@@ -1,3 +1,4 @@
+import AppFoundation
 import MarkdownUI
 import SwiftUI
 import UIKit
@@ -19,6 +20,8 @@ struct MarkdownMessageContent: View {
 
 private struct ChatCodeBlock: View {
   let configuration: CodeBlockConfiguration
+
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     VStack(spacing: 0) {
@@ -43,9 +46,10 @@ private struct ChatCodeBlock: View {
       .padding(.leading, 12)
       .padding(.trailing, 6)
       .frame(minHeight: 38)
-      .background(Color(uiColor: .tertiarySystemBackground))
+      .background(theme.elevatedSurfaceColor)
 
       Divider()
+        .overlay(theme.borderColor)
 
       ScrollView(.horizontal) {
         configuration.label
@@ -58,11 +62,11 @@ private struct ChatCodeBlock: View {
       }
       .scrollIndicators(.visible)
     }
-    .background(Color(uiColor: .secondarySystemBackground))
+    .background(theme.surfaceColor)
     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        .stroke(theme.borderColor, lineWidth: 0.5)
     )
     .markdownMargin(top: .zero, bottom: .em(0.8))
   }
