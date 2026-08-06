@@ -114,9 +114,10 @@ public actor ProviderAccountManager {
     )
   }
 
-  public func deleteAccount(_ id: ProviderAccountID) async throws {
-    try await vault.removeAll(accountID: id)
+  @discardableResult
+  public func deleteAccount(_ id: ProviderAccountID) async throws -> [ProviderAccountID] {
     try await workspace.deleteAccount(id)
+    return await removeCredentialsBestEffort(accountIDs: [id])
   }
 
   public func removeAllCredentials() async throws {
@@ -124,9 +125,25 @@ public actor ProviderAccountManager {
   }
 
   public func removeCredentials(accountIDs: [ProviderAccountID]) async throws {
-    for accountID in Set(accountIDs) {
-      try await vault.removeAll(accountID: accountID)
+    let failures = await removeCredentialsBestEffort(accountIDs: accountIDs)
+    guard failures.isEmpty else {
+      throw ProviderError.credentialCleanupFailed(failures)
     }
+  }
+
+  public func removeCredentialsBestEffort(
+    accountIDs: [ProviderAccountID]
+  ) async -> [ProviderAccountID] {
+    var failures: [ProviderAccountID] = []
+    let uniqueIDs = Set(accountIDs).sorted { $0.rawValue < $1.rawValue }
+    for accountID in uniqueIDs {
+      do {
+        try await vault.removeAll(accountID: accountID)
+      } catch {
+        failures.append(accountID)
+      }
+    }
+    return failures
   }
 }
 
