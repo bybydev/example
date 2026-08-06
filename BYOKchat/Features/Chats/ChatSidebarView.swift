@@ -20,14 +20,19 @@ struct ChatSidebarView: View {
   let close: () -> Void
 
   @State private var searchText = ""
+  @State private var isSearching = false
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
+  @FocusState private var searchFocused: Bool
 
   var body: some View {
     VStack(spacing: 0) {
       header
-      newChatButton
-      searchField
+
+      if isSearching {
+        searchField
+          .transition(.move(edge: .top).combined(with: .opacity))
+      }
 
       if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         conversationHistory
@@ -39,8 +44,7 @@ struct ChatSidebarView: View {
     }
     .safeAreaPadding(.top, 8)
     .safeAreaPadding(.bottom, 8)
-    .background(Color(uiColor: .secondarySystemBackground).ignoresSafeArea())
-    .shadow(color: .black.opacity(0.18), radius: 18, x: 6)
+    .background(Color(uiColor: .systemBackground).ignoresSafeArea())
     .contentShape(Rectangle())
     .gesture(
       DragGesture(minimumDistance: 20)
@@ -48,6 +52,7 @@ struct ChatSidebarView: View {
           if value.translation.width < -70 { close() }
         }
     )
+    .animation(.snappy(duration: 0.2), value: isSearching)
     .alert(
       "Rename Chat",
       isPresented: Binding(
@@ -68,46 +73,41 @@ struct ChatSidebarView: View {
   }
 
   private var header: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "bubble.left.and.bubble.right.fill")
-        .font(.title3)
-        .frame(width: 34, height: 34)
-        .background(.tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
-
+    HStack(alignment: .center) {
       Text("BYOKchat")
-        .font(.headline)
+        .font(.system(size: 30, weight: .bold))
 
       Spacer()
 
-      Button("Close Sidebar", systemImage: "sidebar.left") { close() }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.plain)
-        .frame(width: 44, height: 44)
+      Button("Search Chats", systemImage: isSearching ? "xmark" : "magnifyingglass") {
+        isSearching.toggle()
+        if isSearching {
+          searchFocused = true
+        } else {
+          searchText = ""
+          chats.search("")
+        }
+      }
+      .labelStyle(.iconOnly)
+      .font(.system(size: 24, weight: .medium))
+      .frame(width: 54, height: 54)
+      .background(.ultraThinMaterial, in: Circle())
+      .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
+      .shadow(color: .black.opacity(0.07), radius: 14, y: 6)
     }
-    .padding(.horizontal, 14)
-  }
-
-  private var newChatButton: some View {
-    Button(action: newChat) {
-      Label("New Chat", systemImage: "square.and.pencil")
-        .font(.headline)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
-    }
-    .buttonStyle(.plain)
-    .padding(.horizontal, 12)
-    .padding(.top, 6)
+    .padding(.horizontal, 20)
+    .padding(.bottom, 12)
   }
 
   private var searchField: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 9) {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(.secondary)
       TextField("Search chats", text: $searchText)
+        .font(.system(size: 17))
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .focused($searchFocused)
       if !searchText.isEmpty {
         Button("Clear Search", systemImage: "xmark.circle.fill") {
           searchText = ""
@@ -116,126 +116,162 @@ struct ChatSidebarView: View {
         .foregroundStyle(.secondary)
       }
     }
-    .padding(.horizontal, 12)
-    .frame(height: 42)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+    .padding(.horizontal, 14)
+    .frame(height: 48)
+    .background(
+      Color(uiColor: .secondarySystemBackground),
+      in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+    )
+    .padding(.horizontal, 20)
+    .padding(.bottom, 12)
     .onChange(of: searchText) { _, value in chats.search(value) }
   }
 
   private var conversationHistory: some View {
-    List {
-      if chats.conversations.isEmpty {
-        ContentUnavailableView(
-          "No Chats",
-          systemImage: "bubble.left",
-          description: Text("Start a new conversation to see it here.")
-        )
-        .listRowBackground(Color.clear)
-      } else {
-        ForEach(groupedConversations) { group in
-          Section(group.title) {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 8) {
+        if chats.conversations.isEmpty {
+          ContentUnavailableView(
+            "No Chats",
+            systemImage: "bubble.left",
+            description: Text("Start a new conversation to see it here.")
+          )
+          .frame(maxWidth: .infinity)
+          .padding(.top, 64)
+        } else {
+          ForEach(groupedConversations) { group in
+            Text(group.title)
+              .font(.system(size: 16, weight: .semibold))
+              .padding(.horizontal, 20)
+              .padding(.top, group.title == groupedConversations.first?.title ? 4 : 18)
+              .padding(.bottom, 4)
+
             ForEach(group.conversations) { conversation in
               conversationButton(conversation)
             }
           }
         }
       }
+      .padding(.bottom, 12)
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
+    .scrollIndicators(.hidden)
   }
 
   private var searchResults: some View {
-    List {
-      if chats.searchResults.isEmpty {
-        ContentUnavailableView.search(text: searchText)
-          .listRowBackground(Color.clear)
-      } else {
-        ForEach(chats.searchResults) { result in
-          Button {
-            selectSearchResult(result)
-          } label: {
-            VStack(alignment: .leading, spacing: 5) {
-              Text(result.title)
-                .font(.headline)
-                .lineLimit(1)
-              Text(result.snippet)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
+    ScrollView {
+      LazyVStack(spacing: 4) {
+        if chats.searchResults.isEmpty {
+          ContentUnavailableView.search(text: searchText)
+            .padding(.top, 64)
+        } else {
+          ForEach(chats.searchResults) { result in
+            Button {
+              selectSearchResult(result)
+            } label: {
+              VStack(alignment: .leading, spacing: 5) {
+                Text(result.title)
+                  .font(.system(size: 17, weight: .medium))
+                  .lineLimit(1)
+                Text(result.snippet)
+                  .font(.system(size: 14))
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.horizontal, 14)
+              .padding(.vertical, 11)
+              .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
           }
-          .buttonStyle(.plain)
         }
       }
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
+    .scrollIndicators(.hidden)
   }
 
   private var footer: some View {
-    VStack(spacing: 0) {
-      Divider()
-
-      HStack(spacing: 10) {
-        Image(systemName: providers.accounts.isEmpty ? "key.slash" : "checkmark.circle.fill")
-          .foregroundStyle(providers.accounts.isEmpty ? Color.secondary : Color.green)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(providers.accounts.isEmpty ? "No provider configured" : "Providers ready")
-            .font(.subheadline.weight(.medium))
-          Text("\(providers.accounts.count) account\(providers.accounts.count == 1 ? "" : "s")")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    VStack(spacing: 8) {
+      HStack {
+        Button(action: newChat) {
+          Label("New Chat", systemImage: "square.and.pencil")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22)
+            .frame(height: 54)
+            .background(Color.accentColor, in: Capsule())
         }
-        Spacer()
-      }
-      .padding(.horizontal, 14)
-      .padding(.vertical, 10)
+        .buttonStyle(.plain)
 
-      Button(action: openSettings) {
-        Label("Settings", systemImage: "gearshape")
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 14)
-          .frame(height: 46)
+        Spacer()
+
+        Button("Settings", systemImage: "gearshape", action: openSettings)
+          .labelStyle(.iconOnly)
+          .font(.system(size: 25, weight: .medium))
+          .frame(width: 54, height: 54)
+          .background(.ultraThinMaterial, in: Circle())
+          .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
+          .overlay(alignment: .bottomTrailing) {
+            Circle()
+              .fill(providers.accounts.isEmpty ? Color.orange : Color.green)
+              .frame(width: 9, height: 9)
+              .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+          }
+          .shadow(color: .black.opacity(0.07), radius: 14, y: 6)
       }
-      .buttonStyle(.plain)
+
+      Text(
+        providers.accounts.isEmpty
+          ? "No provider configured"
+          : "\(providers.accounts.count) provider account\(providers.accounts.count == 1 ? "" : "s") ready"
+      )
+      .font(.system(size: 11))
+      .foregroundStyle(.tertiary)
+      .frame(maxWidth: .infinity, alignment: .trailing)
     }
+    .padding(.horizontal, 20)
+    .padding(.top, 10)
   }
 
   private func conversationButton(_ conversation: ChatConversation) -> some View {
     Button {
       selectConversation(conversation.id)
     } label: {
-      VStack(alignment: .leading, spacing: 4) {
-        HStack {
+      HStack(spacing: 12) {
+        Image(systemName: "bubble.left")
+          .font(.system(size: 20, weight: .regular))
+          .frame(width: 28)
+
+        VStack(alignment: .leading, spacing: 3) {
           Text(conversation.title)
-            .font(.subheadline.weight(
-              selectedConversationID == conversation.id ? .semibold : .regular
-            ))
+            .font(.system(size: 17, weight: selectedConversationID == conversation.id ? .medium : .regular))
             .lineLimit(1)
-          Spacer()
-          if selectedConversationID == conversation.id {
-            Circle()
-              .fill(.tint)
-              .frame(width: 6, height: 6)
+
+          if let preview = conversation.lastMessagePreview,
+            selectedConversationID == conversation.id
+          {
+            Text(preview)
+              .font(.system(size: 12))
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
           }
         }
 
-        if let preview = conversation.lastMessagePreview {
-          Text(preview)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+        Spacer(minLength: 0)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .foregroundStyle(.primary)
+      .padding(.horizontal, 14)
+      .frame(minHeight: selectedConversationID == conversation.id ? 62 : 52)
+      .background(
+        selectedConversationID == conversation.id
+          ? Color(uiColor: .secondarySystemBackground) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+      )
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .padding(.horizontal, 8)
     .contextMenu {
       Button("Rename", systemImage: "pencil") {
         renameTarget = conversation
