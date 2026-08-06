@@ -5,12 +5,16 @@ struct MarkdownMessageContent: View {
   let text: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 14) {
       ForEach(Array(MessageBlock.parse(text).enumerated()), id: \.offset) { _, block in
         switch block {
         case .markdown(let value):
           if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Text(.init(value))
+              .font(.system(size: 18, weight: .regular, design: .default))
+              .lineSpacing(7)
+              .foregroundStyle(.primary)
+              .tint(.primary)
               .textSelection(.enabled)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
@@ -45,26 +49,37 @@ struct CodeBlockView: View {
   let code: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 8) {
       HStack {
         Text(language ?? "Code")
-          .font(.caption.weight(.semibold))
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(.secondary)
         Spacer()
         Button("Copy Code", systemImage: "doc.on.doc") {
           UIPasteboard.general.string = code
         }
         .labelStyle(.iconOnly)
+        .font(.system(size: 15))
+        .frame(width: 36, height: 36)
         .accessibilityLabel("Copy code block")
       }
+
       ScrollView(.horizontal) {
         Text(code)
-          .font(.system(.callout, design: .monospaced))
+          .font(.system(size: 15, design: .monospaced))
+          .lineSpacing(4)
           .textSelection(.enabled)
           .fixedSize(horizontal: true, vertical: false)
       }
     }
-    .padding(10)
-    .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    .padding(12)
+    .background(
+      Color(uiColor: .secondarySystemBackground),
+      in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+    )
   }
 }
