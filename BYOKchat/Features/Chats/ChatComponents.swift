@@ -297,20 +297,33 @@ struct ChatMessageView: View {
   private var messageBody: some View {
     if !message.reasoning.isEmpty {
       DisclosureGroup("Reasoning") {
-        Text(message.reasoning)
-          .font(.system(size: 15))
-          .lineSpacing(4)
+        VStack(alignment: .leading, spacing: 9) {
+          Text(message.reasoning)
+            .font(.system(size: 15))
+            .lineSpacing(4)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+          Button("Copy Reasoning", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = message.reasoning
+          }
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(.secondary)
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.top, 4)
+          .buttonStyle(.plain)
+          .accessibilityLabel("Copy reasoning")
+        }
+        .padding(.top, 4)
       }
       .font(.system(size: 13, weight: .semibold))
       .tint(.secondary)
     }
 
     if !message.content.isEmpty {
-      MarkdownMessageContent(text: message.content)
+      MarkdownMessageContent(
+        text: message.content,
+        showsSources: message.role == .assistant
+      )
     } else if message.status == .pending || message.status == .streaming {
       HStack(spacing: 8) {
         ProgressView()
