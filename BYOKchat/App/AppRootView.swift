@@ -2,12 +2,12 @@ import SwiftUI
 
 struct AppRootView: View {
   @Bindable var model: AppModel
+  @Environment(\.scenePhase) private var scenePhase
   @State private var selectedTab: AppTab = .chats
 
   enum AppTab: Hashable {
     case chats
-    case providers
-    case console
+    case settings
   }
 
   var body: some View {
@@ -15,24 +15,20 @@ struct AppRootView: View {
       ChatListView(
         chats: model.chats,
         providers: model.providers,
-        openProviders: { selectedTab = .providers }
+        openProviders: { selectedTab = .settings }
       )
       .tabItem { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
       .tag(AppTab.chats)
 
-      NavigationStack {
-        ProviderListView(model: model.providers)
-      }
-      .tabItem { Label("Providers", systemImage: "key.horizontal") }
-      .tag(AppTab.providers)
-
-      NavigationStack {
-        ProviderConsoleView(model: model.providers)
-      }
-      .tabItem { Label("Console", systemImage: "terminal") }
-      .tag(AppTab.console)
+      SettingsView(model: model)
+        .tabItem { Label("Settings", systemImage: "gearshape") }
+        .tag(AppTab.settings)
     }
     .task { await model.load() }
+    .onChange(of: scenePhase) { _, phase in
+      guard phase != .active else { return }
+      Task { await model.chats.persistActiveMessages() }
+    }
     .overlay(alignment: .top) {
       if model.providers.isBusy || model.chats.isBusy {
         ProgressView()

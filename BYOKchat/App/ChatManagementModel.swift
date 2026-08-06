@@ -11,9 +11,16 @@ final class ChatManagementModel {
     var usage: ProviderUsage?
   }
 
+  private enum GenerationAction {
+    case send(String)
+    case edit(ChatMessageID, String)
+    case regenerate(confirmingUncertainCompletion: Bool)
+  }
+
   private(set) var conversations: [ChatConversation] = []
   private(set) var liveMessages: [ChatMessageID: LiveMessage] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
+  private(set) var searchResults: [ConversationSearchResult] = []
   private(set) var streamRevision = 0
   var isBusy = false
   var errorMessage: String?
@@ -21,16 +28,21 @@ final class ChatManagementModel {
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversationStore: ConversationStore
   private let runtime: ChatRuntime
+  private let preferences: AppPreferencesModel
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
+  private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
+  private var searchTask: Task<Void, Never>?
 
   init(
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
-    runtime: ChatRuntime
+    runtime: ChatRuntime,
+    preferences: AppPreferencesModel
   ) {
     self.providerWorkspace = providerWorkspace
     self.conversationStore = conversations
     self.runtime = runtime
+    self.preferences = preferences
   }
 
   func load() async {
@@ -56,6 +68,47 @@ final class ChatManagementModel {
     return result
   }
 
+  func draft(for conversationID: ConversationID) -> String {
+    conversation(conversationID)?.draftText ?? ""
+  }
+
+  var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
+
+  func saveDraft(_ text: String, conversationID: ConversationID) {
+    if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
+      conversations[index].draftText = text.isEmpty ? nil : text
+    }
+    draftTasks[conversationID]?.cancel()
+    draftTasks[conversationID] = Task {
+      do {
+        try await Task.sleep(for: .milliseconds(250))
+        try Task.checkCancellation()
+        try await conversationStore.setDraft(text, conversationID: conversationID)
+      } catch is CancellationError {
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+      draftTasks.removeValue(forKey: conversationID)
+    }
+  }
+
+  func search(_ query: String) {
+    searchTask?.cancel()
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      searchResults = []
+      return
+    }
+    searchTask = Task {
+      do {
+        try await Task.sleep(for: .milliseconds(180))
+        try Task.checkCancellation()
+        searchResults = await conversationStore.search(trimmed)
+      } catch {
+      }
+    }
+  }
+
   @discardableResult
   func createConversation() async -> ConversationID? {
     do {
@@ -73,6 +126,7 @@ final class ChatManagementModel {
         providerID: account.providerID,
         accountID: account.id,
         modelID: modelID,
+        systemPrompt: preferences.defaultSystemPrompt,
         options: defaultOptions(providerID: account.providerID)
       )
       try await reloadSnapshot()
@@ -85,6 +139,7 @@ final class ChatManagementModel {
 
   func deleteConversation(_ id: ConversationID) async {
     stop(id)
+    draftTasks[id]?.cancel()
     do {
       try await conversationStore.deleteConversation(id)
       try await reloadSnapshot()
@@ -126,11 +181,74 @@ final class ChatManagementModel {
     }
   }
 
-  func send(conversationID: ConversationID, text: String) {
-    guard generationTasks[conversationID] == nil else { return }
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
+  func resetSystemPrompt(_ conversationID: ConversationID) async {
+    guard let conversation = conversation(conversationID) else { return }
+    guard
+      let account = await providerWorkspace.allAccounts().first(where: {
+        $0.id == conversation.accountID
+      })
+    else { return }
+    _ = await updateTarget(
+      conversationID: conversationID,
+      account: account,
+      modelID: conversation.modelID,
+      systemPrompt: preferences.defaultSystemPrompt,
+      options: conversation.options
+    )
+  }
 
+  func send(conversationID: ConversationID, text: String) {
+    saveDraft("", conversationID: conversationID)
+    startGeneration(conversationID: conversationID, action: .send(text))
+  }
+
+  func editAndResend(
+    conversationID: ConversationID,
+    messageID: ChatMessageID,
+    text: String
+  ) {
+    startGeneration(conversationID: conversationID, action: .edit(messageID, text))
+  }
+
+  func regenerate(
+    conversationID: ConversationID,
+    confirmingUncertainCompletion: Bool = false
+  ) {
+    startGeneration(
+      conversationID: conversationID,
+      action: .regenerate(
+        confirmingUncertainCompletion: confirmingUncertainCompletion
+      )
+    )
+  }
+
+  func stop(_ conversationID: ConversationID) {
+    generationTasks[conversationID]?.cancel()
+    Task { await runtime.cancel(conversationID: conversationID) }
+  }
+
+  func persistActiveMessages() async {
+    await runtime.flushActiveGenerations()
+    try? await reloadSnapshot()
+  }
+
+  func isGenerating(_ conversationID: ConversationID) -> Bool {
+    activeConversationIDs.contains(conversationID)
+  }
+
+  func latestAssistantRequiresRegenerationConfirmation(_ conversationID: ConversationID) -> Bool {
+    guard let conversation = conversation(conversationID),
+      let userIndex = conversation.messages.lastIndex(where: { $0.role == .user })
+    else { return false }
+    return conversation.messages[(userIndex + 1)..<conversation.messages.endIndex]
+      .contains { $0.requiresRegenerationConfirmation }
+  }
+
+  private func startGeneration(
+    conversationID: ConversationID,
+    action: GenerationAction
+  ) {
+    guard generationTasks[conversationID] == nil else { return }
     activeConversationIDs.insert(conversationID)
     generationTasks[conversationID] = Task {
       defer {
@@ -138,11 +256,24 @@ final class ChatManagementModel {
         generationTasks.removeValue(forKey: conversationID)
       }
       do {
-        for try await event in await runtime.send(
-          conversationID: conversationID,
-          userText: trimmed
-        ) {
-          await handle(event, conversationID: conversationID)
+        let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
+        switch action {
+        case .send(let text):
+          stream = await runtime.send(conversationID: conversationID, userText: text)
+        case .edit(let messageID, let text):
+          stream = await runtime.editAndResend(
+            conversationID: conversationID,
+            messageID: messageID,
+            newText: text
+          )
+        case .regenerate(let confirmingUncertainCompletion):
+          stream = await runtime.regenerate(
+            conversationID: conversationID,
+            confirmingUncertainCompletion: confirmingUncertainCompletion
+          )
+        }
+        for try await event in stream {
+          await handle(event)
         }
       } catch is CancellationError {
         try? await reloadSnapshot()
@@ -153,16 +284,7 @@ final class ChatManagementModel {
     }
   }
 
-  func stop(_ conversationID: ConversationID) {
-    generationTasks[conversationID]?.cancel()
-    Task { await runtime.cancel(conversationID: conversationID) }
-  }
-
-  func isGenerating(_ conversationID: ConversationID) -> Bool {
-    activeConversationIDs.contains(conversationID)
-  }
-
-  private func handle(_ event: ChatRuntimeEvent, conversationID: ConversationID) async {
+  private func handle(_ event: ChatRuntimeEvent) async {
     switch event {
     case .turnStarted(let turn):
       liveMessages[turn.assistantMessage.id] = .init()
@@ -190,6 +312,8 @@ final class ChatManagementModel {
 
   private func reloadSnapshot() async throws {
     conversations = await conversationStore.allConversations()
+    let currentMessageIDs = Set(conversations.flatMap(\.messages).map(\.id))
+    liveMessages = liveMessages.filter { currentMessageIDs.contains($0.key) }
   }
 
   private func defaultOptions(providerID: ProviderID) -> ProviderRequestOptions {

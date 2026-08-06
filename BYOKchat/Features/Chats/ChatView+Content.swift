@@ -1,0 +1,173 @@
+import BYOKchatProviderCore
+import SwiftUI
+import UIKit
+
+extension ChatView {
+  @ViewBuilder
+  func chatContent(_ conversation: ChatConversation) -> some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        LazyVStack(spacing: 14) {
+          if let issue = configurationIssue(conversation) {
+            RepairBanner(message: issue) { showTargetSettings = true }
+          }
+
+          if conversation.lastContextOmittedMessageCount > 0 {
+            Label(
+              "\(conversation.lastContextOmittedMessageCount) earlier messages were omitted from the latest request.",
+              systemImage: "text.badge.minus"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+          }
+
+          if conversation.messages.isEmpty {
+            ContentUnavailableView {
+              Label("Ready", systemImage: "sparkles")
+            } description: {
+              Text("Using \(targetLabel(conversation))")
+            }
+            .padding(.top, 80)
+          } else {
+            ForEach(conversation.messages) { stored in
+              let displayed = chats.displayMessage(stored)
+              ChatMessageView(
+                message: displayed,
+                accountLabel: accountLabel(for: stored),
+                canEdit: stored.role == .user && !chats.isGenerating(conversationID),
+                canRegenerate: stored.id == latestAssistantID
+                  && !chats.isGenerating(conversationID),
+                edit: {
+                  editText = stored.content
+                  editTarget = stored
+                },
+                regenerate: regenerate,
+                copy: { UIPasteboard.general.string = displayed.content }
+              )
+              .id(stored.id)
+            }
+          }
+
+          Color.clear
+            .frame(height: 1)
+            .id("chat-bottom")
+        }
+        .padding(.horizontal)
+        .padding(.top, 12)
+      }
+      .scrollDismissesKeyboard(.interactively)
+      .defaultScrollAnchor(.bottom)
+      .onScrollGeometryChange(for: Bool.self) { geometry in
+        geometry.contentSize.height <= geometry.containerSize.height
+          || geometry.contentOffset.y + geometry.containerSize.height
+            >= geometry.contentSize.height - 120
+      } action: { _, nearBottom in
+        isNearBottom = nearBottom
+        if nearBottom { showJumpToLatest = false }
+      }
+      .onChange(of: conversation.messages.count) { _, _ in
+        if isNearBottom { scrollToBottom(proxy) } else { showJumpToLatest = true }
+      }
+      .onChange(of: chats.streamRevision) { _, _ in
+        if isNearBottom { scrollToBottom(proxy, animated: false) } else { showJumpToLatest = true }
+      }
+      .task {
+        try? await Task.sleep(for: .milliseconds(80))
+        if let initialScrollMessageID {
+          proxy.scrollTo(initialScrollMessageID, anchor: .center)
+        } else {
+          proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
+      }
+      .overlay(alignment: .bottomTrailing) {
+        if showJumpToLatest {
+          Button("Jump to Latest", systemImage: "arrow.down") {
+            scrollToBottom(proxy)
+            showJumpToLatest = false
+          }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderedProminent)
+          .clipShape(Circle())
+          .padding(.trailing, 16)
+          .padding(.bottom, 100)
+          .accessibilityLabel("Jump to latest message")
+        }
+      }
+      .safeAreaInset(edge: .bottom) {
+        ChatComposer(
+          draft: $draft,
+          isGenerating: chats.isGenerating(conversationID),
+          canSend: configurationIssue(conversation) == nil,
+          targetLabel: targetLabel(conversation),
+          openTarget: { showTargetSettings = true },
+          send: send,
+          stop: { chats.stop(conversationID) }
+        )
+      }
+    }
+  }
+
+  private func send() {
+    let text = draft
+    draft = ""
+    chats.send(conversationID: conversationID, text: text)
+  }
+
+  private func regenerate() {
+    if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
+      showRegenerateConfirmation = true
+    } else {
+      chats.regenerate(conversationID: conversationID)
+    }
+  }
+
+  private func targetLabel(_ conversation: ChatConversation) -> String {
+    "\(providers.accounts.first(where: { $0.id == conversation.accountID })?.label ?? conversation.providerID.rawValue) · \(conversation.modelID.rawValue)"
+  }
+
+  private func accountLabel(for message: ChatMessage) -> String? {
+    guard let accountID = message.accountID else { return nil }
+    return providers.accounts.first { $0.id == accountID }?.label
+  }
+
+  private func configurationIssue(_ conversation: ChatConversation) -> String? {
+    guard providers.definitions.contains(where: { $0.id == conversation.providerID }) else {
+      return "This conversation references a provider that is no longer configured."
+    }
+    guard let account = providers.accounts.first(where: { $0.id == conversation.accountID }) else {
+      return
+        "The provider account used by this conversation was deleted. Select another account to continue."
+    }
+    guard account.isEnabled else {
+      return "The selected provider account is disabled."
+    }
+    guard
+      providers.credentialAccountIDs.contains(account.id)
+        || providers.provider(for: account.providerID)?.authentication == .none
+    else {
+      return "The selected account is missing its credential."
+    }
+    guard
+      let model = providers.models(for: account.id, includeHidden: true).first(where: {
+        $0.model.id == conversation.modelID
+      })
+    else {
+      return "The selected model is missing. Choose another model to continue."
+    }
+    guard model.isAvailable else {
+      return "The selected model is no longer reported by the provider."
+    }
+    return nil
+  }
+
+  private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+    if animated {
+      withAnimation(.easeOut(duration: 0.18)) {
+        proxy.scrollTo("chat-bottom", anchor: .bottom)
+      }
+    } else {
+      proxy.scrollTo("chat-bottom", anchor: .bottom)
+    }
+  }
+}

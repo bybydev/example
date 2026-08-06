@@ -128,6 +128,148 @@ public actor ConversationStore {
     try await persist()
   }
 
+  public func setDraft(_ text: String, conversationID: ConversationID) async throws {
+    try mutateConversation(conversationID) { conversation in
+      let value = text.isEmpty ? nil : text
+      guard conversation.draftText != value else { return }
+      conversation.draftText = value
+    }
+    try await persist()
+  }
+
+  public func search(_ query: String, limit: Int = 100) -> [ConversationSearchResult] {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    var results: [ConversationSearchResult] = []
+    for conversation in state.conversations {
+      if conversation.title.localizedCaseInsensitiveContains(trimmed) {
+        results.append(
+          ConversationSearchResult(
+            conversationID: conversation.id,
+            messageID: nil,
+            role: .title,
+            title: conversation.title,
+            snippet: conversation.title,
+            updatedAt: conversation.updatedAt
+          )
+        )
+      }
+
+      for message in conversation.messages where message.status == .complete {
+        guard message.content.localizedCaseInsensitiveContains(trimmed) else { continue }
+        results.append(
+          ConversationSearchResult(
+            conversationID: conversation.id,
+            messageID: message.id,
+            role: message.role == .user ? .user : .assistant,
+            title: conversation.title,
+            snippet: Self.searchSnippet(text: message.content, query: trimmed),
+            updatedAt: message.updatedAt
+          )
+        )
+      }
+    }
+
+    return Array(
+      results.sorted { lhs, rhs in
+        if lhs.role == .title, rhs.role != .title { return true }
+        if lhs.role != .title, rhs.role == .title { return false }
+        return lhs.updatedAt > rhs.updatedAt
+      }.prefix(max(1, limit))
+    )
+  }
+
+  public func editUserMessageAndBeginTurn(
+    conversationID: ConversationID,
+    messageID: ChatMessageID,
+    newText: String,
+    at date: Date = .now
+  ) async throws -> ChatHistoryMutation {
+    let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { throw ProviderError.invalidMessages }
+
+    var result: ChatHistoryMutation?
+    try mutateConversation(conversationID) { conversation in
+      guard let index = conversation.messages.firstIndex(where: { $0.id == messageID }) else {
+        throw ProviderError.chatMessageNotFound(messageID)
+      }
+      guard conversation.messages[index].role == .user else {
+        throw ProviderError.invalidRequest("Only user messages can be edited.")
+      }
+
+      let oldContent = conversation.messages[index].content
+      let removedCount = conversation.messages.count - index - 1
+      conversation.messages.removeSubrange((index + 1)..<conversation.messages.endIndex)
+      conversation.messages[index].content = trimmed
+      conversation.messages[index].updatedAt = date
+      conversation.messages[index].status = .complete
+      conversation.messages[index].providerID = conversation.providerID
+      conversation.messages[index].accountID = conversation.accountID
+      conversation.messages[index].modelID = conversation.modelID
+      conversation.messages[index].errorCode = nil
+      conversation.messages[index].errorDescription = nil
+      conversation.messages[index].completionUncertain = false
+
+      if index == 0
+        && (conversation.title == "New Chat"
+          || conversation.title == Self.generatedTitle(from: oldContent))
+      {
+        conversation.title = Self.generatedTitle(from: trimmed)
+      }
+
+      let assistant = Self.assistantPlaceholder(for: conversation, at: date)
+      conversation.messages.append(assistant)
+      conversation.updatedAt = date
+      result = ChatHistoryMutation(
+        turn: ChatTurnStart(
+          conversationID: conversationID,
+          userMessage: conversation.messages[index],
+          assistantMessage: assistant
+        ),
+        removedMessageCount: removedCount
+      )
+    }
+    try await persist()
+    return result!
+  }
+
+  public func beginRegeneration(
+    conversationID: ConversationID,
+    confirmingUncertainCompletion: Bool,
+    at date: Date = .now
+  ) async throws -> ChatHistoryMutation {
+    var result: ChatHistoryMutation?
+    try mutateConversation(conversationID) { conversation in
+      guard let userIndex = conversation.messages.lastIndex(where: { $0.role == .user }) else {
+        throw ProviderError.invalidRequest("There is no user message to regenerate.")
+      }
+
+      let laterMessages = conversation.messages[(userIndex + 1)..<conversation.messages.endIndex]
+      if laterMessages.contains(where: { $0.completionUncertain == true })
+        && !confirmingUncertainCompletion
+      {
+        throw ProviderError.uncertainCompletionConfirmationRequired
+      }
+
+      let removedCount = conversation.messages.count - userIndex - 1
+      conversation.messages.removeSubrange((userIndex + 1)..<conversation.messages.endIndex)
+      let assistant = Self.assistantPlaceholder(for: conversation, at: date)
+      conversation.messages.append(assistant)
+      conversation.updatedAt = date
+      result = ChatHistoryMutation(
+        turn: ChatTurnStart(
+          conversationID: conversationID,
+          userMessage: conversation.messages[userIndex],
+          assistantMessage: assistant
+        ),
+        removedMessageCount: removedCount
+      )
+    }
+    try await persist()
+    return result!
+  }
+
   @discardableResult
   public func beginTurn(
     conversationID: ConversationID,
@@ -149,17 +291,10 @@ public actor ConversationStore {
         accountID: conversation.accountID,
         modelID: conversation.modelID
       )
-      let assistant = ChatMessage(
-        role: .assistant,
-        createdAt: date,
-        updatedAt: date,
-        status: .pending,
-        providerID: conversation.providerID,
-        accountID: conversation.accountID,
-        modelID: conversation.modelID
-      )
+      let assistant = Self.assistantPlaceholder(for: conversation, at: date)
       conversation.messages.append(user)
       conversation.messages.append(assistant)
+      conversation.draftText = nil
       conversation.updatedAt = date
       if conversation.title == "New Chat" || conversation.messages.count == 2 {
         conversation.title = Self.generatedTitle(from: trimmed)
@@ -212,6 +347,7 @@ public actor ConversationStore {
       message.status = .complete
       message.errorCode = nil
       message.errorDescription = nil
+      message.completionUncertain = false
       message.updatedAt = date
       result = message
     }
@@ -232,6 +368,7 @@ public actor ConversationStore {
       message.content = content
       message.reasoning = reasoning
       message.status = .cancelled
+      message.completionUncertain = false
       message.updatedAt = date
       result = message
     }
@@ -255,6 +392,7 @@ public actor ConversationStore {
       message.status = .failed
       message.errorCode = Self.errorCode(error)
       message.errorDescription = Self.safeErrorDescription(error)
+      message.completionUncertain = Self.completionIsUncertain(error)
       message.updatedAt = date
       result = message
     }
@@ -293,6 +431,44 @@ public actor ConversationStore {
     }
   }
 
+  private static func assistantPlaceholder(
+    for conversation: ChatConversation,
+    at date: Date
+  ) -> ChatMessage {
+    ChatMessage(
+      role: .assistant,
+      createdAt: date,
+      updatedAt: date,
+      status: .pending,
+      providerID: conversation.providerID,
+      accountID: conversation.accountID,
+      modelID: conversation.modelID
+    )
+  }
+
+  private static func searchSnippet(text: String, query: String) -> String {
+    let normalized = text.replacingOccurrences(of: "\n", with: " ")
+    guard
+      let range = normalized.range(of: query, options: [.caseInsensitive, .diacriticInsensitive])
+    else {
+      return String(normalized.prefix(160))
+    }
+    let matchOffset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
+    let startOffset = max(0, matchOffset - 56)
+    let endOffset = min(normalized.count, matchOffset + query.count + 96)
+    let start = normalized.index(normalized.startIndex, offsetBy: startOffset)
+    let end = normalized.index(normalized.startIndex, offsetBy: endOffset)
+    let prefix = startOffset > 0 ? "…" : ""
+    let suffix = endOffset < normalized.count ? "…" : ""
+    return prefix + String(normalized[start..<end]) + suffix
+  }
+
+  private static func completionIsUncertain(_ error: Error) -> Bool {
+    guard let providerError = error as? ProviderError else { return false }
+    guard case .transport(_, let completionUnknown) = providerError else { return false }
+    return completionUnknown
+  }
+
   private func repairInterruptedMessages() -> Bool {
     var changed = false
     for conversationIndex in state.conversations.indices {
@@ -303,6 +479,7 @@ public actor ConversationStore {
         state.conversations[conversationIndex].messages[messageIndex].errorCode = "interrupted"
         state.conversations[conversationIndex].messages[messageIndex].errorDescription =
           "Generation was interrupted before completion."
+        state.conversations[conversationIndex].messages[messageIndex].completionUncertain = false
         state.conversations[conversationIndex].messages[messageIndex].updatedAt = .now
         changed = true
       }

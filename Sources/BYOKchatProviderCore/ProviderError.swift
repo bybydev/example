@@ -30,6 +30,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case conversationNotFound(ConversationID)
   case conversationBusy(ConversationID)
   case chatMessageNotFound(ChatMessageID)
+  case uncertainCompletionConfirmationRequired
   case importConflict(String)
 
   public var errorDescription: String? {
@@ -65,6 +66,8 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
     case .conversationNotFound(let id): "Conversation not found: \(id.rawValue)"
     case .conversationBusy: "This conversation is already generating a response."
     case .chatMessageNotFound(let id): "Chat message not found: \(id.rawValue)"
+    case .uncertainCompletionConfirmationRequired:
+      "The previous request may have completed. Confirm before regenerating to avoid a duplicate charge."
     case .importConflict(let message): message
     }
   }

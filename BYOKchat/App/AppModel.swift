@@ -7,10 +7,13 @@ import Observation
 final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
+  let preferences: AppPreferencesModel
 
   private(set) var hasLoaded = false
 
   init() {
+    let preferences = AppPreferencesModel()
+    self.preferences = preferences
     let registry = try! ProviderRegistry.builtIn()
     let supportDirectory = FileManager.default.urls(
       for: .applicationSupportDirectory,
@@ -55,7 +58,8 @@ final class AppModel {
     chats = ChatManagementModel(
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
-      runtime: chatRuntime
+      runtime: chatRuntime,
+      preferences: preferences
     )
   }
 

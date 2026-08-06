@@ -2,18 +2,16 @@
 
 BYOKchat is an iOS-only, BYOK-only AI chat client under active development.
 
-## Current implementation
-
 BYOKchat owns its provider and conversation runtime. It does not use AppFoundation's AI provider management.
 
-### First-class providers
+## First-class providers
 
 - DeepSeek
 - OpenRouter
 - NVIDIA
 - User-defined OpenAI-compatible providers
 
-### Provider platform
+## Provider platform
 
 - Multiple accounts per provider
 - Keychain-isolated credentials
@@ -21,23 +19,30 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Bearer, named-header, and no-auth configuration
 - Model discovery and curated seed models
 - Manual, favorite, hidden, and unavailable model states
+- Searchable, favorites-first model selection
 - Non-secret provider configuration import/export
 - Connection testing and streaming console
 
-### Conversation runtime
+## Native chat experience
 
-- Multiple persistent conversations
-- Local versioned conversation storage
+- Multiple persistent local conversations
 - Per-chat provider account, model, system prompt, and generation options
-- Multi-turn streaming
-- Separate visible answer and reasoning content
+- Global default system prompt for new chats
+- Multi-turn streaming with separate answer and reasoning content
+- Fenced code-block rendering, horizontal scrolling, and code copy
+- Message copy and share
+- Edit and resend with explicit linear-history truncation
+- Regenerate without duplicating the user turn
+- Confirmation before regenerating an uncertain billable request
+- Search across titles, user messages, and assistant messages
+- Per-conversation draft persistence
 - Context budgeting with whole-turn omission
-- Partial-output persistence
+- Partial-output persistence and immediate background flush
 - Explicit cancellation with no automatic retry
 - Relaunch repair of interrupted generations
-- Provider/account/model snapshots on every message
-- Conversation create, rename, and delete
-- Native Chats-first iOS interface
+- Missing-account, credential, and model recovery guidance
+- Near-bottom stream following and Jump to Latest behavior
+- Chats and Settings navigation
 
 ## Local validation
 
@@ -61,3 +66,4 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/ProviderCoreOrigin.md`
 - `Documentation/ProviderWorkspace.md`
 - `Documentation/ConversationRuntime.md`
+- `Documentation/NativeChatExperience.md`

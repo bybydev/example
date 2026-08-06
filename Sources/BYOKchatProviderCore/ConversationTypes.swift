@@ -52,6 +52,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var metadata: [String: String]
   public var errorCode: String?
   public var errorDescription: String?
+  public var completionUncertain: Bool?
 
   public init(
     id: ChatMessageID = .init(),
@@ -68,7 +69,8 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     usage: ProviderUsage? = nil,
     metadata: [String: String] = [:],
     errorCode: String? = nil,
-    errorDescription: String? = nil
+    errorDescription: String? = nil,
+    completionUncertain: Bool? = nil
   ) {
     self.id = id
     self.role = role
@@ -85,7 +87,10 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     self.metadata = metadata
     self.errorCode = errorCode
     self.errorDescription = errorDescription
+    self.completionUncertain = completionUncertain
   }
+
+  public var requiresRegenerationConfirmation: Bool { completionUncertain == true }
 }
 
 public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
@@ -100,6 +105,7 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
   public var options: ProviderRequestOptions
   public var messages: [ChatMessage]
   public var lastContextOmittedMessageCount: Int
+  public var draftText: String?
 
   public init(
     id: ConversationID = .init(),
@@ -112,7 +118,8 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     systemPrompt: String = "",
     options: ProviderRequestOptions = .init(),
     messages: [ChatMessage] = [],
-    lastContextOmittedMessageCount: Int = 0
+    lastContextOmittedMessageCount: Int = 0,
+    draftText: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -125,6 +132,7 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     self.options = options
     self.messages = messages
     self.lastContextOmittedMessageCount = lastContextOmittedMessageCount
+    self.draftText = draftText
   }
 
   public var lastMessagePreview: String? {
@@ -145,6 +153,51 @@ public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
   ) {
     self.schemaVersion = schemaVersion
     self.conversations = conversations
+  }
+}
+
+public enum ConversationSearchMatchRole: String, Codable, Sendable {
+  case title
+  case user
+  case assistant
+}
+
+public struct ConversationSearchResult: Sendable, Equatable, Identifiable {
+  public var conversationID: ConversationID
+  public var messageID: ChatMessageID?
+  public var role: ConversationSearchMatchRole
+  public var title: String
+  public var snippet: String
+  public var updatedAt: Date
+
+  public var id: String {
+    "\(conversationID.rawValue)::\(messageID?.rawValue ?? "title")"
+  }
+
+  public init(
+    conversationID: ConversationID,
+    messageID: ChatMessageID?,
+    role: ConversationSearchMatchRole,
+    title: String,
+    snippet: String,
+    updatedAt: Date
+  ) {
+    self.conversationID = conversationID
+    self.messageID = messageID
+    self.role = role
+    self.title = title
+    self.snippet = snippet
+    self.updatedAt = updatedAt
+  }
+}
+
+public struct ChatHistoryMutation: Sendable, Equatable {
+  public var turn: ChatTurnStart
+  public var removedMessageCount: Int
+
+  public init(turn: ChatTurnStart, removedMessageCount: Int) {
+    self.turn = turn
+    self.removedMessageCount = removedMessageCount
   }
 }
 

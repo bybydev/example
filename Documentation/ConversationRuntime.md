@@ -1,6 +1,6 @@
 # Conversation Runtime
 
-Phase 3 adds BYOKchat's local conversation engine on top of the independent provider platform.
+Phase 3 adds BYOKchat's local conversation engine on top of the independent provider platform. Phase 4 extends it with editable linear history, regeneration, drafts, search, and immediate lifecycle flushing.
 
 ## Persistence
 
@@ -29,7 +29,7 @@ pending -> streaming -> complete
 pending/streaming at relaunch -> interrupted
 ```
 
-Partial text and reasoning are persisted approximately every 300 milliseconds and immediately on completion, failure, or cancellation.
+Partial text and reasoning are persisted approximately every 300 milliseconds and immediately on completion, failure, cancellation, or app deactivation.
 
 ## Context building
 
@@ -53,11 +53,11 @@ Only one generation may run for a conversation at a time. Stop explicitly cancel
 
 The main app now contains:
 
-- Chats tab with conversation list, create, rename, and delete
-- Native chat screen with streaming answer and reasoning display
-- Stop generation
-- Per-conversation provider account and model selection
-- Per-conversation system prompt, reasoning, temperature, and output-token options
-- Context omission indicator
-- Providers tab
-- Provider console tab
+- Chats tab with conversation list, local search, create, rename, and delete
+- Native chat screen with streaming answer, reasoning, Markdown, and code blocks
+- Stop, edit and resend, and regenerate
+- Per-conversation draft restoration
+- Per-conversation provider account and searchable model selection
+- Per-conversation system prompt and supported model parameters
+- Context omission and repair indicators
+- Settings tab containing provider management and the provider console

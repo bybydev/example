@@ -9,11 +9,15 @@ struct ChatListView: View {
   @State private var path: [ConversationID] = []
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
+  @State private var searchText = ""
+  @State private var searchTarget: ConversationSearchResult?
 
   var body: some View {
     NavigationStack(path: $path) {
       Group {
-        if chats.conversations.isEmpty {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          searchResults
+        } else if chats.conversations.isEmpty {
           ContentUnavailableView {
             Label("No Chats", systemImage: "bubble.left.and.bubble.right")
           } description: {
@@ -31,35 +35,12 @@ struct ChatListView: View {
             }
           }
         } else {
-          List {
-            ForEach(chats.conversations) { conversation in
-              NavigationLink(value: conversation.id) {
-                ConversationRow(
-                  conversation: conversation,
-                  account: providers.accounts.first { $0.id == conversation.accountID }
-                )
-              }
-              .contextMenu {
-                Button("Rename", systemImage: "pencil") {
-                  renameTarget = conversation
-                  renameText = conversation.title
-                }
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                  Task { await chats.deleteConversation(conversation.id) }
-                }
-              }
-            }
-            .onDelete { offsets in
-              let ids = offsets.map { chats.conversations[$0].id }
-              for id in ids {
-                Task { await chats.deleteConversation(id) }
-              }
-            }
-          }
-          .listStyle(.plain)
+          conversationList
         }
       }
       .navigationTitle("BYOKchat")
+      .searchable(text: $searchText, prompt: "Search chats and messages")
+      .onChange(of: searchText) { _, value in chats.search(value) }
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button("New Chat", systemImage: "square.and.pencil") { createChat() }
@@ -69,6 +50,8 @@ struct ChatListView: View {
       .navigationDestination(for: ConversationID.self) { id in
         ChatView(
           conversationID: id,
+          initialScrollMessageID: searchTarget?.conversationID == id
+            ? searchTarget?.messageID : nil,
           chats: chats,
           providers: providers
         )
@@ -91,11 +74,100 @@ struct ChatListView: View {
     }
   }
 
+  private var conversationList: some View {
+    List {
+      ForEach(chats.conversations) { conversation in
+        NavigationLink(value: conversation.id) {
+          ConversationRow(
+            conversation: conversation,
+            account: providers.accounts.first { $0.id == conversation.accountID }
+          )
+        }
+        .simultaneousGesture(TapGesture().onEnded { searchTarget = nil })
+        .contextMenu {
+          Button("Rename", systemImage: "pencil") {
+            renameTarget = conversation
+            renameText = conversation.title
+          }
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            Task { await chats.deleteConversation(conversation.id) }
+          }
+        }
+      }
+      .onDelete { offsets in
+        let ids = offsets.map { chats.conversations[$0].id }
+        for id in ids {
+          Task { await chats.deleteConversation(id) }
+        }
+      }
+    }
+    .listStyle(.plain)
+  }
+
+  @ViewBuilder
+  private var searchResults: some View {
+    if chats.searchResults.isEmpty {
+      ContentUnavailableView.search(text: searchText)
+    } else {
+      List(chats.searchResults) { result in
+        Button {
+          searchTarget = result
+          path.append(result.conversationID)
+        } label: {
+          SearchResultRow(result: result)
+        }
+        .buttonStyle(.plain)
+      }
+      .listStyle(.plain)
+    }
+  }
+
   private func createChat() {
+    searchTarget = nil
     Task {
       if let id = await chats.createConversation() {
         path.append(id)
       }
+    }
+  }
+}
+
+private struct SearchResultRow: View {
+  let result: ConversationSearchResult
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack {
+        Text(result.title)
+          .font(.headline)
+          .lineLimit(1)
+        Spacer()
+        Label(roleLabel, systemImage: roleIcon)
+          .labelStyle(.iconOnly)
+          .foregroundStyle(.secondary)
+      }
+      Text(result.snippet)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .lineLimit(3)
+    }
+    .contentShape(Rectangle())
+    .padding(.vertical, 3)
+  }
+
+  private var roleLabel: String {
+    switch result.role {
+    case .title: "Title"
+    case .user: "User message"
+    case .assistant: "Assistant message"
+    }
+  }
+
+  private var roleIcon: String {
+    switch result.role {
+    case .title: "textformat"
+    case .user: "person"
+    case .assistant: "sparkles"
     }
   }
 }
@@ -123,12 +195,16 @@ private struct ConversationRow: View {
           .lineLimit(2)
       }
 
-      HStack(spacing: 6) {
+      HStack(spacing: 5) {
         Text(account?.label ?? conversation.providerID.rawValue)
         Text("·")
         Text(conversation.modelID.rawValue)
+        if let draft = conversation.draftText, !draft.isEmpty {
+          Text("· Draft")
+            .foregroundStyle(.tint)
+        }
       }
-      .font(.caption2)
+      .font(.caption)
       .foregroundStyle(.tertiary)
       .lineLimit(1)
     }

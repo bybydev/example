@@ -10,11 +10,25 @@ public protocol ProviderStreamingRuntime: Sendable {
 extension ProviderRuntime: ProviderStreamingRuntime {}
 
 public actor ChatRuntime {
+  private enum GenerationOperation: Sendable {
+    case send(text: String)
+    case edit(messageID: ChatMessageID, text: String)
+    case regenerate(confirmingUncertainCompletion: Bool)
+  }
+
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
+  private struct ActiveGenerationState: Sendable {
+    var assistantID: ChatMessageID
+    var content: String
+    var reasoning: String
+    var usage: ProviderUsage?
+  }
+
   private let partialPersistenceInterval: Duration
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
+  private var activeStates: [ConversationID: ActiveGenerationState] = [:]
 
   public init(
     providerRuntime: any ProviderStreamingRuntime,
@@ -32,27 +46,30 @@ public actor ChatRuntime {
     conversationID: ConversationID,
     userText: String
   ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
-    guard generationTasks[conversationID] == nil else {
-      return AsyncThrowingStream { continuation in
-        continuation.finish(throwing: ProviderError.conversationBusy(conversationID))
-      }
-    }
+    start(conversationID: conversationID, operation: .send(text: userText))
+  }
 
-    var capturedContinuation:
-      AsyncThrowingStream<ChatRuntimeEvent, Error>.Continuation!
-    let stream = AsyncThrowingStream<ChatRuntimeEvent, Error> { continuation in
-      capturedContinuation = continuation
-    }
-    let task = Task {
-      await self.runSend(
-        conversationID: conversationID,
-        userText: userText,
-        continuation: capturedContinuation
+  public func editAndResend(
+    conversationID: ConversationID,
+    messageID: ChatMessageID,
+    newText: String
+  ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
+    start(
+      conversationID: conversationID,
+      operation: .edit(messageID: messageID, text: newText)
+    )
+  }
+
+  public func regenerate(
+    conversationID: ConversationID,
+    confirmingUncertainCompletion: Bool = false
+  ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
+    start(
+      conversationID: conversationID,
+      operation: .regenerate(
+        confirmingUncertainCompletion: confirmingUncertainCompletion
       )
-    }
-    generationTasks[conversationID] = task
-    capturedContinuation.onTermination = { _ in task.cancel() }
-    return stream
+    )
   }
 
   public func cancel(conversationID: ConversationID) async {
@@ -61,12 +78,53 @@ public actor ChatRuntime {
     await task.value
   }
 
-  private func runSend(
+  public func flushActiveGenerations() async {
+    for (conversationID, state) in activeStates {
+      try? await conversations.updateStreamingMessage(
+        conversationID: conversationID,
+        messageID: state.assistantID,
+        content: state.content,
+        reasoning: state.reasoning,
+        usage: state.usage
+      )
+    }
+  }
+
+  private func start(
     conversationID: ConversationID,
-    userText: String,
+    operation: GenerationOperation
+  ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
+    guard generationTasks[conversationID] == nil else {
+      return AsyncThrowingStream { continuation in
+        continuation.finish(throwing: ProviderError.conversationBusy(conversationID))
+      }
+    }
+
+    var capturedContinuation: AsyncThrowingStream<ChatRuntimeEvent, Error>.Continuation!
+    let stream = AsyncThrowingStream<ChatRuntimeEvent, Error> { continuation in
+      capturedContinuation = continuation
+    }
+    let task = Task {
+      await self.runGeneration(
+        conversationID: conversationID,
+        operation: operation,
+        continuation: capturedContinuation
+      )
+    }
+    generationTasks[conversationID] = task
+    capturedContinuation.onTermination = { _ in task.cancel() }
+    return stream
+  }
+
+  private func runGeneration(
+    conversationID: ConversationID,
+    operation: GenerationOperation,
     continuation: AsyncThrowingStream<ChatRuntimeEvent, Error>.Continuation
   ) async {
-    defer { generationTasks.removeValue(forKey: conversationID) }
+    defer {
+      generationTasks.removeValue(forKey: conversationID)
+      activeStates.removeValue(forKey: conversationID)
+    }
 
     var assistantID: ChatMessageID?
     var visibleText = ""
@@ -74,11 +132,17 @@ public actor ChatRuntime {
     var usage: ProviderUsage?
 
     do {
-      let turn = try await conversations.beginTurn(
+      let turn = try await prepareTurn(
         conversationID: conversationID,
-        userText: userText
+        operation: operation
       )
       assistantID = turn.assistantMessage.id
+      activeStates[conversationID] = ActiveGenerationState(
+        assistantID: turn.assistantMessage.id,
+        content: "",
+        reasoning: "",
+        usage: nil
+      )
       continuation.yield(.turnStarted(turn))
 
       let conversation = try await conversations.conversation(id: conversationID)
@@ -87,7 +151,8 @@ public actor ChatRuntime {
       let context = ChatContextBuilder.build(
         conversation: conversation,
         contextWindow: modelRecord?.model.contextWindow,
-        reservedOutputTokens: modelRecord?.model.maxOutputTokens
+        reservedOutputTokens: conversation.options.maxOutputTokens
+          ?? modelRecord?.model.maxOutputTokens
       )
       try await conversations.setContextOmissionCount(
         context.omittedMessageCount,
@@ -123,6 +188,13 @@ public actor ChatRuntime {
         case .completed(let response):
           finalResponse = response
         }
+
+        activeStates[conversationID] = ActiveGenerationState(
+          assistantID: turn.assistantMessage.id,
+          content: visibleText,
+          reasoning: reasoningText,
+          usage: usage
+        )
 
         if lastPersist.duration(to: clock.now) >= partialPersistenceInterval {
           try await conversations.updateStreamingMessage(
@@ -176,6 +248,30 @@ public actor ChatRuntime {
         }
         continuation.finish(throwing: error)
       }
+    }
+  }
+
+  private func prepareTurn(
+    conversationID: ConversationID,
+    operation: GenerationOperation
+  ) async throws -> ChatTurnStart {
+    switch operation {
+    case .send(let text):
+      return try await conversations.beginTurn(
+        conversationID: conversationID,
+        userText: text
+      )
+    case .edit(let messageID, let text):
+      return try await conversations.editUserMessageAndBeginTurn(
+        conversationID: conversationID,
+        messageID: messageID,
+        newText: text
+      ).turn
+    case .regenerate(let confirmingUncertainCompletion):
+      return try await conversations.beginRegeneration(
+        conversationID: conversationID,
+        confirmingUncertainCompletion: confirmingUncertainCompletion
+      ).turn
     }
   }
 }
