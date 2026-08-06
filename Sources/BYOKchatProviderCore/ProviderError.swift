@@ -25,6 +25,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case invalidResponse
   case emptyOutput
   case prematureStreamEnd
+  case contextWindowExceeded(estimatedInputTokens: Int, limit: Int)
   case workspaceVersionUnsupported(Int)
   case conversationVersionUnsupported(Int)
   case backupVersionUnsupported(Int)
@@ -33,6 +34,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case chatMessageNotFound(ChatMessageID)
   case uncertainCompletionConfirmationRequired
   case importConflict(String)
+  case credentialCleanupFailed([ProviderAccountID])
 
   public var errorDescription: String? {
     switch self {
@@ -60,6 +62,8 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
     case .invalidResponse: "The provider returned an invalid response."
     case .emptyOutput: "The provider returned an empty response."
     case .prematureStreamEnd: "The provider stream ended before completion."
+    case .contextWindowExceeded(let estimated, let limit):
+      "The current prompt needs about \(estimated) input tokens, but this model only has \(limit) input tokens available after reserving output space. Shorten the system prompt or latest message, or lower the maximum output tokens."
     case .workspaceVersionUnsupported(let version):
       "Provider workspace version \(version) is unsupported."
     case .conversationVersionUnsupported(let version):
@@ -72,6 +76,9 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
     case .uncertainCompletionConfirmationRequired:
       "The previous request may have completed. Confirm before regenerating to avoid a duplicate charge."
     case .importConflict(let message): message
+    case .credentialCleanupFailed(let accountIDs):
+      let values = accountIDs.map(\.rawValue).sorted().joined(separator: ", ")
+      return "The configuration change was saved, but Keychain cleanup failed for: \(values). The cleanup can be retried safely."
     }
   }
 }
