@@ -37,34 +37,22 @@ struct NewChatView: View {
     VStack(spacing: 0) {
       Spacer(minLength: 72)
 
-      VStack(spacing: 16) {
+      VStack(spacing: 12) {
+        Image(systemName: "bubble.left.and.bubble.right")
+          .font(.system(size: 30, weight: .medium))
+          .foregroundStyle(theme.accentColor)
+          .accessibilityHidden(true)
+
         Text("How can I help?")
           .font(.system(size: 30, weight: .semibold))
           .multilineTextAlignment(.center)
 
-        if providers.accounts.isEmpty {
-          Text("Connect DeepSeek, OpenRouter, NVIDIA, or a custom provider to start chatting.")
-            .font(.system(size: 16))
-            .lineSpacing(3)
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 34)
-
-          Button("Configure Provider", systemImage: "key.horizontal") {
-            openSettings()
-          }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
-        } else {
-          VStack(spacing: 8) {
-            suggestion("Help me write production-ready Swift code")
-            suggestion("Compare the best models for this task")
-            suggestion("Explain a complex topic clearly")
-          }
-          .padding(.horizontal, 22)
-          .padding(.top, 8)
-        }
+        Text("Send a message to start a new conversation.")
+          .font(.system(size: 16))
+          .multilineTextAlignment(.center)
+          .foregroundStyle(.secondary)
       }
+      .padding(.horizontal, 32)
 
       Spacer()
     }
@@ -103,34 +91,6 @@ struct NewChatView: View {
         }
       }
     }
-  }
-
-  private func suggestion(_ text: String) -> some View {
-    Button {
-      startConversation(with: text)
-    } label: {
-      HStack(spacing: 12) {
-        Text(text)
-          .font(.system(size: 16))
-          .multilineTextAlignment(.leading)
-        Spacer(minLength: 8)
-        Image(systemName: "arrow.up.right")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.secondary)
-      }
-      .padding(.horizontal, 16)
-      .frame(minHeight: 52)
-      .background(
-        theme.surfaceColor,
-        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .stroke(theme.borderColor, lineWidth: 0.5)
-      )
-    }
-    .buttonStyle(.plain)
-    .disabled(isCreating)
   }
 
   private func startConversation(with text: String) {
