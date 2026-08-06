@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 struct ChatView: View {
   let conversationID: ConversationID
   let initialScrollMessageID: ChatMessageID?
+  let openSidebar: () -> Void
+  let startNewChat: () -> Void
+
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
 
@@ -28,12 +31,16 @@ struct ChatView: View {
     conversationID: ConversationID,
     initialScrollMessageID: ChatMessageID? = nil,
     chats: ChatManagementModel,
-    providers: ProviderManagementModel
+    providers: ProviderManagementModel,
+    openSidebar: @escaping () -> Void = {},
+    startNewChat: @escaping () -> Void = {}
   ) {
     self.conversationID = conversationID
     self.initialScrollMessageID = initialScrollMessageID
     self.chats = chats
     self.providers = providers
+    self.openSidebar = openSidebar
+    self.startNewChat = startNewChat
   }
 
   var conversation: ChatConversation? {
@@ -50,6 +57,12 @@ struct ChatView: View {
     return String(safe).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
   }
 
+  private var headerAccountLabel: String {
+    guard let conversation else { return "" }
+    return providers.accounts.first { $0.id == conversation.accountID }?.label
+      ?? conversation.providerID.rawValue
+  }
+
   var body: some View {
     Group {
       if let conversation {
@@ -58,14 +71,47 @@ struct ChatView: View {
         ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
       }
     }
-    .navigationTitle(conversation?.title ?? "Chat")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItemGroup(placement: .topBarTrailing) {
-        Button("Chat Settings", systemImage: "slider.horizontal.3") {
-          showTargetSettings = true
+      ToolbarItem(placement: .topBarLeading) {
+        Button("Open Sidebar", systemImage: "line.3.horizontal") {
+          openSidebar()
         }
+      }
+
+      ToolbarItem(placement: .principal) {
+        if let conversation {
+          Button {
+            showTargetSettings = true
+          } label: {
+            VStack(spacing: 0) {
+              HStack(spacing: 4) {
+                Text(conversation.modelID.rawValue)
+                  .font(.headline)
+                  .lineLimit(1)
+                Image(systemName: "chevron.down")
+                  .font(.caption2.weight(.bold))
+              }
+              Text(headerAccountLabel)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Change provider account and model")
+        }
+      }
+
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        Button("New Chat", systemImage: "square.and.pencil") {
+          startNewChat()
+        }
+
         Menu {
+          Button("Chat Settings", systemImage: "slider.horizontal.3") {
+            showTargetSettings = true
+          }
           Button("Rename", systemImage: "pencil") {
             renameText = conversation?.title ?? ""
             showRename = true
@@ -85,11 +131,12 @@ struct ChatView: View {
           Button("Delete", systemImage: "trash", role: .destructive) {
             Task { @MainActor in
               await chats.deleteConversation(conversationID)
+              startNewChat()
               dismiss()
             }
           }
         } label: {
-          Image(systemName: "ellipsis.circle")
+          Image(systemName: "ellipsis")
         }
       }
     }
