@@ -26,6 +26,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat
         PRODUCT_NAME: BYOKchat
+        DEVELOPMENT_TEAM: J458WW3452
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: 1.0
+        CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 6.0
         SWIFT_STRICT_CONCURRENCY: complete
         GENERATE_INFOPLIST_FILE: NO
@@ -40,6 +45,12 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/BYOKchatProviderCoreTests
+    settings:
+      base:
+        DEVELOPMENT_TEAM: J458WW3452
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
     dependencies:
       - target: BYOKchat
       - package: BYOKchatProviderCore
