@@ -156,44 +156,33 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
             for event in try decoder.append(chunk) {
-              if event.data == "[DONE]" {
-                completed = true
-                continue
-              }
-              guard let payload = event.data.data(using: .utf8) else {
-                throw ProviderError.invalidResponse
-              }
-              let decoded: ChatCompletionChunk
-              do {
-                decoded = try JSONDecoder.provider.decode(ChatCompletionChunk.self, from: payload)
-              } catch {
-                throw ProviderError.invalidResponse
-              }
-              if let error = decoded.error {
-                throw ProviderError.midStreamProvider(code: error.code, message: error.message)
-              }
-              if let value = decoded.id { responseID = value }
-              if let value = decoded.model { modelID = ModelID(rawValue: value) }
-              if let value = decoded.provider { metadata["provider"] = value }
-              if let value = decoded.usage?.normalized {
-                usage = value
-                continuation.yield(.usage(value))
-              }
-              if let choice = decoded.choices.first {
-                if let value = choice.finishReason { finishReason = value }
-                if let delta = choice.delta.content, !delta.isEmpty {
-                  text += delta
-                  continuation.yield(.textDelta(delta))
-                }
-                for delta in choice.delta.reasoningFragments where !delta.isEmpty {
-                  reasoning += delta
-                  continuation.yield(.reasoningDelta(delta))
-                }
-              }
+              try processStreamEvent(
+                event,
+                continuation: continuation,
+                text: &text,
+                reasoning: &reasoning,
+                usage: &usage,
+                finishReason: &finishReason,
+                responseID: &responseID,
+                modelID: &modelID,
+                completed: &completed,
+                metadata: &metadata
+              )
             }
           }
-          for event in try decoder.finish() where event.data == "[DONE]" {
-            completed = true
+          for event in try decoder.finish() {
+            try processStreamEvent(
+              event,
+              continuation: continuation,
+              text: &text,
+              reasoning: &reasoning,
+              usage: &usage,
+              finishReason: &finishReason,
+              responseID: &responseID,
+              modelID: &modelID,
+              completed: &completed,
+              metadata: &metadata
+            )
           }
           guard completed || finishReason != nil else {
             throw ProviderError.prematureStreamEnd
@@ -225,6 +214,54 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         }
       }
       continuation.onTermination = { @Sendable _ in task.cancel() }
+    }
+  }
+
+  private func processStreamEvent(
+    _ event: ServerSentEvent,
+    continuation: AsyncThrowingStream<ProviderStreamEvent, Error>.Continuation,
+    text: inout String,
+    reasoning: inout String,
+    usage: inout ProviderUsage?,
+    finishReason: inout String?,
+    responseID: inout String?,
+    modelID: inout ModelID,
+    completed: inout Bool,
+    metadata: inout [String: String]
+  ) throws {
+    if event.data == "[DONE]" {
+      completed = true
+      return
+    }
+    guard let payload = event.data.data(using: .utf8) else {
+      throw ProviderError.invalidResponse
+    }
+    let decoded: ChatCompletionChunk
+    do {
+      decoded = try JSONDecoder.provider.decode(ChatCompletionChunk.self, from: payload)
+    } catch {
+      throw ProviderError.invalidResponse
+    }
+    if let error = decoded.error {
+      throw ProviderError.midStreamProvider(code: error.code, message: error.message)
+    }
+    if let value = decoded.id { responseID = value }
+    if let value = decoded.model { modelID = ModelID(rawValue: value) }
+    if let value = decoded.provider { metadata["provider"] = value }
+    if let value = decoded.usage?.normalized {
+      usage = value
+      continuation.yield(.usage(value))
+    }
+    if let choice = decoded.choices.first {
+      if let value = choice.finishReason { finishReason = value }
+      if let delta = choice.delta.content, !delta.isEmpty {
+        text += delta
+        continuation.yield(.textDelta(delta))
+      }
+      for delta in choice.delta.reasoningFragments where !delta.isEmpty {
+        reasoning += delta
+        continuation.yield(.reasoningDelta(delta))
+      }
     }
   }
 }
