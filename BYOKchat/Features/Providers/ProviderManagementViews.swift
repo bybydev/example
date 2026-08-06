@@ -254,11 +254,13 @@ struct AccountEditorView: View {
           .autocorrectionDisabled()
       }
 
-      Section("Endpoint Override") {
+      Section {
         TextField("Use provider default", text: $baseURL)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
           .keyboardType(.URL)
+      } header: {
+        Text("Endpoint Override")
       } footer: {
         Text("Leave empty to use the provider's built-in HTTPS endpoint.")
       }
@@ -562,10 +564,12 @@ struct CustomProviderEditorView: View {
         }
       }
 
-      Section("Seed Models") {
+      Section {
         TextEditor(text: $seedModels)
           .font(.system(.body, design: .monospaced))
           .frame(minHeight: 100)
+      } header: {
+        Text("Seed Models")
       } footer: {
         Text(
           "One model ID per line. These remain available when the provider does not expose model discovery."
