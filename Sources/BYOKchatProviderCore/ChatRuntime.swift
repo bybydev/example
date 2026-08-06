@@ -146,7 +146,7 @@ public actor ChatRuntime {
       let conversation = try await conversations.conversation(id: conversationID)
       let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
         .first { $0.model.id == conversation.modelID }
-      let context = ChatContextBuilder.build(
+      let context = try ChatContextBuilder.build(
         conversation: conversation,
         contextWindow: modelRecord?.model.contextWindow,
         reservedOutputTokens: conversation.options.maxOutputTokens
