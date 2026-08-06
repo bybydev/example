@@ -31,7 +31,9 @@ final class ChatManagementModel {
   private let preferences: AppPreferencesModel
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
+  private var draftRevisions: [ConversationID: UInt] = [:]
   private var searchTask: Task<Void, Never>?
+  private var searchRevision: UInt = 0
 
   init(
     providerWorkspace: ProviderWorkspaceStore,
@@ -78,32 +80,49 @@ final class ChatManagementModel {
     if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
       conversations[index].draftText = text.isEmpty ? nil : text
     }
+
     draftTasks[conversationID]?.cancel()
-    draftTasks[conversationID] = Task {
+    let revision = (draftRevisions[conversationID] ?? 0) &+ 1
+    draftRevisions[conversationID] = revision
+    draftTasks[conversationID] = Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
         try await Task.sleep(for: .milliseconds(250))
         try Task.checkCancellation()
+        guard draftRevisions[conversationID] == revision else { return }
         try await conversationStore.setDraft(text, conversationID: conversationID)
+        try Task.checkCancellation()
       } catch is CancellationError {
       } catch {
         errorMessage = error.localizedDescription
       }
-      draftTasks.removeValue(forKey: conversationID)
+      if draftRevisions[conversationID] == revision {
+        draftTasks.removeValue(forKey: conversationID)
+      }
     }
   }
 
   func search(_ query: String) {
     searchTask?.cancel()
+    searchRevision &+= 1
+    let revision = searchRevision
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       searchResults = []
+      searchTask = nil
       return
     }
-    searchTask = Task {
+
+    searchTask = Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
         try await Task.sleep(for: .milliseconds(180))
         try Task.checkCancellation()
-        searchResults = await conversationStore.search(trimmed)
+        let results = await conversationStore.search(trimmed)
+        try Task.checkCancellation()
+        guard searchRevision == revision else { return }
+        searchResults = results
+        searchTask = nil
       } catch {
       }
     }
@@ -140,6 +159,8 @@ final class ChatManagementModel {
   func deleteConversation(_ id: ConversationID) async {
     stop(id)
     draftTasks[id]?.cancel()
+    draftTasks.removeValue(forKey: id)
+    draftRevisions.removeValue(forKey: id)
     do {
       try await conversationStore.deleteConversation(id)
       try await reloadSnapshot()
@@ -237,7 +258,8 @@ final class ChatManagementModel {
   }
 
   func latestAssistantRequiresRegenerationConfirmation(_ conversationID: ConversationID) -> Bool {
-    guard let conversation = conversation(conversationID),
+    guard
+      let conversation = conversation(conversationID),
       let userIndex = conversation.messages.lastIndex(where: { $0.role == .user })
     else { return false }
     return conversation.messages[(userIndex + 1)..<conversation.messages.endIndex]
@@ -250,7 +272,8 @@ final class ChatManagementModel {
   ) {
     guard generationTasks[conversationID] == nil else { return }
     activeConversationIDs.insert(conversationID)
-    generationTasks[conversationID] = Task {
+    generationTasks[conversationID] = Task { @MainActor [weak self] in
+      guard let self else { return }
       defer {
         activeConversationIDs.remove(conversationID)
         generationTasks.removeValue(forKey: conversationID)
