@@ -5,12 +5,12 @@ public enum ChatContextBuilder {
     conversation: ChatConversation,
     contextWindow: Int?,
     reservedOutputTokens: Int? = nil
-  ) -> ChatContextResult {
+  ) throws -> ChatContextResult {
     let outputReserve = max(
       256,
       reservedOutputTokens ?? conversation.options.maxOutputTokens ?? 4096
     )
-    let inputBudget = contextWindow.map { max(32, $0 - outputReserve) }
+    let inputBudget = contextWindow.map { max(0, $0 - outputReserve) }
 
     var systemMessages: [ProviderMessage] = []
     let trimmedSystem = conversation.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,13 +41,25 @@ public enum ChatContextBuilder {
       )
     }
 
+    guard systemCost <= inputBudget else {
+      throw ProviderError.contextWindowExceeded(
+        estimatedInputTokens: systemCost,
+        limit: inputBudget
+      )
+    }
+
     var selected: [Turn] = []
     var used = systemCost
     for turn in turns.reversed() {
       let cost = estimate(messages: turn.messages)
-      if selected.isEmpty || used + cost <= inputBudget {
+      if used + cost <= inputBudget {
         selected.append(turn)
         used += cost
+      } else if selected.isEmpty {
+        throw ProviderError.contextWindowExceeded(
+          estimatedInputTokens: used + cost,
+          limit: inputBudget
+        )
       } else {
         break
       }
