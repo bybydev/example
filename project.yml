@@ -1,0 +1,46 @@
+name: BYOKchat
+options:
+  bundleIdPrefix: com.hoangbkit
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26.0"
+  createIntermediateGroups: true
+
+packages:
+  BYOKchatProviderCore:
+    path: .
+
+targets:
+  BYOKchat:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: BYOKchat
+    info:
+      path: BYOKchat/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: BYOKchat
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat
+        PRODUCT_NAME: BYOKchat
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - package: BYOKchatProviderCore
+        product: BYOKchatProviderCore
+
+  BYOKchatTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests/BYOKchatProviderCoreTests
+    dependencies:
+      - target: BYOKchat
+      - package: BYOKchatProviderCore
+        product: BYOKchatProviderCore

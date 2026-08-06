@@ -1,0 +1,342 @@
+import Foundation
+
+public struct ProviderID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral,
+  CustomStringConvertible
+{
+  public let rawValue: String
+
+  public init(rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  public init(stringLiteral value: String) {
+    self.rawValue = value
+  }
+
+  public var description: String { rawValue }
+}
+
+public struct ProviderAccountID: RawRepresentable, Hashable, Codable, Sendable,
+  ExpressibleByStringLiteral, CustomStringConvertible
+{
+  public let rawValue: String
+
+  public init(rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  public init(stringLiteral value: String) {
+    self.rawValue = value
+  }
+
+  public var description: String { rawValue }
+}
+
+public struct ModelID: RawRepresentable, Hashable, Codable, Sendable, ExpressibleByStringLiteral,
+  CustomStringConvertible
+{
+  public let rawValue: String
+
+  public init(rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  public init(stringLiteral value: String) {
+    self.rawValue = value
+  }
+
+  public var description: String { rawValue }
+}
+
+public enum ProviderMessageRole: String, Codable, Sendable {
+  case system
+  case user
+  case assistant
+}
+
+public struct ProviderMessage: Codable, Sendable, Equatable {
+  public var role: ProviderMessageRole
+  public var content: String
+  public var reasoning: String?
+
+  public init(
+    role: ProviderMessageRole,
+    content: String,
+    reasoning: String? = nil
+  ) {
+    self.role = role
+    self.content = content
+    self.reasoning = reasoning
+  }
+}
+
+public enum ReasoningEffort: String, Codable, Sendable, CaseIterable {
+  case minimal
+  case low
+  case medium
+  case high
+  case max
+}
+
+public struct ReasoningOptions: Codable, Sendable, Equatable {
+  public var enabled: Bool?
+  public var effort: ReasoningEffort?
+  public var maxTokens: Int?
+  public var excludeFromResponse: Bool
+
+  public init(
+    enabled: Bool? = nil,
+    effort: ReasoningEffort? = nil,
+    maxTokens: Int? = nil,
+    excludeFromResponse: Bool = false
+  ) {
+    self.enabled = enabled
+    self.effort = effort
+    self.maxTokens = maxTokens
+    self.excludeFromResponse = excludeFromResponse
+  }
+}
+
+public enum OpenRouterSort: String, Codable, Sendable, CaseIterable {
+  case price
+  case throughput
+  case latency
+}
+
+public enum OpenRouterDataCollection: String, Codable, Sendable, CaseIterable {
+  case allow
+  case deny
+}
+
+public struct OpenRouterRoutingOptions: Codable, Sendable, Equatable {
+  public var providerOrder: [String]
+  public var allowFallbacks: Bool?
+  public var requireParameters: Bool?
+  public var dataCollection: OpenRouterDataCollection?
+  public var zeroDataRetention: Bool?
+  public var sort: OpenRouterSort?
+
+  public init(
+    providerOrder: [String] = [],
+    allowFallbacks: Bool? = nil,
+    requireParameters: Bool? = nil,
+    dataCollection: OpenRouterDataCollection? = nil,
+    zeroDataRetention: Bool? = nil,
+    sort: OpenRouterSort? = nil
+  ) {
+    self.providerOrder = providerOrder
+    self.allowFallbacks = allowFallbacks
+    self.requireParameters = requireParameters
+    self.dataCollection = dataCollection
+    self.zeroDataRetention = zeroDataRetention
+    self.sort = sort
+  }
+}
+
+public struct ProviderRequestOptions: Codable, Sendable, Equatable {
+  public var temperature: Double?
+  public var topP: Double?
+  public var maxOutputTokens: Int?
+  public var reasoning: ReasoningOptions?
+  public var openRouterRouting: OpenRouterRoutingOptions?
+
+  public init(
+    temperature: Double? = nil,
+    topP: Double? = nil,
+    maxOutputTokens: Int? = nil,
+    reasoning: ReasoningOptions? = nil,
+    openRouterRouting: OpenRouterRoutingOptions? = nil
+  ) {
+    self.temperature = temperature
+    self.topP = topP
+    self.maxOutputTokens = maxOutputTokens
+    self.reasoning = reasoning
+    self.openRouterRouting = openRouterRouting
+  }
+}
+
+public struct ProviderRequest: Sendable, Equatable {
+  public var model: ModelID
+  public var messages: [ProviderMessage]
+  public var options: ProviderRequestOptions
+
+  public init(
+    model: ModelID,
+    messages: [ProviderMessage],
+    options: ProviderRequestOptions = .init()
+  ) {
+    self.model = model
+    self.messages = messages
+    self.options = options
+  }
+}
+
+public struct ProviderUsage: Codable, Sendable, Equatable {
+  public var inputTokens: Int?
+  public var outputTokens: Int?
+  public var cachedInputTokens: Int?
+  public var reasoningTokens: Int?
+
+  public init(
+    inputTokens: Int? = nil,
+    outputTokens: Int? = nil,
+    cachedInputTokens: Int? = nil,
+    reasoningTokens: Int? = nil
+  ) {
+    self.inputTokens = inputTokens
+    self.outputTokens = outputTokens
+    self.cachedInputTokens = cachedInputTokens
+    self.reasoningTokens = reasoningTokens
+  }
+}
+
+public struct ProviderResponse: Sendable, Equatable {
+  public var id: String?
+  public var text: String
+  public var reasoning: String
+  public var providerID: ProviderID
+  public var accountID: ProviderAccountID
+  public var modelID: ModelID
+  public var finishReason: String?
+  public var usage: ProviderUsage?
+  public var metadata: [String: String]
+
+  public init(
+    id: String? = nil,
+    text: String,
+    reasoning: String = "",
+    providerID: ProviderID,
+    accountID: ProviderAccountID,
+    modelID: ModelID,
+    finishReason: String? = nil,
+    usage: ProviderUsage? = nil,
+    metadata: [String: String] = [:]
+  ) {
+    self.id = id
+    self.text = text
+    self.reasoning = reasoning
+    self.providerID = providerID
+    self.accountID = accountID
+    self.modelID = modelID
+    self.finishReason = finishReason
+    self.usage = usage
+    self.metadata = metadata
+  }
+}
+
+public enum ProviderStreamEvent: Sendable, Equatable {
+  case textDelta(String)
+  case reasoningDelta(String)
+  case usage(ProviderUsage)
+  case completed(ProviderResponse)
+}
+
+public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
+  public var providerID: ProviderID
+  public var id: ModelID
+  public var displayName: String
+  public var contextWindow: Int?
+  public var maxOutputTokens: Int?
+  public var supportedParameters: Set<String>
+  public var inputModalities: Set<String>
+  public var outputModalities: Set<String>
+  public var promptPricePerToken: String?
+  public var completionPricePerToken: String?
+  public var isSeed: Bool
+
+  public init(
+    providerID: ProviderID,
+    id: ModelID,
+    displayName: String,
+    contextWindow: Int? = nil,
+    maxOutputTokens: Int? = nil,
+    supportedParameters: Set<String> = [],
+    inputModalities: Set<String> = ["text"],
+    outputModalities: Set<String> = ["text"],
+    promptPricePerToken: String? = nil,
+    completionPricePerToken: String? = nil,
+    isSeed: Bool = false
+  ) {
+    self.providerID = providerID
+    self.id = id
+    self.displayName = displayName
+    self.contextWindow = contextWindow
+    self.maxOutputTokens = maxOutputTokens
+    self.supportedParameters = supportedParameters
+    self.inputModalities = inputModalities
+    self.outputModalities = outputModalities
+    self.promptPricePerToken = promptPricePerToken
+    self.completionPricePerToken = completionPricePerToken
+    self.isSeed = isSeed
+  }
+}
+
+public enum ProviderAPIFamily: String, Codable, Sendable {
+  case openAIChatCompletions
+}
+
+public enum ProviderBehaviorID: String, Codable, Sendable {
+  case deepSeek
+  case openRouter
+  case nvidia
+  case genericOpenAICompatible
+}
+
+public struct ProviderDefinition: Codable, Sendable, Identifiable, Equatable {
+  public var id: ProviderID
+  public var displayName: String
+  public var apiFamily: ProviderAPIFamily
+  public var behavior: ProviderBehaviorID
+  public var defaultBaseURL: URL
+  public var chatCompletionsPath: String
+  public var modelsPath: String?
+  public var seedModels: [ProviderModel]
+
+  public init(
+    id: ProviderID,
+    displayName: String,
+    apiFamily: ProviderAPIFamily = .openAIChatCompletions,
+    behavior: ProviderBehaviorID,
+    defaultBaseURL: URL,
+    chatCompletionsPath: String = "/chat/completions",
+    modelsPath: String? = "/models",
+    seedModels: [ProviderModel] = []
+  ) {
+    self.id = id
+    self.displayName = displayName
+    self.apiFamily = apiFamily
+    self.behavior = behavior
+    self.defaultBaseURL = defaultBaseURL
+    self.chatCompletionsPath = chatCompletionsPath
+    self.modelsPath = modelsPath
+    self.seedModels = seedModels
+  }
+}
+
+public struct ResolvedProviderAccount: Sendable, Equatable {
+  public var id: ProviderAccountID
+  public var providerID: ProviderID
+  public var label: String
+  public var apiKey: String?
+  public var baseURLOverride: URL?
+  public var additionalHeaders: [String: String]
+  public var metadata: [String: String]
+
+  public init(
+    id: ProviderAccountID,
+    providerID: ProviderID,
+    label: String,
+    apiKey: String?,
+    baseURLOverride: URL? = nil,
+    additionalHeaders: [String: String] = [:],
+    metadata: [String: String] = [:]
+  ) {
+    self.id = id
+    self.providerID = providerID
+    self.label = label
+    self.apiKey = apiKey
+    self.baseURLOverride = baseURLOverride
+    self.additionalHeaders = additionalHeaders
+    self.metadata = metadata
+  }
+}
