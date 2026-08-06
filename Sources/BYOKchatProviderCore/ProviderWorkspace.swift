@@ -97,13 +97,17 @@ public actor ProviderWorkspaceStore {
 
   public func load() async throws {
     guard !hasLoaded else { return }
-    defer { hasLoaded = true }
-    guard let data = try await persistence.loadData() else { return }
+    guard let data = try await persistence.loadData() else {
+      hasLoaded = true
+      return
+    }
     let decoded = try JSONDecoder.provider.decode(ProviderWorkspaceState.self, from: data)
     guard decoded.schemaVersion == ProviderWorkspaceState.currentSchemaVersion else {
       throw ProviderError.workspaceVersionUnsupported(decoded.schemaVersion)
     }
+    try WorkspaceImportValidator.validateProviderWorkspace(decoded)
     state = decoded
+    hasLoaded = true
   }
 
   public func snapshot() -> ProviderWorkspaceState { state }
@@ -147,14 +151,15 @@ public actor ProviderWorkspaceStore {
 
   public func deleteAccount(_ id: ProviderAccountID) async throws {
     guard let account = state.accounts.first(where: { $0.id == id }) else { return }
-    state.accounts.removeAll { $0.id == id }
-    state.modelRecords.removeAll { $0.accountID == id }
-    if state.defaultAccountID == id { state.defaultAccountID = state.accounts.first?.id }
-    if state.providerDefaultAccountIDs[account.providerID.rawValue] == id.rawValue {
-      state.providerDefaultAccountIDs[account.providerID.rawValue] =
-        state.accounts.first(where: { $0.providerID == account.providerID })?.id.rawValue
+    var candidate = state
+    candidate.accounts.removeAll { $0.id == id }
+    candidate.modelRecords.removeAll { $0.accountID == id }
+    if candidate.defaultAccountID == id { candidate.defaultAccountID = candidate.accounts.first?.id }
+    if candidate.providerDefaultAccountIDs[account.providerID.rawValue] == id.rawValue {
+      candidate.providerDefaultAccountIDs[account.providerID.rawValue] =
+        candidate.accounts.first(where: { $0.providerID == account.providerID })?.id.rawValue
     }
-    try await persist()
+    try await commit(candidate)
   }
 
   public func setDefaultAccount(_ id: ProviderAccountID?) async throws {
@@ -195,6 +200,11 @@ public actor ProviderWorkspaceStore {
         "Built-in providers cannot be stored as custom providers.")
     }
     try ProviderRegistry.validate(definition)
+    guard !BuiltInProviders.all.contains(where: { $0.id == definition.id }) else {
+      throw ProviderError.invalidDefinition(
+        "Custom provider IDs cannot replace built-in providers."
+      )
+    }
     if let index = state.customProviders.firstIndex(where: { $0.id == definition.id }) {
       state.customProviders[index] = definition
     } else {
@@ -299,29 +309,38 @@ public actor ProviderWorkspaceStore {
     guard imported.schemaVersion == ProviderWorkspaceState.currentSchemaVersion else {
       throw ProviderError.workspaceVersionUnsupported(imported.schemaVersion)
     }
+    try WorkspaceImportValidator.validateProviderWorkspace(imported)
+
+    var candidate = state
     switch strategy {
     case .replaceExisting:
-      state = imported
+      candidate = imported
     case .keepExisting:
-      state.customProviders = mergeByID(
-        current: state.customProviders, incoming: imported.customProviders,
+      candidate.customProviders = mergeByID(
+        current: candidate.customProviders, incoming: imported.customProviders,
         id: \ProviderDefinition.id)
-      state.accounts = mergeByID(
-        current: state.accounts, incoming: imported.accounts, id: \ProviderAccount.id)
-      let existingModelIDs = Set(state.modelRecords.map(\.id))
-      state.modelRecords.append(
+      candidate.accounts = mergeByID(
+        current: candidate.accounts, incoming: imported.accounts, id: \ProviderAccount.id)
+      let existingModelIDs = Set(candidate.modelRecords.map(\.id))
+      candidate.modelRecords.append(
         contentsOf: imported.modelRecords.filter { !existingModelIDs.contains($0.id) })
-      if state.defaultAccountID == nil { state.defaultAccountID = imported.defaultAccountID }
+      if candidate.defaultAccountID == nil { candidate.defaultAccountID = imported.defaultAccountID }
       for (key, value) in imported.providerDefaultAccountIDs
-      where state.providerDefaultAccountIDs[key] == nil {
-        state.providerDefaultAccountIDs[key] = value
+      where candidate.providerDefaultAccountIDs[key] == nil {
+        candidate.providerDefaultAccountIDs[key] = value
       }
     }
-    try await persist()
+    try WorkspaceImportValidator.validateProviderWorkspace(candidate)
+    try await commit(candidate)
   }
 
   private func persist() async throws {
     try await persistence.saveData(JSONEncoder.providerEncoder.encode(state))
+  }
+
+  private func commit(_ candidate: ProviderWorkspaceState) async throws {
+    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
+    state = candidate
   }
 
   private func mergeModel(_ current: ProviderModel, _ incoming: ProviderModel) -> ProviderModel {
