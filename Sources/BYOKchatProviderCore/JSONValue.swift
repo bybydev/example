@@ -24,9 +24,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
       self = .array(value)
     } else {
       throw DecodingError.dataCorruptedError(
-        in: container,
-        debugDescription: "Unsupported JSON value"
-      )
+        in: container, debugDescription: "Unsupported JSON value")
     }
   }
 
@@ -40,18 +38,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
     case .array(let value): try container.encode(value)
     case .null: try container.encodeNil()
     }
-  }
-
-  public var stringValue: String? {
-    guard case .string(let value) = self else { return nil }
-    return value
-  }
-}
-
-extension JSONValue {
-  static func fromEncodable<Value: Encodable>(_ value: Value) throws -> JSONValue {
-    let data = try JSONEncoder.providerEncoder.encode(value)
-    return try JSONDecoder.provider.decode(JSONValue.self, from: data)
   }
 }
 

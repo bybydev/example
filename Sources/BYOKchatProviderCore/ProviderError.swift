@@ -4,6 +4,8 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case invalidDefinition(String)
   case duplicateProvider(ProviderID)
   case providerNotFound(ProviderID)
+  case accountNotFound(ProviderAccountID)
+  case duplicateAccount(ProviderAccountID)
   case unsupportedAPIFamily(String)
   case invalidBaseURL
   case invalidModel
@@ -23,31 +25,38 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case invalidResponse
   case emptyOutput
   case prematureStreamEnd
+  case workspaceVersionUnsupported(Int)
+  case importConflict(String)
 
   public var errorDescription: String? {
     switch self {
-    case .invalidDefinition(let message): return message
-    case .duplicateProvider(let id): return "Duplicate provider ID: \(id.rawValue)"
-    case .providerNotFound(let id): return "Provider not found: \(id.rawValue)"
-    case .unsupportedAPIFamily(let family): return "Unsupported API family: \(family)"
-    case .invalidBaseURL: return "The provider base URL is invalid."
-    case .invalidModel: return "A model ID is required."
-    case .invalidMessages: return "At least one non-empty message is required."
-    case .missingCredential: return "An API key is required for this provider account."
-    case .unsafeHeader(let name): return "The custom header \(name) is not allowed."
-    case .authenticationFailed: return "The provider rejected the API key."
-    case .permissionDenied: return "The provider denied this request."
-    case .insufficientCredits: return "The provider account has insufficient credit or quota."
-    case .rateLimited: return "The provider rate limited this request."
-    case .modelUnavailable: return "The selected model is unavailable."
-    case .invalidEndpoint: return "The provider endpoint could not be found."
-    case .invalidRequest(let message): return message
-    case .provider(_, let message): return message
-    case .midStreamProvider(_, let message): return message
-    case .transport(let message, _): return message
-    case .invalidResponse: return "The provider returned an invalid response."
-    case .emptyOutput: return "The provider returned an empty response."
-    case .prematureStreamEnd: return "The provider stream ended before completion."
+    case .invalidDefinition(let message): message
+    case .duplicateProvider(let id): "Duplicate provider ID: \(id.rawValue)"
+    case .providerNotFound(let id): "Provider not found: \(id.rawValue)"
+    case .accountNotFound(let id): "Provider account not found: \(id.rawValue)"
+    case .duplicateAccount(let id): "Duplicate provider account: \(id.rawValue)"
+    case .unsupportedAPIFamily(let family): "Unsupported API family: \(family)"
+    case .invalidBaseURL: "The provider base URL is invalid."
+    case .invalidModel: "A model ID is required."
+    case .invalidMessages: "At least one non-empty message is required."
+    case .missingCredential: "An API key is required for this provider account."
+    case .unsafeHeader(let name): "The custom header \(name) is not allowed."
+    case .authenticationFailed: "The provider rejected the API key."
+    case .permissionDenied: "The provider denied this request."
+    case .insufficientCredits: "The provider account has insufficient credit or quota."
+    case .rateLimited: "The provider rate limited this request."
+    case .modelUnavailable: "The selected model is unavailable."
+    case .invalidEndpoint: "The provider endpoint could not be found."
+    case .invalidRequest(let message): message
+    case .provider(_, let message): message
+    case .midStreamProvider(_, let message): message
+    case .transport(let message, _): message
+    case .invalidResponse: "The provider returned an invalid response."
+    case .emptyOutput: "The provider returned an empty response."
+    case .prematureStreamEnd: "The provider stream ended before completion."
+    case .workspaceVersionUnsupported(let version):
+      "Provider workspace version \(version) is unsupported."
+    case .importConflict(let message): message
     }
   }
 }

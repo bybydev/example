@@ -10,32 +10,23 @@ public enum BuiltInProviders {
     displayName: "DeepSeek",
     behavior: .deepSeek,
     defaultBaseURL: URL(string: "https://api.deepseek.com")!,
-    chatCompletionsPath: "/chat/completions",
     modelsPath: "/models",
+    authentication: .bearer,
     seedModels: [
-      ProviderModel(
-        providerID: deepSeekID,
-        id: "deepseek-v4-flash",
-        displayName: "DeepSeek V4 Flash",
-        contextWindow: 1_000_000,
-        maxOutputTokens: 384_000,
+      .init(
+        providerID: deepSeekID, id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
+        contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
           "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort",
-        ],
-        isSeed: true
-      ),
-      ProviderModel(
-        providerID: deepSeekID,
-        id: "deepseek-v4-pro",
-        displayName: "DeepSeek V4 Pro",
-        contextWindow: 1_000_000,
-        maxOutputTokens: 384_000,
+        ], isSeed: true),
+      .init(
+        providerID: deepSeekID, id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
+        contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
           "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort",
-        ],
-        isSeed: true
-      ),
-    ]
+        ], isSeed: true),
+    ],
+    isBuiltIn: true
   )
 
   public static let openRouter = ProviderDefinition(
@@ -43,17 +34,14 @@ public enum BuiltInProviders {
     displayName: "OpenRouter",
     behavior: .openRouter,
     defaultBaseURL: URL(string: "https://openrouter.ai/api/v1")!,
-    chatCompletionsPath: "/chat/completions",
     modelsPath: "/models",
+    authentication: .bearer,
     seedModels: [
-      ProviderModel(
-        providerID: openRouterID,
-        id: "openrouter/free",
-        displayName: "OpenRouter Free",
-        supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning"],
-        isSeed: true
-      )
-    ]
+      .init(
+        providerID: openRouterID, id: "openrouter/free", displayName: "OpenRouter Free",
+        supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning"], isSeed: true)
+    ],
+    isBuiltIn: true
   )
 
   public static let nvidia = ProviderDefinition(
@@ -61,39 +49,25 @@ public enum BuiltInProviders {
     displayName: "NVIDIA",
     behavior: .nvidia,
     defaultBaseURL: URL(string: "https://integrate.api.nvidia.com/v1")!,
-    chatCompletionsPath: "/chat/completions",
     modelsPath: nil,
+    authentication: .bearer,
     seedModels: [
-      ProviderModel(
-        providerID: nvidiaID,
-        id: "deepseek-ai/deepseek-v4-flash",
-        displayName: "DeepSeek V4 Flash",
-        supportedParameters: ["temperature", "top_p", "max_tokens"],
-        isSeed: true
-      ),
-      ProviderModel(
-        providerID: nvidiaID,
-        id: "deepseek-ai/deepseek-v4-pro",
-        displayName: "DeepSeek V4 Pro",
-        supportedParameters: ["temperature", "top_p", "max_tokens"],
-        isSeed: true
-      ),
-      ProviderModel(
-        providerID: nvidiaID,
-        id: "nvidia/nemotron-3-ultra-550b-a55b",
+      .init(
+        providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
+        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+      .init(
+        providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
+        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+      .init(
+        providerID: nvidiaID, id: "nvidia/nemotron-3-ultra-550b-a55b",
         displayName: "Nemotron 3 Ultra 550B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"],
-        isSeed: true
-      ),
-      ProviderModel(
-        providerID: nvidiaID,
-        id: "qwen/qwen3.5-122b-a10b",
-        displayName: "Qwen 3.5 122B A10B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"],
-        isSeed: true
-      ),
-    ]
+        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+      .init(
+        providerID: nvidiaID, id: "qwen/qwen3.5-122b-a10b", displayName: "Qwen 3.5 122B A10B",
+        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+    ],
+    isBuiltIn: true
   )
 
-  public static let all: [ProviderDefinition] = [deepSeek, openRouter, nvidia]
+  public static let all = [deepSeek, openRouter, nvidia]
 }

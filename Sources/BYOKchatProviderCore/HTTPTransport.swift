@@ -8,7 +8,6 @@ public struct ProviderHTTPResponse: Sendable {
   public var statusCode: Int
   public var headers: [String: String]
   public var data: Data
-
   public init(statusCode: Int, headers: [String: String], data: Data) {
     self.statusCode = statusCode
     self.headers = headers
@@ -20,12 +19,8 @@ public struct ProviderHTTPByteStream: Sendable {
   public var statusCode: Int
   public var headers: [String: String]
   public var chunks: AsyncThrowingStream<Data, Error>
-
-  public init(
-    statusCode: Int,
-    headers: [String: String],
-    chunks: AsyncThrowingStream<Data, Error>
-  ) {
+  public init(statusCode: Int, headers: [String: String], chunks: AsyncThrowingStream<Data, Error>)
+  {
     self.statusCode = statusCode
     self.headers = headers
     self.chunks = chunks
@@ -39,31 +34,19 @@ public protocol ProviderHTTPTransport: Sendable {
 
 public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked Sendable {
   private let session: URLSession
-
-  public init(session: URLSession = .shared) {
-    self.session = session
-  }
+  public init(session: URLSession = .shared) { self.session = session }
 
   public func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
     do {
       let (data, response) = try await session.data(for: request)
-      guard let response = response as? HTTPURLResponse else {
-        throw ProviderError.invalidResponse
-      }
-      return ProviderHTTPResponse(
-        statusCode: response.statusCode,
-        headers: Self.headers(response),
-        data: data
-      )
+      guard let response = response as? HTTPURLResponse else { throw ProviderError.invalidResponse }
+      return .init(statusCode: response.statusCode, headers: Self.headers(response), data: data)
     } catch is CancellationError {
       throw CancellationError()
     } catch let error as ProviderError {
       throw error
     } catch {
-      throw ProviderError.transport(
-        message: error.localizedDescription,
-        completionUnknown: true
-      )
+      throw ProviderError.transport(message: error.localizedDescription, completionUnknown: true)
     }
   }
 
@@ -77,7 +60,6 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
         let chunks = AsyncThrowingStream<Data, Error> { continuation in
           let task = Task {
             var pending: [UInt8] = []
-            pending.reserveCapacity(1024)
             do {
               for try await byte in bytes {
                 try Task.checkCancellation()
@@ -87,34 +69,22 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
                   pending.removeAll(keepingCapacity: true)
                 }
               }
-              if !pending.isEmpty {
-                continuation.yield(Data(pending))
-              }
+              if !pending.isEmpty { continuation.yield(Data(pending)) }
               continuation.finish()
-            } catch is CancellationError {
-              continuation.finish(throwing: CancellationError())
             } catch {
               continuation.finish(throwing: error)
             }
           }
-          continuation.onTermination = { _ in
-            task.cancel()
-          }
+          continuation.onTermination = { _ in task.cancel() }
         }
-        return ProviderHTTPByteStream(
-          statusCode: response.statusCode,
-          headers: Self.headers(response),
-          chunks: chunks
-        )
+        return .init(
+          statusCode: response.statusCode, headers: Self.headers(response), chunks: chunks)
       } catch is CancellationError {
         throw CancellationError()
       } catch let error as ProviderError {
         throw error
       } catch {
-        throw ProviderError.transport(
-          message: error.localizedDescription,
-          completionUnknown: true
-        )
+        throw ProviderError.transport(message: error.localizedDescription, completionUnknown: true)
       }
     #else
       let response = try await data(for: request)
@@ -122,31 +92,27 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
         continuation.yield(response.data)
         continuation.finish()
       }
-      return ProviderHTTPByteStream(
-        statusCode: response.statusCode,
-        headers: response.headers,
-        chunks: chunks
-      )
+      return .init(statusCode: response.statusCode, headers: response.headers, chunks: chunks)
     #endif
   }
 
   private static func headers(_ response: HTTPURLResponse) -> [String: String] {
-    var values: [String: String] = [:]
-    for (key, value) in response.allHeaderFields {
-      values[String(describing: key)] = String(describing: value)
-    }
-    return values
+    Dictionary(
+      uniqueKeysWithValues: response.allHeaderFields.map {
+        (String(describing: $0.key), String(describing: $0.value))
+      })
   }
 }
 
 public enum ProviderHTTP {
   private static let forbiddenHeaders: Set<String> = [
-    "authorization", "proxy-authorization", "host", "content-length",
-    "connection", "cookie", "set-cookie", "transfer-encoding",
+    "authorization", "proxy-authorization", "host", "content-length", "connection",
+    "cookie", "set-cookie", "transfer-encoding",
   ]
 
   public static func endpoint(baseURL: URL, path: String) throws -> URL {
-    guard baseURL.scheme?.lowercased() == "https" else {
+    guard baseURL.scheme?.lowercased() == "https", baseURL.user == nil, baseURL.password == nil
+    else {
       throw ProviderError.invalidBaseURL
     }
     let relative = path.hasPrefix("/") ? String(path.dropFirst()) : path
@@ -156,7 +122,8 @@ public enum ProviderHTTP {
   public static func makeRequest(
     url: URL,
     method: String,
-    apiKey: String?,
+    authentication: ProviderAuthentication,
+    secret: String?,
     additionalHeaders: [String: String] = [:]
   ) throws -> URLRequest {
     var request = URLRequest(url: url)
@@ -165,19 +132,29 @@ public enum ProviderHTTP {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-    if let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !apiKey.isEmpty
-    {
-      request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    let normalizedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch authentication {
+    case .bearer:
+      if let normalizedSecret, !normalizedSecret.isEmpty {
+        request.setValue("Bearer \(normalizedSecret)", forHTTPHeaderField: "Authorization")
+      }
+    case .header(let name):
+      guard !Self.isForbiddenCustomHeader(name) else { throw ProviderError.unsafeHeader(name) }
+      if let normalizedSecret, !normalizedSecret.isEmpty {
+        request.setValue(normalizedSecret, forHTTPHeaderField: name)
+      }
+    case .none:
+      break
     }
 
     for (name, value) in additionalHeaders {
-      let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-      guard !forbiddenHeaders.contains(normalized) else {
-        throw ProviderError.unsafeHeader(name)
-      }
+      guard !Self.isForbiddenCustomHeader(name) else { throw ProviderError.unsafeHeader(name) }
       request.setValue(value, forHTTPHeaderField: name)
     }
     return request
+  }
+
+  public static func isForbiddenCustomHeader(_ name: String) -> Bool {
+    forbiddenHeaders.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
   }
 }
