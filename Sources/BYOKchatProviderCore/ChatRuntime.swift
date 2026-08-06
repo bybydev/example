@@ -19,6 +19,7 @@ public actor ChatRuntime {
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
+
   private struct ActiveGenerationState: Sendable {
     var assistantID: ChatMessageID
     var content: String
@@ -100,19 +101,16 @@ public actor ChatRuntime {
       }
     }
 
-    var capturedContinuation: AsyncThrowingStream<ChatRuntimeEvent, Error>.Continuation!
-    let stream = AsyncThrowingStream<ChatRuntimeEvent, Error> { continuation in
-      capturedContinuation = continuation
-    }
+    let (stream, continuation) = AsyncThrowingStream<ChatRuntimeEvent, Error>.makeStream()
     let task = Task {
       await self.runGeneration(
         conversationID: conversationID,
         operation: operation,
-        continuation: capturedContinuation
+        continuation: continuation
       )
     }
     generationTasks[conversationID] = task
-    capturedContinuation.onTermination = { _ in task.cancel() }
+    continuation.onTermination = { @Sendable _ in task.cancel() }
     return stream
   }
 
