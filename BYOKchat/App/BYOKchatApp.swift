@@ -1,6 +1,7 @@
 import SwiftUI
 
 @main
+@MainActor
 struct BYOKchatApp: App {
   @State private var model = AppModel()
 
