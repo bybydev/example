@@ -2,10 +2,16 @@ import BYOKchatProviderCore
 import SwiftUI
 
 struct AppRootView: View {
+  private struct ChatPresentationID: Hashable {
+    let conversationID: ConversationID
+    let messageID: ChatMessageID?
+  }
+
   @Bindable var model: AppModel
 
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedConversationID: ConversationID?
+  @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
   @State private var didRestoreSelection = false
@@ -30,8 +36,10 @@ struct AppRootView: View {
           ChatSidebarView(
             chats: model.chats,
             providers: model.providers,
-            selectedConversationID: $selectedConversationID,
+            selectedConversationID: selectedConversationID,
             newChat: startNewChat,
+            selectConversation: selectConversation,
+            selectSearchResult: selectSearchResult,
             openSettings: openSettings,
             close: closeSidebar
           )
@@ -52,6 +60,7 @@ struct AppRootView: View {
     .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
       guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
       self.selectedConversationID = nil
+      initialScrollMessageID = nil
     }
     .onChange(of: scenePhase) { _, phase in
       guard phase != .active else { return }
@@ -98,12 +107,18 @@ struct AppRootView: View {
       {
         ChatView(
           conversationID: selectedConversationID,
+          initialScrollMessageID: initialScrollMessageID,
           chats: model.chats,
           providers: model.providers,
           openSidebar: openSidebar,
           startNewChat: startNewChat
         )
-        .id(selectedConversationID)
+        .id(
+          ChatPresentationID(
+            conversationID: selectedConversationID,
+            messageID: initialScrollMessageID
+          )
+        )
       } else {
         NewChatView(
           chats: model.chats,
@@ -138,11 +153,19 @@ struct AppRootView: View {
 
   private func startNewChat() {
     selectedConversationID = nil
+    initialScrollMessageID = nil
     closeSidebar()
   }
 
   private func selectConversation(_ id: ConversationID) {
     selectedConversationID = id
+    initialScrollMessageID = nil
+    closeSidebar()
+  }
+
+  private func selectSearchResult(_ result: ConversationSearchResult) {
+    selectedConversationID = result.conversationID
+    initialScrollMessageID = result.messageID
     closeSidebar()
   }
 
