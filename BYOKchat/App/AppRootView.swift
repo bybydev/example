@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -9,6 +10,7 @@ struct AppRootView: View {
 
   @Bindable var model: AppModel
 
+  @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedConversationID: ConversationID?
   @State private var initialScrollMessageID: ChatMessageID?
@@ -21,6 +23,9 @@ struct AppRootView: View {
       let drawerWidth = min(geometry.size.width * 0.80, 390)
 
       ZStack(alignment: .leading) {
+        theme.backgroundColor
+          .ignoresSafeArea()
+
         mainContent
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .offset(x: isSidebarPresented ? drawerWidth : 0)
