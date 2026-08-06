@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import Observation
@@ -9,12 +10,20 @@ final class AppModel {
   let chats: ChatManagementModel
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
+  let themeManager: ThemeManager
 
   private(set) var hasLoaded = false
 
   init() {
     let preferences = AppPreferencesModel()
     self.preferences = preferences
+    themeManager = ThemeManager(
+      catalog: BYOKchatThemes.catalog,
+      stateStore: UserDefaultsThemeStateStore(storageKey: "byokchat.themeState.v1"),
+      hasPro: false,
+      previewBehavior: .disabled
+    )
+
     let registry = try! ProviderRegistry.builtIn()
     let supportDirectory = FileManager.default.urls(
       for: .applicationSupportDirectory,
