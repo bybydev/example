@@ -1,22 +1,106 @@
 import AppFoundation
+import LaTeXSwiftUI
 import MarkdownUI
 import SwiftUI
-import UIKit
 
 struct MarkdownMessageContent: View {
   let text: String
+  var showsSources = true
 
   @Environment(\.appFoundationTheme) private var theme
+  @State private var browserDestination: BrowserDestination?
+
+  private var blocks: [AnswerContentBlock] {
+    AnswerContentParser.parse(text)
+  }
+
+  private var sources: [AnswerSource] {
+    showsSources ? AnswerContentParser.sources(in: blocks) : []
+  }
 
   var body: some View {
-    Markdown(text)
-      .markdownTheme(chatTheme)
-      .markdownBlockStyle(\.codeBlock) { configuration in
-        ChatCodeBlock(configuration: configuration)
+    VStack(alignment: .leading, spacing: 12) {
+      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        blockView(block)
       }
-      .textSelection(.enabled)
-      .tint(theme.accentColor)
-      .frame(maxWidth: .infinity, alignment: .leading)
+
+      if !sources.isEmpty {
+        AnswerSourcesView(sources: sources) { url in
+          browserDestination = BrowserDestination(url: url)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .environment(
+      \.openURL,
+      OpenURLAction { url in
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+          return .systemAction
+        }
+        browserDestination = BrowserDestination(url: url)
+        return .handled
+      }
+    )
+    .sheet(item: $browserDestination) { destination in
+      InAppBrowserView(url: destination.url)
+        .ignoresSafeArea()
+    }
+  }
+
+  @ViewBuilder
+  private func blockView(_ block: AnswerContentBlock) -> some View {
+    switch block {
+    case .markdown(let markdown):
+      if shouldUseInlineMathRenderer(markdown) {
+        LaTeX(markdown)
+          .parsingMode(.onlyEquations)
+          .blockMode(.blockViews)
+          .processEscapes()
+          .renderingStyle(.redactedOriginal)
+          .renderingAnimation(.easeOut(duration: 0.18))
+          .errorMode(.original)
+          .imageRenderingMode(.template)
+          .imageAccessibility(.sre)
+          .font(.system(size: 17))
+          .foregroundStyle(theme.primaryForegroundColor)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        Markdown(markdown)
+          .markdownTheme(chatTheme)
+          .textSelection(.enabled)
+          .tint(theme.accentColor)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+
+    case .code(let language, let content):
+      if AnswerContentParser.isMermaidLanguage(language) {
+        MermaidAnswerView(source: content)
+      } else {
+        HighlightedCodeBlock(language: language, content: content)
+      }
+
+    case .math(let expression):
+      MathAnswerView(expression: expression)
+    }
+  }
+
+  private func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
+    guard AnswerContentParser.containsInlineMath(markdown) else { return false }
+
+    for line in markdown.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if trimmed.hasPrefix("#")
+        || trimmed.hasPrefix(">")
+        || trimmed.hasPrefix("- ")
+        || trimmed.hasPrefix("* ")
+        || trimmed.hasPrefix("+ ")
+        || trimmed.hasPrefix("|")
+        || trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil
+      {
+        return false
+      }
+    }
+    return true
   }
 
   private var chatTheme: MarkdownUI.Theme {
@@ -176,72 +260,5 @@ struct MarkdownMessageContent: View {
         .frame(height: 1)
         .markdownMargin(top: .em(1.1), bottom: .em(1.1))
       }
-  }
-}
-
-private struct ChatCodeBlock: View {
-  let configuration: CodeBlockConfiguration
-
-  @Environment(\.appFoundationTheme) private var theme
-
-  var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 8) {
-        HStack(spacing: 6) {
-          Circle()
-            .fill(theme.accentColor)
-            .frame(width: 6, height: 6)
-
-          Text(configuration.language?.uppercased() ?? "CODE")
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .lineLimit(1)
-        }
-
-        Spacer(minLength: 8)
-
-        Button {
-          UIPasteboard.general.string = configuration.content
-        } label: {
-          Label("Copy", systemImage: "doc.on.doc")
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 9)
-            .frame(height: 30)
-            .background(theme.surfaceColor, in: Capsule())
-        }
-        .foregroundStyle(theme.secondaryForegroundColor)
-        .buttonStyle(.plain)
-        .accessibilityLabel("Copy code block")
-      }
-      .padding(.leading, 13)
-      .padding(.trailing, 7)
-      .frame(minHeight: 42)
-      .background(theme.elevatedSurfaceColor)
-
-      Rectangle()
-        .fill(theme.borderColor)
-        .frame(height: 0.5)
-
-      ScrollView(.horizontal) {
-        configuration.label
-          .fixedSize(horizontal: false, vertical: true)
-          .relativeLineSpacing(.em(0.24))
-          .markdownTextStyle {
-            FontFamilyVariant(.monospaced)
-            FontSize(.em(0.88))
-            ForegroundColor(theme.primaryForegroundColor)
-          }
-          .padding(14)
-      }
-      .scrollIndicators(.visible)
-    }
-    .background(theme.surfaceColor)
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.borderColor, lineWidth: 0.75)
-    )
-    .shadow(color: theme.appearance.shadow.color.opacity(0.35), radius: 8, y: 3)
-    .markdownMargin(top: .em(0.1), bottom: .em(0.9))
   }
 }
