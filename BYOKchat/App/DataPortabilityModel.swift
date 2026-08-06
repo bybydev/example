@@ -101,7 +101,12 @@ final class DataPortabilityModel {
       let existingDefaultPrompt = preferences.defaultSystemPrompt
       await chatsModel.stopAllGenerations()
       let summary = try await service.importBackup(data, strategy: strategy)
-      if strategy == .replaceExisting || existingDefaultPrompt.isEmpty {
+      let replacesExisting: Bool
+      switch strategy {
+      case .replaceExisting: replacesExisting = true
+      case .keepExisting: replacesExisting = false
+      }
+      if replacesExisting || existingDefaultPrompt.isEmpty {
         preferences.defaultSystemPrompt = summary.defaultSystemPrompt
       }
       await providersModel.reloadFromStorage()
