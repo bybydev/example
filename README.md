@@ -2,36 +2,57 @@
 
 BYOKchat is an iOS-only, BYOK-only AI chat client under active development.
 
-## Current Phase 1 slice
+## Current status
 
-The repository now contains an independent Swift provider core with first-class presets for:
+Phase 2 establishes a persistent provider workspace and a native provider-management experience around the independent provider core.
+
+### First-class providers
 
 - DeepSeek
 - OpenRouter
 - NVIDIA
+- User-defined OpenAI-compatible providers
 
-Implemented foundations:
+### Provider core
 
-- OpenAI-compatible one-shot generation
-- Native SSE streaming on Apple platforms
-- Visible text and reasoning separation
-- Stream usage events
-- Mid-stream provider error handling
-- Cancellation propagation
-- Model discovery with bundled seed fallback
+- OpenAI-compatible one-shot generation and SSE streaming
+- Visible answer and reasoning separation
+- Usage, finish reason, and provider metadata normalization
+- Cancellation and mid-stream provider errors
 - DeepSeek thinking controls
-- OpenRouter reasoning and provider-routing controls
-- OpenRouter generation metadata capture
-- NVIDIA hosted API preset
-- Provider registry with stable string IDs
-- Credential vault protocol and Apple Keychain implementation
-- XcodeGen iOS 26 scaffold
-- Debug provider console
+- OpenRouter reasoning and routing controls
+- Model discovery with curated seed fallbacks
+- Stable provider, account, and model IDs
+- Bearer, named-header, and no-auth providers
+- Protected custom headers and HTTPS endpoint validation
+
+### Provider workspace
+
+- Multiple accounts per provider
+- API credentials stored separately in Keychain
+- Versioned non-secret JSON workspace
+- Custom providers
+- Endpoint overrides and safe custom headers
+- Provider defaults and per-account default models
+- Model discovery, manual models, favorites, hidden models, and availability tracking
+- Configuration export/import without credentials
+- Complete credential cleanup when an account is deleted
+
+### iOS app
+
+- Providers and configured accounts browser
+- Account setup and editing
+- Secure credential replacement
+- OpenRouter metadata fields
+- Model refresh, favorites, manual models, and default selection
+- Custom OpenAI-compatible provider creator
+- Persistent-account streaming console
 
 ## Local validation
 
 ```sh
 swift test
+swift build -c release
 ```
 
 On macOS with XcodeGen installed:
@@ -41,8 +62,8 @@ xcodegen generate
 open BYOKchat.xcodeproj
 ```
 
-The debug app requires your own provider key. No live credentials are committed.
+Live provider tests require your own DeepSeek, OpenRouter, or NVIDIA API key. No credentials are committed or exported.
 
-## Important
+## Architecture boundary
 
-BYOKchat does not use AppFoundation's AI provider management. AppFoundation may later be used only for approved non-AI UI infrastructure.
+BYOKchat owns its complete AI provider platform. It does not use AppFoundation's AI provider manager. AppFoundation may later be used only for approved non-AI UI infrastructure.
