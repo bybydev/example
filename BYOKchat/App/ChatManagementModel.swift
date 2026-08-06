@@ -157,7 +157,7 @@ final class ChatManagementModel {
   }
 
   func deleteConversation(_ id: ConversationID) async {
-    stop(id)
+    await stop(id)
     draftTasks[id]?.cancel()
     draftTasks.removeValue(forKey: id)
     draftRevisions.removeValue(forKey: id)
@@ -243,9 +243,21 @@ final class ChatManagementModel {
     )
   }
 
-  func stop(_ conversationID: ConversationID) {
-    generationTasks[conversationID]?.cancel()
-    Task { await runtime.cancel(conversationID: conversationID) }
+  func stop(_ conversationID: ConversationID) async {
+    guard let consumerTask = generationTasks[conversationID] else { return }
+
+    // Cancel the provider/runtime task first so it can persist a cancelled assistant message and close
+    // the stream. The UI consumer remains alive long enough to receive that final state.
+    await runtime.cancel(conversationID: conversationID)
+
+    // A defensive cancellation prevents a malformed provider stream from leaving the consumer waiting.
+    consumerTask.cancel()
+    await consumerTask.value
+
+    // Never allow an in-memory streaming overlay to outlive its generation. Otherwise a stored
+    // cancelled/failed message is still rendered as an endless "Thinking…" row.
+    try? await reloadSnapshot()
+    clearLiveMessages(for: conversationID)
   }
 
   func persistActiveMessages() async {
@@ -275,6 +287,7 @@ final class ChatManagementModel {
     generationTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
       defer {
+        clearLiveMessages(for: conversationID)
         activeConversationIDs.remove(conversationID)
         generationTasks.removeValue(forKey: conversationID)
       }
@@ -337,6 +350,16 @@ final class ChatManagementModel {
     conversations = await conversationStore.allConversations()
     let currentMessageIDs = Set(conversations.flatMap(\.messages).map(\.id))
     liveMessages = liveMessages.filter { currentMessageIDs.contains($0.key) }
+  }
+
+  private func clearLiveMessages(for conversationID: ConversationID) {
+    guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+    let messageIDs = Set(conversation.messages.map(\.id))
+    let previousCount = liveMessages.count
+    liveMessages = liveMessages.filter { !messageIDs.contains($0.key) }
+    if liveMessages.count != previousCount {
+      streamRevision &+= 1
+    }
   }
 
   private func defaultOptions(providerID: ProviderID) -> ProviderRequestOptions {
