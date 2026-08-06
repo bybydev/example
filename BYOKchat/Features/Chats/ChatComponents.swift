@@ -85,6 +85,8 @@ struct ChatComposer: View {
   let send: () -> Void
   let stop: () -> Void
 
+  @FocusState private var isEditorFocused: Bool
+
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -116,11 +118,16 @@ struct ChatComposer: View {
           .font(.system(size: 17))
           .lineLimit(1...7)
           .frame(minHeight: 44)
-          .disabled(isGenerating)
+          .focused($isEditorFocused)
           .accessibilityLabel("Message")
 
         Button {
-          isGenerating ? stop() : send()
+          isEditorFocused = false
+          if isGenerating {
+            stop()
+          } else {
+            send()
+          }
         } label: {
           Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
             .font(.system(size: 18, weight: .bold))
@@ -143,6 +150,10 @@ struct ChatComposer: View {
     .padding(.horizontal, 16)
     .padding(.top, 6)
     .padding(.bottom, 8)
+    .onChange(of: isGenerating) { _, generating in
+      if generating { isEditorFocused = false }
+    }
+    .onDisappear { isEditorFocused = false }
   }
 
   private var sendButtonBackground: Color {
