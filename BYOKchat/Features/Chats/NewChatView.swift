@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UIKit
@@ -10,6 +11,7 @@ struct NewChatView: View {
   let openSettings: () -> Void
   let selectConversation: (ConversationID) -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var draft = ""
   @State private var isCreating = false
 
@@ -72,7 +74,7 @@ struct NewChatView: View {
         dismissKeyboard()
       }
     )
-    .background(Color(uiColor: .systemBackground))
+    .background(theme.backgroundColor)
     .toolbar(.hidden, for: .navigationBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       ChatTopBar(
@@ -119,8 +121,12 @@ struct NewChatView: View {
       .padding(.horizontal, 16)
       .frame(minHeight: 52)
       .background(
-        Color(uiColor: .secondarySystemBackground),
+        theme.surfaceColor,
         in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .stroke(theme.borderColor, lineWidth: 0.5)
       )
     }
     .buttonStyle(.plain)
