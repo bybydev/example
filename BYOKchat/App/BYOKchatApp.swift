@@ -1,3 +1,4 @@
+import AppFoundation
 import SwiftUI
 
 @main
@@ -8,6 +9,7 @@ struct BYOKchatApp: App {
   var body: some Scene {
     WindowGroup {
       AppRootView(model: model)
+        .appFoundationTheme(model.themeManager)
     }
   }
 }
