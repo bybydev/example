@@ -151,7 +151,8 @@ extension ChatView {
     }
     guard
       providers.credentialAccountIDs.contains(account.id)
-        || providers.provider(for: account.providerID)?.authentication == .none
+        || providers.provider(for: account.providerID)?.authentication
+          == ProviderAuthentication.none
     else {
       return "The selected account is missing its credential."
     }
