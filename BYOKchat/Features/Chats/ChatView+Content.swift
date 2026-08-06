@@ -62,31 +62,74 @@ extension ChatView {
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
+      .simultaneousGesture(
+        DragGesture(minimumDistance: 4)
+          .onChanged { _ in
+            isUserDraggingTimeline = true
+          }
+          .onEnded { _ in
+            isUserDraggingTimeline = false
+            if isNearBottom {
+              followsLatest = true
+              showJumpToLatest = false
+            } else {
+              followsLatest = false
+              showJumpToLatest = true
+            }
+          }
+      )
       .onScrollGeometryChange(for: Bool.self) { geometry in
         geometry.contentSize.height <= geometry.containerSize.height
           || geometry.contentOffset.y + geometry.containerSize.height
             >= geometry.contentSize.height - 120
       } action: { _, nearBottom in
         isNearBottom = nearBottom
-        if nearBottom { showJumpToLatest = false }
+        if nearBottom {
+          followsLatest = true
+          showJumpToLatest = false
+        } else if isUserDraggingTimeline {
+          followsLatest = false
+          showJumpToLatest = true
+        }
       }
       .onChange(of: conversation.messages.count) { _, _ in
-        if isNearBottom { scrollToBottom(proxy) } else { showJumpToLatest = true }
+        if followsLatest {
+          scrollToBottom(proxy)
+        } else {
+          showJumpToLatest = true
+        }
       }
       .onChange(of: chats.streamRevision) { _, _ in
-        if isNearBottom { scrollToBottom(proxy, animated: false) } else { showJumpToLatest = true }
+        if followsLatest {
+          scrollToBottom(proxy, animated: false)
+        } else {
+          showJumpToLatest = true
+        }
+      }
+      .onChange(of: chats.isGenerating(conversationID)) { _, generating in
+        if generating {
+          followsLatest = true
+          showJumpToLatest = false
+          scrollToBottom(proxy)
+        } else if followsLatest {
+          scrollToBottom(proxy, animated: false)
+        }
       }
       .task {
         try? await Task.sleep(for: .milliseconds(80))
         if let initialScrollMessageID {
+          followsLatest = false
+          showJumpToLatest = true
           proxy.scrollTo(initialScrollMessageID, anchor: .center)
         } else {
+          followsLatest = true
           proxy.scrollTo("chat-bottom", anchor: .bottom)
         }
       }
       .overlay(alignment: .bottomTrailing) {
         if showJumpToLatest {
           Button("Jump to Latest", systemImage: "arrow.down") {
+            followsLatest = true
             scrollToBottom(proxy)
             showJumpToLatest = false
           }
@@ -122,10 +165,14 @@ extension ChatView {
   private func send() {
     let text = draft
     draft = ""
+    followsLatest = true
+    showJumpToLatest = false
     chats.send(conversationID: conversationID, text: text)
   }
 
   private func regenerate() {
+    followsLatest = true
+    showJumpToLatest = false
     if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
       showRegenerateConfirmation = true
     } else {
