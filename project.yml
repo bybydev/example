@@ -9,6 +9,9 @@ options:
 packages:
   BYOKchatProviderCore:
     path: .
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: 2.4.1
 
 targets:
   BYOKchat:
@@ -38,6 +41,8 @@ targets:
     dependencies:
       - package: BYOKchatProviderCore
         product: BYOKchatProviderCore
+      - package: MarkdownUI
+        product: MarkdownUI
 
   BYOKchatTests:
     type: bundle.unit-test
