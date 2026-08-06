@@ -4,6 +4,10 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension UTType {
+  static let byokMarkdown = UTType(filenameExtension: "md") ?? .plainText
+}
+
 struct JSONExportDocument: FileDocument, Sendable {
   static var readableContentTypes: [UTType] { [.json] }
   var data: Data
@@ -20,7 +24,7 @@ struct JSONExportDocument: FileDocument, Sendable {
 }
 
 struct MarkdownExportDocument: FileDocument, Sendable {
-  static var readableContentTypes: [UTType] { [.markdown, .plainText] }
+  static var readableContentTypes: [UTType] { [.byokMarkdown, .plainText] }
   var data: Data
 
   init(data: Data = Data()) { self.data = data }
