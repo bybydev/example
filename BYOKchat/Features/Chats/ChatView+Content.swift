@@ -56,6 +56,7 @@ extension ChatView {
             .frame(height: 1)
             .id("chat-bottom")
         }
+        .scrollTargetLayout()
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 18)
@@ -67,7 +68,6 @@ extension ChatView {
         }
       )
       .scrollDismissesKeyboard(.interactively)
-      .defaultScrollAnchor(.bottom)
       .simultaneousGesture(
         DragGesture(minimumDistance: 4)
           .onChanged { _ in
@@ -121,16 +121,8 @@ extension ChatView {
           scrollToBottom(proxy, animated: false)
         }
       }
-      .task {
-        try? await Task.sleep(for: .milliseconds(80))
-        if let initialScrollMessageID {
-          followsLatest = false
-          showJumpToLatest = true
-          proxy.scrollTo(initialScrollMessageID, anchor: .center)
-        } else {
-          followsLatest = true
-          proxy.scrollTo("chat-bottom", anchor: .bottom)
-        }
+      .task(id: conversationID) {
+        await positionInitialTimeline(proxy)
       }
       .overlay(alignment: .bottomTrailing) {
         if showJumpToLatest {
@@ -165,6 +157,32 @@ extension ChatView {
           }
         )
       }
+    }
+  }
+
+  private func positionInitialTimeline(_ proxy: ScrollViewProxy) async {
+    followsLatest = initialScrollMessageID == nil
+    showJumpToLatest = initialScrollMessageID != nil
+
+    // Let the lazy timeline produce its first visible children before asking it to
+    // resolve an offscreen target. A second pass accounts for the safe-area composer.
+    await Task.yield()
+    scrollToInitialTarget(proxy)
+
+    do {
+      try await Task.sleep(for: .milliseconds(32))
+    } catch {
+      return
+    }
+    guard !Task.isCancelled else { return }
+    scrollToInitialTarget(proxy)
+  }
+
+  private func scrollToInitialTarget(_ proxy: ScrollViewProxy) {
+    if let initialScrollMessageID {
+      proxy.scrollTo(initialScrollMessageID, anchor: .center)
+    } else {
+      proxy.scrollTo("chat-bottom", anchor: .bottom)
     }
   }
 
