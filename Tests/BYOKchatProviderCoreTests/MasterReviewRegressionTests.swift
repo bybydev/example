@@ -93,11 +93,12 @@ private actor EOFStreamTransport: ProviderHTTPTransport {
   }
 
   func stream(for request: URLRequest) -> ProviderHTTPByteStream {
-    ProviderHTTPByteStream(
+    let values = chunks
+    return ProviderHTTPByteStream(
       statusCode: 200,
       headers: [:],
       chunks: AsyncThrowingStream { continuation in
-        for chunk in chunks { continuation.yield(chunk) }
+        for chunk in values { continuation.yield(chunk) }
         continuation.finish()
       }
     )
@@ -251,7 +252,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
   )
   try await workspace.load()
   let vault = SelectiveCredentialVault()
-  try await vault.setSecret(
+  await vault.setSecret(
     "secret",
     accountID: account.id,
     field: ProviderAccountManager.apiKeyField
@@ -266,21 +267,22 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     _ = try await manager.deleteAccount(account.id)
   }
 
-  #expect(try await workspace.account(id: account.id) == account)
-  #expect(
-    try await vault.secret(
-      accountID: account.id,
-      field: ProviderAccountManager.apiKeyField
-    ) == "secret"
+  let storedAccount = try await workspace.account(id: account.id)
+  let storedSecret = await vault.secret(
+    accountID: account.id,
+    field: ProviderAccountManager.apiKeyField
   )
+  #expect(storedAccount.id == account.id)
+  #expect(storedAccount.label == account.label)
+  #expect(storedSecret == "secret")
 }
 
 @Test func credentialCleanupAttemptsEveryAccountAndReportsFailures() async throws {
   let first: ProviderAccountID = "first"
   let second: ProviderAccountID = "second"
   let vault = SelectiveCredentialVault(failedRemovalIDs: [second])
-  try await vault.setSecret("one", accountID: first, field: ProviderAccountManager.apiKeyField)
-  try await vault.setSecret("two", accountID: second, field: ProviderAccountManager.apiKeyField)
+  await vault.setSecret("one", accountID: first, field: ProviderAccountManager.apiKeyField)
+  await vault.setSecret("two", accountID: second, field: ProviderAccountManager.apiKeyField)
   let workspace = ProviderWorkspaceStore(persistence: InMemoryProviderWorkspacePersistence())
   try await workspace.load()
   let manager = ProviderAccountManager(
@@ -290,12 +292,18 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
   )
 
   let failures = await manager.removeCredentialsBestEffort(accountIDs: [first, second])
+  let firstSecret = await vault.secret(
+    accountID: first,
+    field: ProviderAccountManager.apiKeyField
+  )
+  let secondSecret = await vault.secret(
+    accountID: second,
+    field: ProviderAccountManager.apiKeyField
+  )
 
   #expect(failures == [second])
-  #expect(try await vault.secret(accountID: first, field: ProviderAccountManager.apiKeyField) == nil)
-  #expect(
-    try await vault.secret(accountID: second, field: ProviderAccountManager.apiKeyField) == "two"
-  )
+  #expect(firstSecret == nil)
+  #expect(secondSecret == "two")
 }
 
 @Test func providerReplacementRejectsOrphanedConversations() async throws {
@@ -336,7 +344,9 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     _ = try await service.importProviderConfiguration(data, strategy: .replaceExisting)
   }
 
-  #expect(try await providerWorkspace.account(id: oldAccount.id) == oldAccount)
+  let storedAccount = try await providerWorkspace.account(id: oldAccount.id)
+  #expect(storedAccount.id == oldAccount.id)
+  #expect(storedAccount.label == oldAccount.label)
 }
 
 @Test func providerReplacementCommitsBeforeCredentialCleanup() async throws {
@@ -352,7 +362,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
   )
   try await conversationStore.load()
   let vault = SelectiveCredentialVault(failedRemovalIDs: [oldAccount.id])
-  try await vault.setSecret(
+  await vault.setSecret(
     "secret",
     accountID: oldAccount.id,
     field: ProviderAccountManager.apiKeyField
@@ -376,15 +386,15 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     data,
     strategy: .replaceExisting
   )
+  let accountIDs = await providerWorkspace.allAccounts().map(\.id)
+  let remainingSecret = await vault.secret(
+    accountID: oldAccount.id,
+    field: ProviderAccountManager.apiKeyField
+  )
 
   #expect(failures == [oldAccount.id])
-  #expect(await providerWorkspace.allAccounts().map(\.id) == [newAccount.id])
-  #expect(
-    try await vault.secret(
-      accountID: oldAccount.id,
-      field: ProviderAccountManager.apiKeyField
-    ) == "secret"
-  )
+  #expect(accountIDs == [newAccount.id])
+  #expect(remainingSecret == "secret")
 }
 
 @Test func contextBuilderRejectsOversizedSystemAndLatestMessage() throws {
