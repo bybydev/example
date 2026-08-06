@@ -37,17 +37,20 @@ public struct BYOKchatImportSummary: Sendable, Equatable {
   public var accountCount: Int
   public var conversationCount: Int
   public var defaultSystemPrompt: String
+  public var credentialCleanupFailures: [ProviderAccountID]
 
   public init(
     providerCount: Int,
     accountCount: Int,
     conversationCount: Int,
-    defaultSystemPrompt: String
+    defaultSystemPrompt: String,
+    credentialCleanupFailures: [ProviderAccountID] = []
   ) {
     self.providerCount = providerCount
     self.accountCount = accountCount
     self.conversationCount = conversationCount
     self.defaultSystemPrompt = defaultSystemPrompt
+    self.credentialCleanupFailures = credentialCleanupFailures
   }
 }
 
@@ -89,6 +92,8 @@ public actor DataPortabilityService {
     else {
       throw ProviderError.invalidRequest("The backup contains an unsupported workspace version.")
     }
+    try WorkspaceImportValidator.validateProviderWorkspace(backup.providerWorkspace)
+    try WorkspaceImportValidator.validateConversationWorkspace(backup.conversationWorkspace)
     try await validateConversationTargets(in: backup, strategy: strategy)
 
     let previousProviders = try await providers.exportConfiguration()
@@ -99,22 +104,55 @@ public actor DataPortabilityService {
       let conversationData = try JSONEncoder.providerEncoder.encode(backup.conversationWorkspace)
       try await providers.importConfiguration(providerData, strategy: strategy)
       try await conversations.importWorkspace(conversationData, strategy: strategy)
-      if case .replaceExisting = strategy {
-        let importedAccountIDs = await providers.allAccounts().map(\.id)
-        try await accounts.removeCredentials(
-          accountIDs: previousAccountIDs + importedAccountIDs)
-      }
     } catch {
       try? await providers.importConfiguration(previousProviders, strategy: .replaceExisting)
       try? await conversations.importWorkspace(previousConversations, strategy: .replaceExisting)
       throw error
     }
 
+    let cleanupFailures: [ProviderAccountID]
+    if case .replaceExisting = strategy {
+      let importedAccountIDs = await providers.allAccounts().map(\.id)
+      cleanupFailures = await accounts.removeCredentialsBestEffort(
+        accountIDs: previousAccountIDs + importedAccountIDs
+      )
+    } else {
+      cleanupFailures = []
+    }
+
     return BYOKchatImportSummary(
       providerCount: backup.providerWorkspace.customProviders.count,
       accountCount: backup.providerWorkspace.accounts.count,
       conversationCount: backup.conversationWorkspace.conversations.count,
-      defaultSystemPrompt: backup.preferences.defaultSystemPrompt
+      defaultSystemPrompt: backup.preferences.defaultSystemPrompt,
+      credentialCleanupFailures: cleanupFailures
+    )
+  }
+
+  public func importProviderConfiguration(
+    _ data: Data,
+    strategy: ProviderImportStrategy
+  ) async throws -> [ProviderAccountID] {
+    let imported = try JSONDecoder.provider.decode(ProviderWorkspaceState.self, from: data)
+    guard imported.schemaVersion == ProviderWorkspaceState.currentSchemaVersion else {
+      throw ProviderError.workspaceVersionUnsupported(imported.schemaVersion)
+    }
+    try WorkspaceImportValidator.validateProviderWorkspace(imported)
+
+    if case .replaceExisting = strategy {
+      try WorkspaceImportValidator.validateConversationTargets(
+        await conversations.allConversations(),
+        accounts: imported.accounts
+      )
+    }
+
+    let previousAccountIDs = await providers.allAccounts().map(\.id)
+    try await providers.importConfiguration(data, strategy: strategy)
+
+    guard case .replaceExisting = strategy else { return [] }
+    let importedAccountIDs = await providers.allAccounts().map(\.id)
+    return await accounts.removeCredentialsBestEffort(
+      accountIDs: previousAccountIDs + importedAccountIDs
     )
   }
 
@@ -130,31 +168,23 @@ public actor DataPortabilityService {
     in backup: BYOKchatBackup,
     strategy: ProviderImportStrategy
   ) async throws {
-    let existingAccounts = await providers.allAccounts()
-    var effectiveAccounts: [ProviderAccountID: ProviderAccount]
+    let effectiveAccounts: [ProviderAccount]
     switch strategy {
     case .replaceExisting:
-      effectiveAccounts = Dictionary(
-        uniqueKeysWithValues: backup.providerWorkspace.accounts.map { ($0.id, $0) })
+      effectiveAccounts = backup.providerWorkspace.accounts
     case .keepExisting:
-      effectiveAccounts = Dictionary(uniqueKeysWithValues: existingAccounts.map { ($0.id, $0) })
-      for account in backup.providerWorkspace.accounts where effectiveAccounts[account.id] == nil {
-        effectiveAccounts[account.id] = account
+      var values = Dictionary(
+        uniqueKeysWithValues: await providers.allAccounts().map { ($0.id, $0) }
+      )
+      for account in backup.providerWorkspace.accounts where values[account.id] == nil {
+        values[account.id] = account
       }
+      effectiveAccounts = Array(values.values)
     }
-
-    for conversation in backup.conversationWorkspace.conversations {
-      guard let account = effectiveAccounts[conversation.accountID] else {
-        throw ProviderError.importConflict(
-          "Conversation \(conversation.title) references an unknown provider account."
-        )
-      }
-      guard account.providerID == conversation.providerID else {
-        throw ProviderError.importConflict(
-          "Conversation \(conversation.title) does not match its provider account."
-        )
-      }
-    }
+    try WorkspaceImportValidator.validateConversationTargets(
+      backup.conversationWorkspace.conversations,
+      accounts: effectiveAccounts
+    )
   }
 }
 
