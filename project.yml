@@ -15,6 +15,15 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
+  Highlighter:
+    url: https://github.com/smittytone/HighlighterSwift
+    exactVersion: 3.0.3
+  LaTeXSwiftUI:
+    url: https://github.com/colinc86/LaTeXSwiftUI
+    exactVersion: 2.0.0
+  BeautifulMermaid:
+    url: https://github.com/lukilabs/beautiful-mermaid-swift
+    exactVersion: 1.0.4
 
 targets:
   BYOKchat:
@@ -48,6 +57,12 @@ targets:
         product: AppFoundation
       - package: MarkdownUI
         product: MarkdownUI
+      - package: Highlighter
+        product: Highlighter
+      - package: LaTeXSwiftUI
+        product: LaTeXSwiftUI
+      - package: BeautifulMermaid
+        product: BeautifulMermaid
 
   BYOKchatTests:
     type: bundle.unit-test
