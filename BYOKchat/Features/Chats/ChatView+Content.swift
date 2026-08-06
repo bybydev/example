@@ -109,7 +109,11 @@ extension ChatView {
           targetLabel: targetLabel(conversation),
           openTarget: { showTargetSettings = true },
           send: send,
-          stop: { chats.stop(conversationID) }
+          stop: {
+            Task { @MainActor in
+              await chats.stop(conversationID)
+            }
+          }
         )
       }
     }
