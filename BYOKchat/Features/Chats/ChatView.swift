@@ -138,7 +138,7 @@ struct ChatView: View {
     .fileExporter(
       isPresented: $showMarkdownExporter,
       document: markdownDocument,
-      contentType: .markdown,
+      contentType: .byokMarkdown,
       defaultFilename: markdownFilename
     ) { result in
       if case .failure(let error) = result {
