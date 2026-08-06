@@ -7,7 +7,7 @@ extension ChatView {
   func chatContent(_ conversation: ChatConversation) -> some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(spacing: 14) {
+        LazyVStack(spacing: 24) {
           if let issue = configurationIssue(conversation) {
             RepairBanner(message: issue) { showTargetSettings = true }
           }
@@ -17,18 +17,21 @@ extension ChatView {
               "\(conversation.lastContextOmittedMessageCount) earlier messages were omitted from the latest request.",
               systemImage: "text.badge.minus"
             )
-            .font(.caption)
+            .font(.system(size: 12))
             .foregroundStyle(.secondary)
-            .padding(.horizontal)
+            .frame(maxWidth: .infinity, alignment: .leading)
           }
 
           if conversation.messages.isEmpty {
-            ContentUnavailableView {
-              Label("Ready", systemImage: "sparkles")
-            } description: {
+            VStack(spacing: 12) {
+              Text("How can I help?")
+                .font(.system(size: 30, weight: .semibold))
               Text("Using \(targetLabel(conversation))")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
             }
-            .padding(.top, 80)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 112)
           } else {
             ForEach(conversation.messages) { stored in
               let displayed = chats.displayMessage(stored)
@@ -53,8 +56,9 @@ extension ChatView {
             .frame(height: 1)
             .id("chat-bottom")
         }
-        .padding(.horizontal)
-        .padding(.top, 12)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 18)
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
@@ -87,14 +91,17 @@ extension ChatView {
             showJumpToLatest = false
           }
           .labelStyle(.iconOnly)
-          .buttonStyle(.borderedProminent)
-          .clipShape(Circle())
-          .padding(.trailing, 16)
-          .padding(.bottom, 100)
+          .font(.system(size: 16, weight: .semibold))
+          .frame(width: 44, height: 44)
+          .background(.ultraThinMaterial, in: Circle())
+          .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
+          .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
+          .padding(.trailing, 18)
+          .padding(.bottom, 104)
           .accessibilityLabel("Jump to latest message")
         }
       }
-      .safeAreaInset(edge: .bottom) {
+      .safeAreaInset(edge: .bottom, spacing: 0) {
         ChatComposer(
           draft: $draft,
           isGenerating: chats.isGenerating(conversationID),
