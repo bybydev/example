@@ -23,6 +23,8 @@ struct ChatView: View {
   @State var editText = ""
   @State var showRegenerateConfirmation = false
   @State var isNearBottom = true
+  @State var followsLatest = true
+  @State var isUserDraggingTimeline = false
   @State var showJumpToLatest = false
   @State var markdownDocument: MarkdownExportDocument?
   @State var showMarkdownExporter = false
@@ -103,6 +105,8 @@ struct ChatView: View {
         original: message.content,
         text: $editText,
         save: {
+          followsLatest = true
+          showJumpToLatest = false
           chats.editAndResend(
             conversationID: conversationID,
             messageID: message.id,
@@ -125,6 +129,8 @@ struct ChatView: View {
     .alert("Regenerate response?", isPresented: $showRegenerateConfirmation) {
       Button("Cancel", role: .cancel) {}
       Button("Regenerate Anyway", role: .destructive) {
+        followsLatest = true
+        showJumpToLatest = false
         chats.regenerate(
           conversationID: conversationID,
           confirmingUncertainCompletion: true
