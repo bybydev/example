@@ -19,6 +19,7 @@ extension ConversationStore {
     guard imported.schemaVersion == ConversationWorkspaceState.currentSchemaVersion else {
       throw ProviderError.conversationVersionUnsupported(imported.schemaVersion)
     }
+    try WorkspaceImportValidator.validateConversationWorkspace(imported)
 
     let replacing: Bool
     switch strategy {
