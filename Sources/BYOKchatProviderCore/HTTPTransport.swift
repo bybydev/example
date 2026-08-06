@@ -233,27 +233,23 @@ public enum ProviderHTTP {
     let value = host.lowercased().trimmingCharacters(
       in: CharacterSet(charactersIn: "[]")
     )
-    if value == "localhost" || value == "::1" || value.hasSuffix(".local") {
-      return true
-    }
-    if !value.contains(".") && !value.contains(":") {
-      return true
-    }
-    if value.hasPrefix("fe80:") || value.hasPrefix("fc") || value.hasPrefix("fd") {
+    if value == "localhost" || value.hasSuffix(".localhost") || value.hasSuffix(".local") {
       return true
     }
 
-    let parts = value.split(separator: ".").compactMap { Int($0) }
-    guard parts.count == 4,
-      parts.allSatisfy({ (0...255).contains($0) })
-    else {
+    if let parts = parseIPv4(value) {
+      if parts[0] == 10 || parts[0] == 127 { return true }
+      if parts[0] == 169 && parts[1] == 254 { return true }
+      if parts[0] == 192 && parts[1] == 168 { return true }
+      if parts[0] == 172 && (16...31).contains(parts[1]) { return true }
       return false
     }
-    if parts[0] == 10 || parts[0] == 127 { return true }
-    if parts[0] == 169 && parts[1] == 254 { return true }
-    if parts[0] == 192 && parts[1] == 168 { return true }
-    if parts[0] == 172 && (16...31).contains(parts[1]) { return true }
-    return false
+
+    guard let groups = parseIPv6(value) else { return false }
+    let first = groups[0]
+    if first & 0xFE00 == 0xFC00 { return true }
+    if first & 0xFFC0 == 0xFE80 { return true }
+    return groups.dropLast().allSatisfy { $0 == 0 } && groups.last == 1
   }
 
   public static func isSameOriginRedirect(
@@ -338,6 +334,56 @@ public enum ProviderHTTP {
       "transfer-encoding",
       "cookie",
     ].contains(normalized)
+  }
+
+  private static func parseIPv4(_ value: String) -> [Int]? {
+    let pieces = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard pieces.count == 4 else { return nil }
+    var result: [Int] = []
+    for piece in pieces {
+      guard !piece.isEmpty,
+        piece.allSatisfy(\.isNumber),
+        let number = Int(piece),
+        (0...255).contains(number)
+      else {
+        return nil
+      }
+      result.append(number)
+    }
+    return result
+  }
+
+  private static func parseIPv6(_ value: String) -> [UInt16]? {
+    let address = value.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+      .first.map(String.init) ?? value
+    guard address.contains(":") else { return nil }
+
+    let halves = address.components(separatedBy: "::")
+    guard halves.count <= 2 else { return nil }
+
+    func parseHalf(_ half: String) -> [UInt16]? {
+      guard !half.isEmpty else { return [] }
+      let pieces = half.split(separator: ":", omittingEmptySubsequences: false)
+      var values: [UInt16] = []
+      for piece in pieces {
+        guard !piece.isEmpty,
+          piece.count <= 4,
+          let value = UInt16(piece, radix: 16)
+        else {
+          return nil
+        }
+        values.append(value)
+      }
+      return values
+    }
+
+    guard let left = parseHalf(halves[0]) else { return nil }
+    if halves.count == 1 {
+      return left.count == 8 ? left : nil
+    }
+
+    guard let right = parseHalf(halves[1]), left.count + right.count < 8 else { return nil }
+    return left + Array(repeating: 0, count: 8 - left.count - right.count) + right
   }
 
   private static func effectivePort(_ url: URL) -> Int? {
