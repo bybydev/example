@@ -60,6 +60,12 @@ extension ChatView {
         .padding(.top, 14)
         .padding(.bottom, 18)
       }
+      .contentShape(Rectangle())
+      .simultaneousGesture(
+        TapGesture().onEnded {
+          dismissKeyboard()
+        }
+      )
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
       .simultaneousGesture(
@@ -223,6 +229,15 @@ extension ChatView {
       return "The selected model is no longer reported by the provider."
     }
     return nil
+  }
+
+  private func dismissKeyboard() {
+    UIApplication.shared.sendAction(
+      #selector(UIResponder.resignFirstResponder),
+      to: nil,
+      from: nil,
+      for: nil
+    )
   }
 
   private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
