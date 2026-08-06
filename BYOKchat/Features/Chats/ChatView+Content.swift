@@ -181,7 +181,12 @@ extension ChatView {
   }
 
   private func targetLabel(_ conversation: ChatConversation) -> String {
-    "\(providers.accounts.first(where: { $0.id == conversation.accountID })?.label ?? conversation.providerID.rawValue) · \(conversation.modelID.rawValue)"
+    let accountName = providers.accounts.first(where: { $0.id == conversation.accountID })?.label
+      ?? conversation.providerID.rawValue
+    let modelName = providers.models(for: conversation.accountID, includeHidden: true)
+      .first(where: { $0.model.id == conversation.modelID })?.model.displayName
+      ?? conversation.modelID.rawValue
+    return "\(accountName) · \(modelName)"
   }
 
   private func accountLabel(for message: ChatMessage) -> String? {
