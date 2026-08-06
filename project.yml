@@ -9,6 +9,9 @@ options:
 packages:
   BYOKchatProviderCore:
     path: .
+  AppFoundation:
+    url: https://github.com/hoangbkit/AppFoundation
+    exactVersion: 1.2.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
@@ -41,6 +44,8 @@ targets:
     dependencies:
       - package: BYOKchatProviderCore
         product: BYOKchatProviderCore
+      - package: AppFoundation
+        product: AppFoundation
       - package: MarkdownUI
         product: MarkdownUI
 
