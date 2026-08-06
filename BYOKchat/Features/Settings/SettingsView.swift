@@ -22,174 +22,217 @@ struct SettingsView: View {
   }
 
   var body: some View {
+    failureAlertView
+  }
+
+  private var navigationContent: some View {
     NavigationStack {
-      Form {
-        Section("AI Providers") {
-          NavigationLink {
-            ProviderListView(model: model.providers)
-          } label: {
-            Label("Providers & Accounts", systemImage: "key.horizontal")
-          }
+      settingsForm
+        .navigationTitle("Settings")
+    }
+  }
 
-          NavigationLink {
-            ProviderConsoleView(model: model.providers)
-          } label: {
-            Label("Provider Console", systemImage: "terminal")
-          }
+  private var importConfiguredView: some View {
+    navigationContent
+      .confirmationDialog(
+        "How should imported data be applied?",
+        isPresented: $showImportStrategy
+      ) {
+        Button("Merge, Keep Existing") {
+          importStrategy = .keepExisting
+          showImporter = true
+        }
+        Button("Replace Existing", role: .destructive) {
+          importStrategy = .replaceExisting
+          showImporter = true
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(
+          "Replace removes matching local configuration. Imported credentials must be entered again."
+        )
+      }
+      .fileImporter(
+        isPresented: $showImporter,
+        allowedContentTypes: [.json],
+        allowsMultipleSelection: false,
+        onCompletion: handleImportResult
+      )
+  }
+
+  private var exportConfiguredView: some View {
+    importConfiguredView
+      .fileExporter(
+        isPresented: $showBackupExporter,
+        document: backupDocument,
+        contentType: .json,
+        defaultFilename: "BYOKchat-backup",
+        onCompletion: handleExportResult
+      )
+      .fileExporter(
+        isPresented: $showProviderExporter,
+        document: providerDocument,
+        contentType: .json,
+        defaultFilename: "BYOKchat-providers",
+        onCompletion: handleExportResult
+      )
+  }
+
+  private var deletionConfiguredView: some View {
+    exportConfiguredView
+      .alert("Delete all conversations?", isPresented: $confirmDeleteConversations) {
+        Button("Cancel", role: .cancel) {}
+        Button("Delete", role: .destructive) {
+          Task { await model.dataPortability.deleteAllConversations() }
+        }
+      } message: {
+        Text("This removes every locally stored conversation and cannot be undone without a backup.")
+      }
+      .alert("Delete all credentials?", isPresented: $confirmDeleteCredentials) {
+        Button("Cancel", role: .cancel) {}
+        Button("Delete", role: .destructive) {
+          Task { await model.dataPortability.deleteAllCredentials() }
+        }
+      } message: {
+        Text("Provider accounts remain configured, but every API key must be entered again.")
+      }
+  }
+
+  private var failureAlertView: some View {
+    deletionConfiguredView
+      .alert(
+        "Data Operation Failed",
+        isPresented: Binding(
+          get: { model.dataPortability.errorMessage != nil },
+          set: { if !$0 { model.dataPortability.errorMessage = nil } }
+        )
+      ) {
+        Button("OK") { model.dataPortability.errorMessage = nil }
+      } message: {
+        Text(model.dataPortability.errorMessage ?? "Unknown error")
+      }
+  }
+
+  private var settingsForm: some View {
+    Form {
+      Section("AI Providers") {
+        NavigationLink {
+          ProviderListView(model: model.providers)
+        } label: {
+          Label("Providers & Accounts", systemImage: "key.horizontal")
         }
 
-        Section("New Chats") {
-          NavigationLink {
-            DefaultSystemPromptView(preferences: model.preferences)
-          } label: {
-            LabeledContent("Default System Prompt") {
-              Text(model.preferences.defaultSystemPrompt.isEmpty ? "None" : "Configured")
-                .foregroundStyle(.secondary)
-            }
-          }
+        NavigationLink {
+          ProviderConsoleView(model: model.providers)
+        } label: {
+          Label("Provider Console", systemImage: "terminal")
         }
+      }
 
-        Section("Data Portability") {
-          Button("Export Full Backup", systemImage: "archivebox") {
-            Task {
-              guard let document = await model.dataPortability.makeBackupDocument() else { return }
-              backupDocument = document
-              showBackupExporter = true
-            }
-          }
-
-          Button("Import Full Backup", systemImage: "square.and.arrow.down") {
-            importKind = .backup
-            showImportStrategy = true
-          }
-
-          Button("Export Provider Configuration", systemImage: "key.viewfinder") {
-            Task {
-              guard
-                let document = await model.dataPortability.makeProviderConfigurationDocument()
-              else { return }
-              providerDocument = document
-              showProviderExporter = true
-            }
-          }
-
-          Button("Import Provider Configuration", systemImage: "key.radiowaves.forward") {
-            importKind = .providers
-            showImportStrategy = true
-          }
-        } footer: {
-          Text("Backups and provider configuration never include API keys or secret headers.")
-        }
-
-        Section("Destructive Actions") {
-          Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
-            confirmDeleteConversations = true
-          }
-          Button("Delete All Credentials", systemImage: "key.slash", role: .destructive) {
-            confirmDeleteCredentials = true
-          }
-        }
-
-        if let status = model.dataPortability.statusMessage {
-          Section("Last Data Operation") {
-            Text(status)
-              .font(.footnote)
+      Section("New Chats") {
+        NavigationLink {
+          DefaultSystemPromptView(preferences: model.preferences)
+        } label: {
+          LabeledContent("Default System Prompt") {
+            Text(model.preferences.defaultSystemPrompt.isEmpty ? "None" : "Configured")
               .foregroundStyle(.secondary)
           }
         }
+      }
 
-        Section("About") {
-          LabeledContent("Storage", value: "Local on this iPhone")
-          LabeledContent("Credentials", value: "Keychain")
-          Text("Requests go directly to the provider account selected for each conversation.")
+      Section {
+        Button("Export Full Backup", systemImage: "archivebox") {
+          exportBackup()
+        }
+
+        Button("Import Full Backup", systemImage: "square.and.arrow.down") {
+          importKind = .backup
+          showImportStrategy = true
+        }
+
+        Button("Export Provider Configuration", systemImage: "key.viewfinder") {
+          exportProviderConfiguration()
+        }
+
+        Button("Import Provider Configuration", systemImage: "key.radiowaves.forward") {
+          importKind = .providers
+          showImportStrategy = true
+        }
+      } header: {
+        Text("Data Portability")
+      } footer: {
+        Text("Backups and provider configuration never include API keys or secret headers.")
+      }
+
+      Section("Destructive Actions") {
+        Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
+          confirmDeleteConversations = true
+        }
+        Button("Delete All Credentials", systemImage: "key.slash", role: .destructive) {
+          confirmDeleteCredentials = true
+        }
+      }
+
+      if let status = model.dataPortability.statusMessage {
+        Section("Last Data Operation") {
+          Text(status)
             .font(.footnote)
             .foregroundStyle(.secondary)
         }
       }
-      .navigationTitle("Settings")
-    }
-    .confirmationDialog("How should imported data be applied?", isPresented: $showImportStrategy) {
-      Button("Merge, Keep Existing") {
-        importStrategy = .keepExisting
-        showImporter = true
+
+      Section("About") {
+        LabeledContent("Storage", value: "Local on this iPhone")
+        LabeledContent("Credentials", value: "Keychain")
+        Text("Requests go directly to the provider account selected for each conversation.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
       }
-      Button("Replace Existing", role: .destructive) {
-        importStrategy = .replaceExisting
-        showImporter = true
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "Replace removes matching local configuration. Imported credentials must be entered again."
-      )
     }
-    .fileImporter(
-      isPresented: $showImporter,
-      allowedContentTypes: [.json],
-      allowsMultipleSelection: false
-    ) { result in
-      guard case .success(let urls) = result, let url = urls.first else {
-        if case .failure(let error) = result {
-          model.dataPortability.errorMessage = error.localizedDescription
-        }
+  }
+
+  private func exportBackup() {
+    Task { @MainActor in
+      guard let document = await model.dataPortability.makeBackupDocument() else { return }
+      backupDocument = document
+      showBackupExporter = true
+    }
+  }
+
+  private func exportProviderConfiguration() {
+    Task { @MainActor in
+      guard let document = await model.dataPortability.makeProviderConfigurationDocument() else {
         return
       }
-      Task {
-        switch importKind {
-        case .backup:
-          await model.dataPortability.importBackup(from: url, strategy: importStrategy)
-        case .providers:
-          await model.dataPortability.importProviderConfiguration(
-            from: url, strategy: importStrategy)
-        }
-      }
+      providerDocument = document
+      showProviderExporter = true
     }
-    .fileExporter(
-      isPresented: $showBackupExporter,
-      document: backupDocument,
-      contentType: .json,
-      defaultFilename: "BYOKchat-backup"
-    ) { result in
+  }
+
+  private func handleImportResult(_ result: Result<[URL], any Error>) {
+    guard case .success(let urls) = result, let url = urls.first else {
       if case .failure(let error) = result {
         model.dataPortability.errorMessage = error.localizedDescription
       }
+      return
     }
-    .fileExporter(
-      isPresented: $showProviderExporter,
-      document: providerDocument,
-      contentType: .json,
-      defaultFilename: "BYOKchat-providers"
-    ) { result in
-      if case .failure(let error) = result {
-        model.dataPortability.errorMessage = error.localizedDescription
+
+    Task { @MainActor in
+      switch importKind {
+      case .backup:
+        await model.dataPortability.importBackup(from: url, strategy: importStrategy)
+      case .providers:
+        await model.dataPortability.importProviderConfiguration(
+          from: url,
+          strategy: importStrategy
+        )
       }
     }
-    .alert("Delete all conversations?", isPresented: $confirmDeleteConversations) {
-      Button("Cancel", role: .cancel) {}
-      Button("Delete", role: .destructive) {
-        Task { await model.dataPortability.deleteAllConversations() }
-      }
-    } message: {
-      Text("This removes every locally stored conversation and cannot be undone without a backup.")
-    }
-    .alert("Delete all credentials?", isPresented: $confirmDeleteCredentials) {
-      Button("Cancel", role: .cancel) {}
-      Button("Delete", role: .destructive) {
-        Task { await model.dataPortability.deleteAllCredentials() }
-      }
-    } message: {
-      Text("Provider accounts remain configured, but every API key must be entered again.")
-    }
-    .alert(
-      "Data Operation Failed",
-      isPresented: Binding(
-        get: { model.dataPortability.errorMessage != nil },
-        set: { if !$0 { model.dataPortability.errorMessage = nil } }
-      )
-    ) {
-      Button("OK") { model.dataPortability.errorMessage = nil }
-    } message: {
-      Text(model.dataPortability.errorMessage ?? "Unknown error")
+  }
+
+  private func handleExportResult(_ result: Result<URL, any Error>) {
+    if case .failure(let error) = result {
+      model.dataPortability.errorMessage = error.localizedDescription
     }
   }
 }
