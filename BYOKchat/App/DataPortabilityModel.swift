@@ -115,6 +115,11 @@ final class DataPortabilityModel {
       }
       await providersModel.reloadFromStorage()
       await chatsModel.reloadFromStorage()
+      if !summary.credentialCleanupFailures.isEmpty {
+        errorMessage = ProviderError.credentialCleanupFailed(
+          summary.credentialCleanupFailures
+        ).localizedDescription
+      }
     }
   }
 
@@ -122,14 +127,14 @@ final class DataPortabilityModel {
     await perform("Provider configuration imported. Credentials were not included.") {
       let data = try await Self.readSecurityScopedData(from: url)
       await chatsModel.stopAllGenerations()
-      let previousAccountIDs = await providerWorkspace.allAccounts().map(\.id)
-      try await providerWorkspace.importConfiguration(data, strategy: strategy)
-      if case .replaceExisting = strategy {
-        let importedAccountIDs = await providerWorkspace.allAccounts().map(\.id)
-        try await accountManager.removeCredentials(
-          accountIDs: previousAccountIDs + importedAccountIDs)
-      }
+      let cleanupFailures = try await service.importProviderConfiguration(
+        data,
+        strategy: strategy
+      )
       await providersModel.reloadFromStorage()
+      if !cleanupFailures.isEmpty {
+        errorMessage = ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
+      }
     }
   }
 
