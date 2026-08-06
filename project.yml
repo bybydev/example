@@ -70,6 +70,7 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/BYOKchatProviderCoreTests
+      - path: Tests/BYOKchatAppTests
     settings:
       base:
         DEVELOPMENT_TEAM: J458WW3452
