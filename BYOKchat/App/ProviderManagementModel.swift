@@ -127,8 +127,11 @@ final class ProviderManagementModel {
 
   func deleteAccount(_ id: ProviderAccountID) async {
     await perform("Account deleted") {
-      try await accountManager.deleteAccount(id)
+      let cleanupFailures = try await accountManager.deleteAccount(id)
       try await reloadSnapshot()
+      guard cleanupFailures.isEmpty else {
+        throw ProviderError.credentialCleanupFailed(cleanupFailures)
+      }
     }
   }
 
