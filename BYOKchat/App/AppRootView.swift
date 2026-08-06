@@ -25,7 +25,7 @@ struct AppRootView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .offset(x: isSidebarPresented ? drawerWidth : 0)
           .allowsHitTesting(!isSidebarPresented)
-          .simultaneousGesture(openSidebarGesture)
+          .simultaneousGesture(openSidebarGesture, including: .all)
           .overlay {
             if isSidebarPresented {
               Color.black.opacity(0.12)
@@ -135,13 +135,17 @@ struct AppRootView: View {
   }
 
   private var openSidebarGesture: some Gesture {
-    DragGesture(minimumDistance: 20)
+    DragGesture(minimumDistance: 16, coordinateSpace: .local)
       .onEnded { value in
+        let horizontalTravel = max(value.translation.width, value.predictedEndTranslation.width)
+        let verticalTravel = abs(value.translation.height)
+
         guard !isSidebarPresented,
-          value.startLocation.x < 30,
-          value.translation.width > 80,
-          abs(value.translation.width) > abs(value.translation.height)
+          horizontalTravel > 90,
+          value.translation.width > 0,
+          abs(value.translation.width) > verticalTravel * 1.35
         else { return }
+
         openSidebar()
       }
   }
