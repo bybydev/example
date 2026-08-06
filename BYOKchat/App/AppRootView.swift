@@ -18,21 +18,23 @@ struct AppRootView: View {
 
   var body: some View {
     GeometryReader { geometry in
-      let drawerWidth = min(geometry.size.width * 0.88, 360)
+      let drawerWidth = min(geometry.size.width * 0.80, 390)
 
       ZStack(alignment: .leading) {
         mainContent
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .offset(x: isSidebarPresented ? drawerWidth : 0)
           .allowsHitTesting(!isSidebarPresented)
           .simultaneousGesture(openSidebarGesture)
+          .overlay {
+            if isSidebarPresented {
+              Color.black.opacity(0.12)
+                .ignoresSafeArea()
+                .onTapGesture { closeSidebar() }
+            }
+          }
 
         if isSidebarPresented {
-          Color.black.opacity(0.28)
-            .ignoresSafeArea()
-            .onTapGesture { closeSidebar() }
-            .transition(.opacity)
-            .zIndex(1)
-
           ChatSidebarView(
             chats: model.chats,
             providers: model.providers,
@@ -49,7 +51,8 @@ struct AppRootView: View {
           .zIndex(2)
         }
       }
-      .animation(.snappy(duration: 0.24), value: isSidebarPresented)
+      .clipped()
+      .animation(.snappy(duration: 0.28), value: isSidebarPresented)
     }
     .task {
       await model.load()
@@ -135,7 +138,7 @@ struct AppRootView: View {
     DragGesture(minimumDistance: 20)
       .onEnded { value in
         guard !isSidebarPresented,
-          value.startLocation.x < 28,
+          value.startLocation.x < 30,
           value.translation.width > 80,
           abs(value.translation.width) > abs(value.translation.height)
         else { return }
