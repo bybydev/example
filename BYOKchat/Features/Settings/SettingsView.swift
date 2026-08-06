@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -5,6 +6,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
   @Bindable var model: AppModel
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var backupDocument: JSONExportDocument?
   @State private var providerDocument: JSONExportDocument?
   @State private var showBackupExporter = false
@@ -115,6 +117,16 @@ struct SettingsView: View {
 
   private var settingsForm: some View {
     Form {
+      Section("Appearance") {
+        ThemePickerView(
+          manager: model.themeManager,
+          title: nil,
+          showsCountdown: false
+        ) { candidate in
+          ChatThemePreview(theme: candidate)
+        }
+      }
+
       Section("AI Providers") {
         NavigationLink {
           ProviderListView(model: model.providers)
@@ -189,6 +201,8 @@ struct SettingsView: View {
           .foregroundStyle(.secondary)
       }
     }
+    .scrollContentBackground(.hidden)
+    .background(theme.backgroundColor)
   }
 
   private func exportBackup() {
@@ -233,6 +247,34 @@ struct SettingsView: View {
   private func handleExportResult(_ result: Result<URL, any Error>) {
     if case .failure(let error) = result {
       model.dataPortability.errorMessage = error.localizedDescription
+    }
+  }
+}
+
+private struct ChatThemePreview: View {
+  let theme: AppTheme
+
+  var body: some View {
+    ZStack {
+      theme.backgroundColor
+
+      VStack(alignment: .leading, spacing: 7) {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .fill(theme.secondaryForegroundColor.opacity(0.26))
+          .frame(width: 54, height: 6)
+
+        HStack {
+          Spacer()
+          RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(theme.elevatedSurfaceColor)
+            .frame(width: 64, height: 22)
+        }
+
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .fill(theme.accentColor.opacity(0.72))
+          .frame(width: 74, height: 6)
+      }
+      .padding(12)
     }
   }
 }
