@@ -160,6 +160,7 @@ extension ChatView {
     }
   }
 
+  @MainActor
   private func positionInitialTimeline(_ proxy: ScrollViewProxy) async {
     followsLatest = initialScrollMessageID == nil
     showJumpToLatest = initialScrollMessageID != nil
@@ -178,6 +179,7 @@ extension ChatView {
     scrollToInitialTarget(proxy)
   }
 
+  @MainActor
   private func scrollToInitialTarget(_ proxy: ScrollViewProxy) {
     if let initialScrollMessageID {
       proxy.scrollTo(initialScrollMessageID, anchor: .center)
