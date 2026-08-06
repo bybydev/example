@@ -1,17 +1,13 @@
 import Foundation
 
 extension ProviderHTTP {
+  @available(*, deprecated, message: "Pass allowsLocalHTTP explicitly from the provider definition.")
   public static func endpoint(baseURL: URL, path: String) throws -> URL {
-    let allowLocal =
-      baseURL.scheme?.lowercased() == "http"
-      && baseURL.host.map(isPrivateNetworkHost) == true
-    return try endpoint(baseURL: baseURL, path: path, allowsLocalHTTP: allowLocal)
+    try endpoint(baseURL: baseURL, path: path, allowsLocalHTTP: false)
   }
 
+  @available(*, deprecated, message: "Pass allowsLocalHTTP explicitly from the provider definition.")
   public static func validateBaseURL(_ baseURL: URL) throws {
-    let allowLocal =
-      baseURL.scheme?.lowercased() == "http"
-      && baseURL.host.map(isPrivateNetworkHost) == true
-    try validateBaseURL(baseURL, allowsLocalHTTP: allowLocal)
+    try validateBaseURL(baseURL, allowsLocalHTTP: false)
   }
 }
