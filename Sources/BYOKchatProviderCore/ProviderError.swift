@@ -26,6 +26,10 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case emptyOutput
   case prematureStreamEnd
   case workspaceVersionUnsupported(Int)
+  case conversationVersionUnsupported(Int)
+  case conversationNotFound(ConversationID)
+  case conversationBusy(ConversationID)
+  case chatMessageNotFound(ChatMessageID)
   case importConflict(String)
 
   public var errorDescription: String? {
@@ -56,6 +60,11 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
     case .prematureStreamEnd: "The provider stream ended before completion."
     case .workspaceVersionUnsupported(let version):
       "Provider workspace version \(version) is unsupported."
+    case .conversationVersionUnsupported(let version):
+      "Conversation workspace version \(version) is unsupported."
+    case .conversationNotFound(let id): "Conversation not found: \(id.rawValue)"
+    case .conversationBusy: "This conversation is already generating a response."
+    case .chatMessageNotFound(let id): "Chat message not found: \(id.rawValue)"
     case .importConflict(let message): message
     }
   }
