@@ -3,11 +3,19 @@ import SwiftUI
 import UIKit
 
 struct ChatSidebarView: View {
+  private struct ConversationGroup: Identifiable {
+    let title: String
+    let conversations: [ChatConversation]
+    var id: String { title }
+  }
+
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
-  @Binding var selectedConversationID: ConversationID?
 
+  let selectedConversationID: ConversationID?
   let newChat: () -> Void
+  let selectConversation: (ConversationID) -> Void
+  let selectSearchResult: (ConversationSearchResult) -> Void
   let openSettings: () -> Void
   let close: () -> Void
 
@@ -80,9 +88,7 @@ struct ChatSidebarView: View {
   }
 
   private var newChatButton: some View {
-    Button {
-      newChat()
-    } label: {
+    Button(action: newChat) {
       Label("New Chat", systemImage: "square.and.pencil")
         .font(.headline)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,7 +134,7 @@ struct ChatSidebarView: View {
         )
         .listRowBackground(Color.clear)
       } else {
-        ForEach(groupedConversations, id: \.title) { group in
+        ForEach(groupedConversations) { group in
           Section(group.title) {
             ForEach(group.conversations) { conversation in
               conversationButton(conversation)
@@ -149,8 +155,7 @@ struct ChatSidebarView: View {
       } else {
         ForEach(chats.searchResults) { result in
           Button {
-            selectedConversationID = result.conversationID
-            close()
+            selectSearchResult(result)
           } label: {
             VStack(alignment: .leading, spacing: 5) {
               Text(result.title)
@@ -178,7 +183,7 @@ struct ChatSidebarView: View {
 
       HStack(spacing: 10) {
         Image(systemName: providers.accounts.isEmpty ? "key.slash" : "checkmark.circle.fill")
-          .foregroundStyle(providers.accounts.isEmpty ? .secondary : .green)
+          .foregroundStyle(providers.accounts.isEmpty ? Color.secondary : Color.green)
         VStack(alignment: .leading, spacing: 2) {
           Text(providers.accounts.isEmpty ? "No provider configured" : "Providers ready")
             .font(.subheadline.weight(.medium))
@@ -191,9 +196,7 @@ struct ChatSidebarView: View {
       .padding(.horizontal, 14)
       .padding(.vertical, 10)
 
-      Button {
-        openSettings()
-      } label: {
+      Button(action: openSettings) {
         Label("Settings", systemImage: "gearshape")
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, 14)
@@ -205,8 +208,7 @@ struct ChatSidebarView: View {
 
   private func conversationButton(_ conversation: ChatConversation) -> some View {
     Button {
-      selectedConversationID = conversation.id
-      close()
+      selectConversation(conversation.id)
     } label: {
       VStack(alignment: .leading, spacing: 4) {
         HStack {
@@ -243,14 +245,14 @@ struct ChatSidebarView: View {
         Task { @MainActor in
           await chats.deleteConversation(conversation.id)
           if selectedConversationID == conversation.id {
-            selectedConversationID = nil
+            newChat()
           }
         }
       }
     }
   }
 
-  private var groupedConversations: [(title: String, conversations: [ChatConversation])] {
+  private var groupedConversations: [ConversationGroup] {
     let calendar = Calendar.current
     let startOfToday = calendar.startOfDay(for: Date())
     var today: [ChatConversation] = []
@@ -270,10 +272,10 @@ struct ChatSidebarView: View {
     }
 
     return [
-      ("Today", today),
-      ("Previous 7 Days", previousSevenDays),
-      ("Previous 30 Days", previousThirtyDays),
-      ("Older", older),
+      ConversationGroup(title: "Today", conversations: today),
+      ConversationGroup(title: "Previous 7 Days", conversations: previousSevenDays),
+      ConversationGroup(title: "Previous 30 Days", conversations: previousThirtyDays),
+      ConversationGroup(title: "Older", conversations: older),
     ].filter { !$0.conversations.isEmpty }
   }
 }
