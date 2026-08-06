@@ -24,8 +24,11 @@ struct NewChatView: View {
 
   private var targetLabel: String {
     guard let account = defaultAccount else { return "Configure a provider" }
-    let model = defaultModelID?.rawValue ?? "Choose model"
-    return "\(account.label) · \(model)"
+    guard let modelID = defaultModelID else { return "Choose model" }
+    let modelName = providers.models(for: account.id)
+      .first(where: { $0.model.id == modelID })?.model.displayName
+      ?? modelID.rawValue
+    return "\(account.label) · \(modelName)"
   }
 
   var body: some View {
