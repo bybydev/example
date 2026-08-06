@@ -18,43 +18,54 @@ struct ChatTopBar<MenuContent: View>: View {
   }
 
   var body: some View {
-    HStack {
+    HStack(spacing: 12) {
       Button("Open Sidebar", systemImage: "line.3.horizontal", action: openSidebar)
         .labelStyle(.iconOnly)
-        .font(.system(size: 24, weight: .medium))
-        .frame(width: 58, height: 58)
-        .background(.ultraThinMaterial, in: Circle())
-        .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
-        .shadow(color: .black.opacity(0.09), radius: 18, y: 8)
+        .font(.system(size: 17, weight: .semibold))
+        .symbolRenderingMode(.hierarchical)
+        .frame(width: 40, height: 40)
+        .background(.thinMaterial, in: Circle())
+        .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+        .contentShape(Circle())
         .accessibilityLabel("Open sidebar")
 
       Spacer()
 
-      HStack(spacing: 0) {
+      HStack(spacing: 2) {
         Button("New Chat", systemImage: "square.and.pencil", action: newChat)
           .labelStyle(.iconOnly)
-          .font(.system(size: 24, weight: .medium))
-          .frame(width: 54, height: 50)
+          .font(.system(size: 17, weight: .semibold))
+          .symbolRenderingMode(.hierarchical)
+          .frame(width: 40, height: 40)
+          .contentShape(Rectangle())
+
+        Rectangle()
+          .fill(.primary.opacity(0.10))
+          .frame(width: 0.5, height: 18)
+          .accessibilityHidden(true)
 
         Menu {
           menuContent
         } label: {
           Image(systemName: "ellipsis")
-            .font(.system(size: 22, weight: .semibold))
-            .frame(width: 54, height: 50)
+            .font(.system(size: 17, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .frame(width: 40, height: 40)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("More options")
       }
       .foregroundStyle(.primary)
-      .padding(4)
-      .background(.ultraThinMaterial, in: Capsule())
-      .overlay(Capsule().stroke(.white.opacity(0.72), lineWidth: 1))
-      .shadow(color: .black.opacity(0.09), radius: 18, y: 8)
+      .padding(2)
+      .background(.thinMaterial, in: Capsule())
+      .overlay(Capsule().stroke(.primary.opacity(0.08), lineWidth: 0.5))
     }
-    .padding(.horizontal, 16)
-    .padding(.top, 6)
-    .padding(.bottom, 10)
+    .buttonStyle(.plain)
+    .foregroundStyle(.primary)
+    .shadow(color: .black.opacity(0.055), radius: 10, y: 4)
+    .padding(.horizontal, 14)
+    .padding(.top, 4)
+    .padding(.bottom, 8)
   }
 }
 
