@@ -2,9 +2,9 @@
 
 BYOKchat is an iOS-only, BYOK-only AI chat client under active development.
 
-## Current status
+## Current implementation
 
-Phase 2 establishes a persistent provider workspace and a native provider-management experience around the independent provider core.
+BYOKchat owns its provider and conversation runtime. It does not use AppFoundation's AI provider management.
 
 ### First-class providers
 
@@ -13,40 +13,31 @@ Phase 2 establishes a persistent provider workspace and a native provider-manage
 - NVIDIA
 - User-defined OpenAI-compatible providers
 
-### Provider core
-
-- OpenAI-compatible one-shot generation and SSE streaming
-- Visible answer and reasoning separation
-- Usage, finish reason, and provider metadata normalization
-- Cancellation and mid-stream provider errors
-- DeepSeek thinking controls
-- OpenRouter reasoning and routing controls
-- Model discovery with curated seed fallbacks
-- Stable provider, account, and model IDs
-- Bearer, named-header, and no-auth providers
-- Protected custom headers and HTTPS endpoint validation
-
-### Provider workspace
+### Provider platform
 
 - Multiple accounts per provider
-- API credentials stored separately in Keychain
-- Versioned non-secret JSON workspace
-- Custom providers
-- Endpoint overrides and safe custom headers
-- Provider defaults and per-account default models
-- Model discovery, manual models, favorites, hidden models, and availability tracking
-- Configuration export/import without credentials
-- Complete credential cleanup when an account is deleted
+- Keychain-isolated credentials
+- Custom HTTPS endpoints and safe headers
+- Bearer, named-header, and no-auth configuration
+- Model discovery and curated seed models
+- Manual, favorite, hidden, and unavailable model states
+- Non-secret provider configuration import/export
+- Connection testing and streaming console
 
-### iOS app
+### Conversation runtime
 
-- Providers and configured accounts browser
-- Account setup and editing
-- Secure credential replacement
-- OpenRouter metadata fields
-- Model refresh, favorites, manual models, and default selection
-- Custom OpenAI-compatible provider creator
-- Persistent-account streaming console
+- Multiple persistent conversations
+- Local versioned conversation storage
+- Per-chat provider account, model, system prompt, and generation options
+- Multi-turn streaming
+- Separate visible answer and reasoning content
+- Context budgeting with whole-turn omission
+- Partial-output persistence
+- Explicit cancellation with no automatic retry
+- Relaunch repair of interrupted generations
+- Provider/account/model snapshots on every message
+- Conversation create, rename, and delete
+- Native Chats-first iOS interface
 
 ## Local validation
 
@@ -62,8 +53,11 @@ xcodegen generate
 open BYOKchat.xcodeproj
 ```
 
-Live provider tests require your own DeepSeek, OpenRouter, or NVIDIA API key. No credentials are committed or exported.
+The app requires your own provider keys. No live credentials are committed.
 
-## Architecture boundary
+## Documentation
 
-BYOKchat owns its complete AI provider platform. It does not use AppFoundation's AI provider manager. AppFoundation may later be used only for approved non-AI UI infrastructure.
+- `IMPLEMENTATION_PLAN.md`
+- `Documentation/ProviderCoreOrigin.md`
+- `Documentation/ProviderWorkspace.md`
+- `Documentation/ConversationRuntime.md`
