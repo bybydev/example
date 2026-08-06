@@ -66,6 +66,12 @@ struct NewChatView: View {
 
       Spacer()
     }
+    .contentShape(Rectangle())
+    .simultaneousGesture(
+      TapGesture().onEnded {
+        dismissKeyboard()
+      }
+    )
     .background(Color(uiColor: .systemBackground))
     .toolbar(.hidden, for: .navigationBar)
     .safeAreaInset(edge: .top, spacing: 0) {
@@ -133,5 +139,14 @@ struct NewChatView: View {
       chats.send(conversationID: id, text: normalized)
       selectConversation(id)
     }
+  }
+
+  private func dismissKeyboard() {
+    UIApplication.shared.sendAction(
+      #selector(UIResponder.resignFirstResponder),
+      to: nil,
+      from: nil,
+      for: nil
+    )
   }
 }
