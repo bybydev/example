@@ -19,6 +19,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   public let definition: ProviderDefinition
   public let transport: any ProviderHTTPTransport
   public var providerID: ProviderID { definition.id }
+
   public init(
     definition: ProviderDefinition,
     transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
@@ -30,8 +31,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   public func testConnection(account: ResolvedProviderAccount, model: ModelID) async throws {
     _ = try await generate(
       request: .init(
-        model: model, messages: [.init(role: .user, content: "Return exactly OK.")],
-        options: .init(maxOutputTokens: 16)),
+        model: model,
+        messages: [.init(role: .user, content: "Return exactly OK.")],
+        options: .init(maxOutputTokens: 16)
+      ),
       account: account
     )
   }
@@ -39,14 +42,26 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     guard let path = definition.modelsPath else { return definition.seedModels }
     let url = try ProviderHTTP.endpoint(
-      baseURL: account.baseURLOverride ?? definition.defaultBaseURL, path: path)
+      baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
+      path: path,
+      allowsLocalHTTP: definition.allowsLocalHTTP
+    )
     let request = try makeRequest(
-      url: url, method: "GET", account: account, acceptsEventStream: false)
+      url: url,
+      method: "GET",
+      account: account,
+      acceptsEventStream: false
+    )
     let response = try await transport.data(for: request)
     try validate(response)
+
     let decoded: ModelsResponse
-    do { decoded = try JSONDecoder.provider.decode(ModelsResponse.self, from: response.data) } catch
-    { throw ProviderError.invalidResponse }
+    do {
+      decoded = try JSONDecoder.provider.decode(ModelsResponse.self, from: response.data)
+    } catch {
+      throw ProviderError.invalidResponse
+    }
+
     let discovered = decoded.data.map {
       ProviderModel(
         providerID: definition.id,
@@ -71,20 +86,31 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     let validated = try validate(request: request, account: account)
     let url = try ProviderHTTP.endpoint(
       baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
-      path: definition.chatCompletionsPath)
+      path: definition.chatCompletionsPath,
+      allowsLocalHTTP: definition.allowsLocalHTTP
+    )
     var urlRequest = try makeRequest(
-      url: url, method: "POST", account: account, acceptsEventStream: false)
+      url: url,
+      method: "POST",
+      account: account,
+      acceptsEventStream: false
+    )
     urlRequest.httpBody = try JSONEncoder.providerEncoder.encode(
-      JSONValue.object(requestBody(validated, streaming: false)))
+      JSONValue.object(requestBody(validated, streaming: false))
+    )
     let response = try await transport.data(for: urlRequest)
     try validate(response)
+
     let decoded: ChatCompletionResponse
     do {
       decoded = try JSONDecoder.provider.decode(ChatCompletionResponse.self, from: response.data)
-    } catch { throw ProviderError.invalidResponse }
+    } catch {
+      throw ProviderError.invalidResponse
+    }
     if let error = decoded.error {
       throw ProviderError.provider(status: response.statusCode, message: error.message)
     }
+
     let message = decoded.choices.first?.message
     let text = message?.content ?? ""
     let reasoning = message?.normalizedReasoning ?? ""
@@ -94,6 +120,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     else {
       throw ProviderError.emptyOutput
     }
+
     return .init(
       id: decoded.id,
       text: text,
@@ -116,11 +143,18 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           let validated = try validate(request: request, account: account)
           let url = try ProviderHTTP.endpoint(
             baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
-            path: definition.chatCompletionsPath)
+            path: definition.chatCompletionsPath,
+            allowsLocalHTTP: definition.allowsLocalHTTP
+          )
           var urlRequest = try makeRequest(
-            url: url, method: "POST", account: account, acceptsEventStream: true)
+            url: url,
+            method: "POST",
+            account: account,
+            acceptsEventStream: true
+          )
           urlRequest.httpBody = try JSONEncoder.providerEncoder.encode(
-            JSONValue.object(requestBody(validated, streaming: true)))
+            JSONValue.object(requestBody(validated, streaming: true))
+          )
           let stream = try await transport.stream(for: urlRequest)
           guard (200..<300).contains(stream.statusCode) else {
             var data = Data()
@@ -151,7 +185,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               let decoded: ChatCompletionChunk
               do {
                 decoded = try JSONDecoder.provider.decode(ChatCompletionChunk.self, from: payload)
-              } catch { throw ProviderError.invalidResponse }
+              } catch {
+                throw ProviderError.invalidResponse
+              }
               if let error = decoded.error {
                 throw ProviderError.midStreamProvider(code: error.code, message: error.message)
               }
@@ -175,24 +211,41 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               }
             }
           }
-          for event in try decoder.finish() where event.data == "[DONE]" { completed = true }
-          guard completed || finishReason != nil else { throw ProviderError.prematureStreamEnd }
+
+          for event in try decoder.finish() where event.data == "[DONE]" {
+            completed = true
+          }
+          guard completed || finishReason != nil else {
+            throw ProviderError.prematureStreamEnd
+          }
           guard
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           else {
             throw ProviderError.emptyOutput
           }
+
           continuation.yield(
             .completed(
               .init(
-                id: responseID, text: text, reasoning: reasoning, providerID: definition.id,
-                accountID: account.id, modelID: modelID, finishReason: finishReason, usage: usage,
-                metadata: metadata)))
+                id: responseID,
+                text: text,
+                reasoning: reasoning,
+                providerID: definition.id,
+                accountID: account.id,
+                modelID: modelID,
+                finishReason: finishReason,
+                usage: usage,
+                metadata: metadata
+              )
+            )
+          )
           continuation.finish()
-        } catch { continuation.finish(throwing: error) }
+        } catch {
+          continuation.finish(throwing: error)
+        }
       }
-      continuation.onTermination = { _ in task.cancel() }
+      continuation.onTermination = { @Sendable _ in task.cancel() }
     }
   }
 
@@ -208,7 +261,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     }
     guard !messages.isEmpty else { throw ProviderError.invalidMessages }
     if definition.authentication != .none {
-      guard let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
+      guard
+        let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !key.isEmpty
       else {
         throw ProviderError.missingCredential(definition.id)
       }
@@ -220,7 +275,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   }
 
   private func makeRequest(
-    url: URL, method: String, account: ResolvedProviderAccount, acceptsEventStream: Bool
+    url: URL,
+    method: String,
+    account: ResolvedProviderAccount,
+    acceptsEventStream: Bool
   ) throws -> URLRequest {
     var headers = account.additionalHeaders
     if definition.behavior == .openRouter {
@@ -228,12 +286,20 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       if let value = account.metadata["httpReferer"], !value.isEmpty {
         headers["HTTP-Referer"] = value
       }
-      if let value = account.metadata["appTitle"], !value.isEmpty { headers["X-Title"] = value }
+      if let value = account.metadata["appTitle"], !value.isEmpty {
+        headers["X-Title"] = value
+      }
     }
     var request = try ProviderHTTP.makeRequest(
-      url: url, method: method, authentication: definition.authentication, secret: account.apiKey,
-      additionalHeaders: headers)
-    if acceptsEventStream { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
+      url: url,
+      method: method,
+      authentication: definition.authentication,
+      secret: account.apiKey,
+      additionalHeaders: headers
+    )
+    if acceptsEventStream {
+      request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    }
     return request
   }
 
@@ -243,12 +309,16 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       "messages": .array(
         request.messages.map {
           .object(["role": .string($0.role.rawValue), "content": .string($0.content)])
-        }),
+        }
+      ),
       "stream": .bool(streaming),
     ]
     if let value = request.options.temperature { body["temperature"] = .number(value) }
     if let value = request.options.topP { body["top_p"] = .number(value) }
-    if let value = request.options.maxOutputTokens { body["max_tokens"] = .number(Double(value)) }
+    if let value = request.options.maxOutputTokens {
+      body["max_tokens"] = .number(Double(value))
+    }
+
     switch definition.behavior {
     case .deepSeek:
       if let reasoning = request.options.reasoning {
@@ -259,13 +329,17 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           body["reasoning_effort"] = .string(effort == .max ? "max" : "high")
         }
       }
-      if streaming { body["stream_options"] = .object(["include_usage": .bool(true)]) }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .openRouter:
       if let reasoning = request.options.reasoning {
         var object: [String: JSONValue] = [:]
         if let value = reasoning.enabled { object["enabled"] = .bool(value) }
         if let value = reasoning.effort { object["effort"] = .string(value.rawValue) }
-        if let value = reasoning.maxTokens { object["max_tokens"] = .number(Double(value)) }
+        if let value = reasoning.maxTokens {
+          object["max_tokens"] = .number(Double(value))
+        }
         if reasoning.excludeFromResponse { object["exclude"] = .bool(true) }
         if !object.isEmpty { body["reasoning"] = .object(object) }
       }
@@ -275,7 +349,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           object["order"] = .array(routing.providerOrder.map(JSONValue.string))
         }
         if let value = routing.allowFallbacks { object["allow_fallbacks"] = .bool(value) }
-        if let value = routing.requireParameters { object["require_parameters"] = .bool(value) }
+        if let value = routing.requireParameters {
+          object["require_parameters"] = .bool(value)
+        }
         if let value = routing.dataCollection {
           object["data_collection"] = .string(value.rawValue)
         }
@@ -283,7 +359,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         if let value = routing.sort { object["sort"] = .string(value.rawValue) }
         if !object.isEmpty { body["provider"] = .object(object) }
       }
-      if streaming { body["stream_options"] = .object(["include_usage": .bool(true)]) }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .nvidia, .genericOpenAICompatible:
       break
     }
@@ -293,7 +371,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   private func validate(_ response: ProviderHTTPResponse) throws {
     guard (200..<300).contains(response.statusCode) else {
       throw mapHTTPError(
-        status: response.statusCode, headers: response.headers, data: response.data)
+        status: response.statusCode,
+        headers: response.headers,
+        data: response.data
+      )
     }
   }
 
@@ -304,12 +385,18 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       ?? HTTPURLResponse.localizedString(forStatusCode: status)
     let lowered = message.lowercased()
     switch status {
-    case 401: return .authenticationFailed
-    case 402: return .insufficientCredits
-    case 403: return .permissionDenied
-    case 404 where lowered.contains("model"): return .modelUnavailable
-    case 404: return .invalidEndpoint
-    case 429: return .rateLimited(retryAfter: header("Retry-After", headers))
+    case 401:
+      return .authenticationFailed
+    case 402:
+      return .insufficientCredits
+    case 403:
+      return .permissionDenied
+    case 404 where lowered.contains("model"):
+      return .modelUnavailable
+    case 404:
+      return .invalidEndpoint
+    case 429:
+      return .rateLimited(retryAfter: header("Retry-After", headers))
     default:
       if lowered.contains("credit") || lowered.contains("quota") || lowered.contains("billing") {
         return .insufficientCredits
@@ -327,7 +414,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     -> [String: String]
   {
     var metadata: [String: String] = [:]
-    if let value = header("X-Generation-Id", headers) { metadata["generationID"] = value }
+    if let value = header("X-Generation-Id", headers) {
+      metadata["generationID"] = value
+    }
     if let value = decoded?.provider { metadata["provider"] = value }
     return metadata
   }
