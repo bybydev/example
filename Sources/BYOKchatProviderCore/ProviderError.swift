@@ -77,8 +77,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
       "The previous request may have completed. Confirm before regenerating to avoid a duplicate charge."
     case .importConflict(let message): message
     case .credentialCleanupFailed(let accountIDs):
-      let values = accountIDs.map(\.rawValue).sorted().joined(separator: ", ")
-      return "The configuration change was saved, but Keychain cleanup failed for: \(values). The cleanup can be retried safely."
+      "The configuration change was saved, but Keychain cleanup failed for: \(accountIDs.map(\.rawValue).sorted().joined(separator: ", ")). The cleanup can be retried safely."
     }
   }
 }
