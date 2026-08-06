@@ -75,7 +75,7 @@ struct ChatSidebarView: View {
   private var header: some View {
     HStack(alignment: .center) {
       Text("BYOKchat")
-        .font(.system(size: 30, weight: .bold))
+        .font(.system(size: 28, weight: .bold))
 
       Spacer()
 
@@ -89,11 +89,14 @@ struct ChatSidebarView: View {
         }
       }
       .labelStyle(.iconOnly)
-      .font(.system(size: 24, weight: .medium))
-      .frame(width: 54, height: 54)
-      .background(.ultraThinMaterial, in: Circle())
-      .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
-      .shadow(color: .black.opacity(0.07), radius: 14, y: 6)
+      .font(.system(size: 17, weight: .semibold))
+      .symbolRenderingMode(.hierarchical)
+      .frame(width: 40, height: 40)
+      .background(.thinMaterial, in: Circle())
+      .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+      .contentShape(Circle())
+      .buttonStyle(.plain)
+      .shadow(color: .black.opacity(0.05), radius: 9, y: 3)
     }
     .padding(.horizontal, 20)
     .padding(.bottom, 12)
@@ -196,10 +199,10 @@ struct ChatSidebarView: View {
       HStack {
         Button(action: newChat) {
           Label("New Chat", systemImage: "square.and.pencil")
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .frame(height: 54)
+            .padding(.horizontal, 18)
+            .frame(height: 48)
             .background(Color.accentColor, in: Capsule())
         }
         .buttonStyle(.plain)
@@ -208,17 +211,20 @@ struct ChatSidebarView: View {
 
         Button("Settings", systemImage: "gearshape", action: openSettings)
           .labelStyle(.iconOnly)
-          .font(.system(size: 25, weight: .medium))
-          .frame(width: 54, height: 54)
-          .background(.ultraThinMaterial, in: Circle())
-          .overlay(Circle().stroke(.white.opacity(0.72), lineWidth: 1))
+          .font(.system(size: 17, weight: .semibold))
+          .symbolRenderingMode(.hierarchical)
+          .frame(width: 44, height: 44)
+          .background(.thinMaterial, in: Circle())
+          .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
           .overlay(alignment: .bottomTrailing) {
             Circle()
               .fill(providers.accounts.isEmpty ? Color.orange : Color.green)
-              .frame(width: 9, height: 9)
-              .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+              .frame(width: 8, height: 8)
+              .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
           }
-          .shadow(color: .black.opacity(0.07), radius: 14, y: 6)
+          .contentShape(Circle())
+          .buttonStyle(.plain)
+          .shadow(color: .black.opacity(0.05), radius: 9, y: 3)
       }
 
       Text(
