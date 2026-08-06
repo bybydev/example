@@ -42,13 +42,13 @@ public enum JSONValue: Codable, Sendable, Equatable {
 }
 
 extension JSONEncoder {
-  static let providerEncoder: JSONEncoder = {
+  static var providerEncoder: JSONEncoder {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return encoder
-  }()
+  }
 }
 
 extension JSONDecoder {
-  static let provider = JSONDecoder()
+  static var provider: JSONDecoder { JSONDecoder() }
 }
