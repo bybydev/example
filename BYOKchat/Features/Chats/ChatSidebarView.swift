@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UIKit
@@ -19,6 +20,7 @@ struct ChatSidebarView: View {
   let openSettings: () -> Void
   let close: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var searchText = ""
   @State private var isSearching = false
   @State private var renameTarget: ChatConversation?
@@ -44,7 +46,7 @@ struct ChatSidebarView: View {
     }
     .safeAreaPadding(.top, 8)
     .safeAreaPadding(.bottom, 8)
-    .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+    .background(theme.backgroundColor.ignoresSafeArea())
     .contentShape(Rectangle())
     .gesture(
       DragGesture(minimumDistance: 20)
@@ -93,10 +95,10 @@ struct ChatSidebarView: View {
       .symbolRenderingMode(.hierarchical)
       .frame(width: 40, height: 40)
       .background(.thinMaterial, in: Circle())
-      .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+      .overlay(Circle().stroke(theme.borderColor, lineWidth: 0.5))
       .contentShape(Circle())
       .buttonStyle(.plain)
-      .shadow(color: .black.opacity(0.05), radius: 9, y: 3)
+      .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
     }
     .padding(.horizontal, 20)
     .padding(.bottom, 12)
@@ -122,8 +124,12 @@ struct ChatSidebarView: View {
     .padding(.horizontal, 14)
     .frame(height: 48)
     .background(
-      Color(uiColor: .secondarySystemBackground),
+      theme.surfaceColor,
       in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(theme.borderColor, lineWidth: 0.5)
     )
     .padding(.horizontal, 20)
     .padding(.bottom, 12)
@@ -200,10 +206,10 @@ struct ChatSidebarView: View {
         Button(action: newChat) {
           Label("New Chat", systemImage: "square.and.pencil")
             .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(theme.backgroundColor)
             .padding(.horizontal, 18)
             .frame(height: 48)
-            .background(Color.accentColor, in: Capsule())
+            .background(theme.accentColor, in: Capsule())
         }
         .buttonStyle(.plain)
 
@@ -215,16 +221,16 @@ struct ChatSidebarView: View {
           .symbolRenderingMode(.hierarchical)
           .frame(width: 44, height: 44)
           .background(.thinMaterial, in: Circle())
-          .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+          .overlay(Circle().stroke(theme.borderColor, lineWidth: 0.5))
           .overlay(alignment: .bottomTrailing) {
             Circle()
               .fill(providers.accounts.isEmpty ? Color.orange : Color.green)
               .frame(width: 8, height: 8)
-              .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+              .overlay(Circle().stroke(theme.backgroundColor, lineWidth: 1.5))
           }
           .contentShape(Circle())
           .buttonStyle(.plain)
-          .shadow(color: .black.opacity(0.05), radius: 9, y: 3)
+          .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
       }
 
       Text(
@@ -270,9 +276,15 @@ struct ChatSidebarView: View {
       .padding(.horizontal, 14)
       .frame(minHeight: selectedConversationID == conversation.id ? 62 : 52)
       .background(
-        selectedConversationID == conversation.id
-          ? Color(uiColor: .secondarySystemBackground) : Color.clear,
+        selectedConversationID == conversation.id ? theme.elevatedSurfaceColor : Color.clear,
         in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+          .stroke(
+            selectedConversationID == conversation.id ? theme.borderColor : Color.clear,
+            lineWidth: 0.5
+          )
       )
       .contentShape(Rectangle())
     }
