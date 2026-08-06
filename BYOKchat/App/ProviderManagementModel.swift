@@ -19,26 +19,25 @@ final class ProviderManagementModel {
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
 
-  init() {
-    registry = try! ProviderRegistry.builtIn()
-    let supportDirectory = FileManager.default.urls(
-      for: .applicationSupportDirectory, in: .userDomainMask
-    ).first!
-    .appendingPathComponent("BYOKchat", isDirectory: true)
-    workspace = ProviderWorkspaceStore(
-      persistence: JSONFileProviderWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("providers-v1.json")
-      )
-    )
-    vault = KeychainCredentialVault()
-    accountManager = ProviderAccountManager(registry: registry, workspace: workspace, vault: vault)
-    runtime = ProviderRuntime(registry: registry, workspace: workspace, accounts: accountManager)
+  init(
+    registry: ProviderRegistry,
+    workspace: ProviderWorkspaceStore,
+    vault: KeychainCredentialVault,
+    accountManager: ProviderAccountManager,
+    runtime: ProviderRuntime
+  ) {
+    self.registry = registry
+    self.workspace = workspace
+    self.vault = vault
+    self.accountManager = accountManager
+    self.runtime = runtime
   }
 
   func load() async {
     await perform("Provider workspace loaded") {
       try await workspace.load()
       try await accountManager.synchronizeCustomProviders()
+      try await ensureDefaultModelsExist()
       try await reloadSnapshot()
     }
   }
@@ -79,6 +78,20 @@ final class ProviderManagementModel {
       )
       if let definition = provider(for: providerID), !definition.seedModels.isEmpty {
         try await workspace.mergeModels(definition.seedModels, for: account.id)
+      }
+      if let defaultModelID = account.defaultModelID,
+        !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
+          $0.model.id == defaultModelID
+        })
+      {
+        try await workspace.addManualModel(
+          ProviderModel(
+            providerID: account.providerID,
+            id: defaultModelID,
+            displayName: defaultModelID.rawValue
+          ),
+          for: account.id
+        )
       }
       try await reloadSnapshot()
     }
@@ -208,6 +221,22 @@ final class ProviderManagementModel {
       ),
       accountID: accountID
     )
+  }
+
+  private func ensureDefaultModelsExist() async throws {
+    for account in await workspace.allAccounts() {
+      guard let defaultModelID = account.defaultModelID else { continue }
+      let records = await workspace.modelRecords(for: account.id, includeHidden: true)
+      guard !records.contains(where: { $0.model.id == defaultModelID }) else { continue }
+      try await workspace.addManualModel(
+        ProviderModel(
+          providerID: account.providerID,
+          id: defaultModelID,
+          displayName: defaultModelID.rawValue
+        ),
+        for: account.id
+      )
+    }
   }
 
   private func reloadSnapshot() async throws {
