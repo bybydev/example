@@ -110,13 +110,40 @@ public enum ProviderHTTP {
     "cookie", "set-cookie", "transfer-encoding",
   ]
 
-  public static func endpoint(baseURL: URL, path: String) throws -> URL {
-    guard baseURL.scheme?.lowercased() == "https", baseURL.user == nil, baseURL.password == nil
-    else {
-      throw ProviderError.invalidBaseURL
-    }
+  public static func endpoint(
+    baseURL: URL, path: String, allowsLocalHTTP: Bool = false
+  ) throws -> URL {
+    try validateBaseURL(baseURL, allowsLocalHTTP: allowsLocalHTTP)
     let relative = path.hasPrefix("/") ? String(path.dropFirst()) : path
     return baseURL.appendingPathComponent(relative)
+  }
+
+  public static func validateBaseURL(_ baseURL: URL, allowsLocalHTTP: Bool = false) throws {
+    guard baseURL.user == nil, baseURL.password == nil, let host = baseURL.host else {
+      throw ProviderError.invalidBaseURL
+    }
+    switch baseURL.scheme?.lowercased() {
+    case "https":
+      return
+    case "http" where allowsLocalHTTP && isPrivateNetworkHost(host):
+      return
+    default:
+      throw ProviderError.invalidBaseURL
+    }
+  }
+
+  public static func isPrivateNetworkHost(_ host: String) -> Bool {
+    let value = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    if value == "localhost" || value == "::1" || value.hasSuffix(".local") { return true }
+    if !value.contains(".") && !value.contains(":") { return true }
+    if value.hasPrefix("fe80:") || value.hasPrefix("fc") || value.hasPrefix("fd") { return true }
+    let parts = value.split(separator: ".").compactMap { Int($0) }
+    guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+    if parts[0] == 10 || parts[0] == 127 { return true }
+    if parts[0] == 169 && parts[1] == 254 { return true }
+    if parts[0] == 192 && parts[1] == 168 { return true }
+    if parts[0] == 172 && (16...31).contains(parts[1]) { return true }
+    return false
   }
 
   public static func makeRequest(

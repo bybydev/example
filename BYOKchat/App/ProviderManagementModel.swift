@@ -42,6 +42,14 @@ final class ProviderManagementModel {
     }
   }
 
+  func reloadFromStorage() async {
+    await perform("Provider workspace reloaded") {
+      try await accountManager.synchronizeCustomProviders()
+      try await ensureDefaultModelsExist()
+      try await reloadSnapshot()
+    }
+  }
+
   func accounts(for providerID: ProviderID) -> [ProviderAccount] {
     accounts.filter { $0.providerID == providerID }
   }
@@ -181,7 +189,8 @@ final class ProviderManagementModel {
     chatPath: String,
     modelsPath: String,
     authentication: ProviderAuthentication,
-    seedModels: [String]
+    seedModels: [String],
+    allowsLocalHTTP: Bool
   ) async -> Bool {
     await performResult("Custom provider added") {
       guard let url = URL(string: baseURL) else { throw ProviderError.invalidBaseURL }
@@ -192,7 +201,8 @@ final class ProviderManagementModel {
         chatCompletionsPath: chatPath,
         modelsPath: modelsPath.isEmpty ? nil : modelsPath,
         authentication: authentication,
-        seedModelIDs: seedModels
+        seedModelIDs: seedModels,
+        allowsLocalHTTP: allowsLocalHTTP
       )
       try await runtime.registerCustomProvider(definition)
       try await reloadSnapshot()

@@ -8,6 +8,7 @@ final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
   let preferences: AppPreferencesModel
+  let dataPortability: DataPortabilityModel
 
   private(set) var hasLoaded = false
 
@@ -47,19 +48,34 @@ final class AppModel {
       providerWorkspace: providerWorkspace,
       conversations: conversationStore
     )
-
-    providers = ProviderManagementModel(
+    let providerModel = ProviderManagementModel(
       registry: registry,
       workspace: providerWorkspace,
       vault: vault,
       accountManager: accountManager,
       runtime: providerRuntime
     )
-    chats = ChatManagementModel(
+    let chatModel = ChatManagementModel(
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
       runtime: chatRuntime,
       preferences: preferences
+    )
+
+    providers = providerModel
+    chats = chatModel
+    dataPortability = DataPortabilityModel(
+      service: DataPortabilityService(
+        providers: providerWorkspace,
+        conversations: conversationStore,
+        accounts: accountManager
+      ),
+      providerWorkspace: providerWorkspace,
+      conversations: conversationStore,
+      accountManager: accountManager,
+      preferences: preferences,
+      providersModel: providerModel,
+      chatsModel: chatModel
     )
   }
 

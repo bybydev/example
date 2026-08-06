@@ -15,7 +15,13 @@ public actor ProviderAccountManager {
   }
 
   public func synchronizeCustomProviders() async throws {
-    for definition in await workspace.customProviderDefinitions() {
+    let custom = await workspace.customProviderDefinitions()
+    let customIDs = Set(custom.map(\.id))
+    for definition in await registry.allDefinitions()
+    where !definition.isBuiltIn && !customIDs.contains(definition.id) {
+      try await registry.remove(definition.id)
+    }
+    for definition in custom {
       try await registry.replace(definition)
     }
   }
@@ -32,7 +38,11 @@ public actor ProviderAccountManager {
   ) async throws -> ProviderAccount {
     let definition = try await registry.definition(for: providerID)
     if let baseURLOverride {
-      _ = try ProviderHTTP.endpoint(baseURL: baseURLOverride, path: definition.chatCompletionsPath)
+      _ = try ProviderHTTP.endpoint(
+        baseURL: baseURLOverride,
+        path: definition.chatCompletionsPath,
+        allowsLocalHTTP: definition.allowsLocalHTTP
+      )
     }
     for name in additionalHeaders.keys where ProviderHTTP.isForbiddenCustomHeader(name) {
       throw ProviderError.unsafeHeader(name)
@@ -61,7 +71,11 @@ public actor ProviderAccountManager {
 
   public func updateAccount(_ account: ProviderAccount) async throws {
     _ = try await registry.definition(for: account.providerID)
-    if let url = account.baseURLOverride { _ = try ProviderHTTP.endpoint(baseURL: url, path: "/") }
+    if let url = account.baseURLOverride {
+      let definition = try await registry.definition(for: account.providerID)
+      _ = try ProviderHTTP.endpoint(
+        baseURL: url, path: "/", allowsLocalHTTP: definition.allowsLocalHTTP)
+    }
     for name in account.additionalHeaders.keys where ProviderHTTP.isForbiddenCustomHeader(name) {
       throw ProviderError.unsafeHeader(name)
     }
@@ -103,6 +117,16 @@ public actor ProviderAccountManager {
   public func deleteAccount(_ id: ProviderAccountID) async throws {
     try await vault.removeAll(accountID: id)
     try await workspace.deleteAccount(id)
+  }
+
+  public func removeAllCredentials() async throws {
+    try await removeCredentials(accountIDs: await workspace.allAccounts().map(\.id))
+  }
+
+  public func removeCredentials(accountIDs: [ProviderAccountID]) async throws {
+    for accountID in Set(accountIDs) {
+      try await vault.removeAll(accountID: accountID)
+    }
   }
 }
 

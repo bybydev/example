@@ -10,12 +10,14 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - OpenRouter
 - NVIDIA
 - User-defined OpenAI-compatible providers
+- Private-network OpenAI-compatible servers
 
 ## Provider platform
 
 - Multiple accounts per provider
 - Keychain-isolated credentials
-- Custom HTTPS endpoints and safe headers
+- Custom HTTPS endpoints and protected headers
+- Explicit private-LAN HTTP support without global arbitrary loads
 - Bearer, named-header, and no-auth configuration
 - Model discovery and curated seed models
 - Manual, favorite, hidden, and unavailable model states
@@ -30,7 +32,7 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Global default system prompt for new chats
 - Multi-turn streaming with separate answer and reasoning content
 - Fenced code-block rendering, horizontal scrolling, and code copy
-- Message copy and share
+- Message copy, share, and Markdown export
 - Edit and resend with explicit linear-history truncation
 - Regenerate without duplicating the user turn
 - Confirmation before regenerating an uncertain billable request
@@ -42,7 +44,15 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Relaunch repair of interrupted generations
 - Missing-account, credential, and model recovery guidance
 - Near-bottom stream following and Jump to Latest behavior
-- Chats and Settings navigation
+
+## Data portability
+
+- Versioned full backup containing conversations, preferences, and non-secret provider configuration
+- Merge or replace restore strategies
+- Pre-mutation validation and workspace rollback on import failure
+- Credentials excluded from every export
+- Replace restore clears affected Keychain credentials
+- Delete-all controls for conversations and credentials
 
 ## Local validation
 
@@ -67,3 +77,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/ProviderWorkspace.md`
 - `Documentation/ConversationRuntime.md`
 - `Documentation/NativeChatExperience.md`
+- `Documentation/DataPortability.md`
+- `Documentation/LocalProviders.md`

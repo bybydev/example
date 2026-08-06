@@ -46,3 +46,11 @@ Provider refreshes merge rather than replace:
 - local metadata fills missing remote metadata
 - remote models missing from a later refresh are marked unavailable
 - missing models are not immediately deleted
+
+## Import validation
+
+Provider configuration imports validate schema versions, duplicate IDs, provider/account references, endpoint security, protected headers, model ownership, and default-account references before replacing persisted state.
+
+## Local HTTP
+
+Custom providers may explicitly allow plain HTTP only for private-network hosts. Public HTTP remains rejected. This policy is stored in the provider definition and defaults to disabled when decoding older provider configurations.

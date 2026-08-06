@@ -56,11 +56,14 @@ public actor ProviderRegistry {
     guard !definition.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw ProviderError.invalidDefinition("Provider name cannot be empty.")
     }
-    guard definition.defaultBaseURL.scheme?.lowercased() == "https",
-      definition.defaultBaseURL.user == nil
-    else {
+    do {
+      try ProviderHTTP.validateBaseURL(
+        definition.defaultBaseURL, allowsLocalHTTP: definition.allowsLocalHTTP)
+    } catch {
       throw ProviderError.invalidDefinition(
-        "Provider base URL must be a credential-free HTTPS URL.")
+        definition.allowsLocalHTTP
+          ? "Provider base URL must be HTTPS or an explicit private-network HTTP URL."
+          : "Provider base URL must be a credential-free HTTPS URL.")
     }
     guard !definition.chatCompletionsPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
@@ -86,7 +89,8 @@ public enum CustomProviderFactory {
     chatCompletionsPath: String = "/chat/completions",
     modelsPath: String? = "/models",
     authentication: ProviderAuthentication = .bearer,
-    seedModelIDs: [String] = []
+    seedModelIDs: [String] = [],
+    allowsLocalHTTP: Bool = false
   ) throws -> ProviderDefinition {
     let providerID = ProviderID(
       rawValue: id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
@@ -101,6 +105,7 @@ public enum CustomProviderFactory {
       seedModels: seedModelIDs.map {
         .init(providerID: providerID, id: ModelID(rawValue: $0), displayName: $0, isSeed: true)
       },
+      allowsLocalHTTP: allowsLocalHTTP,
       isBuiltIn: false
     )
     try ProviderRegistry.validate(definition)

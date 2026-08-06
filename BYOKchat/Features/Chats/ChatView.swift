@@ -1,6 +1,7 @@
 import BYOKchatProviderCore
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ChatView: View {
   let conversationID: ConversationID
@@ -19,6 +20,8 @@ struct ChatView: View {
   @State var showRegenerateConfirmation = false
   @State var isNearBottom = true
   @State var showJumpToLatest = false
+  @State var markdownDocument: MarkdownExportDocument?
+  @State var showMarkdownExporter = false
 
   init(
     conversationID: ConversationID,
@@ -40,6 +43,12 @@ struct ChatView: View {
     conversation?.messages.last(where: { $0.role == .assistant })?.id
   }
 
+  var markdownFilename: String {
+    let title = conversation?.title ?? "BYOKchat-conversation"
+    let safe = title.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }
+    return String(safe).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+  }
+
   var body: some View {
     Group {
       if let conversation {
@@ -59,6 +68,18 @@ struct ChatView: View {
           Button("Rename", systemImage: "pencil") {
             renameText = conversation?.title ?? ""
             showRename = true
+          }
+          Button("Export Markdown", systemImage: "doc.text") {
+            guard let conversation else { return }
+            let accountLabel = providers.accounts.first { $0.id == conversation.accountID }?.label
+            markdownDocument = MarkdownExportDocument(
+              data: Data(
+                ConversationMarkdownFormatter.render(
+                  conversation, accountLabel: accountLabel
+                ).utf8
+              )
+            )
+            showMarkdownExporter = true
           }
           Button("Delete", systemImage: "trash", role: .destructive) {
             Task {
@@ -114,6 +135,16 @@ struct ChatView: View {
       Text(
         "The previous request may have completed at the provider. Regenerating could create another billable request."
       )
+    }
+    .fileExporter(
+      isPresented: $showMarkdownExporter,
+      document: markdownDocument,
+      contentType: .markdown,
+      defaultFilename: markdownFilename
+    ) { result in
+      if case .failure(let error) = result {
+        chats.errorMessage = error.localizedDescription
+      }
     }
     .task(id: conversationID) {
       guard !restoredDraft else { return }

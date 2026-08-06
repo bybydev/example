@@ -30,7 +30,7 @@ struct AppRootView: View {
       Task { await model.chats.persistActiveMessages() }
     }
     .overlay(alignment: .top) {
-      if model.providers.isBusy || model.chats.isBusy {
+      if model.providers.isBusy || model.chats.isBusy || model.dataPortability.isBusy {
         ProgressView()
           .padding(10)
           .background(.regularMaterial, in: Capsule())
