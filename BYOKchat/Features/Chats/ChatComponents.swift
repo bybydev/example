@@ -181,22 +181,24 @@ struct ChatMessageView: View {
   private var userMessage: some View {
     HStack(alignment: .top) {
       Spacer(minLength: 54)
-      messageBody
-        .padding(.horizontal, 15)
-        .padding(.vertical, 11)
-        .background(
-          Color(uiColor: .secondarySystemBackground),
-          in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
-        .contextMenu {
-          Button("Copy", systemImage: "doc.on.doc", action: copy)
-          ShareLink(item: message.content) {
-            Label("Share", systemImage: "square.and.arrow.up")
-          }
-          if canEdit {
-            Button("Edit and Resend", systemImage: "pencil", action: edit)
-          }
+      VStack(alignment: .leading, spacing: 8) {
+        messageBody
+      }
+      .padding(.horizontal, 15)
+      .padding(.vertical, 11)
+      .background(
+        Color(uiColor: .secondarySystemBackground),
+        in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+      )
+      .contextMenu {
+        Button("Copy", systemImage: "doc.on.doc", action: copy)
+        ShareLink(item: message.content) {
+          Label("Share", systemImage: "square.and.arrow.up")
         }
+        if canEdit {
+          Button("Edit and Resend", systemImage: "pencil", action: edit)
+        }
+      }
     }
   }
 
