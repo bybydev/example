@@ -102,69 +102,108 @@ struct ChatComposer: View {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  private var modelLabel: String {
+    targetLabel.components(separatedBy: " · ").last ?? targetLabel
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Button(action: openTarget) {
-        HStack(spacing: 5) {
-          Text(targetLabel)
-            .lineLimit(1)
-          Image(systemName: "chevron.down")
-            .font(.system(size: 9, weight: .bold))
-        }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
+    VStack(alignment: .leading, spacing: 2) {
+      if isEditorFocused {
+        messageField
+          .padding(.horizontal, 16)
+          .padding(.top, 12)
+          .padding(.bottom, 2)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Change provider account and model")
 
-      HStack(alignment: .bottom, spacing: 8) {
-        Button("Chat options", systemImage: "plus", action: openTarget)
-          .labelStyle(.iconOnly)
-          .font(.system(size: 25, weight: .regular))
-          .frame(width: 44, height: 44)
-          .contentShape(Circle())
+      HStack(alignment: .bottom, spacing: 6) {
+        optionsButton
 
-        TextField("Message BYOKchat", text: $draft, axis: .vertical)
-          .font(.system(size: 17))
-          .lineLimit(1...7)
-          .frame(minHeight: 44)
-          .focused($isEditorFocused)
-          .accessibilityLabel("Message")
-
-        Button {
-          isEditorFocused = false
-          if isGenerating {
-            stop()
-          } else {
-            send()
-          }
-        } label: {
-          Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
-            .font(.system(size: 18, weight: .bold))
-            .frame(width: 44, height: 44)
-            .background(sendButtonBackground, in: Circle())
-            .foregroundStyle(sendButtonForeground)
+        if isEditorFocused {
+          modelButton
+          Spacer(minLength: 8)
+        } else {
+          messageField
         }
-        .disabled(!isGenerating && (!canSend || normalizedDraft.isEmpty))
-        .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
+
+        sendButton
       }
       .padding(.horizontal, 8)
-      .padding(.vertical, 7)
-      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 30, style: .continuous)
-          .stroke(.white.opacity(0.72), lineWidth: 1)
-      )
-      .shadow(color: .black.opacity(0.08), radius: 20, y: 8)
+      .padding(.vertical, isEditorFocused ? 8 : 6)
     }
-    .padding(.horizontal, 16)
+    .background(.thinMaterial, in: composerShape)
+    .overlay(composerShape.stroke(.primary.opacity(0.08), lineWidth: 0.5))
+    .shadow(color: .black.opacity(0.06), radius: 14, y: 6)
+    .animation(.snappy(duration: 0.22), value: isEditorFocused)
+    .padding(.horizontal, 14)
     .padding(.top, 6)
     .padding(.bottom, 8)
     .onChange(of: isGenerating) { _, generating in
       if generating { isEditorFocused = false }
     }
     .onDisappear { isEditorFocused = false }
+  }
+
+  private var composerShape: RoundedRectangle {
+    RoundedRectangle(
+      cornerRadius: isEditorFocused ? 24 : 28,
+      style: .continuous
+    )
+  }
+
+  private var messageField: some View {
+    TextField("Message BYOKchat", text: $draft, axis: .vertical)
+      .font(.system(size: 17))
+      .lineLimit(isEditorFocused ? 1...7 : 1...1)
+      .frame(minHeight: 40)
+      .focused($isEditorFocused)
+      .accessibilityLabel("Message")
+  }
+
+  private var optionsButton: some View {
+    Button("Chat options", systemImage: "plus", action: openTarget)
+      .labelStyle(.iconOnly)
+      .font(.system(size: 22, weight: .regular))
+      .frame(width: 40, height: 40)
+      .contentShape(Circle())
+      .accessibilityLabel("Chat options")
+  }
+
+  private var modelButton: some View {
+    Button(action: openTarget) {
+      HStack(spacing: 5) {
+        Text(modelLabel)
+          .lineLimit(1)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 9, weight: .semibold))
+      }
+      .font(.system(size: 14, weight: .medium))
+      .foregroundStyle(.primary)
+      .padding(.horizontal, 11)
+      .frame(height: 38)
+      .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Change provider account and model, currently \(targetLabel)")
+  }
+
+  private var sendButton: some View {
+    Button {
+      isEditorFocused = false
+      if isGenerating {
+        stop()
+      } else {
+        send()
+      }
+    } label: {
+      Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
+        .font(.system(size: 16, weight: .bold))
+        .frame(width: 40, height: 40)
+        .background(sendButtonBackground, in: Circle())
+        .foregroundStyle(sendButtonForeground)
+    }
+    .disabled(!isGenerating && (!canSend || normalizedDraft.isEmpty))
+    .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
   }
 
   private var sendButtonBackground: Color {
