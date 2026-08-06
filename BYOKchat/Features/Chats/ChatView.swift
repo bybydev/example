@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -13,6 +14,7 @@ struct ChatView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
 
+  @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
   @State var restoredDraft = false
@@ -67,7 +69,7 @@ struct ChatView: View {
         ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
       }
     }
-    .background(Color(uiColor: .systemBackground))
+    .background(theme.backgroundColor)
     .toolbar(.hidden, for: .navigationBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       ChatTopBar(openSidebar: openSidebar, newChat: startNewChat) {
