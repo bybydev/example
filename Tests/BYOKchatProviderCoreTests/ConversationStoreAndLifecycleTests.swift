@@ -28,7 +28,7 @@ import Testing
     repaired.messages.first(where: { $0.id == turn.assistantMessage.id })?.status == .interrupted)
 }
 
-@Test func contextBuilderExcludesIncompleteMessagesAndDropsWholeOldTurns() {
+@Test func contextBuilderExcludesIncompleteMessagesAndDropsWholeOldTurns() throws {
   let messages = [
     ChatMessage(role: .user, content: String(repeating: "old ", count: 100), status: .complete),
     ChatMessage(
@@ -43,16 +43,17 @@ import Testing
     systemPrompt: "System",
     messages: messages
   )
-  let result = ChatContextBuilder.build(
+  let result = try ChatContextBuilder.build(
     conversation: conversation,
-    contextWindow: 80,
-    reservedOutputTokens: 32
+    contextWindow: 400,
+    reservedOutputTokens: 64
   )
 
   #expect(result.messages.first?.role == .system)
   #expect(result.messages.last?.content == "latest question")
   #expect(!result.messages.contains(where: { $0.content == "not ready" }))
   #expect(result.omittedMessageCount == 2)
+  #expect(result.estimatedInputTokens <= 144)
 }
 
 @Test func successfulChatRuntimePersistsNormalizedCompletion() async throws {
