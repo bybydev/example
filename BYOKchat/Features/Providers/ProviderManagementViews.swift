@@ -275,10 +275,12 @@ struct AccountEditorView: View {
         }
       }
 
-      Section("Additional Headers") {
+      Section {
         TextEditor(text: $headersText)
           .font(.system(.body, design: .monospaced))
           .frame(minHeight: 100)
+      } header: {
+        Text("Additional Headers")
       } footer: {
         Text(
           "One header per line: Name: Value. Authorization and transport-level headers are blocked."
