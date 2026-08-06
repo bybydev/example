@@ -26,11 +26,21 @@ extension ConversationStore {
     case .keepExisting: replacing = false
     }
 
-    let existingIDs = Set(allConversations().map(\.id))
-    if replacing { try await deleteAllConversations() }
+    if replacing {
+      try await deleteAllConversations()
+    }
+
+    let current = allConversations()
+    let existingIDs = Set(current.map(\.id))
+    var existingFingerprints = try Set(current.map(Self.portableFingerprint))
 
     for source in imported.conversations {
-      if !replacing && existingIDs.contains(source.id) { continue }
+      if !replacing {
+        if existingIDs.contains(source.id) { continue }
+        let fingerprint = try Self.portableFingerprint(source)
+        if existingFingerprints.contains(fingerprint) { continue }
+        existingFingerprints.insert(fingerprint)
+      }
       try await restorePortableConversation(source)
     }
   }
@@ -106,5 +116,62 @@ extension ConversationStore {
       source.lastContextOmittedMessageCount,
       conversationID: created.id
     )
+  }
+
+  private static func portableFingerprint(_ conversation: ChatConversation) throws -> String {
+    let value = PortableConversationFingerprint(
+      title: conversation.title,
+      providerID: conversation.providerID,
+      accountID: conversation.accountID,
+      modelID: conversation.modelID,
+      systemPrompt: conversation.systemPrompt,
+      options: conversation.options,
+      messages: conversation.messages.map(PortableMessageFingerprint.init),
+      lastContextOmittedMessageCount: conversation.lastContextOmittedMessageCount,
+      draftText: conversation.draftText
+    )
+    return try JSONEncoder.providerEncoder.encode(value).base64EncodedString()
+  }
+}
+
+private struct PortableConversationFingerprint: Encodable {
+  var title: String
+  var providerID: ProviderID
+  var accountID: ProviderAccountID
+  var modelID: ModelID
+  var systemPrompt: String
+  var options: ProviderRequestOptions
+  var messages: [PortableMessageFingerprint]
+  var lastContextOmittedMessageCount: Int
+  var draftText: String?
+}
+
+private struct PortableMessageFingerprint: Encodable {
+  var role: ChatMessageRole
+  var content: String
+  var reasoning: String
+  var status: ChatMessageStatus
+  var providerID: ProviderID?
+  var accountID: ProviderAccountID?
+  var modelID: ModelID?
+  var finishReason: String?
+  var usage: ProviderUsage?
+  var metadata: [String: String]
+
+  init(_ message: ChatMessage) {
+    role = message.role
+    content = message.content
+    reasoning = message.reasoning
+    status = switch message.status {
+    case .complete: .complete
+    case .cancelled: .cancelled
+    case .failed, .interrupted, .pending, .streaming: .failed
+    }
+    providerID = message.providerID
+    accountID = message.accountID
+    modelID = message.modelID
+    finishReason = message.finishReason
+    usage = message.usage
+    metadata = message.metadata
   }
 }

@@ -34,7 +34,10 @@ public protocol ProviderHTTPTransport: Sendable {
 
 public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked Sendable {
   private let session: URLSession
-  public init(session: URLSession = .shared) { self.session = session }
+
+  public init(session: URLSession? = nil) {
+    self.session = session ?? Self.makeDefaultSession()
+  }
 
   public func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
     do {
@@ -96,6 +99,23 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
     #endif
   }
 
+  private static func makeDefaultSession() -> URLSession {
+    #if canImport(Darwin)
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.httpShouldSetCookies = false
+      configuration.httpCookieAcceptPolicy = .never
+      configuration.urlCache = nil
+      configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+      return URLSession(
+        configuration: configuration,
+        delegate: ProviderSameOriginRedirectDelegate.shared,
+        delegateQueue: nil
+      )
+    #else
+      return .shared
+    #endif
+  }
+
   private static func headers(_ response: HTTPURLResponse) -> [String: String] {
     Dictionary(
       uniqueKeysWithValues: response.allHeaderFields.map {
@@ -103,6 +123,37 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
       })
   }
 }
+
+#if canImport(Darwin)
+  private final class ProviderSameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate,
+    @unchecked Sendable
+  {
+    static let shared = ProviderSameOriginRedirectDelegate()
+
+    func urlSession(
+      _ session: URLSession,
+      task: URLSessionTask,
+      willPerformHTTPRedirection response: HTTPURLResponse,
+      newRequest request: URLRequest,
+      completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+      guard let sourceURL = task.currentRequest?.url ?? task.originalRequest?.url,
+        let destinationURL = request.url,
+        ProviderHTTP.isSameOriginRedirect(from: sourceURL, to: destinationURL)
+      else {
+        completionHandler(nil)
+        return
+      }
+
+      var redirected = request
+      let headers = task.currentRequest?.allHTTPHeaderFields ?? task.originalRequest?.allHTTPHeaderFields
+      for (name, value) in headers ?? [:] {
+        redirected.setValue(value, forHTTPHeaderField: name)
+      }
+      completionHandler(redirected)
+    }
+  }
+#endif
 
 public enum ProviderHTTP {
   private static let forbiddenHeaders: Set<String> = [
@@ -146,6 +197,20 @@ public enum ProviderHTTP {
     return false
   }
 
+  public static func isSameOriginRedirect(from source: URL, to destination: URL) -> Bool {
+    guard source.user == nil, source.password == nil,
+      destination.user == nil, destination.password == nil,
+      let sourceScheme = source.scheme?.lowercased(),
+      let destinationScheme = destination.scheme?.lowercased(),
+      let sourceHost = source.host?.lowercased(),
+      let destinationHost = destination.host?.lowercased()
+    else { return false }
+
+    return sourceScheme == destinationScheme
+      && sourceHost == destinationHost
+      && effectivePort(source) == effectivePort(destination)
+  }
+
   public static func makeRequest(
     url: URL,
     method: String,
@@ -183,5 +248,14 @@ public enum ProviderHTTP {
 
   public static func isForbiddenCustomHeader(_ name: String) -> Bool {
     forbiddenHeaders.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+  }
+
+  private static func effectivePort(_ url: URL) -> Int? {
+    if let port = url.port { return port }
+    switch url.scheme?.lowercased() {
+    case "http": return 80
+    case "https": return 443
+    default: return nil
+    }
   }
 }
