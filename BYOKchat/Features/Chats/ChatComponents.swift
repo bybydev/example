@@ -108,28 +108,36 @@ struct ChatComposer: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
-      if isEditorFocused {
-        messageField
-          .padding(.horizontal, 16)
-          .padding(.top, 12)
-          .padding(.bottom, 2)
-          .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
-
       HStack(alignment: .bottom, spacing: 6) {
         optionsButton
+          .frame(width: isEditorFocused ? 0 : 40)
+          .opacity(isEditorFocused ? 0 : 1)
+          .clipped()
+          .allowsHitTesting(!isEditorFocused)
 
-        if isEditorFocused {
-          modelButton
-          Spacer(minLength: 8)
-        } else {
-          messageField
-        }
+        messageField
 
         sendButton
+          .frame(width: isEditorFocused ? 0 : 40)
+          .opacity(isEditorFocused ? 0 : 1)
+          .clipped()
+          .allowsHitTesting(!isEditorFocused)
       }
       .padding(.horizontal, 8)
-      .padding(.vertical, isEditorFocused ? 8 : 6)
+      .padding(.top, isEditorFocused ? 10 : 6)
+      .padding(.bottom, isEditorFocused ? 2 : 6)
+
+      if isEditorFocused {
+        HStack(spacing: 6) {
+          optionsButton
+          modelButton
+          Spacer(minLength: 8)
+          sendButton
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
     }
     .background(.thinMaterial, in: composerShape)
     .overlay(composerShape.stroke(.primary.opacity(0.08), lineWidth: 0.5))
@@ -189,12 +197,12 @@ struct ChatComposer: View {
 
   private var sendButton: some View {
     Button {
-      isEditorFocused = false
       if isGenerating {
         stop()
       } else {
         send()
       }
+      isEditorFocused = false
     } label: {
       Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
         .font(.system(size: 16, weight: .bold))
