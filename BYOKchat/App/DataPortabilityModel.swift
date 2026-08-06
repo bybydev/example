@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct JSONExportDocument: FileDocument {
+struct JSONExportDocument: FileDocument, Sendable {
   static var readableContentTypes: [UTType] { [.json] }
   var data: Data
 
@@ -19,7 +19,7 @@ struct JSONExportDocument: FileDocument {
   }
 }
 
-struct MarkdownExportDocument: FileDocument {
+struct MarkdownExportDocument: FileDocument, Sendable {
   static var readableContentTypes: [UTType] { [.markdown, .plainText] }
   var data: Data
 
@@ -97,7 +97,7 @@ final class DataPortabilityModel {
 
   func importBackup(from url: URL, strategy: ProviderImportStrategy) async {
     await perform("Backup imported. Re-enter credentials for imported accounts.") {
-      let data = try readSecurityScopedData(from: url)
+      let data = try await Self.readSecurityScopedData(from: url)
       let existingDefaultPrompt = preferences.defaultSystemPrompt
       await chatsModel.stopAllGenerations()
       let summary = try await service.importBackup(data, strategy: strategy)
@@ -116,7 +116,7 @@ final class DataPortabilityModel {
 
   func importProviderConfiguration(from url: URL, strategy: ProviderImportStrategy) async {
     await perform("Provider configuration imported. Credentials were not included.") {
-      let data = try readSecurityScopedData(from: url)
+      let data = try await Self.readSecurityScopedData(from: url)
       await chatsModel.stopAllGenerations()
       let previousAccountIDs = await providerWorkspace.allAccounts().map(\.id)
       try await providerWorkspace.importConfiguration(data, strategy: strategy)
@@ -144,13 +144,18 @@ final class DataPortabilityModel {
     }
   }
 
-  private func readSecurityScopedData(from url: URL) throws -> Data {
-    let accessed = url.startAccessingSecurityScopedResource()
-    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-    return try Data(contentsOf: url, options: .mappedIfSafe)
+  private nonisolated static func readSecurityScopedData(from url: URL) async throws -> Data {
+    try await Task.detached(priority: .userInitiated) {
+      let accessed = url.startAccessingSecurityScopedResource()
+      defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+      return try Data(contentsOf: url, options: .mappedIfSafe)
+    }.value
   }
 
-  private func perform(_ success: String, operation: () async throws -> Void) async {
+  private func perform(
+    _ success: String,
+    operation: @MainActor () async throws -> Void
+  ) async {
     isBusy = true
     defer { isBusy = false }
     do {
@@ -161,7 +166,9 @@ final class DataPortabilityModel {
     }
   }
 
-  private func performResult<Value>(_ operation: () async throws -> Value) async -> Value? {
+  private func performResult<Value: Sendable>(
+    _ operation: @MainActor () async throws -> Value
+  ) async -> Value? {
     isBusy = true
     defer { isBusy = false }
     do {

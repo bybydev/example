@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 
 struct ProviderConsoleView: View {
@@ -12,6 +13,7 @@ struct ProviderConsoleView: View {
   @State private var reasoningText = ""
   @State private var status = "Ready"
   @State private var generationTask: Task<Void, Never>?
+  @State private var generationRevision: UInt64 = 0
 
   private var selectedAccount: ProviderAccount? {
     model.accounts.first { $0.id == accountID }
@@ -87,20 +89,29 @@ struct ProviderConsoleView: View {
   private func startStream() {
     guard let accountID, let modelID else { return }
     generationTask?.cancel()
+    generationRevision &+= 1
+    let revision = generationRevision
+    let requestPrompt = prompt
+    let requestReasoning = includeReasoning
+
     visibleText = ""
     reasoningText = ""
     status = "Connecting…"
 
-    generationTask = Task {
+    generationTask = Task { @MainActor in
       do {
         let stream = try await model.stream(
           accountID: accountID,
           modelID: modelID,
-          prompt: prompt,
-          reasoning: includeReasoning
+          prompt: requestPrompt,
+          reasoning: requestReasoning
         )
+        guard generationRevision == revision else { return }
         status = "Streaming…"
+
         for try await event in stream {
+          try Task.checkCancellation()
+          guard generationRevision == revision else { return }
           switch event {
           case .textDelta(let value): visibleText += value
           case .reasoningDelta(let value): reasoningText += value
@@ -111,15 +122,20 @@ struct ProviderConsoleView: View {
           }
         }
       } catch is CancellationError {
+        guard generationRevision == revision else { return }
         status = "Cancelled"
       } catch {
+        guard generationRevision == revision else { return }
         status = error.localizedDescription
       }
+
+      guard generationRevision == revision else { return }
       generationTask = nil
     }
   }
 
   private func stop() {
+    generationRevision &+= 1
     generationTask?.cancel()
     generationTask = nil
     if status == "Streaming…" || status == "Connecting…" { status = "Cancelled" }

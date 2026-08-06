@@ -8,6 +8,7 @@ public struct ProviderHTTPResponse: Sendable {
   public var statusCode: Int
   public var headers: [String: String]
   public var data: Data
+
   public init(statusCode: Int, headers: [String: String], data: Data) {
     self.statusCode = statusCode
     self.headers = headers
@@ -19,8 +20,12 @@ public struct ProviderHTTPByteStream: Sendable {
   public var statusCode: Int
   public var headers: [String: String]
   public var chunks: AsyncThrowingStream<Data, Error>
-  public init(statusCode: Int, headers: [String: String], chunks: AsyncThrowingStream<Data, Error>)
-  {
+
+  public init(
+    statusCode: Int,
+    headers: [String: String],
+    chunks: AsyncThrowingStream<Data, Error>
+  ) {
     self.statusCode = statusCode
     self.headers = headers
     self.chunks = chunks
@@ -42,14 +47,23 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
   public func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
     do {
       let (data, response) = try await session.data(for: request)
-      guard let response = response as? HTTPURLResponse else { throw ProviderError.invalidResponse }
-      return .init(statusCode: response.statusCode, headers: Self.headers(response), data: data)
+      guard let response = response as? HTTPURLResponse else {
+        throw ProviderError.invalidResponse
+      }
+      return .init(
+        statusCode: response.statusCode,
+        headers: Self.headers(response),
+        data: data
+      )
     } catch is CancellationError {
       throw CancellationError()
     } catch let error as ProviderError {
       throw error
     } catch {
-      throw ProviderError.transport(message: error.localizedDescription, completionUnknown: true)
+      throw ProviderError.transport(
+        message: error.localizedDescription,
+        completionUnknown: true
+      )
     }
   }
 
@@ -60,34 +74,45 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
         guard let response = response as? HTTPURLResponse else {
           throw ProviderError.invalidResponse
         }
-        let chunks = AsyncThrowingStream<Data, Error> { continuation in
-          let task = Task {
-            var pending: [UInt8] = []
-            do {
-              for try await byte in bytes {
-                try Task.checkCancellation()
-                pending.append(byte)
-                if pending.count >= 1024 {
-                  continuation.yield(Data(pending))
-                  pending.removeAll(keepingCapacity: true)
-                }
+
+        let pair = AsyncThrowingStream<Data, Error>.makeStream()
+        let task = Task { @Sendable in
+          var pending: [UInt8] = []
+          do {
+            for try await byte in bytes {
+              try Task.checkCancellation()
+              pending.append(byte)
+              if pending.count >= 1024 {
+                pair.continuation.yield(Data(pending))
+                pending.removeAll(keepingCapacity: true)
               }
-              if !pending.isEmpty { continuation.yield(Data(pending)) }
-              continuation.finish()
-            } catch {
-              continuation.finish(throwing: error)
             }
+            if !pending.isEmpty {
+              pair.continuation.yield(Data(pending))
+            }
+            pair.continuation.finish()
+          } catch {
+            pair.continuation.finish(throwing: error)
           }
-          continuation.onTermination = { _ in task.cancel() }
         }
+        pair.continuation.onTermination = { @Sendable _ in
+          task.cancel()
+        }
+
         return .init(
-          statusCode: response.statusCode, headers: Self.headers(response), chunks: chunks)
+          statusCode: response.statusCode,
+          headers: Self.headers(response),
+          chunks: pair.stream
+        )
       } catch is CancellationError {
         throw CancellationError()
       } catch let error as ProviderError {
         throw error
       } catch {
-        throw ProviderError.transport(message: error.localizedDescription, completionUnknown: true)
+        throw ProviderError.transport(
+          message: error.localizedDescription,
+          completionUnknown: true
+        )
       }
     #else
       let response = try await data(for: request)
@@ -95,7 +120,11 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
         continuation.yield(response.data)
         continuation.finish()
       }
-      return .init(statusCode: response.statusCode, headers: response.headers, chunks: chunks)
+      return .init(
+        statusCode: response.statusCode,
+        headers: response.headers,
+        chunks: chunks
+      )
     #endif
   }
 
@@ -120,7 +149,8 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
     Dictionary(
       uniqueKeysWithValues: response.allHeaderFields.map {
         (String(describing: $0.key), String(describing: $0.value))
-      })
+      }
+    )
   }
 }
 
@@ -134,45 +164,61 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
       _ session: URLSession,
       task: URLSessionTask,
       willPerformHTTPRedirection response: HTTPURLResponse,
-      newRequest request: URLRequest,
-      completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-      guard let sourceURL = task.currentRequest?.url ?? task.originalRequest?.url,
+      newRequest request: URLRequest
+    ) async -> URLRequest? {
+      guard let sourceURL = response.url,
         let destinationURL = request.url,
         ProviderHTTP.isSameOriginRedirect(from: sourceURL, to: destinationURL)
       else {
-        completionHandler(nil)
-        return
+        return nil
       }
 
       var redirected = request
-      let headers = task.currentRequest?.allHTTPHeaderFields ?? task.originalRequest?.allHTTPHeaderFields
-      for (name, value) in headers ?? [:] {
+      let headers =
+        task.currentRequest?.allHTTPHeaderFields
+        ?? task.originalRequest?.allHTTPHeaderFields
+      for (name, value) in headers ?? [:]
+      where ProviderHTTP.canForwardHeaderAcrossRedirect(name) {
         redirected.setValue(value, forHTTPHeaderField: name)
       }
-      completionHandler(redirected)
+      return redirected
     }
   }
 #endif
 
 public enum ProviderHTTP {
   private static let forbiddenHeaders: Set<String> = [
-    "authorization", "proxy-authorization", "host", "content-length", "connection",
-    "cookie", "set-cookie", "transfer-encoding",
+    "authorization",
+    "proxy-authorization",
+    "host",
+    "content-length",
+    "connection",
+    "cookie",
+    "set-cookie",
+    "transfer-encoding",
   ]
 
   public static func endpoint(
-    baseURL: URL, path: String, allowsLocalHTTP: Bool = false
+    baseURL: URL,
+    path: String,
+    allowsLocalHTTP: Bool = false
   ) throws -> URL {
     try validateBaseURL(baseURL, allowsLocalHTTP: allowsLocalHTTP)
     let relative = path.hasPrefix("/") ? String(path.dropFirst()) : path
     return baseURL.appendingPathComponent(relative)
   }
 
-  public static func validateBaseURL(_ baseURL: URL, allowsLocalHTTP: Bool = false) throws {
-    guard baseURL.user == nil, baseURL.password == nil, let host = baseURL.host else {
+  public static func validateBaseURL(
+    _ baseURL: URL,
+    allowsLocalHTTP: Bool = false
+  ) throws {
+    guard baseURL.user == nil,
+      baseURL.password == nil,
+      let host = baseURL.host
+    else {
       throw ProviderError.invalidBaseURL
     }
+
     switch baseURL.scheme?.lowercased() {
     case "https":
       return
@@ -184,12 +230,25 @@ public enum ProviderHTTP {
   }
 
   public static func isPrivateNetworkHost(_ host: String) -> Bool {
-    let value = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-    if value == "localhost" || value == "::1" || value.hasSuffix(".local") { return true }
-    if !value.contains(".") && !value.contains(":") { return true }
-    if value.hasPrefix("fe80:") || value.hasPrefix("fc") || value.hasPrefix("fd") { return true }
+    let value = host.lowercased().trimmingCharacters(
+      in: CharacterSet(charactersIn: "[]")
+    )
+    if value == "localhost" || value == "::1" || value.hasSuffix(".local") {
+      return true
+    }
+    if !value.contains(".") && !value.contains(":") {
+      return true
+    }
+    if value.hasPrefix("fe80:") || value.hasPrefix("fc") || value.hasPrefix("fd") {
+      return true
+    }
+
     let parts = value.split(separator: ".").compactMap { Int($0) }
-    guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+    guard parts.count == 4,
+      parts.allSatisfy({ (0...255).contains($0) })
+    else {
+      return false
+    }
     if parts[0] == 10 || parts[0] == 127 { return true }
     if parts[0] == 169 && parts[1] == 254 { return true }
     if parts[0] == 192 && parts[1] == 168 { return true }
@@ -197,14 +256,21 @@ public enum ProviderHTTP {
     return false
   }
 
-  public static func isSameOriginRedirect(from source: URL, to destination: URL) -> Bool {
-    guard source.user == nil, source.password == nil,
-      destination.user == nil, destination.password == nil,
+  public static func isSameOriginRedirect(
+    from source: URL,
+    to destination: URL
+  ) -> Bool {
+    guard source.user == nil,
+      source.password == nil,
+      destination.user == nil,
+      destination.password == nil,
       let sourceScheme = source.scheme?.lowercased(),
       let destinationScheme = destination.scheme?.lowercased(),
       let sourceHost = source.host?.lowercased(),
       let destinationHost = destination.host?.lowercased()
-    else { return false }
+    else {
+      return false
+    }
 
     return sourceScheme == destinationScheme
       && sourceHost == destinationHost
@@ -224,14 +290,21 @@ public enum ProviderHTTP {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-    let normalizedSecret = secret?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedSecret = secret?.trimmingCharacters(
+      in: .whitespacesAndNewlines
+    )
     switch authentication {
     case .bearer:
       if let normalizedSecret, !normalizedSecret.isEmpty {
-        request.setValue("Bearer \(normalizedSecret)", forHTTPHeaderField: "Authorization")
+        request.setValue(
+          "Bearer \(normalizedSecret)",
+          forHTTPHeaderField: "Authorization"
+        )
       }
     case .header(let name):
-      guard !Self.isForbiddenCustomHeader(name) else { throw ProviderError.unsafeHeader(name) }
+      guard !Self.isForbiddenCustomHeader(name) else {
+        throw ProviderError.unsafeHeader(name)
+      }
       if let normalizedSecret, !normalizedSecret.isEmpty {
         request.setValue(normalizedSecret, forHTTPHeaderField: name)
       }
@@ -240,14 +313,31 @@ public enum ProviderHTTP {
     }
 
     for (name, value) in additionalHeaders {
-      guard !Self.isForbiddenCustomHeader(name) else { throw ProviderError.unsafeHeader(name) }
+      guard !Self.isForbiddenCustomHeader(name) else {
+        throw ProviderError.unsafeHeader(name)
+      }
       request.setValue(value, forHTTPHeaderField: name)
     }
     return request
   }
 
   public static func isForbiddenCustomHeader(_ name: String) -> Bool {
-    forbiddenHeaders.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    forbiddenHeaders.contains(
+      name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    )
+  }
+
+  static func canForwardHeaderAcrossRedirect(_ name: String) -> Bool {
+    let normalized = name.trimmingCharacters(
+      in: .whitespacesAndNewlines
+    ).lowercased()
+    return ![
+      "host",
+      "content-length",
+      "connection",
+      "transfer-encoding",
+      "cookie",
+    ].contains(normalized)
   }
 
   private static func effectivePort(_ url: URL) -> Int? {

@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -82,7 +83,7 @@ struct ChatView: View {
             showMarkdownExporter = true
           }
           Button("Delete", systemImage: "trash", role: .destructive) {
-            Task {
+            Task { @MainActor in
               await chats.deleteConversation(conversationID)
               dismiss()
             }
@@ -120,7 +121,9 @@ struct ChatView: View {
       TextField("Title", text: $renameText)
       Button("Cancel", role: .cancel) {}
       Button("Save") {
-        Task { await chats.renameConversation(conversationID, title: renameText) }
+        Task { @MainActor in
+          await chats.renameConversation(conversationID, title: renameText)
+        }
       }
     }
     .alert("Regenerate response?", isPresented: $showRegenerateConfirmation) {
