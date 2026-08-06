@@ -1,5 +1,6 @@
 import BYOKchatProviderCore
 import SwiftUI
+import UIKit
 
 struct NewChatView: View {
   @Bindable var chats: ChatManagementModel
@@ -29,64 +30,51 @@ struct NewChatView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      Spacer()
+      Spacer(minLength: 72)
 
-      VStack(spacing: 18) {
-        Image(systemName: "bubble.left.and.bubble.right.fill")
-          .font(.system(size: 42))
-          .foregroundStyle(.tint)
-          .frame(width: 76, height: 76)
-          .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 22))
-
+      VStack(spacing: 16) {
         Text("How can I help?")
-          .font(.largeTitle.bold())
+          .font(.system(size: 30, weight: .semibold))
+          .multilineTextAlignment(.center)
 
         if providers.accounts.isEmpty {
-          Text("Add a DeepSeek, OpenRouter, NVIDIA, or custom provider account to begin.")
+          Text("Connect DeepSeek, OpenRouter, NVIDIA, or a custom provider to start chatting.")
+            .font(.system(size: 16))
+            .lineSpacing(3)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 34)
 
           Button("Configure Provider", systemImage: "key.horizontal") {
             openSettings()
           }
           .buttonStyle(.borderedProminent)
+          .controlSize(.large)
         } else {
-          VStack(spacing: 10) {
+          VStack(spacing: 8) {
             suggestion("Help me write production-ready Swift code")
             suggestion("Compare the best models for this task")
             suggestion("Explain a complex topic clearly")
           }
-          .padding(.horizontal, 24)
+          .padding(.horizontal, 22)
+          .padding(.top, 8)
         }
       }
 
       Spacer()
     }
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .topBarLeading) {
-        Button("Open Sidebar", systemImage: "line.3.horizontal") {
-          openSidebar()
-        }
-      }
-
-      ToolbarItem(placement: .principal) {
-        Button {
-          openSettings()
-        } label: {
-          HStack(spacing: 5) {
-            Text(defaultModelID?.rawValue ?? "BYOKchat")
-              .font(.headline)
-              .lineLimit(1)
-            Image(systemName: "chevron.down")
-              .font(.caption2.weight(.bold))
-          }
-        }
-        .buttonStyle(.plain)
+    .background(Color(uiColor: .systemBackground))
+    .toolbar(.hidden, for: .navigationBar)
+    .safeAreaInset(edge: .top, spacing: 0) {
+      ChatTopBar(
+        openSidebar: openSidebar,
+        newChat: { draft = "" }
+      ) {
+        Button("Settings", systemImage: "gearshape", action: openSettings)
+        Button("Providers & Accounts", systemImage: "key.horizontal", action: openSettings)
       }
     }
-    .safeAreaInset(edge: .bottom) {
+    .safeAreaInset(edge: .bottom, spacing: 0) {
       ChatComposer(
         draft: $draft,
         isGenerating: false,
@@ -110,15 +98,21 @@ struct NewChatView: View {
     Button {
       startConversation(with: text)
     } label: {
-      HStack {
+      HStack(spacing: 12) {
         Text(text)
+          .font(.system(size: 16))
           .multilineTextAlignment(.leading)
-        Spacer()
+        Spacer(minLength: 8)
         Image(systemName: "arrow.up.right")
+          .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.secondary)
       }
-      .padding(14)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
+      .padding(.horizontal, 16)
+      .frame(minHeight: 52)
+      .background(
+        Color(uiColor: .secondarySystemBackground),
+        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+      )
     }
     .buttonStyle(.plain)
     .disabled(isCreating)
