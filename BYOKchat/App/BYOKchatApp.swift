@@ -2,11 +2,11 @@ import SwiftUI
 
 @main
 struct BYOKchatApp: App {
-  @State private var model = ProviderManagementModel()
+  @State private var model = AppModel()
 
   var body: some Scene {
     WindowGroup {
-      ProviderRootView(model: model)
+      AppRootView(model: model)
     }
   }
 }
