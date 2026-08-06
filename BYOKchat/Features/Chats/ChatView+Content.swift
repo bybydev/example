@@ -122,7 +122,21 @@ extension ChatView {
         }
       }
       .task(id: conversationID) {
-        await positionInitialTimeline(proxy)
+        followsLatest = initialScrollMessageID == nil
+        showJumpToLatest = initialScrollMessageID != nil
+
+        // Let the lazy timeline materialize a visible child before resolving an
+        // offscreen target. Repeat after the safe-area composer gets its final size.
+        await Task.yield()
+        scrollToInitialTarget(proxy)
+
+        do {
+          try await Task.sleep(for: .milliseconds(32))
+        } catch {
+          return
+        }
+        guard !Task.isCancelled else { return }
+        scrollToInitialTarget(proxy)
       }
       .overlay(alignment: .bottomTrailing) {
         if showJumpToLatest {
@@ -160,26 +174,6 @@ extension ChatView {
     }
   }
 
-  @MainActor
-  private func positionInitialTimeline(_ proxy: ScrollViewProxy) async {
-    followsLatest = initialScrollMessageID == nil
-    showJumpToLatest = initialScrollMessageID != nil
-
-    // Let the lazy timeline produce its first visible children before asking it to
-    // resolve an offscreen target. A second pass accounts for the safe-area composer.
-    await Task.yield()
-    scrollToInitialTarget(proxy)
-
-    do {
-      try await Task.sleep(for: .milliseconds(32))
-    } catch {
-      return
-    }
-    guard !Task.isCancelled else { return }
-    scrollToInitialTarget(proxy)
-  }
-
-  @MainActor
   private func scrollToInitialTarget(_ proxy: ScrollViewProxy) {
     if let initialScrollMessageID {
       proxy.scrollTo(initialScrollMessageID, anchor: .center)
