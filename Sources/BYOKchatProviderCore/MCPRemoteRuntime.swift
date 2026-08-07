@@ -160,6 +160,25 @@ public actor MCPRemoteRuntime {
     remoteName: String,
     arguments: JSONValue
   ) async throws -> MCPToolCallOutput {
+    switch try await callToolRound(
+      serverID: serverID,
+      remoteName: remoteName,
+      arguments: arguments
+    ) {
+    case .complete(let output):
+      return output
+    case .inputRequired:
+      throw MCPError.inputRequired
+    }
+  }
+
+  public func callToolRound(
+    serverID: MCPServerID,
+    remoteName: String,
+    arguments: JSONValue,
+    inputResponses: [String: JSONValue]? = nil,
+    requestState: String? = nil
+  ) async throws -> MCPToolCallRoundResult {
     let server = try await workspace.server(id: serverID)
     var snapshot = try await refreshServer(serverID)
     guard var tool = snapshot.tools.first(where: { $0.remoteName == remoteName }) else {
@@ -172,11 +191,13 @@ public actor MCPRemoteRuntime {
 
     var connection = try await connection(for: server, forceProbe: false)
     do {
-      return try await callTool(
+      return try await callToolRound(
         server: server,
         connection: connection,
         tool: tool,
-        arguments: arguments
+        arguments: arguments,
+        inputResponses: inputResponses,
+        requestState: requestState
       )
     } catch MCPError.protocolError(let code, _) where code == -32_020 && connection.era == .modern {
       snapshot = try await refreshServer(serverID, force: true)
@@ -184,11 +205,13 @@ public actor MCPRemoteRuntime {
         throw MCPError.toolNotFound(remoteName)
       }
       connection = try await connection(for: server, forceProbe: false)
-      return try await callTool(
+      return try await callToolRound(
         server: server,
         connection: connection,
         tool: refreshedTool,
-        arguments: arguments
+        arguments: arguments,
+        inputResponses: inputResponses,
+        requestState: requestState
       )
     }
   }
@@ -440,23 +463,37 @@ public actor MCPRemoteRuntime {
     )
   }
 
-  private func callTool(
+  private func callToolRound(
     server: MCPRemoteServer,
     connection: ConnectionState,
     tool: MCPRemoteTool,
-    arguments: JSONValue
-  ) async throws -> MCPToolCallOutput {
+    arguments: JSONValue,
+    inputResponses: [String: JSONValue]?,
+    requestState: String?
+  ) async throws -> MCPToolCallRoundResult {
+    if (inputResponses != nil || requestState != nil), connection.era != .modern {
+      throw MCPError.inputRequired
+    }
+
     let parameterHeaders = connection.era == .modern
       ? try MCPToolHeaderMapper.headers(bindings: tool.headerBindings, arguments: arguments)
       : [:]
+    var params: [String: JSONValue] = [
+      "name": .string(tool.remoteName),
+      "arguments": arguments,
+    ]
+    if let inputResponses {
+      params["inputResponses"] = .object(inputResponses)
+    }
+    if let requestState {
+      params["requestState"] = .string(requestState)
+    }
+
     let reply = try await postWithLegacyRecovery(
       server: server,
       connection: connection,
       method: "tools/call",
-      params: [
-        "name": .string(tool.remoteName),
-        "arguments": arguments,
-      ],
+      params: params,
       name: tool.remoteName,
       parameterHeaders: parameterHeaders
     )
@@ -469,11 +506,28 @@ public actor MCPRemoteRuntime {
     guard let result = rpcResult(payload), case .object(let object) = result else {
       throw MCPError.invalidResponse
     }
+
     if stringValue(object["resultType"]) == "input_required" {
-      throw MCPError.inputRequired
+      guard connection.era == .modern else { throw MCPError.inputRequired }
+      let inputRequests: [String: JSONValue]
+      if case .object(let values)? = object["inputRequests"] {
+        inputRequests = values
+      } else {
+        inputRequests = [:]
+      }
+      let state = stringValue(object["requestState"])
+      guard !inputRequests.isEmpty || state != nil else {
+        throw MCPError.invalidResponse
+      }
+      return .inputRequired(
+        MCPInputRequiredRound(inputRequests: inputRequests, requestState: state)
+      )
     }
+
     let isError = boolValue(object["isError"]) ?? false
-    return MCPToolCallOutput(content: normalizedToolContent(object), isError: isError)
+    return .complete(
+      MCPToolCallOutput(content: normalizedToolContent(object), isError: isError)
+    )
   }
 
   private func postWithLegacyRecovery(
@@ -642,13 +696,17 @@ public actor MCPRemoteRuntime {
         for try await chunk in response.chunks {
           try Task.checkCancellation()
           for event in try decoder.append(chunk) {
-            if let value = try? decodeJSON(event.data), matchesExpectedResponse(value, expectedID: expectedID) {
+            if let value = try? decodeJSON(event.data),
+              matchesExpectedResponse(value, expectedID: expectedID)
+            {
               finalPayload = value
             }
           }
         }
         for event in try decoder.finish() {
-          if let value = try? decodeJSON(event.data), matchesExpectedResponse(value, expectedID: expectedID) {
+          if let value = try? decodeJSON(event.data),
+            matchesExpectedResponse(value, expectedID: expectedID)
+          {
             finalPayload = value
           }
         }
@@ -697,7 +755,12 @@ public actor MCPRemoteRuntime {
         "name": .string("BYOKchat"),
         "version": .string("1.0"),
       ]),
-      "io.modelcontextprotocol/clientCapabilities": .object([:]),
+      "io.modelcontextprotocol/clientCapabilities": .object([
+        "elicitation": .object([
+          "form": .object([:]),
+          "url": .object([:]),
+        ])
+      ]),
     ])
   }
 
