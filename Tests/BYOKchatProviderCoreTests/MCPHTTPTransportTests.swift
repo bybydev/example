@@ -88,7 +88,9 @@ private actor SlowModernLegacyTransport: ProviderHTTPTransport {
       )
     default:
       return streamResponse(
-        """{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}""",
+        """
+        {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+        """,
         status: 404
       )
     }
