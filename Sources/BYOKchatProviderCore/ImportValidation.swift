@@ -151,6 +151,7 @@ public enum WorkspaceImportValidator {
           )
         }
         try validateAttachments(message.attachments ?? [], messageID: message.id)
+        try validateToolRounds(message.toolRounds ?? [], messageID: message.id)
       }
     }
   }
@@ -213,6 +214,75 @@ public enum WorkspaceImportValidator {
         throw ProviderError.importConflict(
           "Message \(messageID.rawValue) contains an attachment with an empty MIME type."
         )
+      }
+    }
+  }
+
+  private static func validateToolRounds(
+    _ rounds: [ChatToolRound],
+    messageID: ChatMessageID
+  ) throws {
+    guard rounds.count <= 8 else {
+      throw ProviderError.importConflict(
+        "Message \(messageID.rawValue) contains more than 8 tool-call rounds."
+      )
+    }
+    try requireUnique(
+      rounds,
+      id: \ChatToolRound.id,
+      description: { "Message \(messageID.rawValue) contains duplicate tool round ID: \($0)" }
+    )
+
+    for round in rounds {
+      guard !round.calls.isEmpty, round.calls.count <= 32 else {
+        throw ProviderError.importConflict(
+          "Message \(messageID.rawValue) contains an invalid tool-call round."
+        )
+      }
+      try requireUnique(
+        round.calls,
+        id: \ChatToolCall.id,
+        description: { "Message \(messageID.rawValue) contains duplicate tool call ID: \($0)" }
+      )
+      try requireUnique(
+        round.results,
+        id: \ChatToolResult.callID,
+        description: { "Message \(messageID.rawValue) contains duplicate tool result ID: \($0)" }
+      )
+
+      let callsByID = Dictionary(uniqueKeysWithValues: round.calls.map { ($0.id, $0) })
+      guard Set(callsByID.keys) == Set(round.results.map(\.callID)) else {
+        throw ProviderError.importConflict(
+          "Message \(messageID.rawValue) contains tool results that do not match its tool calls."
+        )
+      }
+
+      for call in round.calls {
+        guard !call.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          !call.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+          throw ProviderError.importConflict(
+            "Message \(messageID.rawValue) contains a tool call with an empty ID or name."
+          )
+        }
+      }
+      for result in round.results {
+        guard !result.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          callsByID[result.callID]?.name == result.name
+        else {
+          throw ProviderError.importConflict(
+            "Message \(messageID.rawValue) contains a tool result with invalid call metadata."
+          )
+        }
+      }
+
+      if let continuation = round.providerContinuation {
+        let byteCount = continuation.payload.compactJSONString().utf8.count
+        guard byteCount <= 1_024 * 1_024 else {
+          throw ProviderError.importConflict(
+            "Message \(messageID.rawValue) contains oversized provider continuation metadata."
+          )
+        }
       }
     }
   }
