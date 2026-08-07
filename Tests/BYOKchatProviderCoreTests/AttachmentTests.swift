@@ -91,6 +91,98 @@ import Testing
   #expect(payload["file_data"] == .string("data:application/pdf;base64,JVBERg=="))
 }
 
+@Test func deepSeekRejectsImageInputBeforeTransport() throws {
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
+  let image = ChatAttachment(
+    kind: .image,
+    filename: "screen.jpg",
+    mimeType: "image/jpeg",
+    data: Data([0x01])
+  )
+  let request = ProviderRequest(
+    model: "deepseek-v4-flash",
+    messages: [.init(role: .user, content: "Understand this", attachments: [image])]
+  )
+  let account = ResolvedProviderAccount(
+    id: "account",
+    providerID: BuiltInProviders.deepSeekID,
+    label: "DeepSeek",
+    apiKey: "secret"
+  )
+
+  do {
+    _ = try adapter.validate(request: request, account: account)
+    Issue.record("Expected DeepSeek image input to be rejected")
+  } catch let error as ProviderError {
+    guard case .invalidRequest(let message) = error else {
+      Issue.record("Expected invalidRequest, got \(error)")
+      return
+    }
+    #expect(message.contains("text-only"))
+    #expect(message.contains("images"))
+  }
+}
+
+@Test func deepSeekRejectsBinaryDocumentBeforeTransport() throws {
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
+  let pdf = ChatAttachment(
+    kind: .file,
+    filename: "document.pdf",
+    mimeType: "application/pdf",
+    data: Data([0x25, 0x50, 0x44, 0x46])
+  )
+  let request = ProviderRequest(
+    model: "deepseek-v4-pro",
+    messages: [.init(role: .user, content: "Read this", attachments: [pdf])]
+  )
+  let account = ResolvedProviderAccount(
+    id: "account",
+    providerID: BuiltInProviders.deepSeekID,
+    label: "DeepSeek",
+    apiKey: "secret"
+  )
+
+  do {
+    _ = try adapter.validate(request: request, account: account)
+    Issue.record("Expected DeepSeek binary document input to be rejected")
+  } catch let error as ProviderError {
+    guard case .invalidRequest(let message) = error else {
+      Issue.record("Expected invalidRequest, got \(error)")
+      return
+    }
+    #expect(message.contains("binary documents"))
+  }
+}
+
+@Test func deepSeekStillAllowsTextFileContext() throws {
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
+  let file = ChatAttachment(
+    kind: .file,
+    filename: "notes.txt",
+    mimeType: "text/plain",
+    data: Data("alpha\nbeta".utf8)
+  )
+  let request = ProviderRequest(
+    model: "deepseek-v4-flash",
+    messages: [.init(role: .user, content: "Summarize", attachments: [file])]
+  )
+  let account = ResolvedProviderAccount(
+    id: "account",
+    providerID: BuiltInProviders.deepSeekID,
+    label: "DeepSeek",
+    apiKey: "secret"
+  )
+
+  let validated = try adapter.validate(request: request, account: account)
+  let parts = try userContentParts(adapter.requestBody(validated, streaming: false))
+  #expect(parts.count == 2)
+  guard case .object(let filePart) = parts[1] else {
+    Issue.record("Missing inline DeepSeek text file")
+    return
+  }
+  #expect(filePart["type"] == .string("text"))
+}
+
 @Test func attachmentOnlyTurnPersistsAndEntersContext() async throws {
   let persistence = InMemoryConversationWorkspacePersistence()
   let store = ConversationStore(persistence: persistence)
