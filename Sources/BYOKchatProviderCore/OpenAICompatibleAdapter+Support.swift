@@ -23,26 +23,8 @@ extension OpenAICompatibleAdapter {
     }
     guard !messages.isEmpty else { throw ProviderError.invalidMessages }
 
-    let attachments = messages.flatMap { $0.attachments ?? [] }
-    guard attachments.count <= 8 else {
-      throw ProviderError.invalidRequest("A message can include at most 8 attachments.")
-    }
-    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
-      throw ProviderError.invalidRequest("Each attachment must be non-empty and no larger than 20 MB.")
-    }
-    guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
-      throw ProviderError.invalidRequest("Attachments in one request cannot exceed 40 MB total.")
-    }
-
-    let supportedImageMIMEs: Set<String> = [
-      "image/png", "image/jpeg", "image/webp", "image/gif",
-    ]
-    if let unsupportedImage = attachments.first(where: {
-      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
-    }) {
-      throw ProviderError.invalidRequest(
-        "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."
-      )
+    for message in messages {
+      try validateAttachments(message.attachments ?? [])
     }
 
     if definition.authentication != .none {
@@ -55,6 +37,29 @@ extension OpenAICompatibleAdapter {
     result.model = ModelID(rawValue: model)
     result.messages = messages
     return result
+  }
+
+  private func validateAttachments(_ attachments: [ChatAttachment]) throws {
+    guard attachments.count <= 8 else {
+      throw ProviderError.invalidRequest("A message can include at most 8 attachments.")
+    }
+    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
+      throw ProviderError.invalidRequest("Each attachment must be non-empty and no larger than 20 MB.")
+    }
+    guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
+      throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
+    }
+
+    let supportedImageMIMEs: Set<String> = [
+      "image/png", "image/jpeg", "image/webp", "image/gif",
+    ]
+    if let unsupportedImage = attachments.first(where: {
+      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
+    }) {
+      throw ProviderError.invalidRequest(
+        "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."
+      )
+    }
   }
 
   func makeRequest(
