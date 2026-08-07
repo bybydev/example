@@ -257,7 +257,8 @@ public actor DataPortabilityService {
     conversations: [ChatConversation]
   ) throws {
     let conversationIDs = Set(conversations.map { $0.id.rawValue })
-    for conversationID in workspace.chatConfigurations?.keys ?? [] {
+    let configuredConversationIDs = workspace.chatConfigurations.map { Array($0.keys) } ?? []
+    for conversationID in configuredConversationIDs {
       guard conversationIDs.contains(conversationID) else {
         throw ProviderError.importConflict(
           "MCP tool settings reference conversation \(conversationID), which is not present in the backup."
