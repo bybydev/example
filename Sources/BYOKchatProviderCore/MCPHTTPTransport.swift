@@ -20,19 +20,64 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
   }
 
   public func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
-    try await base.data(for: bounded(request))
+    guard isDiscoverProbe(request) else {
+      return try await base.data(for: request)
+    }
+
+    let stream = try await stream(for: request)
+    var data = Data()
+    for try await chunk in stream.chunks {
+      data.append(chunk)
+    }
+    return ProviderHTTPResponse(
+      statusCode: stream.statusCode,
+      headers: stream.headers,
+      data: data
+    )
   }
 
   public func stream(for request: URLRequest) async throws -> ProviderHTTPByteStream {
-    try await base.stream(for: bounded(request))
+    guard isDiscoverProbe(request) else {
+      return try await base.stream(for: request)
+    }
+
+    var bounded = request
+    bounded.timeoutInterval = discoverProbeTimeout
+    let base = self.base
+    let timeout = discoverProbeTimeout
+
+    return try await withThrowingTaskGroup(of: ProviderHTTPByteStream.self) { group in
+      group.addTask {
+        let upstream = try await base.stream(for: bounded)
+        var data = Data()
+        for try await chunk in upstream.chunks {
+          try Task.checkCancellation()
+          data.append(chunk)
+        }
+        return ProviderHTTPByteStream(
+          statusCode: upstream.statusCode,
+          headers: upstream.headers,
+          chunks: AsyncThrowingStream { continuation in
+            if !data.isEmpty { continuation.yield(data) }
+            continuation.finish()
+          }
+        )
+      }
+
+      group.addTask {
+        try await Task.sleep(for: .seconds(timeout))
+        throw MCPError.transport("Legacy MCP probe required.")
+      }
+
+      guard let first = try await group.next() else {
+        throw MCPError.invalidResponse
+      }
+      group.cancelAll()
+      return first
+    }
   }
 
-  private func bounded(_ request: URLRequest) -> URLRequest {
-    guard request.value(forHTTPHeaderField: "Mcp-Method") == "server/discover" else {
-      return request
-    }
-    var copy = request
-    copy.timeoutInterval = discoverProbeTimeout
-    return copy
+  private func isDiscoverProbe(_ request: URLRequest) -> Bool {
+    request.value(forHTTPHeaderField: "Mcp-Method") == "server/discover"
   }
 }
