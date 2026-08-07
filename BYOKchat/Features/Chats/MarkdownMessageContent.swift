@@ -226,13 +226,15 @@ struct MarkdownMessageContent: View {
       .table { configuration in
         ScrollView(.horizontal) {
           configuration.label
-            .fixedSize(horizontal: false, vertical: true)
+            .fixedSize(horizontal: true, vertical: true)
             .markdownTableBorderStyle(.init(color: theme.borderColor))
             .markdownTableBackgroundStyle(
               .alternatingRows(theme.surfaceColor, theme.elevatedSurfaceColor)
             )
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.visible)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .markdownMargin(top: .em(0.08), bottom: .em(0.9))
       }
       .tableCell { configuration in
@@ -247,6 +249,7 @@ struct MarkdownMessageContent: View {
             BackgroundColor(nil)
           }
           .fixedSize(horizontal: false, vertical: true)
+          .frame(minWidth: 96, maxWidth: 280, alignment: .leading)
           .relativeLineSpacing(.em(0.16))
           .padding(.horizontal, 12)
           .padding(.vertical, 8)
