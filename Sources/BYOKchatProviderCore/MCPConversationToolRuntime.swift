@@ -4,6 +4,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
   private let localRuntime: (any ChatToolExecuting)?
   private let mcpRuntime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
+  private let projectWorkspace: ProjectWorkspaceStore?
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
   private let maxInputRequiredRounds: Int
@@ -12,6 +13,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     localRuntime: (any ChatToolExecuting)? = nil,
     mcpRuntime: MCPRemoteRuntime,
     workspace: MCPWorkspaceStore,
+    projectWorkspace: ProjectWorkspaceStore? = nil,
     approvals: MCPToolApprovalCenter,
     elicitations: MCPElicitationCenter,
     maxInputRequiredRounds: Int = 10
@@ -19,6 +21,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     self.localRuntime = localRuntime
     self.mcpRuntime = mcpRuntime
     self.workspace = workspace
+    self.projectWorkspace = projectWorkspace
     self.approvals = approvals
     self.elicitations = elicitations
     self.maxInputRequiredRounds = max(1, maxInputRequiredRounds)
@@ -32,7 +35,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       definitions = []
     }
 
-    let configuration = await workspace.chatConfiguration(for: conversationID)
+    let configuration = await effectiveConfiguration(for: conversationID)
     guard !configuration.enabledServerIDs.isEmpty else {
       return sorted(definitions)
     }
@@ -44,8 +47,6 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       return sorted(definitions)
     }
 
-    // Refresh only selected servers. A temporary refresh failure does not erase the last
-    // validated catalog, but an expired cache gets a chance to update before model dispatch.
     for serverID in selectedServerIDs {
       _ = try? await mcpRuntime.refreshServer(serverID)
     }
@@ -72,7 +73,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       }
     }
 
-    let configuration = await workspace.chatConfiguration(for: conversationID)
+    let configuration = await effectiveConfiguration(for: conversationID)
     let bindings = await mcpRuntime.toolBindings()
     guard let binding = bindings.first(where: { $0.exposedName == call.name }) else {
       return failure(call, "MCP tool is no longer available. Refresh its server and try again.")
@@ -110,6 +111,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
         break
       case .alwaysAllow:
         do {
+          try await materializeInheritedConfigurationIfNeeded(conversationID)
           try await workspace.setChatToolPolicy(
             .alwaysAllow,
             exposedToolName: binding.exposedName,
@@ -144,6 +146,25 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
   public func cancelInteractions(conversationID: ConversationID) async {
     await approvals.cancelConversation(conversationID)
     await elicitations.cancelConversation(conversationID)
+  }
+
+  private func effectiveConfiguration(for conversationID: ConversationID) async
+    -> MCPChatToolConfiguration
+  {
+    if let explicit = await workspace.explicitChatConfiguration(for: conversationID) {
+      return explicit
+    }
+    if let inherited = await projectWorkspace?.mcpConfiguration(for: conversationID) {
+      return inherited
+    }
+    return MCPChatToolConfiguration()
+  }
+
+  private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
+    guard await workspace.explicitChatConfiguration(for: conversationID) == nil,
+      let inherited = await projectWorkspace?.mcpConfiguration(for: conversationID)
+    else { return }
+    try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
   }
 
   private func executeRemoteTool(
@@ -183,7 +204,6 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
 
         requestState = required.requestState
         guard !required.inputRequests.isEmpty else {
-          // Current MCP client guidance uses requestState-only rounds for load shedding.
           try await Task.sleep(for: .milliseconds(250))
           inputResponses = nil
           continue
