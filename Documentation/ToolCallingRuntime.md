@@ -1,10 +1,10 @@
 # Generic Tool-Calling Runtime
 
-Phase 1 of BYOKchat's MCP roadmap establishes a provider-neutral tool runtime. It intentionally does **not** connect to MCP servers yet; remote MCP discovery and execution are Phase 2.
+Phase 1 of BYOKchat's MCP roadmap establishes a provider-neutral tool runtime. Phase 2 now adds remote Streamable HTTP MCP configuration, discovery, and execution beneath it. The two layers remain intentionally separated until Phase 3 adds per-chat selection and explicit approval policy.
 
 ## Architecture
 
-The generation loop is:
+The generic generation loop is:
 
 `model → normalized tool call → BYOKchat ToolRuntime → normalized tool result → model continues`
 
@@ -16,7 +16,13 @@ Provider adapters translate between their native wire formats and the shared cor
 - `ChatToolRound`
 - `ProviderToolContinuation`
 
-`ChatRuntime` does not know whether a future tool came from MCP, an app-native integration, or another source.
+`ChatRuntime` does not know whether a tool comes from MCP, an app-native integration, or another source.
+
+Remote MCP is a separate layer:
+
+`MCP server → MCPRemoteRuntime → validated/namespaced MCPToolBinding → future ToolRuntime registration`
+
+Phase 2 stops before the final registration step. That keeps remote tools unavailable to model-driven chat execution until Phase 3 can enforce user-visible permissions and approvals.
 
 ## Tool registry and execution
 
@@ -31,11 +37,11 @@ Each registered tool has:
 
 Handler failures are converted into `ChatToolResult(isError: true)` and are returned to the model. A normal tool error therefore does not automatically abort the conversation turn.
 
-The app owns one long-lived `ToolRuntime`. No production tools are registered yet; Phase 2 will populate it from remote MCP servers.
+The app owns one long-lived `ToolRuntime`. Phase 2 also owns a long-lived `MCPRemoteRuntime`, but discovered MCP tools are deliberately not registered into the shared tool registry yet.
 
 ## Multi-step orchestration
 
-`ChatRuntime` can now perform more than one provider request for a single assistant turn.
+`ChatRuntime` can perform more than one provider request for a single assistant turn.
 
 1. Build normal conversation context.
 2. Include currently available tool definitions in the provider request.
@@ -98,22 +104,36 @@ Full conversation backups include tool rounds through normal Codable persistence
 
 Provider usage is accumulated across every model step in one logical assistant turn. The final persisted assistant message therefore reports the total usage for the full model → tool → model loop rather than only the last request.
 
-## Phase boundaries
+## Phase 2 integration
 
-Phase 1 provides the generic tool foundation only.
+Remote MCP Phase 2 is implemented in `MCPRemoteRuntime` and related workspace/credential types.
 
-Not implemented yet:
+It now provides:
 
-- MCP server configuration
-- Streamable HTTP MCP transport
-- MCP initialize/discovery
-- MCP `tools/list`
-- MCP `tools/call`
+- persisted remote HTTPS MCP server configuration
+- dedicated Keychain credentials
+- MCP `2026-07-28` stateless discovery and request metadata
+- fallback to initialize-era Streamable HTTP MCP revisions
+- `tools/list` pagination and TTL-aware cached discovery
+- `tools/call`
+- JSON and request-scoped SSE responses
+- current MCP tool-routing headers and `x-mcp-header` parameter mirroring
+- deterministic provider-safe namespacing of remote tool names
+- MCP configuration in full backups while excluding credentials
+
+See `Documentation/RemoteMCP.md` for transport details.
+
+## Remaining Phase 3 boundary
+
+The generic runtime and remote MCP transport are both present. The remaining MCP v1 product layer is intentionally user-facing and permission-oriented:
+
 - per-chat server/tool selection
-- permission policies
-- Allow once / Always allow / Deny approvals
-- tool-call cards and result UI
+- Ask / Always Allow / Disabled policies
+- Allow Once / Always Allow / Deny approvals
+- human-readable argument review
+- running / success / failure tool-call cards
+- collapsed result UI and retry
+- safe handling of interactive `input_required` responses
+- registration/removal of approved MCP bindings in the shared `ToolRuntime`
 
-Those are intentionally Phase 2 and Phase 3.
-
-OAuth, local stdio MCP, MCP Apps, and advanced MCP extensions are outside the current BYOKchat MCP v1 scope.
+OAuth, local stdio MCP, deprecated HTTP+SSE transport, MCP Apps, and advanced MCP extensions remain outside the current BYOKchat MCP v1 scope.
