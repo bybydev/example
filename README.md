@@ -9,11 +9,14 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - DeepSeek
 - OpenRouter
 - NVIDIA
+- Anthropic
+- Gemini
 - User-defined OpenAI-compatible providers
 - Private-network OpenAI-compatible servers
 
 ## Provider platform
 
+- Native OpenAI-compatible Chat Completions, Anthropic Messages, and Gemini GenerateContent API families
 - Multiple accounts per provider
 - Keychain-isolated credentials
 - Custom HTTPS endpoints and protected headers
@@ -22,6 +25,7 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Model discovery and curated seed models
 - Manual, favorite, hidden, and unavailable model states
 - Searchable, favorites-first model selection
+- Provider-native streaming with separate answer and reasoning/thought summaries where supported
 - Non-secret provider configuration import/export
 - Connection testing and streaming console
 
@@ -32,8 +36,8 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Global default system prompt for new chats
 - Multi-turn streaming with separate answer and reasoning content
 - Image and file attachments from Photos and the system document picker
-- Vision requests using OpenAI-compatible multimodal `image_url` content
-- Text-file context and binary file content parts for supporting providers
+- Provider-native multimodal image/file payloads for OpenAI-compatible, Anthropic, and Gemini APIs
+- Text-file context and binary file content for supporting providers
 - Persisted attachment previews in conversation history
 - Attachment-only messages and attachment filename search
 - Fenced code-block rendering, horizontal scrolling, and code copy
@@ -85,4 +89,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/DataPortability.md`
 - `Documentation/LocalProviders.md`
 - `Documentation/MultimodalAttachments.md`
+- `Documentation/NativeProviderAPIs.md`
 - `Documentation/ExpandedVisionProgress-2026-08-07.md`
