@@ -13,12 +13,17 @@ extension OpenAICompatibleAdapter {
     let messages = request.messages.compactMap { message -> ProviderMessage? in
       let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
       let attachments = message.attachments ?? []
-      guard !content.isEmpty || !attachments.isEmpty else { return nil }
+      let toolCalls = message.toolCalls ?? []
+      let toolResults = message.toolResults ?? []
+      guard !content.isEmpty || !attachments.isEmpty || !toolCalls.isEmpty || !toolResults.isEmpty
+      else { return nil }
       return .init(
         role: message.role,
         content: content,
         reasoning: message.reasoning,
-        attachments: attachments.isEmpty ? nil : attachments
+        attachments: attachments.isEmpty ? nil : attachments,
+        toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+        toolResults: toolResults.isEmpty ? nil : toolResults
       )
     }
     guard !messages.isEmpty else { throw ProviderError.invalidMessages }
@@ -26,6 +31,7 @@ extension OpenAICompatibleAdapter {
     for message in messages {
       try validateAttachments(message.attachments ?? [])
     }
+    try validateTools(request.tools)
 
     if definition.authentication != .none {
       guard let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
@@ -37,6 +43,19 @@ extension OpenAICompatibleAdapter {
     result.model = ModelID(rawValue: model)
     result.messages = messages
     return result
+  }
+
+  private func validateTools(_ tools: [ChatToolDefinition]) throws {
+    var names: Set<String> = []
+    for tool in tools {
+      let name = tool.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !name.isEmpty else {
+        throw ProviderError.invalidRequest("Tool name cannot be empty.")
+      }
+      guard names.insert(name).inserted else {
+        throw ProviderError.invalidRequest("Duplicate tool name: \(name)")
+      }
+    }
   }
 
   private func validateAttachments(_ attachments: [ChatAttachment]) throws {
@@ -104,9 +123,13 @@ extension OpenAICompatibleAdapter {
   func requestBody(_ request: ProviderRequest, streaming: Bool) -> [String: JSONValue] {
     var body: [String: JSONValue] = [
       "model": .string(request.model.rawValue),
-      "messages": .array(request.messages.map(requestMessage)),
+      "messages": .array(request.messages.flatMap(requestMessageValues)),
       "stream": .bool(streaming),
     ]
+
+    if !request.tools.isEmpty {
+      body["tools"] = .array(request.tools.map(toolValue))
+    }
 
     let deepSeekThinkingEnabled =
       definition.behavior == .deepSeek && request.options.reasoning?.enabled != false
@@ -169,52 +192,83 @@ extension OpenAICompatibleAdapter {
     return body
   }
 
-  private func requestMessage(_ message: ProviderMessage) -> JSONValue {
-    let attachments = message.attachments ?? []
-    guard !attachments.isEmpty else {
-      return .object([
-        "role": .string(message.role.rawValue),
-        "content": .string(message.content),
-      ])
-    }
+  private func toolValue(_ tool: ChatToolDefinition) -> JSONValue {
+    .object([
+      "type": .string("function"),
+      "function": .object([
+        "name": .string(tool.name),
+        "description": .string(tool.description),
+        "parameters": tool.inputSchema,
+      ]),
+    ])
+  }
 
-    var parts: [JSONValue] = []
-    if !message.content.isEmpty {
-      parts.append(.object(["type": .string("text"), "text": .string(message.content)]))
-    }
-
-    for attachment in attachments {
-      if attachment.isImage {
-        parts.append(
-          .object([
-            "type": .string("image_url"),
-            "image_url": .object(["url": .string(attachment.dataURL)]),
-          ])
-        )
-      } else if let text = attachment.utf8Text {
-        parts.append(
-          .object([
-            "type": .string("text"),
-            "text": .string("File: \(attachment.filename)\n\n\(text)"),
-          ])
-        )
-      } else {
-        parts.append(
-          .object([
-            "type": .string("file"),
-            "file": .object([
-              "filename": .string(attachment.filename),
-              "file_data": .string(attachment.dataURL),
-            ]),
-          ])
-        )
+  private func requestMessageValues(_ message: ProviderMessage) -> [JSONValue] {
+    if message.role == .tool {
+      return (message.toolResults ?? []).map { result in
+        .object([
+          "role": .string("tool"),
+          "tool_call_id": .string(result.callID),
+          "content": .string(result.content.compactJSONString()),
+        ])
       }
     }
 
-    return .object([
-      "role": .string(message.role.rawValue),
-      "content": .array(parts),
-    ])
+    let attachments = message.attachments ?? []
+    var object: [String: JSONValue] = ["role": .string(message.role.rawValue)]
+
+    if attachments.isEmpty {
+      object["content"] = message.content.isEmpty ? .null : .string(message.content)
+    } else {
+      var parts: [JSONValue] = []
+      if !message.content.isEmpty {
+        parts.append(.object(["type": .string("text"), "text": .string(message.content)]))
+      }
+
+      for attachment in attachments {
+        if attachment.isImage {
+          parts.append(
+            .object([
+              "type": .string("image_url"),
+              "image_url": .object(["url": .string(attachment.dataURL)]),
+            ])
+          )
+        } else if let text = attachment.utf8Text {
+          parts.append(
+            .object([
+              "type": .string("text"),
+              "text": .string("File: \(attachment.filename)\n\n\(text)"),
+            ])
+          )
+        } else {
+          parts.append(
+            .object([
+              "type": .string("file"),
+              "file": .object([
+                "filename": .string(attachment.filename),
+                "file_data": .string(attachment.dataURL),
+              ]),
+            ])
+          )
+        }
+      }
+      object["content"] = .array(parts)
+    }
+
+    if let calls = message.toolCalls, !calls.isEmpty {
+      object["tool_calls"] = .array(calls.map { call in
+        .object([
+          "id": .string(call.id),
+          "type": .string("function"),
+          "function": .object([
+            "name": .string(call.name),
+            "arguments": .string(call.arguments.compactJSONString()),
+          ]),
+        ])
+      })
+    }
+
+    return [.object(object)]
   }
 
   func validate(_ response: ProviderHTTPResponse) throws {
