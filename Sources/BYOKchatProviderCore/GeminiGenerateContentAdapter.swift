@@ -96,7 +96,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       throw ProviderError.provider(status: error.code ?? response.statusCode, message: error.message)
     }
 
-    let output = collectOutput(decoded)
+    let output = try collectOutput(decoded)
     guard !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !output.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !output.toolCalls.isEmpty
@@ -114,7 +114,11 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       finishReason: decoded.candidates.first?.finishReason,
       usage: decoded.usageMetadata?.normalized,
       metadata: decoded.modelVersion.map { ["modelVersion": $0] } ?? [:],
-      toolCalls: output.toolCalls
+      toolCalls: output.toolCalls,
+      toolContinuation: geminiContinuation(
+        signatures: output.toolSignatures,
+        hasToolCalls: !output.toolCalls.isEmpty
+      )
     )
   }
 
@@ -150,6 +154,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
           var modelVersion: String?
           var completed = false
           var toolCalls: [ChatToolCall] = []
+          var toolSignatures: [String: String] = [:]
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -164,7 +169,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
                 finishReason: &finishReason,
                 modelVersion: &modelVersion,
                 completed: &completed,
-                toolCalls: &toolCalls
+                toolCalls: &toolCalls,
+                toolSignatures: &toolSignatures
               )
             }
           }
@@ -179,7 +185,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
               finishReason: &finishReason,
               modelVersion: &modelVersion,
               completed: &completed,
-              toolCalls: &toolCalls
+              toolCalls: &toolCalls,
+              toolSignatures: &toolSignatures
             )
           }
 
@@ -203,7 +210,11 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
                 finishReason: finishReason,
                 usage: usage,
                 metadata: modelVersion.map { ["modelVersion": $0] } ?? [:],
-                toolCalls: toolCalls
+                toolCalls: toolCalls,
+                toolContinuation: geminiContinuation(
+                  signatures: toolSignatures,
+                  hasToolCalls: !toolCalls.isEmpty
+                )
               )
             )
           )
@@ -226,7 +237,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     finishReason: inout String?,
     modelVersion: inout String?,
     completed: inout Bool,
-    toolCalls: inout [ChatToolCall]
+    toolCalls: inout [ChatToolCall],
+    toolSignatures: inout [String: String]
   ) throws {
     guard let payload = event.data.data(using: .utf8) else { throw ProviderError.invalidResponse }
     let decoded: GeminiGenerateResponse
@@ -262,6 +274,9 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
           toolCalls[index] = call
         } else {
           toolCalls.append(call)
+        }
+        if let signature = part.thoughtSignature, !signature.isEmpty {
+          toolSignatures[call.id] = signature
         }
       }
     }
@@ -302,7 +317,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
           reasoning: message.reasoning,
           attachments: attachments.isEmpty ? nil : attachments,
           toolCalls: calls.isEmpty ? nil : calls,
-          toolResults: results.isEmpty ? nil : results
+          toolResults: results.isEmpty ? nil : results,
+          toolContinuation: message.toolContinuation
         )
       )
     }
@@ -420,6 +436,17 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     }
 
     let role = message.role == .assistant ? "model" : "user"
+    let signatures: [String: JSONValue]
+    if message.role == .assistant,
+      let continuation = message.toolContinuation,
+      continuation.apiFamily == .geminiGenerateContent,
+      case .object(let values) = continuation.payload
+    {
+      signatures = values
+    } else {
+      signatures = [:]
+    }
+
     var parts: [JSONValue] = []
     for attachment in message.attachments ?? [] {
       if let text = attachment.utf8Text {
@@ -441,15 +468,17 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       parts.append(.object(["text": .string(message.content)]))
     }
     for call in message.toolCalls ?? [] {
-      parts.append(
-        .object([
-          "functionCall": .object([
-            "name": .string(call.name),
-            "args": call.arguments,
-            "id": .string(call.id),
-          ])
+      var part: [String: JSONValue] = [
+        "functionCall": .object([
+          "name": .string(call.name),
+          "args": call.arguments,
+          "id": .string(call.id),
         ])
-      )
+      ]
+      if case .string(let signature)? = signatures[call.id], !signature.isEmpty {
+        part["thoughtSignature"] = .string(signature)
+      }
+      parts.append(.object(part))
     }
     return .object(["role": .string(role), "parts": .array(parts)])
   }
@@ -517,21 +546,29 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
 
   private func collectOutput(
     _ response: GeminiGenerateResponse
-  ) -> (text: String, reasoning: String, toolCalls: [ChatToolCall]) {
+  ) throws -> (
+    text: String,
+    reasoning: String,
+    toolCalls: [ChatToolCall],
+    toolSignatures: [String: String]
+  ) {
     var text = ""
     var reasoning = ""
     var toolCalls: [ChatToolCall] = []
+    var signatures: [String: String] = [:]
     for part in response.candidates.first?.content?.parts ?? [] {
       if let value = part.text {
         if part.thought == true { reasoning += value } else { text += value }
       }
-      if let functionCall = part.functionCall,
-        let call = try? normalizedToolCall(functionCall)
-      {
+      if let functionCall = part.functionCall {
+        let call = try normalizedToolCall(functionCall)
         toolCalls.append(call)
+        if let signature = part.thoughtSignature, !signature.isEmpty {
+          signatures[call.id] = signature
+        }
       }
     }
-    return (text, reasoning, toolCalls)
+    return (text, reasoning, toolCalls, signatures)
   }
 
   private func normalizedToolCall(_ value: GeminiFunctionCall) throws -> ChatToolCall {
@@ -539,6 +576,17 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     let id = value.id?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let id, !id.isEmpty else { throw ProviderError.invalidResponse }
     return ChatToolCall(id: id, name: name, arguments: value.args ?? .object([:]))
+  }
+
+  private func geminiContinuation(
+    signatures: [String: String],
+    hasToolCalls: Bool
+  ) -> ProviderToolContinuation? {
+    guard hasToolCalls, !signatures.isEmpty else { return nil }
+    return ProviderToolContinuation(
+      apiFamily: .geminiGenerateContent,
+      payload: .object(signatures.mapValues(JSONValue.string))
+    )
   }
 
   private func mergeModels(seed: [ProviderModel], discovered: [ProviderModel]) -> [ProviderModel] {
@@ -625,6 +673,7 @@ private struct GeminiPart: Decodable {
   var text: String?
   var thought: Bool?
   var functionCall: GeminiFunctionCall?
+  var thoughtSignature: String?
 }
 
 private struct GeminiFunctionCall: Decodable {
