@@ -385,7 +385,15 @@ final class ChatManagementModel {
   }
 
   private func defaultOptions(providerID: ProviderID) -> ProviderRequestOptions {
-    guard providerID == BuiltInProviders.deepSeekID else { return .init() }
-    return .init(reasoning: .init(enabled: true, effort: .high))
+    switch providerID {
+    case BuiltInProviders.deepSeekID:
+      return .init(reasoning: .init(enabled: true, effort: .high))
+    case BuiltInProviders.anthropicID:
+      return .init(reasoning: .init(enabled: true, effort: .high))
+    case BuiltInProviders.geminiID:
+      return .init(reasoning: .init(enabled: true, effort: .medium))
+    default:
+      return .init()
+    }
   }
 }
