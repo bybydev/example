@@ -75,7 +75,9 @@ struct AppRootView: View {
         .presentationDragIndicator(.visible)
     }
     .overlay(alignment: .top) {
-      if model.providers.isBusy || model.chats.isBusy || model.dataPortability.isBusy {
+      if model.providers.isBusy || model.chats.isBusy || model.mcp.isBusy
+        || model.dataPortability.isBusy
+      {
         ProgressView()
           .padding(10)
           .background(.regularMaterial, in: Capsule())
@@ -85,11 +87,16 @@ struct AppRootView: View {
     .alert(
       "BYOKchat",
       isPresented: Binding(
-        get: { model.providers.errorMessage != nil || model.chats.errorMessage != nil },
+        get: {
+          model.providers.errorMessage != nil
+            || model.chats.errorMessage != nil
+            || model.mcp.errorMessage != nil
+        },
         set: { presented in
           if !presented {
             model.providers.errorMessage = nil
             model.chats.errorMessage = nil
+            model.mcp.errorMessage = nil
           }
         }
       )
@@ -97,9 +104,15 @@ struct AppRootView: View {
       Button("OK") {
         model.providers.errorMessage = nil
         model.chats.errorMessage = nil
+        model.mcp.errorMessage = nil
       }
     } message: {
-      Text(model.chats.errorMessage ?? model.providers.errorMessage ?? "Unknown error")
+      Text(
+        model.chats.errorMessage
+          ?? model.providers.errorMessage
+          ?? model.mcp.errorMessage
+          ?? "Unknown error"
+      )
     }
   }
 
@@ -114,6 +127,7 @@ struct AppRootView: View {
           initialScrollMessageID: initialScrollMessageID,
           chats: model.chats,
           providers: model.providers,
+          mcp: model.mcp,
           openSidebar: openSidebar,
           startNewChat: startNewChat
         )
