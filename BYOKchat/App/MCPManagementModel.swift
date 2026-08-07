@@ -49,7 +49,7 @@ final class MCPManagementModel {
     additionalHeaders: [String: String],
     isEnabled: Bool
   ) async -> Bool {
-    await performResult("MCP server saved") {
+    await performResult("MCP server saved and tools discovered") {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
       guard let url = URL(string: normalizedEndpoint) else {
@@ -76,6 +76,9 @@ final class MCPManagementModel {
       }
 
       try await runtime.saveServer(server, credential: credential)
+      if server.isEnabled {
+        _ = try await runtime.refreshServer(server.id, force: true)
+      }
       try await reloadSnapshot()
     }
   }
@@ -90,6 +93,9 @@ final class MCPManagementModel {
   func setEnabled(_ enabled: Bool, serverID: MCPServerID) async {
     await perform(nil) {
       try await runtime.setEnabled(enabled, serverID: serverID)
+      if enabled {
+        _ = try await runtime.refreshServer(serverID, force: true)
+      }
       try await reloadSnapshot()
     }
   }
