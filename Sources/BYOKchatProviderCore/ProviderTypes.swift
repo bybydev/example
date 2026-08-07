@@ -33,10 +33,18 @@ public struct ProviderMessage: Codable, Sendable, Equatable {
   public var role: ProviderMessageRole
   public var content: String
   public var reasoning: String?
-  public init(role: ProviderMessageRole, content: String, reasoning: String? = nil) {
+  public var attachments: [ChatAttachment]?
+
+  public init(
+    role: ProviderMessageRole,
+    content: String,
+    reasoning: String? = nil,
+    attachments: [ChatAttachment]? = nil
+  ) {
     self.role = role
     self.content = content
     self.reasoning = reasoning
+    self.attachments = attachments
   }
 }
 
