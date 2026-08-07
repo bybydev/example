@@ -2,7 +2,7 @@
 
 BYOKchat is an iOS-only, BYOK-only AI chat client under active development.
 
-BYOKchat owns its provider, conversation, and tool runtime. It does not use AppFoundation's AI provider management.
+BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use AppFoundation's AI provider management.
 
 ## First-class providers
 
@@ -66,16 +66,33 @@ Phase 1 of the MCP roadmap is implemented as a generic tool layer beneath chat.
 - Tool calls, tool results, provider continuation metadata, and per-step usage are persisted structurally.
 - Tool-handler failures are returned to the model as error results instead of automatically aborting the chat turn.
 - A hard eight-round limit prevents unbounded recursive tool loops.
-- No production tools or MCP servers are registered yet; remote MCP is Phase 2 and per-chat permissions/tool UI are Phase 3.
+
+## Remote MCP
+
+Phase 2 adds remote Streamable HTTP MCP infrastructure while intentionally keeping model execution disabled until Phase 3 approvals exist.
+
+- Settings-managed remote MCP servers with HTTPS validation.
+- None, bearer-token, and custom-header authentication.
+- MCP credentials stored in a dedicated Keychain vault.
+- Current MCP `2026-07-28` stateless protocol support with `server/discover` and per-request metadata.
+- Automatic compatibility fallback to initialize-era Streamable HTTP revisions `2025-11-25`, `2025-06-18`, and `2025-03-26`.
+- JSON and request-scoped SSE responses.
+- `tools/list` pagination, persisted TTL-aware discovery cache, and per-tool validation warnings.
+- `tools/call` runtime with structured result normalization.
+- Current `Mcp-Method`, `Mcp-Name`, and `x-mcp-header` / `Mcp-Param-*` routing behavior.
+- Deterministic 64-character provider-compatible namespacing for MCP tools.
+- Deprecated HTTP+SSE, OAuth, local stdio servers, MCP Apps, Tasks, and interactive MRTR handling are not part of Phase 2.
+- Discovered MCP tools are not registered into chat automatically; per-chat selection, permissions, approvals, and tool-call UI are Phase 3.
 
 ## Data portability
 
-- Versioned full backup containing conversations, attachments, structured tool rounds, preferences, and non-secret provider configuration
+- Versioned full backup containing conversations, attachments, structured tool rounds, preferences, non-secret provider configuration, and non-secret MCP server configuration/discovery cache
+- Backward-compatible import of existing schema-v1 backups that predate MCP configuration
 - Merge or replace restore strategies
 - Pre-mutation validation and workspace rollback on import failure
-- Credentials excluded from every export
-- Replace restore clears affected Keychain credentials
-- Delete-all controls for conversations and credentials
+- Provider and MCP credentials excluded from every export
+- Replace restore clears affected provider and MCP Keychain credentials
+- Delete-all credential controls include provider and MCP credentials
 
 ## Local validation
 
@@ -105,4 +122,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/MultimodalAttachments.md`
 - `Documentation/NativeProviderAPIs.md`
 - `Documentation/ToolCallingRuntime.md`
+- `Documentation/RemoteMCP.md`
 - `Documentation/ExpandedVisionProgress-2026-08-07.md`
