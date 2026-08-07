@@ -51,6 +51,18 @@ public struct ChatToolResult: Codable, Sendable, Equatable, Identifiable {
   }
 }
 
+/// Opaque provider data that must be replayed unchanged during a multi-step tool turn.
+/// BYOKchat stores it but never interprets it outside the matching provider adapter.
+public struct ProviderToolContinuation: Codable, Sendable, Equatable {
+  public var apiFamily: ProviderAPIFamily
+  public var payload: JSONValue
+
+  public init(apiFamily: ProviderAPIFamily, payload: JSONValue) {
+    self.apiFamily = apiFamily
+    self.payload = payload
+  }
+}
+
 public struct ChatToolRound: Codable, Sendable, Equatable, Identifiable {
   public var id: String
   public var calls: [ChatToolCall]
@@ -58,6 +70,7 @@ public struct ChatToolRound: Codable, Sendable, Equatable, Identifiable {
   public var assistantText: String
   public var assistantReasoning: String
   public var usage: ProviderUsage?
+  public var providerContinuation: ProviderToolContinuation?
   public var createdAt: Date
 
   public init(
@@ -67,6 +80,7 @@ public struct ChatToolRound: Codable, Sendable, Equatable, Identifiable {
     assistantText: String = "",
     assistantReasoning: String = "",
     usage: ProviderUsage? = nil,
+    providerContinuation: ProviderToolContinuation? = nil,
     createdAt: Date = .now
   ) {
     self.id = id
@@ -75,6 +89,7 @@ public struct ChatToolRound: Codable, Sendable, Equatable, Identifiable {
     self.assistantText = assistantText
     self.assistantReasoning = assistantReasoning
     self.usage = usage
+    self.providerContinuation = providerContinuation
     self.createdAt = createdAt
   }
 }
