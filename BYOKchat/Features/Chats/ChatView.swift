@@ -14,12 +14,14 @@ struct ChatView: View {
 
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
+  @Bindable var mcp: MCPManagementModel
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
   @State var restoredDraft = false
   @State var showTargetSettings = false
+  @State var showToolSettings = false
   @State var renameText = ""
   @State var showRename = false
   @State var editTarget: ChatMessage?
@@ -42,6 +44,7 @@ struct ChatView: View {
     initialScrollMessageID: ChatMessageID? = nil,
     chats: ChatManagementModel,
     providers: ProviderManagementModel,
+    mcp: MCPManagementModel,
     openSidebar: @escaping () -> Void = {},
     startNewChat: @escaping () -> Void = {}
   ) {
@@ -49,6 +52,7 @@ struct ChatView: View {
     self.initialScrollMessageID = initialScrollMessageID
     self.chats = chats
     self.providers = providers
+    self.mcp = mcp
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
   }
@@ -82,6 +86,9 @@ struct ChatView: View {
         Button("Chat Settings", systemImage: "slider.horizontal.3") {
           showTargetSettings = true
         }
+        Button("Tools", systemImage: "wrench.and.screwdriver") {
+          showToolSettings = true
+        }
         Button("Rename", systemImage: "pencil") {
           renameText = conversation?.title ?? ""
           showRename = true
@@ -93,6 +100,7 @@ struct ChatView: View {
         Button("Delete", systemImage: "trash", role: .destructive) {
           Task { @MainActor in
             await chats.deleteConversation(conversationID)
+            await mcp.reloadFromStorage()
             startNewChat()
             dismiss()
           }
@@ -107,6 +115,12 @@ struct ChatView: View {
           providers: providers
         )
       }
+    }
+    .sheet(isPresented: $showToolSettings) {
+      ConversationToolsView(
+        conversationID: conversationID,
+        mcp: mcp
+      )
     }
     .sheet(item: $editTarget) { message in
       MessageEditorSheet(
