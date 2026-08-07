@@ -95,6 +95,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var content: String
   public var reasoning: String
   public var attachments: [ChatAttachment]?
+  public var toolRounds: [ChatToolRound]?
   public var createdAt: Date
   public var updatedAt: Date
   public var status: ChatMessageStatus
@@ -114,6 +115,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     content: String = "",
     reasoning: String = "",
     attachments: [ChatAttachment]? = nil,
+    toolRounds: [ChatToolRound]? = nil,
     createdAt: Date = .now,
     updatedAt: Date = .now,
     status: ChatMessageStatus,
@@ -132,6 +134,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     self.content = content
     self.reasoning = reasoning
     self.attachments = attachments
+    self.toolRounds = toolRounds
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.status = status
@@ -294,6 +297,7 @@ public enum ChatRuntimeEvent: Sendable, Equatable {
   case textDelta(messageID: ChatMessageID, value: String)
   case reasoningDelta(messageID: ChatMessageID, value: String)
   case usage(messageID: ChatMessageID, value: ProviderUsage)
+  case toolRound(messageID: ChatMessageID, value: ChatToolRound)
   case completed(ChatMessage)
   case cancelled(ChatMessage)
   case failed(ChatMessage)
