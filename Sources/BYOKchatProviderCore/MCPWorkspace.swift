@@ -6,15 +6,19 @@ public struct MCPWorkspaceState: Codable, Sendable, Equatable {
   public var schemaVersion: Int
   public var servers: [MCPRemoteServer]
   public var snapshots: [MCPServerSnapshot]
+  /// Optional so MCP workspace files and full backups written before Phase 3 still decode as v1.
+  public var chatConfigurations: [String: MCPChatToolConfiguration]?
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
     servers: [MCPRemoteServer] = [],
-    snapshots: [MCPServerSnapshot] = []
+    snapshots: [MCPServerSnapshot] = [],
+    chatConfigurations: [String: MCPChatToolConfiguration]? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.servers = servers
     self.snapshots = snapshots
+    self.chatConfigurations = chatConfigurations
   }
 }
 
@@ -91,6 +95,10 @@ public actor MCPWorkspaceStore {
     state.snapshots.first { $0.serverID == serverID }
   }
 
+  public func chatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration {
+    state.chatConfigurations?[conversationID.rawValue] ?? MCPChatToolConfiguration()
+  }
+
   public func upsertServer(_ server: MCPRemoteServer) async throws {
     var value = server
     try Self.validateServer(value)
@@ -112,9 +120,70 @@ public actor MCPWorkspaceStore {
     try await persist()
   }
 
+  public func setChatServerEnabled(
+    _ enabled: Bool,
+    serverID: MCPServerID,
+    conversationID: ConversationID
+  ) async throws {
+    guard state.servers.contains(where: { $0.id == serverID }) else {
+      throw MCPError.serverNotFound(serverID)
+    }
+    var configuration = chatConfiguration(for: conversationID)
+    configuration.enabledServerIDs.removeAll { $0 == serverID }
+    if enabled { configuration.enabledServerIDs.append(serverID) }
+    configuration.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
+    storeChatConfiguration(configuration, conversationID: conversationID)
+    try await persist()
+  }
+
+  public func setChatToolPolicy(
+    _ policy: ChatToolPermissionPolicy,
+    exposedToolName: String,
+    conversationID: ConversationID
+  ) async throws {
+    let normalized = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty, normalized.count <= MCPToolNamespace.maximumExposedNameLength else {
+      throw MCPError.invalidToolDefinition("Invalid MCP tool permission name.")
+    }
+    var configuration = chatConfiguration(for: conversationID)
+    if policy == .ask {
+      configuration.toolPolicies.removeValue(forKey: normalized)
+    } else {
+      configuration.toolPolicies[normalized] = policy
+    }
+    storeChatConfiguration(configuration, conversationID: conversationID)
+    try await persist()
+  }
+
+  public func removeChatConfiguration(conversationID: ConversationID) async throws {
+    guard state.chatConfigurations?[conversationID.rawValue] != nil else { return }
+    state.chatConfigurations?[conversationID.rawValue] = nil
+    normalizeChatConfigurationStorage()
+    try await persist()
+  }
+
   public func deleteServer(_ id: MCPServerID) async throws {
+    let exposedNames = Set(
+      state.snapshots.first(where: { $0.serverID == id })?.tools.map {
+        MCPToolNamespace.exposedName(serverID: id, remoteName: $0.remoteName)
+      } ?? []
+    )
     state.servers.removeAll { $0.id == id }
     state.snapshots.removeAll { $0.serverID == id }
+
+    if var configurations = state.chatConfigurations {
+      for key in configurations.keys {
+        guard var configuration = configurations[key] else { continue }
+        configuration.enabledServerIDs.removeAll { $0 == id }
+        for name in exposedNames { configuration.toolPolicies.removeValue(forKey: name) }
+        if configuration.enabledServerIDs.isEmpty && configuration.toolPolicies.isEmpty {
+          configurations.removeValue(forKey: key)
+        } else {
+          configurations[key] = configuration
+        }
+      }
+      state.chatConfigurations = configurations.isEmpty ? nil : configurations
+    }
     try await persist()
   }
 
@@ -165,10 +234,35 @@ public actor MCPWorkspaceStore {
           availableIDs.contains($0.serverID) && !existingSnapshotIDs.contains($0.serverID)
         }
       )
+
+      var chatConfigurations = candidate.chatConfigurations ?? [:]
+      for (conversationID, configuration) in imported.chatConfigurations ?? [:]
+        where chatConfigurations[conversationID] == nil
+      {
+        chatConfigurations[conversationID] = configuration
+      }
+      candidate.chatConfigurations = chatConfigurations.isEmpty ? nil : chatConfigurations
     }
     try Self.validate(candidate)
     try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
     state = candidate
+  }
+
+  private func storeChatConfiguration(
+    _ configuration: MCPChatToolConfiguration,
+    conversationID: ConversationID
+  ) {
+    var values = state.chatConfigurations ?? [:]
+    if configuration.enabledServerIDs.isEmpty && configuration.toolPolicies.isEmpty {
+      values.removeValue(forKey: conversationID.rawValue)
+    } else {
+      values[conversationID.rawValue] = configuration
+    }
+    state.chatConfigurations = values.isEmpty ? nil : values
+  }
+
+  private func normalizeChatConfigurationStorage() {
+    if state.chatConfigurations?.isEmpty == true { state.chatConfigurations = nil }
   }
 
   private func persist() async throws {
@@ -195,6 +289,32 @@ public actor MCPWorkspaceStore {
         throw MCPError.invalidServer(
           "Duplicate MCP discovery cache for \(snapshot.serverID.rawValue)."
         )
+      }
+    }
+
+    for (conversationID, configuration) in workspace.chatConfigurations ?? [:] {
+      guard !conversationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw MCPError.invalidServer("MCP chat configuration contains an empty conversation ID.")
+      }
+      let enabledIDs = configuration.enabledServerIDs
+      guard Set(enabledIDs).count == enabledIDs.count else {
+        throw MCPError.invalidServer(
+          "MCP chat configuration \(conversationID) contains duplicate server IDs."
+        )
+      }
+      guard enabledIDs.allSatisfy(ids.contains) else {
+        throw MCPError.invalidServer(
+          "MCP chat configuration \(conversationID) references an unknown server."
+        )
+      }
+      for name in configuration.toolPolicies.keys {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          name.count <= MCPToolNamespace.maximumExposedNameLength
+        else {
+          throw MCPError.invalidServer(
+            "MCP chat configuration \(conversationID) contains an invalid tool permission."
+          )
+        }
       }
     }
   }
