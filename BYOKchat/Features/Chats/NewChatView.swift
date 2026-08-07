@@ -9,6 +9,7 @@ struct NewChatView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
+  @Bindable var mcp: MCPManagementModel
   let projectID: ProjectID?
 
   let openSidebar: () -> Void
@@ -88,7 +89,7 @@ struct NewChatView: View {
           Text(
             project == nil
               ? "Send a message to start a new conversation."
-              : "This chat will use the project's defaults and instructions."
+              : projectContextSummary
           )
           .font(.system(size: 16))
           .multilineTextAlignment(.center)
@@ -117,6 +118,13 @@ struct NewChatView: View {
           photoPickerItems = []
         }
       ) {
+        if let project, !project.projectPromptPresets.isEmpty {
+          Menu("Prompts", systemImage: "text.bubble") {
+            ForEach(project.projectPromptPresets) { preset in
+              Button(preset.name) { applyPromptPreset(preset) }
+            }
+          }
+        }
         if project != nil {
           Button("Project Settings", systemImage: "folder.badge.gearshape") {
             showProjectEditor = true
@@ -159,7 +167,8 @@ struct NewChatView: View {
         ProjectEditorView(
           project: project,
           projects: projects,
-          providers: providers
+          providers: providers,
+          mcp: mcp
         )
         .presentationDragIndicator(.visible)
       }
@@ -182,6 +191,28 @@ struct NewChatView: View {
     }
   }
 
+  private var projectContextSummary: String {
+    guard let project else { return "" }
+    var parts = ["Uses project defaults and instructions"]
+    if !project.projectFiles.isEmpty {
+      parts.append("\(project.projectFiles.count) reference file\(project.projectFiles.count == 1 ? "" : "s")")
+    }
+    if let configuration = project.mcpConfiguration, !configuration.enabledServerIDs.isEmpty {
+      parts.append("project tools")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  private func applyPromptPreset(_ preset: ProjectPromptPreset) {
+    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      draft = value
+    } else {
+      draft += "\n\n" + value
+    }
+  }
+
   private func startConversation() {
     let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     let attachments = pendingAttachments
@@ -194,6 +225,7 @@ struct NewChatView: View {
       defer { isCreating = false }
       guard let id = await chats.createConversation(projectID: projectID) else { return }
       await projects.reloadFromStorage()
+      await mcp.reloadFromStorage()
       draft = ""
       pendingAttachments = []
       photoPickerItems = []
