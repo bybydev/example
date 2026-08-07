@@ -1,5 +1,6 @@
 import BYOKchatProviderCore
 import SwiftUI
+import UIKit
 
 struct MCPToolApprovalCard: View {
   let request: MCPToolApprovalRequest
@@ -61,7 +62,11 @@ struct MCPToolApprovalCard: View {
     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(request.destructiveHint == true ? Color.orange.opacity(0.35) : Color.primary.opacity(0.09), lineWidth: 0.8)
+        .stroke(
+          request.destructiveHint == true
+            ? Color.orange.opacity(0.35) : Color.primary.opacity(0.09),
+          lineWidth: 0.8
+        )
     )
     .accessibilityElement(children: .contain)
   }
@@ -282,10 +287,17 @@ struct MCPElicitationCard: View {
 
   private var canSubmit: Bool {
     guard request.mode == .form else { return request.url != nil }
-    for field in request.fields where field.isRequired {
-      if field.kind == .boolean { continue }
-      if (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return false
+    for field in request.fields {
+      let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      if field.isRequired, field.kind != .boolean, raw.isEmpty { return false }
+      if raw.isEmpty { continue }
+      switch field.kind {
+      case .integer:
+        guard Int(raw) != nil else { return false }
+      case .number:
+        guard let value = Double(raw), value.isFinite else { return false }
+      case .string, .boolean, .stringArray:
+        break
       }
     }
     return true
@@ -302,7 +314,7 @@ struct MCPElicitationCard: View {
           values[field.name] = .number(Double(value))
         }
       case .number:
-        if let value = Double(textValues[field.name] ?? "") {
+        if let value = Double(textValues[field.name] ?? ""), value.isFinite {
           values[field.name] = .number(value)
         }
       case .string:
@@ -326,7 +338,10 @@ extension JSONValue {
     guard let data = try? JSONEncoder.providerEncoder.encode(self),
       let object = try? JSONSerialization.jsonObject(with: data),
       JSONSerialization.isValidJSONObject(object),
-      let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+      let pretty = try? JSONSerialization.data(
+        withJSONObject: object,
+        options: [.prettyPrinted, .sortedKeys]
+      ),
       let value = String(data: pretty, encoding: .utf8)
     else {
       if case .string(let value) = self { return value }
