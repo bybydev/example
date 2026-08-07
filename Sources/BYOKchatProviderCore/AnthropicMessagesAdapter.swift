@@ -111,7 +111,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       modelID: ModelID(rawValue: decoded.model ?? validated.model.rawValue),
       finishReason: decoded.stopReason,
       usage: decoded.usage?.normalized,
-      toolCalls: toolCalls
+      toolCalls: toolCalls,
+      toolContinuation: anthropicContinuation(content: decoded.content, hasToolCalls: !toolCalls.isEmpty)
     )
   }
 
@@ -147,6 +148,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           var finishReason: String?
           var completed = false
           var toolFragments: [Int: AnthropicToolAccumulator] = [:]
+          var thinkingFragments: [Int: AnthropicThinkingAccumulator] = [:]
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -161,7 +163,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 modelID: &modelID,
                 finishReason: &finishReason,
                 completed: &completed,
-                toolFragments: &toolFragments
+                toolFragments: &toolFragments,
+                thinkingFragments: &thinkingFragments
               )
             }
           }
@@ -176,7 +179,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
               modelID: &modelID,
               finishReason: &finishReason,
               completed: &completed,
-              toolFragments: &toolFragments
+              toolFragments: &toolFragments,
+              thinkingFragments: &thinkingFragments
             )
           }
 
@@ -200,7 +204,11 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 modelID: modelID,
                 finishReason: finishReason,
                 usage: usage,
-                toolCalls: toolCalls
+                toolCalls: toolCalls,
+                toolContinuation: anthropicContinuation(
+                  thinkingFragments: thinkingFragments,
+                  hasToolCalls: !toolCalls.isEmpty
+                )
               )
             )
           )
@@ -223,7 +231,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     modelID: inout ModelID,
     finishReason: inout String?,
     completed: inout Bool,
-    toolFragments: inout [Int: AnthropicToolAccumulator]
+    toolFragments: inout [Int: AnthropicToolAccumulator],
+    thinkingFragments: inout [Int: AnthropicThinkingAccumulator]
   ) throws {
     guard let payload = event.data.data(using: .utf8) else { throw ProviderError.invalidResponse }
     let decoded: AnthropicStreamEvent
@@ -244,11 +253,15 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         }
       }
     case "content_block_start":
-      if let index = decoded.index,
-        let block = decoded.contentBlock,
-        block.type == "tool_use"
-      {
-        toolFragments[index] = AnthropicToolAccumulator(id: block.id, name: block.name)
+      if let index = decoded.index, let block = decoded.contentBlock {
+        if block.type == "tool_use" {
+          toolFragments[index] = AnthropicToolAccumulator(id: block.id, name: block.name)
+        } else if block.type == "thinking" {
+          thinkingFragments[index] = AnthropicThinkingAccumulator(
+            thinking: block.thinking ?? "",
+            signature: block.signature
+          )
+        }
       }
     case "content_block_delta":
       guard let delta = decoded.delta else { return }
@@ -257,7 +270,18 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         continuation.yield(.textDelta(value))
       } else if delta.type == "thinking_delta", let value = delta.thinking, !value.isEmpty {
         reasoning += value
+        if let index = decoded.index {
+          var accumulator = thinkingFragments[index] ?? AnthropicThinkingAccumulator()
+          accumulator.thinking += value
+          thinkingFragments[index] = accumulator
+        }
         continuation.yield(.reasoningDelta(value))
+      } else if delta.type == "signature_delta", let value = delta.signature,
+        let index = decoded.index
+      {
+        var accumulator = thinkingFragments[index] ?? AnthropicThinkingAccumulator()
+        accumulator.signature = value
+        thinkingFragments[index] = accumulator
       } else if delta.type == "input_json_delta",
         let index = decoded.index,
         let value = delta.partialJSON
@@ -315,7 +339,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           reasoning: message.reasoning,
           attachments: attachments.isEmpty ? nil : attachments,
           toolCalls: calls.isEmpty ? nil : calls,
-          toolResults: results.isEmpty ? nil : results
+          toolResults: results.isEmpty ? nil : results,
+          toolContinuation: message.toolContinuation
         )
       )
     }
@@ -414,6 +439,14 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     }
 
     var blocks: [JSONValue] = []
+    if message.role == .assistant,
+      let continuation = message.toolContinuation,
+      continuation.apiFamily == .anthropicMessages,
+      case .array(let thinkingBlocks) = continuation.payload
+    {
+      blocks.append(contentsOf: thinkingBlocks)
+    }
+
     for attachment in attachments {
       if attachment.isImage {
         blocks.append(
@@ -486,6 +519,44 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       let arguments = raw.isEmpty ? JSONValue.object([:]) : try JSONValue.parseJSONString(raw)
       return ChatToolCall(id: id, name: name, arguments: arguments)
     }
+  }
+
+  private func anthropicContinuation(
+    content: [AnthropicContentBlock],
+    hasToolCalls: Bool
+  ) -> ProviderToolContinuation? {
+    guard hasToolCalls else { return nil }
+    let blocks = content.compactMap { block -> JSONValue? in
+      guard block.type == "thinking", let signature = block.signature, !signature.isEmpty else {
+        return nil
+      }
+      return .object([
+        "type": .string("thinking"),
+        "thinking": .string(block.thinking ?? ""),
+        "signature": .string(signature),
+      ])
+    }
+    guard !blocks.isEmpty else { return nil }
+    return ProviderToolContinuation(apiFamily: .anthropicMessages, payload: .array(blocks))
+  }
+
+  private func anthropicContinuation(
+    thinkingFragments: [Int: AnthropicThinkingAccumulator],
+    hasToolCalls: Bool
+  ) -> ProviderToolContinuation? {
+    guard hasToolCalls else { return nil }
+    let blocks = thinkingFragments.keys.sorted().compactMap { index -> JSONValue? in
+      guard let block = thinkingFragments[index],
+        let signature = block.signature, !signature.isEmpty
+      else { return nil }
+      return .object([
+        "type": .string("thinking"),
+        "thinking": .string(block.thinking),
+        "signature": .string(signature),
+      ])
+    }
+    guard !blocks.isEmpty else { return nil }
+    return ProviderToolContinuation(apiFamily: .anthropicMessages, payload: .array(blocks))
   }
 
   private func makeRequest(
@@ -569,6 +640,11 @@ private struct AnthropicToolAccumulator: Sendable {
   var arguments = ""
 }
 
+private struct AnthropicThinkingAccumulator: Sendable {
+  var thinking = ""
+  var signature: String?
+}
+
 private struct AnthropicModelsResponse: Decodable {
   var data: [AnthropicModelWire]
 }
@@ -621,6 +697,7 @@ private struct AnthropicContentBlock: Decodable {
   var type: String
   var text: String?
   var thinking: String?
+  var signature: String?
   var id: String?
   var name: String?
   var input: JSONValue?
@@ -682,11 +759,12 @@ private struct AnthropicStreamDelta: Decodable {
   var type: String?
   var text: String?
   var thinking: String?
+  var signature: String?
   var partialJSON: String?
   var stopReason: String?
 
   enum CodingKeys: String, CodingKey {
-    case type, text, thinking
+    case type, text, thinking, signature
     case partialJSON = "partial_json"
     case stopReason = "stop_reason"
   }
