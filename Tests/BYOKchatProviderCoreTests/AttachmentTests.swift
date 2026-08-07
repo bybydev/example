@@ -91,7 +91,7 @@ import Testing
   #expect(payload["file_data"] == .string("data:application/pdf;base64,JVBERg=="))
 }
 
-@Test func deepSeekRejectsImageInputBeforeTransport() throws {
+@Test func deepSeekRejectsImageInputWithRetryFriendlyMessage() throws {
   let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
   let image = ChatAttachment(
     kind: .image,
@@ -118,12 +118,11 @@ import Testing
       Issue.record("Expected invalidRequest, got \(error)")
       return
     }
-    #expect(message.contains("text-only"))
-    #expect(message.contains("images"))
+    #expect(message == "This model can’t read images. Switch to a vision-capable model, then retry.")
   }
 }
 
-@Test func deepSeekRejectsBinaryDocumentBeforeTransport() throws {
+@Test func deepSeekRejectsBinaryDocumentWithRetryFriendlyMessage() throws {
   let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
   let pdf = ChatAttachment(
     kind: .file,
@@ -150,7 +149,7 @@ import Testing
       Issue.record("Expected invalidRequest, got \(error)")
       return
     }
-    #expect(message.contains("binary documents"))
+    #expect(message == "This model can’t read this file type. Switch to a file-capable model, then retry.")
   }
 }
 
@@ -213,6 +212,46 @@ import Testing
   let user = try #require(context.messages.first { $0.role == .user })
   #expect(user.content.isEmpty)
   #expect(user.attachments == [image])
+}
+
+@Test func regenerationReusesFailedTurnAttachments() async throws {
+  let persistence = InMemoryConversationWorkspacePersistence()
+  let store = ConversationStore(persistence: persistence)
+  try await store.load()
+  let conversation = try await store.createConversation(
+    providerID: "deepseek",
+    accountID: "account",
+    modelID: "deepseek-v4-flash"
+  )
+  let image = ChatAttachment(
+    kind: .image,
+    filename: "screen.jpg",
+    mimeType: "image/jpeg",
+    data: Data([0x01])
+  )
+
+  let first = try await store.beginTurn(
+    conversationID: conversation.id,
+    userText: "Understand this",
+    attachments: [image]
+  )
+  _ = try await store.failMessage(
+    conversationID: conversation.id,
+    messageID: first.assistantMessage.id,
+    content: "",
+    reasoning: "",
+    error: ProviderError.invalidRequest(
+      "This model can’t read images. Switch to a vision-capable model, then retry."
+    )
+  )
+
+  let retry = try await store.beginRegeneration(
+    conversationID: conversation.id,
+    confirmingUncertainCompletion: false
+  )
+  #expect(retry.turn.userMessage.id == first.userMessage.id)
+  #expect(retry.turn.userMessage.attachments == [image])
+  #expect(retry.turn.assistantMessage.status == .pending)
 }
 
 @Test func attachmentLimitsRejectOversizedMessages() async throws {
