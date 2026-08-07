@@ -26,7 +26,7 @@ struct MessageInfoView: View {
         }
 
         if let usage = message.usage {
-          Section("Usage") {
+          Section {
             if let value = usage.inputTokens {
               LabeledContent("Input", value: tokenCount(value))
             }
@@ -41,19 +41,23 @@ struct MessageInfoView: View {
             }
 
             LabeledContent(costLabel, value: costValue)
+          } header: {
+            Text("Usage")
           } footer: {
             Text(costFootnote)
           }
         }
 
         if billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
-          Section("Pricing snapshot") {
+          Section {
             if let price = billing.inputPricePerToken {
               LabeledContent("Input / 1M", value: pricePerMillion(price))
             }
             if let price = billing.outputPricePerToken {
               LabeledContent("Output / 1M", value: pricePerMillion(price))
             }
+          } header: {
+            Text("Pricing snapshot")
           } footer: {
             Text("The price snapshot is stored with this message so later model price changes do not rewrite historical spend.")
           }
@@ -140,7 +144,7 @@ struct UsageDashboardView: View {
           .pickerStyle(.segmented)
         }
 
-        Section("Summary") {
+        Section {
           LabeledContent("Spend", value: aggregateCostText(filteredAggregate))
           LabeledContent("Input", value: compactTokens(filteredAggregate.inputTokens))
           LabeledContent("Output", value: compactTokens(filteredAggregate.outputTokens))
@@ -151,6 +155,8 @@ struct UsageDashboardView: View {
           if filteredAggregate.toolCallCount > 0 {
             LabeledContent("Tool calls", value: filteredAggregate.toolCallCount.formatted())
           }
+        } header: {
+          Text("Summary")
         } footer: {
           if filteredAggregate.hasPartialCost {
             Text("Spend is partial because some models did not expose pricing.")
@@ -184,7 +190,7 @@ struct UsageDashboardView: View {
           }
         }
 
-        Section("Monthly budget") {
+        Section {
           HStack {
             Text("Budget")
             Spacer()
@@ -211,6 +217,8 @@ struct UsageDashboardView: View {
                 .foregroundStyle(.orange)
             }
           }
+        } header: {
+          Text("Monthly budget")
         } footer: {
           Text("The budget is a local BYOKchat warning. It does not include API-key usage from other apps and does not change provider-side spending limits.")
         }
