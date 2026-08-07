@@ -57,12 +57,15 @@ struct ConversationTargetView: View {
   }
 
   private var supportsMaximumTokens: Bool {
-    supportedParameters.contains("max_tokens")
-      || supportedParameters.contains("max_output_tokens")
+    !supportedParameters.isDisjoint(with: [
+      "max_tokens", "max_output_tokens", "maxOutputTokens",
+    ])
   }
 
   private var supportsReasoning: Bool {
-    !supportedParameters.isDisjoint(with: ["reasoning", "thinking", "reasoning_effort"])
+    !supportedParameters.isDisjoint(with: [
+      "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
+    ])
   }
 
   var body: some View {
@@ -177,8 +180,12 @@ struct ConversationTargetView: View {
     temperatureEnabled = false
     temperature = 1
     maxOutputTokens = ""
-    reasoningEnabled = providerID == BuiltInProviders.deepSeekID
-    reasoningEffort = .high
+    reasoningEnabled = [
+      BuiltInProviders.deepSeekID,
+      BuiltInProviders.anthropicID,
+      BuiltInProviders.geminiID,
+    ].contains(providerID)
+    reasoningEffort = providerID == BuiltInProviders.geminiID ? .medium : .high
   }
 
   private func save() {
