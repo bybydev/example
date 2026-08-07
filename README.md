@@ -35,7 +35,7 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 ## Native chat experience
 
 - Multiple persistent local conversations
-- Per-chat provider account, model, system prompt, and generation options
+- Per-chat provider account, model, system prompt, generation options, and MCP tool selection
 - Global default system prompt for new chats
 - Multi-turn streaming with separate answer and reasoning content
 - Image and file attachments from Photos and the system document picker
@@ -59,36 +59,63 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 
 ## Tool runtime
 
-Phase 1 of the MCP roadmap is implemented as a generic tool layer beneath chat.
+The generic tool layer beneath chat is provider-neutral and MCP-aware.
 
-- `ToolRuntime` registers normalized tool definitions and async handlers.
+- `ToolRuntime` registers app-native normalized tool definitions and async handlers.
+- `MCPConversationToolRuntime` adds chat-scoped remote MCP catalogs without globally leaking tools between conversations.
 - `ChatRuntime` can execute multiple model/tool rounds before producing the final assistant answer.
 - Tool calls, tool results, provider continuation metadata, and per-step usage are persisted structurally.
-- Tool-handler failures are returned to the model as error results instead of automatically aborting the chat turn.
-- A hard eight-round limit prevents unbounded recursive tool loops.
+- Tool-handler failures and denied calls are returned to the model as structured error results instead of automatically aborting the chat turn.
+- A hard eight-round model/tool limit prevents unbounded recursive tool loops.
 
 ## Remote MCP
 
-Phase 2 adds remote Streamable HTTP MCP infrastructure while intentionally keeping model execution disabled until Phase 3 approvals exist.
+The three-phase MCP v1 roadmap is implemented.
+
+### Remote servers and transport
 
 - Settings-managed remote MCP servers with HTTPS validation.
 - None, bearer-token, and custom-header authentication.
 - MCP credentials stored in a dedicated Keychain vault.
 - Current MCP `2026-07-28` stateless protocol support with `server/discover` and per-request metadata.
 - Automatic compatibility fallback to initialize-era Streamable HTTP revisions `2025-11-25`, `2025-06-18`, and `2025-03-26`.
-- JSON and request-scoped SSE responses.
+- JSON and request-scoped SSE responses with strict JSON-RPC response-ID matching.
 - `tools/list` pagination, persisted TTL-aware discovery cache, and per-tool validation warnings.
 - `tools/call` runtime with structured result normalization.
 - Current `Mcp-Method`, `Mcp-Name`, and `x-mcp-header` / `Mcp-Param-*` routing behavior.
 - Deterministic 64-character provider-compatible namespacing for MCP tools.
-- Deprecated HTTP+SSE, OAuth, local stdio servers, MCP Apps, Tasks, and interactive MRTR handling are not part of Phase 2.
-- Discovered MCP tools are not registered into chat automatically; per-chat selection, permissions, approvals, and tool-call UI are Phase 3.
+
+### Per-chat tools and safety
+
+- Enable MCP servers independently for each conversation.
+- Configure each discovered tool as **Ask**, **Always Allow**, or **Disabled**.
+- Newly discovered tools default to **Ask** rather than inheriting blanket authorization.
+- Approval cards show the server, tool, arguments, and read-only/destructive annotation hints before execution.
+- **Allow Once**, **Always Allow**, and **Deny** decisions are supported.
+- Always-Allow decisions persist per conversation/tool before the waiting call resumes.
+- Execution re-checks the current conversation policy before every remote call, so disabling a tool while a generation is active still blocks execution.
+- Live running/waiting cards appear in the transcript, and completed tool rounds persist as expandable success/failure cards.
+- Tool annotations are treated as display hints only; authorization does not rely on them.
+
+### MCP 2026 multi-round input
+
+- `resultType: input_required` is handled without exposing the server request directly to the model.
+- Form-mode and URL-mode `elicitation/create` input requests are surfaced as native chat cards.
+- Accept, decline, and cancel responses are returned using MCP result objects.
+- The original `tools/call` is retried with a fresh JSON-RPC request ID, `inputResponses`, and byte-exact opaque `requestState` echo.
+- Request-state-only rounds are paced before retrying.
+- Interactive tool execution is capped at 10 input-required rounds.
+- BYOKchat advertises only the MCP client capabilities it currently handles: form and URL elicitation.
+
+Explicitly deferred from MCP v1: OAuth, local stdio/process spawning, deprecated HTTP+SSE, MCP Apps, Tasks, sampling, roots, and other advanced extensions.
 
 ## Data portability
 
-- Versioned full backup containing conversations, attachments, structured tool rounds, preferences, non-secret provider configuration, and non-secret MCP server configuration/discovery cache
-- Backward-compatible import of existing schema-v1 backups that predate MCP configuration
+- Versioned full backup containing conversations, attachments, structured tool rounds, preferences, non-secret provider configuration, MCP server configuration/discovery cache, and per-chat MCP tool policies
+- Backward-compatible import of existing schema-v1 backups that predate MCP configuration and per-chat MCP policies
 - Merge or replace restore strategies
+- Conversation import preserves attachments and structured tool rounds
+- Per-chat MCP policy is remapped when imported conversation IDs change
 - Pre-mutation validation and workspace rollback on import failure
 - Provider and MCP credentials excluded from every export
 - Replace restore clears affected provider and MCP Keychain credentials
