@@ -48,6 +48,7 @@ final class DataPortabilityModel {
   private let preferences: AppPreferencesModel
   private let providersModel: ProviderManagementModel
   private let chatsModel: ChatManagementModel
+  private let mcpModel: MCPManagementModel
 
   var isBusy = false
   var statusMessage: String?
@@ -60,7 +61,8 @@ final class DataPortabilityModel {
     accountManager: ProviderAccountManager,
     preferences: AppPreferencesModel,
     providersModel: ProviderManagementModel,
-    chatsModel: ChatManagementModel
+    chatsModel: ChatManagementModel,
+    mcpModel: MCPManagementModel
   ) {
     self.service = service
     self.providerWorkspace = providerWorkspace
@@ -69,6 +71,7 @@ final class DataPortabilityModel {
     self.preferences = preferences
     self.providersModel = providersModel
     self.chatsModel = chatsModel
+    self.mcpModel = mcpModel
   }
 
   func makeBackupDocument() async -> JSONExportDocument? {
@@ -100,7 +103,7 @@ final class DataPortabilityModel {
   }
 
   func importBackup(from url: URL, strategy: ProviderImportStrategy) async {
-    await perform("Backup imported. Re-enter credentials for imported accounts.") {
+    await perform("Backup imported. Re-enter credentials for imported accounts and MCP servers.") {
       let data = try await Self.readSecurityScopedData(from: url)
       let existingDefaultPrompt = preferences.defaultSystemPrompt
       await chatsModel.stopAllGenerations()
@@ -115,10 +118,22 @@ final class DataPortabilityModel {
       }
       await providersModel.reloadFromStorage()
       await chatsModel.reloadFromStorage()
+      await mcpModel.reloadFromStorage()
+
+      var cleanupMessages: [String] = []
       if !summary.credentialCleanupFailures.isEmpty {
-        errorMessage = ProviderError.credentialCleanupFailed(
-          summary.credentialCleanupFailures
-        ).localizedDescription
+        cleanupMessages.append(
+          ProviderError.credentialCleanupFailed(summary.credentialCleanupFailures).localizedDescription
+        )
+      }
+      if !summary.mcpCredentialCleanupFailures.isEmpty {
+        cleanupMessages.append(
+          "The backup was restored, but Keychain cleanup failed for MCP servers: "
+            + summary.mcpCredentialCleanupFailures.map(\.rawValue).joined(separator: ", ")
+        )
+      }
+      if !cleanupMessages.isEmpty {
+        errorMessage = cleanupMessages.joined(separator: "\n\n")
       }
     }
   }
@@ -149,6 +164,7 @@ final class DataPortabilityModel {
   func deleteAllCredentials() async {
     await perform("All credentials removed") {
       try await accountManager.removeAllCredentials()
+      try await mcpModel.deleteAllCredentials()
       await providersModel.reloadFromStorage()
     }
   }
