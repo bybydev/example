@@ -326,7 +326,9 @@ private actor ModernMCPTransport: ProviderHTTPTransport {
       )
     default:
       return jsonResponse(
-        """{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}""",
+        """
+        {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+        """,
         status: 404
       )
     }
@@ -377,7 +379,9 @@ private actor SSEMCPTransport: ProviderHTTPTransport {
       )
     default:
       return byteStream(
-        json: """{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}""",
+        json: """
+        {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+        """,
         status: 404
       )
     }
@@ -436,7 +440,9 @@ private actor LegacyMCPTransport: ProviderHTTPTransport {
       )
     default:
       return jsonResponse(
-        """{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}""",
+        """
+        {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+        """,
         status: 404
       )
     }
