@@ -52,6 +52,7 @@ final class ProjectSyncModel {
   private let mcp: MCPManagementModel
   private let defaults: UserDefaults
 
+  private(set) var isEnabled: Bool
   private(set) var isSyncing = false
   private(set) var lastSyncedAt: Date?
   var errorMessage: String?
@@ -67,11 +68,11 @@ final class ProjectSyncModel {
     self.projects = projects
     self.mcp = mcp
     self.defaults = defaults
-  }
-
-  var isEnabled: Bool {
-    if defaults.object(forKey: Self.enabledKey) == nil { return true }
-    return defaults.bool(forKey: Self.enabledKey)
+    if defaults.object(forKey: Self.enabledKey) == nil {
+      self.isEnabled = true
+    } else {
+      self.isEnabled = defaults.bool(forKey: Self.enabledKey)
+    }
   }
 
   func load() async {
@@ -81,6 +82,7 @@ final class ProjectSyncModel {
   }
 
   func setEnabled(_ enabled: Bool) async {
+    isEnabled = enabled
     defaults.set(enabled, forKey: Self.enabledKey)
     if enabled {
       await syncNow(showSuccess: true)
