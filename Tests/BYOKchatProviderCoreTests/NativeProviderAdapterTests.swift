@@ -86,7 +86,8 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
   #expect(result.usage?.inputTokens == 12)
   #expect(result.usage?.reasoningTokens == 2)
 
-  let request = try #require(await transport.lastRequest())
+  let recordedRequest = await transport.lastRequest()
+  let request = try #require(recordedRequest)
   #expect(request.url?.path == "/v1/messages")
   #expect(request.value(forHTTPHeaderField: "x-api-key") == "secret")
   #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
@@ -206,7 +207,8 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
   #expect(result.reasoning == "Reasoning summary")
   #expect(result.usage?.reasoningTokens == 2)
 
-  let request = try #require(await transport.lastRequest())
+  let recordedRequest = await transport.lastRequest()
+  let request = try #require(recordedRequest)
   #expect(request.url?.path.contains("/models/gemini-3.6-flash:generateContent") == true)
   #expect(request.value(forHTTPHeaderField: "x-goog-api-key") == "secret")
   let body = try #require(request.httpBody)
@@ -260,10 +262,10 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
   }
   #expect(final.finishReason == "STOP")
   #expect(final.usage?.inputTokens == 6)
-  let request = try #require(await transport.lastRequest())
-  #expect(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains {
-    $0.name == "alt" && $0.value == "sse"
-  } == true)
+  let recordedRequest = await transport.lastRequest()
+  let request = try #require(recordedRequest)
+  let components = try #require(URLComponents(url: request.url!, resolvingAgainstBaseURL: false))
+  #expect(components.queryItems?.contains { $0.name == "alt" && $0.value == "sse" } == true)
 }
 
 @Test func geminiModelDiscoveryFiltersToGenerateContentModels() async throws {
