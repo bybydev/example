@@ -20,6 +20,7 @@ final class ChatManagementModel {
   private(set) var conversations: [ChatConversation] = []
   private(set) var liveMessages: [ChatMessageID: LiveMessage] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
+  private(set) var activeToolCallsByConversation: [ConversationID: [ChatToolCall]] = [:]
   private(set) var searchResults: [ConversationSearchResult] = []
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   var isBusy = false
@@ -29,6 +30,7 @@ final class ChatManagementModel {
   private let conversationStore: ConversationStore
   private let runtime: ChatRuntime
   private let preferences: AppPreferencesModel
+  private let mcpWorkspace: MCPWorkspaceStore?
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftRevisions: [ConversationID: UInt] = [:]
@@ -39,12 +41,14 @@ final class ChatManagementModel {
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
     runtime: ChatRuntime,
-    preferences: AppPreferencesModel
+    preferences: AppPreferencesModel,
+    mcpWorkspace: MCPWorkspaceStore? = nil
   ) {
     self.providerWorkspace = providerWorkspace
     self.conversationStore = conversations
     self.runtime = runtime
     self.preferences = preferences
+    self.mcpWorkspace = mcpWorkspace
   }
 
   func load() async {
@@ -76,6 +80,10 @@ final class ChatManagementModel {
 
   func streamRevision(for conversationID: ConversationID) -> Int {
     streamRevisions[conversationID] ?? 0
+  }
+
+  func activeToolCalls(for conversationID: ConversationID) -> [ChatToolCall] {
+    activeToolCallsByConversation[conversationID] ?? []
   }
 
   var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
@@ -166,8 +174,10 @@ final class ChatManagementModel {
     draftTasks.removeValue(forKey: id)
     draftRevisions.removeValue(forKey: id)
     streamRevisions.removeValue(forKey: id)
+    activeToolCallsByConversation.removeValue(forKey: id)
     do {
       try await conversationStore.deleteConversation(id)
+      try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
       try await reloadSnapshot()
     } catch {
       errorMessage = error.localizedDescription
@@ -263,6 +273,7 @@ final class ChatManagementModel {
     await consumerTask.value
     try? await reloadSnapshot()
     clearLiveMessages(for: conversationID)
+    activeToolCallsByConversation.removeValue(forKey: conversationID)
   }
 
   func persistActiveMessages() async {
@@ -289,12 +300,14 @@ final class ChatManagementModel {
   ) {
     guard generationTasks[conversationID] == nil else { return }
     activeConversationIDs.insert(conversationID)
+    activeToolCallsByConversation.removeValue(forKey: conversationID)
     generationTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
       var didReceiveInlineFailure = false
       defer {
         clearLiveMessages(for: conversationID)
         activeConversationIDs.remove(conversationID)
+        activeToolCallsByConversation.removeValue(forKey: conversationID)
         generationTasks.removeValue(forKey: conversationID)
       }
       do {
@@ -339,6 +352,7 @@ final class ChatManagementModel {
     switch event {
     case .turnStarted(let turn):
       liveMessages[turn.assistantMessage.id] = .init()
+      activeToolCallsByConversation.removeValue(forKey: conversationID)
       try? await reloadSnapshot()
       advanceStreamRevision(for: conversationID)
     case .textDelta(let messageID, let value):
@@ -356,13 +370,18 @@ final class ChatManagementModel {
       live.usage = value
       liveMessages[messageID] = live
       advanceStreamRevision(for: conversationID)
+    case .toolCallsStarted(_, let calls):
+      activeToolCallsByConversation[conversationID] = calls
+      advanceStreamRevision(for: conversationID)
     case .toolRound(let messageID, _):
       // The model has finished an intermediate assistant/tool step. Persisted structured
       // round data becomes the source of truth; reset the live overlay for the next model pass.
+      activeToolCallsByConversation.removeValue(forKey: conversationID)
       liveMessages[messageID] = .init()
       try? await reloadSnapshot()
       advanceStreamRevision(for: conversationID)
     case .completed(let message), .cancelled(let message), .failed(let message):
+      activeToolCallsByConversation.removeValue(forKey: conversationID)
       liveMessages.removeValue(forKey: message.id)
       try? await reloadSnapshot()
       advanceStreamRevision(for: conversationID)
