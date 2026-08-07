@@ -25,6 +25,12 @@ final class MCPManagementModel {
     }
   }
 
+  func reloadFromStorage() async {
+    await perform(nil) {
+      try await reloadSnapshot()
+    }
+  }
+
   func snapshot(for serverID: MCPServerID) -> MCPServerSnapshot? {
     snapshotsByServer[serverID]
   }
@@ -93,6 +99,13 @@ final class MCPManagementModel {
       _ = try await runtime.refreshServer(serverID, force: true)
       try await reloadSnapshot()
     }
+  }
+
+  func deleteAllCredentials() async throws {
+    for server in await runtime.servers() {
+      try await runtime.saveServer(server, credential: "")
+    }
+    try await reloadSnapshot()
   }
 
   private func reloadSnapshot() async throws {
