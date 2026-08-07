@@ -226,9 +226,14 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   }
 }
 
-public enum ProviderAPIFamily: String, Codable, Sendable { case openAIChatCompletions }
+public enum ProviderAPIFamily: String, Codable, Sendable {
+  case openAIChatCompletions
+  case anthropicMessages
+  case geminiGenerateContent
+}
+
 public enum ProviderBehaviorID: String, Codable, Sendable {
-  case deepSeek, openRouter, nvidia, genericOpenAICompatible
+  case deepSeek, openRouter, nvidia, anthropic, gemini, genericOpenAICompatible
 }
 
 public enum ProviderAuthentication: Codable, Sendable, Equatable {
