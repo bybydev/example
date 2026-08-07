@@ -2,7 +2,7 @@
 
 BYOKchat is an iOS-only, BYOK-only AI chat client under active development.
 
-BYOKchat owns its provider and conversation runtime. It does not use AppFoundation's AI provider management.
+BYOKchat owns its provider, conversation, and tool runtime. It does not use AppFoundation's AI provider management.
 
 ## First-class providers
 
@@ -26,6 +26,9 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Manual, favorite, hidden, and unavailable model states
 - Searchable, favorites-first model selection
 - Provider-native streaming with separate answer and reasoning/thought summaries where supported
+- Provider-neutral function/tool calling across OpenAI-compatible, Anthropic, and Gemini wire formats
+- Persisted multi-step model → tool → model execution rounds
+- Anthropic thinking-signature and Gemini thought-signature continuity for tool turns
 - Non-secret provider configuration import/export
 - Connection testing and streaming console
 
@@ -54,9 +57,20 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Missing-account, credential, and model recovery guidance
 - Near-bottom stream following and Jump to Latest behavior
 
+## Tool runtime
+
+Phase 1 of the MCP roadmap is implemented as a generic tool layer beneath chat.
+
+- `ToolRuntime` registers normalized tool definitions and async handlers.
+- `ChatRuntime` can execute multiple model/tool rounds before producing the final assistant answer.
+- Tool calls, tool results, provider continuation metadata, and per-step usage are persisted structurally.
+- Tool-handler failures are returned to the model as error results instead of automatically aborting the chat turn.
+- A hard eight-round limit prevents unbounded recursive tool loops.
+- No production tools or MCP servers are registered yet; remote MCP is Phase 2 and per-chat permissions/tool UI are Phase 3.
+
 ## Data portability
 
-- Versioned full backup containing conversations, attachments, preferences, and non-secret provider configuration
+- Versioned full backup containing conversations, attachments, structured tool rounds, preferences, and non-secret provider configuration
 - Merge or replace restore strategies
 - Pre-mutation validation and workspace rollback on import failure
 - Credentials excluded from every export
@@ -90,4 +104,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/LocalProviders.md`
 - `Documentation/MultimodalAttachments.md`
 - `Documentation/NativeProviderAPIs.md`
+- `Documentation/ToolCallingRuntime.md`
 - `Documentation/ExpandedVisionProgress-2026-08-07.md`
