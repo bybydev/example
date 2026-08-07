@@ -74,6 +74,7 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
         .init(role: .user, content: "Describe this.", attachments: [image]),
       ],
       options: .init(
+        temperature: 0.7,
         maxOutputTokens: 512,
         reasoning: .init(enabled: true, effort: .medium)
       )
@@ -99,6 +100,7 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
     return
   }
   #expect(root["system"] == .string("Be concise."))
+  #expect(root["temperature"] == nil)
   guard case .object(let thinking)? = root["thinking"] else {
     Issue.record("Missing Anthropic thinking config")
     return
@@ -196,6 +198,8 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
         .init(role: .user, content: "Describe this.", attachments: [image]),
       ],
       options: .init(
+        temperature: 0.7,
+        topP: 0.9,
         maxOutputTokens: 512,
         reasoning: .init(enabled: true, effort: .low)
       )
@@ -220,6 +224,8 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
     Issue.record("Missing Gemini generation config")
     return
   }
+  #expect(generation["temperature"] == nil)
+  #expect(generation["topP"] == nil)
   #expect(thinking["includeThoughts"] == .bool(true))
   #expect(thinking["thinkingLevel"] == .string("low"))
   guard case .array(let contents)? = root["contents"],
@@ -271,15 +277,17 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
 @Test func geminiModelDiscoveryFiltersToGenerateContentModels() async throws {
   let response = Data(
     """
-    {"models":[{"name":"models/gemini-test","baseModelId":"gemini-test","displayName":"Gemini Test","inputTokenLimit":1000000,"outputTokenLimit":64000,"supportedGenerationMethods":["generateContent"],"thinking":true},{"name":"models/embed-test","baseModelId":"embed-test","displayName":"Embed","supportedGenerationMethods":["embedContent"]}]}
+    {"models":[{"name":"models/gemini-3.6-flash","baseModelId":"gemini-3.6-flash","displayName":"Gemini 3.6 Flash","inputTokenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateContent"],"thinking":true},{"name":"models/embed-test","baseModelId":"embed-test","displayName":"Embed","supportedGenerationMethods":["embedContent"]}]}
     """.utf8
   )
   let transport = NativeMockTransport(data: response)
   let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: transport)
   let models = try await adapter.listModels(account: nativeAccount("gemini"))
-  let model = try #require(models.first { $0.id == "gemini-test" })
-  #expect(model.contextWindow == 1_000_000)
-  #expect(model.maxOutputTokens == 64_000)
+  let model = try #require(models.first { $0.id == "gemini-3.6-flash" })
+  #expect(model.contextWindow == 1_048_576)
+  #expect(model.maxOutputTokens == 65_536)
   #expect(model.supportedParameters.contains("thinkingConfig"))
+  #expect(model.supportedParameters.contains("temperature") == false)
+  #expect(model.supportedParameters.contains("topP") == false)
   #expect(models.contains { $0.id == "embed-test" } == false)
 }
