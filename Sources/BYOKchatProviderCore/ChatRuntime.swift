@@ -11,7 +11,7 @@ extension ProviderRuntime: ProviderStreamingRuntime {}
 
 public actor ChatRuntime {
   private enum GenerationOperation: Sendable {
-    case send(text: String)
+    case send(text: String, attachments: [ChatAttachment])
     case edit(messageID: ChatMessageID, text: String)
     case regenerate(confirmingUncertainCompletion: Bool)
   }
@@ -45,9 +45,13 @@ public actor ChatRuntime {
 
   public func send(
     conversationID: ConversationID,
-    userText: String
+    userText: String,
+    attachments: [ChatAttachment] = []
   ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
-    start(conversationID: conversationID, operation: .send(text: userText))
+    start(
+      conversationID: conversationID,
+      operation: .send(text: userText, attachments: attachments)
+    )
   }
 
   public func editAndResend(
@@ -254,10 +258,11 @@ public actor ChatRuntime {
     operation: GenerationOperation
   ) async throws -> ChatTurnStart {
     switch operation {
-    case .send(let text):
+    case .send(let text, let attachments):
       return try await conversations.beginTurn(
         conversationID: conversationID,
-        userText: text
+        userText: text,
+        attachments: attachments
       )
     case .edit(let messageID, let text):
       return try await conversations.editUserMessageAndBeginTurn(
