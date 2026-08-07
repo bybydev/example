@@ -70,7 +70,8 @@ final class ProjectSyncModel {
   }
 
   var isEnabled: Bool {
-    defaults.bool(forKey: Self.enabledKey)
+    if defaults.object(forKey: Self.enabledKey) == nil { return true }
+    return defaults.bool(forKey: Self.enabledKey)
   }
 
   func load() async {
