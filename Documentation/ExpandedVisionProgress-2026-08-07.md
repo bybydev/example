@@ -3,30 +3,31 @@
 **Review date:** 2026-08-07  
 **Baseline branch:** `develop`  
 **Baseline head:** `f704b3c298cb7ac57c0df31cb78b1c8566033580`  
-**Updated on PR #2:** multimodal attachments, streaming/UI stabilization, native Anthropic/Gemini APIs, Phase 1 generic tool calling, and Phase 2 remote Streamable HTTP MCP
+**Updated on PR #2:** multimodal attachments, streaming/UI stabilization, native Anthropic/Gemini APIs, generic tool calling, and the complete scoped MCP v1 roadmap
 
 ## Executive summary
 
-BYOKchat is already well beyond a prototype. The codebase now has a substantial provider platform, conversation runtime, streaming pipeline, local persistence, credential isolation, search, context management, recovery flows, import/export, multimodal attachments, three provider API families, a provider-neutral multi-step tool runtime, and a remote MCP transport/discovery layer.
+BYOKchat is already well beyond a prototype. The PR branch now has a substantial provider platform, conversation runtime, streaming pipeline, local persistence, credential isolation, search, context management, recovery flows, import/export, multimodal attachments, three provider API families, provider-neutral multi-step tool orchestration, real remote MCP connectivity, and a conversation-scoped MCP permission/interaction layer.
 
 Against the expanded product vision, the PR branch is approximately:
 
 | Area | Progress |
 |---|---:|
-| Core chat | ~90% |
+| Core chat | ~90–95% |
 | BYOK/provider layer | ~95% |
-| MCP v1 roadmap (Phases 1–3) | ~70% |
+| Scoped MCP v1 roadmap (Phases 1–3) | ~100% |
 | Remote MCP server connectivity | Implemented |
-| Power-user layer | ~20–25% |
-| Whole expanded vision | ~50% |
+| MCP per-chat safety/UI | Implemented |
+| Power-user layer | ~30% |
+| Whole expanded vision | ~55% |
 
-The important remaining MCP gap is no longer protocol connectivity. Phase 2 can configure remote servers, negotiate modern or legacy Streamable HTTP behavior, discover/cache tools, and call them through the MCP core. What remains is Phase 3's user-control layer: per-chat selection, permissions, approvals, and tool-call UI before those remote tools are exposed to model-driven chat execution.
+The important MCP gap is no longer basic protocol connectivity or authorization UX. BYOKchat can now select remote MCP servers per conversation, expose only the allowed tool catalog to that chat's model, require approval before Ask-policy calls, persist Always-Allow choices per chat/tool, render tool activity/results, and fulfill supported MCP `2026-07-28` multi-round elicitation.
 
-A useful framing is that BYOKchat is roughly **90% of the way toward a serious multimodal BYOK AI chat client** and now has both the generic tool engine and remote MCP transport needed for the next step into a controlled MCP-enabled workbench.
+A useful framing is that BYOKchat is roughly **90%+ of the way toward a serious multimodal BYOK AI chat client** and now has a complete first MCP product slice rather than only MCP infrastructure.
 
 ---
 
-## 1. Core chat — ~90%
+## 1. Core chat — ~90–95%
 
 ### Multiple providers — Done
 
@@ -67,11 +68,11 @@ Current support includes:
 
 Current safety limits are 8 attachments per message, 20 MiB per attachment, and 40 MiB total per message.
 
-Remaining attachment polish includes richer PDF/document preview, separate blob storage/deduplication, provider-specific upload/file-ID APIs where useful, drag/drop and paste intake, and attachment metadata in Markdown export.
+Remaining attachment polish includes richer PDF/document previews, separate blob storage/deduplication, provider-specific upload/file-ID APIs where useful, drag/drop and paste intake, and attachment metadata in Markdown export.
 
 ### Conversations / projects — Partial
 
-Conversation support is mature: persistent local chats, per-chat provider/model settings, drafts, edit/resend, regenerate, cancellation, interrupted-generation repair, Markdown, reasoning display, copy/share/export, attachments, and stable stream following.
+Conversation support is mature: persistent local chats, per-chat provider/model settings, drafts, edit/resend, regenerate, cancellation, interrupted-generation repair, Markdown, reasoning display, copy/share/export, attachments, stable stream following, and per-chat MCP tool configuration.
 
 Projects/workspaces in the user-facing ChatGPT/Claude sense are not implemented yet.
 
@@ -123,7 +124,7 @@ Custom endpoint support includes HTTPS custom providers, explicit private-LAN HT
 
 ### Keychain credential management — Done
 
-Provider credentials are isolated from normal provider configuration and stored in Keychain. Remote MCP credentials now use a separate Keychain vault with the same no-secret-export principle.
+Provider credentials are isolated from normal provider configuration and stored in Keychain. Remote MCP credentials use a separate Keychain vault with the same no-secret-export principle.
 
 ### Usage / cost visibility — Partial
 
@@ -133,21 +134,22 @@ Still missing is a complete user-facing cost layer: per-message calculated cost,
 
 ---
 
-## 3. MCP v1 — Phases 1–2 complete, Phase 3 remaining
+## 3. Scoped MCP v1 — Phases 1–3 complete
 
-BYOKchat's intentionally scoped MCP v1 consists of three phases.
+BYOKchat's intentionally scoped MCP v1 consists of three phases, all implemented on PR #2.
 
-### Phase 1 — Generic tool-calling runtime — Done on PR #2
+### Phase 1 — Generic tool-calling runtime — Done
 
 Implemented:
 
 - provider-neutral `ChatToolDefinition`
 - normalized `ChatToolCall` and `ChatToolResult`
-- actor-backed `ToolRuntime` registry/execution
+- actor-backed app-native `ToolRuntime`
+- conversation-scoped `ChatConversationToolExecuting` boundary
 - multi-step `model → tool → model` orchestration in `ChatRuntime`
 - multiple tool calls in one model step
 - handler errors returned to the model as structured error results
-- hard 8-round recursion guard
+- hard 8-round model/tool recursion guard
 - structured `ChatToolRound` persistence
 - tool history reconstruction in `ChatContextBuilder`
 - accumulated usage across tool-driven provider requests
@@ -157,9 +159,8 @@ Implemented:
 - Anthropic signed-thinking continuation across tool turns
 - Gemini thought-signature continuation across tool turns
 - import validation for structured tool traces
-- regression coverage for provider formats and the two-pass orchestration loop
 
-### Phase 2 — Remote Streamable HTTP MCP — Done on PR #2
+### Phase 2 — Remote Streamable HTTP MCP — Done
 
 Implemented:
 
@@ -168,45 +169,57 @@ Implemented:
 - enable/disable state
 - none, bearer-token, and custom-header authentication
 - dedicated MCP Keychain credential storage
-- current MCP `2026-07-28` stateless protocol path
+- MCP `2026-07-28` stateless protocol path
 - `server/discover` probing and per-request MCP metadata
-- compatibility fallback to initialize-era Streamable HTTP revisions `2025-11-25`, `2025-06-18`, and `2025-03-26`
+- bounded modern discovery with legacy fallback
+- compatibility with initialize-era Streamable HTTP revisions `2025-11-25`, `2025-06-18`, and `2025-03-26`
 - legacy `Mcp-Session-Id` capture and one-time expired-session recovery
 - JSON and request-scoped SSE responses
 - strict JSON-RPC response-ID matching while ignoring unrelated SSE notifications/progress events
 - `tools/list` pagination
 - persisted TTL-aware tool catalog cache
-- conservative cache-scope aggregation across pages
 - per-tool validation with warnings rather than whole-catalog failure
 - deterministic provider-safe namespacing when servers expose the same tool name
 - `tools/call` with structured result normalization
 - modern `Mcp-Method` / `Mcp-Name` routing headers
-- `x-mcp-header` validation and `Mcp-Param-*` argument mirroring
+- final `x-mcp-header` rules with string/integer/boolean `Mcp-Param-*` mirroring
 - forced discovery refresh and one retry after a modern header/schema mismatch
-- explicit handling of interactive `input_required` as a deferred Phase 3 interaction
 - MCP server configuration/discovery cache included in full backups
 - MCP secrets excluded from persistence/backups and cleared on replace restore
-- regression coverage for modern transport, legacy fallback, request-scoped SSE, header annotations, namespacing, workspace import, and backup compatibility
-
-The Phase 2 core can call an MCP tool directly, but discovered MCP tools are **not registered into chat's shared `ToolRuntime` yet**. That is deliberate: remote model-driven execution remains blocked until Phase 3 has explicit user permission and approval behavior.
 
 The deprecated pre-Streamable-HTTP HTTP+SSE transport is not implemented.
 
-### Phase 3 — Per-chat tools, safety, and UI — Not started
+### Phase 3 — Per-chat tools, safety, and UI — Done
 
-Planned scope:
+Implemented:
 
-- enable servers/tools per chat
-- individual tool toggles
-- Ask / Always Allow / Disabled permission policy
-- Allow Once / Always Allow / Deny approvals
-- human-readable tool arguments before mutation approval
-- persisted permission choices
-- controlled registration/removal of approved MCP tools in the shared `ToolRuntime`
-- inline running/success/failure tool cards
-- collapsed tool results
-- retry/recovery UX
-- safe handling of interactive `input_required` results where appropriate
+- per-chat enabled MCP server IDs
+- individual tool policy: Ask / Always Allow / Disabled
+- new tools default to Ask
+- conversation-scoped tool catalogs instead of global MCP registration
+- no cross-chat MCP tool leakage during simultaneous generation
+- execution-time re-check of current server/tool policy
+- Allow Once / Always Allow / Deny approval flows
+- Always-Allow persistence before execution resumes
+- human-readable server/tool/argument approval cards
+- read-only/destructive annotation hints treated as untrusted UI hints
+- live tool-request/running state in the transcript
+- persisted expandable success/failure tool cards
+- denial returned to the provider as a structured tool error result
+- cancellation-aware approval/input waits
+- MCP `2026-07-28` `resultType: input_required` handling
+- embedded form-mode `elicitation/create`
+- embedded URL-mode `elicitation/create`
+- Accept / Decline / Cancel input results
+- fresh JSON-RPC request IDs for retry rounds
+- byte-exact opaque `requestState` echo
+- request-state-only pacing
+- bounded 10-round interactive loop
+- advertised elicitation capabilities limited to form + URL
+- sampling/roots deliberately not advertised or auto-fulfilled
+- per-chat MCP policy in backup/restore
+- conversation-ID remapping during restore so imported tool policy follows the restored chat
+- restored attachments and structured tool rounds preserved by the same portability path
 
 ### Explicitly outside MCP v1
 
@@ -217,11 +230,14 @@ The current product scope intentionally defers:
 - spawning Node/Python MCP processes
 - deprecated HTTP+SSE transport
 - MCP Apps
-- Tasks and advanced MCP extensions
+- Tasks
+- sampling
+- roots
+- broader advanced MCP extensions
 
 ---
 
-## 4. Power-user layer — ~20–25%
+## 4. Power-user layer — ~30%
 
 ### Projects/workspaces — Missing
 
@@ -231,9 +247,9 @@ No user-facing project/workspace abstraction currently groups chats, instruction
 
 Global and per-conversation system prompts exist. A reusable prompt library and variables/presets are still missing.
 
-### Agents — Early runtime foundation
+### Agents — Stronger runtime foundation
 
-There is no user-facing agent abstraction, but the multi-step tool orchestration loop and remote MCP runtime provide key primitives that future agents would reuse.
+There is no user-facing agent abstraction yet, but BYOKchat now has multi-step provider tool orchestration, real remote MCP tools, explicit user approval, and interactive MCP input. Those are major primitives a future agent layer can reuse.
 
 ### Artifacts — Missing
 
@@ -247,17 +263,17 @@ Per-message images/files are implemented and persisted. Project-level file colle
 
 The current product remains iOS-only.
 
-### Tool presets — Foundation advancing
+### Tool presets — Partial
 
-The generic tool registry and remote MCP discovery layer exist. User-facing tool presets still depend on Phase 3 per-chat selection and permission state.
+Per-chat MCP server and tool policy now exists. Higher-level named tool presets shared across chats/projects are still missing.
 
 ### Model routing — Early foundation
 
 OpenRouter-specific routing exists. A BYOKchat-owned router across arbitrary configured providers/models does not.
 
-### Export/import/sync — Partial to strong
+### Export/import/sync — Strong local portability
 
-Export/import includes versioned backup, provider configuration, MCP server configuration/discovery cache, conversation data, attachment bytes, structured tool rounds, merge/replace restore, validation, and provider/MCP credentials excluded from backups.
+Export/import includes versioned backup, provider configuration, MCP server configuration/discovery cache, per-chat MCP policy, conversation data, attachment bytes, structured tool rounds, merge/replace restore, validation, and provider/MCP credentials excluded from backups.
 
 Cross-device sync remains the major missing piece.
 
@@ -267,28 +283,39 @@ Cross-device sync remains the major missing piece.
 
 The horizontal foundation now looks like:
 
-`providers → API-family routing → credentials → models → streaming → reasoning → persistence → conversations → attachments → multimodal context → generic tool schemas → native provider tool calls → tool execution → remote MCP transport → MCP discovery/cache → MCP tool calls → recovery → import/export`
+`providers → API-family routing → credentials → models → streaming → reasoning → persistence → conversations → attachments → multimodal context → generic tool schemas → native provider tool calls → conversation tool policy → remote MCP transport → MCP discovery/cache → approval → MCP tool call → interactive input → tool result replay → recovery → import/export`
 
-The architecture now has a useful separation of responsibilities:
+The architecture has a useful separation of responsibilities:
 
 - provider adapters translate model-specific function-call wire formats
 - `ChatRuntime` owns model/tool orchestration
-- `ToolRuntime` owns normalized executable tools
-- `MCPRemoteRuntime` owns MCP protocol, discovery, authentication, caching, and remote execution
-- Phase 3 will own user policy deciding which MCP bindings become available to a conversation
+- `ToolRuntime` owns app-native tools
+- `MCPRemoteRuntime` owns MCP protocol, discovery, authentication, caching, and remote request execution
+- `MCPConversationToolRuntime` owns conversation-specific MCP exposure, approval, and multi-round input
+- the chat UI owns visible human approval and interaction cards
 
-This avoids making the MCP client itself a second chat engine or letting protocol transport implicitly bypass user approval.
+This avoids making MCP a second chat engine and avoids globally registering remote tools that should only exist in one conversation.
 
 ---
 
 ## Recommended next product milestones
 
-Within the current MCP v1 scope, the immediate next milestone is:
+The scoped MCP v1 roadmap is complete. The highest-leverage next product milestones are now outside that original three-phase MCP slice:
 
-1. **Phase 3 — Per-chat tools + safety/UI**  
-   Add server/tool selection, permissions, approvals, controlled ToolRuntime registration, interactive tool states, and first-class tool-call rendering.
+1. **Projects/workspaces**  
+   Group chats, instructions, files, and MCP tool presets into persistent work contexts.
 
-After MCP v1, the next larger product decisions can be projects/workspaces, macOS, cost visibility, and higher-level agents/artifacts.
+2. **macOS target**  
+   Reuse the provider/tool/MCP core and add desktop-native workflows, eventually including local process tools if desired.
+
+3. **Usage/cost visibility**  
+   Turn existing normalized usage into per-message/chat/model spend and budgets.
+
+4. **Artifacts / higher-level agents**  
+   Build on the now-complete tool execution and approval primitives.
+
+5. **Multimodal/file storage polish**  
+   Separate attachment blob storage, richer document previews, paste/drop intake, and provider-native file reuse.
 
 ---
 
@@ -296,6 +323,6 @@ After MCP v1, the next larger product decisions can be projects/workspaces, macO
 
 BYOKchat on this PR is best described as:
 
-> **A mature multimodal, multi-provider BYOK chat foundation with a provider-neutral tool engine and real remote MCP connectivity, but with remote model-driven tool execution intentionally gated until the Phase 3 permission/UI layer exists.**
+> **A mature multimodal, multi-provider BYOK chat foundation with a complete first MCP product slice: remote servers, conversation-scoped tools, explicit approvals, persisted tool activity, and interactive multi-round MCP input.**
 
-Phase 1 removed provider coupling from tool execution. Phase 2 now speaks remote MCP and manages real remote tool catalogs. Phase 3 is the product layer that makes those capabilities safely usable inside everyday chats.
+The next major gains now come from product organization and desktop/power-user workflows rather than basic MCP plumbing.
