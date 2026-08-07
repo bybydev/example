@@ -258,16 +258,9 @@ final class ChatManagementModel {
   func stop(_ conversationID: ConversationID) async {
     guard let consumerTask = generationTasks[conversationID] else { return }
 
-    // Cancel the provider/runtime task first so it can persist a cancelled assistant message and close
-    // the stream. The UI consumer remains alive long enough to receive that final state.
     await runtime.cancel(conversationID: conversationID)
-
-    // A defensive cancellation prevents a malformed provider stream from leaving the consumer waiting.
     consumerTask.cancel()
     await consumerTask.value
-
-    // Never allow an in-memory streaming overlay to outlive its generation. Otherwise a stored
-    // cancelled/failed message is still rendered as an endless "Thinking…" row.
     try? await reloadSnapshot()
     clearLiveMessages(for: conversationID)
   }
@@ -362,6 +355,12 @@ final class ChatManagementModel {
       var live = liveMessages[messageID] ?? .init()
       live.usage = value
       liveMessages[messageID] = live
+      advanceStreamRevision(for: conversationID)
+    case .toolRound(let messageID, _):
+      // The model has finished an intermediate assistant/tool step. Persisted structured
+      // round data becomes the source of truth; reset the live overlay for the next model pass.
+      liveMessages[messageID] = .init()
+      try? await reloadSnapshot()
       advanceStreamRevision(for: conversationID)
     case .completed(let message), .cancelled(let message), .failed(let message):
       liveMessages.removeValue(forKey: message.id)
