@@ -72,7 +72,8 @@ final class AppModel {
     let mcpVault = KeychainMCPCredentialVault()
     let mcpRuntime = MCPRemoteRuntime(
       workspace: mcpWorkspace,
-      vault: mcpVault
+      vault: mcpVault,
+      transport: MCPHTTPTransport()
     )
 
     let providerModel = ProviderManagementModel(
