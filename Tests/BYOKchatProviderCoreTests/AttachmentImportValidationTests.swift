@@ -64,3 +64,77 @@ import Testing
     try WorkspaceImportValidator.validateConversationWorkspace(workspace)
   }
 }
+
+@Test func importedConversationRejectsMismatchedToolResults() {
+  let round = ChatToolRound(
+    calls: [
+      ChatToolCall(
+        id: "call-1",
+        name: "lookup",
+        arguments: .object(["query": .string("value")])
+      )
+    ],
+    results: [
+      ChatToolResult(
+        callID: "different-call",
+        name: "lookup",
+        content: .string("result")
+      )
+    ]
+  )
+  let message = ChatMessage(
+    role: .assistant,
+    toolRounds: [round],
+    status: .complete
+  )
+  let conversation = ChatConversation(
+    providerID: "openrouter",
+    accountID: "account",
+    modelID: "model",
+    messages: [message]
+  )
+
+  #expect(throws: ProviderError.self) {
+    try WorkspaceImportValidator.validateConversationWorkspace(
+      ConversationWorkspaceState(conversations: [conversation])
+    )
+  }
+}
+
+@Test func importedConversationAcceptsValidToolRound() throws {
+  let call = ChatToolCall(
+    id: "call-1",
+    name: "lookup",
+    arguments: .object(["query": .string("value")])
+  )
+  let round = ChatToolRound(
+    calls: [call],
+    results: [
+      ChatToolResult(
+        callID: call.id,
+        name: call.name,
+        content: .object(["value": .string("result")])
+      )
+    ],
+    providerContinuation: ProviderToolContinuation(
+      apiFamily: .geminiGenerateContent,
+      payload: .object([call.id: .string("opaque-signature")])
+    )
+  )
+  let message = ChatMessage(
+    role: .assistant,
+    content: "Done",
+    toolRounds: [round],
+    status: .complete
+  )
+  let conversation = ChatConversation(
+    providerID: "gemini",
+    accountID: "account",
+    modelID: "model",
+    messages: [message]
+  )
+
+  try WorkspaceImportValidator.validateConversationWorkspace(
+    ConversationWorkspaceState(conversations: [conversation])
+  )
+}
