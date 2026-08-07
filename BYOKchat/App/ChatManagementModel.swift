@@ -31,6 +31,7 @@ final class ChatManagementModel {
   private let runtime: ChatRuntime
   private let preferences: AppPreferencesModel
   private let mcpWorkspace: MCPWorkspaceStore?
+  private let projectWorkspace: ProjectWorkspaceStore?
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftRevisions: [ConversationID: UInt] = [:]
@@ -42,13 +43,15 @@ final class ChatManagementModel {
     conversations: ConversationStore,
     runtime: ChatRuntime,
     preferences: AppPreferencesModel,
-    mcpWorkspace: MCPWorkspaceStore? = nil
+    mcpWorkspace: MCPWorkspaceStore? = nil,
+    projectWorkspace: ProjectWorkspaceStore? = nil
   ) {
     self.providerWorkspace = providerWorkspace
     self.conversationStore = conversations
     self.runtime = runtime
     self.preferences = preferences
     self.mcpWorkspace = mcpWorkspace
+    self.projectWorkspace = projectWorkspace
   }
 
   func load() async {
@@ -141,25 +144,73 @@ final class ChatManagementModel {
   }
 
   @discardableResult
-  func createConversation() async -> ConversationID? {
+  func createConversation(projectID: ProjectID? = nil) async -> ConversationID? {
     do {
       let accounts = await providerWorkspace.allAccounts().filter(\.isEnabled)
       guard !accounts.isEmpty else {
         throw ProviderError.invalidRequest("Configure a provider account before creating a chat.")
       }
-      let defaultID = await providerWorkspace.defaultAccountID()
-      let account = accounts.first(where: { $0.id == defaultID }) ?? accounts[0]
+
+      let project: ChatProject?
+      if let projectID {
+        guard let projectWorkspace else {
+          throw ProviderError.invalidRequest("Project storage is unavailable.")
+        }
+        project = try await projectWorkspace.project(id: projectID)
+      } else {
+        project = nil
+      }
+
+      let account: ProviderAccount
+      if let accountID = project?.accountID {
+        guard let configured = accounts.first(where: { $0.id == accountID }) else {
+          throw ProviderError.invalidRequest(
+            "This project's provider account is unavailable. Edit the project defaults first."
+          )
+        }
+        account = configured
+      } else {
+        let defaultID = await providerWorkspace.defaultAccountID()
+        account = accounts.first(where: { $0.id == defaultID }) ?? accounts[0]
+      }
+
       let models = await providerWorkspace.modelRecords(for: account.id)
-      guard let modelID = account.defaultModelID ?? models.first?.model.id else {
+      let modelID: ModelID
+      if let configuredModelID = project?.modelID {
+        guard models.contains(where: { $0.model.id == configuredModelID && $0.isAvailable }) else {
+          throw ProviderError.invalidRequest(
+            "This project's default model is unavailable. Edit the project defaults first."
+          )
+        }
+        modelID = configuredModelID
+      } else if let fallback = account.defaultModelID ?? models.first(where: \.isAvailable)?.model.id {
+        modelID = fallback
+      } else {
         throw ProviderError.invalidModel
       }
+
+      let projectInstructions = project?.instructions.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let systemPrompt = projectInstructions.isEmpty
+        ? preferences.defaultSystemPrompt
+        : projectInstructions
+
       let conversation = try await conversationStore.createConversation(
         providerID: account.providerID,
         accountID: account.id,
         modelID: modelID,
-        systemPrompt: preferences.defaultSystemPrompt,
+        systemPrompt: systemPrompt,
         options: defaultOptions(providerID: account.providerID)
       )
+
+      if let projectID, let projectWorkspace {
+        do {
+          try await projectWorkspace.assignConversation(conversation.id, to: projectID)
+        } catch {
+          try? await conversationStore.deleteConversation(conversation.id)
+          throw error
+        }
+      }
+
       try await reloadSnapshot()
       return conversation.id
     } catch {
@@ -178,6 +229,7 @@ final class ChatManagementModel {
     do {
       try await conversationStore.deleteConversation(id)
       try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
+      try await projectWorkspace?.removeConversation(id)
       try await reloadSnapshot()
     } catch {
       errorMessage = error.localizedDescription
