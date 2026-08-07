@@ -50,7 +50,10 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       guard wire.supportedGenerationMethods?.contains("generateContent") != false else { return nil }
       let id = wire.baseModelID ?? wire.name.replacingOccurrences(of: "models/", with: "")
       guard !id.isEmpty else { return nil }
-      var parameters: Set<String> = ["temperature", "topP", "maxOutputTokens"]
+      var parameters: Set<String> = ["maxOutputTokens"]
+      if supportsSamplingParameters(id) {
+        parameters.formUnion(["temperature", "topP"])
+      }
       if wire.thinking == true { parameters.insert("thinkingConfig") }
       return ProviderModel(
         providerID: definition.id,
@@ -318,8 +321,10 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     }
 
     var generation: [String: JSONValue] = [:]
-    if let value = request.options.temperature { generation["temperature"] = .number(value) }
-    if let value = request.options.topP { generation["topP"] = .number(value) }
+    if supportsSamplingParameters(request.model.rawValue) {
+      if let value = request.options.temperature { generation["temperature"] = .number(value) }
+      if let value = request.options.topP { generation["topP"] = .number(value) }
+    }
     if let value = request.options.maxOutputTokens {
       generation["maxOutputTokens"] = .number(Double(value))
     }
@@ -469,6 +474,11 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     return values.values.sorted {
       $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
     }
+  }
+
+  private func supportsSamplingParameters(_ modelID: String) -> Bool {
+    let id = modelID.lowercased()
+    return !id.hasPrefix("gemini-3.6") && !id.hasPrefix("gemini-3.5-flash-lite")
   }
 }
 
