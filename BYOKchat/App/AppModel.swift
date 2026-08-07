@@ -9,6 +9,7 @@ final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
   let projects: ProjectManagementModel
+  let projectSync: ProjectSyncModel
   let mcp: MCPManagementModel
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
@@ -116,25 +117,46 @@ final class AppModel {
       approvals: approvalCenter,
       elicitations: elicitationCenter
     )
+    let syncService = ProjectSyncService(
+      workspace: projectWorkspace,
+      remote: ICloudProjectSyncStorage(),
+      localPersistence: JSONFileProjectSyncLocalPersistence(
+        fileURL: supportDirectory.appendingPathComponent("project-sync-local-v1.json")
+      )
+    )
+    let projectSyncModel = ProjectSyncModel(
+      service: syncService,
+      projects: projectModel,
+      mcp: mcpModel
+    )
+
+    let baseDataPortability = DataPortabilityService(
+      providers: providerWorkspace,
+      conversations: conversationStore,
+      accounts: accountManager,
+      mcp: mcpWorkspace,
+      mcpCredentials: mcpVault
+    )
+    let projectAwareDataPortability = ProjectAwareDataPortabilityService(
+      base: baseDataPortability,
+      projects: projectWorkspace,
+      conversations: conversationStore
+    )
 
     providers = providerModel
     projects = projectModel
+    projectSync = projectSyncModel
     chats = chatModel
     mcp = mcpModel
     dataPortability = DataPortabilityModel(
-      service: DataPortabilityService(
-        providers: providerWorkspace,
-        conversations: conversationStore,
-        accounts: accountManager,
-        mcp: mcpWorkspace,
-        mcpCredentials: mcpVault
-      ),
+      service: projectAwareDataPortability,
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
       accountManager: accountManager,
       preferences: preferences,
       providersModel: providerModel,
       chatsModel: chatModel,
+      projectsModel: projectModel,
       mcpModel: mcpModel
     )
   }
@@ -147,6 +169,7 @@ final class AppModel {
     await chats.load()
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
+    await projectSync.load()
     hasLoaded = true
   }
 }
