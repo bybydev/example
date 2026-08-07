@@ -150,6 +150,36 @@ import Testing
   }
 }
 
+@Test func providerValidationAppliesAttachmentLimitsPerMessage() throws {
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.openRouter)
+  let attachment = ChatAttachment(
+    kind: .image,
+    filename: "pixel.jpg",
+    mimeType: "image/jpeg",
+    data: Data([0x01])
+  )
+  let eight = Array(repeating: attachment, count: 8)
+  let request = ProviderRequest(
+    model: "openrouter/free",
+    messages: [
+      .init(role: .user, content: "First", attachments: eight),
+      .init(role: .assistant, content: "Seen"),
+      .init(role: .user, content: "Second", attachments: eight),
+    ]
+  )
+  let account = ResolvedProviderAccount(
+    id: "account",
+    providerID: "openrouter",
+    label: "OpenRouter",
+    apiKey: "secret"
+  )
+
+  let validated = try adapter.validate(request: request, account: account)
+  #expect(validated.messages.count == 3)
+  #expect(validated.messages[0].attachments?.count == 8)
+  #expect(validated.messages[2].attachments?.count == 8)
+}
+
 private func userContentParts(_ body: [String: JSONValue]) throws -> [JSONValue] {
   guard case .array(let messages)? = body["messages"],
     let first = messages.first,
