@@ -298,6 +298,7 @@ final class ChatManagementModel {
     activeConversationIDs.insert(conversationID)
     generationTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
+      var didReceiveInlineFailure = false
       defer {
         clearLiveMessages(for: conversationID)
         activeConversationIDs.remove(conversationID)
@@ -325,12 +326,17 @@ final class ChatManagementModel {
           )
         }
         for try await event in stream {
+          if case .failed = event {
+            didReceiveInlineFailure = true
+          }
           await handle(event, conversationID: conversationID)
         }
       } catch is CancellationError {
         try? await reloadSnapshot()
       } catch {
-        errorMessage = error.localizedDescription
+        if !didReceiveInlineFailure {
+          errorMessage = error.localizedDescription
+        }
         try? await reloadSnapshot()
       }
     }
