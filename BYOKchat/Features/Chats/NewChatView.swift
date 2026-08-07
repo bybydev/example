@@ -34,35 +34,41 @@ struct NewChatView: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      Spacer(minLength: 72)
+    ZStack {
+      theme.backgroundColor
+        .ignoresSafeArea()
 
-      VStack(spacing: 12) {
-        Image(systemName: "bubble.left.and.bubble.right")
-          .font(.system(size: 30, weight: .medium))
-          .foregroundStyle(theme.accentColor)
-          .accessibilityHidden(true)
+      VStack(spacing: 0) {
+        Spacer(minLength: 72)
 
-        Text("How can I help?")
-          .font(.system(size: 30, weight: .semibold))
-          .multilineTextAlignment(.center)
+        VStack(spacing: 12) {
+          Image(systemName: "bubble.left.and.bubble.right")
+            .font(.system(size: 30, weight: .medium))
+            .foregroundStyle(theme.accentColor)
+            .accessibilityHidden(true)
 
-        Text("Send a message to start a new conversation.")
-          .font(.system(size: 16))
-          .multilineTextAlignment(.center)
-          .foregroundStyle(.secondary)
+          Text("How can I help?")
+            .font(.system(size: 30, weight: .semibold))
+            .multilineTextAlignment(.center)
+
+          Text("Send a message to start a new conversation.")
+            .font(.system(size: 16))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 32)
+
+        Spacer()
       }
-      .padding(.horizontal, 32)
-
-      Spacer()
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
     .simultaneousGesture(
       TapGesture().onEnded {
         dismissKeyboard()
       }
     )
-    .background(theme.backgroundColor)
     .toolbar(.hidden, for: .navigationBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       ChatTopBar(
