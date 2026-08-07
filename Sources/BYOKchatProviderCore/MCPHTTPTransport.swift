@@ -8,6 +8,8 @@ import Foundation
 /// instead of returning an error, so the modern probe must be bounded before the
 /// runtime can fall back to the initialize-era protocol.
 public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
+  private static let maximumDiscoverResponseBytes = 1_024 * 1_024
+
   private let base: any ProviderHTTPTransport
   private let discoverProbeTimeout: TimeInterval
 
@@ -52,6 +54,9 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
         var data = Data()
         for try await chunk in upstream.chunks {
           try Task.checkCancellation()
+          guard data.count + chunk.count <= Self.maximumDiscoverResponseBytes else {
+            throw MCPError.invalidResponse
+          }
           data.append(chunk)
         }
         return ProviderHTTPByteStream(
