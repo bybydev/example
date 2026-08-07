@@ -13,6 +13,7 @@ struct ChatSidebarView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
+  @Bindable var mcp: MCPManagementModel
 
   let selectedConversationID: ConversationID?
   let newChat: (ProjectID?) -> Void
@@ -63,7 +64,8 @@ struct ChatSidebarView: View {
       ProjectEditorView(
         project: projectEditorTarget,
         projects: projects,
-        providers: providers
+        providers: providers,
+        mcp: mcp
       )
       .presentationDragIndicator(.visible)
     }
@@ -96,6 +98,7 @@ struct ChatSidebarView: View {
         guard let id = deleteProjectTarget?.id else { return }
         Task { @MainActor in
           await projects.deleteProject(id)
+          await mcp.reloadFromStorage()
         }
         deleteProjectTarget = nil
       }
@@ -423,6 +426,7 @@ struct ChatSidebarView: View {
         Task { @MainActor in
           await chats.deleteConversation(conversation.id)
           await projects.reloadFromStorage()
+          await mcp.reloadFromStorage()
           if selectedConversationID == conversation.id {
             newChat(nil)
           }
