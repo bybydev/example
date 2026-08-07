@@ -22,46 +22,51 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
   }
 
   public func availableTools(conversationID: ConversationID) async -> [ChatToolDefinition] {
-    var definitions = await localRuntime?.availableTools() ?? []
+    var definitions: [ChatToolDefinition]
+    if let localRuntime {
+      definitions = await localRuntime.availableTools()
+    } else {
+      definitions = []
+    }
+
     let configuration = await workspace.chatConfiguration(for: conversationID)
     guard !configuration.enabledServerIDs.isEmpty else {
-      return definitions.sorted { $0.name < $1.name }
+      return sorted(definitions)
     }
 
-    let globallyEnabled = Set(
-      await mcpRuntime.servers().filter(\.isEnabled).map(\.id)
-    )
+    let servers = await mcpRuntime.servers()
+    let globallyEnabled = Set(servers.filter(\.isEnabled).map(\.id))
     let selectedServerIDs = Set(configuration.enabledServerIDs).intersection(globallyEnabled)
     guard !selectedServerIDs.isEmpty else {
-      return definitions.sorted { $0.name < $1.name }
+      return sorted(definitions)
     }
 
-    // Refresh only selected servers. A stale cached catalog should not remain exposed to the model
-    // indefinitely, but a temporary refresh failure should not erase the last known safe catalog.
+    // Refresh only selected servers. A temporary refresh failure does not erase the last
+    // validated catalog, but an expired cache gets a chance to update before model dispatch.
     for serverID in selectedServerIDs {
       _ = try? await mcpRuntime.refreshServer(serverID)
     }
 
     let localNames = Set(definitions.map(\.name))
-    let bindings = await mcpRuntime.toolBindings().filter { binding in
+    let allBindings = await mcpRuntime.toolBindings()
+    let bindings = allBindings.filter { binding in
       selectedServerIDs.contains(binding.serverID)
         && configuration.policy(for: binding.exposedName) != .disabled
         && !localNames.contains(binding.exposedName)
     }
     definitions.append(contentsOf: bindings.map(\.chatDefinition))
-    return definitions.sorted {
-      $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-    }
+    return sorted(definitions)
   }
 
   public func execute(
     _ call: ChatToolCall,
     conversationID: ConversationID
   ) async -> ChatToolResult {
-    if let localRuntime,
-      await localRuntime.availableTools().contains(where: { $0.name == call.name })
-    {
-      return await localRuntime.execute(call)
+    if let localRuntime {
+      let localTools = await localRuntime.availableTools()
+      if localTools.contains(where: { $0.name == call.name }) {
+        return await localRuntime.execute(call)
+      }
     }
 
     let configuration = await workspace.chatConfiguration(for: conversationID)
@@ -72,9 +77,9 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     guard configuration.isServerEnabled(binding.serverID) else {
       return failure(call, "This MCP server is not enabled for this chat.")
     }
-    guard let server = await mcpRuntime.servers().first(where: { $0.id == binding.serverID }),
-      server.isEnabled
-    else {
+
+    let servers = await mcpRuntime.servers()
+    guard let server = servers.first(where: { $0.id == binding.serverID }), server.isEnabled else {
       return failure(call, "This MCP server is disabled in Settings.")
     }
 
@@ -153,6 +158,12 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       case .bool(let value)? = annotations[key]
     else { return nil }
     return value
+  }
+
+  private func sorted(_ definitions: [ChatToolDefinition]) -> [ChatToolDefinition] {
+    definitions.sorted {
+      $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+    }
   }
 
   private func failure(_ call: ChatToolCall, _ message: String) -> ChatToolResult {
