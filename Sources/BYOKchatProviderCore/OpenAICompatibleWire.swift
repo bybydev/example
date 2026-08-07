@@ -5,10 +5,12 @@ struct ChatCompletionMessageWire: Decodable {
   var reasoning: String?
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
+  var toolCalls: [ToolCallWire]?
   enum CodingKeys: String, CodingKey {
     case content, reasoning
     case reasoningContent = "reasoning_content"
     case reasoningDetails = "reasoning_details"
+    case toolCalls = "tool_calls"
   }
   var normalizedReasoning: String? {
     let details = reasoningDetails?.compactMap { $0.text ?? $0.summary }.joined() ?? ""
@@ -20,6 +22,18 @@ struct ChatCompletionMessageWire: Decodable {
 struct ReasoningDetailWire: Decodable {
   var text: String?
   var summary: String?
+}
+
+struct ToolCallWire: Decodable {
+  var index: Int?
+  var id: String?
+  var type: String?
+  var function: ToolFunctionWire?
+}
+
+struct ToolFunctionWire: Decodable {
+  var name: String?
+  var arguments: String?
 }
 
 struct ChatCompletionChoiceWire: Decodable {
@@ -43,19 +57,22 @@ struct ChatCompletionDeltaWire: Decodable {
   var reasoning: String?
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
+  var toolCalls: [ToolCallWire]?
   init(
     content: String? = nil, reasoning: String? = nil, reasoningContent: String? = nil,
-    reasoningDetails: [ReasoningDetailWire]? = nil
+    reasoningDetails: [ReasoningDetailWire]? = nil, toolCalls: [ToolCallWire]? = nil
   ) {
     self.content = content
     self.reasoning = reasoning
     self.reasoningContent = reasoningContent
     self.reasoningDetails = reasoningDetails
+    self.toolCalls = toolCalls
   }
   enum CodingKeys: String, CodingKey {
     case content, reasoning
     case reasoningContent = "reasoning_content"
     case reasoningDetails = "reasoning_details"
+    case toolCalls = "tool_calls"
   }
   var reasoningFragments: [String] {
     [reasoning, reasoningContent].compactMap { $0 }
