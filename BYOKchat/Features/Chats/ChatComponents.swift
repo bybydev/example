@@ -359,18 +359,34 @@ struct ChatMessageView: View {
       messageBody
       footer
 
-      if !message.content.isEmpty {
+      if !message.content.isEmpty || canRegenerate {
         HStack(spacing: 4) {
-          actionButton("Copy", systemImage: "doc.on.doc", action: copy)
-          ShareLink(item: message.content) {
-            Image(systemName: "square.and.arrow.up")
-              .frame(width: 38, height: 38)
-              .contentShape(Rectangle())
+          if !message.content.isEmpty {
+            actionButton("Copy", systemImage: "doc.on.doc", action: copy)
+            ShareLink(item: message.content) {
+              Image(systemName: "square.and.arrow.up")
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Share")
           }
-          .accessibilityLabel("Share")
 
           if canRegenerate {
-            actionButton("Regenerate", systemImage: "arrow.clockwise", action: regenerate)
+            if message.status == .failed {
+              Button(action: regenerate) {
+                Label("Retry", systemImage: "arrow.clockwise")
+                  .font(.system(size: 13, weight: .semibold))
+                  .padding(.horizontal, 11)
+                  .frame(height: 34)
+                  .background(
+                    Color(uiColor: .secondarySystemFill),
+                    in: Capsule()
+                  )
+              }
+              .accessibilityLabel("Retry generation")
+            } else {
+              actionButton("Regenerate", systemImage: "arrow.clockwise", action: regenerate)
+            }
           }
         }
         .font(.system(size: 17))
@@ -436,13 +452,31 @@ struct ChatMessageView: View {
 
   @ViewBuilder
   private var footer: some View {
-    VStack(alignment: .leading, spacing: 5) {
+    VStack(alignment: .leading, spacing: 7) {
       switch message.status {
       case .failed:
-        Label(
-          message.errorDescription ?? "Generation failed", systemImage: "exclamationmark.triangle"
+        HStack(alignment: .top, spacing: 8) {
+          Image(systemName: "exclamationmark.circle.fill")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.orange)
+            .padding(.top, 1)
+
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Couldn’t generate a response")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.primary)
+            Text(message.errorDescription ?? "Try again or choose a different model.")
+              .font(.system(size: 12))
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(
+          Color.orange.opacity(0.09),
+          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
-        .foregroundStyle(.red)
       case .cancelled:
         Label("Stopped", systemImage: "stop.circle")
           .foregroundStyle(.secondary)
