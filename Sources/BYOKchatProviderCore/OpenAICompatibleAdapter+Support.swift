@@ -12,10 +12,39 @@ extension OpenAICompatibleAdapter {
     guard !model.isEmpty else { throw ProviderError.invalidModel }
     let messages = request.messages.compactMap { message -> ProviderMessage? in
       let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-      return content.isEmpty
-        ? nil : .init(role: message.role, content: content, reasoning: message.reasoning)
+      let attachments = message.attachments ?? []
+      guard !content.isEmpty || !attachments.isEmpty else { return nil }
+      return .init(
+        role: message.role,
+        content: content,
+        reasoning: message.reasoning,
+        attachments: attachments.isEmpty ? nil : attachments
+      )
     }
     guard !messages.isEmpty else { throw ProviderError.invalidMessages }
+
+    let attachments = messages.flatMap { $0.attachments ?? [] }
+    guard attachments.count <= 8 else {
+      throw ProviderError.invalidRequest("A message can include at most 8 attachments.")
+    }
+    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
+      throw ProviderError.invalidRequest("Each attachment must be non-empty and no larger than 20 MB.")
+    }
+    guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
+      throw ProviderError.invalidRequest("Attachments in one request cannot exceed 40 MB total.")
+    }
+
+    let supportedImageMIMEs: Set<String> = [
+      "image/png", "image/jpeg", "image/webp", "image/gif",
+    ]
+    if let unsupportedImage = attachments.first(where: {
+      $0.isImage && !supportedImageMIMEs.contains($0.mimeType.lowercased())
+    }) {
+      throw ProviderError.invalidRequest(
+        "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."
+      )
+    }
+
     if definition.authentication != .none {
       guard let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
       else {
@@ -57,11 +86,7 @@ extension OpenAICompatibleAdapter {
   func requestBody(_ request: ProviderRequest, streaming: Bool) -> [String: JSONValue] {
     var body: [String: JSONValue] = [
       "model": .string(request.model.rawValue),
-      "messages": .array(
-        request.messages.map {
-          .object(["role": .string($0.role.rawValue), "content": .string($0.content)])
-        }
-      ),
+      "messages": .array(request.messages.map(requestMessage)),
       "stream": .bool(streaming),
     ]
 
@@ -124,6 +149,54 @@ extension OpenAICompatibleAdapter {
       break
     }
     return body
+  }
+
+  private func requestMessage(_ message: ProviderMessage) -> JSONValue {
+    let attachments = message.attachments ?? []
+    guard !attachments.isEmpty else {
+      return .object([
+        "role": .string(message.role.rawValue),
+        "content": .string(message.content),
+      ])
+    }
+
+    var parts: [JSONValue] = []
+    if !message.content.isEmpty {
+      parts.append(.object(["type": .string("text"), "text": .string(message.content)]))
+    }
+
+    for attachment in attachments {
+      if attachment.isImage {
+        parts.append(
+          .object([
+            "type": .string("image_url"),
+            "image_url": .object(["url": .string(attachment.dataURL)]),
+          ])
+        )
+      } else if let text = attachment.utf8Text {
+        parts.append(
+          .object([
+            "type": .string("text"),
+            "text": .string("File: \(attachment.filename)\n\n\(text)"),
+          ])
+        )
+      } else {
+        parts.append(
+          .object([
+            "type": .string("file"),
+            "file": .object([
+              "filename": .string(attachment.filename),
+              "file_data": .string(attachment.dataURL),
+            ]),
+          ])
+        )
+      }
+    }
+
+    return .object([
+      "role": .string(message.role.rawValue),
+      "content": .array(parts),
+    ])
   }
 
   func validate(_ response: ProviderHTTPResponse) throws {
