@@ -58,7 +58,8 @@ public actor MCPRemoteRuntime {
   }
 
   public func hasCredential(serverID: MCPServerID) async throws -> Bool {
-    try await vault.credential(serverID: serverID)?.isEmpty == false
+    let credential = try await vault.credential(serverID: serverID)
+    return credential?.isEmpty == false
   }
 
   public func saveServer(_ server: MCPRemoteServer, credential: String?) async throws {
@@ -132,18 +133,6 @@ public actor MCPRemoteRuntime {
     )
     try await workspace.storeSnapshot(snapshot)
     return snapshot
-  }
-
-  public func refreshEnabledServers(force: Bool = false) async -> [MCPServerID: Result<MCPServerSnapshot, Error>] {
-    var results: [MCPServerID: Result<MCPServerSnapshot, Error>] = [:]
-    for server in await workspace.allServers() where server.isEnabled {
-      do {
-        results[server.id] = .success(try await refreshServer(server.id, force: force))
-      } catch {
-        results[server.id] = .failure(error)
-      }
-    }
-    return results
   }
 
   public func toolBindings(includeDisabled: Bool = false) async -> [MCPToolBinding] {
@@ -282,7 +271,7 @@ public actor MCPRemoteRuntime {
         if error.code == -32_022 {
           return .failure(.unsupportedProtocol(error.supportedVersions))
         }
-        if error.code == -32_020 {
+        if error.code == -32_020 || error.code == -32_021 {
           return .failure(.protocolError(code: error.code, message: error.message))
         }
       }
@@ -428,8 +417,12 @@ public actor MCPRemoteRuntime {
       if connection.era == .modern {
         let pageTTL = integerValue(object["ttlMs"]) ?? 0
         ttlMilliseconds = min(ttlMilliseconds ?? pageTTL, pageTTL)
-        let pageScope = stringValue(object["cacheScope"]) ?? "private"
-        cacheScope = cacheScope == "public" && pageScope == "public" ? "public" : pageScope
+        let pageScope = stringValue(object["cacheScope"]) == "public" ? "public" : "private"
+        if let existingScope = cacheScope {
+          cacheScope = existingScope == "public" && pageScope == "public" ? "public" : "private"
+        } else {
+          cacheScope = pageScope
+        }
       }
 
       guard let next = stringValue(object["nextCursor"]), !next.isEmpty else { break }
@@ -553,7 +546,7 @@ public actor MCPRemoteRuntime {
       name: name,
       parameterHeaders: parameterHeaders
     )
-    return try await send(request)
+    return try await send(request, expectedID: id)
   }
 
   private func postNotification(
@@ -578,7 +571,7 @@ public actor MCPRemoteRuntime {
       name: nil,
       parameterHeaders: [:]
     )
-    return try await send(request)
+    return try await send(request, expectedID: nil)
   }
 
   private func makeRequest(
@@ -639,7 +632,7 @@ public actor MCPRemoteRuntime {
     return request
   }
 
-  private func send(_ request: URLRequest) async throws -> HTTPReply {
+  private func send(_ request: URLRequest, expectedID: UInt64?) async throws -> HTTPReply {
     do {
       let response = try await transport.stream(for: request)
       let contentType = header("Content-Type", in: response.headers)?.lowercased() ?? ""
@@ -649,13 +642,13 @@ public actor MCPRemoteRuntime {
         for try await chunk in response.chunks {
           try Task.checkCancellation()
           for event in try decoder.append(chunk) {
-            if let value = try? decodeJSON(event.data), isRPCResponse(value) {
+            if let value = try? decodeJSON(event.data), matchesExpectedResponse(value, expectedID: expectedID) {
               finalPayload = value
             }
           }
         }
         for event in try decoder.finish() {
-          if let value = try? decodeJSON(event.data), isRPCResponse(value) {
+          if let value = try? decodeJSON(event.data), matchesExpectedResponse(value, expectedID: expectedID) {
             finalPayload = value
           }
         }
@@ -675,7 +668,13 @@ public actor MCPRemoteRuntime {
       if data.isEmpty {
         payload = nil
       } else {
-        payload = try? JSONDecoder.provider.decode(JSONValue.self, from: data)
+        let decoded = try? JSONDecoder.provider.decode(JSONValue.self, from: data)
+        if let decoded, expectedID != nil, isRPCResponse(decoded),
+          !matchesExpectedResponse(decoded, expectedID: expectedID)
+        {
+          throw MCPError.invalidResponse
+        }
+        payload = decoded
       }
       return HTTPReply(
         statusCode: response.statusCode,
@@ -789,6 +788,21 @@ public actor MCPRemoteRuntime {
     return object["id"] != nil && (object["result"] != nil || object["error"] != nil)
   }
 
+  private func matchesExpectedResponse(_ value: JSONValue, expectedID: UInt64?) -> Bool {
+    guard let expectedID else { return false }
+    guard case .object(let object) = value,
+      object["result"] != nil || object["error"] != nil,
+      case .number(let rawID)? = object["id"],
+      rawID.isFinite,
+      rawID >= 0,
+      rawID.rounded(.towardZero) == rawID,
+      rawID <= Double(UInt64.max)
+    else {
+      return false
+    }
+    return UInt64(rawID) == expectedID
+  }
+
   private func decodeJSON(_ string: String) throws -> JSONValue {
     guard let data = string.data(using: .utf8) else { throw MCPError.invalidResponse }
     do {
@@ -852,7 +866,7 @@ public actor MCPRemoteRuntime {
 
   private func stringArray(_ value: JSONValue?) -> [String] {
     guard case .array(let values)? = value else { return [] }
-    return values.compactMap(stringValue)
+    return values.compactMap { stringValue($0) }
   }
 
   private func nextID() -> UInt64 {
