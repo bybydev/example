@@ -50,6 +50,12 @@ Text-like file inlining makes common source code, Markdown, JSON, configuration,
 
 Binary `file` content parts depend on provider support. OpenRouter supports file inputs, including PDFs. Other custom OpenAI-compatible endpoints may reject file content parts; BYOKchat surfaces the provider error rather than silently dropping the attachment.
 
+### OpenRouter PDF follow-ups
+
+OpenRouter can return parsed file annotations for PDFs. Replaying those annotations in later requests lets OpenRouter reuse parsed results rather than paying the PDF parsing cost again.
+
+The first BYOKchat attachment implementation does not yet persist and replay these annotations. A PDF that remains inside the selected conversation context can therefore be submitted again on later turns and may be parsed again by OpenRouter. Annotation caching should be added before treating repeated large-PDF conversations as cost-optimized.
+
 ## Context management
 
 Attachment-bearing user messages participate in normal conversation context selection.
@@ -61,6 +67,10 @@ Token estimation uses:
 - a conservative fixed estimate for other binary files
 
 Binary multimodal tokenization varies substantially by model and provider, so the local estimate is deliberately approximate.
+
+## Import validation
+
+Backup imports validate attachment records before mutating the conversation workspace. Imported messages must obey the same limits as newly composed messages and cannot contain duplicate attachment IDs, empty attachment data, empty filenames, or empty MIME types.
 
 ## UI
 
@@ -84,6 +94,7 @@ Because full backups contain conversation data, they also contain persisted atta
 Useful follow-up work includes:
 
 - provider/model capability warnings before sending unsupported modalities
+- OpenRouter PDF annotation persistence/replay to avoid repeated parsing costs
 - native upload/file-ID APIs where they provide a clear benefit
 - attachment deduplication or external blob storage for very large histories
 - richer previews for PDFs and documents
