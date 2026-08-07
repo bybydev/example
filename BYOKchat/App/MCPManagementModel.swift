@@ -245,7 +245,8 @@ final class MCPManagementModel {
   }
 
   func deleteAllCredentials() async throws {
-    for server in await runtime.servers() {
+    let values = await runtime.servers()
+    for server in values {
       try await runtime.saveServer(server, credential: "")
     }
     try await reloadSnapshot()
@@ -274,8 +275,9 @@ final class MCPManagementModel {
 
   private func startInteractionObserversIfNeeded() {
     if approvalObservationTask == nil {
-      approvalObservationTask = Task { @MainActor [weak self, approvals] in
-        let stream = await approvals.updates()
+      let approvalCenter = approvals
+      approvalObservationTask = Task { @MainActor [weak self] in
+        let stream = await approvalCenter.updates()
         for await requests in stream {
           guard let self, !Task.isCancelled else { return }
           pendingApprovals = requests
@@ -284,8 +286,9 @@ final class MCPManagementModel {
     }
 
     if elicitationObservationTask == nil {
-      elicitationObservationTask = Task { @MainActor [weak self, elicitations] in
-        let stream = await elicitations.updates()
+      let elicitationCenter = elicitations
+      elicitationObservationTask = Task { @MainActor [weak self] in
+        let stream = await elicitationCenter.updates()
         for await requests in stream {
           guard let self, !Task.isCancelled else { return }
           pendingElicitations = requests
