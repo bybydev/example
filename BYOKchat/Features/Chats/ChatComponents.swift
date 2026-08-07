@@ -317,6 +317,9 @@ struct ChatMessageView: View {
   let regenerate: () -> Void
   let copy: () -> Void
 
+  @State private var reasoningExpanded = false
+  @State private var showMessageInfo = false
+
   var body: some View {
     Group {
       if message.role == .user {
@@ -359,68 +362,57 @@ struct ChatMessageView: View {
       messageBody
       footer
 
-      if !message.content.isEmpty || canRegenerate {
-        HStack(spacing: 4) {
-          if !message.content.isEmpty {
-            actionButton("Copy", systemImage: "doc.on.doc", action: copy)
-            ShareLink(item: message.content) {
-              Image(systemName: "square.and.arrow.up")
-                .frame(width: 38, height: 38)
-                .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Share")
-          }
-
-          if canRegenerate {
-            if message.status == .failed {
-              Button(action: regenerate) {
-                Label("Retry", systemImage: "arrow.clockwise")
-                  .font(.system(size: 13, weight: .semibold))
-                  .padding(.horizontal, 11)
-                  .frame(height: 34)
-                  .background(
-                    Color(uiColor: .secondarySystemFill),
-                    in: Capsule()
-                  )
-              }
-              .accessibilityLabel("Retry generation")
-            } else {
-              actionButton("Regenerate", systemImage: "arrow.clockwise", action: regenerate)
-            }
-          }
-        }
-        .font(.system(size: 17))
-        .foregroundStyle(.secondary)
-        .buttonStyle(.plain)
+      if message.status != .pending && message.status != .streaming {
+        assistantActions
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .sheet(isPresented: $showMessageInfo) {
+      MessageInfoView(message: message, accountLabel: accountLabel)
+    }
+  }
+
+  private var assistantActions: some View {
+    HStack(spacing: 4) {
+      actionButton("Copy", systemImage: "doc.on.doc", action: copy)
+        .disabled(message.content.isEmpty)
+
+      actionButton("Retry", systemImage: "arrow.clockwise", action: regenerate)
+        .disabled(!canRegenerate)
+
+      ShareLink(item: message.content) {
+        Image(systemName: "square.and.arrow.up")
+          .frame(width: 38, height: 38)
+          .contentShape(Rectangle())
+      }
+      .disabled(message.content.isEmpty)
+      .accessibilityLabel("Share")
+
+      Menu {
+        Button("Message Info", systemImage: "info.circle") {
+          showMessageInfo = true
+        }
+        if !message.reasoning.isEmpty {
+          Button("Copy Reasoning", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = message.reasoning
+          }
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .frame(width: 38, height: 38)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("More")
+    }
+    .font(.system(size: 17))
+    .foregroundStyle(.secondary)
+    .buttonStyle(.plain)
   }
 
   @ViewBuilder
   private var messageBody: some View {
-    if !message.reasoning.isEmpty {
-      DisclosureGroup("Reasoning") {
-        VStack(alignment: .leading, spacing: 9) {
-          Text(message.reasoning)
-            .font(.system(size: 15))
-            .lineSpacing(4)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-          Button("Copy Reasoning", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = message.reasoning
-          }
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .buttonStyle(.plain)
-          .accessibilityLabel("Copy reasoning")
-        }
-        .padding(.top, 4)
-      }
-      .font(.system(size: 13, weight: .semibold))
-      .tint(.secondary)
+    if shouldShowReasoningDisclosure {
+      reasoningDisclosure
     }
 
     if let attachments = message.attachments, !attachments.isEmpty {
@@ -432,17 +424,68 @@ struct ChatMessageView: View {
         text: message.content,
         showsSources: message.role == .assistant
       )
-    } else if message.status == .pending || message.status == .streaming {
-      HStack(spacing: 8) {
-        ProgressView()
-        Text("Thinking…")
-          .font(.system(size: 17))
+    }
+  }
+
+  private var shouldShowReasoningDisclosure: Bool {
+    !message.reasoning.isEmpty || isReasoningActive
+  }
+
+  private var isReasoningActive: Bool {
+    (message.status == .pending || message.status == .streaming) && message.content.isEmpty
+  }
+
+  private var reasoningDisclosure: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button {
+        guard !message.reasoning.isEmpty else { return }
+        withAnimation(.snappy(duration: 0.2)) {
+          reasoningExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 8) {
+          if isReasoningActive {
+            Text("Thinking…")
+              .phaseAnimator([false, true]) { content, phase in
+                content.opacity(phase ? 0.45 : 1)
+              } animation: { _ in
+                .easeInOut(duration: 0.8)
+              }
+          } else {
+            Text("Reasoning")
+          }
+
+          Spacer(minLength: 8)
+
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .rotationEffect(.degrees(reasoningExpanded ? 90 : 0))
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(isReasoningActive ? "Thinking" : "Reasoning")
+      .accessibilityValue(reasoningExpanded ? "Expanded" : "Collapsed")
+
+      if reasoningExpanded, !message.reasoning.isEmpty {
+        Text(message.reasoning)
+          .font(.system(size: 15))
+          .lineSpacing(4)
           .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
   }
 
-  private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+  private func actionButton(
+    _ title: String,
+    systemImage: String,
+    action: @escaping () -> Void
+  ) -> some View {
     Button(title, systemImage: systemImage, action: action)
       .labelStyle(.iconOnly)
       .frame(width: 38, height: 38)
@@ -452,59 +495,41 @@ struct ChatMessageView: View {
 
   @ViewBuilder
   private var footer: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      switch message.status {
-      case .failed:
-        HStack(alignment: .top, spacing: 8) {
-          Image(systemName: "exclamationmark.circle.fill")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.orange)
-            .padding(.top, 1)
-
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Couldn’t generate a response")
-              .font(.system(size: 13, weight: .semibold))
-              .foregroundStyle(.primary)
-            Text(message.errorDescription ?? "Try again or choose a different model.")
-              .font(.system(size: 12))
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .background(
-          Color.orange.opacity(0.09),
-          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-      case .cancelled:
-        Label("Stopped", systemImage: "stop.circle")
-          .foregroundStyle(.secondary)
-      case .interrupted:
-        Label("Interrupted", systemImage: "bolt.slash")
+    switch message.status {
+    case .failed:
+      HStack(alignment: .top, spacing: 8) {
+        Image(systemName: "exclamationmark.circle.fill")
+          .font(.system(size: 14, weight: .semibold))
           .foregroundStyle(.orange)
-      case .complete, .pending, .streaming:
-        EmptyView()
-      }
+          .padding(.top, 1)
 
-      if message.role == .assistant,
-        let detail = metadataSummary
-      {
-        Text(detail)
-          .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Couldn’t generate a response")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.primary)
+          Text(message.errorDescription ?? "Try again or choose a different model.")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
+      .padding(.horizontal, 11)
+      .padding(.vertical, 9)
+      .background(
+        Color.orange.opacity(0.09),
+        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+      )
+    case .cancelled:
+      Label("Stopped", systemImage: "stop.circle")
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+    case .interrupted:
+      Label("Interrupted", systemImage: "bolt.slash")
+        .font(.system(size: 11))
+        .foregroundStyle(.orange)
+    case .complete, .pending, .streaming:
+      EmptyView()
     }
-    .font(.system(size: 11))
-  }
-
-  private var metadataSummary: String? {
-    var parts: [String] = []
-    if let accountLabel { parts.append(accountLabel) }
-    if let modelID = message.modelID { parts.append(modelID.rawValue) }
-    if let usage = message.usage {
-      parts.append("\(usage.inputTokens ?? 0) in · \(usage.outputTokens ?? 0) out")
-    }
-    return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 }
 
