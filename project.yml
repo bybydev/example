@@ -78,6 +78,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: 6.0
         SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: BYOKchat
       - package: BYOKchatProviderCore
