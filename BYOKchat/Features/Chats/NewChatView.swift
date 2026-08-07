@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 struct NewChatView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
+  @Bindable var projects: ProjectManagementModel
+  let projectID: ProjectID?
 
   let openSidebar: () -> Void
   let openSettings: () -> Void
@@ -20,18 +22,37 @@ struct NewChatView: View {
   @State private var showPhotoPicker = false
   @State private var photoPickerItems: [PhotosPickerItem] = []
   @State private var showFileImporter = false
+  @State private var showProjectEditor = false
+
+  private var project: ChatProject? {
+    projects.project(projectID)
+  }
 
   private var defaultAccount: ProviderAccount? {
-    providers.accounts.first(where: \.isEnabled)
+    let enabled = providers.accounts.filter(\.isEnabled)
+    if let accountID = project?.accountID {
+      return enabled.first { $0.id == accountID }
+    }
+    return enabled.first
   }
 
   private var defaultModelID: ModelID? {
     guard let account = defaultAccount else { return nil }
-    return account.defaultModelID ?? providers.models(for: account.id).first?.model.id
+    let models = providers.models(for: account.id).filter(\.isAvailable)
+    if let projectModelID = project?.modelID {
+      return models.contains(where: { $0.model.id == projectModelID }) ? projectModelID : nil
+    }
+    return account.defaultModelID ?? models.first?.model.id
   }
 
   private var targetLabel: String {
+    if project?.accountID != nil && defaultAccount == nil {
+      return "Project provider unavailable"
+    }
     guard let account = defaultAccount else { return "Configure a provider" }
+    if project?.modelID != nil && defaultModelID == nil {
+      return "Project model unavailable"
+    }
     guard let modelID = defaultModelID else { return "Choose model" }
     let modelName = providers.models(for: account.id)
       .first(where: { $0.model.id == modelID })?.model.displayName
@@ -48,19 +69,30 @@ struct NewChatView: View {
         Spacer(minLength: 72)
 
         VStack(spacing: 12) {
-          Image(systemName: "bubble.left.and.bubble.right")
-            .font(.system(size: 30, weight: .medium))
-            .foregroundStyle(theme.accentColor)
-            .accessibilityHidden(true)
+          if let project {
+            ProjectIconView(project: project, size: 44)
+            Text(project.name)
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(project.projectColor)
+          } else {
+            Image(systemName: "bubble.left.and.bubble.right")
+              .font(.system(size: 30, weight: .medium))
+              .foregroundStyle(theme.accentColor)
+              .accessibilityHidden(true)
+          }
 
           Text("How can I help?")
             .font(.system(size: 30, weight: .semibold))
             .multilineTextAlignment(.center)
 
-          Text("Send a message to start a new conversation.")
-            .font(.system(size: 16))
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
+          Text(
+            project == nil
+              ? "Send a message to start a new conversation."
+              : "This chat will use the project's defaults and instructions."
+          )
+          .font(.system(size: 16))
+          .multilineTextAlignment(.center)
+          .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 32)
 
@@ -85,6 +117,11 @@ struct NewChatView: View {
           photoPickerItems = []
         }
       ) {
+        if project != nil {
+          Button("Project Settings", systemImage: "folder.badge.gearshape") {
+            showProjectEditor = true
+          }
+        }
         Button("Settings", systemImage: "gearshape", action: openSettings)
         Button("Providers & Accounts", systemImage: "key.horizontal", action: openSettings)
       }
@@ -96,7 +133,13 @@ struct NewChatView: View {
         isGenerating: false,
         canSend: !isCreating && defaultAccount != nil && defaultModelID != nil,
         targetLabel: targetLabel,
-        openTarget: openSettings,
+        openTarget: {
+          if project != nil {
+            showProjectEditor = true
+          } else {
+            openSettings()
+          }
+        },
         pickPhoto: { showPhotoPicker = true },
         pickFile: { showFileImporter = true },
         removeAttachment: removePendingAttachment,
@@ -109,6 +152,16 @@ struct NewChatView: View {
             .padding(10)
             .background(.regularMaterial, in: Capsule())
         }
+      }
+    }
+    .sheet(isPresented: $showProjectEditor) {
+      if let project {
+        ProjectEditorView(
+          project: project,
+          projects: projects,
+          providers: providers
+        )
+        .presentationDragIndicator(.visible)
       }
     }
     .photosPicker(
@@ -139,7 +192,8 @@ struct NewChatView: View {
     isCreating = true
     Task { @MainActor in
       defer { isCreating = false }
-      guard let id = await chats.createConversation() else { return }
+      guard let id = await chats.createConversation(projectID: projectID) else { return }
+      await projects.reloadFromStorage()
       draft = ""
       pendingAttachments = []
       photoPickerItems = []
