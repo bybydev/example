@@ -64,12 +64,12 @@ extension OpenAICompatibleAdapter {
     if definition.behavior == .deepSeek {
       if attachments.contains(where: \.isImage) {
         throw ProviderError.invalidRequest(
-          "DeepSeek V4 is text-only and cannot receive images. Choose a vision-capable model or provider before sending."
+          "This model can’t read images. Switch to a vision-capable model, then retry."
         )
       }
       if attachments.contains(where: { !$0.isImage && $0.utf8Text == nil }) {
         throw ProviderError.invalidRequest(
-          "DeepSeek V4 is text-only and cannot receive binary documents directly. Attach a text file or choose a file-capable model before sending."
+          "This model can’t read this file type. Switch to a file-capable model, then retry."
         )
       }
     }
