@@ -157,14 +157,20 @@ public actor ConversationStore {
       }
 
       for message in conversation.messages where message.status == .complete {
-        guard message.content.localizedCaseInsensitiveContains(trimmed) else { continue }
+        let contentMatches = message.content.localizedCaseInsensitiveContains(trimmed)
+        let matchingAttachment = (message.attachments ?? []).first {
+          $0.filename.localizedCaseInsensitiveContains(trimmed)
+        }
+        guard contentMatches || matchingAttachment != nil else { continue }
         results.append(
           ConversationSearchResult(
             conversationID: conversation.id,
             messageID: message.id,
             role: message.role == .user ? .user : .assistant,
             title: conversation.title,
-            snippet: Self.searchSnippet(text: message.content, query: trimmed),
+            snippet: contentMatches
+              ? Self.searchSnippet(text: message.content, query: trimmed)
+              : "Attachment: \(matchingAttachment?.filename ?? trimmed)",
             updatedAt: message.updatedAt
           )
         )
@@ -274,16 +280,19 @@ public actor ConversationStore {
   public func beginTurn(
     conversationID: ConversationID,
     userText: String,
+    attachments: [ChatAttachment] = [],
     at date: Date = .now
   ) async throws -> ChatTurnStart {
     let trimmed = userText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { throw ProviderError.invalidMessages }
+    guard !trimmed.isEmpty || !attachments.isEmpty else { throw ProviderError.invalidMessages }
+    try Self.validateAttachments(attachments)
 
     var result: ChatTurnStart?
     try mutateConversation(conversationID) { conversation in
       let user = ChatMessage(
         role: .user,
         content: trimmed,
+        attachments: attachments.isEmpty ? nil : attachments,
         createdAt: date,
         updatedAt: date,
         status: .complete,
@@ -297,7 +306,8 @@ public actor ConversationStore {
       conversation.draftText = nil
       conversation.updatedAt = date
       if conversation.title == "New Chat" || conversation.messages.count == 2 {
-        conversation.title = Self.generatedTitle(from: trimmed)
+        let titleSource = trimmed.isEmpty ? (attachments.first?.filename ?? "Attachment") : trimmed
+        conversation.title = Self.generatedTitle(from: titleSource)
       }
       result = ChatTurnStart(
         conversationID: conversationID,
@@ -444,6 +454,18 @@ public actor ConversationStore {
       accountID: conversation.accountID,
       modelID: conversation.modelID
     )
+  }
+
+  private static func validateAttachments(_ attachments: [ChatAttachment]) throws {
+    guard attachments.count <= 8 else {
+      throw ProviderError.invalidRequest("A message can include at most 8 attachments.")
+    }
+    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
+      throw ProviderError.invalidRequest("Each attachment must be non-empty and no larger than 20 MB.")
+    }
+    guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
+      throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
+    }
   }
 
   private static func searchSnippet(text: String, query: String) -> String {
