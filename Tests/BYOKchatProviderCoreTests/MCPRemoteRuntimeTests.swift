@@ -15,9 +15,9 @@ import Testing
         "type": .string("string"),
         "x-mcp-header": .string("Region"),
       ]),
-      "ratio": .object([
-        "type": .string("number"),
-        "x-mcp-header": .string("Ratio"),
+      "attempt": .object([
+        "type": .string("integer"),
+        "x-mcp-header": .string("Attempt"),
       ]),
       "nested": .object([
         "type": .string("object"),
@@ -36,13 +36,41 @@ import Testing
     bindings: bindings,
     arguments: .object([
       "region": .string("Hello, 世界"),
-      "ratio": .number(1.5),
+      "attempt": .number(3),
       "nested": .object(["enabled": .bool(true)]),
     ])
   )
   #expect(headers["Mcp-Param-Region"] == "=?base64?SGVsbG8sIOS4lueVjA==?=")
-  #expect(headers["Mcp-Param-Ratio"] == "1.5")
+  #expect(headers["Mcp-Param-Attempt"] == "3")
   #expect(headers["Mcp-Param-Enabled"] == "true")
+}
+
+@Test func mcpHeaderMapperRejectsNumberPropertiesAndInvalidTokens() {
+  let numberSchema: JSONValue = .object([
+    "type": .string("object"),
+    "properties": .object([
+      "ratio": .object([
+        "type": .string("number"),
+        "x-mcp-header": .string("Ratio"),
+      ])
+    ]),
+  ])
+  #expect(throws: MCPError.self) {
+    _ = try MCPToolHeaderMapper.bindings(from: numberSchema)
+  }
+
+  let invalidHeaderSchema: JSONValue = .object([
+    "type": .string("object"),
+    "properties": .object([
+      "value": .object([
+        "type": .string("string"),
+        "x-mcp-header": .string("Bad Header"),
+      ])
+    ]),
+  ])
+  #expect(throws: MCPError.self) {
+    _ = try MCPToolHeaderMapper.bindings(from: invalidHeaderSchema)
+  }
 }
 
 @Test func mcpHeaderMapperRejectsAnnotationsOutsideProperties() {
