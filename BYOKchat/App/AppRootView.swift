@@ -13,6 +13,7 @@ struct AppRootView: View {
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedConversationID: ConversationID?
+  @State private var newChatProjectID: ProjectID?
   @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
@@ -42,8 +43,9 @@ struct AppRootView: View {
           ChatSidebarView(
             chats: model.chats,
             providers: model.providers,
+            projects: model.projects,
             selectedConversationID: selectedConversationID,
-            newChat: startNewChat,
+            newChat: startNewChat(in:),
             selectConversation: selectConversation,
             selectSearchResult: selectSearchResult,
             openSettings: openSettings,
@@ -66,6 +68,10 @@ struct AppRootView: View {
       self.selectedConversationID = nil
       initialScrollMessageID = nil
     }
+    .onChange(of: model.projects.projects.map(\.id)) { _, ids in
+      guard let newChatProjectID, !ids.contains(newChatProjectID) else { return }
+      self.newChatProjectID = nil
+    }
     .onChange(of: scenePhase) { _, phase in
       guard phase != .active else { return }
       Task { await model.chats.persistActiveMessages() }
@@ -75,7 +81,7 @@ struct AppRootView: View {
         .presentationDragIndicator(.visible)
     }
     .overlay(alignment: .top) {
-      if model.providers.isBusy || model.chats.isBusy || model.mcp.isBusy
+      if model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
         || model.dataPortability.isBusy
       {
         ProgressView()
@@ -90,12 +96,14 @@ struct AppRootView: View {
         get: {
           model.providers.errorMessage != nil
             || model.chats.errorMessage != nil
+            || model.projects.errorMessage != nil
             || model.mcp.errorMessage != nil
         },
         set: { presented in
           if !presented {
             model.providers.errorMessage = nil
             model.chats.errorMessage = nil
+            model.projects.errorMessage = nil
             model.mcp.errorMessage = nil
           }
         }
@@ -104,11 +112,13 @@ struct AppRootView: View {
       Button("OK") {
         model.providers.errorMessage = nil
         model.chats.errorMessage = nil
+        model.projects.errorMessage = nil
         model.mcp.errorMessage = nil
       }
     } message: {
       Text(
         model.chats.errorMessage
+          ?? model.projects.errorMessage
           ?? model.providers.errorMessage
           ?? model.mcp.errorMessage
           ?? "Unknown error"
@@ -129,7 +139,9 @@ struct AppRootView: View {
           providers: model.providers,
           mcp: model.mcp,
           openSidebar: openSidebar,
-          startNewChat: startNewChat
+          startNewChat: {
+            startNewChat(in: model.projects.projectID(for: selectedConversationID))
+          }
         )
         .id(
           ChatPresentationID(
@@ -141,6 +153,8 @@ struct AppRootView: View {
         NewChatView(
           chats: model.chats,
           providers: model.providers,
+          projects: model.projects,
+          projectID: newChatProjectID,
           openSidebar: openSidebar,
           openSettings: openSettings,
           selectConversation: selectConversation
@@ -173,20 +187,23 @@ struct AppRootView: View {
     withAnimation { isSidebarPresented = false }
   }
 
-  private func startNewChat() {
+  private func startNewChat(in projectID: ProjectID?) {
     selectedConversationID = nil
+    newChatProjectID = projectID
     initialScrollMessageID = nil
     closeSidebar()
   }
 
   private func selectConversation(_ id: ConversationID) {
     selectedConversationID = id
+    newChatProjectID = nil
     initialScrollMessageID = nil
     closeSidebar()
   }
 
   private func selectSearchResult(_ result: ConversationSearchResult) {
     selectedConversationID = result.conversationID
+    newChatProjectID = nil
     initialScrollMessageID = result.messageID
     closeSidebar()
   }
