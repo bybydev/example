@@ -338,6 +338,28 @@ public actor ConversationStore {
     try await persist()
   }
 
+  public func appendToolRound(
+    conversationID: ConversationID,
+    messageID: ChatMessageID,
+    round: ChatToolRound,
+    at date: Date = .now
+  ) async throws -> ChatMessage {
+    var result: ChatMessage?
+    try mutateMessage(conversationID: conversationID, messageID: messageID) { message in
+      var rounds = message.toolRounds ?? []
+      rounds.append(round)
+      message.toolRounds = rounds
+      message.content = ""
+      message.reasoning = ""
+      message.status = .streaming
+      message.updatedAt = date
+      result = message
+    }
+    try mutateConversation(conversationID) { $0.updatedAt = date }
+    try await persist()
+    return result!
+  }
+
   public func completeMessage(
     conversationID: ConversationID,
     messageID: ChatMessageID,
