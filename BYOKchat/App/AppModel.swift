@@ -69,9 +69,10 @@ final class AppModel {
         fileURL: supportDirectory.appendingPathComponent("mcp-servers-v1.json")
       )
     )
+    let mcpVault = KeychainMCPCredentialVault()
     let mcpRuntime = MCPRemoteRuntime(
       workspace: mcpWorkspace,
-      vault: KeychainMCPCredentialVault()
+      vault: mcpVault
     )
 
     let providerModel = ProviderManagementModel(
@@ -87,22 +88,26 @@ final class AppModel {
       runtime: chatRuntime,
       preferences: preferences
     )
+    let mcpModel = MCPManagementModel(runtime: mcpRuntime)
 
     providers = providerModel
     chats = chatModel
-    mcp = MCPManagementModel(runtime: mcpRuntime)
+    mcp = mcpModel
     dataPortability = DataPortabilityModel(
       service: DataPortabilityService(
         providers: providerWorkspace,
         conversations: conversationStore,
-        accounts: accountManager
+        accounts: accountManager,
+        mcp: mcpWorkspace,
+        mcpCredentials: mcpVault
       ),
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
       accountManager: accountManager,
       preferences: preferences,
       providersModel: providerModel,
-      chatsModel: chatModel
+      chatsModel: chatModel,
+      mcpModel: mcpModel
     )
   }
 
