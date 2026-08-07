@@ -237,20 +237,30 @@ public enum MCPError: Error, LocalizedError, Sendable, Equatable {
 }
 
 public enum MCPToolNamespace {
+  /// Conservative function-name shape accepted across OpenAI-compatible, Anthropic, and Gemini APIs.
+  public static let maximumExposedNameLength = 64
+
   public static func exposedName(serverID: MCPServerID, remoteName: String) -> String {
-    let prefixSource = serverID.rawValue.lowercased().filter { $0.isLetter || $0.isNumber }
-    let serverPrefix = String(prefixSource.prefix(8)).isEmpty ? "server" : String(prefixSource.prefix(8))
+    let prefixSource = serverID.rawValue.lowercased().filter { character in
+      character.isASCII && (character.isLetter || character.isNumber)
+    }
+    let serverPrefix = String(prefixSource.prefix(8)).isEmpty
+      ? "server"
+      : String(prefixSource.prefix(8))
     let sanitized = remoteName.map { character -> Character in
-      if character.isASCII && (character.isLetter || character.isNumber || character == "_" || character == "-") {
+      if character.isASCII
+        && (character.isLetter || character.isNumber || character == "_" || character == "-")
+      {
         return character
       }
       return "_"
     }
-    let body = String(sanitized)
-    let suffix = String(format: "%08x", stableHash(remoteName))
+    let body = String(sanitized).isEmpty ? "tool" : String(sanitized)
+    let hashInput = serverID.rawValue + "\u{0}" + remoteName
+    let suffix = String(format: "%08x", stableHash(hashInput))
     let fixed = "mcp_\(serverPrefix)_"
     let reserved = fixed.count + 1 + suffix.count
-    let available = max(1, 128 - reserved)
+    let available = max(1, maximumExposedNameLength - reserved)
     return fixed + String(body.prefix(available)) + "_" + suffix
   }
 
