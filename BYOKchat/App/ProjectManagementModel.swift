@@ -54,7 +54,11 @@ final class ProjectManagementModel {
     accentID: String,
     accountID: ProviderAccountID?,
     modelID: ModelID?,
-    instructions: String
+    instructions: String,
+    files: [ProjectFile] = [],
+    mcpConfiguration: MCPChatToolConfiguration? = nil,
+    promptPresets: [ProjectPromptPreset] = [],
+    toolPresets: [ProjectToolPreset] = []
   ) async -> ProjectID? {
     var createdID: ProjectID?
     let succeeded = await performResult("Project created") {
@@ -64,7 +68,11 @@ final class ProjectManagementModel {
         accentID: accentID,
         accountID: accountID,
         modelID: modelID,
-        instructions: instructions
+        instructions: instructions,
+        files: files,
+        mcpConfiguration: mcpConfiguration,
+        promptPresets: promptPresets,
+        toolPresets: toolPresets
       )
       createdID = project.id
       await reloadSnapshot()
@@ -79,7 +87,11 @@ final class ProjectManagementModel {
     accentID: String,
     accountID: ProviderAccountID?,
     modelID: ModelID?,
-    instructions: String
+    instructions: String,
+    files: [ProjectFile]? = nil,
+    mcpConfiguration: MCPChatToolConfiguration? = nil,
+    promptPresets: [ProjectPromptPreset]? = nil,
+    toolPresets: [ProjectToolPreset]? = nil
   ) async -> Bool {
     await performResult("Project updated") {
       _ = try await workspace.updateProject(
@@ -89,7 +101,11 @@ final class ProjectManagementModel {
         accentID: accentID,
         accountID: accountID,
         modelID: modelID,
-        instructions: instructions
+        instructions: instructions,
+        files: files,
+        mcpConfiguration: mcpConfiguration,
+        promptPresets: promptPresets,
+        toolPresets: toolPresets
       )
       await reloadSnapshot()
     }
