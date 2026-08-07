@@ -43,13 +43,6 @@ public enum MCPToolHeaderMapper {
           )
         }
         string = String(format: "%.0f", value)
-      case ("number", .number(let value)):
-        guard value.isFinite else {
-          throw MCPError.invalidToolDefinition(
-            "MCP header parameter \(binding.propertyPath.joined(separator: ".")) must be a finite number."
-          )
-        }
-        string = JSONValue.number(value).compactJSONString()
       default:
         throw MCPError.invalidToolDefinition(
           "MCP header parameter \(binding.propertyPath.joined(separator: ".")) has the wrong value type."
@@ -84,7 +77,7 @@ public enum MCPToolHeaderMapper {
     if let annotation = object["x-mcp-header"] {
       guard isReachableProperty,
         case .string(let headerName) = annotation,
-        isValidHeaderName(headerName)
+        isValidToken(headerName)
       else {
         throw MCPError.invalidToolDefinition("Invalid x-mcp-header annotation in MCP tool schema.")
       }
@@ -95,10 +88,10 @@ public enum MCPToolHeaderMapper {
         )
       }
       guard case .string(let type)? = object["type"],
-        ["string", "integer", "number", "boolean"].contains(type)
+        ["string", "integer", "boolean"].contains(type)
       else {
         throw MCPError.invalidToolDefinition(
-          "x-mcp-header can only annotate string, integer, number, or boolean properties."
+          "x-mcp-header can only annotate string, integer, or boolean properties."
         )
       }
       bindings.append(
@@ -152,10 +145,9 @@ public enum MCPToolHeaderMapper {
     return current
   }
 
-  private static func isValidHeaderName(_ value: String) -> Bool {
+  private static func isValidToken(_ value: String) -> Bool {
     guard !value.isEmpty else { return false }
-    return value.unicodeScalars.allSatisfy { scalar in
-      scalar.value >= 0x21 && scalar.value <= 0x7E && scalar.value != 0x3A
-    }
+    let allowed = Set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    return value.allSatisfy { allowed.contains($0) }
   }
 }
