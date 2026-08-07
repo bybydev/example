@@ -159,10 +159,14 @@ extension ChatView {
       .safeAreaInset(edge: .bottom, spacing: 0) {
         ChatComposer(
           draft: $draft,
+          attachments: pendingAttachments,
           isGenerating: chats.isGenerating(conversationID),
           canSend: configurationIssue(conversation) == nil,
           targetLabel: targetLabel(conversation),
           openTarget: { showTargetSettings = true },
+          pickPhoto: { showPhotoPicker = true },
+          pickFile: { showFileImporter = true },
+          removeAttachment: removePendingAttachment,
           send: send,
           stop: {
             Task { @MainActor in
@@ -184,10 +188,16 @@ extension ChatView {
 
   private func send() {
     let text = draft
+    let attachments = pendingAttachments
     draft = ""
+    pendingAttachments = []
     followsLatest = true
     showJumpToLatest = false
-    chats.send(conversationID: conversationID, text: text)
+    chats.send(
+      conversationID: conversationID,
+      text: text,
+      attachments: attachments
+    )
   }
 
   private func regenerate() {
