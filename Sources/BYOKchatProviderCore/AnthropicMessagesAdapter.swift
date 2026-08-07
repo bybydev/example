@@ -50,7 +50,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       var modalities: Set<String> = ["text"]
       if wire.capabilities?.imageInput?.supported == true { modalities.insert("image") }
       if wire.capabilities?.pdfInput?.supported == true { modalities.insert("file") }
-      var parameters: Set<String> = ["max_tokens"]
+      var parameters: Set<String> = ["max_tokens", "tools"]
       if wire.capabilities?.thinking?.supported == true {
         parameters.formUnion(["thinking", "effort"])
       }
@@ -94,8 +94,10 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
 
     let text = decoded.content.compactMap { $0.type == "text" ? $0.text : nil }.joined()
     let reasoning = decoded.content.compactMap { $0.type == "thinking" ? $0.thinking : nil }.joined()
+    let toolCalls = try decoded.content.compactMap(normalizedToolCall)
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !toolCalls.isEmpty
     else {
       throw ProviderError.emptyOutput
     }
@@ -108,7 +110,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       accountID: account.id,
       modelID: ModelID(rawValue: decoded.model ?? validated.model.rawValue),
       finishReason: decoded.stopReason,
-      usage: decoded.usage?.normalized
+      usage: decoded.usage?.normalized,
+      toolCalls: toolCalls
     )
   }
 
@@ -143,6 +146,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           var modelID = validated.model
           var finishReason: String?
           var completed = false
+          var toolFragments: [Int: AnthropicToolAccumulator] = [:]
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -156,7 +160,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 responseID: &responseID,
                 modelID: &modelID,
                 finishReason: &finishReason,
-                completed: &completed
+                completed: &completed,
+                toolFragments: &toolFragments
               )
             }
           }
@@ -170,13 +175,16 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
               responseID: &responseID,
               modelID: &modelID,
               finishReason: &finishReason,
-              completed: &completed
+              completed: &completed,
+              toolFragments: &toolFragments
             )
           }
 
           guard completed else { throw ProviderError.prematureStreamEnd }
+          let toolCalls = try normalizedToolCalls(toolFragments)
           guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !toolCalls.isEmpty
           else {
             throw ProviderError.emptyOutput
           }
@@ -191,7 +199,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
                 accountID: account.id,
                 modelID: modelID,
                 finishReason: finishReason,
-                usage: usage
+                usage: usage,
+                toolCalls: toolCalls
               )
             )
           )
@@ -213,7 +222,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     responseID: inout String?,
     modelID: inout ModelID,
     finishReason: inout String?,
-    completed: inout Bool
+    completed: inout Bool,
+    toolFragments: inout [Int: AnthropicToolAccumulator]
   ) throws {
     guard let payload = event.data.data(using: .utf8) else { throw ProviderError.invalidResponse }
     let decoded: AnthropicStreamEvent
@@ -233,6 +243,13 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           continuation.yield(.usage(usage!))
         }
       }
+    case "content_block_start":
+      if let index = decoded.index,
+        let block = decoded.contentBlock,
+        block.type == "tool_use"
+      {
+        toolFragments[index] = AnthropicToolAccumulator(id: block.id, name: block.name)
+      }
     case "content_block_delta":
       guard let delta = decoded.delta else { return }
       if delta.type == "text_delta", let value = delta.text, !value.isEmpty {
@@ -241,6 +258,13 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       } else if delta.type == "thinking_delta", let value = delta.thinking, !value.isEmpty {
         reasoning += value
         continuation.yield(.reasoningDelta(value))
+      } else if delta.type == "input_json_delta",
+        let index = decoded.index,
+        let value = delta.partialJSON
+      {
+        var accumulator = toolFragments[index] ?? AnthropicToolAccumulator()
+        accumulator.arguments += value
+        toolFragments[index] = accumulator
       }
     case "message_delta":
       if let stop = decoded.delta?.stopReason { finishReason = stop }
@@ -255,10 +279,9 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         code: decoded.error?.type,
         message: decoded.error?.message ?? "Anthropic stream failed."
       )
-    case "ping", "content_block_start", "content_block_stop":
+    case "ping", "content_block_stop":
       break
     default:
-      // Anthropic may add new event types without changing the API version.
       break
     }
   }
@@ -276,9 +299,13 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     for message in request.messages {
       let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
       let attachments = message.attachments ?? []
-      guard !content.isEmpty || !attachments.isEmpty else { continue }
-      if message.role == .system, !attachments.isEmpty {
-        throw ProviderError.invalidRequest("Anthropic system messages cannot contain attachments.")
+      let calls = message.toolCalls ?? []
+      let results = message.toolResults ?? []
+      guard !content.isEmpty || !attachments.isEmpty || !calls.isEmpty || !results.isEmpty else {
+        continue
+      }
+      if message.role == .system, (!attachments.isEmpty || !calls.isEmpty || !results.isEmpty) {
+        throw ProviderError.invalidRequest("Anthropic system messages cannot contain attachments or tools.")
       }
       try validateAttachments(attachments)
       messages.append(
@@ -286,7 +313,9 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           role: message.role,
           content: content,
           reasoning: message.reasoning,
-          attachments: attachments.isEmpty ? nil : attachments
+          attachments: attachments.isEmpty ? nil : attachments,
+          toolCalls: calls.isEmpty ? nil : calls,
+          toolResults: results.isEmpty ? nil : results
         )
       )
     }
@@ -330,6 +359,16 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       "stream": .bool(streaming),
     ]
 
+    if !request.tools.isEmpty {
+      body["tools"] = .array(request.tools.map { tool in
+        .object([
+          "name": .string(tool.name),
+          "description": .string(tool.description),
+          "input_schema": tool.inputSchema,
+        ])
+      })
+    }
+
     let system = request.messages
       .filter { $0.role == .system }
       .map(\.content)
@@ -355,9 +394,22 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   }
 
   private func messageValue(_ message: ProviderMessage) throws -> JSONValue {
+    if message.role == .tool {
+      let blocks = (message.toolResults ?? []).map { result in
+        JSONValue.object([
+          "type": .string("tool_result"),
+          "tool_use_id": .string(result.callID),
+          "content": .string(result.content.compactJSONString()),
+          "is_error": .bool(result.isError),
+        ])
+      }
+      return .object(["role": .string("user"), "content": .array(blocks)])
+    }
+
     let role = message.role == .assistant ? "assistant" : "user"
     let attachments = message.attachments ?? []
-    if attachments.isEmpty {
+    let toolCalls = message.toolCalls ?? []
+    if attachments.isEmpty && toolCalls.isEmpty {
       return .object(["role": .string(role), "content": .string(message.content)])
     }
 
@@ -397,7 +449,43 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     if !message.content.isEmpty {
       blocks.append(.object(["type": .string("text"), "text": .string(message.content)]))
     }
+    for call in toolCalls {
+      blocks.append(
+        .object([
+          "type": .string("tool_use"),
+          "id": .string(call.id),
+          "name": .string(call.name),
+          "input": call.arguments,
+        ])
+      )
+    }
     return .object(["role": .string(role), "content": .array(blocks)])
+  }
+
+  private func normalizedToolCall(_ block: AnthropicContentBlock) throws -> ChatToolCall? {
+    guard block.type == "tool_use" else { return nil }
+    guard let id = block.id, !id.isEmpty,
+      let name = block.name, !name.isEmpty
+    else {
+      throw ProviderError.invalidResponse
+    }
+    return ChatToolCall(id: id, name: name, arguments: block.input ?? .object([:]))
+  }
+
+  private func normalizedToolCalls(
+    _ fragments: [Int: AnthropicToolAccumulator]
+  ) throws -> [ChatToolCall] {
+    try fragments.keys.sorted().map { index in
+      guard let fragment = fragments[index],
+        let id = fragment.id, !id.isEmpty,
+        let name = fragment.name, !name.isEmpty
+      else {
+        throw ProviderError.invalidResponse
+      }
+      let raw = fragment.arguments.trimmingCharacters(in: .whitespacesAndNewlines)
+      let arguments = raw.isEmpty ? JSONValue.object([:]) : try JSONValue.parseJSONString(raw)
+      return ChatToolCall(id: id, name: name, arguments: arguments)
+    }
   }
 
   private func makeRequest(
@@ -475,6 +563,12 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   }
 }
 
+private struct AnthropicToolAccumulator: Sendable {
+  var id: String?
+  var name: String?
+  var arguments = ""
+}
+
 private struct AnthropicModelsResponse: Decodable {
   var data: [AnthropicModelWire]
 }
@@ -527,6 +621,9 @@ private struct AnthropicContentBlock: Decodable {
   var type: String
   var text: String?
   var thinking: String?
+  var id: String?
+  var name: String?
+  var input: JSONValue?
 }
 
 private struct AnthropicUsage: Decodable {
@@ -562,10 +659,17 @@ private struct AnthropicOutputTokenDetails: Decodable {
 
 private struct AnthropicStreamEvent: Decodable {
   var type: String
+  var index: Int?
   var message: AnthropicStreamMessage?
+  var contentBlock: AnthropicContentBlock?
   var delta: AnthropicStreamDelta?
   var usage: AnthropicUsage?
   var error: AnthropicAPIError?
+
+  enum CodingKeys: String, CodingKey {
+    case type, index, message, delta, usage, error
+    case contentBlock = "content_block"
+  }
 }
 
 private struct AnthropicStreamMessage: Decodable {
@@ -578,10 +682,12 @@ private struct AnthropicStreamDelta: Decodable {
   var type: String?
   var text: String?
   var thinking: String?
+  var partialJSON: String?
   var stopReason: String?
 
   enum CodingKeys: String, CodingKey {
     case type, text, thinking
+    case partialJSON = "partial_json"
     case stopReason = "stop_reason"
   }
 }
