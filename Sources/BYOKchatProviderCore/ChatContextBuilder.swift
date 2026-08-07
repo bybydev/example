@@ -4,7 +4,8 @@ public enum ChatContextBuilder {
   public static func build(
     conversation: ChatConversation,
     contextWindow: Int?,
-    reservedOutputTokens: Int? = nil
+    reservedOutputTokens: Int? = nil,
+    supplementalAttachments: [ChatAttachment] = []
   ) throws -> ChatContextResult {
     let outputReserve = max(
       256,
@@ -12,10 +13,19 @@ public enum ChatContextBuilder {
     )
     let inputBudget = contextWindow.map { max(0, $0 - outputReserve) }
 
-    var systemMessages: [ProviderMessage] = []
+    var fixedMessages: [ProviderMessage] = []
     let trimmedSystem = conversation.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedSystem.isEmpty {
-      systemMessages.append(.init(role: .system, content: trimmedSystem))
+      fixedMessages.append(.init(role: .system, content: trimmedSystem))
+    }
+    if !supplementalAttachments.isEmpty {
+      fixedMessages.append(
+        .init(
+          role: .user,
+          content: "Project reference files are attached as persistent context for this conversation. Use them when relevant.",
+          attachments: supplementalAttachments
+        )
+      )
     }
 
     let eligible = conversation.messages.filter { message in
@@ -33,9 +43,9 @@ public enum ChatContextBuilder {
     }
 
     let turns = makeTurns(from: eligible)
-    let systemCost = estimate(messages: systemMessages)
+    let fixedCost = estimate(messages: fixedMessages)
     guard let inputBudget else {
-      let all = systemMessages + turns.flatMap(\.messages)
+      let all = fixedMessages + turns.flatMap(\.messages)
       return .init(
         messages: all,
         omittedMessageCount: 0,
@@ -43,15 +53,15 @@ public enum ChatContextBuilder {
       )
     }
 
-    guard systemCost <= inputBudget else {
+    guard fixedCost <= inputBudget else {
       throw ProviderError.contextWindowExceeded(
-        estimatedInputTokens: systemCost,
+        estimatedInputTokens: fixedCost,
         limit: inputBudget
       )
     }
 
     var selected: [Turn] = []
-    var used = systemCost
+    var used = fixedCost
     for turn in turns.reversed() {
       let cost = estimate(messages: turn.messages)
       if used + cost <= inputBudget {
@@ -70,7 +80,7 @@ public enum ChatContextBuilder {
 
     let selectedMessageCount = selected.reduce(0) { $0 + $1.sourceMessageCount }
     let omitted = max(0, eligible.count - selectedMessageCount)
-    let result = systemMessages + selected.flatMap(\.messages)
+    let result = fixedMessages + selected.flatMap(\.messages)
     return .init(
       messages: result,
       omittedMessageCount: omitted,
