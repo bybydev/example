@@ -335,17 +335,20 @@ struct MCPElicitationCard: View {
 
 extension JSONValue {
   fileprivate func prettyJSONString() -> String {
-    guard let data = try? JSONEncoder.providerEncoder.encode(self),
-      let object = try? JSONSerialization.jsonObject(with: data),
+    if case .string(let value) = self { return value }
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    guard let encoded = try? encoder.encode(self),
+      let object = try? JSONSerialization.jsonObject(with: encoded),
       JSONSerialization.isValidJSONObject(object),
       let pretty = try? JSONSerialization.data(
         withJSONObject: object,
-        options: [.prettyPrinted, .sortedKeys]
+        options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
       ),
       let value = String(data: pretty, encoding: .utf8)
     else {
-      if case .string(let value) = self { return value }
-      return compactJSONString()
+      return String(describing: self)
     }
     return value
   }
