@@ -22,6 +22,59 @@ public struct ChatMessageID: RawRepresentable, Hashable, Codable, Sendable,
   public var description: String { rawValue }
 }
 
+public enum ChatAttachmentKind: String, Codable, Sendable {
+  case image
+  case file
+}
+
+public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
+  public var id: String
+  public var kind: ChatAttachmentKind
+  public var filename: String
+  public var mimeType: String
+  public var data: Data
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    kind: ChatAttachmentKind,
+    filename: String,
+    mimeType: String,
+    data: Data
+  ) {
+    self.id = id
+    self.kind = kind
+    self.filename = filename
+    self.mimeType = mimeType
+    self.data = data
+  }
+
+  public var byteCount: Int { data.count }
+
+  public var isImage: Bool {
+    kind == .image || mimeType.lowercased().hasPrefix("image/")
+  }
+
+  public var isTextLike: Bool {
+    let value = mimeType.lowercased()
+    return value.hasPrefix("text/")
+      || value == "application/json"
+      || value == "application/xml"
+      || value == "application/javascript"
+      || value == "application/x-javascript"
+      || value == "application/yaml"
+      || value == "application/x-yaml"
+  }
+
+  public var utf8Text: String? {
+    guard isTextLike else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  public var dataURL: String {
+    "data:\(mimeType);base64,\(data.base64EncodedString())"
+  }
+}
+
 public enum ChatMessageRole: String, Codable, Sendable {
   case user
   case assistant
@@ -41,6 +94,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var role: ChatMessageRole
   public var content: String
   public var reasoning: String
+  public var attachments: [ChatAttachment]?
   public var createdAt: Date
   public var updatedAt: Date
   public var status: ChatMessageStatus
@@ -59,6 +113,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     role: ChatMessageRole,
     content: String = "",
     reasoning: String = "",
+    attachments: [ChatAttachment]? = nil,
     createdAt: Date = .now,
     updatedAt: Date = .now,
     status: ChatMessageStatus,
@@ -76,6 +131,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     self.role = role
     self.content = content
     self.reasoning = reasoning
+    self.attachments = attachments
     self.createdAt = createdAt
     self.updatedAt = updatedAt
     self.status = status
