@@ -6,7 +6,12 @@ import Testing
 @Test func builtInRegistryContainsPriorityProviders() async throws {
   let registry = try ProviderRegistry.builtIn()
   let definitions = await registry.allDefinitions()
-  #expect(Set(definitions.map(\.id)) == ["deepseek", "openrouter", "nvidia"])
+  #expect(
+    Set(definitions.map(\.id))
+      == ["deepseek", "openrouter", "nvidia", "anthropic", "gemini"]
+  )
+  #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
+  #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
 }
 
 @Test func duplicateProviderIsRejected() throws {
