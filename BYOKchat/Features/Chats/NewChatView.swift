@@ -134,6 +134,16 @@ struct NewChatView: View {
     let attachments = pendingAttachments
     guard !normalized.isEmpty || !attachments.isEmpty else { return }
     guard !isCreating else { return }
+    guard let account = defaultAccount, let modelID = defaultModelID else { return }
+
+    if let issue = providers.attachmentCompatibilityIssue(
+      accountID: account.id,
+      modelID: modelID,
+      attachments: attachments
+    ) {
+      chats.errorMessage = issue
+      return
+    }
 
     isCreating = true
     Task { @MainActor in
