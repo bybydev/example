@@ -101,7 +101,7 @@ struct ChatSidebarView: View {
       .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
     }
     .padding(.horizontal, 20)
-    .padding(.bottom, 12)
+    .padding(.bottom, 10)
   }
 
   private var searchField: some View {
@@ -122,23 +122,23 @@ struct ChatSidebarView: View {
       }
     }
     .padding(.horizontal, 14)
-    .frame(height: 48)
+    .frame(height: 46)
     .background(
       theme.surfaceColor,
-      in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+      in: RoundedRectangle(cornerRadius: 15, style: .continuous)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(theme.borderColor, lineWidth: 0.5)
     )
     .padding(.horizontal, 20)
-    .padding(.bottom, 12)
+    .padding(.bottom, 10)
     .onChange(of: searchText) { _, value in chats.search(value) }
   }
 
   private var conversationHistory: some View {
     ScrollView {
-      LazyVStack(alignment: .leading, spacing: 8) {
+      LazyVStack(alignment: .leading, spacing: 2) {
         if chats.conversations.isEmpty {
           ContentUnavailableView(
             "No Chats",
@@ -150,9 +150,10 @@ struct ChatSidebarView: View {
         } else {
           ForEach(groupedConversations) { group in
             Text(group.title)
-              .font(.system(size: 16, weight: .semibold))
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.secondary)
               .padding(.horizontal, 20)
-              .padding(.top, group.title == groupedConversations.first?.title ? 4 : 18)
+              .padding(.top, group.title == groupedConversations.first?.title ? 4 : 14)
               .padding(.bottom, 4)
 
             ForEach(group.conversations) { conversation in
@@ -161,7 +162,7 @@ struct ChatSidebarView: View {
           }
         }
       }
-      .padding(.bottom, 12)
+      .padding(.bottom, 10)
     }
     .scrollIndicators(.hidden)
   }
@@ -177,18 +178,18 @@ struct ChatSidebarView: View {
             Button {
               selectSearchResult(result)
             } label: {
-              VStack(alignment: .leading, spacing: 5) {
+              VStack(alignment: .leading, spacing: 4) {
                 Text(result.title)
-                  .font(.system(size: 17, weight: .medium))
+                  .font(.system(size: 16, weight: .medium))
                   .lineLimit(1)
                 Text(result.snippet)
-                  .font(.system(size: 14))
+                  .font(.system(size: 13))
                   .foregroundStyle(.secondary)
                   .lineLimit(2)
               }
               .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(.horizontal, 14)
-              .padding(.vertical, 11)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 9)
               .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -243,44 +244,36 @@ struct ChatSidebarView: View {
       .frame(maxWidth: .infinity, alignment: .trailing)
     }
     .padding(.horizontal, 20)
-    .padding(.top, 10)
+    .padding(.top, 8)
   }
 
   private func conversationButton(_ conversation: ChatConversation) -> some View {
     Button {
       selectConversation(conversation.id)
     } label: {
-      HStack(spacing: 12) {
-        Image(systemName: "bubble.left")
-          .font(.system(size: 20, weight: .regular))
-          .frame(width: 28)
+      HStack(spacing: 0) {
+        Text(conversation.title)
+          .font(
+            .system(
+              size: 16,
+              weight: selectedConversationID == conversation.id ? .medium : .regular
+            )
+          )
+          .lineLimit(1)
 
-        VStack(alignment: .leading, spacing: 3) {
-          Text(conversation.title)
-            .font(.system(size: 17, weight: selectedConversationID == conversation.id ? .medium : .regular))
-            .lineLimit(1)
-
-          if let preview = conversation.lastMessagePreview,
-            selectedConversationID == conversation.id
-          {
-            Text(preview)
-              .font(.system(size: 12))
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-          }
-        }
-
-        Spacer(minLength: 0)
+        Spacer(minLength: 12)
       }
       .foregroundStyle(.primary)
-      .padding(.horizontal, 14)
-      .frame(minHeight: selectedConversationID == conversation.id ? 62 : 52)
+      .padding(.horizontal, 12)
+      .frame(height: 42)
       .background(
-        selectedConversationID == conversation.id ? theme.elevatedSurfaceColor : Color.clear,
-        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        selectedConversationID == conversation.id
+          ? theme.elevatedSurfaceColor
+          : Color.clear,
+        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
           .stroke(
             selectedConversationID == conversation.id ? theme.borderColor : Color.clear,
             lineWidth: 0.5
