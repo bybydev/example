@@ -11,7 +11,7 @@ struct MCPToolApprovalCard: View {
       HStack(alignment: .top, spacing: 10) {
         Image(systemName: request.destructiveHint == true ? "exclamationmark.shield" : "hand.raised")
           .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(request.destructiveHint == true ? .orange : .primary)
+          .foregroundStyle(request.destructiveHint == true ? Color.orange : Color.primary)
           .frame(width: 28, height: 28)
 
         VStack(alignment: .leading, spacing: 3) {
@@ -47,14 +47,23 @@ struct MCPToolApprovalCard: View {
       }
       .font(.system(size: 12, weight: .semibold))
 
-      HStack(spacing: 8) {
-        Button("Deny", role: .destructive) { resolve(.deny) }
-          .buttonStyle(.bordered)
-        Spacer(minLength: 4)
-        Button("Allow Once") { resolve(.allowOnce) }
-          .buttonStyle(.bordered)
-        Button("Always Allow") { resolve(.alwaysAllow) }
-          .buttonStyle(.borderedProminent)
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          denyButton
+          Spacer(minLength: 4)
+          allowOnceButton
+          alwaysAllowButton
+        }
+
+        VStack(spacing: 8) {
+          HStack(spacing: 8) {
+            denyButton
+            allowOnceButton
+          }
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          alwaysAllowButton
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
       }
       .font(.system(size: 13, weight: .semibold))
     }
@@ -70,6 +79,21 @@ struct MCPToolApprovalCard: View {
     )
     .accessibilityElement(children: .contain)
   }
+
+  private var denyButton: some View {
+    Button("Deny", role: .destructive) { resolve(.deny) }
+      .buttonStyle(.bordered)
+  }
+
+  private var allowOnceButton: some View {
+    Button("Allow Once") { resolve(.allowOnce) }
+      .buttonStyle(.bordered)
+  }
+
+  private var alwaysAllowButton: some View {
+    Button("Always Allow") { resolve(.alwaysAllow) }
+      .buttonStyle(.borderedProminent)
+  }
 }
 
 struct MCPToolRunningCard: View {
@@ -82,7 +106,7 @@ struct MCPToolRunningCard: View {
       ProgressView()
         .controlSize(.small)
       VStack(alignment: .leading, spacing: 2) {
-        Text(isWaitingForApproval ? "Waiting for approval" : "Running tool")
+        Text(isWaitingForApproval ? "Waiting for approval" : "Tool requested")
           .font(.system(size: 12, weight: .semibold))
         Text(displayName)
           .font(.system(size: 12))
@@ -140,7 +164,7 @@ struct ChatToolRoundView: View {
     } label: {
       HStack(spacing: 8) {
         Image(systemName: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-          .foregroundStyle(failed ? .orange : .secondary)
+          .foregroundStyle(failed ? Color.orange : Color.secondary)
         Text(displayName(call.name))
           .font(.system(size: 12, weight: .semibold))
           .lineLimit(2)
@@ -210,24 +234,38 @@ struct MCPElicitationCard: View {
         formFields
       case .url:
         if let url = request.url {
-          Link(destination: url) {
-            Label("Open Link", systemImage: "arrow.up.right.square")
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Complete the requested step in your browser, then return here.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Link(destination: url) {
+              Label("Open Link", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.borderedProminent)
           }
-          .buttonStyle(.borderedProminent)
         }
       }
 
-      HStack(spacing: 8) {
-        Button("Cancel") { resolve(.cancel) }
-          .buttonStyle(.bordered)
-        Button("Decline", role: .destructive) { resolve(.decline) }
-          .buttonStyle(.bordered)
-        Spacer()
-        Button(request.mode == .url ? "Continue" : "Submit") {
-          resolve(.accept(responseContent()))
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          Button("Cancel") { resolve(.cancel) }
+            .buttonStyle(.bordered)
+          Button("Decline", role: .destructive) { resolve(.decline) }
+            .buttonStyle(.bordered)
+          Spacer()
+          submitButton
         }
-        .buttonStyle(.borderedProminent)
-        .disabled(!canSubmit)
+
+        VStack(alignment: .trailing, spacing: 8) {
+          HStack(spacing: 8) {
+            Button("Cancel") { resolve(.cancel) }
+              .buttonStyle(.bordered)
+            Button("Decline", role: .destructive) { resolve(.decline) }
+              .buttonStyle(.bordered)
+          }
+          submitButton
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
       }
       .font(.system(size: 13, weight: .semibold))
     }
@@ -237,6 +275,14 @@ struct MCPElicitationCard: View {
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .stroke(Color.primary.opacity(0.09), lineWidth: 0.8)
     )
+  }
+
+  private var submitButton: some View {
+    Button(request.mode == .url ? "Continue" : "Submit") {
+      resolve(.accept(responseContent()))
+    }
+    .buttonStyle(.borderedProminent)
+    .disabled(!canSubmit)
   }
 
   @ViewBuilder
