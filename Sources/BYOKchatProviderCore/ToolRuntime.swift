@@ -5,7 +5,12 @@ public protocol ChatToolExecuting: Sendable {
   func execute(_ call: ChatToolCall) async -> ChatToolResult
 }
 
-public actor ToolRuntime: ChatToolExecuting {
+public protocol ChatConversationToolExecuting: Sendable {
+  func availableTools(conversationID: ConversationID) async -> [ChatToolDefinition]
+  func execute(_ call: ChatToolCall, conversationID: ConversationID) async -> ChatToolResult
+}
+
+public actor ToolRuntime: ChatToolExecuting, ChatConversationToolExecuting {
   public typealias Handler = @Sendable (JSONValue) async throws -> JSONValue
 
   private struct Entry: Sendable {
@@ -49,6 +54,10 @@ public actor ToolRuntime: ChatToolExecuting {
     }
   }
 
+  public func availableTools(conversationID: ConversationID) async -> [ChatToolDefinition] {
+    await availableTools()
+  }
+
   public func execute(_ call: ChatToolCall) async -> ChatToolResult {
     guard let entry = entries[call.name] else {
       return ChatToolResult(
@@ -74,5 +83,9 @@ public actor ToolRuntime: ChatToolExecuting {
         isError: true
       )
     }
+  }
+
+  public func execute(_ call: ChatToolCall, conversationID: ConversationID) async -> ChatToolResult {
+    await execute(call)
   }
 }
