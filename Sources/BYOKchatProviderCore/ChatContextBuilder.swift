@@ -27,7 +27,8 @@ public enum ChatContextBuilder {
       case .assistant:
         return message.status == .complete
           && (!message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            || !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(message.toolRounds ?? []).isEmpty)
       }
     }
 
@@ -105,15 +106,41 @@ public enum ChatContextBuilder {
           sourceMessageCount: 1
         )
       case .assistant:
-        let providerMessage = ProviderMessage(
-          role: .assistant,
-          content: message.content,
-          reasoning: message.reasoning.isEmpty ? nil : message.reasoning
-        )
+        var providerMessages: [ProviderMessage] = []
+        for round in message.toolRounds ?? [] {
+          providerMessages.append(
+            ProviderMessage(
+              role: .assistant,
+              content: round.assistantText,
+              reasoning: round.assistantReasoning.isEmpty ? nil : round.assistantReasoning,
+              toolCalls: round.calls
+            )
+          )
+          providerMessages.append(
+            ProviderMessage(
+              role: .tool,
+              content: "",
+              toolResults: round.results
+            )
+          )
+        }
+
+        if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+          providerMessages.append(
+            ProviderMessage(
+              role: .assistant,
+              content: message.content,
+              reasoning: message.reasoning.isEmpty ? nil : message.reasoning
+            )
+          )
+        }
+
         if current == nil {
-          current = Turn(messages: [providerMessage], sourceMessageCount: 1)
+          current = Turn(messages: providerMessages, sourceMessageCount: 1)
         } else {
-          current?.messages.append(providerMessage)
+          current?.messages.append(contentsOf: providerMessages)
           current?.sourceMessageCount += 1
         }
       }
@@ -126,6 +153,8 @@ public enum ChatContextBuilder {
     messages.reduce(0) { partial, message in
       partial + 6 + estimateTokens(message.content) + estimateTokens(message.reasoning ?? "")
         + estimate(attachments: message.attachments ?? [])
+        + estimate(toolCalls: message.toolCalls ?? [])
+        + estimate(toolResults: message.toolResults ?? [])
     }
   }
 
@@ -134,9 +163,19 @@ public enum ChatContextBuilder {
       if let text = attachment.utf8Text {
         return partial + 16 + estimateTokens(text)
       }
-      // Binary multimodal tokenization differs by provider/model. Reserve a conservative
-      // fixed budget instead of treating base64 bytes as prompt text.
       return partial + (attachment.isImage ? 1_024 : 2_048)
+    }
+  }
+
+  private static func estimate(toolCalls: [ChatToolCall]) -> Int {
+    toolCalls.reduce(0) { partial, call in
+      partial + 12 + estimateTokens(call.name) + estimateTokens(call.arguments.compactJSONString())
+    }
+  }
+
+  private static func estimate(toolResults: [ChatToolResult]) -> Int {
+    toolResults.reduce(0) { partial, result in
+      partial + 12 + estimateTokens(result.name) + estimateTokens(result.content.compactJSONString())
     }
   }
 }
