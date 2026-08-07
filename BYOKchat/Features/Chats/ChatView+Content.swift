@@ -208,6 +208,18 @@ extension ChatView {
   private func send() {
     let text = draft
     let attachments = pendingAttachments
+
+    if let conversation,
+      let issue = providers.attachmentCompatibilityIssue(
+        accountID: conversation.accountID,
+        modelID: conversation.modelID,
+        attachments: attachments
+      )
+    {
+      chats.errorMessage = issue
+      return
+    }
+
     draft = ""
     pendingAttachments = []
     followsLatest = true
