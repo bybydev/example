@@ -176,6 +176,7 @@ public actor ChatRuntime {
       var requestMessages = context.messages
       var accumulatedUsage: ProviderUsage?
       var toolRoundCount = 0
+      var totalToolCallCount = 0
 
       while true {
         try Task.checkCancellation()
@@ -255,6 +256,7 @@ public actor ChatRuntime {
             )
           }
 
+          totalToolCallCount += response.toolCalls.count
           continuation.yield(
             .toolCallsStarted(
               messageID: turn.assistantMessage.id,
@@ -310,6 +312,13 @@ public actor ChatRuntime {
         }
 
         response.usage = addingUsage(accumulatedUsage, completedStepUsage)
+        response.metadata = ChatBilling.metadata(
+          existing: response.metadata,
+          usage: response.usage,
+          model: modelRecord?.model,
+          modelRequestCount: toolRoundCount + 1,
+          toolCallCount: totalToolCallCount
+        )
         let completed = try await conversations.completeMessage(
           conversationID: conversationID,
           messageID: turn.assistantMessage.id,
