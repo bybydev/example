@@ -8,6 +8,7 @@ import Observation
 final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
+  let projects: ProjectManagementModel
   let mcp: MCPManagementModel
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
@@ -54,6 +55,11 @@ final class AppModel {
         fileURL: supportDirectory.appendingPathComponent("conversations-v1.json")
       )
     )
+    let projectWorkspace = ProjectWorkspaceStore(
+      persistence: JSONFileProjectWorkspacePersistence(
+        fileURL: supportDirectory.appendingPathComponent("projects-v1.json")
+      )
+    )
 
     let mcpWorkspace = MCPWorkspaceStore(
       persistence: JSONFileMCPWorkspacePersistence(
@@ -92,12 +98,14 @@ final class AppModel {
       accountManager: accountManager,
       runtime: providerRuntime
     )
+    let projectModel = ProjectManagementModel(workspace: projectWorkspace)
     let chatModel = ChatManagementModel(
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
       runtime: chatRuntime,
       preferences: preferences,
-      mcpWorkspace: mcpWorkspace
+      mcpWorkspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace
     )
     let mcpModel = MCPManagementModel(
       runtime: mcpRuntime,
@@ -107,6 +115,7 @@ final class AppModel {
     )
 
     providers = providerModel
+    projects = projectModel
     chats = chatModel
     mcp = mcpModel
     dataPortability = DataPortabilityModel(
@@ -131,7 +140,9 @@ final class AppModel {
     guard !hasLoaded else { return }
     await providers.load()
     await mcp.load()
+    await projects.load()
     await chats.load()
+    await projects.reconcile(conversations: chats.conversations)
     hasLoaded = true
   }
 }
