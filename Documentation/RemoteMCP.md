@@ -1,12 +1,18 @@
 # Remote MCP
 
-BYOKchat Phase 2 implements remote Model Context Protocol servers over Streamable HTTP.
+BYOKchat implements remote Model Context Protocol servers over Streamable HTTP with conversation-scoped tool selection, explicit user permissions, and native tool interaction UI.
 
-The transport layer is intentionally separate from chat permission policy. Phase 2 can configure servers, negotiate protocol behavior, discover tools, cache their schemas, and execute a tool through the MCP runtime. Discovered MCP tools are **not registered into the chat `ToolRuntime` yet**. Phase 3 adds per-chat selection, approval policy, and visible tool-call UI before a model can invoke remote tools.
+The MCP v1 architecture is intentionally split into three layers:
+
+1. provider-neutral model/tool orchestration
+2. remote MCP transport/discovery/execution
+3. per-chat authorization and human interaction
+
+Remote MCP tools are never exposed globally just because a server exists. `MCPConversationToolRuntime` builds the model-visible catalog for each conversation independently.
 
 ## Supported protocol eras
 
-BYOKchat prefers the current MCP `2026-07-28` protocol and automatically falls back to initialize-era Streamable HTTP servers.
+BYOKchat prefers MCP `2026-07-28` and automatically falls back to initialize-era Streamable HTTP servers.
 
 ### MCP 2026-07-28
 
@@ -15,13 +21,15 @@ The modern protocol is stateless at the MCP transport layer.
 BYOKchat:
 
 - probes with `server/discover`
+- bounds the discovery probe so older servers that ignore the method can fall back
 - sends `MCP-Protocol-Version: 2026-07-28`
 - sends `Mcp-Method` on modern requests
 - sends `Mcp-Name` for named requests such as `tools/call`
 - includes per-request MCP client metadata in `_meta`
+- advertises form and URL elicitation support
 - does not use `initialize`, `notifications/initialized`, or `Mcp-Session-Id`
 - accepts either JSON or request-scoped Server-Sent Events responses
-- ignores unrelated notification events on a request SSE stream and accepts only the JSON-RPC response whose ID matches the request
+- ignores unrelated notification/progress events on a request SSE stream and accepts only the JSON-RPC response whose ID matches the request
 
 ### Legacy Streamable HTTP fallback
 
@@ -40,7 +48,7 @@ The legacy path:
 5. reuses the session ID on later requests
 6. reinitializes once if a stateful server reports an expired session with HTTP 404
 
-The older deprecated HTTP+SSE transport is not implemented. Phase 2 supports remote **Streamable HTTP** only.
+The deprecated pre-Streamable-HTTP HTTP+SSE transport is not implemented.
 
 ## Server configuration
 
@@ -57,6 +65,8 @@ Settings → MCP Servers supports:
 Remote endpoints must use HTTPS and cannot contain embedded URL credentials or fragments.
 
 Protocol-owned headers are reserved and cannot be overridden through additional headers.
+
+Saving an enabled server immediately negotiates the connection and performs initial tool discovery.
 
 ## Credentials
 
@@ -104,9 +114,9 @@ BYOKchat creates a deterministic exposed name using:
 - a sanitized remote tool name
 - a stable hash of the full server ID plus remote name
 
-The result is limited to 64 characters and uses only letters, digits, `_`, and `-`, which is a conservative common subset for OpenAI-compatible, Anthropic, and Gemini function calling.
+The result is limited to 64 characters and uses only letters, digits, `_`, and `-`, a conservative common subset for OpenAI-compatible, Anthropic, and Gemini function calling.
 
-This also prevents two MCP servers exposing the same remote tool name from colliding in the generic tool runtime.
+This prevents two MCP servers exposing the same remote name from colliding.
 
 ## MCP parameter headers
 
@@ -114,65 +124,111 @@ MCP `2026-07-28` can annotate tool input properties with `x-mcp-header`.
 
 BYOKchat validates those annotations during discovery and mirrors matching call arguments into `Mcp-Param-*` headers.
 
-Supported annotated value types are:
+The final `2026-07-28` rules allow only:
 
 - string
 - integer
-- number
 - boolean
 
-Annotations must be reachable through JSON Schema `properties`, and header names must be case-insensitively unique. Invalid annotations cause only that tool to be omitted.
+`number` is deliberately not accepted for `x-mcp-header`. Header annotation names must be valid HTTP token values, annotations must be reachable through JSON Schema `properties`, and header names must be case-insensitively unique. Invalid annotations cause only that tool to be omitted.
 
-Header values that cannot safely be emitted as direct ASCII header values are encoded with the MCP Base64 sentinel format.
+Integer header values must remain within the JSON safe-integer range. Header values that cannot safely be emitted directly are encoded with the MCP Base64 sentinel format.
 
-If a modern server reports a header/schema mismatch, BYOKchat forces a fresh `tools/list` and retries the call once using the refreshed tool definition.
+If a modern server reports a header/schema mismatch, BYOKchat forces fresh discovery and retries the call once using the refreshed tool definition.
 
-## Tool calls
+## Per-chat tool selection
 
-`MCPRemoteRuntime.callTool` sends `tools/call` and normalizes the result into `MCPToolCallOutput`.
+Each conversation owns its MCP exposure policy in the MCP workspace.
 
-- plain text-only content becomes a string
-- `structuredContent` is preserved as JSON
-- mixed/non-text content remains structured JSON
-- MCP `isError` is preserved as a tool-result error flag
+A chat can enable one or more globally enabled MCP servers. Tools from unselected servers are never included in that conversation's provider request.
 
-`resultType: input_required` is recognized but not completed in Phase 2. It surfaces as an explicit `inputRequired` error because Multi Round-Trip Request UI belongs with Phase 3 approval and interaction work.
+Each discovered tool has one policy:
 
-## Streamable HTTP responses
+- **Ask** — expose the tool to the model, but require approval before remote execution
+- **Always Allow** — expose and execute without another approval for that conversation
+- **Disabled** — do not expose the tool to the model
 
-POST requests advertise both:
+The default is **Ask**. This also applies to tools discovered after the server was enabled, so adding a new remote capability never silently inherits blanket execution permission.
 
-- `application/json`
-- `text/event-stream`
+Policies are scoped by conversation and namespaced tool identity. Simultaneous chats therefore cannot leak MCP tool visibility or Always-Allow choices into one another.
 
-If a server chooses request-scoped SSE, BYOKchat incrementally decodes the stream, tolerates notifications/progress events, and returns only the matching JSON-RPC result/error for the pending request.
+Execution re-checks the live MCP workspace after the model requests a tool. If a server/tool is disabled after the model saw its schema but before execution, BYOKchat returns a structured denial/error result instead of making the remote call.
 
-Cancellation closes consumption of the active request stream through the existing HTTP transport task cancellation path.
+## Approval flow
+
+For Ask-policy calls, BYOKchat pauses tool execution and renders an approval card containing:
+
+- MCP server name
+- human-readable tool name and description
+- model-supplied arguments
+- read-only/destructive annotation hints when present
+
+The user can choose:
+
+- **Allow Once**
+- **Always Allow**
+- **Deny**
+
+Always-Allow is persisted before the waiting call resumes. Denial is returned to the model as a normal tool error result, allowing the model to recover or explain what it could not do instead of crashing the entire assistant turn.
+
+Tool annotations are untrusted presentation hints. Authorization does not depend on a server claiming a tool is read-only or non-destructive.
+
+Cancelling the assistant generation also cancels a pending approval or elicitation wait.
+
+## Tool activity UI
+
+When a provider emits tool calls, the chat timeline immediately shows tool activity rather than appearing frozen.
+
+- pending approval is shown inline
+- currently executing calls show a running card
+- completed structured tool rounds are persisted with the assistant message
+- persisted calls render as expandable Done/Failed cards
+- argument and result JSON remains inspectable and selectable
+
+The same structured rounds continue to rebuild provider context on later model turns.
+
+## MCP 2026 multi-round input
+
+Modern MCP can return `resultType: input_required` from `tools/call` instead of completing immediately.
+
+BYOKchat handles this as a bounded logical tool call:
+
+1. parse `inputRequests` and opaque `requestState`
+2. fulfill supported embedded requests through native chat interaction UI
+3. retry the original `tools/call` with a fresh JSON-RPC request ID
+4. include an `inputResponses` entry for every input request
+5. echo `requestState` byte-for-byte without interpreting it
+6. repeat until `resultType: complete` or the round limit is reached
+
+The current client supports embedded `elicitation/create` requests in:
+
+- **form** mode
+- **URL** mode
+
+Form requests use a deliberately restricted flat schema renderer for strings, integers, numbers, booleans, and string arrays. Users can accept, decline, or cancel. URL requests open an HTTPS destination out of band and return only the user's action to the MCP server.
+
+Request-state-only `input_required` rounds are paced before retrying instead of presenting an empty prompt.
+
+Interactive execution is capped at 10 input-required rounds to prevent an unbounded server-driven loop.
+
+Sampling and roots input requests are not advertised and are rejected rather than silently fulfilled.
 
 ## Backup and restore
 
-Full BYOKchat backups now include MCP server configuration and cached discovery snapshots as an optional backward-compatible field in backup schema v1.
+Full BYOKchat backups include:
 
-Older schema-v1 backups without MCP data remain decodable.
+- MCP server configuration
+- cached discovery snapshots
+- per-chat enabled server IDs
+- per-tool Ask/Always-Allow/Disabled policy
 
-MCP credentials remain excluded.
+Credentials remain excluded.
 
-## Phase 3 boundary
+Conversation restore can recreate conversations with new local IDs. Import therefore returns a source-to-local conversation ID mapping and remaps MCP chat policy onto the restored conversations. The same portability path now preserves attachment data and structured tool rounds as well.
 
-Phase 2 deliberately does **not** make remote tools available to the model automatically.
+Older schema-v1 backups and MCP workspaces without chat policy remain decodable.
 
-Phase 3 adds:
-
-- per-chat MCP server/tool selection
-- Ask / Always Allow / Disabled policy
-- Allow Once / Always Allow / Deny flows
-- human-readable argument review
-- running / success / failure tool cards
-- collapsed tool results
-- retry UX
-- handling for interactive `input_required` results where appropriate
-
-Only after those controls exist should discovered MCP tools be registered into the shared chat `ToolRuntime`.
+Deleting an MCP server scrubs that server from every stored chat selection and removes known per-tool policies associated with its cached catalog.
 
 ## Deferred beyond MCP v1
 
@@ -183,6 +239,8 @@ The current plan intentionally defers:
 - deprecated HTTP+SSE transport
 - MCP Apps
 - Tasks extension
+- sampling
+- roots
 - subscriptions/listen and broader extension handling
 
-These can be layered onto the remote runtime without changing the provider-neutral Phase 1 tool-call model.
+These can be layered onto the existing provider-neutral tool model and conversation-scoped authorization boundary without creating a second chat engine.
