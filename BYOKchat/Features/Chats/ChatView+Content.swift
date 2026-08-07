@@ -2,6 +2,13 @@ import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
+private struct ChatAutoScrollTrigger: Equatable {
+  var conversationID: ConversationID
+  var messageCount: Int
+  var streamRevision: Int
+  var isGenerating: Bool
+}
+
 extension ChatView {
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
@@ -56,7 +63,6 @@ extension ChatView {
             .frame(height: 1)
             .id("chat-bottom")
         }
-        .scrollTargetLayout()
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 18)
@@ -98,30 +104,42 @@ extension ChatView {
           showJumpToLatest = true
         }
       }
-      .onChange(of: conversation.messages.count) { _, _ in
-        if followsLatest {
-          scrollToBottom(proxy)
-        } else {
-          showJumpToLatest = true
-        }
-      }
-      .onChange(of: chats.streamRevision) { _, _ in
-        if followsLatest {
-          scrollToBottom(proxy, animated: false)
-        } else {
-          showJumpToLatest = true
-        }
-      }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
           followsLatest = true
           showJumpToLatest = false
-          scrollToBottom(proxy)
-        } else if followsLatest {
-          scrollToBottom(proxy, animated: false)
+        } else if !isNearBottom {
+          showJumpToLatest = true
         }
       }
+      .task(
+        id: ChatAutoScrollTrigger(
+          conversationID: conversationID,
+          messageCount: conversation.messages.count,
+          streamRevision: chats.streamRevision(for: conversationID),
+          isGenerating: chats.isGenerating(conversationID)
+        )
+      ) {
+        guard hasCompletedInitialScroll else { return }
+        guard followsLatest, !isUserDraggingTimeline else {
+          if !isNearBottom { showJumpToLatest = true }
+          return
+        }
+
+        // Streaming text changes the rendered Markdown height asynchronously. Coalesce rapid
+        // revisions and wait for the next layout pass before moving the viewport. This prevents
+        // competing ScrollViewReader commands from targeting stale LazyVStack geometry.
+        do {
+          try await Task.sleep(for: .milliseconds(12))
+        } catch {
+          return
+        }
+        await Task.yield()
+        guard !Task.isCancelled, followsLatest, !isUserDraggingTimeline else { return }
+        scrollToBottom(proxy, animated: false)
+      }
       .task(id: conversationID) {
+        hasCompletedInitialScroll = false
         followsLatest = initialScrollMessageID == nil
         showJumpToLatest = initialScrollMessageID != nil
 
@@ -137,6 +155,7 @@ extension ChatView {
         }
         guard !Task.isCancelled else { return }
         scrollToInitialTarget(proxy)
+        hasCompletedInitialScroll = true
       }
       .overlay(alignment: .bottomTrailing) {
         if showJumpToLatest {
