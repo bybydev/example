@@ -14,6 +14,7 @@ struct ChatView: View {
 
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
+  @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
 
   @Environment(\.appFoundationTheme) private var theme
@@ -45,6 +46,7 @@ struct ChatView: View {
     initialScrollMessageID: ChatMessageID? = nil,
     chats: ChatManagementModel,
     providers: ProviderManagementModel,
+    projects: ProjectManagementModel,
     mcp: MCPManagementModel,
     openSidebar: @escaping () -> Void = {},
     startNewChat: @escaping () -> Void = {}
@@ -53,6 +55,7 @@ struct ChatView: View {
     self.initialScrollMessageID = initialScrollMessageID
     self.chats = chats
     self.providers = providers
+    self.projects = projects
     self.mcp = mcp
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
@@ -60,6 +63,10 @@ struct ChatView: View {
 
   var conversation: ChatConversation? {
     chats.conversation(conversationID)
+  }
+
+  var project: ChatProject? {
+    projects.project(for: conversationID)
   }
 
   var latestAssistantID: ChatMessageID? {
@@ -84,6 +91,13 @@ struct ChatView: View {
     .toolbar(.hidden, for: .navigationBar)
     .safeAreaInset(edge: .top, spacing: 0) {
       ChatTopBar(openSidebar: openSidebar, newChat: startNewChat) {
+        if let project, !project.projectPromptPresets.isEmpty {
+          Menu("Prompts", systemImage: "text.bubble") {
+            ForEach(project.projectPromptPresets) { preset in
+              Button(preset.name) { applyPromptPreset(preset) }
+            }
+          }
+        }
         Button("Chat Settings", systemImage: "slider.horizontal.3") {
           showTargetSettings = true
         }
@@ -104,6 +118,7 @@ struct ChatView: View {
         Button("Delete", systemImage: "trash", role: .destructive) {
           Task { @MainActor in
             await chats.deleteConversation(conversationID)
+            await projects.reloadFromStorage()
             await mcp.reloadFromStorage()
             startNewChat()
             dismiss()
@@ -123,6 +138,7 @@ struct ChatView: View {
     .sheet(isPresented: $showToolSettings) {
       ConversationToolsView(
         conversationID: conversationID,
+        projects: projects,
         mcp: mcp
       )
     }
@@ -209,6 +225,16 @@ struct ChatView: View {
     .onChange(of: draft) { _, value in
       guard restoredDraft else { return }
       chats.saveDraft(value, conversationID: conversationID)
+    }
+  }
+
+  private func applyPromptPreset(_ preset: ProjectPromptPreset) {
+    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      draft = value
+    } else {
+      draft += "\n\n" + value
     }
   }
 
@@ -323,9 +349,14 @@ struct ChatView: View {
 
 private struct ConversationToolsView: View {
   let conversationID: ConversationID
+  @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
 
   @Environment(\.dismiss) private var dismiss
+
+  private var project: ChatProject? {
+    projects.project(for: conversationID)
+  }
 
   var body: some View {
     NavigationStack {
@@ -337,6 +368,35 @@ private struct ConversationToolsView: View {
           )
           .font(.footnote)
           .foregroundStyle(.secondary)
+
+          if mcp.inheritsProjectTools(conversationID), let project {
+            Label("Inheriting defaults from \(project.name)", systemImage: "arrow.triangle.branch")
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          } else if mcp.hasChatOverride(conversationID), project != nil {
+            Button("Reset to Project Defaults", systemImage: "arrow.uturn.backward") {
+              Task { @MainActor in
+                await mcp.removeChatConfiguration(conversationID)
+              }
+            }
+          }
+        }
+
+        if let project, !project.projectToolPresets.isEmpty {
+          Section("Project Tool Presets") {
+            ForEach(project.projectToolPresets) { preset in
+              Button {
+                Task { @MainActor in
+                  await mcp.applyChatConfiguration(
+                    preset.configuration,
+                    conversationID: conversationID
+                  )
+                }
+              } label: {
+                Label(preset.name, systemImage: "wrench.adjustable")
+              }
+            }
+          }
         }
 
         if mcp.servers.isEmpty {
