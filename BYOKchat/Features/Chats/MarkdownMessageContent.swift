@@ -225,6 +225,8 @@ struct MarkdownMessageContent: View {
       }
       .table { configuration in
         ScrollView(.horizontal) {
+          // Keep the table at its natural total width. Individual columns are capped below,
+          // so a wide multi-column table can still exceed the viewport and scroll horizontally.
           configuration.label
             .fixedSize(horizontal: true, vertical: true)
             .markdownTableBorderStyle(.init(color: theme.borderColor))
@@ -249,11 +251,11 @@ struct MarkdownMessageContent: View {
             }
             BackgroundColor(nil)
           }
-          // MarkdownUI's table grid can under-measure wrapped cells, which makes
-          // multiline content paint into later rows. Keep cells intrinsic-width
-          // and let the enclosing horizontal ScrollView own overflow instead.
-          .fixedSize(horizontal: true, vertical: true)
-          .frame(minWidth: 88, alignment: .leading)
+          // Let text wrap inside a bounded column and grow the row vertically. The enclosing
+          // table still owns horizontal overflow when the sum of the capped columns is wider
+          // than the screen.
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(minWidth: 88, maxWidth: 240, alignment: .topLeading)
           .padding(.horizontal, 10)
           .padding(.vertical, 7)
       }
