@@ -44,6 +44,7 @@ struct AppRootView: View {
             chats: model.chats,
             providers: model.providers,
             projects: model.projects,
+            mcp: model.mcp,
             selectedConversationID: selectedConversationID,
             newChat: startNewChat(in:),
             selectConversation: selectConversation,
@@ -137,6 +138,7 @@ struct AppRootView: View {
           initialScrollMessageID: initialScrollMessageID,
           chats: model.chats,
           providers: model.providers,
+          projects: model.projects,
           mcp: model.mcp,
           openSidebar: openSidebar,
           startNewChat: {
@@ -154,6 +156,7 @@ struct AppRootView: View {
           chats: model.chats,
           providers: model.providers,
           projects: model.projects,
+          mcp: model.mcp,
           projectID: newChatProjectID,
           openSidebar: openSidebar,
           openSettings: openSettings,
