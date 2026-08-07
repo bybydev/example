@@ -150,6 +150,7 @@ public enum WorkspaceImportValidator {
             "Duplicate chat message ID: \(message.id.rawValue)"
           )
         }
+        try validateAttachments(message.attachments ?? [], messageID: message.id)
       }
     }
   }
@@ -173,6 +174,44 @@ public enum WorkspaceImportValidator {
       guard account.providerID == conversation.providerID else {
         throw ProviderError.importConflict(
           "Conversation \(conversation.title) does not match its provider account."
+        )
+      }
+    }
+  }
+
+  private static func validateAttachments(
+    _ attachments: [ChatAttachment],
+    messageID: ChatMessageID
+  ) throws {
+    guard attachments.count <= 8 else {
+      throw ProviderError.importConflict(
+        "Message \(messageID.rawValue) contains more than 8 attachments."
+      )
+    }
+    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
+      throw ProviderError.importConflict(
+        "Message \(messageID.rawValue) contains an empty attachment or one larger than 20 MB."
+      )
+    }
+    guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
+      throw ProviderError.importConflict(
+        "Message \(messageID.rawValue) contains more than 40 MB of attachments."
+      )
+    }
+    try requireUnique(
+      attachments,
+      id: \ChatAttachment.id,
+      description: { "Message \(messageID.rawValue) contains duplicate attachment ID: \($0)" }
+    )
+    for attachment in attachments {
+      guard !attachment.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw ProviderError.importConflict(
+          "Message \(messageID.rawValue) contains an attachment with an empty filename."
+        )
+      }
+      guard !attachment.mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw ProviderError.importConflict(
+          "Message \(messageID.rawValue) contains an attachment with an empty MIME type."
         )
       }
     }
