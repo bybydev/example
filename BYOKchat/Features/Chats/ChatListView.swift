@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatListView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
+  @Bindable var mcp: MCPManagementModel
   let openProviders: () -> Void
 
   @State private var path: [ConversationID] = []
@@ -53,7 +54,8 @@ struct ChatListView: View {
           initialScrollMessageID: searchTarget?.conversationID == id
             ? searchTarget?.messageID : nil,
           chats: chats,
-          providers: providers
+          providers: providers,
+          mcp: mcp
         )
       }
     }
