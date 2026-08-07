@@ -55,15 +55,6 @@ final class AppModel {
       )
     )
 
-    let toolRuntime = ToolRuntime()
-    self.toolRuntime = toolRuntime
-    let chatRuntime = ChatRuntime(
-      providerRuntime: providerRuntime,
-      providerWorkspace: providerWorkspace,
-      conversations: conversationStore,
-      toolRuntime: toolRuntime
-    )
-
     let mcpWorkspace = MCPWorkspaceStore(
       persistence: JSONFileMCPWorkspacePersistence(
         fileURL: supportDirectory.appendingPathComponent("mcp-servers-v1.json")
@@ -74,6 +65,24 @@ final class AppModel {
       workspace: mcpWorkspace,
       vault: mcpVault,
       transport: MCPHTTPTransport()
+    )
+    let approvalCenter = MCPToolApprovalCenter()
+    let elicitationCenter = MCPElicitationCenter()
+
+    let toolRuntime = ToolRuntime()
+    self.toolRuntime = toolRuntime
+    let conversationToolRuntime = MCPConversationToolRuntime(
+      localRuntime: toolRuntime,
+      mcpRuntime: mcpRuntime,
+      workspace: mcpWorkspace,
+      approvals: approvalCenter,
+      elicitations: elicitationCenter
+    )
+    let chatRuntime = ChatRuntime(
+      providerRuntime: providerRuntime,
+      providerWorkspace: providerWorkspace,
+      conversations: conversationStore,
+      toolRuntime: conversationToolRuntime
     )
 
     let providerModel = ProviderManagementModel(
@@ -87,9 +96,15 @@ final class AppModel {
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
       runtime: chatRuntime,
-      preferences: preferences
+      preferences: preferences,
+      mcpWorkspace: mcpWorkspace
     )
-    let mcpModel = MCPManagementModel(runtime: mcpRuntime)
+    let mcpModel = MCPManagementModel(
+      runtime: mcpRuntime,
+      workspace: mcpWorkspace,
+      approvals: approvalCenter,
+      elicitations: elicitationCenter
+    )
 
     providers = providerModel
     chats = chatModel
@@ -115,8 +130,8 @@ final class AppModel {
   func load() async {
     guard !hasLoaded else { return }
     await providers.load()
-    await chats.load()
     await mcp.load()
+    await chats.load()
     hasLoaded = true
   }
 }
