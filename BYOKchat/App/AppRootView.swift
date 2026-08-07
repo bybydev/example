@@ -16,7 +16,6 @@ struct AppRootView: View {
   @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
-  @State private var didRestoreSelection = false
 
   var body: some View {
     GeometryReader { geometry in
@@ -61,9 +60,6 @@ struct AppRootView: View {
     }
     .task {
       await model.load()
-      guard !didRestoreSelection else { return }
-      selectedConversationID = model.chats.conversations.first?.id
-      didRestoreSelection = true
     }
     .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
       guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
