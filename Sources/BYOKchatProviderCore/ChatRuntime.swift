@@ -19,6 +19,8 @@ public actor ChatRuntime {
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
+  private let toolRuntime: (any ChatToolExecuting)?
+  private let maxToolRounds: Int
 
   private struct ActiveGenerationState: Sendable {
     var assistantID: ChatMessageID
@@ -35,11 +37,15 @@ public actor ChatRuntime {
     providerRuntime: any ProviderStreamingRuntime,
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
+    toolRuntime: (any ChatToolExecuting)? = nil,
+    maxToolRounds: Int = 8,
     partialPersistenceInterval: Duration = .milliseconds(300)
   ) {
     self.providerRuntime = providerRuntime
     self.providerWorkspace = providerWorkspace
     self.conversations = conversations
+    self.toolRuntime = toolRuntime
+    self.maxToolRounds = max(1, maxToolRounds)
     self.partialPersistenceInterval = partialPersistenceInterval
   }
 
@@ -131,7 +137,7 @@ public actor ChatRuntime {
     var assistantID: ChatMessageID?
     var visibleText = ""
     var reasoningText = ""
-    var usage: ProviderUsage?
+    var visibleUsage: ProviderUsage?
 
     do {
       let turn = try await prepareTurn(
@@ -161,68 +167,142 @@ public actor ChatRuntime {
         conversationID: conversationID
       )
 
-      let request = ProviderRequest(
-        model: conversation.modelID,
-        messages: context.messages,
-        options: conversation.options
-      )
-      let stream = try await providerRuntime.stream(
-        request: request,
-        accountID: conversation.accountID
-      )
+      let tools = await toolRuntime?.availableTools() ?? []
+      var requestMessages = context.messages
+      var accumulatedUsage: ProviderUsage?
+      var toolRoundCount = 0
 
-      let clock = ContinuousClock()
-      var lastPersist = clock.now
-      var finalResponse: ProviderResponse?
-
-      for try await event in stream {
+      while true {
         try Task.checkCancellation()
-        switch event {
-        case .textDelta(let value):
-          visibleText += value
-          continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
-        case .reasoningDelta(let value):
-          reasoningText += value
-          continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
-        case .usage(let value):
-          usage = value
-          continuation.yield(.usage(messageID: turn.assistantMessage.id, value: value))
-        case .completed(let response):
-          finalResponse = response
-        }
+        visibleText = ""
+        reasoningText = ""
+        visibleUsage = accumulatedUsage
+        var stepUsage: ProviderUsage?
+        var finalResponse: ProviderResponse?
+        let clock = ContinuousClock()
+        var lastPersist = clock.now
 
-        activeStates[conversationID] = ActiveGenerationState(
-          assistantID: turn.assistantMessage.id,
-          content: visibleText,
-          reasoning: reasoningText,
-          usage: usage
+        let request = ProviderRequest(
+          model: conversation.modelID,
+          messages: requestMessages,
+          options: conversation.options,
+          tools: tools
+        )
+        let stream = try await providerRuntime.stream(
+          request: request,
+          accountID: conversation.accountID
         )
 
-        if lastPersist.duration(to: clock.now) >= partialPersistenceInterval {
-          try await conversations.updateStreamingMessage(
-            conversationID: conversationID,
-            messageID: turn.assistantMessage.id,
+        for try await event in stream {
+          try Task.checkCancellation()
+          switch event {
+          case .textDelta(let value):
+            visibleText += value
+            continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
+          case .reasoningDelta(let value):
+            reasoningText += value
+            continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
+          case .usage(let value):
+            stepUsage = value
+            visibleUsage = addingUsage(accumulatedUsage, value)
+            if let visibleUsage {
+              continuation.yield(.usage(messageID: turn.assistantMessage.id, value: visibleUsage))
+            }
+          case .completed(let response):
+            finalResponse = response
+          }
+
+          activeStates[conversationID] = ActiveGenerationState(
+            assistantID: turn.assistantMessage.id,
             content: visibleText,
             reasoning: reasoningText,
-            usage: usage
+            usage: visibleUsage
           )
-          lastPersist = clock.now
-        }
-      }
 
-      guard var response = finalResponse else {
-        throw ProviderError.prematureStreamEnd
+          if lastPersist.duration(to: clock.now) >= partialPersistenceInterval {
+            try await conversations.updateStreamingMessage(
+              conversationID: conversationID,
+              messageID: turn.assistantMessage.id,
+              content: visibleText,
+              reasoning: reasoningText,
+              usage: visibleUsage
+            )
+            lastPersist = clock.now
+          }
+        }
+
+        guard var response = finalResponse else {
+          throw ProviderError.prematureStreamEnd
+        }
+        if response.text.isEmpty { response.text = visibleText }
+        if response.reasoning.isEmpty { response.reasoning = reasoningText }
+        let completedStepUsage = response.usage ?? stepUsage
+
+        if !response.toolCalls.isEmpty {
+          guard toolRoundCount < maxToolRounds else {
+            throw ProviderError.invalidRequest(
+              "The model exceeded the maximum of \(maxToolRounds) consecutive tool-call rounds."
+            )
+          }
+          guard let toolRuntime else {
+            throw ProviderError.invalidRequest(
+              "The model requested a tool, but no tool runtime is configured."
+            )
+          }
+
+          var results: [ChatToolResult] = []
+          results.reserveCapacity(response.toolCalls.count)
+          for call in response.toolCalls {
+            try Task.checkCancellation()
+            results.append(await toolRuntime.execute(call))
+          }
+
+          let round = ChatToolRound(
+            calls: response.toolCalls,
+            results: results,
+            assistantText: response.text,
+            assistantReasoning: response.reasoning,
+            usage: completedStepUsage
+          )
+          _ = try await conversations.appendToolRound(
+            conversationID: conversationID,
+            messageID: turn.assistantMessage.id,
+            round: round
+          )
+          continuation.yield(.toolRound(messageID: turn.assistantMessage.id, value: round))
+
+          accumulatedUsage = addingUsage(accumulatedUsage, completedStepUsage)
+          requestMessages.append(
+            ProviderMessage(
+              role: .assistant,
+              content: response.text,
+              reasoning: response.reasoning.isEmpty ? nil : response.reasoning,
+              toolCalls: response.toolCalls
+            )
+          )
+          requestMessages.append(
+            ProviderMessage(role: .tool, content: "", toolResults: results)
+          )
+          toolRoundCount += 1
+          activeStates[conversationID] = ActiveGenerationState(
+            assistantID: turn.assistantMessage.id,
+            content: "",
+            reasoning: "",
+            usage: accumulatedUsage
+          )
+          continue
+        }
+
+        response.usage = addingUsage(accumulatedUsage, completedStepUsage)
+        let completed = try await conversations.completeMessage(
+          conversationID: conversationID,
+          messageID: turn.assistantMessage.id,
+          response: response
+        )
+        continuation.yield(.completed(completed))
+        continuation.finish()
+        return
       }
-      if response.text.isEmpty { response.text = visibleText }
-      if response.reasoning.isEmpty { response.reasoning = reasoningText }
-      if response.usage == nil { response.usage = usage }
-      let completed = try await conversations.completeMessage(
-        conversationID: conversationID,
-        messageID: turn.assistantMessage.id,
-        response: response
-      )
-      continuation.yield(.completed(completed))
-      continuation.finish()
     } catch {
       if Task.isCancelled || error is CancellationError {
         if let assistantID,
@@ -276,5 +356,20 @@ public actor ChatRuntime {
         confirmingUncertainCompletion: confirmingUncertainCompletion
       ).turn
     }
+  }
+
+  private func addingUsage(_ lhs: ProviderUsage?, _ rhs: ProviderUsage?) -> ProviderUsage? {
+    guard lhs != nil || rhs != nil else { return nil }
+    return ProviderUsage(
+      inputTokens: adding(lhs?.inputTokens, rhs?.inputTokens),
+      outputTokens: adding(lhs?.outputTokens, rhs?.outputTokens),
+      cachedInputTokens: adding(lhs?.cachedInputTokens, rhs?.cachedInputTokens),
+      reasoningTokens: adding(lhs?.reasoningTokens, rhs?.reasoningTokens)
+    )
+  }
+
+  private func adding(_ lhs: Int?, _ rhs: Int?) -> Int? {
+    guard lhs != nil || rhs != nil else { return nil }
+    return (lhs ?? 0) + (rhs ?? 0)
   }
 }
