@@ -82,6 +82,9 @@ struct AppRootView: View {
     }
     .sheet(isPresented: $isSettingsPresented) {
       SettingsView(model: model)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          ProjectSyncSettingsBar(model: model.projectSync)
+        }
         .presentationDragIndicator(.visible)
     }
     .overlay(alignment: .top) {
