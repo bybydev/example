@@ -19,6 +19,7 @@ public actor ChatRuntime {
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
+  private let projectWorkspace: ProjectWorkspaceStore?
   private let toolRuntime: (any ChatConversationToolExecuting)?
   private let maxToolRounds: Int
 
@@ -37,6 +38,7 @@ public actor ChatRuntime {
     providerRuntime: any ProviderStreamingRuntime,
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
+    projectWorkspace: ProjectWorkspaceStore? = nil,
     toolRuntime: (any ChatConversationToolExecuting)? = nil,
     maxToolRounds: Int = 8,
     partialPersistenceInterval: Duration = .milliseconds(300)
@@ -44,6 +46,7 @@ public actor ChatRuntime {
     self.providerRuntime = providerRuntime
     self.providerWorkspace = providerWorkspace
     self.conversations = conversations
+    self.projectWorkspace = projectWorkspace
     self.toolRuntime = toolRuntime
     self.maxToolRounds = max(1, maxToolRounds)
     self.partialPersistenceInterval = partialPersistenceInterval
@@ -156,11 +159,13 @@ public actor ChatRuntime {
       let conversation = try await conversations.conversation(id: conversationID)
       let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
         .first { $0.model.id == conversation.modelID }
+      let projectAttachments = await projectWorkspace?.files(for: conversationID).map(\.attachment) ?? []
       let context = try ChatContextBuilder.build(
         conversation: conversation,
         contextWindow: modelRecord?.model.contextWindow,
         reservedOutputTokens: conversation.options.maxOutputTokens
-          ?? modelRecord?.model.maxOutputTokens
+          ?? modelRecord?.model.maxOutputTokens,
+        supplementalAttachments: projectAttachments
       )
       try await conversations.setContextOmissionCount(
         context.omittedMessageCount,
