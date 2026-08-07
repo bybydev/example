@@ -6,19 +6,22 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
   private let workspace: MCPWorkspaceStore
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
+  private let maxInputRequiredRounds: Int
 
   public init(
     localRuntime: (any ChatToolExecuting)? = nil,
     mcpRuntime: MCPRemoteRuntime,
     workspace: MCPWorkspaceStore,
     approvals: MCPToolApprovalCenter,
-    elicitations: MCPElicitationCenter
+    elicitations: MCPElicitationCenter,
+    maxInputRequiredRounds: Int = 10
   ) {
     self.localRuntime = localRuntime
     self.mcpRuntime = mcpRuntime
     self.workspace = workspace
     self.approvals = approvals
     self.elicitations = elicitations
+    self.maxInputRequiredRounds = max(1, maxInputRequiredRounds)
   }
 
   public func availableTools(conversationID: ConversationID) async -> [ChatToolDefinition] {
@@ -125,21 +128,11 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     }
 
     do {
-      let output = try await mcpRuntime.callTool(
-        serverID: binding.serverID,
-        remoteName: binding.remoteTool.remoteName,
-        arguments: call.arguments
-      )
-      return ChatToolResult(
-        callID: call.id,
-        name: call.name,
-        content: output.content,
-        isError: output.isError
-      )
-    } catch MCPError.inputRequired {
-      return failure(
+      return try await executeRemoteTool(
         call,
-        "This MCP tool requested additional interactive input that cannot be completed in this build."
+        conversationID: conversationID,
+        server: server,
+        binding: binding
       )
     } catch is CancellationError {
       return failure(call, "Tool execution was cancelled.")
@@ -153,11 +146,225 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     await elicitations.cancelConversation(conversationID)
   }
 
+  private func executeRemoteTool(
+    _ call: ChatToolCall,
+    conversationID: ConversationID,
+    server: MCPRemoteServer,
+    binding: MCPToolBinding
+  ) async throws -> ChatToolResult {
+    var inputResponses: [String: JSONValue]?
+    var requestState: String?
+
+    for roundIndex in 0..<maxInputRequiredRounds {
+      try Task.checkCancellation()
+      let round = try await mcpRuntime.callToolRound(
+        serverID: binding.serverID,
+        remoteName: binding.remoteTool.remoteName,
+        arguments: call.arguments,
+        inputResponses: inputResponses,
+        requestState: requestState
+      )
+
+      switch round {
+      case .complete(let output):
+        return ChatToolResult(
+          callID: call.id,
+          name: call.name,
+          content: output.content,
+          isError: output.isError
+        )
+
+      case .inputRequired(let required):
+        guard roundIndex + 1 < maxInputRequiredRounds else {
+          throw MCPError.transport(
+            "The MCP tool exceeded \(maxInputRequiredRounds) interactive input rounds."
+          )
+        }
+
+        requestState = required.requestState
+        guard !required.inputRequests.isEmpty else {
+          // Current MCP client guidance uses requestState-only rounds for load shedding.
+          try await Task.sleep(for: .milliseconds(250))
+          inputResponses = nil
+          continue
+        }
+
+        var responses: [String: JSONValue] = [:]
+        for key in required.inputRequests.keys.sorted() {
+          guard let inputRequest = required.inputRequests[key] else { continue }
+          let request = try parseElicitationRequest(
+            inputRequest,
+            interactionKey: key,
+            conversationID: conversationID,
+            server: server,
+            binding: binding
+          )
+          let decision = await elicitations.requestInput(request)
+          try Task.checkCancellation()
+          responses[key] = elicitationResponse(decision)
+        }
+        inputResponses = responses
+      }
+    }
+
+    throw MCPError.transport(
+      "The MCP tool exceeded \(maxInputRequiredRounds) interactive input rounds."
+    )
+  }
+
+  private func parseElicitationRequest(
+    _ value: JSONValue,
+    interactionKey: String,
+    conversationID: ConversationID,
+    server: MCPRemoteServer,
+    binding: MCPToolBinding
+  ) throws -> MCPElicitationRequest {
+    guard case .object(let requestObject) = value,
+      stringValue(requestObject["method"]) == "elicitation/create",
+      case .object(let params)? = requestObject["params"],
+      let message = stringValue(params["message"]),
+      !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw MCPError.invalidResponse
+    }
+
+    let modeValue = stringValue(params["mode"]) ?? "form"
+    switch modeValue {
+    case "form":
+      guard let schema = params["requestedSchema"] else { throw MCPError.invalidResponse }
+      return MCPElicitationRequest(
+        interactionKey: interactionKey,
+        conversationID: conversationID,
+        serverID: binding.serverID,
+        serverName: server.name,
+        exposedToolName: binding.exposedName,
+        remoteToolName: binding.remoteTool.remoteName,
+        message: message,
+        mode: .form,
+        fields: try parseElicitationFields(schema)
+      )
+
+    case "url":
+      guard let rawURL = stringValue(params["url"]),
+        let url = URL(string: rawURL),
+        url.scheme?.lowercased() == "https",
+        url.host?.isEmpty == false,
+        url.user == nil,
+        url.password == nil
+      else {
+        throw MCPError.invalidResponse
+      }
+      return MCPElicitationRequest(
+        interactionKey: interactionKey,
+        conversationID: conversationID,
+        serverID: binding.serverID,
+        serverName: server.name,
+        exposedToolName: binding.exposedName,
+        remoteToolName: binding.remoteTool.remoteName,
+        message: message,
+        mode: .url,
+        url: url
+      )
+
+    default:
+      throw MCPError.invalidResponse
+    }
+  }
+
+  private func parseElicitationFields(_ schema: JSONValue) throws -> [MCPElicitationField] {
+    guard case .object(let root) = schema,
+      stringValue(root["type"]) == "object"
+    else {
+      throw MCPError.invalidResponse
+    }
+
+    let required = Set(stringArray(root["required"]))
+    let properties: [String: JSONValue]
+    if case .object(let values)? = root["properties"] {
+      properties = values
+    } else {
+      properties = [:]
+    }
+    guard properties.count <= 32 else {
+      throw MCPError.invalidResponse
+    }
+
+    return try properties.keys.sorted().map { name in
+      guard !name.isEmpty,
+        let value = properties[name],
+        case .object(let property) = value,
+        let type = stringValue(property["type"])
+      else {
+        throw MCPError.invalidResponse
+      }
+
+      let kind: MCPElicitationFieldKind
+      let allowedValues: [String]
+      switch type {
+      case "string":
+        kind = .string
+        allowedValues = stringArray(property["enum"])
+      case "integer":
+        kind = .integer
+        allowedValues = []
+      case "number":
+        kind = .number
+        allowedValues = []
+      case "boolean":
+        kind = .boolean
+        allowedValues = []
+      case "array":
+        guard case .object(let items)? = property["items"],
+          stringValue(items["type"]) == "string"
+        else {
+          throw MCPError.invalidResponse
+        }
+        kind = .stringArray
+        allowedValues = stringArray(items["enum"])
+      default:
+        throw MCPError.invalidResponse
+      }
+
+      return MCPElicitationField(
+        name: name,
+        title: stringValue(property["title"]),
+        description: stringValue(property["description"]),
+        kind: kind,
+        isRequired: required.contains(name),
+        allowedValues: allowedValues,
+        defaultValue: property["default"]
+      )
+    }
+  }
+
+  private func elicitationResponse(_ decision: MCPElicitationDecision) -> JSONValue {
+    switch decision {
+    case .accept(let content):
+      var value: [String: JSONValue] = ["action": .string("accept")]
+      if !content.isEmpty { value["content"] = .object(content) }
+      return .object(value)
+    case .decline:
+      return .object(["action": .string("decline")])
+    case .cancel:
+      return .object(["action": .string("cancel")])
+    }
+  }
+
   private func annotationBool(_ key: String, tool: MCPRemoteTool) -> Bool? {
     guard case .object(let annotations)? = tool.annotations,
       case .bool(let value)? = annotations[key]
     else { return nil }
     return value
+  }
+
+  private func stringValue(_ value: JSONValue?) -> String? {
+    guard case .string(let value)? = value else { return nil }
+    return value
+  }
+
+  private func stringArray(_ value: JSONValue?) -> [String] {
+    guard case .array(let values)? = value else { return [] }
+    return values.compactMap { stringValue($0) }
   }
 
   private func sorted(_ definitions: [ChatToolDefinition]) -> [ChatToolDefinition] {
