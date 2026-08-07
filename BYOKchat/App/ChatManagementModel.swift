@@ -21,7 +21,7 @@ final class ChatManagementModel {
   private(set) var liveMessages: [ChatMessageID: LiveMessage] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
   private(set) var searchResults: [ConversationSearchResult] = []
-  private(set) var streamRevision = 0
+  private(set) var streamRevisions: [ConversationID: Int] = [:]
   var isBusy = false
   var errorMessage: String?
 
@@ -72,6 +72,10 @@ final class ChatManagementModel {
 
   func draft(for conversationID: ConversationID) -> String {
     conversation(conversationID)?.draftText ?? ""
+  }
+
+  func streamRevision(for conversationID: ConversationID) -> Int {
+    streamRevisions[conversationID] ?? 0
   }
 
   var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
@@ -161,6 +165,7 @@ final class ChatManagementModel {
     draftTasks[id]?.cancel()
     draftTasks.removeValue(forKey: id)
     draftRevisions.removeValue(forKey: id)
+    streamRevisions.removeValue(forKey: id)
     do {
       try await conversationStore.deleteConversation(id)
       try await reloadSnapshot()
@@ -320,7 +325,7 @@ final class ChatManagementModel {
           )
         }
         for try await event in stream {
-          await handle(event)
+          await handle(event, conversationID: conversationID)
         }
       } catch is CancellationError {
         try? await reloadSnapshot()
@@ -331,29 +336,31 @@ final class ChatManagementModel {
     }
   }
 
-  private func handle(_ event: ChatRuntimeEvent) async {
+  private func handle(_ event: ChatRuntimeEvent, conversationID: ConversationID) async {
     switch event {
     case .turnStarted(let turn):
       liveMessages[turn.assistantMessage.id] = .init()
       try? await reloadSnapshot()
+      advanceStreamRevision(for: conversationID)
     case .textDelta(let messageID, let value):
       var live = liveMessages[messageID] ?? .init()
       live.content += value
       liveMessages[messageID] = live
-      streamRevision += 1
+      advanceStreamRevision(for: conversationID)
     case .reasoningDelta(let messageID, let value):
       var live = liveMessages[messageID] ?? .init()
       live.reasoning += value
       liveMessages[messageID] = live
-      streamRevision += 1
+      advanceStreamRevision(for: conversationID)
     case .usage(let messageID, let value):
       var live = liveMessages[messageID] ?? .init()
       live.usage = value
       liveMessages[messageID] = live
-      streamRevision += 1
+      advanceStreamRevision(for: conversationID)
     case .completed(let message), .cancelled(let message), .failed(let message):
       liveMessages.removeValue(forKey: message.id)
       try? await reloadSnapshot()
+      advanceStreamRevision(for: conversationID)
     }
   }
 
@@ -369,8 +376,12 @@ final class ChatManagementModel {
     let previousCount = liveMessages.count
     liveMessages = liveMessages.filter { !messageIDs.contains($0.key) }
     if liveMessages.count != previousCount {
-      streamRevision &+= 1
+      advanceStreamRevision(for: conversationID)
     }
+  }
+
+  private func advanceStreamRevision(for conversationID: ConversationID) {
+    streamRevisions[conversationID, default: 0] &+= 1
   }
 
   private func defaultOptions(providerID: ProviderID) -> ProviderRequestOptions {
