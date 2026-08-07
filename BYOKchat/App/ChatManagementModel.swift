@@ -12,7 +12,7 @@ final class ChatManagementModel {
   }
 
   private enum GenerationAction {
-    case send(String)
+    case send(String, [ChatAttachment])
     case edit(ChatMessageID, String)
     case regenerate(confirmingUncertainCompletion: Bool)
   }
@@ -218,9 +218,16 @@ final class ChatManagementModel {
     )
   }
 
-  func send(conversationID: ConversationID, text: String) {
+  func send(
+    conversationID: ConversationID,
+    text: String,
+    attachments: [ChatAttachment] = []
+  ) {
     saveDraft("", conversationID: conversationID)
-    startGeneration(conversationID: conversationID, action: .send(text))
+    startGeneration(
+      conversationID: conversationID,
+      action: .send(text, attachments)
+    )
   }
 
   func editAndResend(
@@ -294,8 +301,12 @@ final class ChatManagementModel {
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
-        case .send(let text):
-          stream = await runtime.send(conversationID: conversationID, userText: text)
+        case .send(let text, let attachments):
+          stream = await runtime.send(
+            conversationID: conversationID,
+            userText: text,
+            attachments: attachments
+          )
         case .edit(let messageID, let text):
           stream = await runtime.editAndResend(
             conversationID: conversationID,
