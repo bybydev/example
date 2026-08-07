@@ -85,7 +85,9 @@ public enum BuiltInProviders {
         providerID: anthropicID,
         id: "claude-sonnet-5",
         displayName: "Claude Sonnet 5",
-        supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "effort"],
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        supportedParameters: ["max_tokens", "thinking", "effort"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       ),
@@ -93,7 +95,9 @@ public enum BuiltInProviders {
         providerID: anthropicID,
         id: "claude-opus-5",
         displayName: "Claude Opus 5",
-        supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "effort"],
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        supportedParameters: ["max_tokens", "thinking", "effort"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       ),
@@ -115,7 +119,9 @@ public enum BuiltInProviders {
         providerID: geminiID,
         id: "gemini-3.6-flash",
         displayName: "Gemini 3.6 Flash",
-        supportedParameters: ["temperature", "topP", "maxOutputTokens", "thinkingConfig"],
+        contextWindow: 1_048_576,
+        maxOutputTokens: 65_536,
+        supportedParameters: ["maxOutputTokens", "thinkingConfig"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       )
