@@ -215,6 +215,10 @@ public actor ProviderRuntime {
     switch definition.apiFamily {
     case .openAIChatCompletions:
       return OpenAICompatibleAdapter(definition: definition, transport: transport)
+    case .anthropicMessages:
+      return AnthropicMessagesAdapter(definition: definition, transport: transport)
+    case .geminiGenerateContent:
+      return GeminiGenerateContentAdapter(definition: definition, transport: transport)
     }
   }
 }
