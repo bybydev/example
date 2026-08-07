@@ -151,7 +151,13 @@ public enum WorkspaceImportValidator {
           )
         }
         try validateAttachments(message.attachments ?? [], messageID: message.id)
-        try validateToolRounds(message.toolRounds ?? [], messageID: message.id)
+        let toolRounds = message.toolRounds ?? []
+        if message.role == .user, !toolRounds.isEmpty {
+          throw ProviderError.importConflict(
+            "User message \(message.id.rawValue) cannot contain assistant tool-call rounds."
+          )
+        }
+        try validateToolRounds(toolRounds, messageID: message.id)
       }
     }
   }
