@@ -150,7 +150,7 @@ extension OpenAICompatibleAdapter {
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])
       }
-    case .nvidia, .genericOpenAICompatible:
+    case .nvidia, .anthropic, .gemini, .genericOpenAICompatible:
       break
     }
     return body
