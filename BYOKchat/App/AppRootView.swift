@@ -74,8 +74,11 @@ struct AppRootView: View {
       self.newChatProjectID = nil
     }
     .onChange(of: scenePhase) { _, phase in
-      guard phase != .active else { return }
-      Task { await model.chats.persistActiveMessages() }
+      if phase == .active {
+        Task { await model.projectSync.syncIfEnabled() }
+      } else {
+        Task { await model.chats.persistActiveMessages() }
+      }
     }
     .sheet(isPresented: $isSettingsPresented) {
       SettingsView(model: model)
@@ -83,7 +86,7 @@ struct AppRootView: View {
     }
     .overlay(alignment: .top) {
       if model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
-        || model.dataPortability.isBusy
+        || model.projectSync.isSyncing || model.dataPortability.isBusy
       {
         ProgressView()
           .padding(10)
@@ -99,6 +102,7 @@ struct AppRootView: View {
             || model.chats.errorMessage != nil
             || model.projects.errorMessage != nil
             || model.mcp.errorMessage != nil
+            || model.projectSync.errorMessage != nil
         },
         set: { presented in
           if !presented {
@@ -106,6 +110,7 @@ struct AppRootView: View {
             model.chats.errorMessage = nil
             model.projects.errorMessage = nil
             model.mcp.errorMessage = nil
+            model.projectSync.errorMessage = nil
           }
         }
       )
@@ -115,6 +120,7 @@ struct AppRootView: View {
         model.chats.errorMessage = nil
         model.projects.errorMessage = nil
         model.mcp.errorMessage = nil
+        model.projectSync.errorMessage = nil
       }
     } message: {
       Text(
@@ -122,6 +128,7 @@ struct AppRootView: View {
           ?? model.projects.errorMessage
           ?? model.providers.errorMessage
           ?? model.mcp.errorMessage
+          ?? model.projectSync.errorMessage
           ?? "Unknown error"
       )
     }
