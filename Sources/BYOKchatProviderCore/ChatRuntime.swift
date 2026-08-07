@@ -167,7 +167,12 @@ public actor ChatRuntime {
         conversationID: conversationID
       )
 
-      let tools = await toolRuntime?.availableTools() ?? []
+      let tools: [ChatToolDefinition]
+      if let toolRuntime {
+        tools = await toolRuntime.availableTools()
+      } else {
+        tools = []
+      }
       var requestMessages = context.messages
       var accumulatedUsage: ProviderUsage?
       var toolRoundCount = 0
@@ -262,7 +267,8 @@ public actor ChatRuntime {
             results: results,
             assistantText: response.text,
             assistantReasoning: response.reasoning,
-            usage: completedStepUsage
+            usage: completedStepUsage,
+            providerContinuation: response.toolContinuation
           )
           _ = try await conversations.appendToolRound(
             conversationID: conversationID,
@@ -277,7 +283,8 @@ public actor ChatRuntime {
               role: .assistant,
               content: response.text,
               reasoning: response.reasoning.isEmpty ? nil : response.reasoning,
-              toolCalls: response.toolCalls
+              toolCalls: response.toolCalls,
+              toolContinuation: response.toolContinuation
             )
           )
           requestMessages.append(
