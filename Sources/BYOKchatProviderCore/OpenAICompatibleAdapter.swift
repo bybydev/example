@@ -101,9 +101,11 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     let message = decoded.choices.first?.message
     let text = message?.content ?? ""
     let reasoning = message?.normalizedReasoning ?? ""
+    let toolCalls = try normalizedToolCalls(message?.toolCalls ?? [])
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !toolCalls.isEmpty
     else {
       throw ProviderError.emptyOutput
     }
@@ -116,7 +118,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       modelID: ModelID(rawValue: decoded.model ?? validated.model.rawValue),
       finishReason: decoded.choices.first?.finishReason,
       usage: decoded.usage?.normalized,
-      metadata: responseMetadata(response.headers, decoded)
+      metadata: responseMetadata(response.headers, decoded),
+      toolCalls: toolCalls
     )
   }
 
@@ -152,6 +155,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           var modelID = validated.model
           var completed = false
           var metadata = responseMetadata(stream.headers, nil)
+          var toolFragments: [Int: OpenAIToolCallAccumulator] = [:]
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -166,7 +170,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 responseID: &responseID,
                 modelID: &modelID,
                 completed: &completed,
-                metadata: &metadata
+                metadata: &metadata,
+                toolFragments: &toolFragments
               )
             }
           }
@@ -181,15 +186,18 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               responseID: &responseID,
               modelID: &modelID,
               completed: &completed,
-              metadata: &metadata
+              metadata: &metadata,
+              toolFragments: &toolFragments
             )
           }
           guard completed || finishReason != nil else {
             throw ProviderError.prematureStreamEnd
           }
+          let toolCalls = try normalizedToolCalls(toolFragments)
           guard
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || !toolCalls.isEmpty
           else {
             throw ProviderError.emptyOutput
           }
@@ -204,7 +212,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 modelID: modelID,
                 finishReason: finishReason,
                 usage: usage,
-                metadata: metadata
+                metadata: metadata,
+                toolCalls: toolCalls
               )
             )
           )
@@ -227,7 +236,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     responseID: inout String?,
     modelID: inout ModelID,
     completed: inout Bool,
-    metadata: inout [String: String]
+    metadata: inout [String: String],
+    toolFragments: inout [Int: OpenAIToolCallAccumulator]
   ) throws {
     if event.data == "[DONE]" {
       completed = true
@@ -262,6 +272,56 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         reasoning += delta
         continuation.yield(.reasoningDelta(delta))
       }
+      for fragment in choice.delta.toolCalls ?? [] {
+        let index = fragment.index ?? 0
+        var accumulator = toolFragments[index] ?? OpenAIToolCallAccumulator()
+        if let value = fragment.id { accumulator.id = value }
+        if let value = fragment.function?.name { accumulator.name = value }
+        if let value = fragment.function?.arguments { accumulator.arguments += value }
+        toolFragments[index] = accumulator
+      }
     }
   }
+
+  private func normalizedToolCalls(_ wires: [ToolCallWire]) throws -> [ChatToolCall] {
+    try wires.enumerated().map { offset, wire in
+      guard let id = wire.id, !id.isEmpty,
+        let name = wire.function?.name, !name.isEmpty
+      else {
+        throw ProviderError.invalidResponse
+      }
+      let arguments = try parseToolArguments(wire.function?.arguments)
+      return ChatToolCall(id: id, name: name, arguments: arguments)
+    }
+  }
+
+  private func normalizedToolCalls(
+    _ fragments: [Int: OpenAIToolCallAccumulator]
+  ) throws -> [ChatToolCall] {
+    try fragments.keys.sorted().map { index in
+      guard let value = fragments[index],
+        let id = value.id, !id.isEmpty,
+        let name = value.name, !name.isEmpty
+      else {
+        throw ProviderError.invalidResponse
+      }
+      return ChatToolCall(
+        id: id,
+        name: name,
+        arguments: try parseToolArguments(value.arguments)
+      )
+    }
+  }
+
+  private func parseToolArguments(_ raw: String?) throws -> JSONValue {
+    let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return .object([:]) }
+    return try JSONValue.parseJSONString(value)
+  }
+}
+
+private struct OpenAIToolCallAccumulator: Sendable {
+  var id: String?
+  var name: String?
+  var arguments = ""
 }
