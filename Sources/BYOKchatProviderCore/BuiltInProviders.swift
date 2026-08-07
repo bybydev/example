@@ -19,13 +19,13 @@ public enum BuiltInProviders {
         providerID: deepSeekID, id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
         contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
-          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort",
+          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
         ], isSeed: true),
       .init(
         providerID: deepSeekID, id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
         contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
-          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort",
+          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
         ], isSeed: true),
     ],
     isBuiltIn: true
@@ -87,7 +87,7 @@ public enum BuiltInProviders {
         displayName: "Claude Sonnet 5",
         contextWindow: 1_000_000,
         maxOutputTokens: 128_000,
-        supportedParameters: ["max_tokens", "thinking", "effort"],
+        supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       ),
@@ -97,7 +97,7 @@ public enum BuiltInProviders {
         displayName: "Claude Opus 5",
         contextWindow: 1_000_000,
         maxOutputTokens: 128_000,
-        supportedParameters: ["max_tokens", "thinking", "effort"],
+        supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       ),
@@ -121,7 +121,7 @@ public enum BuiltInProviders {
         displayName: "Gemini 3.6 Flash",
         contextWindow: 1_048_576,
         maxOutputTokens: 65_536,
-        supportedParameters: ["maxOutputTokens", "thinkingConfig"],
+        supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
         inputModalities: ["text", "image", "file"],
         isSeed: true
       )
