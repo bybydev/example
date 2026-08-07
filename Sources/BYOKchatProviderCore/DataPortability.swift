@@ -113,6 +113,10 @@ public actor DataPortabilityService {
         throw ProviderError.invalidRequest("The backup contains an unsupported MCP workspace version.")
       }
       try MCPWorkspaceStore.validate(importedMCP)
+      try validateMCPConversationReferences(
+        importedMCP,
+        conversations: backup.conversationWorkspace.conversations
+      )
     }
     try WorkspaceImportValidator.validateProviderWorkspace(backup.providerWorkspace)
     try WorkspaceImportValidator.validateConversationWorkspace(backup.conversationWorkspace)
@@ -128,9 +132,16 @@ public actor DataPortabilityService {
       let providerData = try JSONEncoder.providerEncoder.encode(backup.providerWorkspace)
       let conversationData = try JSONEncoder.providerEncoder.encode(backup.conversationWorkspace)
       try await providers.importConfiguration(providerData, strategy: strategy)
-      try await conversations.importWorkspace(conversationData, strategy: strategy)
+      let conversationIDMapping = try await conversations.importWorkspace(
+        conversationData,
+        strategy: strategy
+      )
       if let mcp, let importedMCP = backup.mcpWorkspace {
-        let mcpData = try JSONEncoder.providerEncoder.encode(importedMCP)
+        let remappedMCP = try remapMCPWorkspace(
+          importedMCP,
+          conversationIDMapping: conversationIDMapping
+        )
+        let mcpData = try JSONEncoder.providerEncoder.encode(remappedMCP)
         try await mcp.importConfiguration(mcpData, strategy: strategy)
       } else if let mcp, case .replaceExisting = strategy {
         let empty = try JSONEncoder.providerEncoder.encode(MCPWorkspaceState())
@@ -138,9 +149,20 @@ public actor DataPortabilityService {
       }
     } catch {
       try? await providers.importConfiguration(previousProviders, strategy: .replaceExisting)
-      try? await conversations.importWorkspace(previousConversations, strategy: .replaceExisting)
-      if let mcp, let previousMCP {
-        try? await mcp.importConfiguration(previousMCP, strategy: .replaceExisting)
+      let rollbackMapping = try? await conversations.importWorkspace(
+        previousConversations,
+        strategy: .replaceExisting
+      )
+      if let mcp, let previousMCP,
+        let rollbackMapping,
+        let previousMCPState = try? JSONDecoder.provider.decode(MCPWorkspaceState.self, from: previousMCP),
+        let remappedPreviousMCP = try? remapMCPWorkspace(
+          previousMCPState,
+          conversationIDMapping: rollbackMapping
+        ),
+        let remappedPreviousMCPData = try? JSONEncoder.providerEncoder.encode(remappedPreviousMCP)
+      {
+        try? await mcp.importConfiguration(remappedPreviousMCPData, strategy: .replaceExisting)
       }
       throw error
     }
@@ -228,6 +250,46 @@ public actor DataPortabilityService {
       backup.conversationWorkspace.conversations,
       accounts: effectiveAccounts
     )
+  }
+
+  private func validateMCPConversationReferences(
+    _ workspace: MCPWorkspaceState,
+    conversations: [ChatConversation]
+  ) throws {
+    let conversationIDs = Set(conversations.map { $0.id.rawValue })
+    for conversationID in workspace.chatConfigurations?.keys ?? [] {
+      guard conversationIDs.contains(conversationID) else {
+        throw ProviderError.importConflict(
+          "MCP tool settings reference conversation \(conversationID), which is not present in the backup."
+        )
+      }
+    }
+  }
+
+  private func remapMCPWorkspace(
+    _ workspace: MCPWorkspaceState,
+    conversationIDMapping: [ConversationID: ConversationID]
+  ) throws -> MCPWorkspaceState {
+    var result = workspace
+    guard let sourceConfigurations = workspace.chatConfigurations else { return result }
+
+    var remapped: [String: MCPChatToolConfiguration] = [:]
+    for (sourceIDValue, configuration) in sourceConfigurations {
+      let sourceID = ConversationID(rawValue: sourceIDValue)
+      guard let destinationID = conversationIDMapping[sourceID] else {
+        throw ProviderError.importConflict(
+          "MCP tool settings could not be mapped to restored conversation \(sourceIDValue)."
+        )
+      }
+      if let existing = remapped[destinationID.rawValue], existing != configuration {
+        throw ProviderError.importConflict(
+          "Multiple imported MCP tool settings map to the same restored conversation."
+        )
+      }
+      remapped[destinationID.rawValue] = configuration
+    }
+    result.chatConfigurations = remapped.isEmpty ? nil : remapped
+    return result
   }
 
   private func removeMCPCredentialsBestEffort(serverIDs: [MCPServerID]) async -> [MCPServerID] {
