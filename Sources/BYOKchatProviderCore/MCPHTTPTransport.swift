@@ -43,14 +43,17 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
       return try await base.stream(for: request)
     }
 
-    var bounded = request
-    bounded.timeoutInterval = discoverProbeTimeout
-    let base = self.base
+    let boundedRequest: URLRequest = {
+      var copy = request
+      copy.timeoutInterval = discoverProbeTimeout
+      return copy
+    }()
+    let baseTransport = self.base
     let timeout = discoverProbeTimeout
 
     return try await withThrowingTaskGroup(of: ProviderHTTPByteStream.self) { group in
-      group.addTask {
-        let upstream = try await base.stream(for: bounded)
+      group.addTask { @Sendable [baseTransport, boundedRequest] in
+        let upstream = try await baseTransport.stream(for: boundedRequest)
         var data = Data()
         for try await chunk in upstream.chunks {
           try Task.checkCancellation()
@@ -59,17 +62,18 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
           }
           data.append(chunk)
         }
+        let bufferedData = data
         return ProviderHTTPByteStream(
           statusCode: upstream.statusCode,
           headers: upstream.headers,
           chunks: AsyncThrowingStream { continuation in
-            if !data.isEmpty { continuation.yield(data) }
+            if !bufferedData.isEmpty { continuation.yield(bufferedData) }
             continuation.finish()
           }
         )
       }
 
-      group.addTask {
+      group.addTask { @Sendable [timeout] in
         try await Task.sleep(for: .seconds(timeout))
         throw MCPError.transport("Legacy MCP probe required.")
       }
