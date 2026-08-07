@@ -135,6 +135,42 @@ public actor MCPWorkspaceStore {
     try await persist()
   }
 
+  public func exportConfiguration() throws -> Data {
+    try JSONEncoder.providerEncoder.encode(state)
+  }
+
+  public func importConfiguration(
+    _ data: Data,
+    strategy: ProviderImportStrategy
+  ) async throws {
+    let imported = try JSONDecoder.provider.decode(MCPWorkspaceState.self, from: data)
+    guard imported.schemaVersion == MCPWorkspaceState.currentSchemaVersion else {
+      throw ProviderError.workspaceVersionUnsupported(imported.schemaVersion)
+    }
+    try Self.validate(imported)
+
+    var candidate = state
+    switch strategy {
+    case .replaceExisting:
+      candidate = imported
+    case .keepExisting:
+      let existingServerIDs = Set(candidate.servers.map(\.id))
+      candidate.servers.append(
+        contentsOf: imported.servers.filter { !existingServerIDs.contains($0.id) }
+      )
+      let availableIDs = Set(candidate.servers.map(\.id))
+      let existingSnapshotIDs = Set(candidate.snapshots.map(\.serverID))
+      candidate.snapshots.append(
+        contentsOf: imported.snapshots.filter {
+          availableIDs.contains($0.serverID) && !existingSnapshotIDs.contains($0.serverID)
+        }
+      )
+    }
+    try Self.validate(candidate)
+    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
+    state = candidate
+  }
+
   private func persist() async throws {
     try await persistence.saveData(JSONEncoder.providerEncoder.encode(state))
   }
