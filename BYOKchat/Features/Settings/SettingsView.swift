@@ -141,6 +141,14 @@ struct SettingsView: View {
         }
       }
 
+      Section("Tools & MCP") {
+        NavigationLink {
+          MCPServerListView(model: model.mcp)
+        } label: {
+          Label("MCP Servers", systemImage: "shippingbox.and.arrow.backward")
+        }
+      }
+
       Section("New Chats") {
         NavigationLink {
           DefaultSystemPromptView(preferences: model.preferences)
@@ -196,7 +204,7 @@ struct SettingsView: View {
       Section("About") {
         LabeledContent("Storage", value: "Local on this iPhone")
         LabeledContent("Credentials", value: "Keychain")
-        Text("Requests go directly to the provider account selected for each conversation.")
+        Text("Requests go directly to the provider account or remote MCP endpoint selected by the app.")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }
