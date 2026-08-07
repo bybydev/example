@@ -235,11 +235,12 @@ struct MarkdownMessageContent: View {
         .scrollIndicators(.visible)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .markdownMargin(top: .em(0.08), bottom: .em(0.9))
+        .markdownMargin(top: .em(0.16), bottom: .em(0.9))
       }
       .tableCell { configuration in
         configuration.label
           .markdownTextStyle {
+            FontSize(.em(0.88))
             if configuration.row == 0 {
               FontWeight(.semibold)
               ForegroundColor(theme.primaryForegroundColor)
@@ -248,11 +249,13 @@ struct MarkdownMessageContent: View {
             }
             BackgroundColor(nil)
           }
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(minWidth: 96, maxWidth: 280, alignment: .leading)
-          .relativeLineSpacing(.em(0.16))
-          .padding(.horizontal, 12)
-          .padding(.vertical, 8)
+          // MarkdownUI's table grid can under-measure wrapped cells, which makes
+          // multiline content paint into later rows. Keep cells intrinsic-width
+          // and let the enclosing horizontal ScrollView own overflow instead.
+          .fixedSize(horizontal: true, vertical: true)
+          .frame(minWidth: 88, alignment: .leading)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
       }
       .thematicBreak {
         HStack(spacing: 8) {
