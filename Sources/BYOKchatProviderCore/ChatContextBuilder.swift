@@ -22,7 +22,8 @@ public enum ChatContextBuilder {
       switch message.role {
       case .user:
         return message.status == .complete
-          && !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          && (!message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(message.attachments ?? []).isEmpty)
       case .assistant:
         return message.status == .complete
           && (!message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -94,7 +95,13 @@ public enum ChatContextBuilder {
       case .user:
         if let current { turns.append(current) }
         current = Turn(
-          messages: [.init(role: .user, content: message.content)],
+          messages: [
+            .init(
+              role: .user,
+              content: message.content,
+              attachments: message.attachments
+            )
+          ],
           sourceMessageCount: 1
         )
       case .assistant:
@@ -118,6 +125,18 @@ public enum ChatContextBuilder {
   private static func estimate(messages: [ProviderMessage]) -> Int {
     messages.reduce(0) { partial, message in
       partial + 6 + estimateTokens(message.content) + estimateTokens(message.reasoning ?? "")
+        + estimate(attachments: message.attachments ?? [])
+    }
+  }
+
+  private static func estimate(attachments: [ChatAttachment]) -> Int {
+    attachments.reduce(0) { partial, attachment in
+      if let text = attachment.utf8Text {
+        return partial + 16 + estimateTokens(text)
+      }
+      // Binary multimodal tokenization differs by provider/model. Reserve a conservative
+      // fixed budget instead of treating base64 bytes as prompt text.
+      return partial + (attachment.isImage ? 1_024 : 2_048)
     }
   }
 }
