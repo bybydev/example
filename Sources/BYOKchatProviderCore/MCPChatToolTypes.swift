@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ChatToolPermissionPolicy: String, Codable, Sendable, CaseIterable {
+public enum ChatToolPermissionPolicy: String, Codable, Sendable, CaseIterable, Hashable {
   case ask
   case alwaysAllow
   case disabled
@@ -88,7 +88,8 @@ public struct MCPToolApprovalRequest: Sendable, Equatable, Identifiable {
 
   public var displayName: String {
     let name = toolTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
-    return name?.isEmpty == false ? name! : remoteToolName
+    if let name, !name.isEmpty { return name }
+    return remoteToolName
   }
 }
 
@@ -136,7 +137,8 @@ public struct MCPElicitationField: Sendable, Equatable, Identifiable {
 
   public var displayName: String {
     let value = title?.trimmingCharacters(in: .whitespacesAndNewlines)
-    return value?.isEmpty == false ? value! : name
+    if let value, !value.isEmpty { return value }
+    return name
   }
 }
 
@@ -200,7 +202,7 @@ public struct MCPInputRequiredRound: Sendable, Equatable {
 }
 
 public actor MCPToolApprovalCenter {
-  private struct Pending: Sendable {
+  private struct Pending {
     var request: MCPToolApprovalRequest
     var continuation: CheckedContinuation<MCPToolApprovalDecision, Never>
   }
@@ -263,7 +265,7 @@ public actor MCPToolApprovalCenter {
 }
 
 public actor MCPElicitationCenter {
-  private struct Pending: Sendable {
+  private struct Pending {
     var request: MCPElicitationRequest
     var continuation: CheckedContinuation<MCPElicitationDecision, Never>
   }
