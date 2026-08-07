@@ -209,13 +209,7 @@ extension ChatView {
     let text = draft
     let attachments = pendingAttachments
 
-    if let conversation,
-      let issue = providers.attachmentCompatibilityIssue(
-        accountID: conversation.accountID,
-        modelID: conversation.modelID,
-        attachments: attachments
-      )
-    {
+    if let issue = attachmentCompatibilityIssue(includingPending: true) {
       chats.errorMessage = issue
       return
     }
@@ -232,6 +226,11 @@ extension ChatView {
   }
 
   private func regenerate() {
+    if let issue = attachmentCompatibilityIssue(includingPending: false) {
+      chats.errorMessage = issue
+      return
+    }
+
     followsLatest = true
     showJumpToLatest = false
     if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
@@ -239,6 +238,19 @@ extension ChatView {
     } else {
       chats.regenerate(conversationID: conversationID)
     }
+  }
+
+  private func attachmentCompatibilityIssue(includingPending: Bool) -> String? {
+    guard let conversation else { return nil }
+    var attachments = conversation.messages.flatMap { $0.attachments ?? [] }
+    if includingPending {
+      attachments.append(contentsOf: pendingAttachments)
+    }
+    return providers.attachmentCompatibilityIssue(
+      accountID: conversation.accountID,
+      modelID: conversation.modelID,
+      attachments: attachments
+    )
   }
 
   private func targetLabel(_ conversation: ChatConversation) -> String {
