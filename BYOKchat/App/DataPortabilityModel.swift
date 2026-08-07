@@ -41,13 +41,14 @@ struct MarkdownExportDocument: FileDocument, Sendable {
 @MainActor
 @Observable
 final class DataPortabilityModel {
-  private let service: DataPortabilityService
+  private let service: ProjectAwareDataPortabilityService
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
   private let accountManager: ProviderAccountManager
   private let preferences: AppPreferencesModel
   private let providersModel: ProviderManagementModel
   private let chatsModel: ChatManagementModel
+  private let projectsModel: ProjectManagementModel
   private let mcpModel: MCPManagementModel
 
   var isBusy = false
@@ -55,13 +56,14 @@ final class DataPortabilityModel {
   var errorMessage: String?
 
   init(
-    service: DataPortabilityService,
+    service: ProjectAwareDataPortabilityService,
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
     accountManager: ProviderAccountManager,
     preferences: AppPreferencesModel,
     providersModel: ProviderManagementModel,
     chatsModel: ChatManagementModel,
+    projectsModel: ProjectManagementModel,
     mcpModel: MCPManagementModel
   ) {
     self.service = service
@@ -71,6 +73,7 @@ final class DataPortabilityModel {
     self.preferences = preferences
     self.providersModel = providersModel
     self.chatsModel = chatsModel
+    self.projectsModel = projectsModel
     self.mcpModel = mcpModel
   }
 
@@ -118,6 +121,8 @@ final class DataPortabilityModel {
       }
       await providersModel.reloadFromStorage()
       await chatsModel.reloadFromStorage()
+      await projectsModel.reloadFromStorage()
+      await projectsModel.reconcile(conversations: chatsModel.conversations)
       await mcpModel.reloadFromStorage()
 
       var cleanupMessages: [String] = []
@@ -158,6 +163,8 @@ final class DataPortabilityModel {
       await chatsModel.stopAllGenerations()
       try await conversations.deleteAllConversations()
       await chatsModel.reloadFromStorage()
+      await projectsModel.reconcile(conversations: chatsModel.conversations)
+      await mcpModel.reloadFromStorage()
     }
   }
 
