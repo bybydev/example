@@ -60,6 +60,19 @@ extension OpenAICompatibleAdapter {
         "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."
       )
     }
+
+    if definition.behavior == .deepSeek {
+      if attachments.contains(where: \.isImage) {
+        throw ProviderError.invalidRequest(
+          "DeepSeek V4 is text-only and cannot receive images. Choose a vision-capable model or provider before sending."
+        )
+      }
+      if attachments.contains(where: { !$0.isImage && $0.utf8Text == nil }) {
+        throw ProviderError.invalidRequest(
+          "DeepSeek V4 is text-only and cannot receive binary documents directly. Attach a text file or choose a file-capable model before sending."
+        )
+      }
+    }
   }
 
   func makeRequest(
