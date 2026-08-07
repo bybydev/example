@@ -31,12 +31,17 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 - Per-chat provider account, model, system prompt, and generation options
 - Global default system prompt for new chats
 - Multi-turn streaming with separate answer and reasoning content
+- Image and file attachments from Photos and the system document picker
+- Vision requests using OpenAI-compatible multimodal `image_url` content
+- Text-file context and binary file content parts for supporting providers
+- Persisted attachment previews in conversation history
+- Attachment-only messages and attachment filename search
 - Fenced code-block rendering, horizontal scrolling, and code copy
 - Message copy, share, and Markdown export
 - Edit and resend with explicit linear-history truncation
 - Regenerate without duplicating the user turn
 - Confirmation before regenerating an uncertain billable request
-- Search across titles, user messages, and assistant messages
+- Search across titles, user messages, assistant messages, and attachment filenames
 - Per-conversation draft persistence
 - Context budgeting with whole-turn omission
 - Partial-output persistence and immediate background flush
@@ -47,7 +52,7 @@ BYOKchat owns its provider and conversation runtime. It does not use AppFoundati
 
 ## Data portability
 
-- Versioned full backup containing conversations, preferences, and non-secret provider configuration
+- Versioned full backup containing conversations, attachments, preferences, and non-secret provider configuration
 - Merge or replace restore strategies
 - Pre-mutation validation and workspace rollback on import failure
 - Credentials excluded from every export
@@ -79,3 +84,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/NativeChatExperience.md`
 - `Documentation/DataPortability.md`
 - `Documentation/LocalProviders.md`
+- `Documentation/MultimodalAttachments.md`
+- `Documentation/ExpandedVisionProgress-2026-08-07.md`
