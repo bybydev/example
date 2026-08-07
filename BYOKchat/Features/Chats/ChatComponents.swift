@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -89,10 +90,14 @@ struct RepairBanner: View {
 
 struct ChatComposer: View {
   @Binding var draft: String
+  let attachments: [ChatAttachment]
   let isGenerating: Bool
   let canSend: Bool
   let targetLabel: String
   let openTarget: () -> Void
+  let pickPhoto: () -> Void
+  let pickFile: () -> Void
+  let removeAttachment: (String) -> Void
   let send: () -> Void
   let stop: () -> Void
 
@@ -106,8 +111,21 @@ struct ChatComposer: View {
     targetLabel.components(separatedBy: " · ").last ?? targetLabel
   }
 
+  private var canSubmit: Bool {
+    canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
+      if !attachments.isEmpty {
+        ChatAttachmentStrip(
+          attachments: attachments,
+          removeAttachment: removeAttachment
+        )
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+      }
+
       if isEditorFocused {
         HStack(spacing: 6) {
           optionsButton
@@ -115,7 +133,7 @@ struct ChatComposer: View {
           Spacer(minLength: 8)
         }
         .padding(.horizontal, 8)
-        .padding(.top, 8)
+        .padding(.top, attachments.isEmpty ? 8 : 4)
         .transition(.move(edge: .top).combined(with: .opacity))
       }
 
@@ -164,12 +182,18 @@ struct ChatComposer: View {
   }
 
   private var optionsButton: some View {
-    Button("Chat options", systemImage: "plus", action: openTarget)
-      .labelStyle(.iconOnly)
-      .font(.system(size: 22, weight: .regular))
-      .frame(width: 40, height: 40)
-      .contentShape(Circle())
-      .accessibilityLabel("Chat options")
+    Menu {
+      Button("Photo", systemImage: "photo", action: pickPhoto)
+      Button("File", systemImage: "doc", action: pickFile)
+      Divider()
+      Button("Chat Settings", systemImage: "slider.horizontal.3", action: openTarget)
+    } label: {
+      Image(systemName: "plus")
+        .font(.system(size: 22, weight: .regular))
+        .frame(width: 40, height: 40)
+        .contentShape(Circle())
+    }
+    .accessibilityLabel("Add attachment or open chat settings")
   }
 
   private var modelButton: some View {
@@ -205,20 +229,82 @@ struct ChatComposer: View {
         .background(sendButtonBackground, in: Circle())
         .foregroundStyle(sendButtonForeground)
     }
-    .disabled(!isGenerating && (!canSend || normalizedDraft.isEmpty))
+    .disabled(!isGenerating && !canSubmit)
     .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
   }
 
   private var sendButtonBackground: Color {
-    if isGenerating || (canSend && !normalizedDraft.isEmpty) { return .primary }
+    if isGenerating || canSubmit { return .primary }
     return Color(uiColor: .tertiarySystemFill)
   }
 
   private var sendButtonForeground: Color {
-    if isGenerating || (canSend && !normalizedDraft.isEmpty) {
+    if isGenerating || canSubmit {
       return Color(uiColor: .systemBackground)
     }
     return .secondary
+  }
+}
+
+struct ChatAttachmentStrip: View {
+  let attachments: [ChatAttachment]
+  var removeAttachment: ((String) -> Void)?
+
+  var body: some View {
+    ScrollView(.horizontal) {
+      HStack(spacing: 8) {
+        ForEach(attachments) { attachment in
+          attachmentView(attachment)
+        }
+      }
+    }
+    .scrollIndicators(.hidden)
+  }
+
+  @ViewBuilder
+  private func attachmentView(_ attachment: ChatAttachment) -> some View {
+    ZStack(alignment: .topTrailing) {
+      if attachment.isImage, let image = UIImage(data: attachment.data) {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFill()
+          .frame(width: 92, height: 72)
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .stroke(.primary.opacity(0.08), lineWidth: 0.5)
+          )
+          .accessibilityLabel("Image attachment \(attachment.filename)")
+      } else {
+        VStack(alignment: .leading, spacing: 5) {
+          Image(systemName: "doc.fill")
+            .font(.system(size: 20))
+          Text(attachment.filename)
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(2)
+          Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+        }
+        .frame(width: 112, height: 72, alignment: .leading)
+        .padding(.horizontal, 10)
+        .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+      }
+
+      if let removeAttachment {
+        Button("Remove \(attachment.filename)", systemImage: "xmark.circle.fill") {
+          removeAttachment(attachment.id)
+        }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 17, weight: .semibold))
+        .symbolRenderingMode(.palette)
+        .foregroundStyle(.white, .black.opacity(0.65))
+        .offset(x: 6, y: -6)
+      }
+    }
+    .padding(.top, 6)
+    .padding(.trailing, 6)
   }
 }
 
@@ -255,9 +341,11 @@ struct ChatMessageView: View {
         in: RoundedRectangle(cornerRadius: 22, style: .continuous)
       )
       .contextMenu {
-        Button("Copy", systemImage: "doc.on.doc", action: copy)
-        ShareLink(item: message.content) {
-          Label("Share", systemImage: "square.and.arrow.up")
+        if !message.content.isEmpty {
+          Button("Copy", systemImage: "doc.on.doc", action: copy)
+          ShareLink(item: message.content) {
+            Label("Share", systemImage: "square.and.arrow.up")
+          }
         }
         if canEdit {
           Button("Edit and Resend", systemImage: "pencil", action: edit)
@@ -317,6 +405,10 @@ struct ChatMessageView: View {
       }
       .font(.system(size: 13, weight: .semibold))
       .tint(.secondary)
+    }
+
+    if let attachments = message.attachments, !attachments.isEmpty {
+      ChatAttachmentStrip(attachments: attachments, removeAttachment: nil)
     }
 
     if !message.content.isEmpty {
