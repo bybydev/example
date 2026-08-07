@@ -44,6 +44,12 @@ Current Claude 5 models use adaptive thinking. When BYOKchat reasoning display i
 
 The adapter intentionally does not forward generic temperature/top-p overrides to the current native Claude family.
 
+### Request-size caveat
+
+The direct Anthropic Messages API has a 32 MB request limit. Because BYOKchat currently stores inline attachment bytes in conversation history, a long retained context containing several large historical attachments can exceed that provider request limit even though each original message passed BYOKchat's local per-message limits.
+
+For now the provider will surface that error. A later provider-native Files API/blob-reference layer should prevent repeated large inline payloads and is intentionally kept separate from this first native adapter milestone.
+
 ## Gemini
 
 The built-in Gemini provider uses the native GenerateContent API.
