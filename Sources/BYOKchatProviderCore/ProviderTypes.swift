@@ -36,6 +36,7 @@ public struct ProviderMessage: Codable, Sendable, Equatable {
   public var attachments: [ChatAttachment]?
   public var toolCalls: [ChatToolCall]?
   public var toolResults: [ChatToolResult]?
+  public var toolContinuation: ProviderToolContinuation?
 
   public init(
     role: ProviderMessageRole,
@@ -43,7 +44,8 @@ public struct ProviderMessage: Codable, Sendable, Equatable {
     reasoning: String? = nil,
     attachments: [ChatAttachment]? = nil,
     toolCalls: [ChatToolCall]? = nil,
-    toolResults: [ChatToolResult]? = nil
+    toolResults: [ChatToolResult]? = nil,
+    toolContinuation: ProviderToolContinuation? = nil
   ) {
     self.role = role
     self.content = content
@@ -51,6 +53,7 @@ public struct ProviderMessage: Codable, Sendable, Equatable {
     self.attachments = attachments
     self.toolCalls = toolCalls
     self.toolResults = toolResults
+    self.toolContinuation = toolContinuation
   }
 }
 
@@ -169,6 +172,7 @@ public struct ProviderResponse: Sendable, Equatable {
   public var usage: ProviderUsage?
   public var metadata: [String: String]
   public var toolCalls: [ChatToolCall]
+  public var toolContinuation: ProviderToolContinuation?
   public init(
     id: String? = nil,
     text: String,
@@ -179,7 +183,8 @@ public struct ProviderResponse: Sendable, Equatable {
     finishReason: String? = nil,
     usage: ProviderUsage? = nil,
     metadata: [String: String] = [:],
-    toolCalls: [ChatToolCall] = []
+    toolCalls: [ChatToolCall] = [],
+    toolContinuation: ProviderToolContinuation? = nil
   ) {
     self.id = id
     self.text = text
@@ -191,6 +196,7 @@ public struct ProviderResponse: Sendable, Equatable {
     self.usage = usage
     self.metadata = metadata
     self.toolCalls = toolCalls
+    self.toolContinuation = toolContinuation
   }
 }
 
