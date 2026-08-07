@@ -12,6 +12,18 @@ import Testing
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
+
+  let anthropic = try #require(definitions.first { $0.id == "anthropic" })
+  let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5" })
+  #expect(sonnet.contextWindow == 1_000_000)
+  #expect(sonnet.maxOutputTokens == 128_000)
+  #expect(sonnet.supportedParameters.contains("temperature") == false)
+
+  let gemini = try #require(definitions.first { $0.id == "gemini" })
+  let flash = try #require(gemini.seedModels.first { $0.id == "gemini-3.6-flash" })
+  #expect(flash.contextWindow == 1_048_576)
+  #expect(flash.maxOutputTokens == 65_536)
+  #expect(flash.supportedParameters.contains("temperature") == false)
 }
 
 @Test func duplicateProviderIsRejected() throws {
