@@ -8,6 +8,7 @@ import Observation
 final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
+  let mcp: MCPManagementModel
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
   let themeManager: ThemeManager
@@ -53,6 +54,7 @@ final class AppModel {
         fileURL: supportDirectory.appendingPathComponent("conversations-v1.json")
       )
     )
+
     let toolRuntime = ToolRuntime()
     self.toolRuntime = toolRuntime
     let chatRuntime = ChatRuntime(
@@ -61,6 +63,17 @@ final class AppModel {
       conversations: conversationStore,
       toolRuntime: toolRuntime
     )
+
+    let mcpWorkspace = MCPWorkspaceStore(
+      persistence: JSONFileMCPWorkspacePersistence(
+        fileURL: supportDirectory.appendingPathComponent("mcp-servers-v1.json")
+      )
+    )
+    let mcpRuntime = MCPRemoteRuntime(
+      workspace: mcpWorkspace,
+      vault: KeychainMCPCredentialVault()
+    )
+
     let providerModel = ProviderManagementModel(
       registry: registry,
       workspace: providerWorkspace,
@@ -77,6 +90,7 @@ final class AppModel {
 
     providers = providerModel
     chats = chatModel
+    mcp = MCPManagementModel(runtime: mcpRuntime)
     dataPortability = DataPortabilityModel(
       service: DataPortabilityService(
         providers: providerWorkspace,
@@ -96,6 +110,7 @@ final class AppModel {
     guard !hasLoaded else { return }
     await providers.load()
     await chats.load()
+    await mcp.load()
     hasLoaded = true
   }
 }
