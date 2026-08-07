@@ -181,7 +181,10 @@ public actor MCPRemoteRuntime {
   ) async throws -> MCPToolCallRoundResult {
     let server = try await workspace.server(id: serverID)
     var snapshot = try await refreshServer(serverID)
-    guard var tool = snapshot.tools.first(where: { $0.remoteName == remoteName }) else {
+    var tool: MCPRemoteTool
+    if let cachedTool = snapshot.tools.first(where: { $0.remoteName == remoteName }) {
+      tool = cachedTool
+    } else {
       snapshot = try await refreshServer(serverID, force: true)
       guard let refreshedTool = snapshot.tools.first(where: { $0.remoteName == remoteName }) else {
         throw MCPError.toolNotFound(remoteName)
@@ -189,25 +192,25 @@ public actor MCPRemoteRuntime {
       tool = refreshedTool
     }
 
-    var connection = try await connection(for: server, forceProbe: false)
+    var connectionState = try await connection(for: server, forceProbe: false)
     do {
       return try await callToolRound(
         server: server,
-        connection: connection,
+        connection: connectionState,
         tool: tool,
         arguments: arguments,
         inputResponses: inputResponses,
         requestState: requestState
       )
-    } catch MCPError.protocolError(let code, _) where code == -32_020 && connection.era == .modern {
+    } catch MCPError.protocolError(let code, _) where code == -32_020 && connectionState.era == .modern {
       snapshot = try await refreshServer(serverID, force: true)
       guard let refreshedTool = snapshot.tools.first(where: { $0.remoteName == remoteName }) else {
         throw MCPError.toolNotFound(remoteName)
       }
-      connection = try await connection(for: server, forceProbe: false)
+      connectionState = try await connection(for: server, forceProbe: false)
       return try await callToolRound(
         server: server,
-        connection: connection,
+        connection: connectionState,
         tool: refreshedTool,
         arguments: arguments,
         inputResponses: inputResponses,
