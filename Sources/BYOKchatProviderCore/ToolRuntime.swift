@@ -25,6 +25,11 @@ public actor ToolRuntime: ChatToolExecuting {
     guard !name.isEmpty else {
       throw ProviderError.invalidRequest("Tool name cannot be empty.")
     }
+    guard entries[name] == nil else {
+      throw ProviderError.invalidRequest(
+        "Tool name \(name) is already registered. Tool sources must use unique names."
+      )
+    }
     var normalized = definition
     normalized.name = name
     entries[name] = Entry(definition: normalized, handler: handler)
