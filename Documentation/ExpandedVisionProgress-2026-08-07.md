@@ -3,25 +3,25 @@
 **Review date:** 2026-08-07  
 **Baseline branch:** `develop`  
 **Baseline head:** `f704b3c298cb7ac57c0df31cb78b1c8566033580`  
-**Updated on PR #2:** image, vision, and file attachments implemented on the PR branch
+**Updated on PR #2:** multimodal attachments, streaming timeline stabilization, and native Anthropic/Gemini API families implemented on the PR branch
 
 ## Executive summary
 
-BYOKchat is already well beyond a prototype. The codebase has a substantial provider platform, conversation runtime, streaming pipeline, local persistence, credential isolation, search, context management, recovery flows, import/export support, and now a first multimodal attachment path.
+BYOKchat is already well beyond a prototype. The codebase has a substantial provider platform, conversation runtime, streaming pipeline, local persistence, credential isolation, search, context management, recovery flows, import/export support, multimodal attachments, and three provider API families.
 
 Against the expanded product vision, the PR branch is approximately:
 
 | Area | Progress |
 |---|---:|
 | Core chat | ~90% |
-| BYOK/provider layer | ~80% |
+| BYOK/provider layer | ~95% |
 | MCP | ~0% |
 | Power-user layer | ~15–20% |
-| Whole expanded vision | ~40% |
+| Whole expanded vision | ~42% |
 
-The whole-product percentage remains much lower than the chat percentage because the expanded vision is no longer just a BYOK chat client; it describes a broader AI workbench spanning chat, MCP, projects, agents, artifacts, files, Mac tooling, and routing.
+The whole-product percentage remains much lower than the chat/provider percentages because the expanded vision is no longer just a BYOK chat client; it describes a broader AI workbench spanning chat, MCP, projects, agents, artifacts, files, Mac tooling, and routing.
 
-A more useful framing is that BYOKchat is now roughly **90% of the way toward a serious BYOK AI chat client**, while being roughly **40% of the way toward the larger ChatGPT/Claude/Codex-style workbench vision**.
+A more useful framing is that BYOKchat is now roughly **90% of the way toward a serious multimodal BYOK AI chat client**, while being roughly **42% of the way toward the larger ChatGPT/Claude/Codex-style workbench vision**.
 
 ---
 
@@ -34,10 +34,12 @@ Current first-class providers include:
 - DeepSeek
 - OpenRouter
 - NVIDIA
+- Anthropic
+- Gemini
 - user-defined OpenAI-compatible providers
 - private-network OpenAI-compatible servers
 
-The provider architecture also supports multiple accounts per provider, model discovery, seed models, manual models, custom endpoints, headers, and different authentication modes.
+The provider architecture supports multiple accounts per provider, model discovery, seed models, manual models, custom endpoints, headers, and different authentication modes.
 
 ### Model switching — Done
 
@@ -58,9 +60,10 @@ Current support includes:
 - attachment filename search
 - image normalization to JPEG for provider compatibility
 - attachment persistence across relaunch, regeneration, and backup/restore
-- image `image_url` request parts using base64 data URLs
-- UTF-8 text-like file inlining for broad OpenAI-compatible support
-- binary `file` content parts for providers that support them, including OpenRouter-style file input
+- OpenAI-compatible `image_url` and file content parts
+- Anthropic native image/PDF content blocks
+- Gemini native `inlineData` multimodal parts
+- UTF-8 text-like file inlining
 - context budgeting that includes attachment-bearing turns
 
 Current safety limits are 8 attachments per message, 20 MiB per attachment, and 40 MiB total per message.
@@ -83,6 +86,7 @@ Conversations are mature. Current support includes:
 - message copy/share
 - conversation export
 - persisted image/file attachments
+- stable near-bottom streaming that stops fighting the user after manual scroll
 
 Projects/workspaces in the user-facing ChatGPT/Claude sense are not implemented yet.
 
@@ -100,25 +104,59 @@ This means local-network model use is already viable. Embedded on-device inferen
 
 ---
 
-## 2. BYOK/provider layer — ~80%
+## 2. BYOK/provider layer — ~95%
 
-This remains one of the strongest parts of the product.
+This is now one of the most complete parts of the product.
 
 ### OpenRouter — Done
 
-OpenRouter is a built-in provider with model discovery and provider-routing options. The multimodal layer now also uses OpenAI-compatible image/file content parts that map naturally onto OpenRouter's multimodal API.
+OpenRouter is a built-in provider with model discovery, multimodal request support, and provider-routing options.
 
 ### OpenAI-compatible APIs — Done
 
-This is the main provider abstraction currently implemented and supports custom endpoints, authentication strategies, custom headers, model discovery, streaming, and multimodal message content.
+OpenAI-compatible Chat Completions remains the flexible custom-provider family and supports custom endpoints, authentication strategies, custom headers, model discovery, streaming, reasoning normalization, and multimodal message content.
 
-Text-only messages retain normal string content for compatibility. Attachment-bearing messages use multipart content.
+Text-only messages retain normal string content for broad compatibility. Attachment-bearing messages use multipart content.
 
-### Anthropic / Gemini / DeepSeek — Partial
+### Anthropic / Gemini / DeepSeek — Done
 
-DeepSeek is first-class.
+All three are now first-class provider paths.
 
-Anthropic and Gemini are not yet implemented as native API families in the current provider core. The active provider API family is still centered on OpenAI-compatible Chat Completions.
+DeepSeek keeps its existing specialized OpenAI-compatible behavior.
+
+Anthropic now uses the native Messages API:
+
+- `POST /v1/messages`
+- `GET /v1/models`
+- `x-api-key` authentication
+- Anthropic API version header
+- native system-message mapping
+- native image/PDF blocks
+- SSE streaming
+- summarized adaptive-thinking deltas
+- usage and model metadata normalization
+
+Gemini now uses the native GenerateContent API:
+
+- `POST /models/{model}:generateContent`
+- `POST /models/{model}:streamGenerateContent?alt=sse`
+- `GET /models`
+- `x-goog-api-key` authentication
+- `systemInstruction`
+- native `inlineData` multimodal parts
+- thought-summary separation
+- usage/model metadata normalization
+- Gemini 3 thinking-level controls
+
+`ProviderAPIFamily` now includes:
+
+- `openAIChatCompletions`
+- `anthropicMessages`
+- `geminiGenerateContent`
+
+Provider runtime selection is API-family based, so conversation/runtime code remains provider-neutral.
+
+The native implementations intentionally do not yet round-trip Anthropic encrypted thinking signatures or Gemini thought signatures into later turns. That becomes especially important when native tool/function calling is introduced and belongs with the generic tool-runtime milestone.
 
 ### Custom endpoints — Done
 
@@ -133,19 +171,29 @@ Custom endpoint support includes:
 - model discovery
 - manual models
 
-Custom endpoints can receive multimodal OpenAI-compatible content, but binary file support ultimately depends on what that endpoint implements. BYOKchat surfaces provider rejection instead of silently dropping attachments.
+Custom providers remain OpenAI-compatible by design. Native Anthropic and Gemini are explicit built-in provider families rather than trying to overload the custom OpenAI-compatible editor.
 
 ### Keychain credential management — Done
 
 Credentials are isolated from normal provider configuration and stored in Keychain. They are intentionally excluded from exports and backups.
 
+Native Anthropic and Gemini keys use the same account-level Keychain isolation as every other provider.
+
 ### Usage / cost visibility — Partial
 
-The runtime captures and persists provider usage information including input, output, cached input, and reasoning tokens where available.
+The runtime captures and persists provider usage information including input, output, cached input, and reasoning/thinking tokens where available. The native Anthropic and Gemini adapters normalize their provider-specific usage fields into the same `ProviderUsage` model.
 
 Chat UI can display token usage, and provider models can store prompt/completion pricing metadata.
 
-What is still missing is a complete user-facing cost layer such as calculated per-message cost, per-chat totals, daily/monthly totals, provider/model breakdowns, and budget alerts.
+What is still missing is a complete user-facing cost layer such as:
+
+- calculated per-message cost
+- per-chat totals
+- daily/monthly totals
+- provider/model breakdown
+- budget alerts
+
+This cost layer is now the largest unfinished item in the BYOK/provider roadmap.
 
 ---
 
@@ -167,7 +215,7 @@ Remaining work includes:
 
 This is now clearly the largest untouched architectural block in the expanded vision.
 
-The positive side is that the chat, provider, persistence, and attachment architecture is mature enough that MCP can be introduced as a distinct tool-runtime layer rather than mixed prematurely into provider networking.
+The positive side is that the chat, provider, persistence, multimodal, and native-provider architecture is mature enough that MCP can be introduced as a distinct tool-runtime layer rather than mixed prematurely into provider networking.
 
 ---
 
@@ -193,7 +241,7 @@ There is no first-class artifact model or artifact editor/viewer yet.
 
 ### File access — Partial
 
-Per-message local image and file attachments are now implemented, persisted, searchable, backed up, and sent as model context.
+Per-message local image and file attachments are implemented, persisted, searchable, backed up, and sent as provider-native model context.
 
 Broader workspace file access is still missing: there is no project-level file collection, filesystem tool, searchable file index, or agent-accessible file workspace yet.
 
@@ -233,11 +281,11 @@ Cross-device sync is the missing major piece. Markdown export also does not yet 
 
 The horizontal foundation now looks like:
 
-`providers → credentials → models → requests → streaming → reasoning → persistence → conversations → attachments → multimodal requests → context management → search → local endpoints → recovery → import/export`
+`providers → API-family routing → credentials → models → requests → native/provider-compatible streaming → reasoning summaries → persistence → conversations → attachments → multimodal requests → context management → search → local endpoints → recovery → import/export`
 
 These are not superficial checklist items. They are shared infrastructure required by most of the remaining product.
 
-The new attachment implementation is especially useful because it is not just a picker UI: the data survives in conversation history, flows through context selection, and reaches the provider request layer.
+The native Anthropic/Gemini work is especially meaningful because it proves the provider core is no longer structurally tied to OpenAI Chat Completions. New API families can plug into the same conversation and streaming runtime without duplicating the app layer.
 
 ---
 
@@ -246,7 +294,7 @@ The new attachment implementation is especially useful because it is not just a 
 The highest-leverage sequence is now:
 
 1. **Generic tool-calling runtime**  
-   Introduce provider-neutral tool schemas, calls, results, approvals, persistence, and tool-call UI before MCP-specific transport details.
+   Introduce provider-neutral tool schemas, calls, results, approvals, persistence, and tool-call UI before MCP-specific transport details. Preserve provider-native thinking/thought signatures as part of this work.
 
 2. **MCP local + remote**  
    Build server configuration, discovery, permissions, approval flows, auth, and interactive outputs on top of the generic tool runtime.
@@ -260,26 +308,26 @@ The highest-leverage sequence is now:
 5. **Agents / artifacts / routing**  
    Add higher-level orchestration only after tools, files, projects, and Mac primitives are stable.
 
-6. **Multimodal polish**  
-   Add provider capability warnings, richer document previews, blob deduplication, drag/drop/paste intake, and provider-specific file optimizations when they materially improve the experience.
+6. **Provider/multimodal polish**  
+   Add cost visibility, provider capability warnings, richer document previews, blob deduplication, drag/drop/paste intake, and provider-specific file optimizations when they materially improve the experience.
 
 ---
 
 ## Expected progress after the next major platform additions
 
-Attachments/vision are no longer part of the future estimate; they are now implemented on this PR.
+Attachments/vision and native Anthropic/Gemini APIs are no longer future items; they are implemented on this PR.
 
 The two largest product additions that would materially change BYOKchat next are:
 
 - MCP/tool calling
 - macOS
 
-Together with projects/workspaces, those capabilities should unlock a large portion of the remaining power-user architecture and could reasonably move the product from roughly **40%** of the expanded vision toward approximately **60–65%**, depending on depth and polish.
+Together with projects/workspaces, those capabilities should unlock a large portion of the remaining power-user architecture and could reasonably move the product from roughly **42%** of the expanded vision toward approximately **60–65%**, depending on depth and polish.
 
 ## Bottom line
 
 BYOKchat on this PR is best described as:
 
-> **A highly developed multimodal BYOK AI chat client foundation, not yet a full AI workbench.**
+> **A highly developed multimodal, multi-API-family BYOK AI chat client foundation, not yet a full AI workbench.**
 
-The provider, conversation, and multimodal foundations are now strong. The next transformation is a general tool/MCP runtime, followed by projects and Mac-specific capabilities that turn the chat client into a broader workbench.
+The provider, conversation, multimodal, and native API foundations are now strong. The next transformation is a general tool/MCP runtime, followed by projects and Mac-specific capabilities that turn the chat client into a broader workbench.
