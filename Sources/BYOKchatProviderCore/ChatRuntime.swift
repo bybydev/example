@@ -19,7 +19,7 @@ public actor ChatRuntime {
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
-  private let toolRuntime: (any ChatToolExecuting)?
+  private let toolRuntime: (any ChatConversationToolExecuting)?
   private let maxToolRounds: Int
 
   private struct ActiveGenerationState: Sendable {
@@ -37,7 +37,7 @@ public actor ChatRuntime {
     providerRuntime: any ProviderStreamingRuntime,
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
-    toolRuntime: (any ChatToolExecuting)? = nil,
+    toolRuntime: (any ChatConversationToolExecuting)? = nil,
     maxToolRounds: Int = 8,
     partialPersistenceInterval: Duration = .milliseconds(300)
   ) {
@@ -169,7 +169,7 @@ public actor ChatRuntime {
 
       let tools: [ChatToolDefinition]
       if let toolRuntime {
-        tools = await toolRuntime.availableTools()
+        tools = await toolRuntime.availableTools(conversationID: conversationID)
       } else {
         tools = []
       }
@@ -255,11 +255,20 @@ public actor ChatRuntime {
             )
           }
 
+          continuation.yield(
+            .toolCallsStarted(
+              messageID: turn.assistantMessage.id,
+              value: response.toolCalls
+            )
+          )
+
           var results: [ChatToolResult] = []
           results.reserveCapacity(response.toolCalls.count)
           for call in response.toolCalls {
             try Task.checkCancellation()
-            results.append(await toolRuntime.execute(call))
+            results.append(
+              await toolRuntime.execute(call, conversationID: conversationID)
+            )
           }
 
           let round = ChatToolRound(
