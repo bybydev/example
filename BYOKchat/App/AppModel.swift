@@ -11,6 +11,7 @@ final class AppModel {
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
   let themeManager: ThemeManager
+  let toolRuntime: ToolRuntime
 
   private(set) var hasLoaded = false
 
@@ -52,10 +53,13 @@ final class AppModel {
         fileURL: supportDirectory.appendingPathComponent("conversations-v1.json")
       )
     )
+    let toolRuntime = ToolRuntime()
+    self.toolRuntime = toolRuntime
     let chatRuntime = ChatRuntime(
       providerRuntime: providerRuntime,
       providerWorkspace: providerWorkspace,
-      conversations: conversationStore
+      conversations: conversationStore,
+      toolRuntime: toolRuntime
     )
     let providerModel = ProviderManagementModel(
       registry: registry,
