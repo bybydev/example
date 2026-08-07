@@ -197,7 +197,9 @@ private actor InputRequiredMCPTransport: ProviderHTTPTransport {
           """
       }
     default:
-      json = """{"jsonrpc":"2.0","id":\(id),"error":{"code":-32601,"message":"Method not found"}}"""
+      json = """
+        {"jsonrpc":"2.0","id":\(id),"error":{"code":-32601,"message":"Method not found"}}
+        """
     }
     return inputByteStream(json)
   }
@@ -242,7 +244,9 @@ private actor StateOnlyMCPTransport: ProviderHTTPTransport {
           """
       }
     default:
-      json = """{"jsonrpc":"2.0","id":\(id),"error":{"code":-32601,"message":"Method not found"}}"""
+      json = """
+        {"jsonrpc":"2.0","id":\(id),"error":{"code":-32601,"message":"Method not found"}}
+        """
     }
     return inputByteStream(json)
   }
