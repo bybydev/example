@@ -4,6 +4,8 @@ public enum BuiltInProviders {
   public static let deepSeekID: ProviderID = "deepseek"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
+  public static let anthropicID: ProviderID = "anthropic"
+  public static let geminiID: ProviderID = "gemini"
 
   public static let deepSeek = ProviderDefinition(
     id: deepSeekID,
@@ -69,5 +71,57 @@ public enum BuiltInProviders {
     isBuiltIn: true
   )
 
-  public static let all = [deepSeek, openRouter, nvidia]
+  public static let anthropic = ProviderDefinition(
+    id: anthropicID,
+    displayName: "Anthropic",
+    apiFamily: .anthropicMessages,
+    behavior: .anthropic,
+    defaultBaseURL: URL(string: "https://api.anthropic.com")!,
+    chatCompletionsPath: "/v1/messages",
+    modelsPath: "/v1/models",
+    authentication: .header(name: "x-api-key"),
+    seedModels: [
+      .init(
+        providerID: anthropicID,
+        id: "claude-sonnet-5",
+        displayName: "Claude Sonnet 5",
+        supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "effort"],
+        inputModalities: ["text", "image", "file"],
+        isSeed: true
+      ),
+      .init(
+        providerID: anthropicID,
+        id: "claude-opus-5",
+        displayName: "Claude Opus 5",
+        supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "effort"],
+        inputModalities: ["text", "image", "file"],
+        isSeed: true
+      ),
+    ],
+    isBuiltIn: true
+  )
+
+  public static let gemini = ProviderDefinition(
+    id: geminiID,
+    displayName: "Gemini",
+    apiFamily: .geminiGenerateContent,
+    behavior: .gemini,
+    defaultBaseURL: URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+    chatCompletionsPath: "/models",
+    modelsPath: "/models",
+    authentication: .header(name: "x-goog-api-key"),
+    seedModels: [
+      .init(
+        providerID: geminiID,
+        id: "gemini-3.6-flash",
+        displayName: "Gemini 3.6 Flash",
+        supportedParameters: ["temperature", "topP", "maxOutputTokens", "thinkingConfig"],
+        inputModalities: ["text", "image", "file"],
+        isSeed: true
+      )
+    ],
+    isBuiltIn: true
+  )
+
+  public static let all = [deepSeek, openRouter, nvidia, anthropic, gemini]
 }
