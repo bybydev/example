@@ -113,7 +113,8 @@ public enum ChatContextBuilder {
               role: .assistant,
               content: round.assistantText,
               reasoning: round.assistantReasoning.isEmpty ? nil : round.assistantReasoning,
-              toolCalls: round.calls
+              toolCalls: round.calls,
+              toolContinuation: round.providerContinuation
             )
           )
           providerMessages.append(
