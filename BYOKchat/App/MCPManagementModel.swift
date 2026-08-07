@@ -8,17 +8,34 @@ final class MCPManagementModel {
   private(set) var servers: [MCPRemoteServer] = []
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
+  private(set) var chatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
+  private(set) var pendingApprovals: [MCPToolApprovalRequest] = []
+  private(set) var pendingElicitations: [MCPElicitationRequest] = []
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
 
   private let runtime: MCPRemoteRuntime
+  private let workspace: MCPWorkspaceStore
+  private let approvals: MCPToolApprovalCenter
+  private let elicitations: MCPElicitationCenter
+  private var approvalObservationTask: Task<Void, Never>?
+  private var elicitationObservationTask: Task<Void, Never>?
 
-  init(runtime: MCPRemoteRuntime) {
+  init(
+    runtime: MCPRemoteRuntime,
+    workspace: MCPWorkspaceStore,
+    approvals: MCPToolApprovalCenter,
+    elicitations: MCPElicitationCenter
+  ) {
     self.runtime = runtime
+    self.workspace = workspace
+    self.approvals = approvals
+    self.elicitations = elicitations
   }
 
   func load() async {
+    startInteractionObserversIfNeeded()
     await perform(nil) {
       try await runtime.load()
       try await reloadSnapshot()
@@ -37,6 +54,57 @@ final class MCPManagementModel {
 
   func hasCredential(_ serverID: MCPServerID) -> Bool {
     credentialServerIDs.contains(serverID)
+  }
+
+  func chatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration {
+    chatConfigurations[conversationID] ?? MCPChatToolConfiguration()
+  }
+
+  func isServerEnabled(_ serverID: MCPServerID, for conversationID: ConversationID) -> Bool {
+    chatConfiguration(for: conversationID).isServerEnabled(serverID)
+  }
+
+  func toolPolicy(_ exposedToolName: String, for conversationID: ConversationID)
+    -> ChatToolPermissionPolicy
+  {
+    chatConfiguration(for: conversationID).policy(for: exposedToolName)
+  }
+
+  func tools(for serverID: MCPServerID) -> [MCPToolBinding] {
+    guard let snapshot = snapshotsByServer[serverID] else { return [] }
+    return snapshot.tools.map { tool in
+      MCPToolBinding(
+        serverID: serverID,
+        remoteTool: tool,
+        exposedName: MCPToolNamespace.exposedName(
+          serverID: serverID,
+          remoteName: tool.remoteName
+        )
+      )
+    }
+    .sorted {
+      let lhs = $0.remoteTool.title ?? $0.remoteTool.remoteName
+      let rhs = $1.remoteTool.title ?? $1.remoteTool.remoteName
+      return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+    }
+  }
+
+  func toolDisplayName(_ exposedToolName: String) -> String {
+    for server in servers {
+      if let binding = tools(for: server.id).first(where: { $0.exposedName == exposedToolName }) {
+        let toolName = binding.remoteTool.title ?? binding.remoteTool.remoteName
+        return "\(server.name) · \(toolName)"
+      }
+    }
+    return exposedToolName
+  }
+
+  func pendingApprovals(for conversationID: ConversationID) -> [MCPToolApprovalRequest] {
+    pendingApprovals.filter { $0.conversationID == conversationID }
+  }
+
+  func pendingElicitations(for conversationID: ConversationID) -> [MCPElicitationRequest] {
+    pendingElicitations.filter { $0.conversationID == conversationID }
   }
 
   func saveServer(
@@ -100,11 +168,80 @@ final class MCPManagementModel {
     }
   }
 
+  func setChatServerEnabled(
+    _ enabled: Bool,
+    serverID: MCPServerID,
+    conversationID: ConversationID
+  ) async {
+    await perform(nil) {
+      if enabled {
+        guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
+          throw MCPError.invalidServer("Enable this MCP server in Settings first.")
+        }
+        _ = try await runtime.refreshServer(serverID)
+      }
+      try await workspace.setChatServerEnabled(
+        enabled,
+        serverID: serverID,
+        conversationID: conversationID
+      )
+      try await reloadSnapshot()
+    }
+  }
+
+  func setChatToolPolicy(
+    _ policy: ChatToolPermissionPolicy,
+    exposedToolName: String,
+    conversationID: ConversationID
+  ) async {
+    await perform(nil) {
+      try await workspace.setChatToolPolicy(
+        policy,
+        exposedToolName: exposedToolName,
+        conversationID: conversationID
+      )
+      try await reloadSnapshot()
+    }
+  }
+
+  func removeChatConfiguration(_ conversationID: ConversationID) async {
+    await perform(nil) {
+      try await workspace.removeChatConfiguration(conversationID: conversationID)
+      try await reloadSnapshot()
+    }
+  }
+
   func refresh(_ serverID: MCPServerID) async {
     await perform("MCP tools refreshed") {
       _ = try await runtime.refreshServer(serverID, force: true)
       try await reloadSnapshot()
     }
+  }
+
+  func resolveApproval(_ requestID: String, decision: MCPToolApprovalDecision) async {
+    if decision == .alwaysAllow,
+      let request = pendingApprovals.first(where: { $0.id == requestID })
+    {
+      do {
+        try await workspace.setChatToolPolicy(
+          .alwaysAllow,
+          exposedToolName: request.exposedToolName,
+          conversationID: request.conversationID
+        )
+        try await reloadSnapshot()
+        // Persistence already happened here, so the executor only needs a one-shot allow.
+        await approvals.resolve(requestID, decision: .allowOnce)
+      } catch {
+        errorMessage = error.localizedDescription
+        await approvals.resolve(requestID, decision: .deny)
+      }
+      return
+    }
+    await approvals.resolve(requestID, decision: decision)
+  }
+
+  func resolveElicitation(_ requestID: String, decision: MCPElicitationDecision) async {
+    await elicitations.resolve(requestID, decision: decision)
   }
 
   func deleteAllCredentials() async throws {
@@ -118,6 +255,14 @@ final class MCPManagementModel {
     servers = await runtime.servers()
     let snapshots = await runtime.snapshots()
     snapshotsByServer = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.serverID, $0) })
+
+    let workspaceSnapshot = await workspace.snapshot()
+    chatConfigurations = Dictionary(
+      uniqueKeysWithValues: (workspaceSnapshot.chatConfigurations ?? [:]).map {
+        (ConversationID(rawValue: $0.key), $0.value)
+      }
+    )
+
     var credentials: Set<MCPServerID> = []
     for server in servers {
       if try await runtime.hasCredential(serverID: server.id) {
@@ -125,6 +270,28 @@ final class MCPManagementModel {
       }
     }
     credentialServerIDs = credentials
+  }
+
+  private func startInteractionObserversIfNeeded() {
+    if approvalObservationTask == nil {
+      approvalObservationTask = Task { @MainActor [weak self, approvals] in
+        let stream = await approvals.updates()
+        for await requests in stream {
+          guard let self, !Task.isCancelled else { return }
+          pendingApprovals = requests
+        }
+      }
+    }
+
+    if elicitationObservationTask == nil {
+      elicitationObservationTask = Task { @MainActor [weak self, elicitations] in
+        let stream = await elicitations.updates()
+        for await requests in stream {
+          guard let self, !Task.isCancelled else { return }
+          pendingElicitations = requests
+        }
+      }
+    }
   }
 
   private func perform(_ success: String?, operation: () async throws -> Void) async {
