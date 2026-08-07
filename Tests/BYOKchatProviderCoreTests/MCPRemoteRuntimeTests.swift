@@ -15,6 +15,10 @@ import Testing
         "type": .string("string"),
         "x-mcp-header": .string("Region"),
       ]),
+      "ratio": .object([
+        "type": .string("number"),
+        "x-mcp-header": .string("Ratio"),
+      ]),
       "nested": .object([
         "type": .string("object"),
         "properties": .object([
@@ -27,15 +31,17 @@ import Testing
     ]),
   ])
   let bindings = try MCPToolHeaderMapper.bindings(from: schema)
-  #expect(bindings.count == 2)
+  #expect(bindings.count == 3)
   let headers = try MCPToolHeaderMapper.headers(
     bindings: bindings,
     arguments: .object([
       "region": .string("Hello, 世界"),
+      "ratio": .number(1.5),
       "nested": .object(["enabled": .bool(true)]),
     ])
   )
   #expect(headers["Mcp-Param-Region"] == "=?base64?SGVsbG8sIOS4lueVjA==?=")
+  #expect(headers["Mcp-Param-Ratio"] == "1.5")
   #expect(headers["Mcp-Param-Enabled"] == "true")
 }
 
@@ -58,9 +64,14 @@ import Testing
   let first = MCPToolNamespace.exposedName(serverID: "server-a", remoteName: "search.web")
   let repeated = MCPToolNamespace.exposedName(serverID: "server-a", remoteName: "search.web")
   let other = MCPToolNamespace.exposedName(serverID: "server-b", remoteName: "search.web")
+  let sameVisiblePrefix = MCPToolNamespace.exposedName(
+    serverID: "server-a-but-different",
+    remoteName: "search.web"
+  )
   #expect(first == repeated)
   #expect(first != other)
-  #expect(first.count <= 128)
+  #expect(first != sameVisiblePrefix)
+  #expect(first.count <= MCPToolNamespace.maximumExposedNameLength)
   #expect(first.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" })
 }
 
@@ -209,14 +220,16 @@ import Testing
   let incoming = MCPWorkspaceState(servers: [first, second])
   let incomingData = try JSONEncoder.providerEncoder.encode(incoming)
   try await store.importConfiguration(incomingData, strategy: .keepExisting)
-  #expect(Set(await store.allServers().map(\.id)) == [first.id, second.id])
+  let mergedIDs = Set(await store.allServers().map(\.id))
+  #expect(mergedIDs == [first.id, second.id])
 
   let replacement = MCPWorkspaceState(servers: [second])
   try await store.importConfiguration(
     JSONEncoder.providerEncoder.encode(replacement),
     strategy: .replaceExisting
   )
-  #expect(await store.allServers().map(\.id) == [second.id])
+  let replacedIDs = await store.allServers().map(\.id)
+  #expect(replacedIDs == [second.id])
 }
 
 @Test func oldBackupWithoutMCPWorkspaceStillDecodes() throws {
@@ -329,8 +342,8 @@ private actor SSEMCPTransport: ProviderHTTPTransport {
         chunks: AsyncThrowingStream { continuation in
           let bytes = Data(sse.utf8)
           let midpoint = bytes.count / 2
-          continuation.yield(bytes.prefix(midpoint))
-          continuation.yield(bytes.suffix(from: midpoint))
+          continuation.yield(Data(bytes.prefix(midpoint)))
+          continuation.yield(Data(bytes.suffix(from: midpoint)))
           continuation.finish()
         }
       )
