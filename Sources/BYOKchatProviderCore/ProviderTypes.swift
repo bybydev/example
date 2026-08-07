@@ -27,24 +27,30 @@ public struct ModelID: RawRepresentable, Hashable, Codable, Sendable, Expressibl
   public var description: String { rawValue }
 }
 
-public enum ProviderMessageRole: String, Codable, Sendable { case system, user, assistant }
+public enum ProviderMessageRole: String, Codable, Sendable { case system, user, assistant, tool }
 
 public struct ProviderMessage: Codable, Sendable, Equatable {
   public var role: ProviderMessageRole
   public var content: String
   public var reasoning: String?
   public var attachments: [ChatAttachment]?
+  public var toolCalls: [ChatToolCall]?
+  public var toolResults: [ChatToolResult]?
 
   public init(
     role: ProviderMessageRole,
     content: String,
     reasoning: String? = nil,
-    attachments: [ChatAttachment]? = nil
+    attachments: [ChatAttachment]? = nil,
+    toolCalls: [ChatToolCall]? = nil,
+    toolResults: [ChatToolResult]? = nil
   ) {
     self.role = role
     self.content = content
     self.reasoning = reasoning
     self.attachments = attachments
+    self.toolCalls = toolCalls
+    self.toolResults = toolResults
   }
 }
 
@@ -122,12 +128,17 @@ public struct ProviderRequest: Sendable, Equatable {
   public var model: ModelID
   public var messages: [ProviderMessage]
   public var options: ProviderRequestOptions
+  public var tools: [ChatToolDefinition]
   public init(
-    model: ModelID, messages: [ProviderMessage], options: ProviderRequestOptions = .init()
+    model: ModelID,
+    messages: [ProviderMessage],
+    options: ProviderRequestOptions = .init(),
+    tools: [ChatToolDefinition] = []
   ) {
     self.model = model
     self.messages = messages
     self.options = options
+    self.tools = tools
   }
 }
 
@@ -157,6 +168,7 @@ public struct ProviderResponse: Sendable, Equatable {
   public var finishReason: String?
   public var usage: ProviderUsage?
   public var metadata: [String: String]
+  public var toolCalls: [ChatToolCall]
   public init(
     id: String? = nil,
     text: String,
@@ -166,7 +178,8 @@ public struct ProviderResponse: Sendable, Equatable {
     modelID: ModelID,
     finishReason: String? = nil,
     usage: ProviderUsage? = nil,
-    metadata: [String: String] = [:]
+    metadata: [String: String] = [:],
+    toolCalls: [ChatToolCall] = []
   ) {
     self.id = id
     self.text = text
@@ -177,6 +190,7 @@ public struct ProviderResponse: Sendable, Equatable {
     self.finishReason = finishReason
     self.usage = usage
     self.metadata = metadata
+    self.toolCalls = toolCalls
   }
 }
 
