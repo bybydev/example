@@ -83,3 +83,102 @@ import Testing
   #expect(await workspace.projectID(for: keep) == project.id)
   #expect(await workspace.projectID(for: stale) == nil)
 }
+
+@Test func projectWorkspacePersistsFilesToolsAndPresetsForConversation() async throws {
+  let persistence = InMemoryProjectWorkspacePersistence()
+  let workspace = ProjectWorkspaceStore(persistence: persistence)
+  try await workspace.load()
+
+  let file = ProjectFile(
+    filename: "brief.txt",
+    mimeType: "text/plain",
+    data: Data("Project brief".utf8)
+  )
+  let configuration = MCPChatToolConfiguration(
+    enabledServerIDs: [MCPServerID(rawValue: "github")],
+    toolPolicies: ["github__read_file": .alwaysAllow]
+  )
+  let prompt = ProjectPromptPreset(name: "Review", prompt: "Review this carefully.")
+  let toolPreset = ProjectToolPreset(name: "Read only", configuration: configuration)
+
+  let project = try await workspace.createProject(
+    name: "Launch",
+    symbolName: "shippingbox.fill",
+    accentID: "orange",
+    accountID: nil,
+    modelID: nil,
+    instructions: "Use the project brief.",
+    files: [file],
+    mcpConfiguration: configuration,
+    promptPresets: [prompt],
+    toolPresets: [toolPreset]
+  )
+  let conversationID: ConversationID = "phase2-chat"
+  try await workspace.assignConversation(conversationID, to: project.id)
+
+  #expect(await workspace.files(for: conversationID) == [file])
+  #expect(await workspace.mcpConfiguration(for: conversationID) == configuration)
+  #expect(await workspace.promptPresets(for: conversationID) == [prompt])
+  #expect(await workspace.toolPresets(for: conversationID) == [toolPreset])
+
+  let reloaded = ProjectWorkspaceStore(persistence: persistence)
+  try await reloaded.load()
+  #expect(try await reloaded.project(id: project.id).projectFiles == [file])
+  #expect(await reloaded.mcpConfiguration(for: conversationID) == configuration)
+}
+
+@Test func phaseOneProjectWorkspaceStillDecodesWithoutPhaseTwoFields() async throws {
+  let json = """
+  {
+    "schemaVersion" : 1,
+    "projects" : [
+      {
+        "id" : "legacy-project",
+        "name" : "Legacy",
+        "symbolName" : "folder.fill",
+        "accentID" : "blue",
+        "instructions" : "Legacy instructions",
+        "createdAt" : "2026-08-07T00:00:00Z",
+        "updatedAt" : "2026-08-07T00:00:00Z"
+      }
+    ],
+    "conversationProjectIDs" : {
+      "legacy-chat" : "legacy-project"
+    }
+  }
+  """
+  let persistence = InMemoryProjectWorkspacePersistence(data: Data(json.utf8))
+  let workspace = ProjectWorkspaceStore(persistence: persistence)
+  try await workspace.load()
+
+  let project = try await workspace.project(id: "legacy-project")
+  #expect(project.projectFiles.isEmpty)
+  #expect(project.mcpConfiguration == nil)
+  #expect(project.projectPromptPresets.isEmpty)
+  #expect(project.projectToolPresets.isEmpty)
+  #expect(await workspace.projectID(for: "legacy-chat") == ProjectID(rawValue: "legacy-project"))
+}
+
+@Test func projectWorkspaceRejectsOversizedReferenceFileSet() async throws {
+  let workspace = ProjectWorkspaceStore(persistence: InMemoryProjectWorkspacePersistence())
+  try await workspace.load()
+  let files = (0..<9).map { index in
+    ProjectFile(
+      filename: "\(index).txt",
+      mimeType: "text/plain",
+      data: Data("x".utf8)
+    )
+  }
+
+  await #expect(throws: ProjectWorkspaceError.self) {
+    _ = try await workspace.createProject(
+      name: "Too many files",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      files: files
+    )
+  }
+}
