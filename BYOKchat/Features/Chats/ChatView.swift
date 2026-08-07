@@ -22,6 +22,7 @@ struct ChatView: View {
   @State var restoredDraft = false
   @State var showTargetSettings = false
   @State var showToolSettings = false
+  @State var showUsage = false
   @State var renameText = ""
   @State var showRename = false
   @State var editTarget: ChatMessage?
@@ -89,6 +90,9 @@ struct ChatView: View {
         Button("Tools", systemImage: "wrench.and.screwdriver") {
           showToolSettings = true
         }
+        Button("Usage", systemImage: "chart.bar.xaxis") {
+          showUsage = true
+        }
         Button("Rename", systemImage: "pencil") {
           renameText = conversation?.title ?? ""
           showRename = true
@@ -120,6 +124,12 @@ struct ChatView: View {
       ConversationToolsView(
         conversationID: conversationID,
         mcp: mcp
+      )
+    }
+    .sheet(isPresented: $showUsage) {
+      UsageDashboardView(
+        conversations: chats.conversations,
+        currentConversationID: conversationID
       )
     }
     .sheet(item: $editTarget) { message in
