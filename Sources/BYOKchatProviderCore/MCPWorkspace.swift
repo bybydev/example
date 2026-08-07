@@ -172,7 +172,7 @@ public actor MCPWorkspaceStore {
     state.snapshots.removeAll { $0.serverID == id }
 
     if var configurations = state.chatConfigurations {
-      for key in configurations.keys {
+      for key in Array(configurations.keys) {
         guard var configuration = configurations[key] else { continue }
         configuration.enabledServerIDs.removeAll { $0 == id }
         for name in exposedNames { configuration.toolPolicies.removeValue(forKey: name) }
