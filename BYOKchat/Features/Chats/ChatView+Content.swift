@@ -7,6 +7,9 @@ private struct ChatAutoScrollTrigger: Equatable {
   var messageCount: Int
   var streamRevision: Int
   var isGenerating: Bool
+  var activeToolCount: Int
+  var approvalCount: Int
+  var elicitationCount: Int
 }
 
 extension ChatView {
@@ -42,21 +45,61 @@ extension ChatView {
           } else {
             ForEach(conversation.messages) { stored in
               let displayed = chats.displayMessage(stored)
-              ChatMessageView(
-                message: displayed,
-                accountLabel: accountLabel(for: stored),
-                canEdit: stored.role == .user && !chats.isGenerating(conversationID),
-                canRegenerate: stored.id == latestAssistantID
-                  && !chats.isGenerating(conversationID),
-                edit: {
-                  editText = stored.content
-                  editTarget = stored
-                },
-                regenerate: regenerate,
-                copy: { UIPasteboard.general.string = displayed.content }
-              )
+              VStack(alignment: .leading, spacing: 10) {
+                ChatMessageView(
+                  message: displayed,
+                  accountLabel: accountLabel(for: stored),
+                  canEdit: stored.role == .user && !chats.isGenerating(conversationID),
+                  canRegenerate: stored.id == latestAssistantID
+                    && !chats.isGenerating(conversationID),
+                  edit: {
+                    editText = stored.content
+                    editTarget = stored
+                  },
+                  regenerate: regenerate,
+                  copy: { UIPasteboard.general.string = displayed.content }
+                )
+
+                if stored.role == .assistant,
+                  let rounds = displayed.toolRounds,
+                  !rounds.isEmpty
+                {
+                  ForEach(rounds) { round in
+                    ChatToolRoundView(
+                      round: round,
+                      displayName: { mcp.toolDisplayName($0) }
+                    )
+                  }
+                }
+              }
               .id(stored.id)
             }
+          }
+
+          let approvals = mcp.pendingApprovals(for: conversationID)
+          let approvalCallIDs = Set(approvals.map(\.callID))
+          ForEach(approvals) { request in
+            MCPToolApprovalCard(request: request) { decision in
+              Task { @MainActor in
+                await mcp.resolveApproval(request.id, decision: decision)
+              }
+            }
+          }
+
+          ForEach(mcp.pendingElicitations(for: conversationID)) { request in
+            MCPElicitationCard(request: request) { decision in
+              Task { @MainActor in
+                await mcp.resolveElicitation(request.id, decision: decision)
+              }
+            }
+          }
+
+          ForEach(chats.activeToolCalls(for: conversationID)) { call in
+            MCPToolRunningCard(
+              call: call,
+              displayName: mcp.toolDisplayName(call.name),
+              isWaitingForApproval: approvalCallIDs.contains(call.id)
+            )
           }
 
           Color.clear
@@ -117,7 +160,10 @@ extension ChatView {
           conversationID: conversationID,
           messageCount: conversation.messages.count,
           streamRevision: chats.streamRevision(for: conversationID),
-          isGenerating: chats.isGenerating(conversationID)
+          isGenerating: chats.isGenerating(conversationID),
+          activeToolCount: chats.activeToolCalls(for: conversationID).count,
+          approvalCount: mcp.pendingApprovals(for: conversationID).count,
+          elicitationCount: mcp.pendingElicitations(for: conversationID).count
         )
       ) {
         guard hasCompletedInitialScroll else { return }
@@ -126,9 +172,8 @@ extension ChatView {
           return
         }
 
-        // Streaming text changes the rendered Markdown height asynchronously. Coalesce rapid
-        // revisions and wait for the next layout pass before moving the viewport. This prevents
-        // competing ScrollViewReader commands from targeting stale LazyVStack geometry.
+        // Streaming text and tool interaction cards both change timeline height asynchronously.
+        // Coalesce rapid revisions and wait for the next layout pass before moving the viewport.
         do {
           try await Task.sleep(for: .milliseconds(12))
         } catch {
