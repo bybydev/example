@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatListView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
+  @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
   let openProviders: () -> Void
 
@@ -55,6 +56,7 @@ struct ChatListView: View {
             ? searchTarget?.messageID : nil,
           chats: chats,
           providers: providers,
+          projects: projects,
           mcp: mcp
         )
       }
@@ -92,14 +94,22 @@ struct ChatListView: View {
             renameText = conversation.title
           }
           Button("Delete", systemImage: "trash", role: .destructive) {
-            Task { await chats.deleteConversation(conversation.id) }
+            Task {
+              await chats.deleteConversation(conversation.id)
+              await projects.reloadFromStorage()
+              await mcp.reloadFromStorage()
+            }
           }
         }
       }
       .onDelete { offsets in
         let ids = offsets.map { chats.conversations[$0].id }
         for id in ids {
-          Task { await chats.deleteConversation(id) }
+          Task {
+            await chats.deleteConversation(id)
+            await projects.reloadFromStorage()
+            await mcp.reloadFromStorage()
+          }
         }
       }
     }
