@@ -81,6 +81,7 @@ final class AppModel {
       localRuntime: toolRuntime,
       mcpRuntime: mcpRuntime,
       workspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace,
       approvals: approvalCenter,
       elicitations: elicitationCenter
     )
@@ -88,6 +89,7 @@ final class AppModel {
       providerRuntime: providerRuntime,
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
+      projectWorkspace: projectWorkspace,
       toolRuntime: conversationToolRuntime
     )
 
@@ -110,6 +112,7 @@ final class AppModel {
     let mcpModel = MCPManagementModel(
       runtime: mcpRuntime,
       workspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace,
       approvals: approvalCenter,
       elicitations: elicitationCenter
     )
@@ -139,10 +142,11 @@ final class AppModel {
   func load() async {
     guard !hasLoaded else { return }
     await providers.load()
-    await mcp.load()
     await projects.load()
+    await mcp.load()
     await chats.load()
     await projects.reconcile(conversations: chats.conversations)
+    await mcp.reloadFromStorage()
     hasLoaded = true
   }
 }
@@ -154,6 +158,7 @@ final class MCPManagementModel {
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
   private(set) var chatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
+  private(set) var inheritedChatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
   private(set) var pendingApprovals: [MCPToolApprovalRequest] = []
   private(set) var pendingElicitations: [MCPElicitationRequest] = []
   var isBusy = false
@@ -162,6 +167,7 @@ final class MCPManagementModel {
 
   private let runtime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
+  private let projectWorkspace: ProjectWorkspaceStore
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
   private var approvalObservationTask: Task<Void, Never>?
@@ -170,11 +176,13 @@ final class MCPManagementModel {
   init(
     runtime: MCPRemoteRuntime,
     workspace: MCPWorkspaceStore,
+    projectWorkspace: ProjectWorkspaceStore,
     approvals: MCPToolApprovalCenter,
     elicitations: MCPElicitationCenter
   ) {
     self.runtime = runtime
     self.workspace = workspace
+    self.projectWorkspace = projectWorkspace
     self.approvals = approvals
     self.elicitations = elicitations
   }
@@ -202,7 +210,17 @@ final class MCPManagementModel {
   }
 
   func chatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration {
-    chatConfigurations[conversationID] ?? MCPChatToolConfiguration()
+    chatConfigurations[conversationID]
+      ?? inheritedChatConfigurations[conversationID]
+      ?? MCPChatToolConfiguration()
+  }
+
+  func hasChatOverride(_ conversationID: ConversationID) -> Bool {
+    chatConfigurations[conversationID] != nil
+  }
+
+  func inheritsProjectTools(_ conversationID: ConversationID) -> Bool {
+    chatConfigurations[conversationID] == nil && inheritedChatConfigurations[conversationID] != nil
   }
 
   func isServerEnabled(_ serverID: MCPServerID, for conversationID: ConversationID) -> Bool {
@@ -325,6 +343,7 @@ final class MCPManagementModel {
         }
         _ = try await runtime.refreshServer(serverID)
       }
+      try await materializeInheritedConfigurationIfNeeded(conversationID)
       try await workspace.setChatServerEnabled(
         enabled,
         serverID: serverID,
@@ -340,11 +359,22 @@ final class MCPManagementModel {
     conversationID: ConversationID
   ) async {
     await perform(nil) {
+      try await materializeInheritedConfigurationIfNeeded(conversationID)
       try await workspace.setChatToolPolicy(
         policy,
         exposedToolName: exposedToolName,
         conversationID: conversationID
       )
+      try await reloadSnapshot()
+    }
+  }
+
+  func applyChatConfiguration(
+    _ configuration: MCPChatToolConfiguration,
+    conversationID: ConversationID
+  ) async {
+    await perform("Tool preset applied") {
+      try await workspace.replaceChatConfiguration(configuration, conversationID: conversationID)
       try await reloadSnapshot()
     }
   }
@@ -368,13 +398,13 @@ final class MCPManagementModel {
       let request = pendingApprovals.first(where: { $0.id == requestID })
     {
       do {
+        try await materializeInheritedConfigurationIfNeeded(request.conversationID)
         try await workspace.setChatToolPolicy(
           .alwaysAllow,
           exposedToolName: request.exposedToolName,
           conversationID: request.conversationID
         )
         try await reloadSnapshot()
-        // Persistence already happened here, so the executor only needs a one-shot allow.
         await approvals.resolve(requestID, decision: .allowOnce)
       } catch {
         errorMessage = error.localizedDescription
@@ -397,6 +427,13 @@ final class MCPManagementModel {
     try await reloadSnapshot()
   }
 
+  private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
+    guard chatConfigurations[conversationID] == nil,
+      let inherited = inheritedChatConfigurations[conversationID]
+    else { return }
+    try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
+  }
+
   private func reloadSnapshot() async throws {
     servers = await runtime.servers()
     let snapshots = await runtime.snapshots()
@@ -406,6 +443,15 @@ final class MCPManagementModel {
     chatConfigurations = Dictionary(
       uniqueKeysWithValues: (workspaceSnapshot.chatConfigurations ?? [:]).map {
         (ConversationID(rawValue: $0.key), $0.value)
+      }
+    )
+
+    let projectSnapshot = await projectWorkspace.snapshot()
+    let projectsByID = Dictionary(uniqueKeysWithValues: projectSnapshot.projects.map { ($0.id.rawValue, $0) })
+    inheritedChatConfigurations = Dictionary(
+      uniqueKeysWithValues: projectSnapshot.conversationProjectIDs.compactMap { conversationID, projectID in
+        guard let configuration = projectsByID[projectID]?.mcpConfiguration else { return nil }
+        return (ConversationID(rawValue: conversationID), configuration)
       }
     )
 
