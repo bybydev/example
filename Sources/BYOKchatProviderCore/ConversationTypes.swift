@@ -165,8 +165,6 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
   public var messages: [ChatMessage]
   public var lastContextOmittedMessageCount: Int
   public var draftText: String?
-  /// Optional for backward compatibility with schema-v1 conversations created before MCP Phase 3.
-  public var mcpToolConfiguration: MCPChatToolConfiguration?
 
   public init(
     id: ConversationID = .init(),
@@ -180,8 +178,7 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     options: ProviderRequestOptions = .init(),
     messages: [ChatMessage] = [],
     lastContextOmittedMessageCount: Int = 0,
-    draftText: String? = nil,
-    mcpToolConfiguration: MCPChatToolConfiguration? = nil
+    draftText: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -195,7 +192,6 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     self.messages = messages
     self.lastContextOmittedMessageCount = lastContextOmittedMessageCount
     self.draftText = draftText
-    self.mcpToolConfiguration = mcpToolConfiguration
   }
 
   public var lastMessagePreview: String? {
