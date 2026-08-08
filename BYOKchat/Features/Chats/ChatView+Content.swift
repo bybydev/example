@@ -2,16 +2,6 @@ import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
-private struct ChatAutoScrollTrigger: Equatable {
-  var conversationID: ConversationID
-  var messageCount: Int
-  var streamRevision: Int
-  var isGenerating: Bool
-  var activeToolCount: Int
-  var approvalCount: Int
-  var elicitationCount: Int
-}
-
 extension ChatView {
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
@@ -147,6 +137,18 @@ extension ChatView {
           showJumpToLatest = true
         }
       }
+      .onScrollGeometryChange(for: CGFloat.self) { geometry in
+        geometry.contentSize.height
+      } action: { oldHeight, newHeight in
+        guard oldHeight != newHeight,
+          hasCompletedInitialScroll,
+          followsLatest,
+          !isUserDraggingTimeline,
+          chats.isGenerating(conversationID)
+        else { return }
+
+        scrollToBottom(proxy, animated: false)
+      }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
           followsLatest = true
@@ -154,32 +156,6 @@ extension ChatView {
         } else if !isNearBottom {
           showJumpToLatest = true
         }
-      }
-      .task(
-        id: ChatAutoScrollTrigger(
-          conversationID: conversationID,
-          messageCount: conversation.messages.count,
-          streamRevision: chats.streamRevision(for: conversationID),
-          isGenerating: chats.isGenerating(conversationID),
-          activeToolCount: chats.activeToolCalls(for: conversationID).count,
-          approvalCount: mcp.pendingApprovals(for: conversationID).count,
-          elicitationCount: mcp.pendingElicitations(for: conversationID).count
-        )
-      ) {
-        guard hasCompletedInitialScroll else { return }
-        guard followsLatest, !isUserDraggingTimeline else {
-          if !isNearBottom { showJumpToLatest = true }
-          return
-        }
-
-        do {
-          try await Task.sleep(for: .milliseconds(12))
-        } catch {
-          return
-        }
-        await Task.yield()
-        guard !Task.isCancelled, followsLatest, !isUserDraggingTimeline else { return }
-        scrollToBottom(proxy, animated: false)
       }
       .task(id: conversationID) {
         hasCompletedInitialScroll = false
