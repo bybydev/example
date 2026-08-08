@@ -47,7 +47,7 @@ import Testing
 }
 
 @Test func explicitOutputRequestTakesPriorityOverModelMaximumForBudgeting() throws {
-  let prompt = String(repeating: "x", count: 16_000)
+  let prompt = String(repeating: "x", count: 16_400)
   let conversation = ChatConversation(
     providerID: "openrouter",
     accountID: "account",
