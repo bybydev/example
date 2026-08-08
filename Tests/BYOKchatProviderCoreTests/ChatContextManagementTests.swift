@@ -58,7 +58,7 @@ import Testing
   #expect(withTools.messages.count == 1)
   #expect(withTools.messages.last?.role == .user)
   #expect(withTools.messages.last?.content == String(repeating: "q", count: 100))
-  #expect(withTools.estimatedInputTokens > withoutTools.messages.last.map { _ in 0 } ?? 0)
+  #expect(withTools.estimatedInputTokens > 400)
 }
 
 @Test func defaultContextPolicyKeepsSafetyHeadroomForApproximateTokenCounting() throws {
