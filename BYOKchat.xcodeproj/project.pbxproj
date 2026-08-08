@@ -42,6 +42,7 @@
 		691E79BE21D033FCAAB67A42 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0246EC65F20ED232EFD28182 /* ChatView.swift */; };
 		6A5F9C578F011AE0B98E6E36 /* BYOKchatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2925788434A51E9708D31261 /* BYOKchatApp.swift */; };
 		6E47201781645FC494717B81 /* ConversationPortabilityRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728A86DAB307D55AC10B1F30 /* ConversationPortabilityRegressionTests.swift */; };
+		6F168B662F2EDF4D85613F02 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 95591C20C763E5B80CF2B26B /* PrivacyInfo.xcprivacy */; };
 		73B0E5B0B445ACD757182BD2 /* ProjectWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03CB5C9E7F5C561AC39CA425 /* ProjectWorkspaceTests.swift */; };
 		7C132209589F41FDF72C114B /* ChatComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2CEBBA0FEFFAA48EF4F09B /* ChatComponents.swift */; };
 		8226BB2131557AD21DD40AC1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85D33F404D207D928A02AD35 /* SettingsView.swift */; };
@@ -128,6 +129,7 @@
 		8C3810F706F376B2ED8E5392 /* Phase5CompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase5CompatibilityTests.swift; sourceTree = "<group>"; };
 		8E8F7154DFF3B1FF8AA69430 /* ProjectSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSyncTests.swift; sourceTree = "<group>"; };
 		939D4D1067ABC6D3D8DF8482 /* ConversationRuntimeAndCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRuntimeAndCompatibilityTests.swift; sourceTree = "<group>"; };
+		95591C20C763E5B80CF2B26B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		961033A42E62C4FBA93AF12C /* MCPInputRequiredTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPInputRequiredTests.swift; sourceTree = "<group>"; };
 		98C1CFC079AFFF1A1FF99FC9 /* BYOKchat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BYOKchat.entitlements; sourceTree = "<group>"; };
 		9DC9FE58E59595C53DA61141 /* ConversationTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTestSupport.swift; sourceTree = "<group>"; };
@@ -347,6 +349,7 @@
 			children = (
 				EE73D293A7A14460256C7E90 /* Assets.xcassets */,
 				4D01C982611E7A7630D7F474 /* Info.plist */,
+				95591C20C763E5B80CF2B26B /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -452,6 +455,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				489407CDB48CCFD30BFDFEC0 /* Assets.xcassets in Resources */,
+				6F168B662F2EDF4D85613F02 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
