@@ -160,25 +160,28 @@ public actor ChatRuntime {
       let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
         .first { $0.model.id == conversation.modelID }
       let projectAttachments = await projectWorkspace?.files(for: conversationID).map(\.attachment) ?? []
-      let context = try ChatContextBuilder.build(
-        conversation: conversation,
-        contextWindow: modelRecord?.model.contextWindow,
-        reservedOutputTokens: conversation.options.maxOutputTokens
-          ?? modelRecord?.model.maxOutputTokens,
-        supplementalAttachments: projectAttachments
-      )
-      try await conversations.setContextOmissionCount(
-        context.omittedMessageCount,
-        conversationID: conversationID
-      )
-
       let tools: [ChatToolDefinition]
       if let toolRuntime {
         tools = await toolRuntime.availableTools(conversationID: conversationID)
       } else {
         tools = []
       }
+
+      let context = try ChatContextBuilder.build(
+        conversation: conversation,
+        contextWindow: modelRecord?.model.contextWindow,
+        reservedOutputTokens: conversation.options.maxOutputTokens
+          ?? modelRecord?.model.maxOutputTokens,
+        supplementalAttachments: projectAttachments,
+        tools: tools
+      )
+      try await conversations.setContextOmissionCount(
+        context.omittedMessageCount,
+        conversationID: conversationID
+      )
+
       var requestMessages = context.messages
+      var continuationMessages: [ProviderMessage] = []
       var accumulatedUsage: ProviderUsage?
       var toolRoundCount = 0
       var totalToolCallCount = 0
@@ -294,7 +297,7 @@ public actor ChatRuntime {
           continuation.yield(.toolRound(messageID: turn.assistantMessage.id, value: round))
 
           accumulatedUsage = addingUsage(accumulatedUsage, completedStepUsage)
-          requestMessages.append(
+          continuationMessages.append(
             ProviderMessage(
               role: .assistant,
               content: response.text,
@@ -303,10 +306,26 @@ public actor ChatRuntime {
               toolContinuation: response.toolContinuation
             )
           )
-          requestMessages.append(
+          continuationMessages.append(
             ProviderMessage(role: .tool, content: "", toolResults: results)
           )
           toolRoundCount += 1
+
+          let continuedContext = try ChatContextBuilder.build(
+            conversation: conversation,
+            contextWindow: modelRecord?.model.contextWindow,
+            reservedOutputTokens: conversation.options.maxOutputTokens
+              ?? modelRecord?.model.maxOutputTokens,
+            supplementalAttachments: projectAttachments,
+            tools: tools,
+            requiredTailMessages: continuationMessages
+          )
+          requestMessages = continuedContext.messages
+          try await conversations.setContextOmissionCount(
+            continuedContext.omittedMessageCount,
+            conversationID: conversationID
+          )
+
           activeStates[conversationID] = ActiveGenerationState(
             assistantID: turn.assistantMessage.id,
             content: "",
