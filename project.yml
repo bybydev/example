@@ -43,10 +43,7 @@ targets:
         PRODUCT_NAME: BYOKchat
         DEVELOPMENT_TEAM: J458WW3452
         CODE_SIGN_STYLE: Automatic
-        # Keep this entitlements file source-controlled. Do not use XcodeGen's
-        # target-level `entitlements:` block here; that rewrites the file during
-        # project generation and has repeatedly broken physical-device signing.
-        CODE_SIGN_ENTITLEMENTS: Config/BYOKchat.entitlements
+        CODE_SIGN_ENTITLEMENTS: BYOKchat/BYOKchat.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: 1.0
         CURRENT_PROJECT_VERSION: 1
