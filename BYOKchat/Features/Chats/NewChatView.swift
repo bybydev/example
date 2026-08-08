@@ -108,30 +108,41 @@ struct NewChatView: View {
         dismissKeyboard()
       }
     )
-    .toolbar(.hidden, for: .navigationBar)
-    .safeAreaInset(edge: .top, spacing: 0) {
-      ChatTopBar(
-        openSidebar: openSidebar,
-        newChat: {
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Button("Open Sidebar", systemImage: "line.3.horizontal.decrease", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
+      }
+
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        Button("New Chat", systemImage: "square.and.pencil") {
           draft = ""
           pendingAttachments = []
           photoPickerItems = []
         }
-      ) {
-        if let project, !project.projectPromptPresets.isEmpty {
-          Menu("Prompts", systemImage: "text.bubble") {
-            ForEach(project.projectPromptPresets) { preset in
-              Button(preset.name) { applyPromptPreset(preset) }
+        .labelStyle(.iconOnly)
+
+        Menu {
+          if let project, !project.projectPromptPresets.isEmpty {
+            Menu("Prompts", systemImage: "text.bubble") {
+              ForEach(project.projectPromptPresets) { preset in
+                Button(preset.name) { applyPromptPreset(preset) }
+              }
             }
           }
-        }
-        if project != nil {
-          Button("Project Settings", systemImage: "folder.badge.gearshape") {
-            showProjectEditor = true
+          if project != nil {
+            Button("Project Settings", systemImage: "folder.badge.gearshape") {
+              showProjectEditor = true
+            }
           }
+          Button("Settings", systemImage: "gearshape", action: openSettings)
+          Button("Providers & Accounts", systemImage: "key.horizontal", action: openSettings)
+        } label: {
+          Image(systemName: "ellipsis")
         }
-        Button("Settings", systemImage: "gearshape", action: openSettings)
-        Button("Providers & Accounts", systemImage: "key.horizontal", action: openSettings)
+        .accessibilityLabel("More options")
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
