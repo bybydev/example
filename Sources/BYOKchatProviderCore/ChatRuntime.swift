@@ -159,6 +159,8 @@ public actor ChatRuntime {
       let conversation = try await conversations.conversation(id: conversationID)
       let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
         .first { $0.model.id == conversation.modelID }
+      let model = modelRecord?.model
+      let contextWindowKind = model?.effectiveContextWindowKind ?? .combined
       let projectAttachments = await projectWorkspace?.files(for: conversationID).map(\.attachment) ?? []
       let tools: [ChatToolDefinition]
       if let toolRuntime {
@@ -169,9 +171,10 @@ public actor ChatRuntime {
 
       let context = try ChatContextBuilder.build(
         conversation: conversation,
-        contextWindow: modelRecord?.model.contextWindow,
+        contextWindow: model?.contextWindow,
+        contextWindowKind: contextWindowKind,
         reservedOutputTokens: conversation.options.maxOutputTokens,
-        modelMaxOutputTokens: modelRecord?.model.maxOutputTokens,
+        modelMaxOutputTokens: model?.maxOutputTokens,
         supplementalAttachments: projectAttachments,
         tools: tools
       )
@@ -313,9 +316,10 @@ public actor ChatRuntime {
 
           let continuedContext = try ChatContextBuilder.build(
             conversation: conversation,
-            contextWindow: modelRecord?.model.contextWindow,
+            contextWindow: model?.contextWindow,
+            contextWindowKind: contextWindowKind,
             reservedOutputTokens: conversation.options.maxOutputTokens,
-            modelMaxOutputTokens: modelRecord?.model.maxOutputTokens,
+            modelMaxOutputTokens: model?.maxOutputTokens,
             supplementalAttachments: projectAttachments,
             tools: tools,
             requiredTailMessages: continuationMessages
@@ -339,7 +343,7 @@ public actor ChatRuntime {
         response.metadata = ChatBilling.metadata(
           existing: response.metadata,
           usage: response.usage,
-          model: modelRecord?.model,
+          model: model,
           modelRequestCount: toolRoundCount + 1,
           toolCallCount: totalToolCallCount
         )
