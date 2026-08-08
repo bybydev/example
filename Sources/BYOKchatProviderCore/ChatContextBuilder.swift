@@ -54,7 +54,9 @@ public enum ChatContextBuilder {
     let outputReserve = policy.outputReserve(
       requested: reservedOutputTokens ?? conversation.options.maxOutputTokens
     )
-    let safetyMargin = contextWindow.map(policy.safetyMargin(contextWindow:)) ?? 0
+    let safetyMargin = contextWindow.map {
+      policy.safetyMargin(contextWindow: $0)
+    } ?? 0
     let inputBudget = contextWindow.map {
       max(0, $0 - outputReserve - safetyMargin)
     }
