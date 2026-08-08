@@ -36,6 +36,7 @@ targets:
       path: BYOKchat/Resources/Info.plist
       properties:
         CFBundleDisplayName: BYOKchat
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
     settings:
       base:
