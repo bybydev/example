@@ -27,11 +27,14 @@ context window
 - required in-flight tool continuation
 ```
 
-Output reservation follows these rules:
+Output reservation deliberately separates **what the request asks for** from **what the model is capable of producing**:
 
-- An explicit request limit or known model output limit is respected as-is. A real 64-token ceiling is not inflated to 256 tokens.
-- When no output limit is known, the normal fallback is 4096 tokens.
-- For a small known context window, that unknown-output fallback is capped at one quarter of the total window so the fallback itself cannot consume the entire prompt budget.
+- An explicit per-chat output limit is the requested generation ceiling and is reserved as-is.
+- When the chat does not set an output limit, BYOKchat uses a 4096-token fallback reserve.
+- A model's advertised `maxOutputTokens` is only a capability ceiling on that fallback. It can reduce a 4096-token fallback for a small-output model, but a 128k/384k advertised maximum never inflates the reserve to 128k/384k.
+- For a small known context window, the fallback is also capped at one quarter of the total window so the fallback itself cannot consume the entire prompt budget.
+
+This matches the transport behavior: an unset generation option is still unset when the request reaches providers whose API can choose its own default; Anthropic currently supplies its own 4096-token default at the adapter layer.
 
 `ChatContextPolicy.automatic` targets 5% of the model context window as estimation headroom, with a 64-token preferred minimum and a 65,536-token maximum. For small models, the safety reserve is capped at one quarter of the capacity remaining after output reservation. The safety margin exists to absorb estimation error; it must never starve the actual prompt.
 
@@ -45,7 +48,7 @@ The current counter is a provider-independent fallback, not a claim of exact tok
 - Non-ASCII text is counted more conservatively using both UTF-8 bytes and Unicode scalar count so CJK text is not underestimated by simply dividing its multibyte UTF-8 representation by four.
 - Attachment metadata, tool schemas, tool-call IDs, tool-result IDs, tool arguments/results, and opaque provider continuation payloads all contribute to the estimate.
 
-Images and binary documents remain inherently provider-specific. Their fallback costs are deliberately coarse until provider/model-specific token counters are added.
+Images and binary documents remain inherently provider-specific. Their fallback costs are deliberately coarse until provider/model-specific token counters are added. Therefore the safety margin is a guardrail, not a guarantee of exact fit for every multimodal payload.
 
 ## Tools and MCP
 
@@ -63,18 +66,22 @@ BYOKchat therefore keeps the reducer provider-independent and uses provider adap
 
 ## Regression coverage
 
-The context suite covers:
+The context suites cover:
 
 - explicit small output ceilings;
+- distinction between requested output and advertised model maximum output;
 - unknown output limits on small context windows;
 - safety-margin starvation protection;
 - CJK fallback estimation;
 - tool-schema and tool-call/result-ID accounting;
+- opaque provider continuation accounting;
 - atomic trimming of persisted tool rounds;
 - required live tool continuation preservation;
+- two consecutive tool rounds preserving every call/result/continuation in order;
 - overflow failure instead of dropping the current user turn;
 - preflight rejection of oversized tool schemas before any provider request;
-- runtime re-budgeting between the first and second requests of a tool loop.
+- runtime re-budgeting between the first and second requests of a tool loop;
+- oversized tool results stopping before a second provider request while persisting the failed turn.
 
 ## Token counting roadmap
 
