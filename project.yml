@@ -37,21 +37,16 @@ targets:
       properties:
         CFBundleDisplayName: BYOKchat
         UILaunchScreen: {}
-    entitlements:
-      path: Config/BYOKchat.entitlements
-      properties:
-        com.apple.developer.icloud-container-identifiers:
-          - iCloud.com.hoangbkit.byokchat
-        com.apple.developer.icloud-services:
-          - CloudDocuments
-        com.apple.developer.ubiquity-container-identifiers:
-          - iCloud.com.hoangbkit.byokchat
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat
         PRODUCT_NAME: BYOKchat
         DEVELOPMENT_TEAM: J458WW3452
         CODE_SIGN_STYLE: Automatic
+        # Keep this entitlements file source-controlled. Do not use XcodeGen's
+        # target-level `entitlements:` block here; that rewrites the file during
+        # project generation and has repeatedly broken physical-device signing.
+        CODE_SIGN_ENTITLEMENTS: Config/BYOKchat.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: 1.0
         CURRENT_PROJECT_VERSION: 1
