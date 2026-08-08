@@ -12,7 +12,7 @@ The request context is built from:
 4. Any required in-flight tool continuation messages.
 5. Tool definitions supplied with the request.
 
-The reducer removes only whole historical turns. A user message, its assistant reply, and persisted tool exchanges are kept or removed together so the app never creates orphaned tool calls or tool results.
+The reducer removes only whole historical turns. A user message, its assistant reply, and persisted tool exchanges are kept or removed together so the app never creates orphaned tool calls or tool results. History also remains contiguous: the reducer never skips a large recent turn just to include an older smaller one.
 
 ## Budgeting
 
@@ -27,17 +27,33 @@ context window
 - required in-flight tool continuation
 ```
 
-`ChatContextPolicy.automatic` reserves 5% of the model context window as estimation headroom, with a 64-token minimum and an 8192-token maximum. This is deliberately conservative because BYOKchat currently uses a local approximate token estimator and providers add model-specific serialization overhead.
+Output reservation follows these rules:
 
-The output reserve still uses the explicit request value first, then model metadata, with a 256-token minimum.
+- An explicit request limit or known model output limit is respected as-is. A real 64-token ceiling is not inflated to 256 tokens.
+- When no output limit is known, the normal fallback is 4096 tokens.
+- For a small known context window, that unknown-output fallback is capped at one quarter of the total window so the fallback itself cannot consume the entire prompt budget.
+
+`ChatContextPolicy.automatic` targets 5% of the model context window as estimation headroom, with a 64-token preferred minimum and a 65,536-token maximum. For small models, the safety reserve is capped at one quarter of the capacity remaining after output reservation. The safety margin exists to absorb estimation error; it must never starve the actual prompt.
+
+`estimatedInputTokens` reports the estimated request payload itself. It intentionally does not include the unused safety reserve.
+
+## Approximate token counting
+
+The current counter is a provider-independent fallback, not a claim of exact tokenizer parity.
+
+- ASCII text uses the common approximately four-bytes-per-token heuristic.
+- Non-ASCII text is counted more conservatively using both UTF-8 bytes and Unicode scalar count so CJK text is not underestimated by simply dividing its multibyte UTF-8 representation by four.
+- Attachment metadata, tool schemas, tool-call IDs, tool-result IDs, tool arguments/results, and opaque provider continuation payloads all contribute to the estimate.
+
+Images and binary documents remain inherently provider-specific. Their fallback costs are deliberately coarse until provider/model-specific token counters are added.
 
 ## Tools and MCP
 
-Tool schemas are part of the model prompt and therefore count against the context window. Context budgeting must include tool names, descriptions, and JSON schemas.
+Tool schemas are part of the model prompt and therefore count against the context window. Context budgeting includes tool names, descriptions, and JSON schemas before the first provider request.
 
 A multi-round tool turn is also dynamic: tool calls and tool results increase the next request size after the first model response. `ChatRuntime` therefore rebuilds the context after every tool round. Older historical turns may be removed as the live tool continuation grows, but the current user turn and all required continuation messages are preserved atomically.
 
-If the current turn plus its required tool continuation cannot fit, BYOKchat fails with `contextWindowExceeded` instead of silently dropping tool state and sending an invalid conversation.
+If the current turn plus its required tool continuation cannot fit, BYOKchat fails with `contextWindowExceeded` instead of silently dropping tool state and sending an invalid conversation. If a fixed tool schema is already too large, the failure happens before the provider request so the user is not billed for a request that BYOKchat already knows cannot fit.
 
 ## Why this is implemented in BYOKchatProviderCore
 
@@ -45,9 +61,24 @@ The proven algorithms needed for ordinary chat context are small: output reserva
 
 BYOKchat therefore keeps the reducer provider-independent and uses provider adapters only for transport/wire-format concerns.
 
+## Regression coverage
+
+The context suite covers:
+
+- explicit small output ceilings;
+- unknown output limits on small context windows;
+- safety-margin starvation protection;
+- CJK fallback estimation;
+- tool-schema and tool-call/result-ID accounting;
+- atomic trimming of persisted tool rounds;
+- required live tool continuation preservation;
+- overflow failure instead of dropping the current user turn;
+- preflight rejection of oversized tool schemas before any provider request;
+- runtime re-budgeting between the first and second requests of a tool loop.
+
 ## Token counting roadmap
 
-The current estimator intentionally has a safety margin. A future `TokenCounter` abstraction can provide provider/model-specific counting while keeping `ChatContextBuilder` as the policy layer:
+A future `TokenCounter` abstraction can provide provider/model-specific counting while keeping `ChatContextBuilder` as the policy layer:
 
 - exact provider token-count endpoints when available;
 - local model tokenizers when practical;
