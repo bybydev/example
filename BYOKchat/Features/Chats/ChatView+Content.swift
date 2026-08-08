@@ -99,16 +99,14 @@ extension ChatView {
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 18)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          dismissKeyboard()
+        }
       }
       .defaultScrollAnchor(
         initialScrollMessageID == nil ? UnitPoint.bottom : nil,
         for: .initialOffset
-      )
-      .contentShape(Rectangle())
-      .simultaneousGesture(
-        TapGesture().onEnded {
-          dismissKeyboard()
-        }
       )
       .scrollDismissesKeyboard(.interactively)
       .simultaneousGesture(
@@ -136,8 +134,7 @@ extension ChatView {
         if nearBottom {
           followsLatest = true
           showJumpToLatest = false
-        } else if isUserDraggingTimeline {
-          followsLatest = false
+        } else if isUserDraggingTimeline || !followsLatest {
           showJumpToLatest = true
         }
       }
@@ -184,21 +181,23 @@ extension ChatView {
         scrollToInitialTarget(proxy)
         hasCompletedInitialScroll = true
       }
-      .overlay(alignment: .bottomTrailing) {
+      .overlay(alignment: .bottom) {
         if showJumpToLatest {
           Button("Jump to Latest", systemImage: "arrow.down") {
             followsLatest = true
+            isUserDraggingTimeline = false
             scrollToBottom(proxy)
-            showJumpToLatest = false
           }
           .labelStyle(.iconOnly)
           .font(.system(size: 16, weight: .semibold))
-          .frame(width: 44, height: 44)
+          .frame(width: 48, height: 48)
+          .contentShape(Circle())
           .background(.ultraThinMaterial, in: Circle())
           .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
           .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
-          .padding(.trailing, 18)
-          .padding(.bottom, 104)
+          .padding(.bottom, 108)
+          .buttonStyle(.plain)
+          .zIndex(10)
           .accessibilityLabel("Jump to latest message")
         }
       }
