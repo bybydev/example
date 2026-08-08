@@ -129,6 +129,7 @@
 		8E8F7154DFF3B1FF8AA69430 /* ProjectSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSyncTests.swift; sourceTree = "<group>"; };
 		939D4D1067ABC6D3D8DF8482 /* ConversationRuntimeAndCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRuntimeAndCompatibilityTests.swift; sourceTree = "<group>"; };
 		961033A42E62C4FBA93AF12C /* MCPInputRequiredTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPInputRequiredTests.swift; sourceTree = "<group>"; };
+		98C1CFC079AFFF1A1FF99FC9 /* BYOKchat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BYOKchat.entitlements; sourceTree = "<group>"; };
 		9DC9FE58E59595C53DA61141 /* ConversationTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTestSupport.swift; sourceTree = "<group>"; };
 		A3F12BBE5DF4BC58124A4962 /* SSEDecoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEDecoderTests.swift; sourceTree = "<group>"; };
 		A539DA1482A5E95030F5AD50 /* ChatView+Content.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatView+Content.swift"; sourceTree = "<group>"; };
@@ -187,6 +188,7 @@
 		103653E92F90B4431AF68199 /* BYOKchat */ = {
 			isa = PBXGroup;
 			children = (
+				98C1CFC079AFFF1A1FF99FC9 /* BYOKchat.entitlements */,
 				4ABA52D4942A1FBB641BC245 /* App */,
 				80E4C95824FE6C6B336321AF /* Features */,
 				F62DC1264DF82927DFADA50B /* Resources */,
@@ -543,7 +545,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Config/BYOKchat.entitlements;
+				CODE_SIGN_ENTITLEMENTS = BYOKchat/BYOKchat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -732,7 +734,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Config/BYOKchat.entitlements;
+				CODE_SIGN_ENTITLEMENTS = BYOKchat/BYOKchat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
