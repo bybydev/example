@@ -10,15 +10,10 @@ struct MarkdownMessageContent: View {
   @Environment(\.appFoundationTheme) private var theme
   @State private var browserDestination: BrowserDestination?
 
-  private var blocks: [AnswerContentBlock] {
-    AnswerContentParser.parse(text)
-  }
-
-  private var sources: [AnswerSource] {
-    showsSources ? AnswerContentParser.sources(in: blocks) : []
-  }
-
   var body: some View {
+    let blocks = AnswerContentParser.parse(text)
+    let sources = showsSources ? AnswerContentParser.sources(in: blocks) : []
+
     VStack(alignment: .leading, spacing: 12) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
         blockView(block)
