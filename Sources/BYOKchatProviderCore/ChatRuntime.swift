@@ -170,8 +170,8 @@ public actor ChatRuntime {
       let context = try ChatContextBuilder.build(
         conversation: conversation,
         contextWindow: modelRecord?.model.contextWindow,
-        reservedOutputTokens: conversation.options.maxOutputTokens
-          ?? modelRecord?.model.maxOutputTokens,
+        reservedOutputTokens: conversation.options.maxOutputTokens,
+        modelMaxOutputTokens: modelRecord?.model.maxOutputTokens,
         supplementalAttachments: projectAttachments,
         tools: tools
       )
@@ -314,8 +314,8 @@ public actor ChatRuntime {
           let continuedContext = try ChatContextBuilder.build(
             conversation: conversation,
             contextWindow: modelRecord?.model.contextWindow,
-            reservedOutputTokens: conversation.options.maxOutputTokens
-              ?? modelRecord?.model.maxOutputTokens,
+            reservedOutputTokens: conversation.options.maxOutputTokens,
+            modelMaxOutputTokens: modelRecord?.model.maxOutputTokens,
             supplementalAttachments: projectAttachments,
             tools: tools,
             requiredTailMessages: continuationMessages
