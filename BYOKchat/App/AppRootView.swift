@@ -58,7 +58,6 @@ struct AppRootView: View {
           .zIndex(2)
         }
       }
-      .clipped()
       .animation(.snappy(duration: 0.28), value: isSidebarPresented)
     }
     .task {
@@ -171,6 +170,10 @@ struct AppRootView: View {
           selectConversation: selectConversation
         )
       }
+    }
+    .background {
+      theme.backgroundColor
+        .ignoresSafeArea()
     }
   }
 
