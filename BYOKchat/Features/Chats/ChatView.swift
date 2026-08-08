@@ -34,6 +34,7 @@ struct ChatView: View {
   @State var isUserDraggingTimeline = false
   @State var showJumpToLatest = false
   @State var hasCompletedInitialScroll = false
+  @State var chatScrollPosition = ScrollPosition(idType: String.self)
   @State var markdownDocument: MarkdownExportDocument?
   @State var showMarkdownExporter = false
   @State var pendingAttachments: [ChatAttachment] = []
