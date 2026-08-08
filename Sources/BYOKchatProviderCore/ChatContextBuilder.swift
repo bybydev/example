@@ -108,17 +108,45 @@ public enum ChatContextBuilder {
       )
     }
 
-    let eligible = conversation.messages.filter { message in
+    let latestUserIndex = conversation.messages.lastIndex { $0.role == .user }
+    let eligible = conversation.messages.enumerated().compactMap { index, message -> ChatMessage? in
       switch message.role {
       case .user:
-        return message.status == .complete
-          && (!message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !(message.attachments ?? []).isEmpty)
+        guard message.status == .complete,
+          !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(message.attachments ?? []).isEmpty
+        else { return nil }
+
+        // beginTurn persists the newest user message together with a pending assistant placeholder.
+        // That newest user message is the request being generated and must always enter context.
+        if index == latestUserIndex { return message }
+
+        // Historical context is turn-based. If the assistant response failed, was cancelled, or was
+        // interrupted, do not leave the preceding user message (and especially its attachments) as
+        // an orphaned half-turn that gets resent forever on every later request.
+        let responseIndex = index + 1
+        guard conversation.messages.indices.contains(responseIndex) else { return nil }
+        let response = conversation.messages[responseIndex]
+        guard response.role == .assistant, response.status == .complete else { return nil }
+        return message
+
       case .assistant:
-        return message.status == .complete
-          && (!message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard message.status == .complete,
+          !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !(message.toolRounds ?? []).isEmpty)
+            || !(message.toolRounds ?? []).isEmpty
+        else { return nil }
+
+        // Keep assistant history paired with the user turn that produced it. This also avoids
+        // importing a malformed/orphan assistant response into provider context.
+        let userIndex = index - 1
+        guard conversation.messages.indices.contains(userIndex) else { return nil }
+        let user = conversation.messages[userIndex]
+        guard user.role == .user, user.status == .complete,
+          !user.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(user.attachments ?? []).isEmpty
+        else { return nil }
+        return message
       }
     }
 
