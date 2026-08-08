@@ -128,24 +128,16 @@ struct ChatComposer: View {
 
       if isEditorFocused {
         HStack(spacing: 6) {
-          optionsButton
           modelButton
           Spacer(minLength: 8)
         }
         .padding(.horizontal, 8)
         .padding(.top, attachments.isEmpty ? 8 : 4)
-        .transition(.move(edge: .top).combined(with: .opacity))
       }
 
       HStack(alignment: .bottom, spacing: 6) {
         optionsButton
-          .frame(width: isEditorFocused ? 0 : 40)
-          .opacity(isEditorFocused ? 0 : 1)
-          .clipped()
-          .allowsHitTesting(!isEditorFocused)
-
         messageField
-
         sendButton
       }
       .padding(.horizontal, 8)
@@ -155,7 +147,6 @@ struct ChatComposer: View {
     .background(.thinMaterial, in: composerShape)
     .overlay(composerShape.stroke(.primary.opacity(0.08), lineWidth: 0.5))
     .shadow(color: .black.opacity(0.06), radius: 14, y: 6)
-    .animation(.snappy(duration: 0.22), value: isEditorFocused)
     .padding(.horizontal, 14)
     .padding(.top, 6)
     .padding(.bottom, 8)
@@ -166,17 +157,16 @@ struct ChatComposer: View {
   }
 
   private var composerShape: RoundedRectangle {
-    RoundedRectangle(
-      cornerRadius: isEditorFocused ? 24 : 28,
-      style: .continuous
-    )
+    RoundedRectangle(cornerRadius: 24, style: .continuous)
   }
 
   private var messageField: some View {
     TextField("Message BYOKchat", text: $draft, axis: .vertical)
       .font(.system(size: 17))
-      .lineLimit(isEditorFocused ? 1...7 : 1...1)
-      .frame(minHeight: 40)
+      .lineLimit(1...7)
+      .padding(.vertical, 4)
+      .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+      .contentShape(Rectangle())
       .focused($isEditorFocused)
       .accessibilityLabel("Message")
   }
@@ -190,8 +180,8 @@ struct ChatComposer: View {
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 22, weight: .regular))
-        .frame(width: 40, height: 40)
-        .contentShape(Circle())
+        .frame(width: 44, height: 48)
+        .contentShape(Rectangle())
     }
     .accessibilityLabel("Add attachment or open chat settings")
   }
@@ -225,7 +215,7 @@ struct ChatComposer: View {
     } label: {
       Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
         .font(.system(size: 16, weight: .bold))
-        .frame(width: 40, height: 40)
+        .frame(width: 44, height: 48)
         .background(sendButtonBackground, in: Circle())
         .foregroundStyle(sendButtonForeground)
     }
