@@ -100,6 +100,10 @@ extension ChatView {
         .padding(.top, 14)
         .padding(.bottom, 18)
       }
+      .defaultScrollAnchor(
+        initialScrollMessageID == nil ? UnitPoint.bottom : nil,
+        for: .initialOffset
+      )
       .contentShape(Rectangle())
       .simultaneousGesture(
         TapGesture().onEnded {
@@ -162,6 +166,12 @@ extension ChatView {
         followsLatest = initialScrollMessageID == nil
         showJumpToLatest = initialScrollMessageID != nil
 
+        guard initialScrollMessageID != nil else {
+          await Task.yield()
+          hasCompletedInitialScroll = true
+          return
+        }
+
         await Task.yield()
         scrollToInitialTarget(proxy)
 
@@ -215,11 +225,8 @@ extension ChatView {
   }
 
   private func scrollToInitialTarget(_ proxy: ScrollViewProxy) {
-    if let initialScrollMessageID {
-      proxy.scrollTo(initialScrollMessageID, anchor: .center)
-    } else {
-      proxy.scrollTo("chat-bottom", anchor: .bottom)
-    }
+    guard let initialScrollMessageID else { return }
+    proxy.scrollTo(initialScrollMessageID, anchor: .center)
   }
 
   private func send() {
