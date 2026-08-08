@@ -38,24 +38,24 @@ public struct ChatContextPolicy: Sendable, Equatable {
     }
 
     var preferred = max(minimumOutputReserve, defaultOutputReserve)
-    if let modelMaximum {
+    if let modelMaximum, modelMaximum > 0 {
       // The model maximum is a capability ceiling, not the amount the user asked to generate.
       // It may lower the fallback but must never inflate it (for example 128k or 384k models).
-      preferred = min(preferred, max(0, modelMaximum))
+      preferred = min(preferred, modelMaximum)
     }
     guard let contextWindow else { return preferred }
 
-    // Unknown-output models with small windows must still have room for input. For the fallback
-    // only, reserve at most one quarter of the total window.
+    // Unknown-output models with small combined windows must still have room for input. The cap
+    // is harmless for input-only windows because their output reserve is not subtracted below.
     let window = max(0, contextWindow)
     guard window > 0 else { return 0 }
     return min(preferred, max(1, window / 4))
   }
 
-  fileprivate func safetyMargin(contextWindow: Int, outputReserve: Int) -> Int {
+  fileprivate func safetyMargin(contextWindow: Int, reservedWithinWindow: Int) -> Int {
     let window = max(0, contextWindow)
-    let remainingAfterOutput = max(0, window - outputReserve)
-    guard remainingAfterOutput > 0 else { return 0 }
+    let remaining = max(0, window - reservedWithinWindow)
+    guard remaining > 0 else { return 0 }
 
     let proportional = Int(ceil(Double(window) * safetyMarginRatio))
     let desired = min(
@@ -63,9 +63,8 @@ public struct ChatContextPolicy: Sendable, Equatable {
       max(minimumSafetyMarginTokens, proportional)
     )
 
-    // The safety reserve exists to absorb estimation error, not to starve genuinely small
-    // contexts. Never let it consume more than one quarter of the post-output input capacity.
-    return min(desired, remainingAfterOutput / 4)
+    // Headroom exists to absorb estimation error, not to starve genuinely small contexts.
+    return min(desired, remaining / 4)
   }
 }
 
@@ -73,6 +72,7 @@ public enum ChatContextBuilder {
   public static func build(
     conversation: ChatConversation,
     contextWindow: Int?,
+    contextWindowKind: ProviderContextWindowKind = .combined,
     reservedOutputTokens: Int? = nil,
     modelMaxOutputTokens: Int? = nil,
     supplementalAttachments: [ChatAttachment] = [],
@@ -85,11 +85,12 @@ public enum ChatContextBuilder {
       modelMaximum: modelMaxOutputTokens,
       contextWindow: contextWindow
     )
+    let reservedWithinWindow = contextWindowKind == .combined ? outputReserve : 0
     let safetyMargin = contextWindow.map {
-      policy.safetyMargin(contextWindow: $0, outputReserve: outputReserve)
+      policy.safetyMargin(contextWindow: $0, reservedWithinWindow: reservedWithinWindow)
     } ?? 0
     let inputBudget = contextWindow.map {
-      max(0, $0 - outputReserve - safetyMargin)
+      max(0, $0 - reservedWithinWindow - safetyMargin)
     }
 
     var fixedMessages: [ProviderMessage] = []
