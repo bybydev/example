@@ -1,17 +1,97 @@
 import Foundation
 
+public struct ChatContextPolicy: Sendable, Equatable {
+  public var minimumOutputReserve: Int
+  public var defaultOutputReserve: Int
+  public var safetyMarginRatio: Double
+  public var minimumSafetyMarginTokens: Int
+  public var maximumSafetyMarginTokens: Int
+
+  public init(
+    minimumOutputReserve: Int = 256,
+    defaultOutputReserve: Int = 4096,
+    safetyMarginRatio: Double = 0.05,
+    minimumSafetyMarginTokens: Int = 64,
+    maximumSafetyMarginTokens: Int = 65_536
+  ) {
+    self.minimumOutputReserve = max(0, minimumOutputReserve)
+    self.defaultOutputReserve = max(0, defaultOutputReserve)
+    self.safetyMarginRatio = max(0, safetyMarginRatio)
+    self.minimumSafetyMarginTokens = max(0, minimumSafetyMarginTokens)
+    self.maximumSafetyMarginTokens = max(
+      self.minimumSafetyMarginTokens,
+      maximumSafetyMarginTokens
+    )
+  }
+
+  public static var automatic: Self { .init() }
+
+  fileprivate func outputReserve(
+    requested: Int?,
+    modelMaximum: Int?,
+    contextWindow: Int?
+  ) -> Int {
+    if let requested {
+      // A supplied request value is the actual generation ceiling. Respect it exactly instead of
+      // inflating a real 64-token request to an arbitrary minimum.
+      return max(0, requested)
+    }
+
+    var preferred = max(minimumOutputReserve, defaultOutputReserve)
+    if let modelMaximum, modelMaximum > 0 {
+      // The model maximum is a capability ceiling, not the amount the user asked to generate.
+      // It may lower the fallback but must never inflate it (for example 128k or 384k models).
+      preferred = min(preferred, modelMaximum)
+    }
+    guard let contextWindow else { return preferred }
+
+    // Unknown-output models with small combined windows must still have room for input. The cap
+    // is harmless for input-only windows because their output reserve is not subtracted below.
+    let window = max(0, contextWindow)
+    guard window > 0 else { return 0 }
+    return min(preferred, max(1, window / 4))
+  }
+
+  fileprivate func safetyMargin(contextWindow: Int, reservedWithinWindow: Int) -> Int {
+    let window = max(0, contextWindow)
+    let remaining = max(0, window - reservedWithinWindow)
+    guard remaining > 0 else { return 0 }
+
+    let proportional = Int(ceil(Double(window) * safetyMarginRatio))
+    let desired = min(
+      maximumSafetyMarginTokens,
+      max(minimumSafetyMarginTokens, proportional)
+    )
+
+    // Headroom exists to absorb estimation error, not to starve genuinely small contexts.
+    return min(desired, remaining / 4)
+  }
+}
+
 public enum ChatContextBuilder {
   public static func build(
     conversation: ChatConversation,
     contextWindow: Int?,
+    contextWindowKind: ProviderContextWindowKind = .combined,
     reservedOutputTokens: Int? = nil,
-    supplementalAttachments: [ChatAttachment] = []
+    modelMaxOutputTokens: Int? = nil,
+    supplementalAttachments: [ChatAttachment] = [],
+    tools: [ChatToolDefinition] = [],
+    requiredTailMessages: [ProviderMessage] = [],
+    policy: ChatContextPolicy = .automatic
   ) throws -> ChatContextResult {
-    let outputReserve = max(
-      256,
-      reservedOutputTokens ?? conversation.options.maxOutputTokens ?? 4096
+    let outputReserve = policy.outputReserve(
+      requested: reservedOutputTokens ?? conversation.options.maxOutputTokens,
+      modelMaximum: modelMaxOutputTokens,
+      contextWindow: contextWindow
     )
-    let inputBudget = contextWindow.map { max(0, $0 - outputReserve) }
+    let reservedWithinWindow = contextWindowKind == .combined ? outputReserve : 0
+    let safetyMargin = contextWindow.map {
+      policy.safetyMargin(contextWindow: $0, reservedWithinWindow: reservedWithinWindow)
+    } ?? 0
+    let inputBudget = contextWindow.map {
+      max(0, $0 - reservedWithinWindow - safetyMargin)
+    }
 
     var fixedMessages: [ProviderMessage] = []
     let trimmedSystem = conversation.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,13 +123,17 @@ public enum ChatContextBuilder {
     }
 
     let turns = makeTurns(from: eligible)
+    let toolCost = estimate(toolDefinitions: tools)
     let fixedCost = estimate(messages: fixedMessages)
+      + toolCost
+      + estimate(messages: requiredTailMessages)
+
     guard let inputBudget else {
-      let all = fixedMessages + turns.flatMap(\.messages)
+      let all = fixedMessages + turns.flatMap(\.messages) + requiredTailMessages
       return .init(
         messages: all,
         omittedMessageCount: 0,
-        estimatedInputTokens: estimate(messages: all)
+        estimatedInputTokens: estimate(messages: all) + toolCost
       )
     }
 
@@ -68,11 +152,14 @@ public enum ChatContextBuilder {
         selected.append(turn)
         used += cost
       } else if selected.isEmpty {
+        // The newest turn is mandatory. Failing is safer than sending tool state or a response
+        // without the user message that caused it.
         throw ProviderError.contextWindowExceeded(
           estimatedInputTokens: used + cost,
           limit: inputBudget
         )
       } else {
+        // Keep history contiguous. Do not skip a large recent turn to fish for older small turns.
         break
       }
     }
@@ -80,16 +167,36 @@ public enum ChatContextBuilder {
 
     let selectedMessageCount = selected.reduce(0) { $0 + $1.sourceMessageCount }
     let omitted = max(0, eligible.count - selectedMessageCount)
-    let result = fixedMessages + selected.flatMap(\.messages)
+    let result = fixedMessages + selected.flatMap(\.messages) + requiredTailMessages
     return .init(
       messages: result,
       omittedMessageCount: omitted,
-      estimatedInputTokens: estimate(messages: result)
+      estimatedInputTokens: estimate(messages: result) + toolCost
     )
   }
 
+  /// Provider-independent fallback estimate. ASCII text follows the common ~4 bytes/token
+  /// heuristic; non-ASCII text is counted more conservatively so CJK and other multibyte input
+  /// cannot be underestimated simply because UTF-8 uses several bytes per scalar.
   public static func estimateTokens(_ text: String) -> Int {
-    max(1, Int(ceil(Double(text.utf8.count) / 4.0)))
+    guard !text.isEmpty else { return 0 }
+
+    var asciiByteCount = 0
+    var nonASCIIByteCount = 0
+    var nonASCIIScalarCount = 0
+    for scalar in text.unicodeScalars {
+      if scalar.value < 0x80 {
+        asciiByteCount += 1
+      } else {
+        nonASCIIScalarCount += 1
+        nonASCIIByteCount += String(scalar).utf8.count
+      }
+    }
+
+    let asciiEstimate = Int(ceil(Double(asciiByteCount) / 4.0))
+    let nonASCIIByteEstimate = Int(ceil(Double(nonASCIIByteCount) / 3.0))
+    let nonASCIIEstimate = max(nonASCIIScalarCount, nonASCIIByteEstimate)
+    return max(1, asciiEstimate + nonASCIIEstimate)
   }
 
   private struct Turn {
@@ -166,27 +273,50 @@ public enum ChatContextBuilder {
         + estimate(attachments: message.attachments ?? [])
         + estimate(toolCalls: message.toolCalls ?? [])
         + estimate(toolResults: message.toolResults ?? [])
+        + estimate(toolContinuation: message.toolContinuation)
     }
   }
 
   private static func estimate(attachments: [ChatAttachment]) -> Int {
     attachments.reduce(0) { partial, attachment in
+      let metadataCost = estimateTokens(attachment.filename) + estimateTokens(attachment.mimeType)
       if let text = attachment.utf8Text {
-        return partial + 16 + estimateTokens(text)
+        return partial + 16 + metadataCost + estimateTokens(text)
       }
-      return partial + (attachment.isImage ? 1_024 : 2_048)
+      return partial + metadataCost + (attachment.isImage ? 1_024 : 2_048)
+    }
+  }
+
+  private static func estimate(toolDefinitions: [ChatToolDefinition]) -> Int {
+    toolDefinitions.reduce(0) { partial, tool in
+      partial + 24
+        + estimateTokens(tool.name)
+        + estimateTokens(tool.description)
+        + estimateTokens(tool.inputSchema.compactJSONString())
     }
   }
 
   private static func estimate(toolCalls: [ChatToolCall]) -> Int {
     toolCalls.reduce(0) { partial, call in
-      partial + 12 + estimateTokens(call.name) + estimateTokens(call.arguments.compactJSONString())
+      partial + 12
+        + estimateTokens(call.id)
+        + estimateTokens(call.name)
+        + estimateTokens(call.arguments.compactJSONString())
     }
   }
 
   private static func estimate(toolResults: [ChatToolResult]) -> Int {
     toolResults.reduce(0) { partial, result in
-      partial + 12 + estimateTokens(result.name) + estimateTokens(result.content.compactJSONString())
+      partial + 12
+        + estimateTokens(result.callID)
+        + estimateTokens(result.name)
+        + estimateTokens(result.content.compactJSONString())
+        + (result.isError ? 1 : 0)
     }
+  }
+
+  private static func estimate(toolContinuation: ProviderToolContinuation?) -> Int {
+    guard let toolContinuation else { return 0 }
+    return 12 + estimateTokens(toolContinuation.payload.compactJSONString())
   }
 }

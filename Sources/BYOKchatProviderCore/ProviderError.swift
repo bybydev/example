@@ -63,7 +63,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
     case .emptyOutput: "The provider returned an empty response."
     case .prematureStreamEnd: "The provider stream ended before completion."
     case .contextWindowExceeded(let estimated, let limit):
-      "The current prompt needs about \(estimated) input tokens, but this model only has \(limit) input tokens available after reserving output space. Shorten the system prompt or latest message, or lower the maximum output tokens."
+      "The current prompt needs about \(estimated) input tokens, but only \(limit) input tokens are available under this model’s context budget after estimation headroom. Shorten the system prompt or latest message, or remove large attachments or tools. For models with a combined input/output window, lowering the maximum output tokens can also free input capacity."
     case .workspaceVersionUnsupported(let version):
       "Provider workspace version \(version) is unsupported."
     case .conversationVersionUnsupported(let version):

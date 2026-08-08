@@ -37,6 +37,13 @@ final class ChatManagementModel {
   private var draftRevisions: [ConversationID: UInt] = [:]
   private var searchTask: Task<Void, Never>?
   private var searchRevision: UInt = 0
+  private var streamTargets: [ChatMessageID: LiveMessage] = [:]
+  private var streamPresentationTasks: [ChatMessageID: Task<Void, Never>] = [:]
+
+  // Provider streams can arrive much faster than SwiftUI should re-layout rich Markdown.
+  // Keep the provider stream lossless in streamTargets, but publish snapshots to the UI at
+  // roughly 20 FPS. This also limits follow-latest scroll work to the same pleasant cadence.
+  private static let streamPresentationInterval: Duration = .milliseconds(50)
 
   init(
     providerWorkspace: ProviderWorkspaceStore,
@@ -403,54 +410,124 @@ final class ChatManagementModel {
   private func handle(_ event: ChatRuntimeEvent, conversationID: ConversationID) async {
     switch event {
     case .turnStarted(let turn):
-      liveMessages[turn.assistantMessage.id] = .init()
+      let live = LiveMessage()
+      streamTargets[turn.assistantMessage.id] = live
+      liveMessages[turn.assistantMessage.id] = live
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       try? await reloadSnapshot()
       advanceStreamRevision(for: conversationID)
     case .textDelta(let messageID, let value):
-      var live = liveMessages[messageID] ?? .init()
-      live.content += value
-      liveMessages[messageID] = live
-      advanceStreamRevision(for: conversationID)
+      updateStreamTarget(messageID, conversationID: conversationID) { live in
+        live.content += value
+      }
     case .reasoningDelta(let messageID, let value):
-      var live = liveMessages[messageID] ?? .init()
-      live.reasoning += value
-      liveMessages[messageID] = live
-      advanceStreamRevision(for: conversationID)
+      updateStreamTarget(messageID, conversationID: conversationID) { live in
+        live.reasoning += value
+      }
     case .usage(let messageID, let value):
-      var live = liveMessages[messageID] ?? .init()
-      live.usage = value
-      liveMessages[messageID] = live
-      advanceStreamRevision(for: conversationID)
+      updateStreamTarget(messageID, conversationID: conversationID) { live in
+        live.usage = value
+      }
     case .toolCallsStarted(_, let calls):
       activeToolCallsByConversation[conversationID] = calls
       advanceStreamRevision(for: conversationID)
     case .toolRound(let messageID, _):
-      // The model has finished an intermediate assistant/tool step. Persisted structured
-      // round data becomes the source of truth; reset the live overlay for the next model pass.
+      // The model has finished an intermediate assistant/tool step. Flush any coalesced
+      // stream text first so the hand-off into persisted tool-round UI does not visually jump.
+      await flushStreamPresentation(messageID, conversationID: conversationID)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
-      liveMessages[messageID] = .init()
       try? await reloadSnapshot()
+      let live = LiveMessage()
+      streamTargets[messageID] = live
+      liveMessages[messageID] = live
       advanceStreamRevision(for: conversationID)
     case .completed(let message), .cancelled(let message), .failed(let message):
+      // A final provider event may arrive between presentation frames. Flush that last small
+      // slice before swapping the live overlay for the persisted message.
+      await flushStreamPresentation(message.id, conversationID: conversationID)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
-      liveMessages.removeValue(forKey: message.id)
       try? await reloadSnapshot()
+      streamTargets.removeValue(forKey: message.id)
+      liveMessages.removeValue(forKey: message.id)
       advanceStreamRevision(for: conversationID)
     }
+  }
+
+  private func updateStreamTarget(
+    _ messageID: ChatMessageID,
+    conversationID: ConversationID,
+    update: (inout LiveMessage) -> Void
+  ) {
+    var target = streamTargets[messageID] ?? liveMessages[messageID] ?? .init()
+    update(&target)
+    streamTargets[messageID] = target
+    scheduleStreamPresentation(messageID, conversationID: conversationID)
+  }
+
+  private func scheduleStreamPresentation(
+    _ messageID: ChatMessageID,
+    conversationID: ConversationID
+  ) {
+    guard streamPresentationTasks[messageID] == nil else { return }
+
+    streamPresentationTasks[messageID] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.streamPresentationTasks.removeValue(forKey: messageID) }
+      do {
+        try await Task.sleep(for: Self.streamPresentationInterval)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      presentStreamTarget(messageID, conversationID: conversationID)
+    }
+  }
+
+  private func presentStreamTarget(
+    _ messageID: ChatMessageID,
+    conversationID: ConversationID
+  ) {
+    guard let target = streamTargets[messageID] else { return }
+    guard liveMessages[messageID] != target else { return }
+    liveMessages[messageID] = target
+    advanceStreamRevision(for: conversationID)
+  }
+
+  private func flushStreamPresentation(
+    _ messageID: ChatMessageID,
+    conversationID: ConversationID
+  ) async {
+    if let task = streamPresentationTasks.removeValue(forKey: messageID) {
+      task.cancel()
+      await task.value
+    }
+    presentStreamTarget(messageID, conversationID: conversationID)
   }
 
   private func reloadSnapshot() async throws {
     conversations = await conversationStore.allConversations()
     let currentMessageIDs = Set(conversations.flatMap(\.messages).map(\.id))
+
+    let stalePresentationIDs = Set(streamPresentationTasks.keys).subtracting(currentMessageIDs)
+    for messageID in stalePresentationIDs {
+      streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
+    }
+
     liveMessages = liveMessages.filter { currentMessageIDs.contains($0.key) }
+    streamTargets = streamTargets.filter { currentMessageIDs.contains($0.key) }
   }
 
   private func clearLiveMessages(for conversationID: ConversationID) {
     guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
     let messageIDs = Set(conversation.messages.map(\.id))
     let previousCount = liveMessages.count
+
+    for messageID in messageIDs {
+      streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
+      streamTargets.removeValue(forKey: messageID)
+    }
     liveMessages = liveMessages.filter { !messageIDs.contains($0.key) }
+
     if liveMessages.count != previousCount {
       advanceStreamRevision(for: conversationID)
     }

@@ -207,11 +207,23 @@ public enum ProviderStreamEvent: Sendable, Equatable {
   case completed(ProviderResponse)
 }
 
+/// Describes what `ProviderModel.contextWindow` means for budgeting.
+///
+/// Some provider model-list APIs expose a combined input+output context length, while others
+/// expose a dedicated maximum input-token count. Keeping the distinction explicit prevents the
+/// context reducer from subtracting output capacity twice.
+public enum ProviderContextWindowKind: String, Codable, Sendable, Hashable {
+  case combined
+  case inputOnly
+}
+
 public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   public var providerID: ProviderID
   public var id: ModelID
   public var displayName: String
   public var contextWindow: Int?
+  /// Optional for backward-compatible decoding of previously persisted provider workspaces.
+  public var contextWindowKind: ProviderContextWindowKind?
   public var maxOutputTokens: Int?
   public var supportedParameters: Set<String>
   public var inputModalities: Set<String>
@@ -224,6 +236,7 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     id: ModelID,
     displayName: String,
     contextWindow: Int? = nil,
+    contextWindowKind: ProviderContextWindowKind? = nil,
     maxOutputTokens: Int? = nil,
     supportedParameters: Set<String> = [],
     inputModalities: Set<String> = ["text"],
@@ -236,6 +249,7 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     self.id = id
     self.displayName = displayName
     self.contextWindow = contextWindow
+    self.contextWindowKind = contextWindowKind
     self.maxOutputTokens = maxOutputTokens
     self.supportedParameters = supportedParameters
     self.inputModalities = inputModalities
@@ -243,6 +257,17 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     self.promptPricePerToken = promptPricePerToken
     self.completionPricePerToken = completionPricePerToken
     self.isSeed = isSeed
+  }
+
+  public var effectiveContextWindowKind: ProviderContextWindowKind {
+    if let contextWindowKind { return contextWindowKind }
+
+    // Older persisted records and native model-discovery responses do not yet carry this field.
+    // Preserve the known semantics of BYOKchat's native providers without breaking decoding.
+    switch providerID.rawValue {
+    case "anthropic", "gemini": return .inputOnly
+    default: return .combined
+    }
   }
 }
 
