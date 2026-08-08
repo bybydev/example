@@ -89,42 +89,56 @@ struct ChatView: View {
       }
     }
     .background(theme.backgroundColor)
-    .toolbar(.hidden, for: .navigationBar)
-    .safeAreaInset(edge: .top, spacing: 0) {
-      ChatTopBar(openSidebar: openSidebar, newChat: startNewChat) {
-        if let project, !project.projectPromptPresets.isEmpty {
-          Menu("Prompts", systemImage: "text.bubble") {
-            ForEach(project.projectPromptPresets) { preset in
-              Button(preset.name) { applyPromptPreset(preset) }
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Button("Open Sidebar", systemImage: "line.3.horizontal.decrease", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
+      }
+
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+          .labelStyle(.iconOnly)
+
+        Menu {
+          if let project, !project.projectPromptPresets.isEmpty {
+            Menu("Prompts", systemImage: "text.bubble") {
+              ForEach(project.projectPromptPresets) { preset in
+                Button(preset.name) { applyPromptPreset(preset) }
+              }
             }
           }
-        }
-        Button("Chat Settings", systemImage: "slider.horizontal.3") {
-          showTargetSettings = true
-        }
-        Button("Tools", systemImage: "wrench.and.screwdriver") {
-          showToolSettings = true
-        }
-        Button("Usage", systemImage: "chart.bar.xaxis") {
-          showUsage = true
-        }
-        Button("Rename", systemImage: "pencil") {
-          renameText = conversation?.title ?? ""
-          showRename = true
-        }
-        Button("Export Markdown", systemImage: "square.and.arrow.up") {
-          prepareMarkdownExport()
-        }
-        Divider()
-        Button("Delete", systemImage: "trash", role: .destructive) {
-          Task { @MainActor in
-            await chats.deleteConversation(conversationID)
-            await projects.reloadFromStorage()
-            await mcp.reloadFromStorage()
-            startNewChat()
-            dismiss()
+          Button("Chat Settings", systemImage: "slider.horizontal.3") {
+            showTargetSettings = true
           }
+          Button("Tools", systemImage: "wrench.and.screwdriver") {
+            showToolSettings = true
+          }
+          Button("Usage", systemImage: "chart.bar.xaxis") {
+            showUsage = true
+          }
+          Button("Rename", systemImage: "pencil") {
+            renameText = conversation?.title ?? ""
+            showRename = true
+          }
+          Button("Export Markdown", systemImage: "square.and.arrow.up") {
+            prepareMarkdownExport()
+          }
+          Divider()
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            Task { @MainActor in
+              await chats.deleteConversation(conversationID)
+              await projects.reloadFromStorage()
+              await mcp.reloadFromStorage()
+              startNewChat()
+              dismiss()
+            }
+          }
+        } label: {
+          Image(systemName: "ellipsis")
         }
+        .accessibilityLabel("More options")
       }
     }
     .sheet(isPresented: $showTargetSettings) {
