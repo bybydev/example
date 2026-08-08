@@ -7,7 +7,15 @@ final class ProviderWorkspaceTests: XCTestCase {
     let registry = try ProviderRegistry.builtIn()
     let ids = Set(await registry.allDefinitions().map(\.id))
     XCTAssertEqual(
-      ids, [BuiltInProviders.deepSeekID, BuiltInProviders.openRouterID, BuiltInProviders.nvidiaID])
+      ids,
+      [
+        BuiltInProviders.anthropicID,
+        BuiltInProviders.geminiID,
+        BuiltInProviders.nvidiaID,
+        BuiltInProviders.openRouterID,
+        BuiltInProviders.deepSeekID,
+      ]
+    )
   }
 
   func testCustomProviderFactoryRejectsInsecureURL() throws {
