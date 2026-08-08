@@ -161,6 +161,32 @@ struct SettingsView: View {
       }
 
       Section {
+        Toggle(
+          "Sync Projects with iCloud",
+          isOn: Binding(
+            get: { model.projectSync.isEnabled },
+            set: { enabled in
+              Task { @MainActor in await model.projectSync.setEnabled(enabled) }
+            }
+          )
+        )
+        .disabled(model.projectSync.isSyncing)
+
+        LabeledContent("Status", value: projectSyncStatusText)
+
+        if model.projectSync.isEnabled {
+          Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
+            Task { @MainActor in await model.projectSync.syncNow() }
+          }
+          .disabled(model.projectSync.isSyncing)
+        }
+      } header: {
+        Text("iCloud Projects")
+      } footer: {
+        Text("Syncs project instructions, files, presets, and tool defaults. Chat history and credentials remain local to this device.")
+      }
+
+      Section {
         Button("Export Full Backup", systemImage: "archivebox") {
           exportBackup()
         }
@@ -211,6 +237,15 @@ struct SettingsView: View {
     }
     .scrollContentBackground(.hidden)
     .background(theme.backgroundColor)
+  }
+
+  private var projectSyncStatusText: String {
+    if model.projectSync.isSyncing { return "Syncing…" }
+    if !model.projectSync.isEnabled { return "Off" }
+    if let date = model.projectSync.lastSyncedAt {
+      return "Last synced \(date.formatted(.relative(presentation: .named)))"
+    }
+    return "On"
   }
 
   private func exportBackup() {
