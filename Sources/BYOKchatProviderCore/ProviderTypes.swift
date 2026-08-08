@@ -223,7 +223,6 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   public var displayName: String
   public var contextWindow: Int?
   /// Optional for backward-compatible decoding of previously persisted provider workspaces.
-  /// `nil` is treated as `.combined`, matching BYOKchat's historical behavior.
   public var contextWindowKind: ProviderContextWindowKind?
   public var maxOutputTokens: Int?
   public var supportedParameters: Set<String>
@@ -261,7 +260,14 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   }
 
   public var effectiveContextWindowKind: ProviderContextWindowKind {
-    contextWindowKind ?? .combined
+    if let contextWindowKind { return contextWindowKind }
+
+    // Older persisted records and native model-discovery responses do not yet carry this field.
+    // Preserve the known semantics of BYOKchat's native providers without breaking decoding.
+    switch providerID.rawValue {
+    case "anthropic", "gemini": return .inputOnly
+    default: return .combined
+    }
   }
 }
 
