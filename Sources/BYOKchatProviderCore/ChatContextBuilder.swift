@@ -26,14 +26,23 @@ public struct ChatContextPolicy: Sendable, Equatable {
 
   public static var automatic: Self { .init() }
 
-  fileprivate func outputReserve(requested: Int?, contextWindow: Int?) -> Int {
+  fileprivate func outputReserve(
+    requested: Int?,
+    modelMaximum: Int?,
+    contextWindow: Int?
+  ) -> Int {
     if let requested {
-      // A supplied value comes from either the request options or model metadata and is already
-      // the actual output ceiling. Do not inflate a real 64-token limit to an arbitrary minimum.
+      // A supplied request value is the actual generation ceiling. Respect it exactly instead of
+      // inflating a real 64-token request to an arbitrary minimum.
       return max(0, requested)
     }
 
-    let preferred = max(minimumOutputReserve, defaultOutputReserve)
+    var preferred = max(minimumOutputReserve, defaultOutputReserve)
+    if let modelMaximum {
+      // The model maximum is a capability ceiling, not the amount the user asked to generate.
+      // It may lower the fallback but must never inflate it (for example 128k or 384k models).
+      preferred = min(preferred, max(0, modelMaximum))
+    }
     guard let contextWindow else { return preferred }
 
     // Unknown-output models with small windows must still have room for input. For the fallback
@@ -65,6 +74,7 @@ public enum ChatContextBuilder {
     conversation: ChatConversation,
     contextWindow: Int?,
     reservedOutputTokens: Int? = nil,
+    modelMaxOutputTokens: Int? = nil,
     supplementalAttachments: [ChatAttachment] = [],
     tools: [ChatToolDefinition] = [],
     requiredTailMessages: [ProviderMessage] = [],
@@ -72,6 +82,7 @@ public enum ChatContextBuilder {
   ) throws -> ChatContextResult {
     let outputReserve = policy.outputReserve(
       requested: reservedOutputTokens ?? conversation.options.maxOutputTokens,
+      modelMaximum: modelMaxOutputTokens,
       contextWindow: contextWindow
     )
     let safetyMargin = contextWindow.map {
