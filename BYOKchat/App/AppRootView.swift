@@ -82,6 +82,7 @@ struct AppRootView: View {
     }
     .sheet(isPresented: $isSettingsPresented) {
       SettingsView(model: model)
+        .appFoundationTheme(model.themeManager)
         .presentationDragIndicator(.visible)
     }
     .overlay(alignment: .top) {
