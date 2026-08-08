@@ -1,4 +1,5 @@
 import AppFoundation
+import Foundation
 import LaTeXSwiftUI
 import MarkdownUI
 import SwiftUI
@@ -8,10 +9,23 @@ struct MarkdownMessageContent: View {
   var showsSources = true
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var browserDestination: BrowserDestination?
+  @State private var displayedText: String
+  @State private var isPresentingStream = false
+  @State private var lastRevealDate = Date.distantPast
+
+  private static let revealInterval: Duration = .milliseconds(50)
+  private static let settleDelay: Duration = .milliseconds(300)
+
+  init(text: String, showsSources: Bool = true) {
+    self.text = text
+    self.showsSources = showsSources
+    _displayedText = State(initialValue: text)
+  }
 
   private var blocks: [AnswerContentBlock] {
-    AnswerContentParser.parse(text)
+    AnswerContentParser.parse(displayedText)
   }
 
   private var sources: [AnswerSource] {
@@ -20,8 +34,11 @@ struct MarkdownMessageContent: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-        blockView(block)
+      ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+        blockView(
+          block,
+          isLiveTail: isPresentingStream && index == blocks.indices.last
+        )
       }
 
       if !sources.isEmpty {
@@ -45,10 +62,13 @@ struct MarkdownMessageContent: View {
       InAppBrowserView(url: destination.url)
         .ignoresSafeArea()
     }
+    .task(id: text) {
+      await presentTargetText(text)
+    }
   }
 
   @ViewBuilder
-  private func blockView(_ block: AnswerContentBlock) -> some View {
+  private func blockView(_ block: AnswerContentBlock, isLiveTail: Bool) -> some View {
     switch block {
     case .markdown(let markdown):
       if shouldUseInlineMathRenderer(markdown) {
@@ -64,6 +84,8 @@ struct MarkdownMessageContent: View {
           .font(.system(size: 17))
           .foregroundStyle(theme.primaryForegroundColor)
           .frame(maxWidth: .infinity, alignment: .leading)
+      } else if isLiveTail, canUseAnimatedStreamingTail(markdown) {
+        streamingMarkdownBlock(markdown)
       } else {
         Markdown(markdown)
           .markdownTheme(chatTheme)
@@ -82,6 +104,124 @@ struct MarkdownMessageContent: View {
     case .math(let expression):
       MathAnswerView(expression: expression)
     }
+  }
+
+  @ViewBuilder
+  private func streamingMarkdownBlock(_ markdown: String) -> some View {
+    let parts = liveParagraphParts(markdown)
+
+    VStack(alignment: .leading, spacing: 0) {
+      if !parts.settled.isEmpty {
+        Markdown(parts.settled)
+          .markdownTheme(chatTheme)
+          .textSelection(.enabled)
+          .tint(theme.accentColor)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+
+      if !parts.live.isEmpty {
+        StreamingTailText(
+          text: parts.live,
+          revealDate: lastRevealDate,
+          foregroundColor: theme.primaryForegroundColor,
+          reduceMotion: reduceMotion
+        )
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func presentTargetText(_ target: String) async {
+    guard target != displayedText else { return }
+
+    guard target.hasPrefix(displayedText) else {
+      displayedText = target
+      isPresentingStream = false
+      return
+    }
+
+    isPresentingStream = true
+
+    while displayedText != target, !Task.isCancelled {
+      let displayedCount = displayedText.count
+      let start = target.index(target.startIndex, offsetBy: displayedCount)
+      let backlog = target.distance(from: start, to: target.endIndex)
+      let amount = revealAmount(for: backlog)
+      let end = target.index(start, offsetBy: amount, limitedBy: target.endIndex) ?? target.endIndex
+
+      displayedText.append(contentsOf: target[start..<end])
+      lastRevealDate = .now
+
+      guard displayedText != target else { break }
+      do {
+        try await Task.sleep(for: Self.revealInterval)
+      } catch {
+        return
+      }
+    }
+
+    guard !Task.isCancelled, displayedText == target else { return }
+
+    do {
+      try await Task.sleep(for: Self.settleDelay)
+    } catch {
+      return
+    }
+
+    guard !Task.isCancelled, displayedText == target else { return }
+    isPresentingStream = false
+  }
+
+  private func revealAmount(for backlog: Int) -> Int {
+    switch backlog {
+    case ...10:
+      return max(backlog, 1)
+    case ...40:
+      return 4
+    case ...100:
+      return 7
+    case ...240:
+      return 12
+    case ...600:
+      return 20
+    case ...1_200:
+      return 30
+    default:
+      return 42
+    }
+  }
+
+  private func liveParagraphParts(_ markdown: String) -> (settled: String, live: String) {
+    guard let range = markdown.range(of: "\n\n", options: .backwards) else {
+      return ("", markdown)
+    }
+
+    return (
+      String(markdown[..<range.lowerBound]),
+      String(markdown[range.upperBound...])
+    )
+  }
+
+  private func canUseAnimatedStreamingTail(_ markdown: String) -> Bool {
+    guard !AnswerContentParser.containsInlineMath(markdown) else { return false }
+
+    let live = liveParagraphParts(markdown).live
+    for line in live.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if trimmed.hasPrefix("#")
+        || trimmed.hasPrefix(">")
+        || trimmed.hasPrefix("- ")
+        || trimmed.hasPrefix("* ")
+        || trimmed.hasPrefix("+ ")
+        || trimmed.hasPrefix("|")
+        || trimmed.hasPrefix("```")
+        || trimmed.hasPrefix("~~~")
+        || trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil
+      {
+        return false
+      }
+    }
+    return true
   }
 
   private func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
@@ -268,5 +408,93 @@ struct MarkdownMessageContent: View {
         .frame(height: 1)
         .markdownMargin(top: .em(1.1), bottom: .em(1.1))
       }
+  }
+}
+
+private struct StreamingTailText: View {
+  let text: String
+  let revealDate: Date
+  let foregroundColor: Color
+  let reduceMotion: Bool
+
+  private var attributedText: AttributedString {
+    (try? AttributedString(markdown: text)) ?? AttributedString(text)
+  }
+
+  var body: some View {
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+      let age = max(0, timeline.date.timeIntervalSince(revealDate))
+      let revealProgress = reduceMotion ? 1 : min(1, age / 0.16)
+      let phase = reduceMotion
+        ? 0
+        : timeline.date.timeIntervalSinceReferenceDate
+          .truncatingRemainder(dividingBy: 1.15) / 1.15
+
+      Text(attributedText)
+        .font(.system(size: 17))
+        .lineSpacing(4)
+        .foregroundStyle(foregroundColor)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textRenderer(
+          StreamingTailTextRenderer(
+            shimmerPhase: phase,
+            revealProgress: revealProgress,
+            reduceMotion: reduceMotion
+          )
+        )
+    }
+  }
+}
+
+private struct StreamingTailTextRenderer: TextRenderer {
+  var shimmerPhase: Double
+  var revealProgress: Double
+  var reduceMotion: Bool
+
+  var animatableData: AnimatablePair<Double, Double> {
+    get { AnimatablePair(shimmerPhase, revealProgress) }
+    set {
+      shimmerPhase = newValue.first
+      revealProgress = newValue.second
+    }
+  }
+
+  func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+    let totalSlices = layout.reduce(0) { lineTotal, line in
+      lineTotal + line.reduce(0) { runTotal, run in
+        runTotal + run.count
+      }
+    }
+    let liveSliceCount = min(28, totalSlices)
+    let liveStart = max(0, totalSlices - liveSliceCount)
+    var sliceIndex = 0
+
+    for line in layout {
+      for run in line {
+        for slice in run {
+          if reduceMotion || sliceIndex < liveStart {
+            context.draw(slice, options: .disablesSubpixelQuantization)
+          } else {
+            var copy = context
+            let localIndex = sliceIndex - liveStart
+            let localProgress = Double(localIndex) / Double(max(liveSliceCount - 1, 1))
+            let shimmerCenter = shimmerPhase * 1.45 - 0.2
+            let shimmerDistance = abs(localProgress - shimmerCenter)
+            let shimmer = max(0, 1 - shimmerDistance / 0.24)
+            let baseOpacity = 0.62 + 0.38 * revealProgress
+
+            copy.opacity = min(1, baseOpacity + 0.16 * shimmer)
+            let blurRadius = max(0, (1 - revealProgress) * 0.65 - shimmer * 0.15)
+            if blurRadius > 0.02 {
+              copy.addFilter(.blur(radius: CGFloat(blurRadius)))
+            }
+            copy.draw(slice, options: .disablesSubpixelQuantization)
+          }
+          sliceIndex += 1
+        }
+      }
+    }
   }
 }
