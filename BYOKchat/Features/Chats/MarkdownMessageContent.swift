@@ -37,7 +37,7 @@ struct MarkdownMessageContent: View {
       ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
         blockView(
           block,
-          isLiveTail: isPresentingStream && index == blocks.indices.last
+          isLiveTail: isPresentingStream && index == blocks.count - 1
         )
       }
 
