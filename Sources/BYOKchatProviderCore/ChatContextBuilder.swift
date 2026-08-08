@@ -1,17 +1,63 @@
 import Foundation
 
+public struct ChatContextPolicy: Sendable, Equatable {
+  public var minimumOutputReserve: Int
+  public var defaultOutputReserve: Int
+  public var safetyMarginRatio: Double
+  public var minimumSafetyMarginTokens: Int
+  public var maximumSafetyMarginTokens: Int
+
+  public init(
+    minimumOutputReserve: Int = 256,
+    defaultOutputReserve: Int = 4096,
+    safetyMarginRatio: Double = 0.05,
+    minimumSafetyMarginTokens: Int = 64,
+    maximumSafetyMarginTokens: Int = 8192
+  ) {
+    self.minimumOutputReserve = max(0, minimumOutputReserve)
+    self.defaultOutputReserve = max(0, defaultOutputReserve)
+    self.safetyMarginRatio = max(0, safetyMarginRatio)
+    self.minimumSafetyMarginTokens = max(0, minimumSafetyMarginTokens)
+    self.maximumSafetyMarginTokens = max(
+      self.minimumSafetyMarginTokens,
+      maximumSafetyMarginTokens
+    )
+  }
+
+  public static var automatic: Self { .init() }
+
+  fileprivate func outputReserve(requested: Int?) -> Int {
+    max(minimumOutputReserve, requested ?? defaultOutputReserve)
+  }
+
+  fileprivate func safetyMargin(contextWindow: Int) -> Int {
+    let proportional = Int(
+      ceil(Double(max(0, contextWindow)) * safetyMarginRatio)
+    )
+    return min(
+      maximumSafetyMarginTokens,
+      max(minimumSafetyMarginTokens, proportional)
+    )
+  }
+}
+
 public enum ChatContextBuilder {
   public static func build(
     conversation: ChatConversation,
     contextWindow: Int?,
     reservedOutputTokens: Int? = nil,
-    supplementalAttachments: [ChatAttachment] = []
+    supplementalAttachments: [ChatAttachment] = [],
+    tools: [ChatToolDefinition] = [],
+    requiredTailMessages: [ProviderMessage] = [],
+    policy: ChatContextPolicy = .automatic
   ) throws -> ChatContextResult {
-    let outputReserve = max(
-      256,
-      reservedOutputTokens ?? conversation.options.maxOutputTokens ?? 4096
+    let outputReserve = policy.outputReserve(
+      requested: reservedOutputTokens ?? conversation.options.maxOutputTokens
     )
-    let inputBudget = contextWindow.map { max(0, $0 - outputReserve) }
+    let safetyMargin = contextWindow.map(policy.safetyMargin(contextWindow:)) ?? 0
+    let inputBudget = contextWindow.map {
+      max(0, $0 - outputReserve - safetyMargin)
+    }
 
     var fixedMessages: [ProviderMessage] = []
     let trimmedSystem = conversation.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,13 +89,17 @@ public enum ChatContextBuilder {
     }
 
     let turns = makeTurns(from: eligible)
+    let toolCost = estimate(toolDefinitions: tools)
     let fixedCost = estimate(messages: fixedMessages)
+      + toolCost
+      + estimate(messages: requiredTailMessages)
+
     guard let inputBudget else {
-      let all = fixedMessages + turns.flatMap(\.messages)
+      let all = fixedMessages + turns.flatMap(\.messages) + requiredTailMessages
       return .init(
         messages: all,
         omittedMessageCount: 0,
-        estimatedInputTokens: estimate(messages: all)
+        estimatedInputTokens: estimate(messages: all) + toolCost
       )
     }
 
@@ -80,11 +130,11 @@ public enum ChatContextBuilder {
 
     let selectedMessageCount = selected.reduce(0) { $0 + $1.sourceMessageCount }
     let omitted = max(0, eligible.count - selectedMessageCount)
-    let result = fixedMessages + selected.flatMap(\.messages)
+    let result = fixedMessages + selected.flatMap(\.messages) + requiredTailMessages
     return .init(
       messages: result,
       omittedMessageCount: omitted,
-      estimatedInputTokens: estimate(messages: result)
+      estimatedInputTokens: estimate(messages: result) + toolCost
     )
   }
 
@@ -166,6 +216,7 @@ public enum ChatContextBuilder {
         + estimate(attachments: message.attachments ?? [])
         + estimate(toolCalls: message.toolCalls ?? [])
         + estimate(toolResults: message.toolResults ?? [])
+        + estimate(toolContinuation: message.toolContinuation)
     }
   }
 
@@ -175,6 +226,15 @@ public enum ChatContextBuilder {
         return partial + 16 + estimateTokens(text)
       }
       return partial + (attachment.isImage ? 1_024 : 2_048)
+    }
+  }
+
+  private static func estimate(toolDefinitions: [ChatToolDefinition]) -> Int {
+    toolDefinitions.reduce(0) { partial, tool in
+      partial + 24
+        + estimateTokens(tool.name)
+        + estimateTokens(tool.description)
+        + estimateTokens(tool.inputSchema.compactJSONString())
     }
   }
 
@@ -188,5 +248,10 @@ public enum ChatContextBuilder {
     toolResults.reduce(0) { partial, result in
       partial + 12 + estimateTokens(result.name) + estimateTokens(result.content.compactJSONString())
     }
+  }
+
+  private static func estimate(toolContinuation: ProviderToolContinuation?) -> Int {
+    guard let toolContinuation else { return 0 }
+    return 12 + estimateTokens(toolContinuation.payload.compactJSONString())
   }
 }
