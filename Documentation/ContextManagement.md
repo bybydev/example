@@ -14,9 +14,18 @@ The request context is built from:
 
 The reducer removes only whole historical turns. A user message, its assistant reply, and persisted tool exchanges are kept or removed together so the app never creates orphaned tool calls or tool results. History also remains contiguous: the reducer never skips a large recent turn just to include an older smaller one.
 
+## Context-window semantics
+
+`ProviderModel.contextWindow` is accompanied by an optional `contextWindowKind` because providers expose two different kinds of limits:
+
+- `combined`: the reported limit is shared by input and output, so reserved output capacity reduces how much input can be sent.
+- `inputOnly`: the reported limit is already the maximum input-token count, so output capacity must **not** be subtracted from it again.
+
+Older persisted provider workspaces remain decodable because `contextWindowKind` is optional. Missing metadata keeps the historical combined-window behavior for unknown/custom providers, while BYOKchat's native Anthropic and Gemini provider IDs resolve to input-only semantics. Their built-in seed models also persist the explicit kind going forward.
+
 ## Budgeting
 
-The effective history budget is:
+For a combined window, the effective input budget is:
 
 ```text
 context window
@@ -27,18 +36,29 @@ context window
 - required in-flight tool continuation
 ```
 
+For an input-only window, the provider's reported limit already represents input capacity:
+
+```text
+input-token limit
+- estimation safety margin
+- system/project fixed context
+- tool definitions
+- required in-flight tool continuation
+```
+
 Output reservation deliberately separates **what the request asks for** from **what the model is capable of producing**:
 
-- An explicit per-chat output limit is the requested generation ceiling and is reserved as-is.
-- When the chat does not set an output limit, BYOKchat uses a 4096-token fallback reserve.
+- An explicit per-chat output limit is the requested generation ceiling and is reserved as-is when the provider uses a combined window.
+- When the chat does not set an output limit, BYOKchat uses 4096 tokens as planning headroom for combined windows.
 - A model's advertised `maxOutputTokens` is only a capability ceiling on that fallback. It can reduce a 4096-token fallback for a small-output model, but a 128k/384k advertised maximum never inflates the reserve to 128k/384k.
-- For a small known context window, the fallback is also capped at one quarter of the total window so the fallback itself cannot consume the entire prompt budget.
+- For a small known combined context window, the fallback is capped at one quarter of the total window so the fallback itself cannot consume the entire prompt budget.
+- Input-only windows do not subtract this output reserve from their reported input capacity.
 
-This matches the transport behavior: an unset generation option is still unset when the request reaches providers whose API can choose its own default; Anthropic currently supplies its own 4096-token default at the adapter layer.
+An unset generation option remains unset when the request reaches providers whose transport can choose its own default; the fallback is context-planning headroom rather than an implicit mutation of user generation settings. Anthropic's current adapter supplies its own 4096-token API default when the chat option is blank.
 
-`ChatContextPolicy.automatic` targets 5% of the model context window as estimation headroom, with a 64-token preferred minimum and a 65,536-token maximum. For small models, the safety reserve is capped at one quarter of the capacity remaining after output reservation. The safety margin exists to absorb estimation error; it must never starve the actual prompt.
+`ChatContextPolicy.automatic` targets 5% of the reported input/context limit as estimation headroom, with a 64-token preferred minimum and a 65,536-token maximum. On small limits, the safety reserve is capped at one quarter of the remaining budget so estimation headroom cannot starve the actual prompt.
 
-`estimatedInputTokens` reports the estimated request payload itself. It intentionally does not include the unused safety reserve.
+`estimatedInputTokens` reports the estimated request payload itself. It intentionally does not include unused safety headroom.
 
 ## Approximate token counting
 
@@ -66,12 +86,18 @@ BYOKchat therefore keeps the reducer provider-independent and uses provider adap
 
 ## Regression coverage
 
-The context suites cover:
+The context suites currently add 22 focused tests covering:
 
 - explicit small output ceilings;
-- distinction between requested output and advertised model maximum output;
-- unknown output limits on small context windows;
+- requested output versus advertised model maximum output;
+- large advertised output maxima not destroying usable history;
+- small model maxima lowering fallback planning headroom;
+- unknown output limits on small combined context windows;
 - safety-margin starvation protection;
+- input-only versus combined context-window budgeting;
+- legacy Gemini model records resolving to input-only behavior without a migration;
+- backward decoding of provider models that predate `contextWindowKind`;
+- conservative combined behavior for unknown/custom providers;
 - CJK fallback estimation;
 - tool-schema and tool-call/result-ID accounting;
 - opaque provider continuation accounting;
