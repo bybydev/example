@@ -1,74 +1,8 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 import UIKit
-
-struct ChatTopBar<MenuContent: View>: View {
-  let openSidebar: () -> Void
-  let newChat: () -> Void
-  private let menuContent: MenuContent
-
-  init(
-    openSidebar: @escaping () -> Void,
-    newChat: @escaping () -> Void,
-    @ViewBuilder menuContent: () -> MenuContent
-  ) {
-    self.openSidebar = openSidebar
-    self.newChat = newChat
-    self.menuContent = menuContent()
-  }
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Button("Open Sidebar", systemImage: "line.3.horizontal", action: openSidebar)
-        .labelStyle(.iconOnly)
-        .font(.system(size: 17, weight: .semibold))
-        .symbolRenderingMode(.hierarchical)
-        .frame(width: 40, height: 40)
-        .background(.thinMaterial, in: Circle())
-        .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
-        .contentShape(Circle())
-        .accessibilityLabel("Open sidebar")
-
-      Spacer()
-
-      HStack(spacing: 2) {
-        Button("New Chat", systemImage: "square.and.pencil", action: newChat)
-          .labelStyle(.iconOnly)
-          .font(.system(size: 17, weight: .semibold))
-          .symbolRenderingMode(.hierarchical)
-          .frame(width: 40, height: 40)
-          .contentShape(Rectangle())
-
-        Rectangle()
-          .fill(.primary.opacity(0.10))
-          .frame(width: 0.5, height: 18)
-          .accessibilityHidden(true)
-
-        Menu {
-          menuContent
-        } label: {
-          Image(systemName: "ellipsis")
-            .font(.system(size: 17, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .frame(width: 40, height: 40)
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel("More options")
-      }
-      .foregroundStyle(.primary)
-      .padding(2)
-      .background(.thinMaterial, in: Capsule())
-      .overlay(Capsule().stroke(.primary.opacity(0.08), lineWidth: 0.5))
-    }
-    .buttonStyle(.plain)
-    .foregroundStyle(.primary)
-    .shadow(color: .black.opacity(0.055), radius: 10, y: 4)
-    .padding(.horizontal, 14)
-    .padding(.top, 4)
-    .padding(.bottom, 8)
-  }
-}
 
 struct RepairBanner: View {
   let message: String
@@ -101,6 +35,7 @@ struct ChatComposer: View {
   let send: () -> Void
   let stop: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
 
   private var normalizedDraft: String {
@@ -144,9 +79,10 @@ struct ChatComposer: View {
       .padding(.top, isEditorFocused ? 2 : 6)
       .padding(.bottom, 6)
     }
-    .background(.thinMaterial, in: composerShape)
-    .overlay(composerShape.stroke(.primary.opacity(0.08), lineWidth: 0.5))
-    .shadow(color: .black.opacity(0.06), radius: 14, y: 6)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(theme.elevatedSurfaceColor, in: composerShape)
+    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.75))
+    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
     .padding(.horizontal, 14)
     .padding(.top, 6)
     .padding(.bottom, 8)
@@ -163,6 +99,8 @@ struct ChatComposer: View {
   private var messageField: some View {
     TextField("Message BYOKchat", text: $draft, axis: .vertical)
       .font(.system(size: 17))
+      .foregroundStyle(theme.primaryForegroundColor)
+      .tint(theme.accentColor)
       .lineLimit(1...7)
       .padding(.vertical, 4)
       .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
@@ -180,6 +118,7 @@ struct ChatComposer: View {
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 22, weight: .regular))
+        .foregroundStyle(theme.primaryForegroundColor)
         .frame(width: 44, height: 48)
         .contentShape(Rectangle())
     }
@@ -195,10 +134,11 @@ struct ChatComposer: View {
           .font(.system(size: 9, weight: .semibold))
       }
       .font(.system(size: 14, weight: .medium))
-      .foregroundStyle(.primary)
+      .foregroundStyle(theme.primaryForegroundColor)
       .padding(.horizontal, 11)
       .frame(height: 38)
-      .background(Color(uiColor: .secondarySystemFill), in: Capsule())
+      .background(theme.surfaceColor, in: Capsule())
+      .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.5))
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Change provider account and model, currently \(targetLabel)")
@@ -224,21 +164,21 @@ struct ChatComposer: View {
   }
 
   private var sendButtonBackground: Color {
-    if isGenerating || canSubmit { return .primary }
-    return Color(uiColor: .tertiarySystemFill)
+    if isGenerating || canSubmit { return theme.accentColor }
+    return theme.surfaceColor
   }
 
   private var sendButtonForeground: Color {
-    if isGenerating || canSubmit {
-      return Color(uiColor: .systemBackground)
-    }
-    return .secondary
+    if isGenerating || canSubmit { return theme.backgroundColor }
+    return theme.secondaryForegroundColor
   }
 }
 
 struct ChatAttachmentStrip: View {
   let attachments: [ChatAttachment]
   var removeAttachment: ((String) -> Void)?
+
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     ScrollView(.horizontal) {
@@ -262,23 +202,34 @@ struct ChatAttachmentStrip: View {
           .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
           .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .stroke(.primary.opacity(0.08), lineWidth: 0.5)
+              .stroke(theme.borderColor, lineWidth: 0.75)
           )
           .accessibilityLabel("Image attachment \(attachment.filename)")
       } else {
         VStack(alignment: .leading, spacing: 5) {
           Image(systemName: "doc.fill")
             .font(.system(size: 20))
+            .foregroundStyle(theme.accentColor)
           Text(attachment.filename)
             .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
             .lineLimit(2)
-          Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
+          Text(
+            ByteCountFormatter.string(
+              fromByteCount: Int64(attachment.byteCount),
+              countStyle: .file
+            )
+          )
+          .font(.system(size: 10))
+          .foregroundStyle(theme.secondaryForegroundColor)
         }
         .frame(width: 112, height: 72, alignment: .leading)
         .padding(.horizontal, 10)
-        .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+        .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(theme.borderColor, lineWidth: 0.5)
+        )
         .accessibilityElement(children: .combine)
       }
 
@@ -307,6 +258,7 @@ struct ChatMessageView: View {
   let regenerate: () -> Void
   let copy: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var reasoningExpanded = false
   @State private var showMessageInfo = false
 
@@ -318,6 +270,7 @@ struct ChatMessageView: View {
         assistantMessage
       }
     }
+    .foregroundStyle(theme.primaryForegroundColor)
     .accessibilityElement(children: .contain)
   }
 
@@ -330,8 +283,12 @@ struct ChatMessageView: View {
       .padding(.horizontal, 15)
       .padding(.vertical, 11)
       .background(
-        Color(uiColor: .secondarySystemBackground),
+        theme.elevatedSurfaceColor,
         in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+          .stroke(theme.borderColor, lineWidth: 0.5)
       )
       .contextMenu {
         if !message.content.isEmpty {
@@ -395,7 +352,7 @@ struct ChatMessageView: View {
       .accessibilityLabel("More")
     }
     .font(.system(size: 17))
-    .foregroundStyle(.secondary)
+    .foregroundStyle(theme.secondaryForegroundColor)
     .buttonStyle(.plain)
   }
 
@@ -452,7 +409,7 @@ struct ChatMessageView: View {
             .rotationEffect(.degrees(reasoningExpanded ? 90 : 0))
         }
         .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -463,7 +420,7 @@ struct ChatMessageView: View {
         Text(message.reasoning)
           .font(.system(size: 15))
           .lineSpacing(4)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
           .transition(.opacity.combined(with: .move(edge: .top)))
@@ -496,10 +453,10 @@ struct ChatMessageView: View {
         VStack(alignment: .leading, spacing: 2) {
           Text("Couldn’t generate a response")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.primary)
+            .foregroundStyle(theme.primaryForegroundColor)
           Text(message.errorDescription ?? "Try again or choose a different model.")
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .fixedSize(horizontal: false, vertical: true)
         }
       }
@@ -512,7 +469,7 @@ struct ChatMessageView: View {
     case .cancelled:
       Label("Stopped", systemImage: "stop.circle")
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
     case .interrupted:
       Label("Interrupted", systemImage: "bolt.slash")
         .font(.system(size: 11))
