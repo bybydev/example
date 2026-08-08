@@ -145,10 +145,10 @@ private struct HighlightedCodeText: View {
     .fixedSize(horizontal: true, vertical: true)
     .textSelection(.enabled)
     .task(id: renderID) {
-      highlighted = SyntaxHighlighting.render(
+      highlighted = await SyntaxHighlighting.shared.render(
         code: code,
         language: language,
-        colorScheme: colorScheme
+        isDark: colorScheme == .dark
       )
     }
   }
@@ -158,16 +158,32 @@ private struct HighlightedCodeText: View {
   }
 }
 
-@MainActor
-private enum SyntaxHighlighting {
-  static func render(
+private actor SyntaxHighlighting {
+  private struct CacheKey: Hashable, Sendable {
+    let code: String
+    let language: String?
+    let isDark: Bool
+  }
+
+  static let shared = SyntaxHighlighting()
+
+  private var cache: [CacheKey: AttributedString] = [:]
+  private var cacheOrder: [CacheKey] = []
+  private let cacheLimit = 64
+
+  func render(
     code: String,
     language: String?,
-    colorScheme: ColorScheme
+    isDark: Bool
   ) -> AttributedString? {
+    let key = CacheKey(code: code, language: language, isDark: isDark)
+    if let cached = cache[key] {
+      return cached
+    }
+
     guard let highlighter = Highlighter() else { return nil }
     _ = highlighter.setTheme(
-      colorScheme == .dark ? "github-dark" : "github",
+      isDark ? "github-dark" : "github",
       withFont: "Menlo-Regular",
       ofSize: 14
     )
@@ -180,10 +196,19 @@ private enum SyntaxHighlighting {
     let mutable = NSMutableAttributedString(attributedString: value)
     let fullRange = NSRange(location: 0, length: mutable.length)
     mutable.removeAttribute(.backgroundColor, range: fullRange)
-    return AttributedString(mutable)
+    let rendered = AttributedString(mutable)
+
+    cache[key] = rendered
+    cacheOrder.append(key)
+    if cacheOrder.count > cacheLimit {
+      let evicted = cacheOrder.removeFirst()
+      cache.removeValue(forKey: evicted)
+    }
+
+    return rendered
   }
 
-  private static func normalize(_ language: String?) -> String? {
+  private func normalize(_ language: String?) -> String? {
     guard let value = language?.lowercased(), !value.isEmpty else { return nil }
     switch value {
     case "text", "txt", "plaintext", "plain": return nil
