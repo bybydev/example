@@ -508,7 +508,7 @@
 				61276AEA59509155C9A5E7E6 /* ChatContextToolLoopTests.swift in Sources */,
 				DC1D74779E28D241EF9E347A /* ChatContextWindowKindTests.swift in Sources */,
 				60E177B71C660424FE43D512 /* ConsolidationTests.swift in Sources */,
-				C13E0942E5C1DAF6209E144 /* ConversationHistoryTests.swift in Sources */,
+				C13E0942E5BB24D2405FF724 /* ConversationHistoryTests.swift in Sources */,
 				6E47201781645FC494717B81 /* ConversationPortabilityRegressionTests.swift in Sources */,
 				3810C748AD9C9754E097E3E1 /* ConversationRuntimeAndCompatibilityTests.swift in Sources */,
 				1A4789121A5875370BF7B83A /* ConversationStoreAndLifecycleTests.swift in Sources */,
