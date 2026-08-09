@@ -113,7 +113,7 @@ import Testing
     promptPresets: [prompt],
     toolPresets: [toolPreset]
   )
-  let conversationID: ConversationID = "phase2-chat"
+  let conversationID: ConversationID = "project-files-chat"
   try await workspace.assignConversation(conversationID, to: project.id)
 
   #expect(await workspace.files(for: conversationID) == [file])
@@ -127,7 +127,7 @@ import Testing
   #expect(await reloaded.mcpConfiguration(for: conversationID) == configuration)
 }
 
-@Test func phaseOneProjectWorkspaceStillDecodesWithoutPhaseTwoFields() async throws {
+@Test func olderProjectWorkspaceStillDecodesWithoutOptionalFields() async throws {
   let json = """
   {
     "schemaVersion" : 1,
