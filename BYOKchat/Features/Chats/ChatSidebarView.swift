@@ -341,15 +341,17 @@ struct ChatSidebarView: View {
           systemImage: purchases.hasPro ? "square.and.pencil" : "crown.fill"
         )
         .font(.system(size: 15, weight: .semibold))
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .frame(height: 44)
       }
       .foregroundStyle(theme.backgroundColor)
-      .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
       .background(theme.accentColor, in: Capsule())
       .contentShape(Capsule())
       .buttonStyle(.plain)
       .shadow(color: theme.accentColor.opacity(0.22), radius: 9, y: 3)
       .accessibilityLabel(purchases.hasPro ? "Start new chat" : "Upgrade to Pro")
+
+      Spacer(minLength: 8)
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
