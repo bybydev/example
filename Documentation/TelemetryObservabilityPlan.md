@@ -213,6 +213,15 @@ Large files are split **only when the current task already needs to touch them**
 
 No drive-by refactors. When a phase must substantially modify a large file, first separate the touched responsibility into focused files without behavior changes, then add the phase's feature work.
 
+## Progress
+
+- [x] Phase 1 — Telemetry foundation
+- [x] Phase 2 — Chat and provider instrumentation
+- [x] Phase 3 — Tool and MCP instrumentation
+- [x] Phase 4 — Advanced Analytics UI
+- [ ] Phase 5 — Developer Logs and controls
+- [ ] Phase 6 — Consolidation and hardening
+
 ## Implementation phases
 
 ### Phase 1 — Telemetry foundation
@@ -264,19 +273,20 @@ Never persist tool arguments or result content by default.
 
 Turn the existing Usage surface into a richer Analytics module instead of growing `UsageViews.swift`.
 
-Views should cover:
+Views cover:
 
-- spend/tokens/requests
+- spend/tokens/requests from persisted `ChatMessage` billing
 - success rate
-- TTFT
-- generation speed
-- request duration
-- provider/model breakdown
-- reliability/error breakdown
+- median and P95 TTFT
+- median generation speed
+- median and P95 request duration
+- provider/model breakdown with reliability context
+- privacy-safe error breakdown
 - Today / 7D / 30D / Month / All
 - conversation-level drill-down
+- local telemetry storage/retention disclosure
 
-Split `UsageViews.swift` only because this phase directly touches it.
+`UsageViews.swift` is split into focused files because this phase directly touched it. Performance analytics currently read the latest 5,000 retained local events; if the store contains more, the UI discloses that cap rather than implying complete telemetry history. Usage/cost history remains independent and is reconstructed from messages.
 
 ### Phase 5 — Developer Logs and controls
 
