@@ -257,6 +257,10 @@ struct ChatMessageView: View {
     RoundedRectangle(cornerRadius: 22, style: .continuous)
   }
 
+  private var failureOrigin: ChatFailureOrigin {
+    message.failureOrigin ?? .local
+  }
+
   private var assistantMessage: some View {
     VStack(alignment: .leading, spacing: 10) {
       messageBody
@@ -307,6 +311,10 @@ struct ChatMessageView: View {
     .font(.system(size: 17))
     .foregroundStyle(theme.secondaryForegroundColor)
     .buttonStyle(.plain)
+    .frame(
+      maxWidth: .infinity,
+      alignment: message.status == .failed && failureOrigin == .local ? .trailing : .leading
+    )
   }
 
   @ViewBuilder
@@ -400,28 +408,7 @@ struct ChatMessageView: View {
   private var footer: some View {
     switch message.status {
     case .failed:
-      HStack(alignment: .top, spacing: 8) {
-        Image(systemName: "exclamationmark.circle.fill")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(.orange)
-          .padding(.top, 1)
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Couldn’t generate a response")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(theme.primaryForegroundColor)
-          Text(message.errorDescription ?? "Try again or choose a different model.")
-            .font(.system(size: 12))
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-      .padding(.horizontal, 11)
-      .padding(.vertical, 9)
-      .background(
-        Color.orange.opacity(0.09),
-        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-      )
+      failureFooter
     case .cancelled:
       Label("Stopped", systemImage: "stop.circle")
         .font(.system(size: 11))
@@ -432,6 +419,49 @@ struct ChatMessageView: View {
         .foregroundStyle(.orange)
     case .complete, .pending, .streaming:
       EmptyView()
+    }
+  }
+
+  @ViewBuilder
+  private var failureFooter: some View {
+    let description = message.errorDescription ?? "Something went wrong. Try again."
+
+    if failureOrigin == .local {
+      HStack(alignment: .top, spacing: 7) {
+        Text(description)
+          .font(.system(size: 13))
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .multilineTextAlignment(.trailing)
+          .fixedSize(horizontal: false, vertical: true)
+
+        Image(systemName: "exclamationmark.circle.fill")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.orange)
+          .padding(.top, 1)
+      }
+      .frame(maxWidth: .infinity, alignment: .trailing)
+      .padding(.vertical, 2)
+    } else {
+      HStack(alignment: .top, spacing: 8) {
+        Image(systemName: "exclamationmark.circle.fill")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.orange)
+          .padding(.top, 1)
+
+        VStack(alignment: .leading, spacing: 2) {
+          if let accountLabel, !accountLabel.isEmpty {
+            Text(accountLabel)
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.82))
+          }
+          Text(description)
+            .font(.system(size: 13))
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.vertical, 2)
     }
   }
 }
