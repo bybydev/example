@@ -216,6 +216,7 @@ struct ChatComposer: View {
     }
     .foregroundStyle(theme.primaryForegroundColor)
     .background(theme.elevatedSurfaceColor, in: composerShape)
+    .clipShape(composerShape)
     .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.65))
     .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
     .padding(.horizontal, 14)
