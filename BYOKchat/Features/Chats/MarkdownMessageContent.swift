@@ -220,8 +220,8 @@ struct MarkdownMessageContent: View {
       }
       .table { configuration in
         ScrollView(.horizontal) {
-          // Keep the table at its natural total width. Individual columns are capped below,
-          // so a wide multi-column table can still exceed the viewport and scroll horizontally.
+          // Keep the total table width natural enough to scroll, while each cell below receives
+          // a concrete width proposal so long text wraps and grows its row vertically.
           configuration.label
             .fixedSize(horizontal: true, vertical: true)
             .markdownTableBorderStyle(.init(color: theme.borderColor))
@@ -246,11 +246,12 @@ struct MarkdownMessageContent: View {
             }
             BackgroundColor(nil)
           }
-          // Let text wrap inside a bounded column and grow the row vertically. The enclosing
-          // table still owns horizontal overflow when the sum of the capped columns is wider
-          // than the screen.
+          // MarkdownUI's Grid measures cells at their ideal width when the enclosing table is
+          // horizontally fixed. A maxWidth-only frame can therefore measure long text as one line
+          // and clamp the reported width afterwards. Give the text an actual width proposal so it
+          // wraps during measurement and the Grid computes the correct multiline row height.
+          .frame(width: 220, alignment: .topLeading)
           .fixedSize(horizontal: false, vertical: true)
-          .frame(minWidth: 88, maxWidth: 240, alignment: .topLeading)
           .padding(.horizontal, 10)
           .padding(.vertical, 7)
       }
