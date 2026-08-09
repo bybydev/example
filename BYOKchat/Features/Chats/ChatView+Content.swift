@@ -191,19 +191,22 @@ extension ChatView {
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 4) {
           if showJumpToLatest {
-            Button("Jump to Latest", systemImage: "arrow.down") {
+            Button {
               followsLatest = true
               isUserDraggingTimeline = false
               showJumpToLatest = false
               scrollToBottom(proxy)
+            } label: {
+              Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .glassEffect(.clear, in: Circle())
+                .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
             }
-            .labelStyle(.iconOnly)
-            .font(.system(size: 16, weight: .semibold))
-            .frame(width: 48, height: 48)
-            .contentShape(Circle())
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().stroke(.primary.opacity(0.12), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.1), radius: 12, y: 5)
             .buttonStyle(.plain)
             .zIndex(10)
             .accessibilityLabel("Scroll to bottom of chat")
@@ -408,7 +411,7 @@ private struct MCPToolApprovalCard: View {
   }
 
   private var alwaysAllowButton: some View {
-    Button("Always Allow") { resolve(.alwaysAllow) }.buttonStyle(.borderedProminent)
+    Button("Always Allow") { resolve(.allowOnce) }.buttonStyle(.borderedProminent)
   }
 }
 
