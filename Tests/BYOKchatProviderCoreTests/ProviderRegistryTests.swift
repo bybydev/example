@@ -8,10 +8,17 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["deepseek", "openrouter", "nvidia", "anthropic", "gemini"]
+      == ["openai", "deepseek", "openrouter", "nvidia", "anthropic", "gemini"]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
+
+  let openAI = try #require(definitions.first { $0.id == "openai" })
+  #expect(openAI.defaultBaseURL.absoluteString == "https://api.openai.com/v1")
+  #expect(openAI.apiFamily == .openAIChatCompletions)
+  #expect(openAI.authentication == .bearer)
+  #expect(openAI.modelsPath == "/models")
+  #expect(openAI.chatCompletionsPath == "/chat/completions")
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5" })
