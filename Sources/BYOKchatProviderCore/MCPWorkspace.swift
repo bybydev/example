@@ -6,7 +6,7 @@ public struct MCPWorkspaceState: Codable, Sendable, Equatable {
   public var schemaVersion: Int
   public var servers: [MCPRemoteServer]
   public var snapshots: [MCPServerSnapshot]
-  /// Optional so MCP workspace files and full backups written before Phase 3 still decode as v1.
+  /// Optional so older schema-v1 MCP workspaces and full backups still decode.
   public var chatConfigurations: [String: MCPChatToolConfiguration]?
 
   public init(
