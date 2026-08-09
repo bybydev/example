@@ -219,7 +219,7 @@ No drive-by refactors. When a phase must substantially modify a large file, firs
 - [x] Phase 2 — Chat and provider instrumentation
 - [x] Phase 3 — Tool and MCP instrumentation
 - [x] Phase 4 — Advanced Analytics UI
-- [ ] Phase 5 — Developer Logs and controls
+- [x] Phase 5 — Developer Logs and controls
 - [ ] Phase 6 — Consolidation and hardening
 
 ## Implementation phases
@@ -290,18 +290,21 @@ Views cover:
 
 ### Phase 5 — Developer Logs and controls
 
-Build a chronological developer Logs module with:
+The Settings diagnostics surface now provides:
 
-- category/severity/provider/model/chat filters
-- search
-- detail view
-- copy/export sanitized diagnostics
-- clear diagnostic logs
-- clear all telemetry
-- retention/database statistics
-- log level controls if useful
+- chronological event log over the latest 5,000 retained local events
+- data-class/category/severity/provider/model/chat filters
+- search across structured sanitized fields
+- event detail view with timing/token/request/status metadata
+- copy/share of a single sanitized event
+- filtered JSON diagnostics export with a second privacy-sanitization pass
+- recorder health and retry state
+- event/database/schema statistics
+- explicit retention-cap display and manual maintenance
+- clear diagnostic logs without clearing analytics
+- clear all telemetry with database recreation
 
-Split `SettingsView.swift` only because this phase directly adds these controls.
+Diagnostics are available in normal builds so a user can inspect/export/clear their own local telemetry. DEBUG-only purchase simulation and onboarding replay were moved into a focused `DeveloperSettingsSection` because this phase directly touched that large Settings file. No unrelated Settings responsibilities were refactored.
 
 ### Phase 6 — Consolidation and hardening
 
