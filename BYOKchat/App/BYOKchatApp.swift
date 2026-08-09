@@ -11,6 +11,7 @@ struct BYOKchatApp: App {
     WindowGroup {
       AppRootView(model: model, purchases: purchases)
         .appFoundationTheme(model.themeManager)
+        .environment(model)
         .environment(purchases.manager)
     }
   }
