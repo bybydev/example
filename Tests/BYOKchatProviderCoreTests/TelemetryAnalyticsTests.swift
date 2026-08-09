@@ -101,7 +101,7 @@ import Testing
   #expect(failures.first?.classification == "transport")
 }
 
-@Test func telemetryAnalyticsFailureBreakdownGroupsStableErrors() {
+@Test func telemetryAnalyticsFailureBreakdownUsesCanonicalEvents() {
   let events: [TelemetryEvent] = [
     TelemetryEvent(
       dataClass: .analytics,
@@ -113,11 +113,19 @@ import Testing
     ),
     TelemetryEvent(
       dataClass: .analytics,
-      category: .provider,
-      name: .providerRequestFailed,
+      category: .chat,
+      name: .chatTurnFailed,
       outcome: .failure,
       errorCode: "rate_limited",
       metadata: ["classification": "rate_limit"]
+    ),
+    TelemetryEvent(
+      dataClass: .analytics,
+      category: .chat,
+      name: .chatTurnFailed,
+      outcome: .failure,
+      errorCode: "context_window_exceeded",
+      metadata: ["classification": "context"]
     ),
     TelemetryEvent(
       dataClass: .analytics,
@@ -130,10 +138,10 @@ import Testing
   ]
 
   let failures = TelemetryAnalytics.failureBreakdown(events: events)
-  #expect(failures.count == 2)
-  #expect(failures.first?.errorCode == "rate_limited")
-  #expect(failures.first?.count == 2)
-  #expect(failures.last?.errorCode == "approval_denied")
+  #expect(failures.count == 3)
+  #expect(failures.contains(where: { $0.errorCode == "rate_limited" && $0.count == 1 }))
+  #expect(failures.contains(where: { $0.errorCode == "context_window_exceeded" && $0.count == 1 }))
+  #expect(failures.contains(where: { $0.errorCode == "approval_denied" && $0.count == 1 }))
 }
 
 @Test func telemetryAnalyticsIgnoresDiagnosticAndInvalidMetricValues() {
