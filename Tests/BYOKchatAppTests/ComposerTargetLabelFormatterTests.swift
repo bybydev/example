@@ -61,3 +61,39 @@ struct ComposerTargetLabelFormatterTests {
     #expect(label == "OR · Nova 3.1 · Off")
   }
 }
+
+@Suite("Composer layout policy")
+struct ChatComposerLayoutPolicyTests {
+  @Test("Compact is only idle, unfocused, empty, and attachment-free")
+  func completeStateMatrix() {
+    let activities: [ChatComposerActivity] = [.idle, .generating, .creating]
+
+    for isFocused in [false, true] {
+      for draftIsEmpty in [false, true] {
+        for hasAttachments in [false, true] {
+          for activity in activities {
+            let actual = ChatComposerLayoutPolicy.shouldUseCompact(
+              isFocused: isFocused,
+              draftIsEmpty: draftIsEmpty,
+              hasAttachments: hasAttachments,
+              activity: activity
+            )
+            let expected =
+              !isFocused
+              && draftIsEmpty
+              && !hasAttachments
+              && activity == .idle
+
+            #expect(actual == expected)
+          }
+        }
+      }
+    }
+  }
+
+  @Test("Text viewport caps at six lines without attachments and three with attachments")
+  func visibleTextLineCaps() {
+    #expect(ChatComposerLayoutPolicy.visibleTextLineCap(hasAttachments: false) == 6)
+    #expect(ChatComposerLayoutPolicy.visibleTextLineCap(hasAttachments: true) == 3)
+  }
+}
