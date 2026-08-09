@@ -39,6 +39,9 @@ struct UsageDashboardView: View {
         if hasPerformanceData {
           performanceSection
           reliabilitySection
+          if !failureBreakdown.isEmpty {
+            failureSection
+          }
         } else if hasLoadedTelemetry {
           Section {
             ContentUnavailableView(
@@ -84,7 +87,13 @@ struct UsageDashboardView: View {
         Section {
           LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
           if telemetryStatistics.databaseBytes > 0 {
-            LabeledContent("Local database", value: ByteCountFormatter.string(fromByteCount: telemetryStatistics.databaseBytes, countStyle: .file))
+            LabeledContent(
+              "Local database",
+              value: ByteCountFormatter.string(
+                fromByteCount: telemetryStatistics.databaseBytes,
+                countStyle: .file
+              )
+            )
           }
         } header: {
           Text("Local analytics")
@@ -167,6 +176,30 @@ struct UsageDashboardView: View {
     }
   }
 
+  private var failureSection: some View {
+    Section {
+      ForEach(Array(failureBreakdown.prefix(8))) { failure in
+        HStack(alignment: .firstTextBaseline) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(errorTitle(failure.errorCode))
+              .lineLimit(1)
+            Text("\(failure.category.rawValue.capitalized) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer(minLength: 12)
+          Text(failure.count.formatted())
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+      }
+    } header: {
+      Text("Errors")
+    } footer: {
+      Text("Only stable, privacy-safe error codes are shown. Provider response text and request content are never stored in analytics.")
+    }
+  }
+
   private var monthlyBudgetSection: some View {
     Section {
       HStack {
@@ -221,6 +254,10 @@ struct UsageDashboardView: View {
 
   private var performance: TelemetryPerformanceAggregate {
     TelemetryAnalytics.aggregate(events: filteredTelemetryEvents)
+  }
+
+  private var failureBreakdown: [TelemetryFailureBreakdown] {
+    TelemetryAnalytics.failureBreakdown(events: filteredTelemetryEvents)
   }
 
   private var hasPerformanceData: Bool {
@@ -351,6 +388,13 @@ struct UsageDashboardView: View {
       return "Performance and reliability use the latest 5,000 local telemetry events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
     }
     return "Performance and reliability are calculated from device-local telemetry retained for up to 30 days by default. Chat usage and spend remain available from message history even if telemetry is cleared."
+  }
+
+  private func errorTitle(_ raw: String) -> String {
+    raw.replacingOccurrences(of: "_", with: " ")
+      .split(separator: " ")
+      .map { $0.capitalized }
+      .joined(separator: " ")
   }
 
   private func loadTelemetry() async {
