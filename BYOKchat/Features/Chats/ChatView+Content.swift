@@ -209,13 +209,15 @@ extension ChatView {
             .accessibilityLabel("Scroll to bottom of chat")
           }
 
-          ChatComposer(
+          ChatInputComposer(
             draft: $draft,
             attachments: pendingAttachments,
             isGenerating: chats.isGenerating(conversationID),
             canSend: configurationIssue(conversation) == nil,
-            targetLabel: targetLabel(conversation),
+            conversation: conversation,
+            providers: providers,
             openTarget: { showTargetSettings = true },
+            openChatSettings: { showTargetSettings = true },
             pickPhoto: { showPhotoPicker = true },
             pickFile: { showFileImporter = true },
             removeAttachment: removePendingAttachment,
