@@ -81,10 +81,10 @@ struct ChatInputComposer: View {
         .padding(.top, attachments.isEmpty ? 10 : 4)
         .padding(.bottom, 2)
 
-      HStack(spacing: 8) {
+      HStack(spacing: 6) {
         optionsButton
-        Spacer(minLength: 8)
         targetButton
+        Spacer(minLength: 8)
         sendButton
       }
       .padding(.horizontal, 10)
@@ -144,20 +144,21 @@ struct ChatInputComposer: View {
     Button {
       showTargetPicker = true
     } label: {
-      HStack(spacing: 4) {
+      HStack(spacing: 3) {
         Text(targetSummary)
           .lineLimit(1)
           .minimumScaleFactor(0.82)
         Image(systemName: "chevron.down")
-          .font(.system(size: 8, weight: .bold))
+          .font(.system(size: 7, weight: .semibold))
       }
-      .font(.system(size: 13, weight: .medium))
-      .foregroundStyle(theme.primaryForegroundColor)
+      .font(.system(size: 12.5, weight: .medium))
+      .foregroundStyle(theme.secondaryForegroundColor)
+      .padding(.horizontal, 4)
+      .frame(height: 32)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(.glass)
-    .buttonBorderShape(.capsule)
-    .controlSize(.small)
-    .frame(maxWidth: 184)
+    .buttonStyle(.plain)
+    .frame(maxWidth: 176, alignment: .leading)
     .disabled(isGenerating)
     .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
     .accessibilityValue(targetSummary)
