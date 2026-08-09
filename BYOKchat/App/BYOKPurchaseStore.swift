@@ -5,6 +5,7 @@ import Foundation
 final class BYOKPurchaseStore {
   static let monthlyProductID = "com.hoangbkit.byokchat.pro.monthly"
   static let yearlyProductID = "com.hoangbkit.byokchat.pro.yearly"
+  static let lifetimeProductID = "com.hoangbkit.byokchat.pro.lifetime"
 
   #if DEBUG
   private static let simulatedModeKey = "byokchat.developer.simulatedPurchases"
@@ -21,7 +22,11 @@ final class BYOKPurchaseStore {
 
     manager = PurchaseManager(
       configuration: PurchaseConfiguration(
-        productIDs: [Self.monthlyProductID, Self.yearlyProductID],
+        productIDs: [
+          Self.monthlyProductID,
+          Self.yearlyProductID,
+          Self.lifetimeProductID,
+        ],
         preferredProductID: Self.yearlyProductID
       ),
       simulated: startsSimulated,
@@ -82,17 +87,24 @@ final class BYOKPurchaseStore {
       id: monthlyProductID,
       displayName: "BYOK Pro Monthly",
       description: "BYOK Pro for one month",
-      displayPrice: "$7.99",
-      price: 7.99,
+      displayPrice: "$6.99",
+      price: 6.99,
       subscriptionPeriod: .init(value: 1, unit: .month)
     ),
     PurchaseProduct(
       id: yearlyProductID,
       displayName: "BYOK Pro Yearly",
       description: "BYOK Pro for one year",
-      displayPrice: "$29.99",
-      price: 29.99,
+      displayPrice: "$49.99",
+      price: 49.99,
       subscriptionPeriod: .init(value: 1, unit: .year)
+    ),
+    PurchaseProduct(
+      id: lifetimeProductID,
+      displayName: "BYOK Pro Lifetime",
+      description: "Pay once and keep BYOK Pro forever",
+      displayPrice: "$129.99",
+      price: 129.99
     ),
   ]
 }
