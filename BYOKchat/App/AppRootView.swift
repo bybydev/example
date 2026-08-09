@@ -9,9 +9,11 @@ struct AppRootView: View {
   }
 
   @Bindable var model: AppModel
+  let purchases: BYOKPurchaseStore
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
+  @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
   @State private var selectedConversationID: ConversationID?
   @State private var newChatProjectID: ProjectID?
   @State private var initialScrollMessageID: ChatMessageID?
@@ -45,6 +47,7 @@ struct AppRootView: View {
             providers: model.providers,
             projects: model.projects,
             mcp: model.mcp,
+            purchases: purchases,
             selectedConversationID: selectedConversationID,
             newChat: startNewChat(in:),
             selectConversation: selectConversation,
@@ -61,6 +64,7 @@ struct AppRootView: View {
       .animation(.snappy(duration: 0.28), value: isSidebarPresented)
     }
     .task {
+      await purchases.prepare()
       await model.load()
     }
     .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
@@ -80,9 +84,27 @@ struct AppRootView: View {
       }
     }
     .sheet(isPresented: $isSettingsPresented) {
-      SettingsView(model: model)
-        .appFoundationTheme(model.themeManager)
-        .presentationDragIndicator(.visible)
+      SettingsView(
+        model: model,
+        purchases: purchases,
+        replayOnboarding: replayOnboarding
+      )
+      .appFoundationTheme(model.themeManager)
+      .presentationDragIndicator(.visible)
+    }
+    .fullScreenCover(
+      isPresented: Binding(
+        get: { !hasCompletedOnboarding },
+        set: { presented in
+          if !presented { hasCompletedOnboarding = true }
+        }
+      )
+    ) {
+      BYOKOnboardingView {
+        hasCompletedOnboarding = true
+      }
+      .appFoundationTheme(model.themeManager)
+      .interactiveDismissDisabled()
     }
     .overlay(alignment: .top) {
       if model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
@@ -225,5 +247,13 @@ struct AppRootView: View {
   private func openSettings() {
     closeSidebar()
     isSettingsPresented = true
+  }
+
+  private func replayOnboarding() {
+    isSettingsPresented = false
+    Task { @MainActor in
+      await Task.yield()
+      hasCompletedOnboarding = false
+    }
   }
 }
