@@ -1,6 +1,6 @@
 # Generic Tool-Calling Runtime
 
-BYOKchat's MCP roadmap is built on a provider-neutral tool runtime. Phase 1 established normalized model/tool orchestration, Phase 2 added remote MCP transport/discovery, and Phase 3 adds conversation-scoped exposure plus explicit user interaction.
+BYOKchat uses a provider-neutral tool runtime with remote MCP support, conversation-scoped exposure, explicit permissions, and native user interaction.
 
 ## Architecture
 
@@ -150,13 +150,15 @@ Full conversation backups include tool rounds through normal Codable persistence
 
 Provider usage is accumulated across every model step in one logical assistant turn. The final persisted assistant message therefore reports total usage for the complete model → tool → model loop rather than only the last request.
 
-## MCP v1 status
+## MCP scope
 
-The scoped MCP v1 product layer is implemented:
+The current MCP product layer includes:
 
-- Phase 1 — generic tool runtime
-- Phase 2 — remote Streamable HTTP MCP
-- Phase 3 — per-chat tools, permissions, approvals, interaction cards, and MCP multi-round elicitation
+- provider-neutral generic tool orchestration
+- remote Streamable HTTP MCP transport and discovery
+- per-chat tool exposure and permissions
+- approval and elicitation interaction UI
+- persisted multi-round tool execution
 
 OAuth, local stdio MCP, deprecated HTTP+SSE transport, MCP Apps, Tasks, sampling, roots, and advanced MCP extensions remain outside the current BYOKchat MCP v1 scope.
 
