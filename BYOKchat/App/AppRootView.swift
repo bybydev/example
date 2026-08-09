@@ -21,47 +21,49 @@ struct AppRootView: View {
   @State private var isSettingsPresented = false
 
   var body: some View {
-    GeometryReader { geometry in
-      let drawerWidth = min(geometry.size.width * 0.80, 390)
+    ZStack {
+      theme.backgroundColor
+        .ignoresSafeArea()
 
-      ZStack(alignment: .leading) {
-        theme.backgroundColor
-          .ignoresSafeArea()
+      GeometryReader { geometry in
+        let drawerWidth = min(geometry.size.width * 0.80, 390)
 
-        mainContent
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .offset(x: isSidebarPresented ? drawerWidth : 0)
-          .allowsHitTesting(!isSidebarPresented)
-          .simultaneousGesture(openSidebarGesture, including: .all)
-          .overlay {
-            if isSidebarPresented {
-              Color.black.opacity(0.12)
-                .ignoresSafeArea()
-                .onTapGesture { closeSidebar() }
+        ZStack(alignment: .leading) {
+          mainContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .offset(x: isSidebarPresented ? drawerWidth : 0)
+            .allowsHitTesting(!isSidebarPresented)
+            .simultaneousGesture(openSidebarGesture, including: .all)
+            .overlay {
+              if isSidebarPresented {
+                Color.black.opacity(0.12)
+                  .ignoresSafeArea()
+                  .onTapGesture { closeSidebar() }
+              }
             }
-          }
 
-        if isSidebarPresented {
-          ChatSidebarView(
-            chats: model.chats,
-            providers: model.providers,
-            projects: model.projects,
-            mcp: model.mcp,
-            purchases: purchases,
-            selectedConversationID: selectedConversationID,
-            newChat: startNewChat(in:),
-            selectConversation: selectConversation,
-            selectSearchResult: selectSearchResult,
-            openSettings: openSettings,
-            close: closeSidebar
-          )
-          .frame(width: drawerWidth)
-          .frame(maxHeight: .infinity)
-          .transition(.move(edge: .leading))
-          .zIndex(2)
+          if isSidebarPresented {
+            ChatSidebarView(
+              chats: model.chats,
+              providers: model.providers,
+              projects: model.projects,
+              mcp: model.mcp,
+              purchases: purchases,
+              selectedConversationID: selectedConversationID,
+              newChat: startNewChat(in:),
+              selectConversation: selectConversation,
+              selectSearchResult: selectSearchResult,
+              openSettings: openSettings,
+              close: closeSidebar
+            )
+            .frame(width: drawerWidth)
+            .frame(maxHeight: .infinity)
+            .transition(.move(edge: .leading))
+            .zIndex(2)
+          }
         }
+        .animation(.snappy(duration: 0.28), value: isSidebarPresented)
       }
-      .animation(.snappy(duration: 0.28), value: isSidebarPresented)
     }
     .task {
       await purchases.prepare()
