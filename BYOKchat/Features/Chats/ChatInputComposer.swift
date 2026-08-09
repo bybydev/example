@@ -9,8 +9,8 @@ struct ChatInputComposer: View {
   let isGenerating: Bool
   let canSend: Bool
   let conversation: ChatConversation
+  @Bindable var chats: ChatManagementModel
   let providers: ProviderManagementModel
-  let openTarget: () -> Void
   let openChatSettings: () -> Void
   let pickPhoto: () -> Void
   let pickFile: () -> Void
@@ -20,6 +20,7 @@ struct ChatInputComposer: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
+  @State private var showTargetPicker = false
 
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,6 +97,13 @@ struct ChatInputComposer: View {
     .padding(.horizontal, 14)
     .padding(.top, 6)
     .padding(.bottom, 8)
+    .sheet(isPresented: $showTargetPicker) {
+      ComposerTargetPickerView(
+        conversation: chats.conversation(conversation.id) ?? conversation,
+        chats: chats,
+        providers: providers
+      )
+    }
     .onChange(of: isGenerating) { _, generating in
       if generating { isEditorFocused = false }
     }
@@ -135,7 +143,9 @@ struct ChatInputComposer: View {
   }
 
   private var targetButton: some View {
-    Button(action: openTarget) {
+    Button {
+      showTargetPicker = true
+    } label: {
       HStack(spacing: 4) {
         Text(targetSummary)
           .lineLimit(1)
