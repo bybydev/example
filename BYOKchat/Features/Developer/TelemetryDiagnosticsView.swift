@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 
 struct TelemetryDiagnosticsView: View {
