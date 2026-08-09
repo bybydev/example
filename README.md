@@ -70,7 +70,7 @@ The generic tool layer beneath chat is provider-neutral and MCP-aware.
 
 ## Remote MCP
 
-The three-phase MCP v1 roadmap is implemented.
+The MCP v1 product surface is implemented.
 
 ### Remote servers and transport
 
@@ -109,6 +109,19 @@ The three-phase MCP v1 roadmap is implemented.
 
 Explicitly deferred from MCP v1: OAuth, local stdio/process spawning, deprecated HTTP+SSE, MCP Apps, Tasks, sampling, roots, and other advanced extensions.
 
+## Analytics and diagnostics
+
+BYOKchat keeps durable usage accounting separate from disposable observability.
+
+- Conversation `ChatBilling` metadata remains the source of truth for historical tokens, model requests, tool calls, pricing snapshots, and spend.
+- A dedicated local SQLite telemetry store records privacy-safe timing, lifecycle, and reliability data.
+- Analytics includes TTFT, request duration, generation speed, success rates, provider/model breakdowns, tool/MCP reliability, and stable error classifications.
+- Settings → Diagnostics & Logs provides local event search/filtering, event details, sanitized export, recorder health, retention status, cleanup, and clear controls.
+- Raw telemetry stays on the device and is never used as a backup or synchronized as a SQLite file.
+- Telemetry is capped by age, event count, and database size and can be discarded/recreated if corrupt or incompatible.
+- Telemetry storage failures fail open and never block chat, tools, purchases, project sync, or app launch.
+- Prompts, responses, reasoning, credentials, tool arguments/results, attachment contents, URLs, and hostnames are excluded from telemetry by default.
+
 ## Data portability
 
 - Versioned full backup containing conversations, attachments, structured tool rounds, preferences, non-secret provider configuration, MCP server configuration/discovery cache, and per-chat MCP tool policies
@@ -116,6 +129,7 @@ Explicitly deferred from MCP v1: OAuth, local stdio/process spawning, deprecated
 - Merge or replace restore strategies
 - Conversation import preserves attachments and structured tool rounds
 - Per-chat MCP policy is remapped when imported conversation IDs change
+- Repeated keep-existing import is idempotent
 - Pre-mutation validation and workspace rollback on import failure
 - Provider and MCP credentials excluded from every export
 - Replace restore clears affected provider and MCP Keychain credentials
@@ -150,4 +164,5 @@ The app requires your own provider keys. No live credentials are committed.
 - `Documentation/NativeProviderAPIs.md`
 - `Documentation/ToolCallingRuntime.md`
 - `Documentation/RemoteMCP.md`
+- `Documentation/TelemetryObservability.md`
 - `Documentation/ExpandedVisionProgress-2026-08-07.md`
