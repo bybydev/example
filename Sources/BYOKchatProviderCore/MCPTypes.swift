@@ -230,7 +230,7 @@ public enum MCPError: Error, LocalizedError, Sendable, Equatable {
     case .toolNotFound(let name): "MCP tool not found: \(name)"
     case .invalidToolDefinition(let message): message
     case .inputRequired:
-      "This MCP tool requires additional interactive input. BYOKchat will support that in a later phase."
+      "This MCP tool requires additional interactive input that could not be completed."
     case .transport(let message): message
     }
   }
