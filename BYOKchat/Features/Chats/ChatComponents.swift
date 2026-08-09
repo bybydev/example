@@ -203,7 +203,7 @@ struct ChatMessageView: View {
   let copy: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
-  @State private var reasoningExpanded = false
+  @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
 
   var body: some View {
@@ -273,6 +273,9 @@ struct ChatMessageView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .sheet(isPresented: $showMessageInfo) {
       MessageInfoView(message: message, accountLabel: accountLabel)
+    }
+    .sheet(isPresented: $showReasoningSheet) {
+      ReasoningSheet(reasoning: message.reasoning)
     }
   }
 
@@ -347,49 +350,37 @@ struct ChatMessageView: View {
   }
 
   private var reasoningDisclosure: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Button {
-        guard !message.reasoning.isEmpty else { return }
-        withAnimation(.snappy(duration: 0.2)) {
-          reasoningExpanded.toggle()
+    Button {
+      guard !message.reasoning.isEmpty else { return }
+      showReasoningSheet = true
+    } label: {
+      HStack(spacing: 8) {
+        if isReasoningActive {
+          Text("Thinking…")
+            .phaseAnimator([false, true]) { content, phase in
+              content.opacity(phase ? 0.45 : 1)
+            } animation: { _ in
+              .easeInOut(duration: 0.8)
+            }
+        } else {
+          Text("Reasoning")
         }
-      } label: {
-        HStack(spacing: 8) {
-          if isReasoningActive {
-            Text("Thinking…")
-              .phaseAnimator([false, true]) { content, phase in
-                content.opacity(phase ? 0.45 : 1)
-              } animation: { _ in
-                .easeInOut(duration: 0.8)
-              }
-          } else {
-            Text("Reasoning")
-          }
 
-          Spacer(minLength: 8)
+        Spacer(minLength: 8)
 
+        if !message.reasoning.isEmpty {
           Image(systemName: "chevron.right")
             .font(.system(size: 11, weight: .semibold))
-            .rotationEffect(.degrees(reasoningExpanded ? 90 : 0))
         }
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(theme.secondaryForegroundColor)
-        .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel(isReasoningActive ? "Thinking" : "Reasoning")
-      .accessibilityValue(reasoningExpanded ? "Expanded" : "Collapsed")
-
-      if reasoningExpanded, !message.reasoning.isEmpty {
-        Text(message.reasoning)
-          .font(.system(size: 15))
-          .lineSpacing(4)
-          .foregroundStyle(theme.secondaryForegroundColor)
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .transition(.opacity.combined(with: .move(edge: .top)))
-      }
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(theme.secondaryForegroundColor)
+      .contentShape(Rectangle())
     }
+    .buttonStyle(.plain)
+    .disabled(message.reasoning.isEmpty)
+    .accessibilityLabel(isReasoningActive ? "Thinking" : "Reasoning")
+    .accessibilityHint(message.reasoning.isEmpty ? "" : "Opens reasoning in a sheet")
   }
 
   private func actionButton(
