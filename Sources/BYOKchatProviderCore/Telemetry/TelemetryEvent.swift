@@ -61,6 +61,7 @@ public struct TelemetryEventName: RawRepresentable, Hashable, Codable, Sendable,
   public static let providerFirstToken: Self = "provider.first_token"
   public static let providerRequestCompleted: Self = "provider.request.completed"
   public static let providerRequestFailed: Self = "provider.request.failed"
+  public static let providerRequestCancelled: Self = "provider.request.cancelled"
 
   public static let toolCallStarted: Self = "tool.call.started"
   public static let toolCallCompleted: Self = "tool.call.completed"
