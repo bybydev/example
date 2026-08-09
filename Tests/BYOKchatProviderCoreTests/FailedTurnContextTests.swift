@@ -89,3 +89,27 @@ import Testing
 
   #expect(context.messages.map(\.content) == ["current prompt"])
 }
+
+@Test func failedMessagesExposeStableFailureOrigin() {
+  let local = ChatMessage(
+    role: .assistant,
+    status: .failed,
+    errorCode: "invalidRequest(\"This model can’t read images.\")"
+  )
+  let remoteHTTP = ChatMessage(
+    role: .assistant,
+    status: .failed,
+    errorCode: "provider(status: 500, message: \"Server error\")"
+  )
+  let remoteTransport = ChatMessage(
+    role: .assistant,
+    status: .failed,
+    errorCode: "transport(message: \"The Internet connection appears to be offline.\", completionUnknown: false)"
+  )
+  let completed = ChatMessage(role: .assistant, status: .complete)
+
+  #expect(local.failureOrigin == .local)
+  #expect(remoteHTTP.failureOrigin == .remote)
+  #expect(remoteTransport.failureOrigin == .remote)
+  #expect(completed.failureOrigin == nil)
+}
