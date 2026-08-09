@@ -95,7 +95,7 @@ import Testing
   _ = await consumer.result
 }
 
-@Test func phaseThreeConversationJSONRemainsDecodable() async throws {
+@Test func olderConversationJSONRemainsDecodable() async throws {
   let message = ChatMessage(role: .user, content: "Legacy", status: .complete)
   let conversation = ChatConversation(
     providerID: "deepseek",
