@@ -329,33 +329,27 @@ struct ChatSidebarView: View {
 
   private var footer: some View {
     HStack(alignment: .center, spacing: 8) {
-      Button(action: { destination = .usage }) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(purchases.hasPro ? "Pro" : "Free")
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(theme.primaryForegroundColor)
-            .lineLimit(1)
-
-          Text(usageResetText)
-            .font(.system(size: 10.5))
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .lineLimit(1)
+      Button {
+        if purchases.hasPro {
+          newChat(nil)
+        } else {
+          showPaywall = true
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+      } label: {
+        Label(
+          purchases.hasPro ? "Chat" : "Upgrade",
+          systemImage: purchases.hasPro ? "square.and.pencil" : "crown.fill"
+        )
+        .font(.system(size: 15, weight: .semibold))
+        .frame(maxWidth: .infinity)
       }
+      .foregroundStyle(theme.backgroundColor)
+      .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+      .background(theme.accentColor, in: Capsule())
+      .contentShape(Capsule())
       .buttonStyle(.plain)
-      .frame(maxWidth: .infinity, alignment: .leading)
-
-      if !purchases.hasPro {
-        Button("Upgrade") { showPaywall = true }
-          .font(.system(size: 10.5, weight: .semibold))
-          .foregroundStyle(theme.accentColor)
-          .padding(.horizontal, 8)
-          .frame(height: 25)
-          .background(theme.accentColor.opacity(0.13), in: Capsule())
-          .buttonStyle(.plain)
-      }
+      .shadow(color: theme.accentColor.opacity(0.22), radius: 9, y: 3)
+      .accessibilityLabel(purchases.hasPro ? "Start new chat" : "Upgrade to Pro")
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
