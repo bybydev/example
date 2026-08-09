@@ -23,6 +23,7 @@ struct NewChatInputComposer: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
+  @State private var isExpanded = false
 
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,7 +34,7 @@ struct NewChatInputComposer: View {
   }
 
   private var isCompact: Bool {
-    !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isCreating
+    !isExpanded && !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isCreating
   }
 
   var body: some View {
@@ -52,19 +53,28 @@ struct NewChatInputComposer: View {
     .padding(.top, 6)
     .padding(.bottom, 8)
     .animation(.snappy(duration: 0.2), value: isCompact)
-    .onChange(of: isCreating) { _, creating in
-      if creating { isEditorFocused = false }
+    .onChange(of: isEditorFocused) { _, focused in
+      if !focused && attachments.isEmpty && normalizedDraft.isEmpty && !isCreating {
+        isExpanded = false
+      }
     }
-    .onDisappear { isEditorFocused = false }
+    .onChange(of: isCreating) { _, creating in
+      if creating {
+        isEditorFocused = false
+        isExpanded = false
+      }
+    }
+    .onDisappear {
+      isEditorFocused = false
+      isExpanded = false
+    }
   }
 
   private var compactComposer: some View {
     HStack(spacing: 6) {
       optionsButton
 
-      Button {
-        isEditorFocused = true
-      } label: {
+      Button(action: expandAndFocus) {
         Text("Message...")
           .font(.system(size: 17))
           .foregroundStyle(theme.secondaryForegroundColor)
@@ -184,6 +194,14 @@ struct NewChatInputComposer: View {
     .buttonStyle(.plain)
     .disabled(isCreating || !canSubmit)
     .accessibilityLabel(isCreating ? "Creating chat" : "Send message")
+  }
+
+  private func expandAndFocus() {
+    isExpanded = true
+    Task { @MainActor in
+      await Task.yield()
+      isEditorFocused = true
+    }
   }
 }
 
