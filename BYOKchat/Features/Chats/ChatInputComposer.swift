@@ -241,19 +241,28 @@ enum ComposerTargetLabelFormatter {
 
     value = collapseWhitespace(value)
 
+    let providerIsModelFamily = recognizableFamilies.contains {
+      providerName.lowercased().contains($0)
+    }
+    if !providerIsModelFamily,
+      value.lowercased().hasPrefix(providerName.lowercased() + " ")
+    {
+      value = String(value.dropFirst(providerName.count))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     let removableVendorPrefixes = [
-      providerName,
       "OpenAI",
       "Anthropic",
-      "Google",
       "Google DeepMind",
+      "Google",
       "Meta AI",
       "Meta",
       "Alibaba",
       "NVIDIA",
     ]
 
-    for prefix in removableVendorPrefixes where !prefix.isEmpty {
+    for prefix in removableVendorPrefixes {
       if value.lowercased().hasPrefix(prefix.lowercased() + " ") {
         value = String(value.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         break
