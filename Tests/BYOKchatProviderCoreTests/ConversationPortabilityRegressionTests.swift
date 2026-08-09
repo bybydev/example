@@ -69,3 +69,33 @@ import Testing
   #expect(restored.messages[1].content == "Finished")
   #expect(restored.messages[1].status == .complete)
 }
+
+@Test func keepExistingConversationImportIsIdempotent() async throws {
+  let source = ConversationStore(persistence: InMemoryConversationWorkspacePersistence())
+  try await source.load()
+  let conversation = try await source.createConversation(
+    providerID: "deepseek",
+    accountID: "account",
+    modelID: "deepseek-chat",
+    systemPrompt: "Be direct."
+  )
+  let turn = try await source.beginTurn(conversationID: conversation.id, userText: "Hello")
+  _ = try await source.completeMessage(
+    conversationID: conversation.id,
+    messageID: turn.assistantMessage.id,
+    response: ProviderResponse(
+      text: "Hi",
+      providerID: "deepseek",
+      accountID: "account",
+      modelID: "deepseek-chat"
+    )
+  )
+
+  let data = try await source.exportWorkspace()
+  let restored = ConversationStore(persistence: InMemoryConversationWorkspacePersistence())
+  try await restored.load()
+  try await restored.importWorkspace(data, strategy: .keepExisting)
+  try await restored.importWorkspace(data, strategy: .keepExisting)
+
+  #expect(await restored.allConversations().count == 1)
+}
