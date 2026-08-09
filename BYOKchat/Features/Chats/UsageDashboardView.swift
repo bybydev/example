@@ -385,7 +385,8 @@ struct UsageDashboardView: View {
 
   private var telemetryFootnote: String {
     if telemetryStatistics.eventCount > telemetryEvents.count {
-      return "Performance and reliability use the latest 5,000 local telemetry events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
+      let queryLimit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
+      return "Performance and reliability use the latest \(queryLimit) local telemetry events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
     }
     return "Performance and reliability are calculated from device-local telemetry retained for up to 30 days by default. Chat usage and spend remain available from message history even if telemetry is cleared."
   }
@@ -399,7 +400,9 @@ struct UsageDashboardView: View {
 
   private func loadTelemetry() async {
     let recorder = TelemetryRecorder.shared
-    let events = await recorder.recentEvents(limit: 5_000)
+    let events = await recorder.recentEvents(
+      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+    )
     let statistics = await recorder.statistics()
     telemetryEvents = events
     telemetryStatistics = statistics
