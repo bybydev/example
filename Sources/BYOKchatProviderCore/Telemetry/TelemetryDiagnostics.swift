@@ -87,7 +87,7 @@ public enum TelemetryDiagnostics {
   public static func text(for event: TelemetryEvent) -> String {
     let event = TelemetryPrivacy.sanitize(event)
     var lines = [
-      event.timestamp.formatted(.iso8601),
+      ISO8601DateFormatter().string(from: event.timestamp),
       "\(event.severity.rawValue.uppercased()) · \(event.category.rawValue) · \(event.name.rawValue)",
     ]
     if let outcome = event.outcome { lines.append("Outcome: \(outcome.rawValue)") }
