@@ -27,6 +27,7 @@ private enum SimulatorConfigurationConstants {
   static let versionKey = "simulatorVersion"
   static let schemaVersionKey = "simulatorSchemaVersion"
   static let mcpName = "AI Provider Simulator"
+  static let defaultManifestURL = "https://ai-provider-simulator.hoangbkit.workers.dev/manifest.json"
 }
 
 private struct SimulatorManifest: Decodable {
@@ -67,7 +68,7 @@ struct DeveloperSettingsSection: View {
   let replayOnboarding: () -> Void
 
   @Environment(AppModel.self) private var model
-  @AppStorage("byokchat.dev.simulator.manifestURL") private var simulatorManifestURL = ""
+  @AppStorage("byokchat.dev.simulator.manifestURL") private var simulatorManifestURL = SimulatorConfigurationConstants.defaultManifestURL
   @AppStorage("byokchat.dev.simulator.mcpServerID") private var simulatorMCPServerID = ""
 
   @State private var simulatedPurchasesEnabled = false
