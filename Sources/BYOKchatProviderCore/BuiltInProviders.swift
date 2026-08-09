@@ -1,11 +1,22 @@
 import Foundation
 
 public enum BuiltInProviders {
+  public static let openAIID: ProviderID = "openai"
   public static let deepSeekID: ProviderID = "deepseek"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let anthropicID: ProviderID = "anthropic"
   public static let geminiID: ProviderID = "gemini"
+
+  public static let openAI = ProviderDefinition(
+    id: openAIID,
+    displayName: "OpenAI",
+    behavior: .genericOpenAICompatible,
+    defaultBaseURL: URL(string: "https://api.openai.com/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    isBuiltIn: true
+  )
 
   public static let deepSeek = ProviderDefinition(
     id: deepSeekID,
@@ -132,5 +143,5 @@ public enum BuiltInProviders {
     isBuiltIn: true
   )
 
-  public static let all = [deepSeek, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, deepSeek, openRouter, nvidia, anthropic, gemini]
 }
