@@ -5,8 +5,11 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
   @Bindable var model: AppModel
+  let purchases: BYOKPurchaseStore
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.dismiss) private var dismiss
+  @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = true
   @State private var backupDocument: JSONExportDocument?
   @State private var providerDocument: JSONExportDocument?
   @State private var showBackupExporter = false
@@ -17,6 +20,9 @@ struct SettingsView: View {
   @State private var importStrategy: ProviderImportStrategy = .keepExisting
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
+  #if DEBUG
+  @State private var simulatedPurchasesEnabled = false
+  #endif
 
   private enum ImportKind {
     case backup
@@ -25,6 +31,11 @@ struct SettingsView: View {
 
   var body: some View {
     failureAlertView
+      #if DEBUG
+      .onAppear {
+        simulatedPurchasesEnabled = purchases.isUsingSimulatedPurchases
+      }
+      #endif
   }
 
   private var navigationContent: some View {
@@ -226,6 +237,29 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
         }
       }
+
+      #if DEBUG
+      Section("Developer") {
+        Toggle(
+          "Simulated Purchases",
+          isOn: Binding(
+            get: { simulatedPurchasesEnabled },
+            set: { enabled in
+              simulatedPurchasesEnabled = enabled
+              Task { @MainActor in
+                await purchases.setSimulatedPurchasesEnabled(enabled)
+              }
+            }
+          )
+        )
+        .disabled(purchases.manager.isBusy)
+
+        Button("Replay Onboarding", systemImage: "rectangle.portrait.and.arrow.forward") {
+          hasCompletedOnboarding = false
+          dismiss()
+        }
+      }
+      #endif
 
       Section("About") {
         LabeledContent("Storage", value: "Local on this iPhone")
