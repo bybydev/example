@@ -290,7 +290,35 @@ final class ChatManagementModel {
     text: String,
     attachments: [ChatAttachment] = []
   ) {
+    guard generationTasks[conversationID] == nil else { return }
+
     saveDraft("", conversationID: conversationID)
+
+    // The runtime persists attachments before it can emit turnStarted. Large image/file payloads
+    // can therefore leave a visible frame where the composer has already cleared but the sent
+    // message has not appeared yet. Mirror the user message into the observable snapshot now;
+    // turnStarted reloads the persisted store and replaces this optimistic copy atomically.
+    if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
+      let conversation = conversations[index]
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty || !attachments.isEmpty {
+        let now = Date.now
+        let optimistic = ChatMessage(
+          role: .user,
+          content: trimmed,
+          attachments: attachments.isEmpty ? nil : attachments,
+          createdAt: now,
+          updatedAt: now,
+          status: .complete,
+          providerID: conversation.providerID,
+          accountID: conversation.accountID,
+          modelID: conversation.modelID
+        )
+        conversations[index].messages.append(optimistic)
+        conversations[index].updatedAt = now
+      }
+    }
+
     startGeneration(
       conversationID: conversationID,
       action: .send(text, attachments)
