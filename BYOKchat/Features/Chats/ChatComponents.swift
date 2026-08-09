@@ -22,161 +22,6 @@ struct RepairBanner: View {
   }
 }
 
-struct ChatComposer: View {
-  @Binding var draft: String
-  let attachments: [ChatAttachment]
-  let isGenerating: Bool
-  let canSend: Bool
-  let targetLabel: String
-  let openTarget: () -> Void
-  let pickPhoto: () -> Void
-  let pickFile: () -> Void
-  let removeAttachment: (String) -> Void
-  let send: () -> Void
-  let stop: () -> Void
-
-  @Environment(\.appFoundationTheme) private var theme
-  @FocusState private var isEditorFocused: Bool
-
-  private var normalizedDraft: String {
-    draft.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var modelLabel: String {
-    targetLabel.components(separatedBy: " · ").last ?? targetLabel
-  }
-
-  private var canSubmit: Bool {
-    canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      if !attachments.isEmpty {
-        ChatAttachmentStrip(
-          attachments: attachments,
-          presentation: .composer,
-          removeAttachment: removeAttachment,
-          pickPhoto: pickPhoto,
-          pickFile: pickFile
-        )
-        .padding(.horizontal, 8)
-        .padding(.top, 8)
-      }
-
-      if isEditorFocused {
-        HStack(spacing: 6) {
-          modelButton
-          Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, attachments.isEmpty ? 8 : 4)
-      }
-
-      HStack(alignment: .bottom, spacing: 6) {
-        optionsButton
-        messageField
-        sendButton
-      }
-      .padding(.horizontal, 8)
-      .padding(.top, isEditorFocused ? 2 : 6)
-      .padding(.bottom, 6)
-    }
-    .foregroundStyle(theme.primaryForegroundColor)
-    .background(theme.elevatedSurfaceColor, in: composerShape)
-    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.75))
-    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
-    .padding(.horizontal, 14)
-    .padding(.top, 6)
-    .padding(.bottom, 8)
-    .onChange(of: isGenerating) { _, generating in
-      if generating { isEditorFocused = false }
-    }
-    .onDisappear { isEditorFocused = false }
-  }
-
-  private var composerShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 24, style: .continuous)
-  }
-
-  private var messageField: some View {
-    TextField("Message BYOKchat", text: $draft, axis: .vertical)
-      .font(.system(size: 17))
-      .foregroundStyle(theme.primaryForegroundColor)
-      .tint(theme.accentColor)
-      .lineLimit(1...7)
-      .padding(.vertical, 4)
-      .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-      .contentShape(Rectangle())
-      .focused($isEditorFocused)
-      .accessibilityLabel("Message")
-  }
-
-  private var optionsButton: some View {
-    Menu {
-      Button("Photo", systemImage: "photo", action: pickPhoto)
-      Button("File", systemImage: "doc", action: pickFile)
-      Divider()
-      Button("Chat Settings", systemImage: "slider.horizontal.3", action: openTarget)
-    } label: {
-      Image(systemName: "plus")
-        .font(.system(size: 22, weight: .regular))
-        .foregroundStyle(theme.primaryForegroundColor)
-        .frame(width: 44, height: 48)
-        .contentShape(Rectangle())
-    }
-    .accessibilityLabel("Add attachment or open chat settings")
-  }
-
-  private var modelButton: some View {
-    Button(action: openTarget) {
-      HStack(spacing: 5) {
-        Text(modelLabel)
-          .lineLimit(1)
-        Image(systemName: "chevron.down")
-          .font(.system(size: 9, weight: .semibold))
-      }
-      .font(.system(size: 14, weight: .medium))
-      .foregroundStyle(theme.primaryForegroundColor)
-      .padding(.horizontal, 11)
-      .frame(height: 38)
-      .background(theme.surfaceColor, in: Capsule())
-      .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.5))
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel("Change provider account and model, currently \(targetLabel)")
-  }
-
-  private var sendButton: some View {
-    Button {
-      if isGenerating {
-        stop()
-      } else {
-        send()
-      }
-      isEditorFocused = false
-    } label: {
-      Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
-        .font(.system(size: 16, weight: .bold))
-        .frame(width: 44, height: 48)
-        .background(sendButtonBackground, in: Circle())
-        .foregroundStyle(sendButtonForeground)
-    }
-    .disabled(!isGenerating && !canSubmit)
-    .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
-  }
-
-  private var sendButtonBackground: Color {
-    if isGenerating || canSubmit { return theme.accentColor }
-    return theme.surfaceColor
-  }
-
-  private var sendButtonForeground: Color {
-    if isGenerating || canSubmit { return theme.backgroundColor }
-    return theme.secondaryForegroundColor
-  }
-}
-
 enum ChatAttachmentPresentation {
   case composer
   case message
@@ -255,7 +100,7 @@ struct ChatAttachmentStrip: View {
       }
 
       if let removeAttachment {
-        Button("Remove \(attachment.filename)") {
+        Button {
           removeAttachment(attachment.id)
         } label: {
           Image(systemName: "xmark")
@@ -267,6 +112,7 @@ struct ChatAttachmentStrip: View {
         }
         .buttonStyle(.plain)
         .padding(6)
+        .accessibilityLabel("Remove \(attachment.filename)")
       }
     }
   }
