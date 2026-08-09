@@ -185,12 +185,12 @@ private struct MCPChatFixture: Sendable {
   let remote: MCPRemoteRuntime
   let coordinator: MCPConversationToolRuntime
   let approvals: MCPToolApprovalCenter
-  let transport: Phase3MCPTransport
+  let transport: MCPChatTestTransport
   let server: MCPRemoteServer
   let exposedToolName: String
 
   static func make() async throws -> MCPChatFixture {
-    let transport = Phase3MCPTransport()
+    let transport = MCPChatTestTransport()
     let workspace = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
     let remote = MCPRemoteRuntime(
       workspace: workspace,
@@ -200,9 +200,9 @@ private struct MCPChatFixture: Sendable {
     try await remote.load()
 
     let server = MCPRemoteServer(
-      id: "phase3-server",
-      name: "Phase 3 Server",
-      endpoint: URL(string: "https://phase3.example.com/mcp")!
+      id: "mcp-chat-server",
+      name: "MCP Chat Server",
+      endpoint: URL(string: "https://mcp-chat.example.com/mcp")!
     )
     try await remote.saveServer(server, credential: nil)
     _ = try await remote.refreshServer(server.id, force: true)
@@ -238,7 +238,7 @@ private struct MCPChatFixture: Sendable {
   }
 }
 
-private actor Phase3MCPTransport: ProviderHTTPTransport {
+private actor MCPChatTestTransport: ProviderHTTPTransport {
   private(set) var toolCallCount = 0
 
   func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
@@ -255,7 +255,7 @@ private actor Phase3MCPTransport: ProviderHTTPTransport {
     switch method {
     case "server/discover":
       json = """
-        {"jsonrpc":"2.0","id":\(id),"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"Phase 3 MCP","version":"1.0"}}}}
+        {"jsonrpc":"2.0","id":\(id),"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"MCP Chat Test","version":"1.0"}}}}
         """
     case "tools/list":
       json = """
