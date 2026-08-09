@@ -171,6 +171,43 @@ import Testing
   await ageStore.close()
 }
 
+@Test func telemetrySizeCapPrunesAndCompactsOldEvents() async throws {
+  let location = temporaryTelemetryLocation()
+  defer { try? FileManager.default.removeItem(at: location.directory) }
+
+  let configuration = TelemetryStoreConfiguration(
+    maximumAge: 100_000,
+    maximumEventCount: 10_000,
+    maximumDatabaseBytes: 1 * 1024 * 1024,
+    maintenanceInsertInterval: 10_000,
+    pruneBatchSize: 100
+  )
+  let store = TelemetrySQLiteStore(databaseURL: location.database, configuration: configuration)
+  let payload = String(repeating: "x", count: 256)
+  let metadata = Dictionary(uniqueKeysWithValues: (0..<24).map { ("field\($0)", payload) })
+
+  for index in 0..<500 {
+    try await store.append(
+      TelemetryEvent(
+        timestamp: Date(timeIntervalSince1970: Double(index)),
+        dataClass: .diagnostic,
+        category: .provider,
+        name: "provider.size_test",
+        metadata: metadata
+      )
+    )
+  }
+
+  let before = try await store.statistics()
+  #expect(before.databaseBytes > 1 * 1024 * 1024)
+
+  try await store.performMaintenance(referenceDate: Date(timeIntervalSince1970: 600))
+  let after = try await store.statistics()
+  #expect(after.eventCount < before.eventCount)
+  #expect(after.databaseBytes <= 1 * 1024 * 1024)
+  await store.close()
+}
+
 @Test func telemetrySupportsSeparateDiagnosticAndFullClear() async throws {
   let location = temporaryTelemetryLocation()
   defer { try? FileManager.default.removeItem(at: location.directory) }
