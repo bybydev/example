@@ -34,6 +34,14 @@ enum TelemetryPrivacy {
     "reasoningtext",
     "content",
     "headers",
+    "endpoint",
+    "requesturl",
+    "responseurl",
+    "hostname",
+    "host",
+    "url",
+    "uri",
+    "query",
   ]
 
   private static let sensitiveValueFragments = [
@@ -46,6 +54,10 @@ enum TelemetryPrivacy {
     "token=",
     "secret=",
     "password=",
+    "https://",
+    "http://",
+    "wss://",
+    "ws://",
   ]
 
   static func sanitize(_ event: TelemetryEvent) -> TelemetryEvent {
@@ -103,7 +115,18 @@ enum TelemetryPrivacy {
       .map(String.init)?
       .trimmingCharacters(in: .whitespacesAndNewlines)
     guard let firstLine, !firstLine.isEmpty else { return nil }
-    return bounded(firstLine, maximum: maximumErrorCodeLength)
+
+    let candidate = bounded(firstLine, maximum: maximumErrorCodeLength)
+    guard !isSensitiveValue(candidate), isMachineReadableCode(candidate) else {
+      return "redacted"
+    }
+    return candidate
+  }
+
+  private static func isMachineReadableCode(_ value: String) -> Bool {
+    value.allSatisfy { character in
+      character.isLetter || character.isNumber || "._:-".contains(character)
+    }
   }
 
   private static func isSensitiveKey(_ key: String) -> Bool {
