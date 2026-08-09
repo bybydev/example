@@ -1,6 +1,6 @@
 # Conversation Runtime
 
-Phase 3 adds BYOKchat's local conversation engine on top of the independent provider platform. Phase 4 extends it with editable linear history, regeneration, drafts, search, and immediate lifecycle flushing.
+BYOKchat's local conversation engine sits on top of the independent provider platform and supports editable linear history, regeneration, drafts, search, context management, and immediate lifecycle flushing.
 
 ## Persistence
 
@@ -51,13 +51,13 @@ Only one generation may run for a conversation at a time. Stop explicitly cancel
 
 ## App surface
 
-The main app now contains:
+The app exposes:
 
-- Chats tab with conversation list, local search, create, rename, and delete
-- Native chat screen with streaming answer, reasoning, Markdown, and code blocks
+- local conversation list and search, with create, rename, pin, and delete actions
+- native chat screen with streaming answer, reasoning, Markdown, and code blocks
 - Stop, edit and resend, and regenerate
-- Per-conversation draft restoration
-- Per-conversation provider account and searchable model selection
-- Per-conversation system prompt and supported model parameters
-- Context omission and repair indicators
-- Settings tab containing provider management and the provider console
+- per-conversation draft restoration
+- per-conversation provider account and searchable model selection
+- per-conversation system prompt and supported model parameters
+- context omission and repair indicators
+- Settings with provider management and provider console
