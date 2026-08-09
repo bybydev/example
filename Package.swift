@@ -16,12 +16,7 @@ let package = Package(
   targets: [
     .systemLibrary(
       name: "CSQLite",
-      path: "Sources/CSQLite",
-      pkgConfig: "sqlite3",
-      providers: [
-        .brew(["sqlite3"]),
-        .apt(["libsqlite3-dev"]),
-      ]
+      path: "Sources/CSQLite"
     ),
     .target(
       name: "BYOKchatProviderCore",
