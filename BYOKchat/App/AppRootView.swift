@@ -84,13 +84,9 @@ struct AppRootView: View {
       }
     }
     .sheet(isPresented: $isSettingsPresented) {
-      SettingsView(
-        model: model,
-        purchases: purchases,
-        replayOnboarding: replayOnboarding
-      )
-      .appFoundationTheme(model.themeManager)
-      .presentationDragIndicator(.visible)
+      SettingsView(model: model, purchases: purchases)
+        .appFoundationTheme(model.themeManager)
+        .presentationDragIndicator(.visible)
     }
     .fullScreenCover(
       isPresented: Binding(
@@ -247,13 +243,5 @@ struct AppRootView: View {
   private func openSettings() {
     closeSidebar()
     isSettingsPresented = true
-  }
-
-  private func replayOnboarding() {
-    isSettingsPresented = false
-    Task { @MainActor in
-      await Task.yield()
-      hasCompletedOnboarding = false
-    }
   }
 }
