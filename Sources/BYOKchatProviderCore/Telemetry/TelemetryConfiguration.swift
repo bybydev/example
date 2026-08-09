@@ -1,6 +1,8 @@
 import Foundation
 
 public struct TelemetryStoreConfiguration: Sendable, Equatable {
+  public static let maximumRecentEventQueryCount = 5_000
+
   public var maximumAge: TimeInterval
   public var maximumEventCount: Int
   public var maximumDatabaseBytes: Int64
