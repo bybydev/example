@@ -12,20 +12,19 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
 
   private let base: any ProviderHTTPTransport
   private let discoverProbeTimeout: TimeInterval
+  private let telemetry: MCPTransportTelemetry
 
   public init(
     base: any ProviderHTTPTransport = URLSessionProviderHTTPTransport(),
-    discoverProbeTimeout: TimeInterval = 5
+    discoverProbeTimeout: TimeInterval = 5,
+    telemetryRecorder: TelemetryRecorder? = nil
   ) {
     self.base = base
     self.discoverProbeTimeout = discoverProbeTimeout
+    telemetry = MCPTransportTelemetry(recorder: telemetryRecorder)
   }
 
   public func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
-    guard isDiscoverProbe(request) else {
-      return try await base.data(for: request)
-    }
-
     let stream = try await stream(for: request)
     var data = Data()
     for try await chunk in stream.chunks {
@@ -39,10 +38,96 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
   }
 
   public func stream(for request: URLRequest) async throws -> ProviderHTTPByteStream {
-    guard isDiscoverProbe(request) else {
-      return try await base.stream(for: request)
+    let context = telemetryContext(for: request)
+    let clock = ContinuousClock()
+    let startedAt = clock.now
+    telemetry.started(context)
+
+    if isDiscoverProbe(request) {
+      do {
+        let response = try await boundedDiscoverResponse(for: request)
+        telemetry.completed(
+          context,
+          statusCode: response.statusCode,
+          durationMilliseconds: MCPTransportTelemetry.milliseconds(
+            startedAt.duration(to: clock.now)
+          ),
+          responseMode: responseMode(response.headers)
+        )
+        return response
+      } catch {
+        telemetry.failed(
+          context,
+          error: error,
+          durationMilliseconds: MCPTransportTelemetry.milliseconds(
+            startedAt.duration(to: clock.now)
+          )
+        )
+        throw error
+      }
     }
 
+    do {
+      let upstream = try await base.stream(for: request)
+      let pair = AsyncThrowingStream<Data, Error>.makeStream()
+      let telemetry = self.telemetry
+      let responseMode = responseMode(upstream.headers)
+      let task = Task { @Sendable in
+        do {
+          for try await chunk in upstream.chunks {
+            try Task.checkCancellation()
+            pair.continuation.yield(chunk)
+          }
+          telemetry.completed(
+            context,
+            statusCode: upstream.statusCode,
+            durationMilliseconds: MCPTransportTelemetry.milliseconds(
+              startedAt.duration(to: ContinuousClock().now)
+            ),
+            responseMode: responseMode
+          )
+          pair.continuation.finish()
+        } catch is CancellationError {
+          telemetry.cancelled(
+            context,
+            durationMilliseconds: MCPTransportTelemetry.milliseconds(
+              startedAt.duration(to: ContinuousClock().now)
+            )
+          )
+          pair.continuation.finish(throwing: CancellationError())
+        } catch {
+          telemetry.failed(
+            context,
+            error: error,
+            durationMilliseconds: MCPTransportTelemetry.milliseconds(
+              startedAt.duration(to: ContinuousClock().now)
+            )
+          )
+          pair.continuation.finish(throwing: error)
+        }
+      }
+      pair.continuation.onTermination = { @Sendable _ in
+        task.cancel()
+      }
+
+      return ProviderHTTPByteStream(
+        statusCode: upstream.statusCode,
+        headers: upstream.headers,
+        chunks: pair.stream
+      )
+    } catch {
+      telemetry.failed(
+        context,
+        error: error,
+        durationMilliseconds: MCPTransportTelemetry.milliseconds(
+          startedAt.duration(to: clock.now)
+        )
+      )
+      throw error
+    }
+  }
+
+  private func boundedDiscoverResponse(for request: URLRequest) async throws -> ProviderHTTPByteStream {
     let boundedRequest: URLRequest = {
       var copy = request
       copy.timeoutInterval = discoverProbeTimeout
@@ -84,6 +169,52 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
       group.cancelAll()
       return first
     }
+  }
+
+  private func telemetryContext(for request: URLRequest) -> MCPTransportTelemetryContext {
+    let body = rpcMetadata(request.httpBody)
+    let headerMethod = request.value(forHTTPHeaderField: "Mcp-Method")
+    let method = headerMethod ?? body.method ?? "unknown"
+    return MCPTransportTelemetryContext(
+      method: method,
+      protocolEra: headerMethod == nil ? .legacy : .modern,
+      protocolVersion: request.value(forHTTPHeaderField: "MCP-Protocol-Version"),
+      toolName: body.toolName ?? request.value(forHTTPHeaderField: "Mcp-Name"),
+      hasSession: request.value(forHTTPHeaderField: "Mcp-Session-Id")?.isEmpty == false
+    )
+  }
+
+  private func rpcMetadata(_ body: Data?) -> (method: String?, toolName: String?) {
+    guard let body,
+      let value = try? JSONDecoder.provider.decode(JSONValue.self, from: body),
+      case .object(let root) = value
+    else {
+      return (nil, nil)
+    }
+
+    let method: String?
+    if case .string(let value)? = root["method"] {
+      method = value
+    } else {
+      method = nil
+    }
+
+    let toolName: String?
+    if case .object(let params)? = root["params"],
+      case .string(let value)? = params["name"]
+    {
+      toolName = value
+    } else {
+      toolName = nil
+    }
+    return (method, toolName)
+  }
+
+  private func responseMode(_ headers: [String: String]) -> String {
+    let contentType = headers.first {
+      $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame
+    }?.value.lowercased() ?? ""
+    return contentType.contains("text/event-stream") ? "sse" : "json"
   }
 
   private func isDiscoverProbe(_ request: URLRequest) -> Bool {
