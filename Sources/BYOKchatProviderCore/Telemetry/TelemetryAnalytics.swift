@@ -188,15 +188,30 @@ public enum TelemetryAnalytics {
       var classification: String
     }
 
+    let localChatClassifications: Set<String> = [
+      "configuration",
+      "context",
+      "local",
+      "request",
+      "storage",
+    ]
+
     var counts: [Key: Int] = [:]
     for event in events where event.dataClass == .analytics && event.outcome == .failure {
-      if event.name == .mcpRequestFailed,
-        event.metadata["classification"] == "legacy_fallback"
-      {
+      let classification = event.metadata["classification"] ?? "unknown"
+
+      switch event.name {
+      case .providerRequestFailed, .toolCallFailed, .purchaseFailed, .syncFailed:
+        break
+      case .mcpRequestFailed:
+        if classification == "legacy_fallback" { continue }
+      case .chatTurnFailed:
+        guard localChatClassifications.contains(classification) else { continue }
+      default:
         continue
       }
+
       guard let errorCode = event.errorCode, !errorCode.isEmpty else { continue }
-      let classification = event.metadata["classification"] ?? "unknown"
       counts[Key(category: event.category, errorCode: errorCode, classification: classification), default: 0] += 1
     }
 
