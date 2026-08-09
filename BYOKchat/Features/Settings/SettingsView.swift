@@ -20,9 +20,6 @@ struct SettingsView: View {
   @State private var importStrategy: ProviderImportStrategy = .keepExisting
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
-  #if DEBUG
-  @State private var simulatedPurchasesEnabled = false
-  #endif
 
   private enum ImportKind {
     case backup
@@ -31,11 +28,6 @@ struct SettingsView: View {
 
   var body: some View {
     failureAlertView
-      #if DEBUG
-      .onAppear {
-        simulatedPurchasesEnabled = purchases.isUsingSimulatedPurchases
-      }
-      #endif
   }
 
   private var navigationContent: some View {
@@ -221,6 +213,8 @@ struct SettingsView: View {
         Text("Backups and provider configuration never include API keys or secret headers.")
       }
 
+      TelemetrySettingsSection()
+
       Section("Destructive Actions") {
         Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
           confirmDeleteConversations = true
@@ -239,25 +233,9 @@ struct SettingsView: View {
       }
 
       #if DEBUG
-      Section("Developer") {
-        Toggle(
-          "Simulated Purchases",
-          isOn: Binding(
-            get: { simulatedPurchasesEnabled },
-            set: { enabled in
-              simulatedPurchasesEnabled = enabled
-              Task { @MainActor in
-                await purchases.setSimulatedPurchasesEnabled(enabled)
-              }
-            }
-          )
-        )
-        .disabled(purchases.manager.isBusy)
-
-        Button("Replay Onboarding", systemImage: "rectangle.portrait.and.arrow.forward") {
-          hasCompletedOnboarding = false
-          dismiss()
-        }
+      DeveloperSettingsSection(purchases: purchases) {
+        hasCompletedOnboarding = false
+        dismiss()
       }
       #endif
 
