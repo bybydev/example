@@ -71,7 +71,7 @@ final class BYOKPurchaseStore {
         message: "Your provider accounts remain yours; Pro upgrades the BYOK app experience around them."
       ),
     ],
-    highlightedProductID: Self.yearlyProductID,
+    highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
     privacyURL: URL(string: "https://byok.pro/privacy"),
     termsURL: URL(string: "https://byok.pro/terms")
