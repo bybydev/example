@@ -30,6 +30,10 @@ struct ChatInputComposer: View {
     canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
   }
 
+  private var isCompact: Bool {
+    !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating
+  }
+
   private var selectedAccount: ProviderAccount? {
     providers.accounts.first { $0.id == conversation.accountID }
   }
@@ -63,6 +67,58 @@ struct ChatInputComposer: View {
   }
 
   var body: some View {
+    Group {
+      if isCompact {
+        compactComposer
+      } else {
+        expandedComposer
+      }
+    }
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(theme.elevatedSurfaceColor, in: composerShape)
+    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.65))
+    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
+    .padding(.horizontal, 14)
+    .padding(.top, 6)
+    .padding(.bottom, 8)
+    .animation(.snappy(duration: 0.2), value: isCompact)
+    .sheet(isPresented: $showTargetPicker) {
+      ComposerTargetPickerView(
+        conversation: chats.conversation(conversation.id) ?? conversation,
+        chats: chats,
+        providers: providers
+      )
+    }
+    .onChange(of: isGenerating) { _, generating in
+      if generating { isEditorFocused = false }
+    }
+    .onDisappear { isEditorFocused = false }
+  }
+
+  private var compactComposer: some View {
+    HStack(spacing: 6) {
+      optionsButton
+
+      Button {
+        isEditorFocused = true
+      } label: {
+        Text("Message...")
+          .font(.system(size: 17))
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Message")
+      .accessibilityHint("Double tap to start typing")
+
+      sendButton
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 5)
+  }
+
+  private var expandedComposer: some View {
     VStack(alignment: .leading, spacing: 0) {
       if !attachments.isEmpty {
         ChatAttachmentStrip(
@@ -90,24 +146,6 @@ struct ChatInputComposer: View {
       .padding(.horizontal, 10)
       .padding(.bottom, 8)
     }
-    .foregroundStyle(theme.primaryForegroundColor)
-    .background(theme.elevatedSurfaceColor, in: composerShape)
-    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.65))
-    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
-    .padding(.horizontal, 14)
-    .padding(.top, 6)
-    .padding(.bottom, 8)
-    .sheet(isPresented: $showTargetPicker) {
-      ComposerTargetPickerView(
-        conversation: chats.conversation(conversation.id) ?? conversation,
-        chats: chats,
-        providers: providers
-      )
-    }
-    .onChange(of: isGenerating) { _, generating in
-      if generating { isEditorFocused = false }
-    }
-    .onDisappear { isEditorFocused = false }
   }
 
   private var composerShape: RoundedRectangle {
