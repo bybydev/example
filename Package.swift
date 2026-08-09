@@ -14,12 +14,19 @@ let package = Package(
     ),
   ],
   targets: [
+    .systemLibrary(
+      name: "CSQLite",
+      path: "Sources/CSQLite",
+      pkgConfig: "sqlite3",
+      providers: [
+        .brew(["sqlite3"]),
+        .apt(["libsqlite3-dev"]),
+      ]
+    ),
     .target(
       name: "BYOKchatProviderCore",
-      path: "Sources/BYOKchatProviderCore",
-      linkerSettings: [
-        .linkedLibrary("sqlite3"),
-      ]
+      dependencies: ["CSQLite"],
+      path: "Sources/BYOKchatProviderCore"
     ),
     .testTarget(
       name: "BYOKchatProviderCoreTests",
