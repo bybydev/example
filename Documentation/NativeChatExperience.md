@@ -1,6 +1,6 @@
 # Native Chat Experience
 
-Phase 4 turns the provider-backed conversation runtime into the primary iPhone experience.
+BYOKchat's provider-backed conversation runtime is presented as a native iPhone chat experience with linear history editing, regeneration, drafts, search, and lifecycle-safe streaming.
 
 ## Linear history operations
 
@@ -8,7 +8,7 @@ Phase 4 turns the provider-backed conversation runtime into the primary iPhone e
 
 Editing a user message replaces that message, deletes every later message, creates a fresh assistant placeholder, and sends the edited context through the conversation's current provider account and model.
 
-BYOKchat does not create hidden branches in this phase.
+BYOKchat keeps one explicit linear history rather than creating hidden branches.
 
 ### Regenerate
 
