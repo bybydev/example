@@ -12,6 +12,14 @@ BYOKchat supports multiple provider-native API families behind the same `Provide
 
 `ProviderRuntime` chooses the adapter from the provider definition, so chat persistence and the rest of the app remain provider-neutral.
 
+## Transport security
+
+Provider HTTP uses an ephemeral URL session on Apple platforms. Cookies and URL caching are disabled.
+
+Redirects are followed only when scheme, host, and effective port remain unchanged. Original request headers are retained only for an approved same-origin redirect; cross-host, cross-port, and cross-scheme redirects are rejected. This prevents bearer keys and custom secret headers from being forwarded to a different origin.
+
+Private-LAN plain HTTP is opt-in per provider and is accepted only for private/local hosts. Enabling local HTTP does not permit arbitrary public `http://` endpoints.
+
 ## Anthropic
 
 The built-in Anthropic provider uses the native Messages API.
@@ -53,7 +61,7 @@ The adapter intentionally does not forward generic temperature/top-p overrides t
 
 The direct Anthropic Messages API has a 32 MB request limit. Because BYOKchat currently stores inline attachment bytes in conversation history, a long retained context containing several large historical attachments can exceed that provider request limit even though each original message passed BYOKchat's local per-message limits.
 
-For now the provider will surface that error. A later provider-native Files API/blob-reference layer should prevent repeated large inline payloads and is intentionally kept separate from this native adapter milestone.
+For now the provider will surface that error. A later provider-native Files API/blob-reference layer should prevent repeated large inline payloads and remains separate from the native adapter.
 
 ## Gemini
 
@@ -105,9 +113,9 @@ Users can refresh the account model list to discover other currently available m
 
 ## Tool continuation compatibility
 
-Provider-native reasoning metadata is no longer treated as display-only when a model requests tools.
+Provider-native reasoning metadata is not treated as display-only when a model requests tools.
 
-The generic tool-runtime milestone adds `ProviderToolContinuation`, an opaque persistence envelope used only by the matching provider adapter. This keeps provider-required continuation metadata out of normal chat text while allowing a tool turn to survive persistence, relaunch, and later context rebuilding.
+The generic tool runtime defines `ProviderToolContinuation`, an opaque persistence envelope used only by the matching provider adapter. This keeps provider-required continuation metadata out of normal chat text while allowing a tool turn to survive persistence, relaunch, and later context rebuilding.
 
 Current continuation support includes:
 
@@ -124,4 +132,4 @@ Future provider-specific work includes:
 - native structured-output schema controls beyond ordinary tool schemas
 - provider-specific prompt caching controls
 
-Tool execution permissions, per-chat tool selection, and tool-call rendering belong to Phase 3 of the MCP roadmap rather than the provider adapters.
+Tool execution permissions, per-chat tool selection, and tool-call rendering are implemented by the provider-neutral tool/MCP runtime rather than by individual provider adapters.
