@@ -115,7 +115,10 @@ public actor TelemetrySQLiteStore {
 
   public func recentEvents(limit: Int = 500) throws -> [TelemetryEvent] {
     let database = try database()
-    let safeLimit = min(max(limit, 1), 5_000)
+    let safeLimit = min(
+      max(limit, 1),
+      TelemetryStoreConfiguration.maximumRecentEventQueryCount
+    )
     let sql = """
       SELECT
         id, timestamp, data_class, category, name, severity, outcome,
