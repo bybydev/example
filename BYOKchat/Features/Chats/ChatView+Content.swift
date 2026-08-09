@@ -365,7 +365,7 @@ private struct MCPToolApprovalCard: View {
       .foregroundStyle(.secondary)
 
       DisclosureGroup("Arguments") {
-        Text(request.arguments.phase3PrettyJSONString())
+        Text(request.arguments.prettyJSONString())
           .font(.system(size: 11, design: .monospaced))
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -460,14 +460,14 @@ private struct ChatToolRoundView: View {
       VStack(alignment: .leading, spacing: 10) {
         VStack(alignment: .leading, spacing: 4) {
           Text("Arguments").font(.caption.weight(.semibold))
-          Text(call.arguments.phase3PrettyJSONString())
+          Text(call.arguments.prettyJSONString())
             .font(.system(size: 11, design: .monospaced))
             .textSelection(.enabled)
         }
         if let result {
           VStack(alignment: .leading, spacing: 4) {
             Text(result.isError ? "Error" : "Result").font(.caption.weight(.semibold))
-            Text(result.content.phase3PrettyJSONString())
+            Text(result.content.prettyJSONString())
               .font(.system(size: 11, design: .monospaced))
               .textSelection(.enabled)
           }
@@ -674,7 +674,7 @@ private struct MCPElicitationCard: View {
 }
 
 private extension JSONValue {
-  func phase3PrettyJSONString() -> String {
+  func prettyJSONString() -> String {
     if case .string(let value) = self { return value }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
