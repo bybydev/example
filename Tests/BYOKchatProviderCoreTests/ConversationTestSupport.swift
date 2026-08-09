@@ -68,7 +68,8 @@ actor MockStreamingRuntime: ProviderStreamingRuntime {
 
 func makeConversationEnvironment(
   runtimeMode: MockStreamingRuntime.Mode = .success,
-  partialPersistenceInterval: Duration = .zero
+  partialPersistenceInterval: Duration = .zero,
+  telemetryRecorder: TelemetryRecorder? = nil
 ) async throws -> (
   conversations: ConversationStore,
   providerWorkspace: ProviderWorkspaceStore,
@@ -111,6 +112,7 @@ func makeConversationEnvironment(
     providerRuntime: runtime,
     providerWorkspace: providerWorkspace,
     conversations: conversations,
+    telemetryRecorder: telemetryRecorder,
     partialPersistenceInterval: partialPersistenceInterval
   )
   return (conversations, providerWorkspace, runtime, chat, conversation)
