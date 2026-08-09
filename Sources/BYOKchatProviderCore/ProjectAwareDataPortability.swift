@@ -1,7 +1,7 @@
 import Foundation
 
-/// Backward-compatible full-backup envelope. `projectWorkspace` is optional so backups
-/// written before Projects Phase 3 continue to decode as schema v1.
+/// Backward-compatible full-backup envelope. `projectWorkspace` is optional so older
+/// schema-v1 backups written before project data was added continue to decode.
 public struct ProjectAwareBYOKchatBackup: Codable, Sendable, Equatable {
   public var schemaVersion: Int
   public var exportedAt: Date
