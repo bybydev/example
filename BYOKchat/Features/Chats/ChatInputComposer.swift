@@ -45,14 +45,125 @@ struct ChatComposer: View {
   let send: () -> Void
   let stop: (() -> Void)?
 
+  private let targetPickerConversation: ChatConversation?
+  private let targetPickerChats: ChatManagementModel?
+  private let targetPickerProviders: ProviderManagementModel?
+
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
   @State private var measuredContentHeight: CGFloat = 0
+  @State private var showTargetPicker = false
 
   private static let messageLineHeight: CGFloat = 22
   private static let compactContentHeight: CGFloat = 50
   private static let minimumExpandedContentHeight: CGFloat = 54
   private static let textAnchor = "chat-composer-text"
+
+  init(
+    draft: Binding<String>,
+    attachments: [ChatAttachment],
+    activity: ChatComposerActivity,
+    canSend: Bool,
+    targetSummary: String,
+    targetDetails: String,
+    openTarget: @escaping () -> Void,
+    pickPhoto: @escaping () -> Void,
+    pickFile: @escaping () -> Void,
+    removeAttachment: @escaping (String) -> Void,
+    send: @escaping () -> Void,
+    stop: (() -> Void)? = nil
+  ) {
+    _draft = draft
+    self.attachments = attachments
+    self.activity = activity
+    self.canSend = canSend
+    self.targetSummary = targetSummary
+    self.targetDetails = targetDetails
+    self.openTarget = openTarget
+    self.pickPhoto = pickPhoto
+    self.pickFile = pickFile
+    self.removeAttachment = removeAttachment
+    self.send = send
+    self.stop = stop
+    targetPickerConversation = nil
+    targetPickerChats = nil
+    targetPickerProviders = nil
+  }
+
+  init(
+    draft: Binding<String>,
+    attachments: [ChatAttachment],
+    isGenerating: Bool,
+    canSend: Bool,
+    conversation: ChatConversation,
+    chats: ChatManagementModel,
+    providers: ProviderManagementModel,
+    openChatSettings: @escaping () -> Void,
+    pickPhoto: @escaping () -> Void,
+    pickFile: @escaping () -> Void,
+    removeAttachment: @escaping (String) -> Void,
+    send: @escaping () -> Void,
+    stop: @escaping () -> Void
+  ) {
+    _draft = draft
+    self.attachments = attachments
+    activity = isGenerating ? .generating : .idle
+    self.canSend = canSend
+
+    let account = providers.accounts.first { $0.id == conversation.accountID }
+    let model = providers.models(for: conversation.accountID, includeHidden: true)
+      .first { $0.model.id == conversation.modelID }?.model
+    let providerName = providers.provider(for: conversation.providerID)?.displayName
+      ?? account?.label
+      ?? conversation.providerID.rawValue
+
+    targetSummary = ComposerTargetLabelFormatter.make(
+      providerID: conversation.providerID,
+      providerName: providerName,
+      modelName: model?.displayName ?? conversation.modelID.rawValue,
+      modelID: conversation.modelID.rawValue,
+      supportedParameters: model?.supportedParameters ?? [],
+      reasoning: conversation.options.reasoning
+    )
+    targetDetails = "\(account?.label ?? providerName) · \(model?.displayName ?? conversation.modelID.rawValue)"
+    openTarget = openChatSettings
+    self.pickPhoto = pickPhoto
+    self.pickFile = pickFile
+    self.removeAttachment = removeAttachment
+    self.send = send
+    self.stop = stop
+    targetPickerConversation = conversation
+    targetPickerChats = chats
+    targetPickerProviders = providers
+  }
+
+  init(
+    draft: Binding<String>,
+    attachments: [ChatAttachment],
+    isCreating: Bool,
+    canSend: Bool,
+    targetSummary: String,
+    targetDetails: String,
+    openTarget: @escaping () -> Void,
+    pickPhoto: @escaping () -> Void,
+    pickFile: @escaping () -> Void,
+    removeAttachment: @escaping (String) -> Void,
+    send: @escaping () -> Void
+  ) {
+    self.init(
+      draft: draft,
+      attachments: attachments,
+      activity: isCreating ? .creating : .idle,
+      canSend: canSend,
+      targetSummary: targetSummary,
+      targetDetails: targetDetails,
+      openTarget: openTarget,
+      pickPhoto: pickPhoto,
+      pickFile: pickFile,
+      removeAttachment: removeAttachment,
+      send: send
+    )
+  }
 
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -111,6 +222,18 @@ struct ChatComposer: View {
     .padding(.top, 6)
     .padding(.bottom, 8)
     .animation(.snappy(duration: 0.2), value: isCompact)
+    .sheet(isPresented: $showTargetPicker) {
+      if let conversation = targetPickerConversation,
+        let chats = targetPickerChats,
+        let providers = targetPickerProviders
+      {
+        ComposerTargetPickerView(
+          conversation: chats.conversation(conversation.id) ?? conversation,
+          chats: chats,
+          providers: providers
+        )
+      }
+    }
     .onDisappear {
       isEditorFocused = false
     }
@@ -221,7 +344,13 @@ struct ChatComposer: View {
   }
 
   private var targetButton: some View {
-    Button(action: openTarget) {
+    Button {
+      if targetPickerConversation != nil {
+        showTargetPicker = true
+      } else {
+        openTarget()
+      }
+    } label: {
       HStack(spacing: 3) {
         Text(targetSummary)
           .lineLimit(1)
@@ -307,6 +436,9 @@ struct ChatComposer: View {
     }
   }
 }
+
+typealias ChatInputComposer = ChatComposer
+typealias NewChatInputComposer = ChatComposer
 
 private struct ChatComposerContentHeightKey: PreferenceKey {
   static var defaultValue: CGFloat = 0
