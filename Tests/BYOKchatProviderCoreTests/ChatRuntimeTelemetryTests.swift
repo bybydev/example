@@ -159,6 +159,38 @@ import Testing
   #expect(turnCancellation.metadata["operation"] == "send")
 }
 
+@Test func telemetryStorageFailureNeverBreaksChatRuntime() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("BYOKchatRuntimeTelemetryBlocked-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+  let blockingFile = root.appendingPathComponent("not-a-directory")
+  try Data("blocked".utf8).write(to: blockingFile)
+  let recorder = TelemetryRecorder(
+    databaseURL: blockingFile.appendingPathComponent("telemetry.sqlite"),
+    configuration: runtimeTelemetryConfiguration(),
+    deviceID: "runtime-device",
+    sessionID: "runtime-session"
+  )
+  let environment = try await makeConversationEnvironment(telemetryRecorder: recorder)
+
+  for try await _ in await environment.chat.send(
+    conversationID: environment.conversation.id,
+    userText: "Telemetry must not matter"
+  ) {}
+
+  let conversation = try await environment.conversations.conversation(id: environment.conversation.id)
+  #expect(conversation.messages.last?.status == .complete)
+  #expect(conversation.messages.last?.content == "Hello")
+
+  for _ in 0..<100 {
+    if !(await recorder.health().isAvailable) { break }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(!(await recorder.health().isAvailable))
+}
+
 @Test func providerFailureDescriptorKeepsOnlyStableClassification() {
   let provider = ChatRuntimeTelemetry.failureDescriptor(
     for: ProviderError.provider(status: 503, message: "private provider response")
