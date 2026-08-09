@@ -34,12 +34,6 @@ public actor TelemetrySQLiteStore {
     self.configuration = configuration
   }
 
-  deinit {
-    if let connection {
-      sqlite3_close(connection)
-    }
-  }
-
   public func append(_ event: TelemetryEvent) throws {
     let database = try database()
     let event = TelemetryPrivacy.sanitize(event)
@@ -87,7 +81,7 @@ public actor TelemetrySQLiteStore {
 
     insertsSinceMaintenance += 1
     if insertsSinceMaintenance >= configuration.maintenanceInsertInterval {
-      try performMaintenance(referenceDate: event.timestamp)
+      try performMaintenance(referenceDate: .now)
     }
   }
 
