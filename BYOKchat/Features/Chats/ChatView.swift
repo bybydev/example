@@ -92,7 +92,7 @@ struct ChatView: View {
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
-        Button("Open Sidebar", systemImage: "line.3.horizontal.decrease", action: openSidebar)
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
           .labelStyle(.iconOnly)
           .accessibilityLabel("Open sidebar")
       }
