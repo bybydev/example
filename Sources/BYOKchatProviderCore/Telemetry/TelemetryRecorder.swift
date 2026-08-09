@@ -20,6 +20,8 @@ public struct TelemetryRecorderHealth: Sendable, Equatable {
 }
 
 public actor TelemetryRecorder {
+  public static let shared = TelemetryRecorder()
+
   private static let deviceIDDefaultsKey = "byokchat.telemetry.deviceID"
   private static let maximumConsecutiveFailures = 3
 
@@ -126,8 +128,9 @@ public actor TelemetryRecorder {
   public static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL {
     let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
       ?? fileManager.temporaryDirectory
+    let namespace = storageNamespace()
     return root
-      .appendingPathComponent("BYOKchat", isDirectory: true)
+      .appendingPathComponent(namespace, isDirectory: true)
       .appendingPathComponent("Telemetry", isDirectory: true)
       .appendingPathComponent("telemetry.sqlite", isDirectory: false)
   }
@@ -139,6 +142,18 @@ public actor TelemetryRecorder {
     let value = UUID().uuidString.lowercased()
     defaults.set(value, forKey: deviceIDDefaultsKey)
     return value
+  }
+
+  private static func storageNamespace() -> String {
+    let raw = Bundle.main.bundleIdentifier
+      ?? "BYOKchat-\(ProcessInfo.processInfo.processName)"
+    let safe = raw.map { character -> Character in
+      if character.isLetter || character.isNumber || character == "." || character == "-" {
+        return character
+      }
+      return "_"
+    }
+    return String(safe.prefix(160))
   }
 
   private func markSuccess() {
