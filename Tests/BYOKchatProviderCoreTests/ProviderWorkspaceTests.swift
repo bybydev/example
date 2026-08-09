@@ -9,6 +9,7 @@ final class ProviderWorkspaceTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
+        BuiltInProviders.openAIID,
         BuiltInProviders.anthropicID,
         BuiltInProviders.geminiID,
         BuiltInProviders.nvidiaID,
@@ -16,6 +17,30 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.deepSeekID,
       ]
     )
+  }
+
+  func testBuiltInAccountsAllowHTTPSBaseURLOverride() async throws {
+    let (_, manager, _) = try await makeEnvironment()
+    let initialSimulatorURL = URL(string: "https://simulator.example.test/v1")!
+    let editedSimulatorURL = URL(string: "https://simulator-alt.example.test/api")!
+
+    for definition in BuiltInProviders.all {
+      let account = try await manager.createAccount(
+        providerID: definition.id,
+        label: "\(definition.displayName) Simulator",
+        credential: definition.authentication == .none ? nil : "test-key",
+        baseURLOverride: initialSimulatorURL
+      )
+      let initialResolved = try await manager.resolvedAccount(id: account.id)
+      XCTAssertEqual(initialResolved.baseURLOverride, initialSimulatorURL)
+
+      var edited = account
+      edited.baseURLOverride = editedSimulatorURL
+      try await manager.updateAccount(edited)
+
+      let editedResolved = try await manager.resolvedAccount(id: account.id)
+      XCTAssertEqual(editedResolved.baseURLOverride, editedSimulatorURL)
+    }
   }
 
   func testCustomProviderFactoryRejectsInsecureURL() throws {
