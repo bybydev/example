@@ -279,7 +279,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       )
       return failure(call, "Tool execution was cancelled.")
     } catch {
-      let failure = ChatToolTelemetry.failureDescriptor(for: error)
+      let descriptor = ChatToolTelemetry.failureDescriptor(for: error)
       telemetry.failed(
         call: call,
         conversationID: conversationID,
@@ -288,8 +288,8 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
         remoteToolName: binding.remoteTool.remoteName,
         policy: policy,
         durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
-        errorCode: failure.errorCode,
-        classification: failure.classification,
+        errorCode: descriptor.errorCode,
+        classification: descriptor.classification,
         approvalDecision: approvalDecision
       )
       return failure(call, error.localizedDescription)
