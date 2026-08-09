@@ -16,7 +16,10 @@ let package = Package(
   targets: [
     .target(
       name: "BYOKchatProviderCore",
-      path: "Sources/BYOKchatProviderCore"
+      path: "Sources/BYOKchatProviderCore",
+      linkerSettings: [
+        .linkedLibrary("sqlite3"),
+      ]
     ),
     .testTarget(
       name: "BYOKchatProviderCoreTests",
