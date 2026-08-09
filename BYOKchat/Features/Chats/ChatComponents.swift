@@ -55,7 +55,10 @@ struct ChatComposer: View {
       if !attachments.isEmpty {
         ChatAttachmentStrip(
           attachments: attachments,
-          removeAttachment: removeAttachment
+          presentation: .composer,
+          removeAttachment: removeAttachment,
+          pickPhoto: pickPhoto,
+          pickFile: pickFile
         )
         .padding(.horizontal, 8)
         .padding(.top, 8)
@@ -174,21 +177,66 @@ struct ChatComposer: View {
   }
 }
 
+enum ChatAttachmentPresentation {
+  case composer
+  case message
+
+  var imageWidth: CGFloat {
+    switch self {
+    case .composer: 104
+    case .message: 112
+    }
+  }
+
+  var imageHeight: CGFloat {
+    switch self {
+    case .composer: 86
+    case .message: 112
+    }
+  }
+
+  var fileWidth: CGFloat {
+    switch self {
+    case .composer: 122
+    case .message: 132
+    }
+  }
+
+  var cornerRadius: CGFloat {
+    switch self {
+    case .composer: 16
+    case .message: 20
+    }
+  }
+}
+
 struct ChatAttachmentStrip: View {
   let attachments: [ChatAttachment]
+  var presentation: ChatAttachmentPresentation = .message
   var removeAttachment: ((String) -> Void)?
+  var pickPhoto: (() -> Void)?
+  var pickFile: (() -> Void)?
 
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     ScrollView(.horizontal) {
-      HStack(spacing: 8) {
+      LazyHStack(spacing: 10) {
         ForEach(attachments) { attachment in
           attachmentView(attachment)
         }
+
+        if presentation == .composer,
+          let pickPhoto,
+          let pickFile
+        {
+          addAttachmentTile(pickPhoto: pickPhoto, pickFile: pickFile)
+        }
       }
+      .padding(.vertical, presentation == .composer ? 4 : 0)
     }
     .scrollIndicators(.hidden)
+    .scrollClipDisabled()
   }
 
   @ViewBuilder
@@ -198,54 +246,95 @@ struct ChatAttachmentStrip: View {
         Image(uiImage: image)
           .resizable()
           .scaledToFill()
-          .frame(width: 92, height: 72)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-          .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .stroke(theme.borderColor, lineWidth: 0.75)
-          )
+          .frame(width: presentation.imageWidth, height: presentation.imageHeight)
+          .clipShape(tileShape)
+          .overlay(tileShape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
           .accessibilityLabel("Image attachment \(attachment.filename)")
       } else {
-        VStack(alignment: .leading, spacing: 5) {
-          Image(systemName: "doc.fill")
-            .font(.system(size: 20))
-            .foregroundStyle(theme.accentColor)
-          Text(attachment.filename)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(theme.primaryForegroundColor)
-            .lineLimit(2)
-          Text(
-            ByteCountFormatter.string(
-              fromByteCount: Int64(attachment.byteCount),
-              countStyle: .file
-            )
-          )
-          .font(.system(size: 10))
-          .foregroundStyle(theme.secondaryForegroundColor)
-        }
-        .frame(width: 112, height: 72, alignment: .leading)
-        .padding(.horizontal, 10)
-        .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(theme.borderColor, lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .combine)
+        fileTile(attachment)
       }
 
       if let removeAttachment {
-        Button("Remove \(attachment.filename)", systemImage: "xmark.circle.fill") {
+        Button("Remove \(attachment.filename)") {
           removeAttachment(attachment.id)
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 27, height: 27)
+            .background(.black.opacity(0.62), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 0.5))
         }
-        .labelStyle(.iconOnly)
-        .font(.system(size: 17, weight: .semibold))
-        .symbolRenderingMode(.palette)
-        .foregroundStyle(.white, .black.opacity(0.65))
-        .offset(x: 6, y: -6)
+        .buttonStyle(.plain)
+        .padding(6)
       }
     }
-    .padding(.top, 6)
-    .padding(.trailing, 6)
+  }
+
+  private func fileTile(_ attachment: ChatAttachment) -> some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Image(systemName: fileSymbol(for: attachment))
+        .font(.system(size: presentation == .composer ? 22 : 25, weight: .semibold))
+        .foregroundStyle(theme.accentColor)
+
+      Spacer(minLength: 0)
+
+      Text(attachment.filename)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(theme.primaryForegroundColor)
+        .lineLimit(2)
+
+      Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .padding(11)
+    .frame(
+      width: presentation.fileWidth,
+      height: presentation.imageHeight,
+      alignment: .leading
+    )
+    .background(theme.surfaceColor, in: tileShape)
+    .overlay(tileShape.stroke(theme.borderColor, lineWidth: 0.75))
+    .accessibilityElement(children: .combine)
+  }
+
+  private func addAttachmentTile(
+    pickPhoto: @escaping () -> Void,
+    pickFile: @escaping () -> Void
+  ) -> some View {
+    Menu {
+      Button("Photo", systemImage: "photo", action: pickPhoto)
+      Button("File", systemImage: "doc", action: pickFile)
+    } label: {
+      VStack(spacing: 7) {
+        Image(systemName: "photo.badge.plus")
+          .font(.system(size: 22, weight: .semibold))
+        Text("Add")
+          .font(.system(size: 11, weight: .semibold))
+      }
+      .foregroundStyle(theme.secondaryForegroundColor)
+      .frame(width: 76, height: presentation.imageHeight)
+      .background(theme.surfaceColor.opacity(0.72), in: tileShape)
+      .overlay(
+        tileShape
+          .stroke(theme.borderColor, style: StrokeStyle(lineWidth: 0.75, dash: [5, 4]))
+      )
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Add another attachment")
+  }
+
+  private var tileShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: presentation.cornerRadius, style: .continuous)
+  }
+
+  private func fileSymbol(for attachment: ChatAttachment) -> String {
+    let mime = attachment.mimeType.lowercased()
+    if mime.contains("pdf") { return "doc.richtext.fill" }
+    if mime.contains("json") || mime.contains("javascript") { return "curlybraces.square.fill" }
+    if attachment.isTextLike { return "doc.text.fill" }
+    return "doc.fill"
   }
 }
 
@@ -275,33 +364,42 @@ struct ChatMessageView: View {
   }
 
   private var userMessage: some View {
-    HStack(alignment: .top) {
-      Spacer(minLength: 54)
-      VStack(alignment: .leading, spacing: 8) {
-        messageBody
+    VStack(alignment: .trailing, spacing: 10) {
+      if let attachments = message.attachments, !attachments.isEmpty {
+        ChatAttachmentStrip(
+          attachments: attachments,
+          presentation: .message
+        )
+        .frame(maxWidth: .infinity)
       }
-      .padding(.horizontal, 15)
-      .padding(.vertical, 11)
-      .background(
-        theme.elevatedSurfaceColor,
-        in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-          .stroke(theme.borderColor, lineWidth: 0.5)
-      )
-      .contextMenu {
-        if !message.content.isEmpty {
-          Button("Copy", systemImage: "doc.on.doc", action: copy)
-          ShareLink(item: message.content) {
-            Label("Share", systemImage: "square.and.arrow.up")
-          }
-        }
-        if canEdit {
-          Button("Edit and Resend", systemImage: "pencil", action: edit)
+
+      if !message.content.isEmpty {
+        HStack(alignment: .top) {
+          Spacer(minLength: 54)
+          MarkdownMessageContent(text: message.content, showsSources: false)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 11)
+            .background(theme.elevatedSurfaceColor, in: userBubbleShape)
+            .overlay(userBubbleShape.stroke(theme.borderColor, lineWidth: 0.5))
         }
       }
     }
+    .frame(maxWidth: .infinity, alignment: .trailing)
+    .contextMenu {
+      if !message.content.isEmpty {
+        Button("Copy", systemImage: "doc.on.doc", action: copy)
+        ShareLink(item: message.content) {
+          Label("Share", systemImage: "square.and.arrow.up")
+        }
+      }
+      if canEdit {
+        Button("Edit and Resend", systemImage: "pencil", action: edit)
+      }
+    }
+  }
+
+  private var userBubbleShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: 22, style: .continuous)
   }
 
   private var assistantMessage: some View {
@@ -363,7 +461,10 @@ struct ChatMessageView: View {
     }
 
     if let attachments = message.attachments, !attachments.isEmpty {
-      ChatAttachmentStrip(attachments: attachments, removeAttachment: nil)
+      ChatAttachmentStrip(
+        attachments: attachments,
+        presentation: .message
+      )
     }
 
     if !message.content.isEmpty {
