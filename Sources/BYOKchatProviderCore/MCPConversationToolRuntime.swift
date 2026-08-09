@@ -1,6 +1,12 @@
 import Foundation
 
 public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
+  private struct RemoteExecutionOutcome: Sendable {
+    var result: ChatToolResult
+    var interactiveRoundCount: Int
+    var elicitationCount: Int
+  }
+
   private let localRuntime: (any ChatToolExecuting)?
   private let mcpRuntime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
@@ -8,6 +14,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
   private let maxInputRequiredRounds: Int
+  private let telemetry: ChatToolTelemetry
 
   public init(
     localRuntime: (any ChatToolExecuting)? = nil,
@@ -16,7 +23,8 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     projectWorkspace: ProjectWorkspaceStore? = nil,
     approvals: MCPToolApprovalCenter,
     elicitations: MCPElicitationCenter,
-    maxInputRequiredRounds: Int = 10
+    maxInputRequiredRounds: Int = 10,
+    telemetryRecorder: TelemetryRecorder? = nil
   ) {
     self.localRuntime = localRuntime
     self.mcpRuntime = mcpRuntime
@@ -25,6 +33,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     self.approvals = approvals
     self.elicitations = elicitations
     self.maxInputRequiredRounds = max(1, maxInputRequiredRounds)
+    telemetry = ChatToolTelemetry(recorder: telemetryRecorder)
   }
 
   public func availableTools(conversationID: ConversationID) async -> [ChatToolDefinition] {
@@ -66,32 +75,105 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     _ call: ChatToolCall,
     conversationID: ConversationID
   ) async -> ChatToolResult {
+    let clock = ContinuousClock()
+    let startedAt = clock.now
+
     if let localRuntime {
       let localTools = await localRuntime.availableTools()
       if localTools.contains(where: { $0.name == call.name }) {
-        return await localRuntime.execute(call)
+        telemetry.started(
+          call: call,
+          conversationID: conversationID,
+          source: "local"
+        )
+        let result = await localRuntime.execute(call)
+        telemetry.completed(
+          call: call,
+          conversationID: conversationID,
+          source: "local",
+          durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+          resultIsError: result.isError
+        )
+        return result
       }
     }
 
     let configuration = await effectiveConfiguration(for: conversationID)
     let bindings = await mcpRuntime.toolBindings()
     guard let binding = bindings.first(where: { $0.exposedName == call.name }) else {
+      telemetry.started(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp"
+      )
+      telemetry.failed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        errorCode: "tool_unavailable",
+        classification: "configuration"
+      )
       return failure(call, "MCP tool is no longer available. Refresh its server and try again.")
     }
+
+    let policy = configuration.policy(for: binding.exposedName)
+    telemetry.started(
+      call: call,
+      conversationID: conversationID,
+      source: "mcp",
+      serverID: binding.serverID,
+      remoteToolName: binding.remoteTool.remoteName,
+      policy: policy
+    )
+
     guard configuration.isServerEnabled(binding.serverID) else {
+      telemetry.failed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        errorCode: "server_not_enabled_for_chat",
+        classification: "configuration"
+      )
       return failure(call, "This MCP server is not enabled for this chat.")
     }
 
     let servers = await mcpRuntime.servers()
     guard let server = servers.first(where: { $0.id == binding.serverID }), server.isEnabled else {
+      telemetry.failed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        errorCode: "server_disabled",
+        classification: "configuration"
+      )
       return failure(call, "This MCP server is disabled in Settings.")
     }
 
-    let policy = configuration.policy(for: binding.exposedName)
     guard policy != .disabled else {
+      telemetry.failed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        errorCode: "tool_disabled",
+        classification: "configuration"
+      )
       return failure(call, "This MCP tool is disabled for this chat.")
     }
 
+    var approvalDecision: String?
     if policy == .ask {
       let request = MCPToolApprovalRequest(
         conversationID: conversationID,
@@ -108,8 +190,9 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       )
       switch await approvals.requestApproval(request) {
       case .allowOnce:
-        break
+        approvalDecision = MCPToolApprovalDecision.allowOnce.rawValue
       case .alwaysAllow:
+        approvalDecision = MCPToolApprovalDecision.alwaysAllow.rawValue
         do {
           try await materializeInheritedConfigurationIfNeeded(conversationID)
           try await workspace.setChatToolPolicy(
@@ -118,27 +201,97 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
             conversationID: conversationID
           )
         } catch {
+          telemetry.failed(
+            call: call,
+            conversationID: conversationID,
+            source: "mcp",
+            serverID: binding.serverID,
+            remoteToolName: binding.remoteTool.remoteName,
+            policy: policy,
+            durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+            errorCode: "approval_persistence_failed",
+            classification: "storage",
+            approvalDecision: approvalDecision
+          )
           return failure(call, error.localizedDescription)
         }
       case .deny:
+        approvalDecision = MCPToolApprovalDecision.deny.rawValue
+        telemetry.failed(
+          call: call,
+          conversationID: conversationID,
+          source: "mcp",
+          serverID: binding.serverID,
+          remoteToolName: binding.remoteTool.remoteName,
+          policy: policy,
+          durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+          errorCode: "approval_denied",
+          classification: "user_decision",
+          approvalDecision: approvalDecision
+        )
         return failure(call, "The user denied this tool call.")
       }
     }
 
     if Task.isCancelled {
+      telemetry.cancelled(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock)
+      )
       return failure(call, "Tool execution was cancelled.")
     }
 
     do {
-      return try await executeRemoteTool(
+      let outcome = try await executeRemoteTool(
         call,
         conversationID: conversationID,
         server: server,
         binding: binding
       )
+      telemetry.completed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        resultIsError: outcome.result.isError,
+        interactiveRoundCount: outcome.interactiveRoundCount,
+        elicitationCount: outcome.elicitationCount,
+        approvalDecision: approvalDecision
+      )
+      return outcome.result
     } catch is CancellationError {
+      telemetry.cancelled(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock)
+      )
       return failure(call, "Tool execution was cancelled.")
     } catch {
+      let failure = ChatToolTelemetry.failureDescriptor(for: error)
+      telemetry.failed(
+        call: call,
+        conversationID: conversationID,
+        source: "mcp",
+        serverID: binding.serverID,
+        remoteToolName: binding.remoteTool.remoteName,
+        policy: policy,
+        durationMilliseconds: durationMilliseconds(startedAt, clock: clock),
+        errorCode: failure.errorCode,
+        classification: failure.classification,
+        approvalDecision: approvalDecision
+      )
       return failure(call, error.localizedDescription)
     }
   }
@@ -172,9 +325,10 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     conversationID: ConversationID,
     server: MCPRemoteServer,
     binding: MCPToolBinding
-  ) async throws -> ChatToolResult {
+  ) async throws -> RemoteExecutionOutcome {
     var inputResponses: [String: JSONValue]?
     var requestState: String?
+    var elicitationCount = 0
 
     for roundIndex in 0..<maxInputRequiredRounds {
       try Task.checkCancellation()
@@ -188,11 +342,15 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
 
       switch round {
       case .complete(let output):
-        return ChatToolResult(
-          callID: call.id,
-          name: call.name,
-          content: output.content,
-          isError: output.isError
+        return RemoteExecutionOutcome(
+          result: ChatToolResult(
+            callID: call.id,
+            name: call.name,
+            content: output.content,
+            isError: output.isError
+          ),
+          interactiveRoundCount: roundIndex + 1,
+          elicitationCount: elicitationCount
         )
 
       case .inputRequired(let required):
@@ -209,6 +367,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
           continue
         }
 
+        elicitationCount += required.inputRequests.count
         var responses: [String: JSONValue] = [:]
         for key in required.inputRequests.keys.sorted() {
           guard let inputRequest = required.inputRequests[key] else { continue }
@@ -391,6 +550,13 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
     definitions.sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
+  }
+
+  private func durationMilliseconds(
+    _ startedAt: ContinuousClock.Instant,
+    clock: ContinuousClock
+  ) -> Double {
+    ChatToolTelemetry.milliseconds(startedAt.duration(to: clock.now))
   }
 
   private func failure(_ call: ChatToolCall, _ message: String) -> ChatToolResult {
