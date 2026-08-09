@@ -32,7 +32,56 @@ struct NewChatInputComposer: View {
     canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
   }
 
+  private var isCompact: Bool {
+    !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isCreating
+  }
+
   var body: some View {
+    Group {
+      if isCompact {
+        compactComposer
+      } else {
+        expandedComposer
+      }
+    }
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(theme.elevatedSurfaceColor, in: composerShape)
+    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.65))
+    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
+    .padding(.horizontal, 14)
+    .padding(.top, 6)
+    .padding(.bottom, 8)
+    .animation(.snappy(duration: 0.2), value: isCompact)
+    .onChange(of: isCreating) { _, creating in
+      if creating { isEditorFocused = false }
+    }
+    .onDisappear { isEditorFocused = false }
+  }
+
+  private var compactComposer: some View {
+    HStack(spacing: 6) {
+      optionsButton
+
+      Button {
+        isEditorFocused = true
+      } label: {
+        Text("Message...")
+          .font(.system(size: 17))
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Message")
+      .accessibilityHint("Double tap to start typing")
+
+      sendButton
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 5)
+  }
+
+  private var expandedComposer: some View {
     VStack(alignment: .leading, spacing: 0) {
       if !attachments.isEmpty {
         ChatAttachmentStrip(
@@ -46,93 +95,95 @@ struct NewChatInputComposer: View {
         .padding(.top, 9)
       }
 
-      TextField("Message...", text: $draft, axis: .vertical)
-        .font(.system(size: 17))
-        .foregroundStyle(theme.primaryForegroundColor)
-        .tint(theme.accentColor)
-        .lineLimit(1...7)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .contentShape(Rectangle())
-        .focused($isEditorFocused)
-        .accessibilityLabel("Message")
+      messageField
         .padding(.horizontal, 14)
         .padding(.top, attachments.isEmpty ? 10 : 4)
         .padding(.bottom, 2)
 
       HStack(spacing: 6) {
-        Menu {
-          Button("Photo", systemImage: "photo", action: pickPhoto)
-          Button("File", systemImage: "doc", action: pickFile)
-        } label: {
-          Image(systemName: "plus")
-            .font(.system(size: 21, weight: .regular))
-            .foregroundStyle(theme.primaryForegroundColor)
-            .frame(width: 38, height: 38)
-            .contentShape(Circle())
-        }
-        .accessibilityLabel("Add attachment")
-
-        Button(action: openTarget) {
-          HStack(spacing: 3) {
-            Text(targetSummary)
-              .lineLimit(1)
-              .minimumScaleFactor(0.82)
-            Image(systemName: "chevron.down")
-              .font(.system(size: 7, weight: .semibold))
-          }
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(theme.secondaryForegroundColor)
-          .padding(.horizontal, 4)
-          .frame(height: 32)
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: 176, alignment: .leading)
-        .disabled(isCreating)
-        .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
-        .accessibilityValue(targetSummary)
-
+        optionsButton
+        targetButton
         Spacer(minLength: 8)
-
-        Button {
-          send()
-          isEditorFocused = false
-        } label: {
-          Group {
-            if isCreating {
-              ProgressView()
-                .controlSize(.small)
-            } else {
-              Image(systemName: "arrow.up")
-                .font(.system(size: 15, weight: .bold))
-            }
-          }
-          .frame(width: 40, height: 40)
-          .background(canSubmit ? theme.accentColor : theme.surfaceColor, in: Circle())
-          .foregroundStyle(canSubmit ? theme.backgroundColor : theme.secondaryForegroundColor)
-        }
-        .buttonStyle(.plain)
-        .disabled(isCreating || !canSubmit)
-        .accessibilityLabel(isCreating ? "Creating chat" : "Send message")
+        sendButton
       }
       .padding(.horizontal, 10)
       .padding(.bottom, 8)
     }
-    .foregroundStyle(theme.primaryForegroundColor)
-    .background(theme.elevatedSurfaceColor, in: composerShape)
-    .overlay(composerShape.stroke(theme.borderColor, lineWidth: 0.65))
-    .shadow(color: theme.appearance.shadow.color, radius: 14, y: 6)
-    .padding(.horizontal, 14)
-    .padding(.top, 6)
-    .padding(.bottom, 8)
-    .onChange(of: isCreating) { _, creating in
-      if creating { isEditorFocused = false }
-    }
-    .onDisappear { isEditorFocused = false }
   }
 
   private var composerShape: RoundedRectangle {
     RoundedRectangle(cornerRadius: 28, style: .continuous)
+  }
+
+  private var messageField: some View {
+    TextField("Message...", text: $draft, axis: .vertical)
+      .font(.system(size: 17))
+      .foregroundStyle(theme.primaryForegroundColor)
+      .tint(theme.accentColor)
+      .lineLimit(1...7)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      .contentShape(Rectangle())
+      .focused($isEditorFocused)
+      .accessibilityLabel("Message")
+  }
+
+  private var optionsButton: some View {
+    Menu {
+      Button("Photo", systemImage: "photo", action: pickPhoto)
+      Button("File", systemImage: "doc", action: pickFile)
+    } label: {
+      Image(systemName: "plus")
+        .font(.system(size: 21, weight: .regular))
+        .foregroundStyle(theme.primaryForegroundColor)
+        .frame(width: 38, height: 38)
+        .contentShape(Circle())
+    }
+    .accessibilityLabel("Add attachment")
+  }
+
+  private var targetButton: some View {
+    Button(action: openTarget) {
+      HStack(spacing: 3) {
+        Text(targetSummary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 7, weight: .semibold))
+      }
+      .font(.system(size: 12.5, weight: .medium))
+      .foregroundStyle(theme.secondaryForegroundColor)
+      .padding(.horizontal, 4)
+      .frame(height: 32)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .frame(maxWidth: 176, alignment: .leading)
+    .disabled(isCreating)
+    .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
+    .accessibilityValue(targetSummary)
+  }
+
+  private var sendButton: some View {
+    Button {
+      send()
+      isEditorFocused = false
+    } label: {
+      Group {
+        if isCreating {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Image(systemName: "arrow.up")
+            .font(.system(size: 15, weight: .bold))
+        }
+      }
+      .frame(width: 40, height: 40)
+      .background(canSubmit ? theme.accentColor : theme.surfaceColor, in: Circle())
+      .foregroundStyle(canSubmit ? theme.backgroundColor : theme.secondaryForegroundColor)
+    }
+    .buttonStyle(.plain)
+    .disabled(isCreating || !canSubmit)
+    .accessibilityLabel(isCreating ? "Creating chat" : "Send message")
   }
 }
 
