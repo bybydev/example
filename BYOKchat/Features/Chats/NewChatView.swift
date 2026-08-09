@@ -144,11 +144,6 @@ struct NewChatView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
-    .simultaneousGesture(
-      TapGesture().onEnded {
-        dismissKeyboard()
-      }
-    )
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
@@ -187,10 +182,10 @@ struct NewChatView: View {
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      NewChatInputComposer(
+      ChatComposer(
         draft: $draft,
         attachments: pendingAttachments,
-        isCreating: isCreating,
+        activity: isCreating ? .creating : .idle,
         canSend: !isCreating && defaultAccount != nil && defaultModelID != nil,
         targetSummary: targetSummary,
         targetDetails: targetDetails,
@@ -410,14 +405,5 @@ struct NewChatView: View {
 
   private func removePendingAttachment(_ id: String) {
     pendingAttachments.removeAll { $0.id == id }
-  }
-
-  private func dismissKeyboard() {
-    UIApplication.shared.sendAction(
-      #selector(UIResponder.resignFirstResponder),
-      to: nil,
-      from: nil,
-      for: nil
-    )
   }
 }
