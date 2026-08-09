@@ -21,6 +21,34 @@ public enum TelemetryStoreError: Error, Sendable, CustomStringConvertible {
 public actor TelemetrySQLiteStore {
   public static let currentSchemaVersion = 1
 
+  private static let requiredEventColumns: Set<String> = [
+    "id",
+    "timestamp",
+    "data_class",
+    "category",
+    "name",
+    "severity",
+    "outcome",
+    "device_id",
+    "session_id",
+    "conversation_id",
+    "message_id",
+    "provider_id",
+    "account_id",
+    "model_id",
+    "duration_ms",
+    "ttft_ms",
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens",
+    "model_request_count",
+    "tool_call_count",
+    "http_status",
+    "error_code",
+    "metadata_json",
+  ]
+
   private let databaseURL: URL
   private let configuration: TelemetryStoreConfiguration
   private var connection: OpaquePointer?
@@ -238,6 +266,8 @@ public actor TelemetrySQLiteStore {
       try execute("PRAGMA synchronous = NORMAL;", on: database, context: "set synchronous mode")
       try execute("PRAGMA temp_store = MEMORY;", on: database, context: "set temp store")
       try migrateIfNeeded(on: database)
+      try ensureIndexes(on: database)
+      try validateSchema(on: database)
       return database
     } catch {
       sqlite3_close(database)
@@ -293,6 +323,16 @@ public actor TelemetrySQLiteStore {
         metadata_json TEXT NOT NULL DEFAULT '{}'
       );
 
+      PRAGMA user_version = 1;
+      """,
+      on: database,
+      context: "create schema v1"
+    )
+  }
+
+  private func ensureIndexes(on database: OpaquePointer) throws {
+    try execute(
+      """
       CREATE INDEX IF NOT EXISTS telemetry_events_timestamp_idx
         ON telemetry_events(timestamp);
       CREATE INDEX IF NOT EXISTS telemetry_events_category_timestamp_idx
@@ -305,12 +345,35 @@ public actor TelemetrySQLiteStore {
         ON telemetry_events(conversation_id, timestamp);
       CREATE INDEX IF NOT EXISTS telemetry_events_class_timestamp_idx
         ON telemetry_events(data_class, timestamp);
-
-      PRAGMA user_version = 1;
       """,
       on: database,
-      context: "create schema v1"
+      context: "ensure telemetry indexes"
     )
+  }
+
+  private func validateSchema(on database: OpaquePointer) throws {
+    guard try schemaVersion(on: database) == Self.currentSchemaVersion else {
+      throw TelemetryStoreError.invalidDatabaseState
+    }
+
+    let statement = try prepare("PRAGMA table_info(telemetry_events);", on: database)
+    defer { sqlite3_finalize(statement) }
+
+    var columns = Set<String>()
+    while true {
+      let result = sqlite3_step(statement)
+      if result == SQLITE_DONE { break }
+      guard result == SQLITE_ROW else {
+        throw sqliteError(database, context: "validate telemetry schema", code: result)
+      }
+      if let columnName = textColumn(statement, index: 1) {
+        columns.insert(columnName)
+      }
+    }
+
+    guard Self.requiredEventColumns.isSubset(of: columns) else {
+      throw TelemetryStoreError.invalidDatabaseState
+    }
   }
 
   private func enforceSizeCap(on database: OpaquePointer) throws {
