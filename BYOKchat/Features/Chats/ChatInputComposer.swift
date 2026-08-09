@@ -3,76 +3,104 @@ import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 
-struct ChatInputComposer: View {
+enum ChatComposerActivity: Equatable {
+  case idle
+  case generating
+  case creating
+
+  var isBusy: Bool {
+    self != .idle
+  }
+}
+
+enum ChatComposerLayoutPolicy {
+  static let textOnlyVisibleLineCap = 6
+  static let attachmentVisibleLineCap = 3
+
+  static func visibleTextLineCap(hasAttachments: Bool) -> Int {
+    hasAttachments ? attachmentVisibleLineCap : textOnlyVisibleLineCap
+  }
+
+  static func shouldUseCompact(
+    isFocused: Bool,
+    draftIsEmpty: Bool,
+    hasAttachments: Bool,
+    activity: ChatComposerActivity
+  ) -> Bool {
+    !isFocused && draftIsEmpty && !hasAttachments && activity == .idle
+  }
+}
+
+struct ChatComposer: View {
   @Binding var draft: String
   let attachments: [ChatAttachment]
-  let isGenerating: Bool
+  let activity: ChatComposerActivity
   let canSend: Bool
-  let conversation: ChatConversation
-  @Bindable var chats: ChatManagementModel
-  let providers: ProviderManagementModel
-  let openChatSettings: () -> Void
+  let targetSummary: String
+  let targetDetails: String
+  let openTarget: () -> Void
   let pickPhoto: () -> Void
   let pickFile: () -> Void
   let removeAttachment: (String) -> Void
   let send: () -> Void
-  let stop: () -> Void
+  let stop: (() -> Void)?
 
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
-  @State private var isExpanded = false
-  @State private var showTargetPicker = false
+  @State private var measuredContentHeight: CGFloat = 0
+
+  private static let messageLineHeight: CGFloat = 22
+  private static let compactContentHeight: CGFloat = 50
+  private static let minimumExpandedContentHeight: CGFloat = 54
+  private static let textAnchor = "chat-composer-text"
 
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private var canSubmit: Bool {
-    canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
+    activity == .idle && canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
   }
 
   private var isCompact: Bool {
-    !isExpanded && !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating
-  }
-
-  private var selectedAccount: ProviderAccount? {
-    providers.accounts.first { $0.id == conversation.accountID }
-  }
-
-  private var selectedModel: ProviderModel? {
-    providers.models(for: conversation.accountID, includeHidden: true)
-      .first { $0.model.id == conversation.modelID }?.model
-  }
-
-  private var providerDisplayName: String {
-    providers.provider(for: conversation.providerID)?.displayName
-      ?? selectedAccount?.label
-      ?? conversation.providerID.rawValue
-  }
-
-  private var targetSummary: String {
-    ComposerTargetLabelFormatter.make(
-      providerID: conversation.providerID,
-      providerName: providerDisplayName,
-      modelName: selectedModel?.displayName ?? conversation.modelID.rawValue,
-      modelID: conversation.modelID.rawValue,
-      supportedParameters: selectedModel?.supportedParameters ?? [],
-      reasoning: conversation.options.reasoning
+    ChatComposerLayoutPolicy.shouldUseCompact(
+      isFocused: isEditorFocused,
+      draftIsEmpty: draft.isEmpty,
+      hasAttachments: !attachments.isEmpty,
+      activity: activity
     )
   }
 
-  private var targetDetails: String {
-    let accountName = selectedAccount?.label ?? providerDisplayName
-    let modelName = selectedModel?.displayName ?? conversation.modelID.rawValue
-    return "\(accountName) · \(modelName)"
+  private var contentHeightCap: CGFloat {
+    let lineCount = ChatComposerLayoutPolicy.visibleTextLineCap(
+      hasAttachments: !attachments.isEmpty
+    )
+    let textHeight = CGFloat(lineCount) * Self.messageLineHeight
+
+    if attachments.isEmpty {
+      return 10 + textHeight + 4
+    }
+
+    return 9 + ChatAttachmentPresentation.composer.railHeight + 4 + textHeight + 4
+  }
+
+  private var contentViewportHeight: CGFloat {
+    if isCompact {
+      return Self.compactContentHeight
+    }
+
+    return min(
+      max(measuredContentHeight, Self.minimumExpandedContentHeight),
+      contentHeightCap
+    )
   }
 
   var body: some View {
-    Group {
-      if isCompact {
-        compactComposer
-      } else {
-        expandedComposer
+    VStack(alignment: .leading, spacing: 0) {
+      contentViewport
+
+      if !isCompact {
+        bottomControls
       }
     }
     .foregroundStyle(theme.primaryForegroundColor)
@@ -83,83 +111,61 @@ struct ChatInputComposer: View {
     .padding(.top, 6)
     .padding(.bottom, 8)
     .animation(.snappy(duration: 0.2), value: isCompact)
-    .sheet(isPresented: $showTargetPicker) {
-      ComposerTargetPickerView(
-        conversation: chats.conversation(conversation.id) ?? conversation,
-        chats: chats,
-        providers: providers
-      )
-    }
-    .onChange(of: isEditorFocused) { _, focused in
-      if !focused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating {
-        isExpanded = false
-      }
-    }
-    .onChange(of: isGenerating) { _, generating in
-      if generating {
-        isEditorFocused = false
-        isExpanded = false
-      }
-    }
     .onDisappear {
       isEditorFocused = false
-      isExpanded = false
     }
   }
 
-  private var compactComposer: some View {
-    HStack(spacing: 6) {
-      optionsButton
+  private var contentViewport: some View {
+    ScrollViewReader { proxy in
+      ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 0) {
+          if !attachments.isEmpty {
+            ChatAttachmentStrip(
+              attachments: attachments,
+              presentation: .composer,
+              removeAttachment: removeAttachment,
+              pickPhoto: pickPhoto,
+              pickFile: pickFile
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 9)
+          }
 
-      Button(action: expandAndFocus) {
-        Text("Message...")
-          .font(.system(size: 17))
-          .foregroundStyle(theme.secondaryForegroundColor)
-          .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Message")
-      .accessibilityHint("Double tap to start typing")
-
-      sendButton
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 5)
-  }
-
-  private var expandedComposer: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      if !attachments.isEmpty {
-        ChatAttachmentStrip(
-          attachments: attachments,
-          presentation: .composer,
-          removeAttachment: removeAttachment,
-          pickPhoto: pickPhoto,
-          pickFile: pickFile
+          messageField
+            .padding(.leading, isCompact ? 54 : 14)
+            .padding(.trailing, isCompact ? 54 : 14)
+            .padding(.top, attachments.isEmpty ? (isCompact ? 5 : 10) : 4)
+            .padding(.bottom, isCompact ? 5 : 4)
+            .id(Self.textAnchor)
+        }
+        .background(
+          GeometryReader { geometry in
+            Color.clear.preference(
+              key: ChatComposerContentHeightKey.self,
+              value: geometry.size.height
+            )
+          }
         )
-        .padding(.horizontal, 10)
-        .padding(.top, 9)
       }
-
-      messageField
-        .padding(.horizontal, 14)
-        .padding(.top, attachments.isEmpty ? 10 : 4)
-        .padding(.bottom, 2)
-
-      HStack(spacing: 6) {
-        optionsButton
-        targetButton
-        Spacer(minLength: 8)
-        sendButton
+      .scrollIndicators(.hidden)
+      .scrollBounceBehavior(.basedOnSize)
+      .frame(height: contentViewportHeight)
+      .overlay(alignment: .top) {
+        if isCompact {
+          compactControls
+        }
       }
-      .padding(.horizontal, 10)
-      .padding(.bottom, 8)
+      .onPreferenceChange(ChatComposerContentHeightKey.self) { height in
+        measuredContentHeight = height
+      }
+      .onChange(of: draft) { _, _ in
+        scrollToTextIfNeeded(proxy)
+      }
+      .onChange(of: attachments.count) { _, _ in
+        scrollToTextIfNeeded(proxy)
+      }
     }
-  }
-
-  private var composerShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 28, style: .continuous)
   }
 
   private var messageField: some View {
@@ -167,11 +173,37 @@ struct ChatInputComposer: View {
       .font(.system(size: 17))
       .foregroundStyle(theme.primaryForegroundColor)
       .tint(theme.accentColor)
-      .lineLimit(1...7)
-      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      .lineLimit(1...)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
       .contentShape(Rectangle())
       .focused($isEditorFocused)
       .accessibilityLabel("Message")
+  }
+
+  private var compactControls: some View {
+    HStack(spacing: 6) {
+      optionsButton
+      Spacer(minLength: 8)
+      sendButton
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 5)
+  }
+
+  private var bottomControls: some View {
+    HStack(spacing: 6) {
+      optionsButton
+      targetButton
+      Spacer(minLength: 8)
+      sendButton
+    }
+    .padding(.horizontal, 10)
+    .padding(.bottom, 8)
+  }
+
+  private var composerShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: 28, style: .continuous)
   }
 
   private var optionsButton: some View {
@@ -189,9 +221,7 @@ struct ChatInputComposer: View {
   }
 
   private var targetButton: some View {
-    Button {
-      showTargetPicker = true
-    } label: {
+    Button(action: openTarget) {
       HStack(spacing: 3) {
         Text(targetSummary)
           .lineLimit(1)
@@ -207,47 +237,82 @@ struct ChatInputComposer: View {
     }
     .buttonStyle(.plain)
     .frame(maxWidth: 176, alignment: .leading)
-    .disabled(isGenerating)
+    .disabled(activity.isBusy)
     .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
     .accessibilityValue(targetSummary)
   }
 
   private var sendButton: some View {
     Button {
-      if isGenerating {
-        stop()
-      } else {
+      switch activity {
+      case .idle:
         send()
+        isEditorFocused = false
+      case .generating:
+        stop?()
+        isEditorFocused = false
+      case .creating:
+        break
       }
-      isEditorFocused = false
     } label: {
-      Image(systemName: isGenerating ? "stop.fill" : "arrow.up")
-        .font(.system(size: 15, weight: .bold))
-        .frame(width: 40, height: 40)
-        .background(sendButtonBackground, in: Circle())
-        .foregroundStyle(sendButtonForeground)
+      Group {
+        switch activity {
+        case .idle:
+          Image(systemName: "arrow.up")
+            .font(.system(size: 15, weight: .bold))
+        case .generating:
+          Image(systemName: "stop.fill")
+            .font(.system(size: 15, weight: .bold))
+        case .creating:
+          ProgressView()
+            .controlSize(.small)
+        }
+      }
+      .frame(width: 40, height: 40)
+      .background(sendButtonBackground, in: Circle())
+      .foregroundStyle(sendButtonForeground)
     }
     .buttonStyle(.plain)
-    .disabled(!isGenerating && !canSubmit)
-    .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
-  }
-
-  private func expandAndFocus() {
-    isExpanded = true
-    Task { @MainActor in
-      await Task.yield()
-      isEditorFocused = true
-    }
+    .disabled(activity == .creating || (activity == .idle && !canSubmit))
+    .accessibilityLabel(sendButtonAccessibilityLabel)
   }
 
   private var sendButtonBackground: Color {
-    if isGenerating || canSubmit { return theme.accentColor }
+    if activity == .generating || canSubmit {
+      return theme.accentColor
+    }
     return theme.surfaceColor
   }
 
   private var sendButtonForeground: Color {
-    if isGenerating || canSubmit { return theme.backgroundColor }
+    if activity == .generating || canSubmit {
+      return theme.backgroundColor
+    }
     return theme.secondaryForegroundColor
+  }
+
+  private var sendButtonAccessibilityLabel: String {
+    switch activity {
+    case .idle: "Send message"
+    case .generating: "Stop generation"
+    case .creating: "Creating chat"
+    }
+  }
+
+  private func scrollToTextIfNeeded(_ proxy: ScrollViewProxy) {
+    guard isEditorFocused else { return }
+    Task { @MainActor in
+      await Task.yield()
+      proxy.scrollTo(Self.textAnchor, anchor: .bottom)
+    }
+  }
+}
+
+private struct ChatComposerContentHeightKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
   }
 }
 
