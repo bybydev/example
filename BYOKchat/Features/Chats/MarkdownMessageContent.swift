@@ -220,10 +220,10 @@ struct MarkdownMessageContent: View {
       }
       .table { configuration in
         ScrollView(.horizontal) {
-          // Keep the total table width natural enough to scroll, while each cell below receives
-          // a concrete width proposal so long text wraps and grows its row vertically.
+          // Do not force the Grid to its unconstrained intrinsic width. Let the bounded cells
+          // below participate in layout so ordinary two-column tables can fit the chat viewport,
+          // while genuinely wide tables still overflow into this horizontal scroller.
           configuration.label
-            .fixedSize(horizontal: true, vertical: true)
             .markdownTableBorderStyle(.init(color: theme.borderColor))
             .markdownTableBackgroundStyle(
               .alternatingRows(theme.surfaceColor, theme.elevatedSurfaceColor)
@@ -246,11 +246,10 @@ struct MarkdownMessageContent: View {
             }
             BackgroundColor(nil)
           }
-          // MarkdownUI's Grid measures cells at their ideal width when the enclosing table is
-          // horizontally fixed. A maxWidth-only frame can therefore measure long text as one line
-          // and clamp the reported width afterwards. Give the text an actual width proposal so it
-          // wraps during measurement and the Grid computes the correct multiline row height.
-          .frame(width: 220, alignment: .topLeading)
+          // Cap long cells before vertical measurement so InlineText wraps and the Grid expands
+          // the entire row to the resulting multiline height. Short columns keep their natural
+          // width instead of every column being forced to the same large fixed width.
+          .frame(minWidth: 88, idealWidth: 150, maxWidth: 190, alignment: .topLeading)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 10)
           .padding(.vertical, 7)
