@@ -59,7 +59,7 @@ struct NewChatInputComposer: View {
         .padding(.top, attachments.isEmpty ? 10 : 4)
         .padding(.bottom, 2)
 
-      HStack(spacing: 8) {
+      HStack(spacing: 6) {
         Menu {
           Button("Photo", systemImage: "photo", action: pickPhoto)
           Button("File", systemImage: "doc", action: pickFile)
@@ -72,26 +72,27 @@ struct NewChatInputComposer: View {
         }
         .accessibilityLabel("Add attachment")
 
-        Spacer(minLength: 8)
-
         Button(action: openTarget) {
-          HStack(spacing: 4) {
+          HStack(spacing: 3) {
             Text(targetSummary)
               .lineLimit(1)
               .minimumScaleFactor(0.82)
             Image(systemName: "chevron.down")
-              .font(.system(size: 8, weight: .bold))
+              .font(.system(size: 7, weight: .semibold))
           }
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(theme.primaryForegroundColor)
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .padding(.horizontal, 4)
+          .frame(height: 32)
+          .contentShape(Rectangle())
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
-        .controlSize(.small)
-        .frame(maxWidth: 184)
+        .buttonStyle(.plain)
+        .frame(maxWidth: 176, alignment: .leading)
         .disabled(isCreating)
         .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
         .accessibilityValue(targetSummary)
+
+        Spacer(minLength: 8)
 
         Button {
           send()
