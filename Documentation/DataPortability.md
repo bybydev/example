@@ -21,7 +21,7 @@ A full backup contains:
 
 The backup never contains provider API keys or remote MCP credentials stored in Keychain.
 
-MCP data is an optional field in backup schema v1. Per-chat MCP policy is itself optional inside the MCP workspace. Existing schema-v1 backups produced before Phase 2 or Phase 3 therefore remain decodable.
+MCP data is an optional field in backup schema v1. Per-chat MCP policy is itself optional inside the MCP workspace, so older schema-v1 backups produced before those fields existed remain decodable.
 
 ## Import strategies
 
@@ -50,6 +50,8 @@ The same restore path explicitly preserves:
 - drafts and context-omission state
 
 Portable conversation fingerprints include attachments and structured tool traces so merge import does not treat materially different chats as duplicates.
+
+`keepExisting` import is idempotent: importing the same portable conversation repeatedly does not create duplicates. The fingerprint intentionally excludes regenerated local IDs and timestamps while retaining content and structured conversation state that changes semantic identity.
 
 ## MCP configuration
 
