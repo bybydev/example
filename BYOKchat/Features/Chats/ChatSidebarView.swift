@@ -47,10 +47,8 @@ struct ChatSidebarView: View {
           .transition(.move(edge: .top).combined(with: .opacity))
       }
 
-      primaryNavigation
-
       if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        conversationHistory
+        scrollableSidebarContent
       } else {
         searchResults
       }
@@ -218,17 +216,6 @@ struct ChatSidebarView: View {
   private var primaryNavigation: some View {
     VStack(spacing: 0) {
       SidebarRichMenuRow(
-        systemImage: "crown.fill",
-        title: "BYOK Free",
-        detail: monthlyUsageText,
-        iconColor: theme.accentColor,
-        action: { destination = .usage },
-        actionTitle: "Upgrade",
-        actionColor: theme.accentColor,
-        actionHandler: { showUpgradeNotice = true }
-      )
-
-      SidebarRichMenuRow(
         systemImage: "books.vertical",
         title: "Library",
         action: { destination = .library }
@@ -247,12 +234,14 @@ struct ChatSidebarView: View {
       )
     }
     .padding(.horizontal, 8)
-    .padding(.bottom, 8)
+    .padding(.bottom, 10)
   }
 
-  private var conversationHistory: some View {
+  private var scrollableSidebarContent: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 1) {
+        primaryNavigation
+
         if chats.conversations.isEmpty {
           ContentUnavailableView(
             "No Chats",
@@ -260,7 +249,7 @@ struct ChatSidebarView: View {
             description: Text("Start a new conversation.")
           )
           .frame(maxWidth: .infinity)
-          .padding(.top, 40)
+          .padding(.top, 20)
         } else {
           if !pinnedConversations.isEmpty {
             sidebarSectionTitle("Pinned", topPadding: 2)
@@ -334,18 +323,41 @@ struct ChatSidebarView: View {
   }
 
   private var footer: some View {
-    HStack {
-      Button(action: { newChat(nil) }) {
-        Label("New Chat", systemImage: "square.and.pencil")
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(theme.backgroundColor)
-          .padding(.horizontal, 15)
-          .frame(height: 42)
-          .background(theme.accentColor, in: Capsule())
+    HStack(alignment: .center, spacing: 8) {
+      Button(action: { destination = .usage }) {
+        HStack(alignment: .top, spacing: 9) {
+          Image(systemName: "crown.fill")
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(theme.accentColor)
+            .frame(width: 22, height: 22)
+
+          VStack(alignment: .leading, spacing: 2) {
+            Text("BYOK Free")
+              .font(.system(size: 15, weight: .medium))
+              .foregroundStyle(theme.primaryForegroundColor)
+              .lineLimit(1)
+
+            Text(monthlyUsageText)
+              .font(.system(size: 10.5))
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(1)
+              .minimumScaleFactor(0.72)
+          }
+        }
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .layoutPriority(1)
 
-      Spacer()
+      Button("Upgrade") { showUpgradeNotice = true }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(theme.accentColor)
+        .padding(.horizontal, 8)
+        .frame(height: 25)
+        .background(theme.accentColor.opacity(0.13), in: Capsule())
+        .buttonStyle(.plain)
+
+      Spacer(minLength: 2)
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
