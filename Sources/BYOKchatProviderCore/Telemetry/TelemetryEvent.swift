@@ -66,10 +66,12 @@ public struct TelemetryEventName: RawRepresentable, Hashable, Codable, Sendable,
   public static let toolCallStarted: Self = "tool.call.started"
   public static let toolCallCompleted: Self = "tool.call.completed"
   public static let toolCallFailed: Self = "tool.call.failed"
+  public static let toolCallCancelled: Self = "tool.call.cancelled"
 
   public static let mcpRequestStarted: Self = "mcp.request.started"
   public static let mcpRequestCompleted: Self = "mcp.request.completed"
   public static let mcpRequestFailed: Self = "mcp.request.failed"
+  public static let mcpRequestCancelled: Self = "mcp.request.cancelled"
 
   public static let purchaseStarted: Self = "purchase.started"
   public static let purchaseCompleted: Self = "purchase.completed"
