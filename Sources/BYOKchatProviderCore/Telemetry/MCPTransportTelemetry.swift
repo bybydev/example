@@ -49,7 +49,14 @@ struct MCPTransportTelemetry: Sendable {
     var metadata = metadata(context)
     metadata["responseMode"] = responseMode
     let succeeded = (200..<300).contains(statusCode)
-    if !succeeded { metadata["classification"] = "http" }
+    let legacyProbeFallback =
+      context.method == "server/discover" && [400, 404, 405].contains(statusCode)
+    if legacyProbeFallback {
+      metadata["classification"] = "protocol_fallback"
+      metadata["expectedFallback"] = "true"
+    } else if !succeeded {
+      metadata["classification"] = "http"
+    }
 
     emit(
       TelemetryEvent(
@@ -60,7 +67,7 @@ struct MCPTransportTelemetry: Sendable {
         outcome: succeeded ? .success : .failure,
         durationMilliseconds: durationMilliseconds,
         httpStatus: statusCode,
-        errorCode: succeeded ? nil : "http_status",
+        errorCode: succeeded ? nil : (legacyProbeFallback ? "legacy_probe_fallback" : "http_status"),
         metadata: metadata
       )
     )
@@ -140,6 +147,16 @@ struct MCPTransportTelemetry: Sendable {
   private func failureDescriptor(
     _ error: Error
   ) -> (errorCode: String, classification: String, httpStatus: Int?, metadata: [String: String]) {
+    if case MCPError.transport(let message) = error,
+      message == "Legacy MCP probe required."
+    {
+      return (
+        "legacy_probe_fallback",
+        "protocol_fallback",
+        nil,
+        ["expectedFallback": "true"]
+      )
+    }
     if let error = error as? MCPError {
       let value = ChatToolTelemetry.failureDescriptor(for: error)
       return (value.errorCode, value.classification, nil, value.metadata)
