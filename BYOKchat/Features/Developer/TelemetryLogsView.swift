@@ -114,7 +114,9 @@ struct TelemetryLogsView: View {
 
   @MainActor
   private func loadEvents() async {
-    events = await TelemetryRecorder.shared.recentEvents(limit: 5_000)
+    events = await TelemetryRecorder.shared.recentEvents(
+      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+    )
     hasLoaded = true
   }
 
