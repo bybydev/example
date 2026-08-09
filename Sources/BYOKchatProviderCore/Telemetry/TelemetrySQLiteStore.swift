@@ -1,5 +1,5 @@
+import CSQLite
 import Foundation
-import SQLite3
 
 public enum TelemetryStoreError: Error, Sendable, CustomStringConvertible {
   case sqlite(context: String, code: Int32, message: String)
