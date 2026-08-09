@@ -67,6 +67,29 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
   }
 }
 
+public struct TelemetryFailureBreakdown: Sendable, Equatable, Identifiable {
+  public var category: TelemetryCategory
+  public var errorCode: String
+  public var classification: String
+  public var count: Int
+
+  public var id: String {
+    "\(category.rawValue)::\(errorCode)::\(classification)"
+  }
+
+  public init(
+    category: TelemetryCategory,
+    errorCode: String,
+    classification: String,
+    count: Int
+  ) {
+    self.category = category
+    self.errorCode = errorCode
+    self.classification = classification
+    self.count = count
+  }
+}
+
 public enum TelemetryAnalytics {
   public static func aggregate(events: [TelemetryEvent]) -> TelemetryPerformanceAggregate {
     var providerSuccessCount = 0
@@ -156,6 +179,42 @@ public enum TelemetryAnalytics {
       mcpRequestCount: mcpRequestCount,
       mcpFailureCount: mcpFailureCount
     )
+  }
+
+  public static func failureBreakdown(events: [TelemetryEvent]) -> [TelemetryFailureBreakdown] {
+    struct Key: Hashable {
+      var category: TelemetryCategory
+      var errorCode: String
+      var classification: String
+    }
+
+    var counts: [Key: Int] = [:]
+    for event in events where event.dataClass == .analytics && event.outcome == .failure {
+      if event.name == .mcpRequestFailed,
+        event.metadata["classification"] == "legacy_fallback"
+      {
+        continue
+      }
+      guard let errorCode = event.errorCode, !errorCode.isEmpty else { continue }
+      let classification = event.metadata["classification"] ?? "unknown"
+      counts[Key(category: event.category, errorCode: errorCode, classification: classification), default: 0] += 1
+    }
+
+    return counts.map { key, count in
+      TelemetryFailureBreakdown(
+        category: key.category,
+        errorCode: key.errorCode,
+        classification: key.classification,
+        count: count
+      )
+    }
+    .sorted { lhs, rhs in
+      if lhs.count != rhs.count { return lhs.count > rhs.count }
+      if lhs.category.rawValue != rhs.category.rawValue {
+        return lhs.category.rawValue < rhs.category.rawValue
+      }
+      return lhs.errorCode < rhs.errorCode
+    }
   }
 
   private static func validMetric(_ value: Double?) -> Double? {
