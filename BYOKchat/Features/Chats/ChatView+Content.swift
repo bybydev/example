@@ -411,7 +411,7 @@ private struct MCPToolApprovalCard: View {
   }
 
   private var alwaysAllowButton: some View {
-    Button("Always Allow") { resolve(.allowOnce) }.buttonStyle(.borderedProminent)
+    Button("Always Allow") { resolve(.alwaysAllow) }.buttonStyle(.borderedProminent)
   }
 }
 
