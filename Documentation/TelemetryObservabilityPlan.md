@@ -94,8 +94,9 @@ Never store by default:
 - tool arguments or tool result content
 - attachment bytes or extracted file text
 - image data
+- endpoint URLs, hostnames, or query strings
 
-Metadata is bounded and sanitized before persistence. Suspicious metadata keys are dropped. Long values are truncated.
+Metadata is bounded and sanitized before persistence. Suspicious metadata keys are dropped. URL-like values are rejected. Long values are truncated. Error codes must be machine-readable tokens; free-form error text is replaced with `redacted` before persistence/export.
 
 ## Event model
 
@@ -166,7 +167,7 @@ Default limits:
 
 Whichever limit is reached first wins. Oldest events are removed first.
 
-Maintenance should run after a bounded number of inserts and when explicitly requested. Size recovery may checkpoint/truncate WAL and compact the database only when the size cap is exceeded.
+Maintenance runs after a bounded number of inserts and when explicitly requested. Size recovery may checkpoint/truncate WAL and compact the database only when the size cap is exceeded.
 
 ## Clear behavior
 
@@ -193,9 +194,9 @@ Startup/open behavior:
 ```text
 open telemetry.sqlite
         |
-        +-- current schema -> use it
+        +-- version + required schema valid -> use it
         |
-        +-- migration succeeds -> use migrated DB
+        +-- migration succeeds -> verify columns/indexes -> use it
         |
         +-- open/migration/schema failure
               |
@@ -205,7 +206,22 @@ open telemetry.sqlite
               +-- continue app normally
 ```
 
-If recovery also fails, telemetry recording becomes a no-op for that session. Errors never propagate into chat/provider/purchase flows.
+The store validates the full required column set, not only `PRAGMA user_version`, and idempotently restores the indexes used by current query patterns. A partially malformed “current-version” database therefore resets instead of repeatedly failing writes.
+
+If recovery also fails, telemetry recording becomes a no-op for that session after three consecutive storage failures. Errors never propagate into chat/provider/purchase flows. Diagnostics exposes an explicit retry action; once storage becomes available again, recording can resume without restarting the app.
+
+## Query/index policy
+
+The current store indexes match actual access patterns and are intentionally limited to:
+
+- timestamp
+- data class + timestamp
+- category + timestamp
+- provider + timestamp
+- model + timestamp
+- conversation + timestamp
+
+Do not add speculative indexes for every metadata field. The database is capped at 50 MB and most diagnostic filtering is performed over a bounded recent-event set in memory, so extra write amplification would be a poor tradeoff.
 
 ## Large-file decomposition rule
 
@@ -220,7 +236,7 @@ No drive-by refactors. When a phase must substantially modify a large file, firs
 - [x] Phase 3 — Tool and MCP instrumentation
 - [x] Phase 4 — Advanced Analytics UI
 - [x] Phase 5 — Developer Logs and controls
-- [ ] Phase 6 — Consolidation and hardening
+- [x] Phase 6 — Consolidation and hardening
 
 ## Implementation phases
 
@@ -308,11 +324,18 @@ Diagnostics are available in normal builds so a user can inspect/export/clear th
 
 ### Phase 6 — Consolidation and hardening
 
-- performance profiling
-- storage/migration tests
-- privacy audit
-- query/index review
-- remaining touched-file cleanup
-- remove dead helpers/duplication introduced during the work
+Completed hardening includes:
 
-Do not turn Phase 6 into a repository-wide refactor.
+- required-column schema validation after version migration
+- idempotent index repair at database open
+- destructive self-recovery for malformed disposable telemetry databases
+- stricter metadata privacy filtering for endpoints/URLs/hosts/query strings
+- machine-readable-only error-code persistence with free-form text redaction
+- concurrent recorder-write regression coverage
+- automatic event-cap maintenance regression coverage
+- fail-open session-disable and in-app retry recovery coverage
+- metadata count/value bound regression coverage
+- review of query/index write-amplification tradeoffs
+- confirmation that telemetry remains separate from durable `ChatBilling` accounting
+
+No remaining oversized file was split solely for cleanup. Performance-sensitive runtime instrumentation continues to submit telemetry asynchronously so SQLite work does not sit in the provider streaming critical path.
