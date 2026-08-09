@@ -24,6 +24,8 @@ struct NewChatView: View {
   @State private var photoPickerItems: [PhotosPickerItem] = []
   @State private var showFileImporter = false
   @State private var showProjectEditor = false
+  @State private var showTargetPicker = false
+  @State private var targetOverride: NewChatTargetSelection?
 
   private var project: ChatProject? {
     projects.project(projectID)
@@ -31,6 +33,9 @@ struct NewChatView: View {
 
   private var defaultAccount: ProviderAccount? {
     let enabled = providers.accounts.filter(\.isEnabled)
+    if let targetOverride {
+      return enabled.first { $0.id == targetOverride.accountID }
+    }
     if let accountID = project?.accountID {
       return enabled.first { $0.id == accountID }
     }
@@ -40,24 +45,60 @@ struct NewChatView: View {
   private var defaultModelID: ModelID? {
     guard let account = defaultAccount else { return nil }
     let models = providers.models(for: account.id).filter(\.isAvailable)
+    if let targetOverride, targetOverride.accountID == account.id {
+      return models.contains(where: { $0.model.id == targetOverride.modelID })
+        ? targetOverride.modelID
+        : nil
+    }
     if let projectModelID = project?.modelID {
       return models.contains(where: { $0.model.id == projectModelID }) ? projectModelID : nil
     }
     return account.defaultModelID ?? models.first?.model.id
   }
 
-  private var targetLabel: String {
-    if project?.accountID != nil && defaultAccount == nil {
-      return "Project provider unavailable"
+  private var selectedModel: ProviderModel? {
+    guard let account = defaultAccount, let modelID = defaultModelID else { return nil }
+    return providers.models(for: account.id, includeHidden: true)
+      .first(where: { $0.model.id == modelID })?.model
+  }
+
+  private var targetReasoning: ReasoningOptions? {
+    if let targetOverride { return targetOverride.reasoning }
+    guard let providerID = defaultAccount?.providerID else { return nil }
+    switch providerID {
+    case BuiltInProviders.deepSeekID, BuiltInProviders.anthropicID:
+      return .init(enabled: true, effort: .high)
+    case BuiltInProviders.geminiID:
+      return .init(enabled: true, effort: .medium)
+    default:
+      return nil
     }
-    guard let account = defaultAccount else { return "Configure a provider" }
-    if project?.modelID != nil && defaultModelID == nil {
-      return "Project model unavailable"
+  }
+
+  private var targetSummary: String {
+    if project?.accountID != nil && defaultAccount == nil {
+      return "Provider unavailable"
+    }
+    guard let account = defaultAccount else { return "Configure provider" }
+    if project?.modelID != nil && defaultModelID == nil && targetOverride == nil {
+      return "Model unavailable"
     }
     guard let modelID = defaultModelID else { return "Choose model" }
-    let modelName = providers.models(for: account.id)
-      .first(where: { $0.model.id == modelID })?.model.displayName
-      ?? modelID.rawValue
+    let providerName = providers.provider(for: account.providerID)?.displayName ?? account.label
+    let model = selectedModel
+    return ComposerTargetLabelFormatter.make(
+      providerID: account.providerID,
+      providerName: providerName,
+      modelName: model?.displayName ?? modelID.rawValue,
+      modelID: modelID.rawValue,
+      supportedParameters: model?.supportedParameters ?? [],
+      reasoning: targetReasoning
+    )
+  }
+
+  private var targetDetails: String {
+    guard let account = defaultAccount else { return "No provider configured" }
+    let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
     return "\(account.label) · \(modelName)"
   }
 
@@ -146,14 +187,17 @@ struct NewChatView: View {
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      ChatComposer(
+      NewChatInputComposer(
         draft: $draft,
         attachments: pendingAttachments,
-        isGenerating: false,
+        isCreating: isCreating,
         canSend: !isCreating && defaultAccount != nil && defaultModelID != nil,
-        targetLabel: targetLabel,
+        targetSummary: targetSummary,
+        targetDetails: targetDetails,
         openTarget: {
-          if project != nil {
+          if defaultAccount != nil, defaultModelID != nil {
+            showTargetPicker = true
+          } else if project != nil {
             showProjectEditor = true
           } else {
             openSettings()
@@ -162,14 +206,18 @@ struct NewChatView: View {
         pickPhoto: { showPhotoPicker = true },
         pickFile: { showFileImporter = true },
         removeAttachment: removePendingAttachment,
-        send: startConversation,
-        stop: {}
+        send: startConversation
       )
-      .overlay {
-        if isCreating {
-          ProgressView()
-            .padding(10)
-            .background(.regularMaterial, in: Capsule())
+    }
+    .sheet(isPresented: $showTargetPicker) {
+      if let account = defaultAccount, let modelID = defaultModelID {
+        NewChatTargetPickerView(
+          initialAccountID: account.id,
+          initialModelID: modelID,
+          initialReasoning: targetReasoning,
+          providers: providers
+        ) { selection in
+          targetOverride = selection
         }
       }
     }
@@ -237,6 +285,22 @@ struct NewChatView: View {
       guard let id = await chats.createConversation(projectID: projectID) else { return }
       await projects.reloadFromStorage()
       await mcp.reloadFromStorage()
+
+      if let targetOverride,
+        let account = providers.accounts.first(where: { $0.id == targetOverride.accountID }),
+        let created = chats.conversation(id)
+      {
+        var options = created.options
+        options.reasoning = targetOverride.reasoning
+        guard await chats.updateTarget(
+          conversationID: id,
+          account: account,
+          modelID: targetOverride.modelID,
+          systemPrompt: created.systemPrompt,
+          options: options
+        ) else { return }
+      }
+
       draft = ""
       pendingAttachments = []
       photoPickerItems = []
