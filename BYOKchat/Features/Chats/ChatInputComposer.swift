@@ -130,8 +130,6 @@ struct ChatInputComposer: View {
     Menu {
       Button("Photo", systemImage: "photo", action: pickPhoto)
       Button("File", systemImage: "doc", action: pickFile)
-      Divider()
-      Button("Chat Settings", systemImage: "slider.horizontal.3", action: openChatSettings)
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 21, weight: .regular))
@@ -139,7 +137,7 @@ struct ChatInputComposer: View {
         .frame(width: 38, height: 38)
         .contentShape(Circle())
     }
-    .accessibilityLabel("Add attachment or open chat settings")
+    .accessibilityLabel("Add attachment")
   }
 
   private var targetButton: some View {
