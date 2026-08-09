@@ -23,7 +23,7 @@ struct ChatRuntimeTelemetry: Sendable {
   let recorder: TelemetryRecorder?
 
   init(recorder: TelemetryRecorder?) {
-    self.recorder = recorder
+    self.recorder = recorder ?? TelemetryRecorder.shared
   }
 
   func turnStarted(_ turn: ChatTurnStart, operation: String) {
@@ -212,7 +212,7 @@ struct ChatRuntimeTelemetry: Sendable {
 
     emit(
       TelemetryEvent(
-        dataClass: .diagnostic,
+        dataClass: .analytics,
         category: .provider,
         name: cancelled ? .providerRequestCancelled : .providerRequestFailed,
         severity: cancelled ? .notice : .error,
@@ -279,7 +279,7 @@ struct ChatRuntimeTelemetry: Sendable {
 
     emit(
       TelemetryEvent(
-        dataClass: .diagnostic,
+        dataClass: .analytics,
         category: .chat,
         name: .chatTurnFailed,
         severity: .error,
@@ -308,7 +308,7 @@ struct ChatRuntimeTelemetry: Sendable {
   ) {
     emit(
       TelemetryEvent(
-        dataClass: .diagnostic,
+        dataClass: .analytics,
         category: .chat,
         name: .chatTurnCancelled,
         severity: .notice,
