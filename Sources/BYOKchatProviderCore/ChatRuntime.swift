@@ -14,6 +14,14 @@ public actor ChatRuntime {
     case send(text: String, attachments: [ChatAttachment])
     case edit(messageID: ChatMessageID, text: String)
     case regenerate(confirmingUncertainCompletion: Bool)
+
+    var telemetryName: String {
+      switch self {
+      case .send: "send"
+      case .edit: "edit"
+      case .regenerate: "regenerate"
+      }
+    }
   }
 
   private let providerRuntime: any ProviderStreamingRuntime
@@ -22,6 +30,7 @@ public actor ChatRuntime {
   private let projectWorkspace: ProjectWorkspaceStore?
   private let toolRuntime: (any ChatConversationToolExecuting)?
   private let maxToolRounds: Int
+  private let telemetry: ChatRuntimeTelemetry
 
   private struct ActiveGenerationState: Sendable {
     var assistantID: ChatMessageID
@@ -40,6 +49,7 @@ public actor ChatRuntime {
     conversations: ConversationStore,
     projectWorkspace: ProjectWorkspaceStore? = nil,
     toolRuntime: (any ChatConversationToolExecuting)? = nil,
+    telemetryRecorder: TelemetryRecorder? = nil,
     maxToolRounds: Int = 8,
     partialPersistenceInterval: Duration = .milliseconds(300)
   ) {
@@ -48,6 +58,7 @@ public actor ChatRuntime {
     self.conversations = conversations
     self.projectWorkspace = projectWorkspace
     self.toolRuntime = toolRuntime
+    self.telemetry = ChatRuntimeTelemetry(recorder: telemetryRecorder)
     self.maxToolRounds = max(1, maxToolRounds)
     self.partialPersistenceInterval = partialPersistenceInterval
   }
@@ -109,8 +120,19 @@ public actor ChatRuntime {
     operation: GenerationOperation
   ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
     guard generationTasks[conversationID] == nil else {
+      let error = ProviderError.conversationBusy(conversationID)
+      telemetry.turnFailed(
+        conversationID: conversationID,
+        messageID: nil,
+        providerID: nil,
+        accountID: nil,
+        modelID: nil,
+        operation: operation.telemetryName,
+        error: error,
+        durationMilliseconds: 0
+      )
       return AsyncThrowingStream { continuation in
-        continuation.finish(throwing: ProviderError.conversationBusy(conversationID))
+        continuation.finish(throwing: error)
       }
     }
 
@@ -137,7 +159,14 @@ public actor ChatRuntime {
       activeStates.removeValue(forKey: conversationID)
     }
 
+    let turnClock = ContinuousClock()
+    let turnStartedAt = turnClock.now
+    let operationName = operation.telemetryName
+
     var assistantID: ChatMessageID?
+    var telemetryProviderID: ProviderID?
+    var telemetryAccountID: ProviderAccountID?
+    var telemetryModelID: ModelID?
     var visibleText = ""
     var reasoningText = ""
     var visibleUsage: ProviderUsage?
@@ -148,6 +177,9 @@ public actor ChatRuntime {
         operation: operation
       )
       assistantID = turn.assistantMessage.id
+      telemetryProviderID = turn.assistantMessage.providerID
+      telemetryAccountID = turn.assistantMessage.accountID
+      telemetryModelID = turn.assistantMessage.modelID
       activeStates[conversationID] = ActiveGenerationState(
         assistantID: turn.assistantMessage.id,
         content: "",
@@ -155,6 +187,7 @@ public actor ChatRuntime {
         usage: nil
       )
       continuation.yield(.turnStarted(turn))
+      telemetry.turnStarted(turn, operation: operationName)
 
       let conversation = try await conversations.conversation(id: conversationID)
       let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
@@ -182,6 +215,17 @@ public actor ChatRuntime {
         context.omittedMessageCount,
         conversationID: conversationID
       )
+      telemetry.contextBuilt(
+        context,
+        conversation: conversation,
+        model: model,
+        contextWindowKind: contextWindowKind,
+        requestIndex: 1,
+        toolCount: tools.count,
+        projectFileCount: projectAttachments.count,
+        isContinuation: false,
+        messageID: turn.assistantMessage.id
+      )
 
       var requestMessages = context.messages
       var continuationMessages: [ProviderMessage] = []
@@ -195,9 +239,12 @@ public actor ChatRuntime {
         reasoningText = ""
         visibleUsage = accumulatedUsage
         var stepUsage: ProviderUsage?
-        var finalResponse: ProviderResponse?
-        let clock = ContinuousClock()
-        var lastPersist = clock.now
+        var response: ProviderResponse
+        let requestClock = ContinuousClock()
+        let requestStartedAt = requestClock.now
+        var lastPersist = requestStartedAt
+        var firstTokenMilliseconds: Double?
+        let requestIndex = toolRoundCount + 1
 
         let request = ProviderRequest(
           model: conversation.modelID,
@@ -205,55 +252,115 @@ public actor ChatRuntime {
           options: conversation.options,
           tools: tools
         )
-        let stream = try await providerRuntime.stream(
-          request: request,
-          accountID: conversation.accountID
+        telemetry.providerRequestStarted(
+          conversation: conversation,
+          messageID: turn.assistantMessage.id,
+          requestIndex: requestIndex,
+          requestMessageCount: request.messages.count,
+          toolCount: request.tools.count
         )
 
-        for try await event in stream {
-          try Task.checkCancellation()
-          switch event {
-          case .textDelta(let value):
-            visibleText += value
-            continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
-          case .reasoningDelta(let value):
-            reasoningText += value
-            continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
-          case .usage(let value):
-            stepUsage = value
-            visibleUsage = addingUsage(accumulatedUsage, value)
-            if let visibleUsage {
-              continuation.yield(.usage(messageID: turn.assistantMessage.id, value: visibleUsage))
-            }
-          case .completed(let response):
-            finalResponse = response
-          }
-
-          activeStates[conversationID] = ActiveGenerationState(
-            assistantID: turn.assistantMessage.id,
-            content: visibleText,
-            reasoning: reasoningText,
-            usage: visibleUsage
+        do {
+          let stream = try await providerRuntime.stream(
+            request: request,
+            accountID: conversation.accountID
           )
+          var finalResponse: ProviderResponse?
 
-          if lastPersist.duration(to: clock.now) >= partialPersistenceInterval {
-            try await conversations.updateStreamingMessage(
-              conversationID: conversationID,
-              messageID: turn.assistantMessage.id,
+          for try await event in stream {
+            try Task.checkCancellation()
+            switch event {
+            case .textDelta(let value):
+              visibleText += value
+              continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
+              if firstTokenMilliseconds == nil, !value.isEmpty {
+                let milliseconds = ChatRuntimeTelemetry.milliseconds(
+                  requestStartedAt.duration(to: requestClock.now)
+                )
+                firstTokenMilliseconds = milliseconds
+                telemetry.providerFirstToken(
+                  conversation: conversation,
+                  messageID: turn.assistantMessage.id,
+                  requestIndex: requestIndex,
+                  milliseconds: milliseconds
+                )
+              }
+            case .reasoningDelta(let value):
+              reasoningText += value
+              continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
+              if firstTokenMilliseconds == nil, !value.isEmpty {
+                let milliseconds = ChatRuntimeTelemetry.milliseconds(
+                  requestStartedAt.duration(to: requestClock.now)
+                )
+                firstTokenMilliseconds = milliseconds
+                telemetry.providerFirstToken(
+                  conversation: conversation,
+                  messageID: turn.assistantMessage.id,
+                  requestIndex: requestIndex,
+                  milliseconds: milliseconds
+                )
+              }
+            case .usage(let value):
+              stepUsage = value
+              visibleUsage = addingUsage(accumulatedUsage, value)
+              if let visibleUsage {
+                continuation.yield(.usage(messageID: turn.assistantMessage.id, value: visibleUsage))
+              }
+            case .completed(let value):
+              finalResponse = value
+            }
+
+            activeStates[conversationID] = ActiveGenerationState(
+              assistantID: turn.assistantMessage.id,
               content: visibleText,
               reasoning: reasoningText,
               usage: visibleUsage
             )
-            lastPersist = clock.now
+
+            if lastPersist.duration(to: requestClock.now) >= partialPersistenceInterval {
+              try await conversations.updateStreamingMessage(
+                conversationID: conversationID,
+                messageID: turn.assistantMessage.id,
+                content: visibleText,
+                reasoning: reasoningText,
+                usage: visibleUsage
+              )
+              lastPersist = requestClock.now
+            }
           }
+
+          guard let finalResponse else {
+            throw ProviderError.prematureStreamEnd
+          }
+          response = finalResponse
+        } catch {
+          telemetry.providerRequestFailed(
+            conversation: conversation,
+            messageID: turn.assistantMessage.id,
+            requestIndex: requestIndex,
+            error: error,
+            durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
+              requestStartedAt.duration(to: requestClock.now)
+            ),
+            timeToFirstTokenMilliseconds: firstTokenMilliseconds
+          )
+          throw error
         }
 
-        guard var response = finalResponse else {
-          throw ProviderError.prematureStreamEnd
-        }
         if response.text.isEmpty { response.text = visibleText }
         if response.reasoning.isEmpty { response.reasoning = reasoningText }
         let completedStepUsage = response.usage ?? stepUsage
+        telemetry.providerRequestCompleted(
+          conversation: conversation,
+          messageID: turn.assistantMessage.id,
+          requestIndex: requestIndex,
+          response: response,
+          usage: completedStepUsage,
+          durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
+            requestStartedAt.duration(to: requestClock.now)
+          ),
+          timeToFirstTokenMilliseconds: firstTokenMilliseconds
+        )
 
         if !response.toolCalls.isEmpty {
           guard toolRoundCount < maxToolRounds else {
@@ -329,6 +436,17 @@ public actor ChatRuntime {
             continuedContext.omittedMessageCount,
             conversationID: conversationID
           )
+          telemetry.contextBuilt(
+            continuedContext,
+            conversation: conversation,
+            model: model,
+            contextWindowKind: contextWindowKind,
+            requestIndex: toolRoundCount + 1,
+            toolCount: tools.count,
+            projectFileCount: projectAttachments.count,
+            isContinuation: true,
+            messageID: turn.assistantMessage.id
+          )
 
           activeStates[conversationID] = ActiveGenerationState(
             assistantID: turn.assistantMessage.id,
@@ -353,10 +471,21 @@ public actor ChatRuntime {
           response: response
         )
         continuation.yield(.completed(completed))
+        telemetry.turnCompleted(
+          completed,
+          conversationID: conversationID,
+          operation: operationName,
+          durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
+            turnStartedAt.duration(to: turnClock.now)
+          )
+        )
         continuation.finish()
         return
       }
     } catch {
+      let durationMilliseconds = ChatRuntimeTelemetry.milliseconds(
+        turnStartedAt.duration(to: turnClock.now)
+      )
       if Task.isCancelled || error is CancellationError {
         if let assistantID,
           let cancelled = try? await conversations.cancelMessage(
@@ -368,6 +497,15 @@ public actor ChatRuntime {
         {
           continuation.yield(.cancelled(cancelled))
         }
+        telemetry.turnCancelled(
+          conversationID: conversationID,
+          messageID: assistantID,
+          providerID: telemetryProviderID,
+          accountID: telemetryAccountID,
+          modelID: telemetryModelID,
+          operation: operationName,
+          durationMilliseconds: durationMilliseconds
+        )
         continuation.finish(throwing: CancellationError())
       } else {
         if let assistantID,
@@ -381,6 +519,16 @@ public actor ChatRuntime {
         {
           continuation.yield(.failed(failed))
         }
+        telemetry.turnFailed(
+          conversationID: conversationID,
+          messageID: assistantID,
+          providerID: telemetryProviderID,
+          accountID: telemetryAccountID,
+          modelID: telemetryModelID,
+          operation: operationName,
+          error: error,
+          durationMilliseconds: durationMilliseconds
+        )
         continuation.finish(throwing: error)
       }
     }
