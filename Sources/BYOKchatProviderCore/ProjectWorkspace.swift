@@ -88,7 +88,7 @@ public struct ChatProject: Codable, Sendable, Equatable, Identifiable {
   public var createdAt: Date
   public var updatedAt: Date
 
-  // Optional fields preserve compatibility with Phase 1 projects-v1.json files.
+  // Optional fields preserve compatibility with older projects-v1.json files.
   public var files: [ProjectFile]?
   public var mcpConfiguration: MCPChatToolConfiguration?
   public var promptPresets: [ProjectPromptPreset]?
