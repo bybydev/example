@@ -178,6 +178,10 @@ struct AppRootView: View {
             messageID: initialScrollMessageID
           )
         )
+        .background {
+          theme.backgroundColor
+            .ignoresSafeArea()
+        }
       } else {
         NewChatView(
           chats: model.chats,
