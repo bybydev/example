@@ -20,6 +20,7 @@ struct ChatInputComposer: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
+  @State private var isExpanded = false
   @State private var showTargetPicker = false
 
   private var normalizedDraft: String {
@@ -31,7 +32,7 @@ struct ChatInputComposer: View {
   }
 
   private var isCompact: Bool {
-    !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating
+    !isExpanded && !isEditorFocused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating
   }
 
   private var selectedAccount: ProviderAccount? {
@@ -89,19 +90,28 @@ struct ChatInputComposer: View {
         providers: providers
       )
     }
-    .onChange(of: isGenerating) { _, generating in
-      if generating { isEditorFocused = false }
+    .onChange(of: isEditorFocused) { _, focused in
+      if !focused && attachments.isEmpty && normalizedDraft.isEmpty && !isGenerating {
+        isExpanded = false
+      }
     }
-    .onDisappear { isEditorFocused = false }
+    .onChange(of: isGenerating) { _, generating in
+      if generating {
+        isEditorFocused = false
+        isExpanded = false
+      }
+    }
+    .onDisappear {
+      isEditorFocused = false
+      isExpanded = false
+    }
   }
 
   private var compactComposer: some View {
     HStack(spacing: 6) {
       optionsButton
 
-      Button {
-        isEditorFocused = true
-      } label: {
+      Button(action: expandAndFocus) {
         Text("Message...")
           .font(.system(size: 17))
           .foregroundStyle(theme.secondaryForegroundColor)
@@ -220,6 +230,14 @@ struct ChatInputComposer: View {
     .buttonStyle(.plain)
     .disabled(!isGenerating && !canSubmit)
     .accessibilityLabel(isGenerating ? "Stop generation" : "Send message")
+  }
+
+  private func expandAndFocus() {
+    isExpanded = true
+    Task { @MainActor in
+      await Task.yield()
+      isEditorFocused = true
+    }
   }
 
   private var sendButtonBackground: Color {
