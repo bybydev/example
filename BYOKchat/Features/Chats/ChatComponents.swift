@@ -40,6 +40,13 @@ enum ChatAttachmentPresentation {
     }
   }
 
+  var railHeight: CGFloat {
+    switch self {
+    case .composer: imageHeight + 8
+    case .message: imageHeight
+    }
+  }
+
   var fileWidth: CGFloat {
     switch self {
     case .composer: 122
@@ -80,6 +87,8 @@ struct ChatAttachmentStrip: View {
       }
       .padding(.vertical, presentation == .composer ? 4 : 0)
     }
+    .frame(height: presentation.railHeight)
+    .fixedSize(horizontal: false, vertical: true)
     .scrollIndicators(.hidden)
     .scrollClipDisabled()
   }
