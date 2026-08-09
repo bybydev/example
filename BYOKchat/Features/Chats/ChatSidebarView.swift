@@ -18,6 +18,7 @@ struct ChatSidebarView: View {
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
+  let purchases: BYOKPurchaseStore
 
   let selectedConversationID: ConversationID?
   let newChat: (ProjectID?) -> Void
@@ -35,7 +36,7 @@ struct ChatSidebarView: View {
   @State private var showProjectEditor = false
   @State private var projectEditorTarget: ChatProject?
   @State private var destination: SidebarDestination?
-  @State private var showUpgradeNotice = false
+  @State private var showPaywall = false
   @FocusState private var searchFocused: Bool
 
   var body: some View {
@@ -102,6 +103,15 @@ struct ChatSidebarView: View {
         .presentationDragIndicator(.visible)
       }
     }
+    .sheet(isPresented: $showPaywall) {
+      ProPaywallView(
+        purchases: purchases.manager,
+        configuration: BYOKPurchaseStore.paywallConfiguration,
+        initialSelectedProductID: BYOKPurchaseStore.yearlyProductID
+      )
+      .environment(purchases.manager)
+      .presentationDragIndicator(.visible)
+    }
     .alert(
       "Rename Chat",
       isPresented: Binding(
@@ -118,11 +128,6 @@ struct ChatSidebarView: View {
         }
         renameTarget = nil
       }
-    }
-    .alert("BYOK Pro", isPresented: $showUpgradeNotice) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text("Upgrade options are not available in this build yet.")
     }
   }
 
@@ -325,39 +330,32 @@ struct ChatSidebarView: View {
   private var footer: some View {
     HStack(alignment: .center, spacing: 8) {
       Button(action: { destination = .usage }) {
-        HStack(alignment: .top, spacing: 9) {
-          Image(systemName: "crown.fill")
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(theme.accentColor)
-            .frame(width: 22, height: 22)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(purchases.hasPro ? "Pro" : "Free")
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .lineLimit(1)
 
-          VStack(alignment: .leading, spacing: 2) {
-            Text("BYOK Free")
-              .font(.system(size: 15, weight: .medium))
-              .foregroundStyle(theme.primaryForegroundColor)
-              .lineLimit(1)
-
-            Text(monthlyUsageText)
-              .font(.system(size: 10.5))
-              .foregroundStyle(theme.secondaryForegroundColor)
-              .lineLimit(1)
-              .minimumScaleFactor(0.72)
-          }
+          Text(usageResetText)
+            .font(.system(size: 10.5))
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .layoutPriority(1)
+      .frame(maxWidth: .infinity, alignment: .leading)
 
-      Button("Upgrade") { showUpgradeNotice = true }
-        .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(theme.accentColor)
-        .padding(.horizontal, 8)
-        .frame(height: 25)
-        .background(theme.accentColor.opacity(0.13), in: Capsule())
-        .buttonStyle(.plain)
-
-      Spacer(minLength: 2)
+      if !purchases.hasPro {
+        Button("Upgrade") { showPaywall = true }
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(theme.accentColor)
+          .padding(.horizontal, 8)
+          .frame(height: 25)
+          .background(theme.accentColor.opacity(0.13), in: Capsule())
+          .buttonStyle(.plain)
+      }
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
@@ -457,31 +455,14 @@ struct ChatSidebarView: View {
     pinnedConversationIDs = values.sorted().joined(separator: "\n")
   }
 
-  private var monthlyUsageText: String {
-    let start = startOfCurrentMonth
-    let messages = chats.conversations.flatMap(\.messages).filter { $0.createdAt >= start }
-    let sentMessages = messages.filter { $0.role == .user }.count
-    let estimatedTokens = messages.reduce(into: 0) { total, message in
-      let byteCount = message.content.utf8.count + message.reasoning.utf8.count
-      total += (byteCount + 3) / 4
-    }
-    return "~\(compactTokenCount(estimatedTokens)) tokens · \(sentMessages.formatted()) messages this month"
-  }
-
-  private var startOfCurrentMonth: Date {
+  private var usageResetText: String {
     let calendar = Calendar.current
-    return calendar.date(from: calendar.dateComponents([.year, .month], from: .now)) ?? .distantPast
-  }
-
-  private func compactTokenCount(_ value: Int) -> String {
-    let number = Double(value)
-    if value >= 1_000_000 {
-      return String(format: "%.1fM", number / 1_000_000)
-    }
-    if value >= 1_000 {
-      return String(format: "%.0fK", number / 1_000)
-    }
-    return value.formatted()
+    let currentMonth = calendar.date(
+      from: calendar.dateComponents([.year, .month], from: .now)
+    ) ?? .now
+    let nextMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) ?? .now
+    let date = nextMonth.formatted(.dateTime.month(.abbreviated).day(.twoDigits))
+    return "Usage resets on \(date)"
   }
 }
 
