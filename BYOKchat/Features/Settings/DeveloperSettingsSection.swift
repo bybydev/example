@@ -143,6 +143,14 @@ struct DeveloperSettingsSection: View {
       Button("Replay Onboarding", systemImage: "rectangle.portrait.and.arrow.forward") {
         replayOnboarding()
       }
+
+      NavigationLink {
+        BYOKScreenshotStudioView()
+          .navigationTitle("Screenshot Studio")
+          .navigationBarTitleDisplayMode(.inline)
+      } label: {
+        Label("Screenshot Studio", systemImage: "photo.stack.fill")
+      }
     } header: {
       Text("Developer")
     } footer: {
