@@ -1,3 +1,4 @@
+import AppFoundation
 import Testing
 
 @testable import BYOKchat
@@ -23,6 +24,13 @@ struct BYOKProAccessTests {
     #expect(BYOKProAccess.canCreateMCPServer(currentCount: 0, hasPro: false))
     #expect(!BYOKProAccess.canCreateMCPServer(currentCount: 1, hasPro: false))
     #expect(BYOKProAccess.canCreateMCPServer(currentCount: 10, hasPro: true))
+  }
+
+  @MainActor
+  @Test("Only Paper and Midnight are free themes")
+  func freeThemes() {
+    #expect(BYOKchatThemes.catalog.freeThemes.map(\.id) == ["paper", "midnight"])
+    #expect(BYOKchatThemes.catalog.proThemes.count == 8)
   }
 
   @Test("Feature comparison matches the product table")
