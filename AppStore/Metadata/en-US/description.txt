@@ -1,0 +1,30 @@
+BYOK is a native AI chat workspace built for people who want to use their own API keys, providers, and models.
+
+Connect the AI services you already use, switch between models, and keep your conversations, projects, tools, and usage information together in one focused iPhone app.
+
+BRING YOUR OWN PROVIDERS
+Connect supported providers including OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter, and NVIDIA. You can also configure compatible private endpoints and local servers.
+
+CHAT WITH THE MODELS YOU CHOOSE
+• Stream responses as they are generated
+• Work with reasoning-capable models
+• Send images and files when supported by the selected model
+• Render Markdown, code, math, and diagrams
+• Choose the provider and model for each conversation
+
+PROJECTS FOR FOCUSED WORK
+Organize conversations into projects with reusable instructions, files, presets, and tool defaults. Optional iCloud project sync keeps project configuration available across your devices while chat history and credentials remain local.
+
+MCP TOOLS
+Connect remote MCP servers, discover their tools, choose which chats can use them, and control tool permissions with Ask, Always Allow, or Disabled policies.
+
+YOUR KEYS, YOUR CONNECTIONS
+API keys and MCP credentials are stored in Keychain. Requests go directly to the provider account or remote endpoint you configure. Exported backups and provider configuration never include your API keys or secret headers.
+
+USAGE INSIGHTS
+See provider and model usage in one place so you can understand how you use your AI accounts.
+
+MAKE IT YOURS
+Choose from multiple light and dark themes, with Pro themes available to preview before upgrading.
+
+BYOK is designed for users who already have AI API access and want a clean, native client without being locked into a single provider.
