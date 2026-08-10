@@ -46,6 +46,20 @@ final class BYOKPurchaseStore {
     manager.isUsingSimulatedPurchases
   }
 
+  static func makeScreenshotPreviewManager() -> PurchaseManager {
+    PurchaseManager.screenshotPreview(
+      configuration: PurchaseConfiguration(
+        productIDs: [
+          Self.monthlyProductID,
+          Self.yearlyProductID,
+          Self.lifetimeProductID,
+        ],
+        preferredProductID: Self.yearlyProductID
+      ),
+      products: simulatedProducts
+    )
+  }
+
   func setSimulatedPurchasesEnabled(_ enabled: Bool) async {
     UserDefaults.standard.set(enabled, forKey: Self.simulatedModeKey)
     await manager.setSimulatedPurchasesEnabled(enabled)
