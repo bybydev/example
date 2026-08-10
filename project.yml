@@ -37,6 +37,9 @@ targets:
       properties:
         CFBundleDisplayName: BYOKchat
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: BYOKchat uses your local network to connect to AI providers you configure on nearby devices.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UILaunchScreen: {}
     settings:
       base:
