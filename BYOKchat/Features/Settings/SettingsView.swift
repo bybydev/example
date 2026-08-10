@@ -20,6 +20,7 @@ struct SettingsView: View {
   @State private var importStrategy: ProviderImportStrategy = .keepExisting
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
+  @State private var showThemeUpsell = false
 
   private enum ImportKind {
     case backup
@@ -28,6 +29,9 @@ struct SettingsView: View {
 
   var body: some View {
     failureAlertView
+      .sheet(isPresented: $showThemeUpsell) {
+        BYOKProUpsellFlow(feature: .themes)
+      }
   }
 
   private var navigationContent: some View {
@@ -124,7 +128,8 @@ struct SettingsView: View {
         ThemePickerView(
           manager: model.themeManager,
           title: nil,
-          showsCountdown: false
+          showsCountdown: false,
+          onRequestUpgrade: { showThemeUpsell = true }
         ) { candidate in
           ChatThemePreview(theme: candidate)
         }
@@ -364,7 +369,10 @@ private struct DefaultSystemPromptView: View {
 
 struct MCPServerListView: View {
   @Bindable var model: MCPManagementModel
+
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var showAddServer = false
+  @State private var showProUpsell = false
   @State private var pendingDelete: MCPRemoteServer?
 
   var body: some View {
@@ -394,7 +402,14 @@ struct MCPServerListView: View {
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button("Add MCP Server", systemImage: "plus") {
-          showAddServer = true
+          if BYOKProAccess.canCreateMCPServer(
+            currentCount: model.servers.count,
+            hasPro: purchaseManager.hasPro
+          ) {
+            showAddServer = true
+          } else {
+            showProUpsell = true
+          }
         }
       }
     }
@@ -402,6 +417,9 @@ struct MCPServerListView: View {
       NavigationStack {
         MCPServerEditorView(model: model, server: nil)
       }
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .mcpServers)
     }
     .alert(
       "MCP Error",
