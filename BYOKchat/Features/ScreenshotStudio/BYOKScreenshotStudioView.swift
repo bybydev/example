@@ -79,6 +79,16 @@ struct BYOKScreenshotStudioView: View {
       }
 
       ScreenshotDefinition(
+        id: "analytics",
+        title: "Usage Analytics",
+        filename: "Know what every request costs"
+      ) {
+        lockedAppearance {
+          BYOKScreenshotAnalyticsScene(settings: settings)
+        }
+      }
+
+      ScreenshotDefinition(
         id: "mcp",
         title: "MCP Tools",
         filename: "Give every chat powerful tools"
@@ -95,16 +105,6 @@ struct BYOKScreenshotStudioView: View {
       ) {
         lockedAppearance {
           BYOKScreenshotProjectsScene(settings: settings)
-        }
-      }
-
-      ScreenshotDefinition(
-        id: "analytics",
-        title: "Usage Analytics",
-        filename: "Know what every request costs"
-      ) {
-        lockedAppearance {
-          BYOKScreenshotAnalyticsScene(settings: settings)
         }
       }
 
@@ -146,7 +146,7 @@ private struct BYOKSelectedScreenshotControls: View {
         "Composition",
         value: context.selectedScreenshotID == "pro"
           ? "Full-canvas paywall"
-          : "Hero + deterministic fixture"
+          : "Hero + edge-filling fixture"
       )
       LabeledContent("Device frame", value: "None")
     }
@@ -243,15 +243,10 @@ struct BYOKScreenshotCanvas<Feature: View>: View {
       )
     } visual: {
       feature
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .clipped()
     } footer: {
-      ScreenshotTemplateFooter(
-        eyebrow,
-        systemImage: symbol,
-        tint: theme.accentColor,
-        foreground: theme.primaryForegroundColor.opacity(0.86)
-      )
+      EmptyView()
     }
   }
 }
