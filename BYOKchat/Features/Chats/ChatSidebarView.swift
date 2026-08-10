@@ -37,6 +37,7 @@ struct ChatSidebarView: View {
   @State private var projectEditorTarget: ChatProject?
   @State private var destination: SidebarDestination?
   @State private var showPaywall = false
+  @State private var showProjectUpsell = false
   @FocusState private var searchFocused: Bool
 
   var body: some View {
@@ -75,6 +76,9 @@ struct ChatSidebarView: View {
         mcp: mcp
       )
       .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showProjectUpsell) {
+      BYOKProUpsellFlow(feature: .projects)
     }
     .sheet(item: $destination) { value in
       switch value {
@@ -138,8 +142,15 @@ struct ChatSidebarView: View {
       Spacer()
 
       Button("New Project", systemImage: "folder.badge.plus") {
-        projectEditorTarget = nil
-        showProjectEditor = true
+        if BYOKProAccess.canCreateProject(
+          currentCount: projects.projects.count,
+          hasPro: purchases.hasPro
+        ) {
+          projectEditorTarget = nil
+          showProjectEditor = true
+        } else {
+          showProjectUpsell = true
+        }
       }
       .labelStyle(.iconOnly)
       .font(.system(size: 17, weight: .semibold))
@@ -330,28 +341,36 @@ struct ChatSidebarView: View {
   private var footer: some View {
     HStack(alignment: .center, spacing: 8) {
       Button {
-        if purchases.hasPro {
-          newChat(nil)
-        } else {
-          showPaywall = true
-        }
+        newChat(nil)
       } label: {
-        Label(
-          purchases.hasPro ? "Chat" : "Upgrade",
-          systemImage: purchases.hasPro ? "square.and.pencil" : "crown.fill"
-        )
-        .font(.system(size: 15, weight: .semibold))
-        .padding(.horizontal, 16)
-        .frame(height: 44)
+        Label("Chat", systemImage: "square.and.pencil")
+          .font(.system(size: 15, weight: .semibold))
+          .padding(.horizontal, 16)
+          .frame(height: 44)
       }
       .foregroundStyle(theme.backgroundColor)
       .background(theme.accentColor, in: Capsule())
       .contentShape(Capsule())
       .buttonStyle(.plain)
       .shadow(color: theme.accentColor.opacity(0.22), radius: 9, y: 3)
-      .accessibilityLabel(purchases.hasPro ? "Start new chat" : "Upgrade to Pro")
+      .accessibilityLabel("Start new chat")
 
       Spacer(minLength: 8)
+
+      if !purchases.hasPro {
+        Button("Upgrade to Pro", systemImage: "crown.fill") {
+          showPaywall = true
+        }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(theme.accentColor)
+        .frame(width: 44, height: 44)
+        .background(.thinMaterial, in: Circle())
+        .overlay(Circle().stroke(theme.accentColor.opacity(0.45), lineWidth: 0.8))
+        .contentShape(Circle())
+        .buttonStyle(.plain)
+        .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
+      }
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
