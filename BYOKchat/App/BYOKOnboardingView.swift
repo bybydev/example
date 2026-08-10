@@ -4,12 +4,25 @@ import SwiftUI
 struct BYOKOnboardingView: View {
   let onCompletion: @MainActor () -> Void
 
-  private enum Page: String, CaseIterable, Identifiable {
+  private enum Page: String, CaseIterable, Identifiable, FoundationOnboardingHeaderProviding {
     case chat
     case providers
     case workspace
 
     var id: String { rawValue }
+
+    var onboardingHeaderTitle: String? {
+      switch self {
+      case .chat:
+        nil
+      case .providers:
+        "PROVIDERS"
+      case .workspace:
+        "WORKSPACE"
+      }
+    }
+
+    var onboardingHeaderSystemImage: String? { nil }
   }
 
   var body: some View {
