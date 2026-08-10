@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -98,8 +99,10 @@ struct SidebarProjectsView: View {
   let newChat: (ProjectID?) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var editorTarget: ChatProject?
   @State private var showEditor = false
+  @State private var showProUpsell = false
   @State private var pendingDelete: ChatProject?
 
   var body: some View {
@@ -163,8 +166,15 @@ struct SidebarProjectsView: View {
         }
         ToolbarItem(placement: .primaryAction) {
           Button("New Project", systemImage: "plus") {
-            editorTarget = nil
-            showEditor = true
+            if BYOKProAccess.canCreateProject(
+              currentCount: projects.projects.count,
+              hasPro: purchaseManager.hasPro
+            ) {
+              editorTarget = nil
+              showEditor = true
+            } else {
+              showProUpsell = true
+            }
           }
         }
       }
@@ -177,6 +187,9 @@ struct SidebarProjectsView: View {
         mcp: mcp
       )
       .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .projects)
     }
     .confirmationDialog(
       "Delete project?",
