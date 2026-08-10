@@ -128,11 +128,8 @@ struct SettingsView: View {
         ThemePickerView(
           manager: model.themeManager,
           title: nil,
-          showsCountdown: false,
           onRequestUpgrade: { showThemeUpsell = true }
-        ) { candidate in
-          ChatThemePreview(theme: candidate)
-        }
+        )
       }
 
       Section("AI Providers") {
@@ -311,34 +308,6 @@ struct SettingsView: View {
   }
 }
 
-private struct ChatThemePreview: View {
-  let theme: AppTheme
-
-  var body: some View {
-    ZStack {
-      theme.backgroundColor
-
-      VStack(alignment: .leading, spacing: 7) {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-          .fill(theme.secondaryForegroundColor.opacity(0.26))
-          .frame(width: 54, height: 6)
-
-        HStack {
-          Spacer()
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(theme.elevatedSurfaceColor)
-            .frame(width: 64, height: 22)
-        }
-
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-          .fill(theme.accentColor.opacity(0.72))
-          .frame(width: 74, height: 6)
-      }
-      .padding(12)
-    }
-  }
-}
-
 private struct DefaultSystemPromptView: View {
   @Bindable var preferences: AppPreferencesModel
   @State private var text: String
@@ -356,7 +325,6 @@ private struct DefaultSystemPromptView: View {
       } footer: {
         Text("This prompt is copied into new conversations. Existing conversations are unchanged.")
       }
-
       Section {
         Button("Clear", role: .destructive) { text = "" }
       }
