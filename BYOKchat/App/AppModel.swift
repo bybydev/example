@@ -24,8 +24,7 @@ final class AppModel {
     themeManager = ThemeManager(
       catalog: BYOKchatThemes.catalog,
       stateStore: UserDefaultsThemeStateStore(storageKey: "byokchat.themeState.v1"),
-      hasPro: false,
-      previewBehavior: .disabled
+      hasPro: false
     )
 
     let registry = try! ProviderRegistry.builtIn()
