@@ -38,6 +38,13 @@ struct SettingsView: View {
     NavigationStack {
       settingsForm
         .navigationTitle("Settings")
+        .toolbar {
+          ToolbarItem(placement: .topBarLeading) {
+            Button("Close", systemImage: "xmark") {
+              dismiss()
+            }
+          }
+        }
     }
   }
 
