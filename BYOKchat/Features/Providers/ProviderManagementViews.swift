@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -146,7 +147,10 @@ private struct AccountRow: View {
 struct ProviderDetailView: View {
   @Bindable var model: ProviderManagementModel
   let providerID: ProviderID
+
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var showAddAccount = false
+  @State private var showProUpsell = false
   @State private var showDeleteConfirmation = false
 
   private var definition: ProviderDefinition? { model.provider(for: providerID) }
@@ -176,7 +180,16 @@ struct ProviderDetailView: View {
             }
           }
         }
-        Button("Add Account", systemImage: "plus") { showAddAccount = true }
+        Button("Add Account", systemImage: "plus") {
+          if BYOKProAccess.canCreateProviderAccount(
+            currentCount: model.accounts.count,
+            hasPro: purchaseManager.hasPro
+          ) {
+            showAddAccount = true
+          } else {
+            showProUpsell = true
+          }
+        }
       }
 
       if definition?.isBuiltIn == false {
@@ -192,6 +205,9 @@ struct ProviderDetailView: View {
       NavigationStack {
         AccountEditorView(model: model, providerID: providerID)
       }
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .providerAccounts)
     }
     .confirmationDialog("Delete custom provider?", isPresented: $showDeleteConfirmation) {
       Button("Delete", role: .destructive) {
