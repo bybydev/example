@@ -55,25 +55,37 @@ final class BYOKPurchaseStore {
   static let paywallConfiguration = FoundationPaywallConfiguration(
     badge: "BYOK PRO",
     title: "Upgrade to BYOK Pro",
-    subtitle: "Get higher usage limits and deeper insights while keeping your own provider accounts.",
+    subtitle: "Unlock all themes, unlimited configurations, and advanced local usage analytics.",
     features: [
       FoundationPaywallFeature(
-        id: "higher-limits",
-        systemImage: "message.badge.waveform.fill",
-        title: "Higher usage limits",
-        message: "More monthly messages as Pro limits roll out."
+        id: "themes",
+        systemImage: "paintpalette.fill",
+        title: "All themes",
+        message: "Free includes 2 themes. Pro unlocks the complete theme collection."
       ),
       FoundationPaywallFeature(
-        id: "usage-insights",
-        systemImage: "chart.bar.xaxis",
-        title: "Deeper usage insights",
-        message: "See richer model, token, and conversation analytics as the usage module expands."
-      ),
-      FoundationPaywallFeature(
-        id: "byok",
+        id: "provider-accounts",
         systemImage: "key.horizontal.fill",
-        title: "Keep your own keys",
-        message: "Your provider accounts remain yours; Pro upgrades the BYOK app experience around them."
+        title: "Unlimited provider accounts",
+        message: "Connect as many provider accounts as you need instead of the single free account."
+      ),
+      FoundationPaywallFeature(
+        id: "projects",
+        systemImage: "folder.fill",
+        title: "Unlimited projects",
+        message: "Organize chats, files, prompts, models, and tools across unlimited projects."
+      ),
+      FoundationPaywallFeature(
+        id: "mcp-servers",
+        systemImage: "shippingbox.fill",
+        title: "Unlimited MCP servers",
+        message: "Connect unlimited remote MCP servers instead of the single free server."
+      ),
+      FoundationPaywallFeature(
+        id: "advanced-analytics",
+        systemImage: "chart.bar.xaxis",
+        title: "Advanced usage analytics",
+        message: "Add performance, reliability, provider/model breakdowns, budgets, and deeper insights."
       ),
     ],
     highlightedProductID: yearlyProductID,
