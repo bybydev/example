@@ -14,7 +14,7 @@ struct BYOKOnboardingView: View {
     var onboardingHeaderTitle: String? {
       switch self {
       case .chat:
-        nil
+        "WELCOME"
       case .providers:
         "PROVIDERS"
       case .workspace:
@@ -22,7 +22,16 @@ struct BYOKOnboardingView: View {
       }
     }
 
-    var onboardingHeaderSystemImage: String? { nil }
+    var onboardingHeaderSystemImage: String? {
+      switch self {
+      case .chat:
+        "sparkles"
+      case .providers:
+        "key.horizontal"
+      case .workspace:
+        "square.grid.2x2"
+      }
+    }
   }
 
   var body: some View {
