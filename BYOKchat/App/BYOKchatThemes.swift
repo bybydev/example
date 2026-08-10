@@ -30,7 +30,7 @@ enum BYOKchatThemes {
     id: "github-light",
     title: "GitHub Light",
     symbolName: "chevron.left.forwardslash.chevron.right",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0xFFFFFF),
       gradientStart: ThemeColor(hex: 0xFFFFFF),
@@ -51,7 +51,7 @@ enum BYOKchatThemes {
     id: "sakura",
     title: "Sakura",
     symbolName: "camera.macro",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0xFFF7F9),
       gradientStart: ThemeColor(hex: 0xFFFDFE),
@@ -72,7 +72,7 @@ enum BYOKchatThemes {
     id: "sage",
     title: "Sage",
     symbolName: "leaf.fill",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0xF3F7F2),
       gradientStart: ThemeColor(hex: 0xFBFDFB),
@@ -93,7 +93,7 @@ enum BYOKchatThemes {
     id: "solarized-light",
     title: "Solarized Light",
     symbolName: "sun.max.fill",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0xFDF6E3),
       gradientStart: ThemeColor(hex: 0xFFFDF1),
@@ -116,7 +116,7 @@ enum BYOKchatThemes {
     id: "github-dark-dimmed",
     title: "GitHub Dark Dimmed",
     symbolName: "chevron.left.forwardslash.chevron.right",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0x22272E),
       gradientStart: ThemeColor(hex: 0x2D333B),
@@ -158,7 +158,7 @@ enum BYOKchatThemes {
     id: "nordic",
     title: "Nordic",
     symbolName: "snowflake",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0x2E3440),
       gradientStart: ThemeColor(hex: 0x3B4252),
@@ -179,7 +179,7 @@ enum BYOKchatThemes {
     id: "aubergine",
     title: "Aubergine",
     symbolName: "sparkles",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0x211A29),
       gradientStart: ThemeColor(hex: 0x3A2D47),
@@ -200,7 +200,7 @@ enum BYOKchatThemes {
     id: "ember",
     title: "Ember",
     symbolName: "flame.fill",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0x1B1513),
       gradientStart: ThemeColor(hex: 0x352A26),
