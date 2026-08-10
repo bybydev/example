@@ -67,7 +67,11 @@ struct AppRootView: View {
     }
     .task {
       await purchases.prepare()
+      model.themeManager.synchronizeProAccess(purchases.hasPro)
       await model.load()
+    }
+    .onChange(of: purchases.manager.hasPro) { _, hasPro in
+      model.themeManager.synchronizeProAccess(hasPro)
     }
     .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
       guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
