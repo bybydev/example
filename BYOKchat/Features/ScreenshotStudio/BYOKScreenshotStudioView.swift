@@ -146,7 +146,7 @@ private struct BYOKSelectedScreenshotControls: View {
         "Composition",
         value: context.selectedScreenshotID == "pro"
           ? "Full-canvas paywall"
-          : "Hero + edge-filling fixture"
+          : "AppFoundation HeroScreenshotTemplate"
       )
       LabeledContent("Device frame", value: "None")
     }
@@ -243,10 +243,15 @@ struct BYOKScreenshotCanvas<Feature: View>: View {
       )
     } visual: {
       feature
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .clipped()
     } footer: {
-      EmptyView()
+      ScreenshotTemplateFooter(
+        eyebrow,
+        systemImage: symbol,
+        tint: theme.accentColor,
+        foreground: theme.primaryForegroundColor.opacity(0.86)
+      )
     }
   }
 }
