@@ -5,7 +5,7 @@ struct BYOKOnboardingView: View {
   let onCompletion: @MainActor () -> Void
 
   private enum Page: String, CaseIterable, Identifiable {
-    case welcome
+    case chat
     case providers
     case workspace
 
@@ -21,11 +21,11 @@ struct BYOKOnboardingView: View {
         showsSkipButton: true,
         skipTitle: "Skip",
         continueTitle: "Continue",
-        completionTitle: "Start Chatting",
+        completionTitle: "Get Started",
         showsPageIndicator: true,
-        centersPageContent: true,
-        contentHorizontalPadding: 24,
-        contentVerticalPadding: 8,
+        centersPageContent: false,
+        contentHorizontalPadding: 20,
+        contentVerticalPadding: 0,
         buttonAppearance: .themed
       )
     ) { page, context in
@@ -37,63 +37,53 @@ struct BYOKOnboardingView: View {
 
   @ViewBuilder
   private func pageContent(_ page: Page, context: FoundationOnboardingPageContext) -> some View {
-    VStack(spacing: 22) {
-      switch page {
-      case .welcome:
-        coloredWordmark
-          .font(.system(size: 48, weight: .bold, design: .rounded))
-          .padding(.bottom, 2)
+    VStack(spacing: 18) {
+      Spacer(minLength: 4)
 
+      Group {
+        switch page {
+        case .chat:
+          BYOKOnboardingChatDemo(isSelected: context.isSelected)
+
+        case .providers:
+          BYOKOnboardingProvidersDemo(isSelected: context.isSelected)
+
+        case .workspace:
+          BYOKOnboardingWorkspaceDemo(isSelected: context.isSelected)
+        }
+      }
+      .frame(maxWidth: .infinity)
+      .frame(height: 390)
+
+      switch page {
+      case .chat:
         onboardingCopy(
-          eyebrow: "YOUR AI",
-          title: "Chat your way",
-          message: "Use one focused chat app with the AI providers and models you already choose.",
+          eyebrow: "NATIVE AI CHAT",
+          title: "Chat with any model",
+          message: "Streaming answers, reasoning, files, and tools in one native workspace.",
           context: context
         )
 
       case .providers:
-        onboardingSymbol("key.horizontal.fill", context: context)
         onboardingCopy(
           eyebrow: "YOUR PROVIDERS",
-          title: "Bring your own keys",
-          message: "Connect provider accounts directly. Credentials stay in Keychain on this iPhone.",
+          title: "Your providers. Your API keys.",
+          message: "Connect cloud models, private endpoints, and local servers directly.",
           context: context
         )
 
       case .workspace:
-        onboardingSymbol("square.stack.3d.up.fill", context: context)
         onboardingCopy(
-          eyebrow: "YOUR WORKSPACE",
-          title: "Projects and plugins",
-          message: "Organize chats into projects and connect MCP tools when you need a more capable workflow.",
+          eyebrow: "AI WORKSPACE",
+          title: "More than chat",
+          message: "Projects, tools, usage insights, and controls built into one workspace.",
           context: context
         )
       }
-    }
-    .frame(maxWidth: .infinity)
-  }
 
-  private var coloredWordmark: some View {
-    HStack(spacing: 0) {
-      Text("B").foregroundStyle(Color(red: 0.25, green: 0.49, blue: 1.00))
-      Text("Y").foregroundStyle(Color(red: 0.66, green: 0.34, blue: 0.96))
-      Text("O").foregroundStyle(Color(red: 0.13, green: 0.79, blue: 0.89))
-      Text("K").foregroundStyle(Color(red: 1.00, green: 0.38, blue: 0.47))
+      Spacer(minLength: 2)
     }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("BYOK")
-  }
-
-  private func onboardingSymbol(
-    _ systemImage: String,
-    context: FoundationOnboardingPageContext
-  ) -> some View {
-    Image(systemName: systemImage)
-      .font(.system(size: 38, weight: .semibold))
-      .foregroundStyle(context.theme.primary)
-      .frame(width: 92, height: 92)
-      .background(context.theme.primary.opacity(0.12), in: Circle())
-      .overlay(Circle().stroke(context.theme.primary.opacity(0.16), lineWidth: 1))
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private func onboardingCopy(
@@ -102,23 +92,26 @@ struct BYOKOnboardingView: View {
     message: String,
     context: FoundationOnboardingPageContext
   ) -> some View {
-    VStack(spacing: 11) {
+    VStack(spacing: 9) {
       Text(eyebrow)
         .font(.caption2.weight(.bold))
         .tracking(1.4)
         .foregroundStyle(context.theme.primary)
 
       Text(title)
-        .font(.system(size: 31, weight: .bold, design: .rounded))
+        .font(.system(size: 30, weight: .bold, design: .rounded))
         .foregroundStyle(context.primaryForeground)
         .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
 
       Text(message)
-        .font(.body)
+        .font(.subheadline)
         .foregroundStyle(context.secondaryForeground)
         .multilineTextAlignment(.center)
         .lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 340)
     }
+    .frame(maxWidth: .infinity)
   }
 }
