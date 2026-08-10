@@ -8,7 +8,9 @@ struct BYOKchatApp: App {
   private let purchases: BYOKPurchaseStore
 
   init() {
+    #if DEBUG
     BYOKScreenshotFixtures.prepareIfNeeded()
+    #endif
     _model = State(initialValue: AppModel())
     purchases = BYOKPurchaseStore()
   }
