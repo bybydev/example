@@ -488,8 +488,6 @@ struct BYOKOnboardingWorkspaceDemo: View {
 }
 
 private struct BYOKOnboardingDemoSurface<Content: View>: View {
-  @Environment(\.appFoundationTheme) private var theme
-
   private let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -498,17 +496,7 @@ private struct BYOKOnboardingDemoSurface<Content: View>: View {
 
   var body: some View {
     content
-      .padding(11)
       .frame(maxWidth: .infinity)
-      .background(
-        theme.surfaceColor.opacity(0.92),
-        in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-      )
-      .overlay {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-          .strokeBorder(theme.borderColor)
-      }
-      .shadow(color: theme.appearance.shadow.color.opacity(0.42), radius: 16, y: 8)
   }
 }
 
