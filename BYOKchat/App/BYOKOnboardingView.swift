@@ -99,7 +99,6 @@ struct BYOKOnboardingView: View {
     switch page {
     case .chat:
       onboardingCopy(
-        eyebrow: "NATIVE AI CHAT",
         title: "Chat with any model",
         message: "Streaming answers, reasoning, files, and tools in one native workspace.",
         context: context,
@@ -108,7 +107,6 @@ struct BYOKOnboardingView: View {
 
     case .providers:
       onboardingCopy(
-        eyebrow: "YOUR PROVIDERS",
         title: "Your providers. Your API keys.",
         message: "Connect cloud models, private endpoints, and local servers directly.",
         context: context,
@@ -117,7 +115,6 @@ struct BYOKOnboardingView: View {
 
     case .workspace:
       onboardingCopy(
-        eyebrow: "AI WORKSPACE",
         title: "More than chat",
         message: "Projects, tools, and usage insights in one focused workspace.",
         context: context,
@@ -127,18 +124,12 @@ struct BYOKOnboardingView: View {
   }
 
   private func onboardingCopy(
-    eyebrow: String,
     title: String,
     message: String,
     context: FoundationOnboardingPageContext,
     compact: Bool
   ) -> some View {
     VStack(spacing: compact ? 7 : 9) {
-      Text(eyebrow)
-        .font(.caption2.weight(.bold))
-        .tracking(1.4)
-        .foregroundStyle(context.theme.primary)
-
       Text(title)
         .font(.system(size: compact ? 26 : 30, weight: .bold, design: .rounded))
         .foregroundStyle(context.primaryForeground)
