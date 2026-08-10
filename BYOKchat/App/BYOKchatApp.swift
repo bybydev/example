@@ -4,8 +4,14 @@ import SwiftUI
 @main
 @MainActor
 struct BYOKchatApp: App {
-  @State private var model = AppModel()
-  private let purchases = BYOKPurchaseStore()
+  @State private var model: AppModel
+  private let purchases: BYOKPurchaseStore
+
+  init() {
+    BYOKScreenshotFixtures.prepareIfNeeded()
+    _model = State(initialValue: AppModel())
+    purchases = BYOKPurchaseStore()
+  }
 
   var body: some Scene {
     WindowGroup {

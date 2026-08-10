@@ -87,3 +87,36 @@ targets:
       - target: BYOKchat
       - package: BYOKchatProviderCore
         product: BYOKchatProviderCore
+
+  BYOKchatUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: BYOKchatUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat.uitests
+        DEVELOPMENT_TEAM: J458WW3452
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: 6.0
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: BYOKchat
+
+schemes:
+  BYOKchat Screenshots:
+    build:
+      targets:
+        BYOKchat:
+          - run
+          - test
+        BYOKchatUITests:
+          - test
+    test:
+      config: Debug
+      targets:
+        - name: BYOKchatUITests
+    management:
+      shared: true
+      orderHint: 1
