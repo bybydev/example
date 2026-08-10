@@ -87,12 +87,14 @@ struct BYOKScreenshotAnalyticsScene: View {
   }
 }
 
+// MARK: - Chat
+
 private struct BYOKStudioChatFixture: View {
   let settings: BYOKScreenshotStudioSettings
 
   var body: some View {
-    BYOKStudioScaledFixture(designSize: CGSize(width: 520, height: 930)) {
-      VStack(spacing: 16) {
+    BYOKStudioWidthFixture(designSize: CGSize(width: 520, height: 760)) {
+      VStack(spacing: 12) {
         BYOKStudioCard(theme: settings.theme) {
           HStack(spacing: 12) {
             Image(systemName: "sparkles")
@@ -111,7 +113,7 @@ private struct BYOKStudioChatFixture: View {
 
             Spacer()
 
-            Text("MCP 3")
+            Label("3 tools", systemImage: "shippingbox.fill")
               .font(.caption.bold())
               .foregroundStyle(settings.theme.accentColor)
               .padding(.horizontal, 10)
@@ -120,44 +122,36 @@ private struct BYOKStudioChatFixture: View {
           }
         }
 
-        VStack(spacing: 14) {
-          HStack {
-            Spacer(minLength: 58)
-            Text("Compare the launch risks and give me the three things I should fix first.")
-              .font(.system(size: 16, weight: .medium))
-              .foregroundStyle(settings.theme.backgroundColor)
-              .padding(.horizontal, 16)
-              .padding(.vertical, 13)
-              .background(settings.theme.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-          }
+        HStack {
+          Spacer(minLength: 70)
+          Text("Compare these two reports and tell me what actually changed.")
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(settings.theme.backgroundColor)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .background(settings.theme.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
 
-          BYOKStudioCard(theme: settings.theme) {
-            VStack(alignment: .leading, spacing: 14) {
-              HStack(spacing: 8) {
-                Image(systemName: "brain.head.profile.fill")
-                Text("Reasoned for 8s")
-              }
-              .font(.caption.bold())
-              .foregroundStyle(settings.theme.secondaryForegroundColor)
-
-              Text("The highest-risk areas are purchase configuration, local-network permissions, and release validation. I’d fix them in that order.")
-                .font(.system(size: 16))
-                .fixedSize(horizontal: false, vertical: true)
-
-              Divider().overlay(settings.theme.borderColor)
-
-              Label("Checked project configuration", systemImage: "checkmark.seal.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(settings.theme.accentColor)
+        BYOKStudioCard(theme: settings.theme) {
+          VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 8) {
+              Image(systemName: "brain.head.profile.fill")
+              Text("Reasoned for 8s")
             }
-          }
+            .font(.caption.bold())
+            .foregroundStyle(settings.theme.secondaryForegroundColor)
 
-          BYOKStudioCard(theme: settings.theme) {
-            HStack(spacing: 12) {
-              Image(systemName: "shippingbox.fill")
+            Text("The biggest change is pricing: the new report lowers inference cost while increasing the context window. Reliability is roughly unchanged.")
+              .font(.system(size: 16))
+              .fixedSize(horizontal: false, vertical: true)
+
+            Divider().overlay(settings.theme.borderColor)
+
+            HStack(spacing: 10) {
+              Image(systemName: "doc.text.magnifyingglass")
                 .foregroundStyle(settings.theme.accentColor)
-              VStack(alignment: .leading, spacing: 3) {
-                Text("GitHub · repository search")
+              VStack(alignment: .leading, spacing: 2) {
+                Text("Compared 2 attached reports")
                   .font(.subheadline.bold())
                 Text("Tool completed successfully")
                   .font(.caption)
@@ -170,8 +164,6 @@ private struct BYOKStudioChatFixture: View {
           }
         }
 
-        Spacer(minLength: 0)
-
         BYOKStudioCard(theme: settings.theme) {
           HStack(spacing: 12) {
             Image(systemName: "plus")
@@ -179,6 +171,8 @@ private struct BYOKStudioChatFixture: View {
             Text("Message Claude Sonnet 4")
               .foregroundStyle(settings.theme.secondaryForegroundColor)
             Spacer()
+            Image(systemName: "mic.fill")
+              .foregroundStyle(settings.theme.secondaryForegroundColor)
             Image(systemName: "arrow.up.circle.fill")
               .font(.title2)
               .foregroundStyle(settings.theme.accentColor)
@@ -189,19 +183,13 @@ private struct BYOKStudioChatFixture: View {
   }
 }
 
+// MARK: - Providers
+
 private struct BYOKStudioProvidersFixture: View {
   let settings: BYOKScreenshotStudioSettings
 
-  private let providers = [
-    ("OpenRouter", "openrouter.ai", "bolt.horizontal.fill", "240+ models"),
-    ("Anthropic", "Personal", "sparkles", "Claude Sonnet 4"),
-    ("Gemini", "Google AI", "diamond.fill", "Gemini 2.5 Pro"),
-    ("DeepSeek", "Primary", "brain.fill", "DeepSeek Chat"),
-    ("Local Server", "192.168.1.42", "network", "Qwen3 30B"),
-  ]
-
   var body: some View {
-    BYOKStudioScaledFixture(designSize: CGSize(width: 520, height: 920)) {
+    BYOKStudioWidthFixture(designSize: CGSize(width: 520, height: 720)) {
       VStack(spacing: 14) {
         BYOKStudioCard(theme: settings.theme) {
           HStack {
@@ -219,46 +207,49 @@ private struct BYOKStudioProvidersFixture: View {
           }
         }
 
-        ForEach(Array(providers.enumerated()), id: \.offset) { _, provider in
-          BYOKStudioCard(theme: settings.theme) {
-            HStack(spacing: 14) {
-              Image(systemName: provider.2)
-                .font(.title3.bold())
-                .foregroundStyle(settings.theme.accentColor)
-                .frame(width: 44, height: 44)
-                .background(settings.theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 13))
+        HStack(spacing: 12) {
+          BYOKStudioProviderTile(
+            theme: settings.theme,
+            name: "OpenRouter",
+            detail: "240+ models",
+            symbol: "bolt.horizontal.fill"
+          )
+          BYOKStudioProviderTile(
+            theme: settings.theme,
+            name: "Anthropic",
+            detail: "Claude Sonnet 4",
+            symbol: "sparkles"
+          )
+        }
 
-              VStack(alignment: .leading, spacing: 4) {
-                Text(provider.0)
-                  .font(.headline)
-                HStack(spacing: 6) {
-                  Text(provider.1)
-                  Text("•")
-                  Text(provider.3)
-                }
-                .font(.caption)
-                .foregroundStyle(settings.theme.secondaryForegroundColor)
-              }
-
-              Spacer()
-
-              Text("Connected")
-                .font(.caption.bold())
-                .foregroundStyle(settings.theme.accentColor)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(settings.theme.accentColor.opacity(0.10), in: Capsule())
-            }
-          }
+        HStack(spacing: 12) {
+          BYOKStudioProviderTile(
+            theme: settings.theme,
+            name: "Gemini",
+            detail: "Gemini 2.5 Pro",
+            symbol: "diamond.fill"
+          )
+          BYOKStudioProviderTile(
+            theme: settings.theme,
+            name: "Local Server",
+            detail: "192.168.1.42",
+            symbol: "network"
+          )
         }
 
         BYOKStudioCard(theme: settings.theme) {
-          HStack(spacing: 12) {
+          HStack(spacing: 13) {
             Image(systemName: "lock.shield.fill")
+              .font(.title3)
               .foregroundStyle(settings.theme.accentColor)
-            Text("No BYOK account. No proxy. Your app talks directly to your providers.")
-              .font(.subheadline.weight(.semibold))
-              .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Direct to your providers")
+                .font(.headline)
+              Text("No BYOK account. No proxy. Your app talks directly to the endpoints you configure.")
+                .font(.subheadline)
+                .foregroundStyle(settings.theme.secondaryForegroundColor)
+                .fixedSize(horizontal: false, vertical: true)
+            }
           }
         }
       }
@@ -266,77 +257,71 @@ private struct BYOKStudioProvidersFixture: View {
   }
 }
 
+// MARK: - MCP
+
 private struct BYOKStudioMCPFixture: View {
   let settings: BYOKScreenshotStudioSettings
 
   private let tools = [
-    ("search_repositories", "Search repositories", "Always Allow", "checkmark.shield.fill"),
-    ("fetch_file", "Read repository files", "Always Allow", "checkmark.shield.fill"),
-    ("create_issue", "Create GitHub issues", "Ask", "questionmark.circle.fill"),
-    ("delete_file", "Delete repository files", "Disabled", "nosign"),
+    ("Search repositories", "search_repositories", "Always", "checkmark.shield.fill"),
+    ("Read files", "fetch_file", "Ask", "questionmark.circle.fill"),
+    ("Create issues", "create_issue", "Off", "nosign"),
   ]
 
   var body: some View {
-    BYOKStudioScaledFixture(designSize: CGSize(width: 520, height: 920)) {
-      VStack(spacing: 16) {
+    BYOKStudioWidthFixture(designSize: CGSize(width: 520, height: 760)) {
+      VStack(spacing: 14) {
         BYOKStudioCard(theme: settings.theme) {
-          VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 13) {
-              Image(systemName: "shippingbox.fill")
-                .font(.title2)
-                .foregroundStyle(settings.theme.accentColor)
-                .frame(width: 48, height: 48)
-                .background(settings.theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 14))
+          HStack(spacing: 14) {
+            Image(systemName: "shippingbox.fill")
+              .font(.title2)
+              .foregroundStyle(settings.theme.accentColor)
+              .frame(width: 52, height: 52)
+              .background(settings.theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
 
-              VStack(alignment: .leading, spacing: 4) {
-                Text("GitHub MCP")
-                  .font(.title3.bold())
-                Text("Remote · 12 tools discovered")
-                  .font(.caption)
-                  .foregroundStyle(settings.theme.secondaryForegroundColor)
-              }
-
-              Spacer()
-
-              Circle()
-                .fill(.green)
-                .frame(width: 10, height: 10)
-            }
-
-            Divider().overlay(settings.theme.borderColor)
-
-            HStack {
-              Label("Enabled for this chat", systemImage: "checkmark.circle.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(settings.theme.accentColor)
-              Spacer()
-              Text("HTTPS")
-                .font(.caption.bold())
+            VStack(alignment: .leading, spacing: 4) {
+              Text("GitHub MCP")
+                .font(.title3.bold())
+              Text("Remote · 12 tools discovered")
+                .font(.caption)
                 .foregroundStyle(settings.theme.secondaryForegroundColor)
             }
+
+            Spacer()
+
+            Label("Connected", systemImage: "checkmark.circle.fill")
+              .font(.caption.bold())
+              .foregroundStyle(.green)
           }
         }
 
         BYOKStudioCard(theme: settings.theme) {
           VStack(alignment: .leading, spacing: 0) {
-            Text("Tool permissions")
-              .font(.headline)
-              .padding(.bottom, 12)
+            HStack {
+              Text("Tool permissions")
+                .font(.title3.bold())
+              Spacer()
+              Text("Per chat")
+                .font(.caption.bold())
+                .foregroundStyle(settings.theme.secondaryForegroundColor)
+            }
+            .padding(.bottom, 10)
 
             ForEach(Array(tools.enumerated()), id: \.offset) { index, tool in
               if index > 0 {
                 Divider().overlay(settings.theme.borderColor)
               }
 
-              HStack(spacing: 12) {
+              HStack(spacing: 13) {
                 Image(systemName: tool.3)
-                  .foregroundStyle(tool.2 == "Disabled" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor)
-                  .frame(width: 28)
+                  .font(.title3)
+                  .foregroundStyle(tool.2 == "Off" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor)
+                  .frame(width: 32)
 
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(tool.1)
-                    .font(.subheadline.bold())
+                VStack(alignment: .leading, spacing: 4) {
                   Text(tool.0)
+                    .font(.headline)
+                  Text(tool.1)
                     .font(.caption.monospaced())
                     .foregroundStyle(settings.theme.secondaryForegroundColor)
                 }
@@ -344,75 +329,74 @@ private struct BYOKStudioMCPFixture: View {
                 Spacer()
 
                 Text(tool.2)
-                  .font(.caption.bold())
-                  .foregroundStyle(tool.2 == "Disabled" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor)
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 5)
+                  .font(.subheadline.bold())
+                  .foregroundStyle(tool.2 == "Off" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor)
+                  .padding(.horizontal, 11)
+                  .padding(.vertical, 7)
                   .background(
-                    (tool.2 == "Disabled" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor).opacity(0.10),
+                    (tool.2 == "Off" ? settings.theme.secondaryForegroundColor : settings.theme.accentColor).opacity(0.10),
                     in: Capsule()
                   )
               }
-              .padding(.vertical, 12)
+              .padding(.vertical, 16)
             }
           }
         }
 
-        BYOKStudioCard(theme: settings.theme) {
-          HStack(spacing: 12) {
-            Image(systemName: "hand.raised.fill")
-              .foregroundStyle(settings.theme.accentColor)
-            Text("Sensitive tools can ask every time before anything runs.")
-              .font(.subheadline.weight(.semibold))
-            Spacer(minLength: 0)
-          }
+        HStack(spacing: 10) {
+          Image(systemName: "hand.raised.fill")
+            .foregroundStyle(settings.theme.accentColor)
+          Text("You decide before sensitive tools run.")
+            .font(.subheadline.weight(.semibold))
+          Spacer()
         }
+        .padding(.horizontal, 4)
+        .foregroundStyle(settings.theme.primaryForegroundColor)
       }
     }
   }
 }
 
+// MARK: - Projects
+
 private struct BYOKStudioProjectsFixture: View {
   let settings: BYOKScreenshotStudioSettings
 
   var body: some View {
-    BYOKStudioScaledFixture(designSize: CGSize(width: 520, height: 920)) {
-      VStack(spacing: 16) {
-        HStack(spacing: 14) {
-          BYOKStudioProjectTile(
-            theme: settings.theme,
-            title: "BYOK Launch",
-            detail: "12 chats · Claude Sonnet 4",
-            symbol: "paperplane.fill",
-            selected: true
-          )
-          BYOKStudioProjectTile(
-            theme: settings.theme,
-            title: "Research",
-            detail: "8 chats · Gemini 2.5 Pro",
-            symbol: "magnifyingglass",
-            selected: false
-          )
-        }
-
+    BYOKStudioWidthFixture(designSize: CGSize(width: 520, height: 760)) {
+      VStack(spacing: 14) {
         BYOKStudioCard(theme: settings.theme) {
           VStack(alignment: .leading, spacing: 14) {
-            HStack {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("BYOK Launch")
-                  .font(.title3.bold())
-                Text("Project workspace")
-                  .font(.caption)
-                  .foregroundStyle(settings.theme.secondaryForegroundColor)
+            HStack(alignment: .top) {
+              HStack(spacing: 12) {
+                Image(systemName: "paperplane.fill")
+                  .font(.title2.bold())
+                  .foregroundStyle(settings.theme.accentColor)
+                  .frame(width: 50, height: 50)
+                  .background(settings.theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 14))
+
+                VStack(alignment: .leading, spacing: 4) {
+                  Text("BYOK Launch")
+                    .font(.title2.bold())
+                  Text("12 conversations")
+                    .font(.caption)
+                    .foregroundStyle(settings.theme.secondaryForegroundColor)
+                }
               }
+
               Spacer()
               Image(systemName: "ellipsis.circle")
                 .font(.title3)
                 .foregroundStyle(settings.theme.secondaryForegroundColor)
             }
 
+            Text("Ship a minimal, native AI workspace with direct provider access and safe tool use.")
+              .font(.subheadline)
+              .foregroundStyle(settings.theme.secondaryForegroundColor)
+              .fixedSize(horizontal: false, vertical: true)
+
             HStack(spacing: 8) {
-              BYOKStudioChip(theme: settings.theme, text: "Claude Sonnet 4", symbol: "sparkles")
+              BYOKStudioChip(theme: settings.theme, text: "Sonnet 4", symbol: "sparkles")
               BYOKStudioChip(theme: settings.theme, text: "3 MCP", symbol: "shippingbox.fill")
               BYOKStudioChip(theme: settings.theme, text: "6 files", symbol: "paperclip")
             }
@@ -421,38 +405,35 @@ private struct BYOKStudioProjectsFixture: View {
 
         BYOKStudioCard(theme: settings.theme) {
           VStack(alignment: .leading, spacing: 0) {
-            Text("Recent chats")
-              .font(.headline)
-              .padding(.bottom, 10)
+            HStack {
+              Text("Recent chats")
+                .font(.title3.bold())
+              Spacer()
+              Text("View all")
+                .font(.caption.bold())
+                .foregroundStyle(settings.theme.accentColor)
+            }
+            .padding(.bottom, 8)
 
             BYOKStudioChatRow(theme: settings.theme, title: "Release readiness review", detail: "2 min ago", symbol: "checkmark.seal.fill")
             Divider().overlay(settings.theme.borderColor)
             BYOKStudioChatRow(theme: settings.theme, title: "App Store screenshot copy", detail: "Yesterday", symbol: "photo.stack.fill")
             Divider().overlay(settings.theme.borderColor)
             BYOKStudioChatRow(theme: settings.theme, title: "Provider pricing research", detail: "Yesterday", symbol: "dollarsign.circle.fill")
-            Divider().overlay(settings.theme.borderColor)
-            BYOKStudioChatRow(theme: settings.theme, title: "MCP permission design", detail: "3 days ago", symbol: "shippingbox.fill")
           }
         }
 
-        BYOKStudioCard(theme: settings.theme) {
-          HStack(spacing: 12) {
-            Image(systemName: "text.quote")
-              .foregroundStyle(settings.theme.accentColor)
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Project instructions")
-                .font(.subheadline.bold())
-              Text("Ship BYOK 1.0 with a minimal, native iPhone experience.")
-                .font(.caption)
-                .foregroundStyle(settings.theme.secondaryForegroundColor)
-            }
-            Spacer()
-          }
+        HStack(spacing: 12) {
+          BYOKStudioMiniProject(theme: settings.theme, title: "Research", symbol: "magnifyingglass")
+          BYOKStudioMiniProject(theme: settings.theme, title: "Personal", symbol: "person.fill")
+          BYOKStudioMiniProject(theme: settings.theme, title: "Ideas", symbol: "lightbulb.fill")
         }
       }
     }
   }
 }
+
+// MARK: - Analytics
 
 private struct BYOKStudioAnalyticsFixture: View {
   let settings: BYOKScreenshotStudioSettings
@@ -460,22 +441,22 @@ private struct BYOKStudioAnalyticsFixture: View {
   private let bars: [CGFloat] = [0.42, 0.58, 0.36, 0.72, 0.63, 0.88, 0.76]
 
   var body: some View {
-    BYOKStudioScaledFixture(designSize: CGSize(width: 520, height: 920)) {
-      VStack(spacing: 16) {
-        HStack(spacing: 12) {
+    BYOKStudioWidthFixture(designSize: CGSize(width: 520, height: 820)) {
+      VStack(spacing: 12) {
+        HStack(spacing: 10) {
           BYOKStudioMetricCard(theme: settings.theme, title: "Spend", value: "$12.48", detail: "This month")
           BYOKStudioMetricCard(theme: settings.theme, title: "Requests", value: "842", detail: "+18%")
         }
 
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
           BYOKStudioMetricCard(theme: settings.theme, title: "Input", value: "3.2M", detail: "tokens")
           BYOKStudioMetricCard(theme: settings.theme, title: "Output", value: "824K", detail: "tokens")
         }
 
         BYOKStudioCard(theme: settings.theme) {
-          VStack(alignment: .leading, spacing: 18) {
+          VStack(alignment: .leading, spacing: 14) {
             HStack {
-              VStack(alignment: .leading, spacing: 4) {
+              VStack(alignment: .leading, spacing: 3) {
                 Text("Daily usage")
                   .font(.headline)
                 Text("Last 7 days")
@@ -488,16 +469,16 @@ private struct BYOKStudioAnalyticsFixture: View {
                 .foregroundStyle(settings.theme.accentColor)
             }
 
-            HStack(alignment: .bottom, spacing: 12) {
+            HStack(alignment: .bottom, spacing: 10) {
               ForEach(Array(bars.enumerated()), id: \.offset) { index, height in
-                VStack(spacing: 7) {
+                VStack(spacing: 6) {
                   RoundedRectangle(cornerRadius: 5)
                     .fill(
                       index == bars.count - 2
                         ? settings.theme.accentColor
                         : settings.theme.accentColor.opacity(0.35)
                     )
-                    .frame(height: 150 * height)
+                    .frame(height: 122 * height)
                   Text(["M", "T", "W", "T", "F", "S", "S"][index])
                     .font(.caption2.bold())
                     .foregroundStyle(settings.theme.secondaryForegroundColor)
@@ -505,28 +486,24 @@ private struct BYOKStudioAnalyticsFixture: View {
                 .frame(maxWidth: .infinity, alignment: .bottom)
               }
             }
-            .frame(height: 180, alignment: .bottom)
+            .frame(height: 148, alignment: .bottom)
           }
         }
 
         BYOKStudioCard(theme: settings.theme) {
-          VStack(alignment: .leading, spacing: 14) {
-            Text("Provider performance")
-              .font(.headline)
+          VStack(alignment: .leading, spacing: 12) {
+            HStack {
+              Text("Provider performance")
+                .font(.headline)
+              Spacer()
+              Text("TTFT")
+                .font(.caption.bold())
+                .foregroundStyle(settings.theme.secondaryForegroundColor)
+            }
 
-            BYOKStudioPerformanceRow(theme: settings.theme, provider: "Anthropic", value: "1.2s TTFT", score: 0.91)
-            BYOKStudioPerformanceRow(theme: settings.theme, provider: "OpenRouter", value: "1.6s TTFT", score: 0.82)
-            BYOKStudioPerformanceRow(theme: settings.theme, provider: "Gemini", value: "1.4s TTFT", score: 0.86)
-          }
-        }
-
-        BYOKStudioCard(theme: settings.theme) {
-          HStack(spacing: 12) {
-            Image(systemName: "lock.shield.fill")
-              .foregroundStyle(settings.theme.accentColor)
-            Text("Usage telemetry stays on-device and excludes prompts, responses, and credentials.")
-              .font(.subheadline.weight(.semibold))
-              .fixedSize(horizontal: false, vertical: true)
+            BYOKStudioPerformanceRow(theme: settings.theme, provider: "Anthropic", value: "1.2s", score: 0.91)
+            BYOKStudioPerformanceRow(theme: settings.theme, provider: "OpenRouter", value: "1.6s", score: 0.82)
+            BYOKStudioPerformanceRow(theme: settings.theme, provider: "Gemini", value: "1.4s", score: 0.86)
           }
         }
       }
@@ -534,7 +511,12 @@ private struct BYOKStudioAnalyticsFixture: View {
   }
 }
 
-private struct BYOKStudioScaledFixture<Content: View>: View {
+// MARK: - Layout
+
+/// Scales fixtures from the width only. The screenshot template already owns the
+/// page-level horizontal inset, so the fixture fills that available width and is
+/// allowed to crop vertically instead of shrinking again to fit the visual slot.
+private struct BYOKStudioWidthFixture<Content: View>: View {
   let designSize: CGSize
   private let content: Content
 
@@ -545,24 +527,23 @@ private struct BYOKStudioScaledFixture<Content: View>: View {
 
   var body: some View {
     GeometryReader { proxy in
-      let scale = min(
-        proxy.size.width / designSize.width,
-        proxy.size.height / designSize.height
-      )
+      let scale = proxy.size.width / designSize.width
 
       content
         .frame(width: designSize.width, height: designSize.height, alignment: .top)
         .scaleEffect(scale, anchor: .topLeading)
         .frame(
-          width: designSize.width * scale,
+          width: proxy.size.width,
           height: designSize.height * scale,
           alignment: .topLeading
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     .allowsHitTesting(false)
   }
 }
+
+// MARK: - Components
 
 private struct BYOKStudioCard<Content: View>: View {
   let theme: AppTheme
@@ -590,38 +571,65 @@ private struct BYOKStudioCard<Content: View>: View {
   }
 }
 
-private struct BYOKStudioProjectTile: View {
+private struct BYOKStudioProviderTile: View {
   let theme: AppTheme
-  let title: String
+  let name: String
   let detail: String
   let symbol: String
-  let selected: Bool
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Image(systemName: symbol)
-        .font(.title2.bold())
-        .foregroundStyle(theme.accentColor)
-        .frame(width: 44, height: 44)
-        .background(theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 13))
+    VStack(alignment: .leading, spacing: 13) {
+      HStack {
+        Image(systemName: symbol)
+          .font(.title3.bold())
+          .foregroundStyle(theme.accentColor)
+          .frame(width: 44, height: 44)
+          .background(theme.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 13))
+        Spacer()
+        Image(systemName: "checkmark.circle.fill")
+          .foregroundStyle(.green)
+      }
 
       VStack(alignment: .leading, spacing: 4) {
-        Text(title)
+        Text(name)
           .font(.headline)
         Text(detail)
           .font(.caption)
           .foregroundStyle(theme.secondaryForegroundColor)
+          .lineLimit(1)
       }
     }
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(
-      selected ? theme.accentColor.opacity(0.12) : theme.elevatedSurfaceColor,
-      in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-    )
+    .background(theme.elevatedSurfaceColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .strokeBorder(selected ? theme.accentColor : theme.borderColor, lineWidth: selected ? 2 : 1)
+        .strokeBorder(theme.borderColor)
+    }
+  }
+}
+
+private struct BYOKStudioMiniProject: View {
+  let theme: AppTheme
+  let title: String
+  let symbol: String
+
+  var body: some View {
+    VStack(spacing: 9) {
+      Image(systemName: symbol)
+        .font(.headline)
+        .foregroundStyle(theme.accentColor)
+      Text(title)
+        .font(.caption.bold())
+        .lineLimit(1)
+    }
+    .padding(.vertical, 15)
+    .frame(maxWidth: .infinity)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(theme.elevatedSurfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .strokeBorder(theme.borderColor)
     }
   }
 }
@@ -649,7 +657,7 @@ private struct BYOKStudioChatRow: View {
         .font(.caption.bold())
         .foregroundStyle(theme.secondaryForegroundColor)
     }
-    .padding(.vertical, 11)
+    .padding(.vertical, 12)
   }
 }
 
@@ -675,7 +683,7 @@ private struct BYOKStudioMetricCard: View {
   let detail: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
+    VStack(alignment: .leading, spacing: 6) {
       Text(title)
         .font(.caption.bold())
         .foregroundStyle(theme.secondaryForegroundColor)
