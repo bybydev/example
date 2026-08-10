@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -7,12 +8,14 @@ struct UsageDashboardView: View {
   let currentConversationID: ConversationID?
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(PurchaseManager.self) private var purchaseManager
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
   @State private var range: UsageRange = .month
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
   @State private var hasLoadedTelemetry = false
+  @State private var showProUpsell = false
 
   init(
     conversations: [ChatConversation],
@@ -25,80 +28,86 @@ struct UsageDashboardView: View {
   var body: some View {
     NavigationStack {
       List {
-        Section {
-          Picker("Range", selection: $range) {
-            ForEach(UsageRange.allCases) { value in
-              Text(value.label).tag(value)
+        if purchaseManager.hasPro {
+          Section {
+            Picker("Range", selection: $range) {
+              ForEach(UsageRange.allCases) { value in
+                Text(value.label).tag(value)
+              }
             }
+            .pickerStyle(.segmented)
           }
-          .pickerStyle(.segmented)
         }
 
         usageSummarySection
 
-        if hasPerformanceData {
-          performanceSection
-          reliabilitySection
-          if !failureBreakdown.isEmpty {
-            failureSection
+        if purchaseManager.hasPro {
+          if hasPerformanceData {
+            performanceSection
+            reliabilitySection
+            if !failureBreakdown.isEmpty {
+              failureSection
+            }
+          } else if hasLoadedTelemetry {
+            Section {
+              ContentUnavailableView(
+                "No Performance Data Yet",
+                systemImage: "waveform.path.ecg",
+                description: Text("Send a few messages to start collecting local performance metrics.")
+              )
+            }
           }
-        } else if hasLoadedTelemetry {
+
+          if let conversation = currentConversation {
+            Section("This conversation") {
+              NavigationLink {
+                ConversationAnalyticsView(
+                  conversation: conversation,
+                  range: range,
+                  telemetryEvents: filteredTelemetryEvents
+                )
+              } label: {
+                conversationSummaryLabel(conversation)
+              }
+            }
+          }
+
+          if !providerBreakdown.isEmpty {
+            Section("Providers") {
+              ForEach(providerBreakdown) { row in
+                UsageBreakdownRowView(row: row)
+              }
+            }
+          }
+
+          if !modelBreakdown.isEmpty {
+            Section("Models") {
+              ForEach(modelBreakdown) { row in
+                UsageBreakdownRowView(row: row)
+              }
+            }
+          }
+
+          monthlyBudgetSection
+
           Section {
-            ContentUnavailableView(
-              "No Performance Data Yet",
-              systemImage: "waveform.path.ecg",
-              description: Text("Send a few messages to start collecting local performance metrics.")
-            )
-          }
-        }
-
-        if let conversation = currentConversation {
-          Section("This conversation") {
-            NavigationLink {
-              ConversationAnalyticsView(
-                conversation: conversation,
-                range: range,
-                telemetryEvents: filteredTelemetryEvents
+            LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
+            if telemetryStatistics.databaseBytes > 0 {
+              LabeledContent(
+                "Local database",
+                value: ByteCountFormatter.string(
+                  fromByteCount: telemetryStatistics.databaseBytes,
+                  countStyle: .file
+                )
               )
-            } label: {
-              conversationSummaryLabel(conversation)
             }
+          } header: {
+            Text("Local analytics")
+          } footer: {
+            Text(telemetryFootnote)
           }
-        }
-
-        if !providerBreakdown.isEmpty {
-          Section("Providers") {
-            ForEach(providerBreakdown) { row in
-              UsageBreakdownRowView(row: row)
-            }
-          }
-        }
-
-        if !modelBreakdown.isEmpty {
-          Section("Models") {
-            ForEach(modelBreakdown) { row in
-              UsageBreakdownRowView(row: row)
-            }
-          }
-        }
-
-        monthlyBudgetSection
-
-        Section {
-          LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
-          if telemetryStatistics.databaseBytes > 0 {
-            LabeledContent(
-              "Local database",
-              value: ByteCountFormatter.string(
-                fromByteCount: telemetryStatistics.databaseBytes,
-                countStyle: .file
-              )
-            )
-          }
-        } header: {
-          Text("Local analytics")
-        } footer: {
-          Text(telemetryFootnote)
+        } else {
+          advancedUpsellSection
         }
       }
       .navigationTitle("Analytics")
@@ -109,10 +118,24 @@ struct UsageDashboardView: View {
         }
       }
       .task {
-        await loadTelemetry()
+        if purchaseManager.hasPro {
+          await loadTelemetry()
+        }
+      }
+      .onChange(of: purchaseManager.hasPro) { _, hasPro in
+        if hasPro {
+          Task { await loadTelemetry() }
+        } else {
+          range = .month
+        }
       }
       .refreshable {
-        await loadTelemetry()
+        if purchaseManager.hasPro {
+          await loadTelemetry()
+        }
+      }
+      .sheet(isPresented: $showProUpsell) {
+        BYOKProUpsellFlow(feature: .analytics)
       }
     }
   }
@@ -123,23 +146,45 @@ struct UsageDashboardView: View {
       LabeledContent("Model requests", value: filteredAggregate.modelRequestCount.formatted())
       LabeledContent("Input", value: usageCompactTokens(filteredAggregate.inputTokens))
       LabeledContent("Output", value: usageCompactTokens(filteredAggregate.outputTokens))
-      if filteredAggregate.cachedInputTokens > 0 {
+      if purchaseManager.hasPro, filteredAggregate.cachedInputTokens > 0 {
         LabeledContent("Cached input", value: usageCompactTokens(filteredAggregate.cachedInputTokens))
       }
-      if filteredAggregate.reasoningTokens > 0 {
+      if purchaseManager.hasPro, filteredAggregate.reasoningTokens > 0 {
         LabeledContent("Reasoning", value: usageCompactTokens(filteredAggregate.reasoningTokens))
       }
-      if filteredAggregate.toolCallCount > 0 {
+      if purchaseManager.hasPro, filteredAggregate.toolCallCount > 0 {
         LabeledContent("Tool calls", value: filteredAggregate.toolCallCount.formatted())
       }
     } header: {
-      Text("Usage")
+      Text(purchaseManager.hasPro ? "Usage" : "Basic Usage · This Month")
     } footer: {
       if filteredAggregate.hasPartialCost {
         Text("Spend is partial because some models did not expose pricing. Usage and spend are reconstructed from persisted assistant messages.")
-      } else {
+      } else if purchaseManager.hasPro {
         Text("Usage and spend come from persisted chat history. Only requests made by BYOKchat are included.")
+      } else {
+        Text("Basic analytics includes monthly spend, requests, input tokens, and output tokens.")
       }
+    }
+  }
+
+  private var advancedUpsellSection: some View {
+    Section {
+      Button {
+        showProUpsell = true
+      } label: {
+        VStack(alignment: .leading, spacing: 6) {
+          Label("Advanced Analytics", systemImage: "crown.fill")
+            .font(.body.weight(.semibold))
+          Text("Unlock time ranges, TTFT and speed, reliability, errors, provider/model breakdowns, per-chat details, and monthly budgets.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+      }
+    } footer: {
+      Text("Upgrade to Pro for deeper local analytics. Your chat content and provider credentials remain private.")
     }
   }
 
