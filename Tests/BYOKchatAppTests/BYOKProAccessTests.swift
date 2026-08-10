@@ -37,6 +37,6 @@ struct BYOKProAccessTests {
   func comparisonRows() {
     #expect(BYOKProAccess.comparisonRows.count == 5)
     #expect(BYOKProAccess.comparisonRows.map(\.freeValue) == ["2", "1", "1", "1", "Basic"])
-    #expect(BYOKProAccess.comparisonRows.map(\.proValue) == ["All", "Unlimited", "Unlimited", "Unlimited", "Advanced"])
+    #expect(BYOKProAccess.comparisonRows.map(\.proValue) == ["All themes", "Unlimited", "Unlimited", "Unlimited", "Advanced"])
   }
 }
