@@ -1,4 +1,3 @@
-import AppFoundation
 import Testing
 
 @testable import BYOKchat
