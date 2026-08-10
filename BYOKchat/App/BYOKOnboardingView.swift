@@ -4,6 +4,8 @@ import SwiftUI
 struct BYOKOnboardingView: View {
   let onCompletion: @MainActor () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
+
   private enum Page: String, CaseIterable, Identifiable, FoundationOnboardingHeaderProviding {
     case chat
     case providers
@@ -68,7 +70,18 @@ struct BYOKOnboardingView: View {
         Spacer(minLength: compact ? 0 : 8)
 
         demo(for: page, isSelected: context.isSelected)
+          .padding(11)
           .frame(maxWidth: .infinity)
+          .background(
+            theme.surfaceColor.opacity(0.92),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+          )
+          .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+              .strokeBorder(theme.borderColor)
+          }
+          .shadow(color: theme.appearance.shadow.color.opacity(0.42), radius: 16, y: 8)
+          .padding(.bottom, compact ? 10 : 16)
 
         copy(for: page, context: context, compact: compact)
 
