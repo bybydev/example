@@ -71,7 +71,7 @@ enum BYOKProAccess {
   static let freeMCPServerLimit = 1
 
   static let comparisonRows: [LimitReachedComparisonRow] = [
-    LimitReachedComparisonRow(feature: "Themes", freeValue: "2", proValue: "All"),
+    LimitReachedComparisonRow(feature: "Themes", freeValue: "2", proValue: "All themes"),
     LimitReachedComparisonRow(feature: "Provider accounts", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Projects", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "MCP servers", freeValue: "1", proValue: "Unlimited"),
