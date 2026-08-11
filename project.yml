@@ -105,7 +105,7 @@ targets:
       - target: BYOKchat
 
 schemes:
-  BYOKchat Screenshots:
+  BYOKchatScreenshots:
     build:
       targets:
         BYOKchat:
