@@ -1,6 +1,6 @@
 # App Store Screenshots
 
-BYOKchat screenshots are captured from real app UI through the `BYOKchatUITests` target.
+BYOKchat screenshots are captured from the real app UI through the `BYOKchatUITests` target.
 
 The screenshot launch mode is deterministic and isolated:
 
@@ -11,7 +11,26 @@ The screenshot launch mode is deterministic and isolated:
 - fixture provider credentials use screenshot-only account IDs in the simulator Keychain.
 - no provider or MCP network request is required to render the seeded screens.
 
-Generate the suite from the repository root:
+## Xcode Cloud
+
+After regenerating the project with XcodeGen and committing the generated Xcode project/package resolution files, Xcode Cloud needs no custom setup scripts, environment variables, secrets, or fixture files.
+
+Use the shared `BYOKchat Screenshots` scheme and run the `BYOKchatUITests` test target. The target launches the app with screenshot mode enabled, seeds the fixture state automatically, navigates the real UI, and keeps each capture as an XCTest screenshot attachment in the Xcode Cloud test results.
+
+Current captures:
+
+1. `01_Home`
+2. `02_Sidebar`
+3. `03_Chat`
+4. `04_Projects`
+5. `05_Providers`
+6. `06_MCP`
+7. `07_Themes`
+8. `08_Paywall`
+
+## Local capture
+
+For local development, the optional helper script runs the same UI-test target and exports the XCTest attachments as named PNG files into this directory:
 
 ```sh
 scripts/capture_app_store_screenshots.sh
@@ -24,17 +43,4 @@ SCREENSHOT_DESTINATION='platform=iOS Simulator,name=iPhone 17 Pro' \
   scripts/capture_app_store_screenshots.sh
 ```
 
-The UI tests keep every screenshot as an XCTest attachment. The script exports the result bundle attachments and saves normalized PNGs in this directory.
-
-Current captures:
-
-1. `01_Home.png`
-2. `02_Sidebar.png`
-3. `03_Chat.png`
-4. `04_Projects.png`
-5. `05_Providers.png`
-6. `06_MCP.png`
-7. `07_Themes.png`
-8. `08_Paywall.png`
-
-`project.yml` is the source of truth for the UI-test target and screenshot scheme. The generated Xcode project should not be edited by hand.
+`project.yml` is the source of truth for the UI-test target and screenshot scheme. Regenerate the Xcode project with XcodeGen rather than editing the generated project by hand.
