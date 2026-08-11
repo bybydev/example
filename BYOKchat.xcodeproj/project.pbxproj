@@ -23,6 +23,7 @@
 		13F5ECCD7AC74F1E10DBE6FC /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0549189CF7DBDD0F0364EFBA /* AppRootView.swift */; };
 		153CBB84523DCB60694DC82E /* ComposerTargetLabelFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E13BF9908B7CE54A91F65630 /* ComposerTargetLabelFormatterTests.swift */; };
 		1A4789121A5875370BF7B83A /* ConversationStoreAndLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B6C73138F1EE72A38D3A2B6 /* ConversationStoreAndLifecycleTests.swift */; };
+		1A5CA4394CD0212B273D89F0 /* BYOKScreenshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */; };
 		1C8A2955009CD395A8403B60 /* ChatManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39D9E1A556DE05C56A7C407A /* ChatManagementModel.swift */; };
 		1EDD0632CFCBD7B421C12AA4 /* ProjectSyncModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBE7796DC21881E80D46633A /* ProjectSyncModel.swift */; };
 		1FEE417954E91551F13CDFEA /* AppFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9272B602A06B950B03BDE881 /* AppFoundation */; };
@@ -64,6 +65,7 @@
 		88EAD12DB828EC64FDBD3327 /* ComposerTargetPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E3E020CC212CC3AE691543 /* ComposerTargetPickerView.swift */; };
 		8E127AF940719C7522156EAA /* ChatContextManagementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5779F45BE5492D7D1659DE93 /* ChatContextManagementTests.swift */; };
 		8EA6E6B9F25D2C7228370E14 /* BYOKchatProviderCore in Frameworks */ = {isa = PBXBuildFile; productRef = 89619004427037A13B211975 /* BYOKchatProviderCore */; };
+		908ACE337B5076F5ED183597 /* BYOKchatScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B94C7FC65C3BAF5D2059D3F3 /* BYOKchatScreenshotTests.swift */; };
 		911AAAC39686AC694119A2FB /* MCPHTTPTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A7F49C81C79E77B13D255C /* MCPHTTPTransportTests.swift */; };
 		958AD385781655BAD731536D /* ProviderManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04A6B0A5CB5827C2AEC1EF6A /* ProviderManagementModel.swift */; };
 		97FC498C1E5C1DAF6209E144 /* ProjectViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25141287CFF1D5EDB8A85BBE /* ProjectViews.swift */; };
@@ -104,6 +106,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		37C48C6E305B6A00498D1F1D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 96E78D33025BE142E82A23EB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7BF270193CBD61A9F72B2244;
+			remoteInfo = BYOKchat;
+		};
 		7831040B7E7F023668F5FBD8 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 96E78D33025BE142E82A23EB /* Project object */;
@@ -114,6 +123,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		00C7848DC1570C85CF20453F /* BYOKchatUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BYOKchatUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0246EC65F20ED232EFD28182 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		03CB5C9E7F5C561AC39CA425 /* ProjectWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectWorkspaceTests.swift; sourceTree = "<group>"; };
 		04A6B0A5CB5827C2AEC1EF6A /* ProviderManagementModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderManagementModel.swift; sourceTree = "<group>"; };
@@ -129,6 +139,7 @@
 		13DD745B8429A547A06C55D9 /* ProviderTransportSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderTransportSecurityTests.swift; sourceTree = "<group>"; };
 		147FDA57BC9BC0599B9F7FA6 /* DeveloperSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperSettingsSection.swift; sourceTree = "<group>"; };
 		199FDED70D63E09181FE7EFA /* ChatSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSidebarView.swift; sourceTree = "<group>"; };
+		202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKScreenshotFixtures.swift; sourceTree = "<group>"; };
 		25141287CFF1D5EDB8A85BBE /* ProjectViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectViews.swift; sourceTree = "<group>"; };
 		2626FDA51A13DE2388DF8727 /* BYOKchat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BYOKchat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		27A06A78A0567FD6BB9FC806 /* ChatContextOutputReserveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContextOutputReserveTests.swift; sourceTree = "<group>"; };
@@ -183,6 +194,7 @@
 		B16AE6630FAD37A4DBE09E2E /* MasterReviewRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MasterReviewRegressionTests.swift; sourceTree = "<group>"; };
 		B7C1FCD12634395DF775B663 /* BYOKchatThemes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKchatThemes.swift; sourceTree = "<group>"; };
 		B94A134AADA4EFB5AB8B7ABA /* ProviderRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRegistryTests.swift; sourceTree = "<group>"; };
+		B94C7FC65C3BAF5D2059D3F3 /* BYOKchatScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKchatScreenshotTests.swift; sourceTree = "<group>"; };
 		BABFB2870CEA9EF52A2EAC59 /* TelemetryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryStoreTests.swift; sourceTree = "<group>"; };
 		BBE7796DC21881E80D46633A /* ProjectSyncModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSyncModel.swift; sourceTree = "<group>"; };
 		BDFD4B26E72E48DB125F24EF /* ChatManagementModel+Portability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatManagementModel+Portability.swift"; sourceTree = "<group>"; };
@@ -265,6 +277,7 @@
 			children = (
 				2626FDA51A13DE2388DF8727 /* BYOKchat.app */,
 				A6FC48CB6FAC555D4B9EA688 /* BYOKchatTests.xctest */,
+				00C7848DC1570C85CF20453F /* BYOKchatUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -316,6 +329,7 @@
 			isa = PBXGroup;
 			children = (
 				103653E92F90B4431AF68199 /* BYOKchat */,
+				942DC5A0B502C920536364F8 /* BYOKchatUITests */,
 				13E00B3576BE2B6B47AFD129 /* Packages */,
 				47C29D881259176FE13D3EFE /* Tests */,
 				17D1F6DB14CE35BA110EA4CB /* Products */,
@@ -352,6 +366,7 @@
 				0F2930DD9C5F447605DCFBEC /* BYOKOnboardingView.swift */,
 				A9E4E27EAED1F440936E1A62 /* BYOKProAccess.swift */,
 				306EAAD3FB0CA304C7C78E97 /* BYOKPurchaseStore.swift */,
+				202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */,
 				39D9E1A556DE05C56A7C407A /* ChatManagementModel.swift */,
 				BDFD4B26E72E48DB125F24EF /* ChatManagementModel+Portability.swift */,
 				6917F738425B6EA1106051CB /* DataPortabilityModel.swift */,
@@ -394,6 +409,14 @@
 				35574DB12DA4155D60B008F9 /* Settings */,
 			);
 			path = Features;
+			sourceTree = "<group>";
+		};
+		942DC5A0B502C920536364F8 /* BYOKchatUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B94C7FC65C3BAF5D2059D3F3 /* BYOKchatScreenshotTests.swift */,
+			);
+			path = BYOKchatUITests;
 			sourceTree = "<group>";
 		};
 		A199AB1256A76D0A56F1CC0C /* Chats */ = {
@@ -446,6 +469,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		5A693DFCCE5247397BA3B80F /* BYOKchatUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1317F0F02207E1318DEC7B5B /* Build configuration list for PBXNativeTarget "BYOKchatUITests" */;
+			buildPhases = (
+				4FB49CBDD4612DC6C8AA89CB /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				580D9FBAAE4C28507574C50D /* PBXTargetDependency */,
+			);
+			name = BYOKchatUITests;
+			packageProductDependencies = (
+			);
+			productName = BYOKchatUITests;
+			productReference = 00C7848DC1570C85CF20453F /* BYOKchatUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		7BF270193CBD61A9F72B2244 /* BYOKchat */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 67DB4BA70C97682825E0182D /* Build configuration list for PBXNativeTarget "BYOKchat" */;
@@ -500,6 +541,11 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
+					5A693DFCCE5247397BA3B80F = {
+						DevelopmentTeam = J458WW3452;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 7BF270193CBD61A9F72B2244;
+					};
 					7BF270193CBD61A9F72B2244 = {
 						DevelopmentTeam = J458WW3452;
 						ProvisioningStyle = Automatic;
@@ -534,6 +580,7 @@
 			targets = (
 				7BF270193CBD61A9F72B2244 /* BYOKchat */,
 				DD50D49662FCE73D5ED7892F /* BYOKchatTests */,
+				5A693DFCCE5247397BA3B80F /* BYOKchatUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -564,6 +611,7 @@
 				EAEAA76BE6824AE03EB685C4 /* BYOKOnboardingView.swift in Sources */,
 				D87921410CCF99F63B7CA87F /* BYOKProAccess.swift in Sources */,
 				7016082A0F32EF2F4ACC9AE4 /* BYOKPurchaseStore.swift in Sources */,
+				1A5CA4394CD0212B273D89F0 /* BYOKScreenshotFixtures.swift in Sources */,
 				0BCD9717E3B376F7FA05B7BA /* BYOKScreenshotScenes.swift in Sources */,
 				1383CF9AC730DFFEEF09D560 /* BYOKScreenshotStudioView.swift in Sources */,
 				6A5F9C578F011AE0B98E6E36 /* BYOKchatApp.swift in Sources */,
@@ -601,6 +649,14 @@
 				E00A8A54AB6305006CA5D5BB /* UsageAnalyticsTypes.swift in Sources */,
 				77128FD7F651BC5E51E85D38 /* UsageDashboardView.swift in Sources */,
 				6B2977D193799E76B2B6C92B /* UsageFormatting.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4FB49CBDD4612DC6C8AA89CB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				908ACE337B5076F5ED183597 /* BYOKchatScreenshotTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -653,6 +709,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		580D9FBAAE4C28507574C50D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7BF270193CBD61A9F72B2244 /* BYOKchat */;
+			targetProxy = 37C48C6E305B6A00498D1F1D /* PBXContainerItemProxy */;
+		};
 		CE60B0E23F9FD97B0DD2350D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 7BF270193CBD61A9F72B2244 /* BYOKchat */;
@@ -765,6 +826,27 @@
 			};
 			name = Release;
 		};
+		D01CE6CA67DA385A20C6483A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = J458WW3452;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BYOKchat;
+			};
+			name = Release;
+		};
 		E8C5063DC373BBD612A82535 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -850,6 +932,27 @@
 			};
 			name = Debug;
 		};
+		F067832CDB75ACEEAB408E20 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = J458WW3452;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BYOKchat;
+			};
+			name = Debug;
+		};
 		FFE7648BD4C098C7792390AD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -879,6 +982,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1317F0F02207E1318DEC7B5B /* Build configuration list for PBXNativeTarget "BYOKchatUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F067832CDB75ACEEAB408E20 /* Debug */,
+				D01CE6CA67DA385A20C6483A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		4BCD9AEB438B2C330464E87D /* Build configuration list for PBXNativeTarget "BYOKchatTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -945,7 +1057,7 @@
 			repositoryURL = "https://github.com/hoangbkit/AppFoundation";
 			requirement = {
 				kind = exactVersion;
-				version = 1.2.0;
+				version = 1.2.1;
 			};
 		};
 		DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {

@@ -1,13 +1,13 @@
 {
-  "originHash" : "df4ce0c84b90a92cf2eb810c9f74fcd1389ab00ee6c994bc83621bf24648583f",
+  "originHash" : "8b3b5aa4ece16689ffef23ca3d143551376605bc794ac8eb4a9d5c91116e81da",
   "pins" : [
     {
       "identity" : "appfoundation",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hoangbkit/AppFoundation",
       "state" : {
-        "revision" : "29304b14451731029b60dd1970bed4afec452cf7",
-        "version" : "1.2.0"
+        "revision" : "ed06fbdf3cc02021acbde47c909b2ffe7ffc811e",
+        "version" : "1.2.1"
       }
     },
     {
