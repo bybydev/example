@@ -111,6 +111,7 @@ schemes:
         BYOKchat:
           - run
           - test
+          - archive
         BYOKchatUITests:
           - test
     test:
