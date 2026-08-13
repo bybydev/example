@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f5f6f8" />
+  <title>BYOK — AI Chat with Your Own API Keys</title>
+  <meta name="description" content="A fast, native iPhone AI chat app for your own providers, models, projects, MCP tools, and usage insights." />
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="apple-touch-icon" href="/icon.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="BYOK home">
+        <img src="/icon.png" alt="" width="34" height="34" />
+        <span>BYOK</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a class="nav-download" href="https://apps.apple.com/app/id6799335915">App Store</a>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy-wrap reveal">
+        <img class="hero-icon" src="/icon.png" alt="BYOK app icon" width="82" height="82" />
+        <div class="eyebrow"><span class="eyebrow-dot"></span> Built for iPhone</div>
+        <h1>Your AI.<br><span>Your keys.</span></h1>
+        <p class="hero-copy">
+          A native AI chat app for people who want their own providers, models, tools, and data — without being locked into one AI service.
+        </p>
+        <div class="hero-actions">
+          <a class="app-store-button" href="https://apps.apple.com/app/id6799335915" aria-label="Download BYOK on the App Store">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            Download on the App Store
+          </a>
+          <span class="hero-note">Requires iOS 26 or later</span>
+        </div>
+      </div>
+
+      <div class="phone-wrap reveal" aria-label="Animated BYOK chat preview">
+        <div class="phone-glow"></div>
+        <div class="provider-orbit" aria-hidden="true">
+          <div class="orbit-chip">OpenAI</div>
+          <div class="orbit-chip">Anthropic</div>
+          <div class="orbit-chip">Gemini</div>
+          <div class="orbit-chip">DeepSeek</div>
+        </div>
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="ios-status"><span>9:41</span><span>● ● ●</span></div>
+            <div class="app-topbar"><span class="circle-btn">☰</span><span class="app-title">New Chat</span><span class="circle-btn">•••</span></div>
+            <div class="chat-feed">
+              <div class="msg user">Compare these two approaches and tell me which one is simpler to ship.</div>
+              <div class="msg ai">
+                <div class="reasoning"><i></i> Reasoning</div>
+                The simpler path is the second one. It keeps the integration surface smaller and avoids introducing another dependency just for orchestration.
+              </div>
+              <div class="msg user">Give me the implementation order.</div>
+              <div class="msg ai">Start with the provider boundary, then persistence, then the UI. That keeps each layer independently testable.</div>
+            </div>
+            <div class="phone-composer">
+              <div class="composer-input">Ask anything…</div>
+              <div class="composer-row"><span class="pill">Sonnet 5 · High</span><span class="pill">1 tool</span><span class="send">↑</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="provider-strip reveal" aria-label="Supported providers">
+      <span>OpenAI</span><span>Anthropic</span><span>Gemini</span><span>DeepSeek</span><span>OpenRouter</span><span>NVIDIA</span><span>Custom APIs</span><span>Local servers</span>
+    </div>
+
+    <section class="section" id="features">
+      <div class="section-head reveal">
+        <div class="kicker">Made for how you actually use AI</div>
+        <h2>One native app. Your whole AI setup.</h2>
+        <p class="lead">BYOK keeps the experience fast and familiar on iPhone while giving you control over providers, projects, tools, and usage.</p>
+      </div>
+
+      <article class="feature">
+        <div class="feature-copy reveal">
+          <div class="kicker">Providers & models</div>
+          <h3>Switch models without switching apps.</h3>
+          <p>Connect the accounts you already pay for, pick a model per chat, and change direction without moving your conversation somewhere else.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>First-class support for major AI providers</span></li>
+            <li><span class="check">✓</span><span>Custom OpenAI-compatible endpoints and private LAN servers</span></li>
+            <li><span class="check">✓</span><span>Per-chat model, reasoning, system prompt, and generation settings</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated model switching demo">
+          <div class="demo-inner">
+            <div class="demo-label">Choose the best model for this chat</div>
+            <div class="model-card">
+              <div class="model-row" data-model-row><span class="model-dot"></span><span><strong>Claude Sonnet 5</strong><small>Anthropic · Reasoning</small></span><span class="model-badge">Ready</span></div>
+              <div class="model-row" data-model-row><span class="model-dot" style="background:linear-gradient(135deg,#0b73ff,#65a8ff)"></span><span><strong>Gemini 3.6 Flash</strong><small>Google · Multimodal</small></span><span class="model-badge">Ready</span></div>
+              <div class="model-row" data-model-row><span class="model-dot" style="background:linear-gradient(135deg,#111,#767b86)"></span><span><strong>OpenAI</strong><small>OpenAI · Your account</small></span><span class="model-badge">Ready</span></div>
+            </div>
+            <div class="model-route"><small>Routing directly to your provider</small><strong>Secure connection</strong><div class="route-line"><span></span></div></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse">
+        <div class="feature-copy reveal">
+          <div class="kicker">Native chat</div>
+          <h3>Fast conversations that feel at home on iOS.</h3>
+          <p>Stream answers, use images and files, inspect reasoning, render code and Markdown, and keep long conversations easy to navigate.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>Streaming responses with separate reasoning presentation</span></li>
+            <li><span class="check">✓</span><span>Image and file attachments for supported models</span></li>
+            <li><span class="check">✓</span><span>Markdown, code, math, diagrams, retry, edit, copy, and share</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated streaming response demo">
+          <div class="stream-demo">
+            <div class="demo-label">Live response</div>
+            <div class="stream-user">Explain why this API design is easier to maintain.</div>
+            <div class="stream-answer">
+              <span>It keeps the public surface small. </span>
+              <span>The provider-specific details stay behind one boundary, </span>
+              <span>so the app can add new models without changing chat code. </span>
+              <span>Persistence remains provider-neutral, </span>
+              <span>tests can target the runtime independently, </span>
+              <span>and UI state does not need to know wire formats. </span>
+              <span>That is the maintainable split.</span>
+            </div>
+            <div class="stream-meta"><span>1.2s first token</span><span>42 tok/s</span><span>Reasoning · High</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature">
+        <div class="feature-copy reveal">
+          <div class="kicker">MCP tools</div>
+          <h3>Let AI use tools — with you in control.</h3>
+          <p>Connect remote MCP servers and decide which tools each chat can use. Sensitive calls can ask before they run.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>Per-chat tool access instead of global permission</span></li>
+            <li><span class="check">✓</span><span>Ask, Always Allow, or Disabled policies</span></li>
+            <li><span class="check">✓</span><span>Native approval cards before a tool executes</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated MCP permission demo">
+          <div class="demo-inner">
+            <div class="demo-label">Tool permission</div>
+            <div class="mcp-card">
+              <div class="tool-icon">⌘</div>
+              <h4>Run “search_docs”?</h4>
+              <p>This chat wants to call a tool from your connected Documentation server.</p>
+              <div class="permission-row"><div class="permission">Deny</div><div class="permission active">Allow Once</div><div class="permission">Always Allow</div></div>
+              <div class="tool-run"></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse">
+        <div class="feature-copy reveal">
+          <div class="kicker">Projects</div>
+          <h3>Keep reusable context together.</h3>
+          <p>Projects group chats with instructions, reference files, model defaults, prompt presets, and tool defaults so focused work starts faster.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>Reusable instructions and reference files</span></li>
+            <li><span class="check">✓</span><span>Provider, model, and MCP defaults per project</span></li>
+            <li><span class="check">✓</span><span>Optional iCloud sync for reusable project workspace data</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated projects demo">
+          <div class="demo-inner">
+            <div class="demo-label">Projects</div>
+            <div class="project-stack">
+              <div class="project-card"><span class="project-sync">✓ Synced</span><div class="project-title">Research</div><div class="project-sub">Gemini · 3 files · 2 tools</div><div class="file-chips"><span>notes.md</span><span>sources.pdf</span></div></div>
+              <div class="project-card"><span class="project-sync">✓ Synced</span><div class="project-title">Product</div><div class="project-sub">Sonnet · 4 chats · 1 tool</div><div class="file-chips"><span>brief.md</span><span>roadmap.txt</span><span>api.json</span></div></div>
+              <div class="project-card"><span class="project-sync">✓ Synced</span><div class="project-title">BYOK v1</div><div class="project-sub">OpenAI · 7 chats · 3 tools</div><div class="file-chips"><span>spec.md</span><span>release.md</span><span>screenshots.zip</span></div></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature">
+        <div class="feature-copy reveal">
+          <div class="kicker">Usage</div>
+          <h3>See what your AI setup is actually doing.</h3>
+          <p>Keep local usage and reliability insights across providers instead of checking every dashboard separately.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>Tokens and spend snapshots per conversation</span></li>
+            <li><span class="check">✓</span><span>Provider and model breakdowns</span></li>
+            <li><span class="check">✓</span><span>Advanced performance and reliability analytics with Pro</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated usage analytics demo">
+          <div class="demo-inner">
+            <div class="demo-label">This month</div>
+            <div class="analytics-grid">
+              <div class="metric"><small>Requests</small><strong>328</strong></div>
+              <div class="metric"><small>Estimated spend</small><strong>$6.42</strong></div>
+              <div class="metric wide"><small>Usage by day</small><div class="spark"><i style="--h:28%"></i><i style="--h:48%"></i><i style="--h:38%"></i><i style="--h:72%"></i><i style="--h:58%"></i><i style="--h:88%"></i></div></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse">
+        <div class="feature-copy reveal">
+          <div class="kicker">Themes</div>
+          <h3>Make your chat app feel like yours.</h3>
+          <p>Choose from carefully designed light and dark themes while keeping the interface unmistakably native.</p>
+          <ul class="feature-list">
+            <li><span class="check">✓</span><span>Two themes included free</span></li>
+            <li><span class="check">✓</span><span>Full light and dark theme collection with Pro</span></li>
+            <li><span class="check">✓</span><span>Theme-aware chat, composer, Markdown, code, and settings UI</span></li>
+          </ul>
+        </div>
+        <div class="demo reveal" aria-label="Animated theme preview demo">
+          <div class="demo-inner">
+            <div class="demo-label">Theme previews</div>
+            <div class="theme-phones">
+              <div class="mini-phone" style="--mini-bg:#fcfcfd;--mini-bubble:#ececf1"><div class="mini-notch"></div><div class="mini-bubble"></div><div class="mini-bubble right"></div><div class="mini-bubble"></div></div>
+              <div class="mini-phone" style="--mini-bg:#17191e;--mini-bubble:#30333c"><div class="mini-notch"></div><div class="mini-bubble"></div><div class="mini-bubble right"></div><div class="mini-bubble"></div></div>
+              <div class="mini-phone" style="--mini-bg:#f7f1f5;--mini-bubble:#eadce5"><div class="mini-notch"></div><div class="mini-bubble"></div><div class="mini-bubble right"></div><div class="mini-bubble"></div></div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="cta reveal">
+      <img src="/icon.png" alt="BYOK app icon" width="72" height="72" />
+      <h2>Bring your AI setup to one iPhone app.</h2>
+      <p>Use the providers you choose, keep your credentials under your control, and make every chat feel native.</p>
+      <a class="app-store-button" href="https://apps.apple.com/app/id6799335915">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+        Download on the App Store
+      </a>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© 2026 BYOK. Made for iPhone.</span>
+    <div class="footer-links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/contact">Contact</a></div>
+  </footer>
+
+  <script src="/script.js" defer></script>
+</body>
+</html>
