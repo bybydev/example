@@ -25,7 +25,30 @@ struct NewChatView: View {
   @State private var showFileImporter = false
   @State private var showProjectEditor = false
   @State private var showTargetPicker = false
+  @State private var showProviderList = false
+  @State private var selectedSetupProvider: ProviderDefinition?
+  @State private var selectedSetupAccount: ProviderAccount?
   @State private var targetOverride: NewChatTargetSelection?
+
+  private enum Readiness {
+    case noAccount
+    case missingCredential
+    case noModel
+    case ready
+  }
+
+  private struct StarterAction: Identifiable {
+    enum Kind {
+      case draft(String)
+      case photo
+      case file
+    }
+
+    let id: String
+    let title: String
+    let systemImage: String
+    let kind: Kind
+  }
 
   private var project: ChatProject? {
     projects.project(projectID)
@@ -40,6 +63,11 @@ struct NewChatView: View {
       return enabled.first { $0.id == accountID }
     }
     return enabled.first
+  }
+
+  private var defaultProvider: ProviderDefinition? {
+    guard let account = defaultAccount else { return nil }
+    return providers.provider(for: account.providerID)
   }
 
   private var defaultModelID: ModelID? {
@@ -62,6 +90,22 @@ struct NewChatView: View {
       .first(where: { $0.model.id == modelID })?.model
   }
 
+  private var readiness: Readiness {
+    guard let account = defaultAccount else { return .noAccount }
+    if providerRequiresCredential(account.providerID),
+      !providers.credentialAccountIDs.contains(account.id)
+    {
+      return .missingCredential
+    }
+    guard defaultModelID != nil else { return .noModel }
+    return .ready
+  }
+
+  private var canStartConversation: Bool {
+    if case .ready = readiness { return true }
+    return false
+  }
+
   private var targetReasoning: ReasoningOptions? {
     if let targetOverride { return targetOverride.reasoning }
     guard let providerID = defaultAccount?.providerID else { return nil }
@@ -79,78 +123,79 @@ struct NewChatView: View {
     if project?.accountID != nil && defaultAccount == nil {
       return "Provider unavailable"
     }
-    guard let account = defaultAccount else { return "Configure provider" }
-    if project?.modelID != nil && defaultModelID == nil && targetOverride == nil {
-      return "Model unavailable"
+    switch readiness {
+    case .noAccount:
+      return "Connect provider"
+    case .missingCredential:
+      return "Add API key"
+    case .noModel:
+      return "Choose model"
+    case .ready:
+      guard let account = defaultAccount, let modelID = defaultModelID else {
+        return "Choose model"
+      }
+      let providerName = providers.provider(for: account.providerID)?.displayName ?? account.label
+      let model = selectedModel
+      return ComposerTargetLabelFormatter.make(
+        providerID: account.providerID,
+        providerName: providerName,
+        modelName: model?.displayName ?? modelID.rawValue,
+        modelID: modelID.rawValue,
+        supportedParameters: model?.supportedParameters ?? [],
+        reasoning: targetReasoning
+      )
     }
-    guard let modelID = defaultModelID else { return "Choose model" }
-    let providerName = providers.provider(for: account.providerID)?.displayName ?? account.label
-    let model = selectedModel
-    return ComposerTargetLabelFormatter.make(
-      providerID: account.providerID,
-      providerName: providerName,
-      modelName: model?.displayName ?? modelID.rawValue,
-      modelID: modelID.rawValue,
-      supportedParameters: model?.supportedParameters ?? [],
-      reasoning: targetReasoning
-    )
   }
 
   private var targetDetails: String {
     guard let account = defaultAccount else { return "No provider configured" }
-    let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
-    return "\(account.label) · \(modelName)"
+    switch readiness {
+    case .missingCredential:
+      return "\(account.label) · API key required"
+    case .noModel:
+      return "\(account.label) · No available model"
+    case .noAccount:
+      return "No provider configured"
+    case .ready:
+      let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
+      return "\(account.label) · \(modelName)"
+    }
+  }
+
+  private var builtInProviders: [ProviderDefinition] {
+    providers.definitions.filter(\.isBuiltIn)
+  }
+
+  private var starterActions: [StarterAction] {
+    var actions = [
+      StarterAction(id: "write", title: "Write", systemImage: "square.and.pencil", kind: .draft("Help me write a")),
+      StarterAction(id: "brainstorm", title: "Brainstorm", systemImage: "lightbulb", kind: .draft("Give me ideas for")),
+    ]
+    if selectedModel?.inputModalities.contains("image") == true {
+      actions.append(StarterAction(id: "photo", title: "Analyze a photo", systemImage: "photo", kind: .photo))
+    } else if selectedModel?.inputModalities.contains("file") == true {
+      actions.append(StarterAction(id: "file", title: "Summarize a file", systemImage: "doc.text", kind: .file))
+    } else {
+      actions.append(StarterAction(id: "explain", title: "Explain", systemImage: "text.magnifyingglass", kind: .draft("Explain this to me:")))
+    }
+    actions.append(StarterAction(id: "summarize", title: "Summarize", systemImage: "text.alignleft", kind: .draft("Summarize this for me:")))
+    return actions
   }
 
   var body: some View {
     ZStack {
-      theme.backgroundColor
-        .ignoresSafeArea()
-
+      theme.backgroundColor.ignoresSafeArea()
       VStack(spacing: 0) {
-        Spacer(minLength: 72)
-
-        VStack(spacing: 12) {
-          if let project {
-            ProjectIconView(project: project, size: 44)
-            Text(project.name)
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(project.projectColor)
-          } else {
-            Image(systemName: "bubble.left.and.bubble.right")
-              .font(.system(size: 30, weight: .medium))
-              .foregroundStyle(theme.accentColor)
-              .accessibilityHidden(true)
-          }
-
-          Text("How can I help?")
-            .font(.system(size: 30, weight: .semibold))
-            .multilineTextAlignment(.center)
-
-          Text(
-            project == nil
-              ? "Send a message to start a new conversation."
-              : projectContextSummary
-          )
-          .font(.system(size: 16))
-          .multilineTextAlignment(.center)
-          .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 32)
-
-        Spacer()
+        Spacer(minLength: 52)
+        emptyStateContent.padding(.horizontal, 24)
+        Spacer(minLength: 24)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
     .onTapGesture {
-      UIApplication.shared.sendAction(
-        #selector(UIResponder.resignFirstResponder),
-        to: nil,
-        from: nil,
-        for: nil
-      )
+      UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
@@ -159,7 +204,6 @@ struct NewChatView: View {
           .labelStyle(.iconOnly)
           .accessibilityLabel("Open sidebar")
       }
-
       ToolbarItemGroup(placement: .topBarTrailing) {
         Button("New Chat", systemImage: "square.and.pencil") {
           draft = ""
@@ -167,7 +211,6 @@ struct NewChatView: View {
           photoPickerItems = []
         }
         .labelStyle(.iconOnly)
-
         Menu {
           if let project, !project.projectPromptPresets.isEmpty {
             Menu("Prompts", systemImage: "text.bubble") {
@@ -177,12 +220,10 @@ struct NewChatView: View {
             }
           }
           if project != nil {
-            Button("Project Settings", systemImage: "folder.badge.gearshape") {
-              showProjectEditor = true
-            }
+            Button("Project Settings", systemImage: "folder.badge.gearshape") { showProjectEditor = true }
           }
           Button("Settings", systemImage: "gearshape", action: openSettings)
-          Button("Providers & Accounts", systemImage: "key.horizontal", action: openSettings)
+          Button("Providers & Accounts", systemImage: "key.horizontal") { showProviderList = true }
         } label: {
           Image(systemName: "ellipsis")
         }
@@ -194,18 +235,10 @@ struct NewChatView: View {
         draft: $draft,
         attachments: pendingAttachments,
         activity: isCreating ? .creating : .idle,
-        canSend: !isCreating && defaultAccount != nil && defaultModelID != nil,
+        canSend: !isCreating && canStartConversation,
         targetSummary: targetSummary,
         targetDetails: targetDetails,
-        openTarget: {
-          if defaultAccount != nil, defaultModelID != nil {
-            showTargetPicker = true
-          } else if project != nil {
-            showProjectEditor = true
-          } else {
-            openSettings()
-          }
-        },
+        openTarget: openCurrentTarget,
         pickPhoto: { showPhotoPicker = true },
         pickFile: { showFileImporter = true },
         removeAttachment: removePendingAttachment,
@@ -214,42 +247,266 @@ struct NewChatView: View {
     }
     .sheet(isPresented: $showTargetPicker) {
       if let account = defaultAccount, let modelID = defaultModelID {
-        NewChatTargetPickerView(
-          initialAccountID: account.id,
-          initialModelID: modelID,
-          initialReasoning: targetReasoning,
-          providers: providers
-        ) { selection in
+        NewChatTargetPickerView(initialAccountID: account.id, initialModelID: modelID, initialReasoning: targetReasoning, providers: providers) { selection in
           targetOverride = selection
         }
       }
     }
     .sheet(isPresented: $showProjectEditor) {
       if let project {
-        ProjectEditorView(
-          project: project,
-          projects: projects,
-          providers: providers,
-          mcp: mcp
-        )
-        .presentationDragIndicator(.visible)
+        ProjectEditorView(project: project, projects: projects, providers: providers, mcp: mcp)
+          .presentationDragIndicator(.visible)
       }
     }
-    .photosPicker(
-      isPresented: $showPhotoPicker,
-      selection: $photoPickerItems,
-      maxSelectionCount: 8,
-      matching: .images
-    )
-    .onChange(of: photoPickerItems) { _, items in
-      importPhotos(items)
+    .sheet(isPresented: $showProviderList) {
+      NavigationStack {
+        ProviderListView(model: providers)
+          .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showProviderList = false } } }
+      }
+      .presentationDragIndicator(.visible)
     }
-    .fileImporter(
-      isPresented: $showFileImporter,
-      allowedContentTypes: [.item],
-      allowsMultipleSelection: true
-    ) { result in
+    .sheet(item: $selectedSetupProvider) { provider in
+      NavigationStack {
+        ProviderDetailView(model: providers, providerID: provider.id)
+          .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { selectedSetupProvider = nil } } }
+      }
+      .presentationDragIndicator(.visible)
+    }
+    .sheet(item: $selectedSetupAccount) { account in
+      NavigationStack {
+        AccountDetailView(model: providers, accountID: account.id)
+          .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { selectedSetupAccount = nil } } }
+      }
+      .presentationDragIndicator(.visible)
+    }
+    .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItems, maxSelectionCount: 8, matching: .images)
+    .onChange(of: photoPickerItems) { _, items in importPhotos(items) }
+    .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
       importFiles(result)
+    }
+  }
+
+  @ViewBuilder
+  private var emptyStateContent: some View {
+    switch readiness {
+    case .ready:
+      if let project { projectReadyContent(project) } else { readyChatContent }
+    case .noAccount, .missingCredential, .noModel:
+      setupContent
+    }
+  }
+
+  private var readyChatContent: some View {
+    VStack(spacing: 18) {
+      Image(systemName: "bubble.left.and.bubble.right")
+        .font(.system(size: 30, weight: .medium))
+        .foregroundStyle(theme.accentColor)
+        .accessibilityHidden(true)
+      Text("How can I help?")
+        .font(.system(size: 30, weight: .semibold))
+        .multilineTextAlignment(.center)
+      targetChip
+      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+        ForEach(starterActions) { action in starterActionButton(action) }
+      }
+      .frame(maxWidth: 480)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private func projectReadyContent(_ project: ChatProject) -> some View {
+    VStack(spacing: 14) {
+      ProjectIconView(project: project, size: 44)
+      Text(project.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(project.projectColor)
+      Text("What are we working on?").font(.system(size: 28, weight: .semibold)).multilineTextAlignment(.center)
+      Text(projectContextSummary).font(.system(size: 15)).multilineTextAlignment(.center).foregroundStyle(.secondary)
+      targetChip
+      if !project.projectPromptPresets.isEmpty {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+          ForEach(Array(project.projectPromptPresets.prefix(4))) { preset in
+            Button { applyPromptPreset(preset) } label: {
+              HStack(spacing: 9) {
+                Image(systemName: "text.bubble").foregroundStyle(theme.accentColor)
+                Text(preset.name).lineLimit(2)
+                Spacer(minLength: 0)
+              }
+              .font(.system(size: 14, weight: .medium))
+              .multilineTextAlignment(.leading)
+              .padding(.horizontal, 14)
+              .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+              .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+              .overlay { RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .frame(maxWidth: 480)
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  @ViewBuilder
+  private var setupContent: some View {
+    VStack(spacing: 16) {
+      Image(systemName: setupIcon).font(.system(size: 32, weight: .medium)).foregroundStyle(theme.accentColor).accessibilityHidden(true)
+      Text(setupTitle).font(.system(size: 28, weight: .semibold)).multilineTextAlignment(.center)
+      Text(setupDescription).font(.system(size: 15)).multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 440)
+      if case .noAccount = readiness, !builtInProviders.isEmpty {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+          ForEach(builtInProviders) { provider in
+            Button { selectedSetupProvider = provider } label: {
+              HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(theme.accentColor)
+                Text(provider.displayName).lineLimit(1)
+                Spacer(minLength: 0)
+              }
+              .font(.system(size: 14, weight: .medium))
+              .padding(.horizontal, 12)
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+              .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+              .overlay { RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .frame(maxWidth: 440)
+      }
+      Button { primarySetupAction() } label: {
+        Label(primarySetupTitle, systemImage: primarySetupIcon)
+          .font(.system(size: 16, weight: .semibold))
+          .frame(maxWidth: 320)
+          .padding(.vertical, 12)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(theme.accentColor)
+      if case .noAccount = readiness {
+        Button("Use a custom provider") { showProviderList = true }.font(.system(size: 14, weight: .medium))
+        Text("API keys are stored in Keychain. Requests go directly to your selected provider.")
+          .font(.caption)
+          .multilineTextAlignment(.center)
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: 420)
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var targetChip: some View {
+    Button { showTargetPicker = true } label: {
+      HStack(spacing: 7) {
+        Image(systemName: "sparkles")
+        Text(targetSummary).lineLimit(1)
+        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+      }
+      .font(.system(size: 13, weight: .medium))
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .background(.thinMaterial, in: Capsule())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func starterActionButton(_ action: StarterAction) -> some View {
+    Button { applyStarterAction(action) } label: {
+      HStack(spacing: 9) {
+        Image(systemName: action.systemImage).foregroundStyle(theme.accentColor)
+        Text(action.title).lineLimit(2)
+        Spacer(minLength: 0)
+      }
+      .font(.system(size: 14, weight: .medium))
+      .multilineTextAlignment(.leading)
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+      .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+      .overlay { RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var setupIcon: String {
+    switch readiness {
+    case .noAccount: "key.horizontal"
+    case .missingCredential: "key.slash"
+    case .noModel: "rectangle.stack.badge.plus"
+    case .ready: "bubble.left.and.bubble.right"
+    }
+  }
+
+  private var setupTitle: String {
+    switch readiness {
+    case .noAccount: return project == nil ? "Connect your AI" : "Connect a provider"
+    case .missingCredential: return "Finish setting up \(defaultProvider?.displayName ?? defaultAccount?.label ?? "provider")"
+    case .noModel: return "Choose a model"
+    case .ready: return "How can I help?"
+    }
+  }
+
+  private var setupDescription: String {
+    switch readiness {
+    case .noAccount:
+      if let project { return "Add a provider account before starting a chat in \(project.name)." }
+      return "Connect an AI provider to start chatting with your own account."
+    case .missingCredential: return "Add an API key to \(defaultAccount?.label ?? "this account") before starting a chat."
+    case .noModel: return "Select an available model for \(defaultAccount?.label ?? "this account") before starting a chat."
+    case .ready: return ""
+    }
+  }
+
+  private var primarySetupTitle: String {
+    switch readiness {
+    case .noAccount: "Connect a Provider"
+    case .missingCredential: "Open Account"
+    case .noModel: "Choose Model"
+    case .ready: "Start Chatting"
+    }
+  }
+
+  private var primarySetupIcon: String {
+    switch readiness {
+    case .noAccount: "plus.circle.fill"
+    case .missingCredential: "key.fill"
+    case .noModel: "rectangle.stack.fill"
+    case .ready: "arrow.up.circle.fill"
+    }
+  }
+
+  private func primarySetupAction() {
+    switch readiness {
+    case .noAccount:
+      showProviderList = true
+    case .missingCredential, .noModel:
+      if let account = defaultAccount { selectedSetupAccount = account } else { showProviderList = true }
+    case .ready:
+      break
+    }
+  }
+
+  private func openCurrentTarget() {
+    switch readiness {
+    case .ready:
+      showTargetPicker = true
+    case .missingCredential, .noModel:
+      if let account = defaultAccount { selectedSetupAccount = account } else { showProviderList = true }
+    case .noAccount:
+      if project?.accountID != nil { showProjectEditor = true } else { showProviderList = true }
+    }
+  }
+
+  private func providerRequiresCredential(_ providerID: ProviderID) -> Bool {
+    guard let provider = providers.provider(for: providerID) else { return true }
+    switch provider.authentication {
+    case .none: return false
+    case .bearer, .header: return true
+    }
+  }
+
+  private func applyStarterAction(_ action: StarterAction) {
+    switch action.kind {
+    case .draft(let value): draft = value
+    case .photo: showPhotoPicker = true
+    case .file: showFileImporter = true
     }
   }
 
@@ -280,7 +537,7 @@ struct NewChatView: View {
     let attachments = pendingAttachments
     guard !normalized.isEmpty || !attachments.isEmpty else { return }
     guard !isCreating else { return }
-    guard defaultAccount != nil, defaultModelID != nil else { return }
+    guard canStartConversation, defaultAccount != nil, defaultModelID != nil else { return }
 
     isCreating = true
     Task { @MainActor in
@@ -307,11 +564,7 @@ struct NewChatView: View {
       draft = ""
       pendingAttachments = []
       photoPickerItems = []
-      chats.send(
-        conversationID: id,
-        text: normalized,
-        attachments: attachments
-      )
+      chats.send(conversationID: id, text: normalized, attachments: attachments)
       selectConversation(id)
     }
   }
@@ -323,10 +576,7 @@ struct NewChatView: View {
       for item in items {
         do {
           guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-          let attachment = try normalizedImageAttachment(
-            data: data,
-            suggestedName: "image-\(pendingAttachments.count + imported.count + 1)"
-          )
+          let attachment = try normalizedImageAttachment(data: data, suggestedName: "image-\(pendingAttachments.count + imported.count + 1)")
           imported.append(attachment)
         } catch {
           chats.errorMessage = error.localizedDescription
@@ -353,44 +603,24 @@ struct NewChatView: View {
 
   private func loadFileAttachment(_ url: URL) throws -> ChatAttachment {
     let access = url.startAccessingSecurityScopedResource()
-    defer {
-      if access { url.stopAccessingSecurityScopedResource() }
-    }
-
+    defer { if access { url.stopAccessingSecurityScopedResource() } }
     let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
     if let fileSize = values.fileSize, fileSize > 20 * 1_024 * 1_024 {
       throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
     }
     let data = try Data(contentsOf: url, options: [.mappedIfSafe])
     let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
-
     if type.conforms(to: .image) {
-      return try normalizedImageAttachment(
-        data: data,
-        suggestedName: url.deletingPathExtension().lastPathComponent
-      )
+      return try normalizedImageAttachment(data: data, suggestedName: url.deletingPathExtension().lastPathComponent)
     }
-
-    return ChatAttachment(
-      kind: .file,
-      filename: url.lastPathComponent,
-      mimeType: type.preferredMIMEType ?? "application/octet-stream",
-      data: data
-    )
+    return ChatAttachment(kind: .file, filename: url.lastPathComponent, mimeType: type.preferredMIMEType ?? "application/octet-stream", data: data)
   }
 
-  private func normalizedImageAttachment(data: Data, suggestedName: String) throws
-    -> ChatAttachment
-  {
+  private func normalizedImageAttachment(data: Data, suggestedName: String) throws -> ChatAttachment {
     guard let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) else {
       throw ProviderError.invalidRequest("The selected image could not be read.")
     }
-    return ChatAttachment(
-      kind: .image,
-      filename: suggestedName + ".jpg",
-      mimeType: "image/jpeg",
-      data: jpeg
-    )
+    return ChatAttachment(kind: .image, filename: suggestedName + ".jpg", mimeType: "image/jpeg", data: jpeg)
   }
 
   private func appendAttachments(_ additions: [ChatAttachment]) {
