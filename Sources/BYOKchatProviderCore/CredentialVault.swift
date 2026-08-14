@@ -91,6 +91,18 @@ public actor InMemoryCredentialVault: CredentialVault {
       }
     }
 
+    public func removeAllSecrets() throws {
+      let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+      ]
+      let status = SecItemDelete(query as CFDictionary)
+      guard status == errSecSuccess || status == errSecItemNotFound else {
+        throw ProviderError.transport(
+          message: "Keychain cleanup failed with status \(status).", completionUnknown: false)
+      }
+    }
+
     private func baseQuery(accountID: ProviderAccountID, field: String) -> [String: Any] {
       [
         kSecClass as String: kSecClassGenericPassword,

@@ -86,6 +86,17 @@ public actor InMemoryMCPCredentialVault: MCPCredentialVault {
       }
     }
 
+    public func removeAllCredentials() throws {
+      let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+      ]
+      let status = SecItemDelete(query as CFDictionary)
+      guard status == errSecSuccess || status == errSecItemNotFound else {
+        throw MCPError.transport("Keychain cleanup failed with status \(status).")
+      }
+    }
+
     private func baseQuery(serverID: MCPServerID) -> [String: Any] {
       [
         kSecClass as String: kSecClassGenericPassword,

@@ -17,10 +17,15 @@ struct BYOKchatApp: App {
 
   var body: some Scene {
     WindowGroup {
-      AppRootView(model: model, purchases: purchases)
-        .appFoundationTheme(model.themeManager)
-        .environment(model)
-        .environment(purchases.manager)
+      AppRootView(
+        model: model,
+        purchases: purchases,
+        restartApp: { model = AppModel() }
+      )
+      .id(ObjectIdentifier(model))
+      .appFoundationTheme(model.themeManager)
+      .environment(model)
+      .environment(purchases.manager)
     }
   }
 }

@@ -10,10 +10,12 @@ struct AppRootView: View {
 
   @Bindable var model: AppModel
   let purchases: BYOKPurchaseStore
+  let restartApp: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
+  @State private var bootstrap = AppBootstrapController()
   @State private var selectedConversationID: ConversationID?
   @State private var newChatProjectID: ProjectID?
   @State private var initialScrollMessageID: ChatMessageID?
@@ -21,6 +23,29 @@ struct AppRootView: View {
   @State private var isSettingsPresented = false
 
   var body: some View {
+    Group {
+      switch bootstrap.state {
+      case .loading:
+        AppStartupLoadingView()
+      case .ready:
+        readyAppContent
+      case .failed(let failure):
+        AppStartupFailureView(failure: failure, restartApp: restartApp)
+      }
+    }
+    .task {
+      await bootstrap.start(model: model)
+    }
+    .task {
+      await purchases.prepare()
+      model.themeManager.synchronizeProAccess(purchases.hasPro)
+    }
+    .onChange(of: purchases.manager.hasPro) { _, hasPro in
+      model.themeManager.synchronizeProAccess(hasPro)
+    }
+  }
+
+  private var readyAppContent: some View {
     ZStack {
       theme.backgroundColor
         .ignoresSafeArea()
@@ -65,14 +90,6 @@ struct AppRootView: View {
         .animation(.snappy(duration: 0.28), value: isSidebarPresented)
       }
     }
-    .task {
-      await purchases.prepare()
-      model.themeManager.synchronizeProAccess(purchases.hasPro)
-      await model.load()
-    }
-    .onChange(of: purchases.manager.hasPro) { _, hasPro in
-      model.themeManager.synchronizeProAccess(hasPro)
-    }
     .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
       guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
       self.selectedConversationID = nil
@@ -110,7 +127,7 @@ struct AppRootView: View {
     }
     .overlay(alignment: .top) {
       if model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
-        || model.projectSync.isSyncing || model.dataPortability.isBusy
+        || model.dataPortability.isBusy
       {
         ProgressView()
           .padding(10)

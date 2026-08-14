@@ -40,7 +40,8 @@ targets:
         NSLocalNetworkUsageDescription: BYOKchat uses your local network to connect to AI providers you configure on nearby devices.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: BrandBackground
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat

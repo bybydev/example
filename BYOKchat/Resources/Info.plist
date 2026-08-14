@@ -30,6 +30,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>BYOKchat uses your local network to connect to AI providers you configure on nearby devices.</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>BrandBackground</string>
+	</dict>
 </dict>
 </plist>
