@@ -157,7 +157,7 @@ extension NewChatView {
 
   var setupIcon: String {
     switch readiness {
-    case .noConnection: "point.3.connected.trianglepath.dotted"
+    case .noConnection: "link"
     case .missingCredential: "key.slash"
     case .noModel: "rectangle.stack.badge.plus"
     case .ready: "bubble.left.and.bubble.right"
@@ -187,6 +187,9 @@ extension NewChatView {
     case .missingCredential:
       return "\(defaultAccount?.label ?? "This connection") needs an API key before it can be used."
     case .noModel:
+      if let project, project.modelID != nil {
+        return "The model selected for \(project.name) is no longer available. Choose another project model."
+      }
       return "Choose a default model for \(defaultAccount?.label ?? "this connection") before starting a chat."
     case .ready:
       return ""
@@ -213,7 +216,9 @@ extension NewChatView {
   func primarySetupAction() {
     switch readiness {
     case .noConnection, .missingCredential, .noModel:
-      if project?.accountID != nil && defaultAccount == nil {
+      if (project?.accountID != nil && defaultAccount == nil)
+        || (project?.modelID != nil && defaultModelID == nil)
+      {
         showProjectEditor = true
       } else {
         showConnections = true
@@ -228,7 +233,9 @@ extension NewChatView {
     case .ready:
       showTargetPicker = true
     case .noConnection, .missingCredential, .noModel:
-      if project?.accountID != nil && defaultAccount == nil {
+      if (project?.accountID != nil && defaultAccount == nil)
+        || (project?.modelID != nil && defaultModelID == nil)
+      {
         showProjectEditor = true
       } else {
         showConnections = true

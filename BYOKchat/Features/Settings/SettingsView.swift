@@ -143,7 +143,7 @@ struct SettingsView: View {
         NavigationLink {
           ConnectionsView(model: model.providers)
         } label: {
-          Label("Connections", systemImage: "point.3.connected.trianglepath.dotted")
+          Label("Connections", systemImage: "link")
         }
       }
 

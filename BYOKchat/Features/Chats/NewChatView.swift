@@ -59,10 +59,8 @@ struct NewChatView: View {
       return enabled.first { $0.id == targetOverride.accountID }
     }
 
-    if let accountID = project?.accountID,
-      let projectAccount = enabled.first(where: { $0.id == accountID })
-    {
-      return projectAccount
+    if let accountID = project?.accountID {
+      return enabled.first { $0.id == accountID }
     }
 
     if let ready = enabled.first(where: isConnectionReady) {
@@ -87,10 +85,8 @@ struct NewChatView: View {
         : nil
     }
 
-    if let projectModelID = project?.modelID,
-      models.contains(where: { $0.model.id == projectModelID })
-    {
-      return projectModelID
+    if let projectModelID = project?.modelID {
+      return models.contains(where: { $0.model.id == projectModelID }) ? projectModelID : nil
     }
 
     if let accountModelID = account.defaultModelID,
@@ -139,7 +135,10 @@ struct NewChatView: View {
 
   var targetSummary: String {
     if project?.accountID != nil && defaultAccount == nil {
-      return "Connection unavailable"
+      return "Project connection unavailable"
+    }
+    if project?.modelID != nil && defaultAccount != nil && defaultModelID == nil {
+      return "Project model unavailable"
     }
     switch readiness {
     case .noConnection:

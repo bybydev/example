@@ -325,7 +325,7 @@ func connectionStatus(model: ProviderManagementModel, account: ProviderAccount) 
     return .init(label: "Needs API key", isReady: false)
   }
   let availableModels = model.models(for: account.id).filter(\.isAvailable)
-  if account.defaultModelID == nil && availableModels.isEmpty {
+  if availableModels.isEmpty {
     return .init(label: "Needs model", isReady: false)
   }
   return .init(label: "Ready", isReady: true)

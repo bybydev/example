@@ -81,7 +81,7 @@ struct ConnectionsView: View {
 
   private var emptyState: some View {
     VStack(spacing: 16) {
-      Image(systemName: "point.3.connected.trianglepath.dotted")
+      Image(systemName: "link")
         .font(.system(size: 38, weight: .medium))
         .foregroundStyle(theme.accentColor)
       Text("Connect your AI")

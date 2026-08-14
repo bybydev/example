@@ -28,7 +28,7 @@ enum BYOKProFeature: String, Sendable {
     case .themes:
       "Unlock every theme"
     case .providerAccounts:
-      "Free includes 1 provider account"
+      "Free includes 1 connection"
     case .projects:
       "Free includes 1 project"
     case .mcpServers:
@@ -43,7 +43,7 @@ enum BYOKProFeature: String, Sendable {
     case .themes:
       "Choose from every BYOK theme with Pro. Free includes Paper and Midnight."
     case .providerAccounts:
-      "Keep your existing account, or upgrade to connect unlimited provider accounts."
+      "Keep your existing connection, or upgrade to add unlimited connections."
     case .projects:
       "Keep your existing project, or upgrade to create unlimited projects."
     case .mcpServers:
@@ -56,7 +56,7 @@ enum BYOKProFeature: String, Sendable {
   private var symbolName: String {
     switch self {
     case .themes: "paintpalette.fill"
-    case .providerAccounts: "key.horizontal.fill"
+    case .providerAccounts: "link"
     case .projects: "folder.fill"
     case .mcpServers: "shippingbox.fill"
     case .analytics: "chart.bar.xaxis"
@@ -72,7 +72,7 @@ enum BYOKProAccess {
 
   static let comparisonRows: [LimitReachedComparisonRow] = [
     LimitReachedComparisonRow(feature: "Themes", freeValue: "2", proValue: "All themes"),
-    LimitReachedComparisonRow(feature: "Provider accounts", freeValue: "1", proValue: "Unlimited"),
+    LimitReachedComparisonRow(feature: "Connections", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Projects", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "MCP servers", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Usage analytics", freeValue: "Basic", proValue: "Advanced"),

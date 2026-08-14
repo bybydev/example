@@ -333,7 +333,7 @@ struct ConnectionFlowView: View {
       createdAccountID = accountID
 
       if provider.modelsPath != nil {
-        _ = await model.refreshModelsResult(accountID: accountID)
+        guard await model.refreshModelsResult(accountID: accountID) else { return }
       }
 
       let available = model.models(for: accountID).filter(\.isAvailable)
@@ -380,6 +380,9 @@ struct ConnectionFlowView: View {
         metadata: account.metadata
       )
       guard success else { return }
+      guard await model.testConnectionResult(accountID: accountID, modelID: selectedModelID) else {
+        return
+      }
       highestUnlockedPage = 3
       withAnimation { page = 3 }
     }
