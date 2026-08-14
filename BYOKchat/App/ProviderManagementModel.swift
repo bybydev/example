@@ -64,7 +64,7 @@ final class ProviderManagementModel {
     return includeHidden ? values : values.filter { !$0.isHidden }
   }
 
-  func createAccount(
+  func createConnection(
     providerID: ProviderID,
     label: String,
     credential: String,
@@ -72,8 +72,11 @@ final class ProviderManagementModel {
     defaultModel: String,
     headers: [String: String],
     metadata: [String: String]
-  ) async -> Bool {
-    await performResult("Account saved") {
+  ) async -> ProviderAccountID? {
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+    do {
       let override = try optionalURL(baseURL)
       let account = try await accountManager.createAccount(
         providerID: providerID,
@@ -102,7 +105,32 @@ final class ProviderManagementModel {
         )
       }
       try await reloadSnapshot()
+      statusMessage = "Connection saved"
+      return account.id
+    } catch {
+      errorMessage = error.localizedDescription
+      return nil
     }
+  }
+
+  func createAccount(
+    providerID: ProviderID,
+    label: String,
+    credential: String,
+    baseURL: String,
+    defaultModel: String,
+    headers: [String: String],
+    metadata: [String: String]
+  ) async -> Bool {
+    await createConnection(
+      providerID: providerID,
+      label: label,
+      credential: credential,
+      baseURL: baseURL,
+      defaultModel: defaultModel,
+      headers: headers,
+      metadata: metadata
+    ) != nil
   }
 
   func updateAccount(
@@ -112,7 +140,7 @@ final class ProviderManagementModel {
     headers: [String: String],
     metadata: [String: String]
   ) async -> Bool {
-    await performResult("Account updated") {
+    await performResult("Connection updated") {
       var updated = account
       updated.baseURLOverride = try optionalURL(baseURL)
       updated.additionalHeaders = headers
@@ -126,7 +154,7 @@ final class ProviderManagementModel {
   }
 
   func deleteAccount(_ id: ProviderAccountID) async {
-    await perform("Account deleted") {
+    await perform("Connection deleted") {
       let cleanupFailures = try await accountManager.deleteAccount(id)
       try await reloadSnapshot()
       guard cleanupFailures.isEmpty else {
@@ -144,17 +172,25 @@ final class ProviderManagementModel {
     }
   }
 
-  func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async {
-    await perform("Connection successful") {
+  func testConnectionResult(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
+    await performResult("Connection successful") {
       try await runtime.testConnection(accountID: accountID, modelID: modelID)
     }
   }
 
-  func refreshModels(accountID: ProviderAccountID) async {
-    await perform("Models refreshed") {
+  func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async {
+    _ = await testConnectionResult(accountID: accountID, modelID: modelID)
+  }
+
+  func refreshModelsResult(accountID: ProviderAccountID) async -> Bool {
+    await performResult("Models refreshed") {
       _ = try await runtime.refreshModels(accountID: accountID)
       try await reloadSnapshot()
     }
+  }
+
+  func refreshModels(accountID: ProviderAccountID) async {
+    _ = await refreshModelsResult(accountID: accountID)
   }
 
   func addManualModel(_ modelID: String, accountID: ProviderAccountID) async -> Bool {
@@ -276,6 +312,7 @@ final class ProviderManagementModel {
 
   private func perform(_ success: String?, operation: () async throws -> Void) async {
     isBusy = true
+    errorMessage = nil
     defer { isBusy = false }
     do {
       try await operation()
@@ -287,6 +324,7 @@ final class ProviderManagementModel {
 
   private func performResult(_ success: String?, operation: () async throws -> Void) async -> Bool {
     isBusy = true
+    errorMessage = nil
     defer { isBusy = false }
     do {
       try await operation()
