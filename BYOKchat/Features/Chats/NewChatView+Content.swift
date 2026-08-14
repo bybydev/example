@@ -26,13 +26,6 @@ extension NewChatView {
       Text("How can I help?")
         .font(.system(size: 30, weight: .semibold))
         .multilineTextAlignment(.center)
-      targetChip
-      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-        ForEach(starterActions) { action in
-          starterActionButton(action)
-        }
-      }
-      .frame(maxWidth: 480)
     }
     .frame(maxWidth: .infinity)
   }
