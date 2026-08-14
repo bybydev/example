@@ -105,6 +105,28 @@ targets:
       - target: BYOKchat
 
 schemes:
+  BYOKchat:
+    build:
+      targets:
+        BYOKchat: all
+        BYOKchatTests:
+          - test
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: BYOKchatTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    management:
+      shared: true
+      orderHint: 0
+
   BYOKchatScreenshots:
     build:
       targets:
