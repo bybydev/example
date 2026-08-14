@@ -242,6 +242,7 @@ enum AppStorageBootstrap {
     let fileManager = FileManager.default
     try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
 
+    var migrationBackupDirectory: URL?
     for descriptor in stores {
       let fileURL = root.appendingPathComponent(descriptor.fileName)
       guard fileManager.fileExists(atPath: fileURL.path) else { continue }
@@ -249,7 +250,13 @@ enum AppStorageBootstrap {
       guard let migrated = try migratedDataIfNeeded(original, descriptor: descriptor) else { continue }
 
       try validate(data: migrated, kind: descriptor.kind, expectedSchemaVersion: descriptor.currentSchemaVersion)
-      try createMigrationBackup(root: root, fileName: descriptor.fileName, data: original)
+      if migrationBackupDirectory == nil {
+        migrationBackupDirectory = try newBackupDirectory(root: root, group: "MigrationBackups")
+      }
+      try original.write(
+        to: migrationBackupDirectory!.appendingPathComponent(descriptor.fileName),
+        options: .atomic
+      )
       try migrated.write(to: fileURL, options: .atomic)
     }
     try pruneBackups(root: root, directory: "MigrationBackups", keeping: 3)
@@ -374,11 +381,6 @@ enum AppStorageBootstrap {
 
   private static func recoveryDirectory(root: URL) -> URL {
     root.appendingPathComponent("Recovery", isDirectory: true)
-  }
-
-  private static func createMigrationBackup(root: URL, fileName: String, data: Data) throws {
-    let directory = try newBackupDirectory(root: root, group: "MigrationBackups")
-    try data.write(to: directory.appendingPathComponent(fileName), options: .atomic)
   }
 
   private static func createResetBackup(root: URL) throws {
