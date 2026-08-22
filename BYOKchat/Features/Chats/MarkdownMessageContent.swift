@@ -64,7 +64,11 @@ struct MarkdownMessageContent: View {
           .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
       } else {
         Markdown(markdown)
-          .markdownTheme(chatTheme)
+          .markdownTheme(
+            chatTheme(
+              columnAlignments: tableColumnAlignments(in: markdown) ?? []
+            )
+          )
           .textSelection(.enabled)
           .tint(theme.accentColor)
           .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
@@ -101,7 +105,63 @@ struct MarkdownMessageContent: View {
     return true
   }
 
-  private var chatTheme: MarkdownUI.Theme {
+  /// Recovers GFM column alignments from a table's delimiter row
+  /// (`| --- | :---: | ---: |`), mirroring the mapping TableView applies at the
+  /// Grid level. MarkdownUI never exposes alignment to the theme closure, so
+  /// with fixed-width cells — where the grid anchor has no slack to act on —
+  /// it must be recovered from the source text here. Returns the first
+  /// delimiter row outside code fences; tables after the first in the same
+  /// markdown chunk share its alignments.
+  private func tableColumnAlignments(in markdown: String) -> [TextAlignment]? {
+    var inFence = false
+    for line in markdown.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+        inFence.toggle()
+        continue
+      }
+      guard !inFence, isTableDelimiterRow(trimmed) else { continue }
+
+      let cells = trimmed
+        .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+        .components(separatedBy: "|")
+      var alignments: [TextAlignment] = []
+      for cell in cells {
+        let c = cell.trimmingCharacters(in: .whitespaces)
+        switch (c.hasPrefix(":"), c.hasSuffix(":")) {
+        case (true, true): alignments.append(.center)
+        case (false, true): alignments.append(.trailing)
+        default: alignments.append(.leading)
+        }
+      }
+      return alignments.isEmpty ? nil : alignments
+    }
+    return nil
+  }
+
+  private func isTableDelimiterRow(_ line: String) -> Bool {
+    guard line.contains("|"), line.contains("-") else { return false }
+    let cells = line
+      .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+      .components(separatedBy: "|")
+    return !cells.isEmpty && cells.allSatisfy { cell in
+      let c = cell.trimmingCharacters(in: .whitespaces)
+      let body = c.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+      return !body.isEmpty && body.allSatisfy { $0 == "-" }
+        && c.contains("-")
+    }
+  }
+
+  private func horizontalAlignment(_ alignment: TextAlignment) -> HorizontalAlignment {
+    switch alignment {
+    case .leading: .leading
+    case .center: .center
+    case .trailing: .trailing
+    @unknown default: .leading
+    }
+  }
+
+  private func chatTheme(columnAlignments: [TextAlignment]) -> MarkdownUI.Theme {
     MarkdownUI.Theme.basic
       .text {
         ForegroundColor(theme.primaryForegroundColor)
@@ -238,6 +298,17 @@ struct MarkdownMessageContent: View {
         .markdownMargin(top: .em(0.16), bottom: .em(0.9))
       }
       .tableCell { configuration in
+        // Fixed cell width: the horizontal scroller above proposes nil width,
+        // and under a nil proposal every flexible sizing (min/ideal/max frames,
+        // or none at all) desynchronizes height measurement from the wrapped
+        // render — rows collapse to one line or columns balloon. An exact
+        // width makes every layout pass agree, so wrapped rows grow reliably.
+        // Uniform widths leave the grid-level column anchor no slack, so the
+        // delimiter-row alignment recovered by tableColumnAlignments is applied
+        // here instead. Tune cellWidth if tables feel cramped or airy.
+        let alignment = configuration.column < columnAlignments.count
+          ? columnAlignments[configuration.column] : .leading
+
         configuration.label
           .markdownTextStyle {
             FontSize(.em(0.88))
@@ -249,10 +320,8 @@ struct MarkdownMessageContent: View {
             }
             BackgroundColor(nil)
           }
-          // Cap long cells before vertical measurement so InlineText wraps and the Grid expands
-          // the entire row to the resulting multiline height. Short columns keep their natural
-          // width instead of every column being forced to the same large fixed width.
-          .frame(minWidth: 88, idealWidth: 150, maxWidth: 190, alignment: .topLeading)
+          .multilineTextAlignment(alignment)
+          .frame(width: 140, alignment: Alignment(horizontal: horizontalAlignment(alignment), vertical: .top))
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 10)
           .padding(.vertical, 7)

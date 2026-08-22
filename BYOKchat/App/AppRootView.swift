@@ -222,11 +222,19 @@ struct AppRootView: View {
     }
   }
 
+  /// Swipes only open the sidebar when they begin this close to the leading
+  /// edge. The gesture runs simultaneously with content gestures, so without a
+  /// start-location gate a rightward drag anywhere — like scrolling a wide
+  /// markdown table horizontally — would yank the drawer open mid-scroll.
+  private static let sidebarSwipeEdgeZone: CGFloat = 28
+
   private var openSidebarGesture: some Gesture {
     DragGesture(minimumDistance: 16, coordinateSpace: .local)
       .onEnded { value in
         let horizontalTravel = max(value.translation.width, value.predictedEndTranslation.width)
         let verticalTravel = abs(value.translation.height)
+
+        guard value.startLocation.x < Self.sidebarSwipeEdgeZone else { return }
 
         guard !isSidebarPresented,
           horizontalTravel > 90,
