@@ -40,6 +40,7 @@ extension ChatView {
                   ChatMessageView(
                     message: displayed,
                     accountLabel: accountLabel(for: stored),
+                    failureContext: failureContextLabel(for: stored),
                     canEdit: stored.role == .user && !chats.isGenerating(conversationID),
                     canRegenerate: stored.id == latestAssistantID
                       && !chats.isGenerating(conversationID),
@@ -277,6 +278,32 @@ extension ChatView {
   private func accountLabel(for message: ChatMessage) -> String? {
     guard let accountID = message.accountID else { return nil }
     return providers.accounts.first { $0.id == accountID }?.label
+  }
+
+  /// Remote failures name the connection that rejected the request: provider
+  /// and model, with the account label only when one provider has several
+  /// accounts and the label is the only way to tell them apart. Local failures
+  /// never reached an account, so they get no context line at all.
+  private func failureContextLabel(for message: ChatMessage) -> String? {
+    guard message.status == .failed, message.failureOrigin == .remote else { return nil }
+    guard let accountID = message.accountID,
+      let account = providers.accounts.first(where: { $0.id == accountID })
+    else { return nil }
+
+    var parts: [String] = []
+    if providers.accounts.filter({ $0.providerID == account.providerID }).count > 1 {
+      parts.append(account.label)
+    }
+    parts.append(
+      providers.provider(for: account.providerID)?.displayName ?? account.providerID.rawValue
+    )
+
+    if let modelID = message.modelID {
+      let modelName = providers.models(for: account.id, includeHidden: true)
+        .first(where: { $0.model.id == modelID })?.model.displayName
+      parts.append(modelName ?? modelID.rawValue)
+    }
+    return parts.joined(separator: " · ")
   }
 
   private func configurationIssue(_ conversation: ChatConversation) -> String? {

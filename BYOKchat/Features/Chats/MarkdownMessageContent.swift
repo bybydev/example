@@ -6,6 +6,9 @@ import SwiftUI
 struct MarkdownMessageContent: View {
   let text: String
   var showsSources = true
+  /// Stretch every block to the offered width. Off inside right-hugging user
+  /// bubbles so the capsule shrinks to its content instead of filling the row.
+  var fillsWidth = true
 
   @Environment(\.appFoundationTheme) private var theme
   @State private var browserDestination: BrowserDestination?
@@ -25,7 +28,7 @@ struct MarkdownMessageContent: View {
         }
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     .environment(
       \.openURL,
       OpenURLAction { url in
@@ -58,13 +61,13 @@ struct MarkdownMessageContent: View {
           .imageAccessibility(.sre)
           .font(.system(size: 17))
           .foregroundStyle(theme.primaryForegroundColor)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
       } else {
         Markdown(markdown)
           .markdownTheme(chatTheme)
           .textSelection(.enabled)
           .tint(theme.accentColor)
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
       }
 
     case .code(let language, let content):

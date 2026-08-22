@@ -25,32 +25,34 @@ struct RepairBanner: View {
 enum ChatAttachmentPresentation {
   case composer
   case message
+  /// Tiles rendered inside a merged user-message bubble.
+  case bubble
 
   var imageWidth: CGFloat {
     switch self {
     case .composer: 104
-    case .message: 112
+    case .message, .bubble: 112
     }
   }
 
   var imageHeight: CGFloat {
     switch self {
     case .composer: 86
-    case .message: 112
+    case .message, .bubble: 112
     }
   }
 
   var railHeight: CGFloat {
     switch self {
     case .composer: imageHeight + 8
-    case .message: imageHeight
+    case .message, .bubble: imageHeight
     }
   }
 
   var fileWidth: CGFloat {
     switch self {
     case .composer: 122
-    case .message: 132
+    case .message, .bubble: 132
     }
   }
 
@@ -58,6 +60,7 @@ enum ChatAttachmentPresentation {
     switch self {
     case .composer: 16
     case .message: 20
+    case .bubble: 14
     }
   }
 }
@@ -72,25 +75,46 @@ struct ChatAttachmentStrip: View {
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
-    ScrollView(.horizontal) {
-      LazyHStack(spacing: 10) {
-        ForEach(attachments) { attachment in
-          attachmentView(attachment)
-        }
-
-        if presentation == .composer,
-          let pickPhoto,
-          let pickFile
-        {
-          addAttachmentTile(pickPhoto: pickPhoto, pickFile: pickFile)
-        }
+    if hugsContent {
+      tileList
+        .frame(height: presentation.railHeight)
+        .fixedSize(horizontal: false, vertical: true)
+    } else {
+      ScrollView(.horizontal) {
+        tileList
+          .padding(.vertical, presentation == .composer ? 4 : 0)
       }
-      .padding(.vertical, presentation == .composer ? 4 : 0)
+      .frame(height: presentation.railHeight)
+      .fixedSize(horizontal: false, vertical: true)
+      .scrollIndicators(.hidden)
+      // Keep tiles clipped inside the merged bubble instead of bleeding past
+      // its edges while rubber-banding.
+      .scrollClipDisabled(presentation != .bubble)
     }
-    .frame(height: presentation.railHeight)
-    .fixedSize(horizontal: false, vertical: true)
-    .scrollIndicators(.hidden)
-    .scrollClipDisabled()
+  }
+
+  private var hugsContent: Bool {
+    guard presentation == .bubble, !attachments.isEmpty else { return false }
+    let gaps = CGFloat(10 * (attachments.count - 1))
+    let tiles = attachments.reduce(CGFloat(0)) {
+      $0 + ($1.isImage ? presentation.imageWidth : presentation.fileWidth)
+    }
+    return tiles + gaps <= 240
+  }
+
+  private var tileList: some View {
+    LazyHStack(spacing: 10) {
+      ForEach(attachments) { attachment in
+        attachmentView(attachment)
+      }
+
+      if presentation == .composer,
+        let pickPhoto,
+        let pickFile
+      {
+        addAttachmentTile(pickPhoto: pickPhoto, pickFile: pickFile)
+      }
+    }
   }
 
   @ViewBuilder
@@ -196,6 +220,9 @@ struct ChatAttachmentStrip: View {
 struct ChatMessageView: View {
   let message: ChatMessage
   let accountLabel: String?
+  /// Identity line for remote failures, e.g. "Work · OpenAI · gpt-4o".
+  /// Local failures pass nil so the error stands alone above its Retry pill.
+  var failureContext: String? = nil
   let canEdit: Bool
   let canRegenerate: Bool
   let edit: () -> Void
@@ -219,25 +246,9 @@ struct ChatMessageView: View {
   }
 
   private var userMessage: some View {
-    VStack(alignment: .trailing, spacing: 10) {
-      if let attachments = message.attachments, !attachments.isEmpty {
-        ChatAttachmentStrip(
-          attachments: attachments,
-          presentation: .message
-        )
-        .frame(maxWidth: .infinity)
-      }
-
-      if !message.content.isEmpty {
-        HStack(alignment: .top) {
-          Spacer(minLength: 54)
-          MarkdownMessageContent(text: message.content, showsSources: false)
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
-            .background(theme.elevatedSurfaceColor, in: userBubbleShape)
-            .overlay(userBubbleShape.stroke(theme.borderColor, lineWidth: 0.5))
-        }
-      }
+    HStack(alignment: .top) {
+      Spacer(minLength: 54)
+      userBubble
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .contextMenu {
@@ -253,21 +264,50 @@ struct ChatMessageView: View {
     }
   }
 
-  private var userBubbleShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 22, style: .continuous)
+  /// Media and text share one continuous capsule so attachments hug the same
+  /// edge as the message instead of stretching edge-to-edge on their own.
+  @ViewBuilder
+  private var userBubble: some View {
+    let attachments = message.attachments ?? []
+    let hasMedia = !attachments.isEmpty
+    let hasText = !message.content.isEmpty
+
+    VStack(alignment: .leading, spacing: hasMedia && hasText ? 9 : 0) {
+      if hasMedia {
+        ChatAttachmentStrip(
+          attachments: attachments,
+          presentation: .bubble
+        )
+      }
+
+      if hasText {
+        MarkdownMessageContent(text: message.content, showsSources: false, fillsWidth: false)
+      }
+    }
+    .padding(.horizontal, 15)
+    .padding(.vertical, hasMedia ? 8 : 11)
+    .background(theme.elevatedSurfaceColor, in: userBubbleShape)
+    .overlay(userBubbleShape.stroke(theme.borderColor, lineWidth: 0.5))
   }
 
-  private var failureOrigin: ChatFailureOrigin {
-    message.failureOrigin ?? .local
+  private var userBubbleShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: 22, style: .continuous)
   }
 
   private var assistantMessage: some View {
     VStack(alignment: .leading, spacing: 10) {
       messageBody
-      footer
 
-      if message.status != .pending && message.status != .streaming {
-        assistantActions
+      if message.status == .failed {
+        // The failure footer owns the retry action, so failed turns never
+        // render the icon row with its dead copy/share buttons.
+        failureFooter
+      } else {
+        footer
+
+        if message.status != .pending && message.status != .streaming {
+          assistantActions
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -314,10 +354,7 @@ struct ChatMessageView: View {
     .font(.system(size: 17))
     .foregroundStyle(theme.secondaryForegroundColor)
     .buttonStyle(.plain)
-    .frame(
-      maxWidth: .infinity,
-      alignment: message.status == .failed && failureOrigin == .local ? .trailing : .leading
-    )
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder
@@ -417,43 +454,41 @@ struct ChatMessageView: View {
   private var failureFooter: some View {
     let description = message.errorDescription ?? "Something went wrong. Try again."
 
-    if failureOrigin == .local {
-      HStack(alignment: .top, spacing: 7) {
+    HStack(alignment: .top, spacing: 8) {
+      Image(systemName: "exclamationmark.circle.fill")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.orange)
+        .padding(.top, 1)
+
+      VStack(alignment: .leading, spacing: 8) {
+        if let failureContext, !failureContext.isEmpty {
+          Text(failureContext)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.82))
+        }
+
         Text(description)
           .font(.system(size: 13))
           .foregroundStyle(theme.secondaryForegroundColor)
-          .multilineTextAlignment(.trailing)
           .fixedSize(horizontal: false, vertical: true)
 
-        Image(systemName: "exclamationmark.circle.fill")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.orange)
-          .padding(.top, 1)
-      }
-      .frame(maxWidth: .infinity, alignment: .trailing)
-      .padding(.vertical, 2)
-    } else {
-      HStack(alignment: .top, spacing: 8) {
-        Image(systemName: "exclamationmark.circle.fill")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.orange)
-          .padding(.top, 1)
-
-        VStack(alignment: .leading, spacing: 2) {
-          if let accountLabel, !accountLabel.isEmpty {
-            Text(accountLabel)
-              .font(.system(size: 11, weight: .semibold))
-              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.82))
-          }
-          Text(description)
-            .font(.system(size: 13))
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .fixedSize(horizontal: false, vertical: true)
+        Button(action: regenerate) {
+          Label("Retry", systemImage: "arrow.clockwise")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(canRegenerate ? theme.accentColor : theme.secondaryForegroundColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(theme.surfaceColor, in: Capsule())
+            .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.75))
+            .opacity(canRegenerate ? 1 : 0.45)
         }
+        .buttonStyle(.plain)
+        .disabled(!canRegenerate)
+        .accessibilityLabel("Retry")
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, 2)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.vertical, 2)
   }
 }
 
