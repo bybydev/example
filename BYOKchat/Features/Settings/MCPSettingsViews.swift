@@ -6,6 +6,7 @@ struct MCPServerListView: View {
   @Bindable var model: MCPManagementModel
 
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(\.appFoundationTheme) private var theme
   @State private var showAddServer = false
   @State private var showProUpsell = false
   @State private var pendingDelete: MCPRemoteServer?
@@ -18,6 +19,7 @@ struct MCPServerListView: View {
           systemImage: "shippingbox.and.arrow.backward",
           description: Text("Add a remote Streamable HTTP MCP endpoint to discover its tools.")
         )
+        .listRowBackground(theme.surfaceColor)
       } else {
         ForEach(model.servers) { server in
           NavigationLink {
@@ -31,8 +33,12 @@ struct MCPServerListView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("MCP Servers")
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
@@ -95,23 +101,23 @@ struct MCPServerListView: View {
         if !server.isEnabled {
           Text("Disabled")
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
         Spacer()
         if let snapshot = model.snapshot(for: server.id) {
           Text("\(snapshot.tools.count) tools")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
       Text(server.endpoint.absoluteString)
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .lineLimit(1)
       if let snapshot = model.snapshot(for: server.id) {
         Text(statusText(snapshot))
           .font(.caption2)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
       }
     }
     .padding(.vertical, 3)
@@ -131,6 +137,7 @@ private struct MCPServerEditorView: View {
   let server: MCPRemoteServer?
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var name: String
   @State private var endpoint: String
   @State private var authenticationKind: MCPAuthenticationKind
@@ -165,6 +172,7 @@ private struct MCPServerEditorView: View {
           .keyboardType(.URL)
         Toggle("Enabled", isOn: $isEnabled)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         Picker("Authentication", selection: $authenticationKind) {
@@ -191,9 +199,12 @@ private struct MCPServerEditorView: View {
         }
       } header: {
         Text("Authentication")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Credentials are stored in Keychain and are never written to the MCP server configuration file.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         TextEditor(text: $additionalHeadersText)
@@ -206,9 +217,12 @@ private struct MCPServerEditorView: View {
         }
       } header: {
         Text("Additional Headers")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Optional non-secret headers, one per line as Name: Value. Authentication and MCP protocol headers are managed by BYOKchat.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       if let server {
         Section("Discovery") {
@@ -223,12 +237,12 @@ private struct MCPServerEditorView: View {
               ForEach(snapshot.warnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle")
                   .font(.footnote)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
             }
           } else {
             Text("Not discovered yet.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
 
           Button("Refresh Tools", systemImage: "arrow.clockwise") {
@@ -236,6 +250,7 @@ private struct MCPServerEditorView: View {
           }
           .disabled(model.isBusy)
         }
+        .listRowBackground(theme.surfaceColor)
 
         if let tools = model.snapshot(for: server.id)?.tools, !tools.isEmpty {
           Section("Discovered Tools") {
@@ -246,25 +261,30 @@ private struct MCPServerEditorView: View {
                 if tool.title != nil {
                   Text(tool.remoteName)
                     .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryForegroundColor)
                 }
                 Text(tool.description)
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
                   .lineLimit(3)
               }
               .padding(.vertical, 2)
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
 
       Section {
         Text("Enable this server globally here, then choose which chats can use it from Chat → Tools. Each tool can Ask, Always Allow, or stay Disabled.")
           .font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle(server == nil ? "Add MCP Server" : "MCP Server")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {

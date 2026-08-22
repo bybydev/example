@@ -138,6 +138,7 @@ struct SettingsView: View {
           onRequestUpgrade: { showThemeUpsell = true }
         )
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("AI") {
         NavigationLink {
@@ -146,6 +147,7 @@ struct SettingsView: View {
           Label("Connections", systemImage: "link")
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Tools & MCP") {
         NavigationLink {
@@ -154,6 +156,7 @@ struct SettingsView: View {
           Label("MCP Servers", systemImage: "shippingbox.and.arrow.backward")
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("New Chats") {
         NavigationLink {
@@ -161,10 +164,11 @@ struct SettingsView: View {
         } label: {
           LabeledContent("Default System Prompt") {
             Text(model.preferences.defaultSystemPrompt.isEmpty ? "None" : "Configured")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         Toggle(
@@ -188,9 +192,12 @@ struct SettingsView: View {
         }
       } header: {
         Text("iCloud Projects")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Syncs project instructions, files, presets, and tool defaults. Chat history and credentials remain local to this device.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         Button("Export Full Backup", systemImage: "archivebox") {
@@ -212,11 +219,15 @@ struct SettingsView: View {
         }
       } header: {
         Text("Data Portability")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Backups and connection configuration never include API keys or secret headers.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       TelemetrySettingsSection()
+        .listRowBackground(theme.surfaceColor)
 
       Section("Destructive Actions") {
         Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
@@ -226,13 +237,15 @@ struct SettingsView: View {
           confirmDeleteCredentials = true
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       if let status = model.dataPortability.statusMessage {
         Section("Last Data Operation") {
           Text(status)
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       #if DEBUG
@@ -240,6 +253,7 @@ struct SettingsView: View {
         hasCompletedOnboarding = false
         dismiss()
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Developer Tools") {
         NavigationLink {
@@ -248,6 +262,7 @@ struct SettingsView: View {
           Label("Provider Console", systemImage: "terminal")
         }
       }
+      .listRowBackground(theme.surfaceColor)
       #endif
 
       Section("About") {
@@ -255,11 +270,13 @@ struct SettingsView: View {
         LabeledContent("Credentials", value: "Keychain")
         Text("Requests go directly through the connection or remote MCP endpoint selected by the app.")
           .font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
     .scrollContentBackground(.hidden)
-    .background(theme.backgroundColor)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
   }
 
   private var projectSyncStatusText: String {
@@ -319,6 +336,7 @@ struct SettingsView: View {
 
 private struct DefaultSystemPromptView: View {
   @Bindable var preferences: AppPreferencesModel
+  @Environment(\.appFoundationTheme) private var theme
   @State private var text: String
 
   init(preferences: AppPreferencesModel) {
@@ -333,11 +351,18 @@ private struct DefaultSystemPromptView: View {
           .frame(minHeight: 220)
       } footer: {
         Text("This prompt is copied into new conversations. Existing conversations are unchanged.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
+
       Section {
         Button("Clear", role: .destructive) { text = "" }
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Default Prompt")
     .navigationBarTitleDisplayMode(.inline)
     .onChange(of: text) { _, value in preferences.defaultSystemPrompt = value }
