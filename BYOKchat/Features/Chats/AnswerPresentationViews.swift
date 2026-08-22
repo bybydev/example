@@ -415,71 +415,75 @@ private struct FullScreenMermaidView: View {
   }
 }
 
-struct AnswerSourcesView: View {
+struct AnswerSourcesSheet: View {
   let sources: [AnswerSource]
-  let open: (URL) -> Void
 
   @Environment(\.appFoundationTheme) private var theme
-  @State private var isExpanded = false
-
-  private var visibleSources: ArraySlice<AnswerSource> {
-    sources.prefix(isExpanded ? sources.count : min(3, sources.count))
-  }
+  @Environment(\.dismiss) private var dismiss
+  @State private var browserDestination: BrowserDestination?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 9) {
-      Label("Sources", systemImage: "link")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(theme.secondaryForegroundColor)
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 9) {
+          ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
+            Button {
+              browserDestination = BrowserDestination(url: source.url)
+            } label: {
+              HStack(spacing: 11) {
+                Text("\(index + 1)")
+                  .font(.system(size: 11, weight: .bold, design: .rounded))
+                  .foregroundStyle(theme.accentColor)
+                  .frame(width: 26, height: 26)
+                  .background(theme.accentColor.opacity(0.12), in: Circle())
 
-      ForEach(Array(visibleSources.enumerated()), id: \.element.id) { index, source in
-        Button {
-          open(source.url)
-        } label: {
-          HStack(spacing: 11) {
-            Text("\(index + 1)")
-              .font(.system(size: 11, weight: .bold, design: .rounded))
-              .foregroundStyle(theme.accentColor)
-              .frame(width: 26, height: 26)
-              .background(theme.accentColor.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(source.displayTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.primaryForegroundColor)
+                    .lineLimit(1)
+                  Text(source.host)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                    .lineLimit(1)
+                }
 
-            VStack(alignment: .leading, spacing: 2) {
-              Text(source.displayTitle)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(theme.primaryForegroundColor)
-                .lineLimit(1)
-              Text(source.host)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.secondaryForegroundColor)
-                .lineLimit(1)
+                Spacer(minLength: 8)
+
+                Image(systemName: "arrow.up.right")
+                  .font(.system(size: 12, weight: .semibold))
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              }
+              .padding(.horizontal, 11)
+              .frame(minHeight: 48)
+              .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+              .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                  .stroke(theme.borderColor, lineWidth: 0.6)
+              )
             }
-
-            Spacer(minLength: 8)
-
-            Image(systemName: "arrow.up.right")
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(theme.secondaryForegroundColor)
+            .buttonStyle(.plain)
           }
-          .padding(.horizontal, 11)
-          .frame(minHeight: 48)
-          .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-          .overlay(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-              .stroke(theme.borderColor, lineWidth: 0.6)
-          )
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-
-      if sources.count > 3 {
-        Button(isExpanded ? "Show fewer sources" : "Show all \(sources.count) sources") {
-          withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+      .background(theme.backgroundColor.ignoresSafeArea())
+      .navigationTitle("Sources")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { dismiss() }
         }
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(theme.accentColor)
       }
     }
-    .padding(.top, 3)
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+    .sheet(item: $browserDestination) { destination in
+      InAppBrowserView(url: destination.url)
+        .ignoresSafeArea()
+    }
   }
 }
 

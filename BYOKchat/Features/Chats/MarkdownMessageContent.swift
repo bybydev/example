@@ -5,7 +5,6 @@ import SwiftUI
 
 struct MarkdownMessageContent: View {
   let text: String
-  var showsSources = true
   /// Stretch every block to the offered width. Off inside right-hugging user
   /// bubbles so the capsule shrinks to its content instead of filling the row.
   var fillsWidth = true
@@ -15,17 +14,10 @@ struct MarkdownMessageContent: View {
 
   var body: some View {
     let blocks = AnswerContentParser.parse(text)
-    let sources = showsSources ? AnswerContentParser.sources(in: blocks) : []
 
     VStack(alignment: .leading, spacing: 12) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
         blockView(block)
-      }
-
-      if !sources.isEmpty {
-        AnswerSourcesView(sources: sources) { url in
-          browserDestination = BrowserDestination(url: url)
-        }
       }
     }
     .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)

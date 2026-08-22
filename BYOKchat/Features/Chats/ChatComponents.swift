@@ -232,6 +232,7 @@ struct ChatMessageView: View {
   @Environment(\.appFoundationTheme) private var theme
   @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
+  @State private var showSourcesSheet = false
 
   var body: some View {
     Group {
@@ -281,7 +282,7 @@ struct ChatMessageView: View {
       }
 
       if hasText {
-        MarkdownMessageContent(text: message.content, showsSources: false, fillsWidth: false)
+        MarkdownMessageContent(text: message.content, fillsWidth: false)
       }
     }
     .padding(.horizontal, 15)
@@ -317,6 +318,16 @@ struct ChatMessageView: View {
     .sheet(isPresented: $showReasoningSheet) {
       ReasoningSheet(reasoning: message.reasoning)
     }
+    .sheet(isPresented: $showSourcesSheet) {
+      AnswerSourcesSheet(sources: messageSources)
+    }
+  }
+
+  /// Links extracted from the answer body. They stay tappable inline in the
+  /// markdown; this list is the consolidated index behind the More menu.
+  private var messageSources: [AnswerSource] {
+    guard message.role == .assistant, !message.content.isEmpty else { return [] }
+    return AnswerContentParser.sources(in: AnswerContentParser.parse(message.content))
   }
 
   private var assistantActions: some View {
@@ -338,6 +349,11 @@ struct ChatMessageView: View {
       Menu {
         Button("Message Info", systemImage: "info.circle") {
           showMessageInfo = true
+        }
+        if !messageSources.isEmpty {
+          Button("Sources", systemImage: "link") {
+            showSourcesSheet = true
+          }
         }
         if !message.reasoning.isEmpty {
           Button("Copy Reasoning", systemImage: "doc.on.doc") {
@@ -371,10 +387,7 @@ struct ChatMessageView: View {
     }
 
     if !message.content.isEmpty {
-      MarkdownMessageContent(
-        text: message.content,
-        showsSources: message.role == .assistant
-      )
+      MarkdownMessageContent(text: message.content)
     }
   }
 
