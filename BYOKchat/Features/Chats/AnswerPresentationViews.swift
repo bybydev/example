@@ -339,12 +339,21 @@ struct MermaidAnswerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
       } else {
-        MermaidDiagramView(
-          source: source,
-          theme: diagramTheme,
-          parseError: $parseError,
-          diagramBounds: $diagramBounds
-        )
+        // BeautifulMermaid exposes the diagram's natural pixel size through
+        // intrinsicContentSize. Under the transcript's ideal-size passes that
+        // value escapes as this block's reported width, widening the message
+        // column and pushing sibling code blocks past the screen edge — pin
+        // the representable to an explicit slot so only the offered proposal
+        // reaches layout.
+        GeometryReader { proxy in
+          MermaidDiagramView(
+            source: source,
+            theme: diagramTheme,
+            parseError: $parseError,
+            diagramBounds: $diagramBounds
+          )
+          .frame(width: proxy.size.width, height: proxy.size.height)
+        }
         .frame(height: diagramHeight)
         .padding(8)
       }
