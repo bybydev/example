@@ -21,6 +21,7 @@ struct SettingsView: View {
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
   @State private var showThemeUpsell = false
+  @State private var showPaywall = false
 
   private enum ImportKind {
     case backup
@@ -31,6 +32,14 @@ struct SettingsView: View {
     failureAlertView
       .sheet(isPresented: $showThemeUpsell) {
         BYOKProUpsellFlow(feature: .themes)
+      }
+      .sheet(isPresented: $showPaywall) {
+        ProPaywallView(
+          purchases: purchases.manager,
+          configuration: BYOKPurchaseStore.paywallConfiguration,
+          initialSelectedProductID: BYOKPurchaseStore.yearlyProductID
+        )
+        .environment(purchases.manager)
       }
   }
 
@@ -131,6 +140,12 @@ struct SettingsView: View {
 
   private var settingsForm: some View {
     Form {
+      ProPlanSettingsSection(
+        purchaseManager: purchases.manager,
+        onUpgrade: { showPaywall = true }
+      )
+      .listRowBackground(theme.surfaceColor)
+
       Section("Appearance") {
         ThemePickerView(
           manager: model.themeManager,

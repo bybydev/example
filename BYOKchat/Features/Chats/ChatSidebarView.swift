@@ -37,6 +37,7 @@ struct ChatSidebarView: View {
   @State private var projectEditorTarget: ChatProject?
   @State private var destination: SidebarDestination?
   @State private var showPaywall = false
+  @State private var showCelebration = false
   @State private var showProjectUpsell = false
   @FocusState private var searchFocused: Bool
 
@@ -116,6 +117,22 @@ struct ChatSidebarView: View {
       )
       .environment(purchases.manager)
       .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showCelebration) {
+      ProCelebrationView(
+        configuration: FoundationProCelebrationConfiguration(
+          navigationTitle: "BYOK Pro",
+          rows: BYOKProAccess.comparisonRows.map {
+            FoundationProComparisonRow(
+              feature: $0.feature,
+              freeValue: $0.freeValue,
+              proValue: $0.proValue
+            )
+          },
+          comparisonAccessibilityLabel: "BYOK Free and Pro feature comparison"
+        )
+      )
+      .environment(purchases.manager)
     }
     .alert(
       "Rename Chat",
@@ -358,20 +375,22 @@ struct ChatSidebarView: View {
 
       Spacer(minLength: 8)
 
-      if !purchases.hasPro {
-        Button("Upgrade to Pro", systemImage: "crown.fill") {
+      Button("Upgrade to Pro", systemImage: "crown.fill") {
+        if purchases.hasPro {
+          showCelebration = true
+        } else {
           showPaywall = true
         }
-        .labelStyle(.iconOnly)
-        .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(theme.accentColor)
-        .frame(width: 44, height: 44)
-        .background(.thinMaterial, in: Circle())
-        .overlay(Circle().stroke(theme.accentColor.opacity(0.45), lineWidth: 0.8))
-        .contentShape(Circle())
-        .buttonStyle(.plain)
-        .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
       }
+      .labelStyle(.iconOnly)
+      .font(.system(size: 17, weight: .semibold))
+      .foregroundStyle(theme.accentColor)
+      .frame(width: 44, height: 44)
+      .background(.thinMaterial, in: Circle())
+      .overlay(Circle().stroke(theme.accentColor.opacity(0.45), lineWidth: 0.8))
+      .contentShape(Circle())
+      .buttonStyle(.plain)
+      .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
 
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
