@@ -184,6 +184,12 @@ struct SettingsView: View {
 
         LabeledContent("Status", value: projectSyncStatusText)
 
+        if let error = model.projectSync.errorMessage {
+          Text(error)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
+
         if model.projectSync.isEnabled {
           Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
             Task { @MainActor in await model.projectSync.syncNow() }

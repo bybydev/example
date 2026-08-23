@@ -150,6 +150,10 @@ public struct ProjectWorkspaceState: Codable, Sendable, Equatable {
 public protocol ProjectWorkspacePersistence: Sendable {
   func loadData() async throws -> Data?
   func saveData(_ data: Data) async throws
+
+  /// Preserves unreadable stored data by moving it aside so future saves cannot overwrite it.
+  /// Returns `false` when there is nothing to quarantine.
+  func quarantineData() async throws -> Bool
 }
 
 public actor InMemoryProjectWorkspacePersistence: ProjectWorkspacePersistence {
@@ -158,6 +162,11 @@ public actor InMemoryProjectWorkspacePersistence: ProjectWorkspacePersistence {
   public init(data: Data? = nil) { self.data = data }
   public func loadData() -> Data? { data }
   public func saveData(_ data: Data) { self.data = data }
+  public func quarantineData() -> Bool {
+    guard data != nil else { return false }
+    data = nil
+    return true
+  }
 }
 
 public actor JSONFileProjectWorkspacePersistence: ProjectWorkspacePersistence {
@@ -177,6 +186,16 @@ public actor JSONFileProjectWorkspacePersistence: ProjectWorkspacePersistence {
     )
     try data.write(to: fileURL, options: [.atomic])
   }
+
+  public func quarantineData() throws -> Bool {
+    guard FileManager.default.fileExists(atPath: fileURL.path) else { return false }
+    let quarantineURL = fileURL.appendingPathExtension("corrupt")
+    if FileManager.default.fileExists(atPath: quarantineURL.path) {
+      try FileManager.default.removeItem(at: quarantineURL)
+    }
+    try FileManager.default.moveItem(at: fileURL, to: quarantineURL)
+    return true
+  }
 }
 
 public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
@@ -189,6 +208,8 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
   case filesTooLarge
   case invalidPresetName
   case duplicatePresetName
+  case loadFailurePreserved
+  case writesBlockedAfterLoadFailure
 
   public var errorDescription: String? {
     switch self {
@@ -210,6 +231,10 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
       "Enter a preset name."
     case .duplicatePresetName:
       "Preset names must be unique within a project."
+    case .loadFailurePreserved:
+      "Projects could not be loaded because their stored file was unreadable. The file was preserved with a '.corrupt' extension; new projects will start fresh."
+    case .writesBlockedAfterLoadFailure:
+      "Project changes are blocked because the projects file could not be read. Fix or remove that file, then restart the app."
     }
   }
 }
@@ -218,6 +243,7 @@ public actor ProjectWorkspaceStore {
   private var state = ProjectWorkspaceState()
   private let persistence: any ProjectWorkspacePersistence
   private var hasLoaded = false
+  private var blocksWritesAfterFailedLoad = false
 
   public init(persistence: any ProjectWorkspacePersistence) {
     self.persistence = persistence
@@ -228,13 +254,21 @@ public actor ProjectWorkspaceStore {
     defer { hasLoaded = true }
     guard let data = try await persistence.loadData() else { return }
 
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    let decoded = try decoder.decode(ProjectWorkspaceState.self, from: data)
-    guard decoded.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
-      throw ProjectWorkspaceError.unsupportedVersion(decoded.schemaVersion)
+    do {
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = .iso8601
+      let decoded = try decoder.decode(ProjectWorkspaceState.self, from: data)
+      guard decoded.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
+        throw ProjectWorkspaceError.unsupportedVersion(decoded.schemaVersion)
+      }
+      state = try Self.sanitized(decoded)
+    } catch {
+      // Preserve the unreadable file so a later save cannot replace it with empty state.
+      // When it cannot be moved aside, block all writes outright.
+      let quarantined = (try? await persistence.quarantineData()) ?? false
+      blocksWritesAfterFailedLoad = !quarantined
+      throw ProjectWorkspaceError.loadFailurePreserved
     }
-    state = try Self.sanitized(decoded)
   }
 
   public func snapshot() -> ProjectWorkspaceState { state }
@@ -406,6 +440,9 @@ public actor ProjectWorkspaceStore {
   }
 
   private func persist() async throws {
+    guard !blocksWritesAfterFailedLoad else {
+      throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
+    }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601

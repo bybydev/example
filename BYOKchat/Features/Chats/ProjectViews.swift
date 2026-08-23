@@ -43,6 +43,45 @@ struct ProjectIconView: View {
   }
 }
 
+/// Context-menu entries that move a chat into, out of, or between projects.
+struct ConversationProjectMenu: View {
+  let conversationID: ConversationID
+  let projects: ProjectManagementModel
+
+  var body: some View {
+    if let current = projects.project(for: conversationID) {
+      Button("Remove from \(current.name)", systemImage: "folder.badge.minus") {
+        Task { await projects.removeConversation(conversationID) }
+      }
+      Menu("Move to Project…", systemImage: "folder.badge.plus") {
+        ForEach(projects.projects.filter { $0.id != current.id }) { project in
+          Button(project.name) {
+            Task { await projects.assignConversation(conversationID, to: project.id) }
+          }
+        }
+      }
+    } else if projects.projects.isEmpty {
+      EmptyView()
+    } else {
+      Menu("Add to Project…", systemImage: "folder.badge.plus") {
+        ForEach(projects.projects) { project in
+          Button(project.name) {
+            Task { await projects.assignConversation(conversationID, to: project.id) }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Rough size context for attach decisions: text averages ~4 bytes per token, so the
+/// estimate tells users why a large reference file may exceed a model's context window.
+func projectFileDetail(_ file: ProjectFile) -> String {
+  let size = ByteCountFormatter.string(fromByteCount: Int64(file.byteCount), countStyle: .file)
+  let estimatedTokens = max(1, file.byteCount / 4)
+  return "\(size) · ~\(estimatedTokens.formatted()) tokens"
+}
+
 struct ProjectEditorView: View {
   let existing: ChatProject?
   @Bindable var projects: ProjectManagementModel
@@ -191,7 +230,7 @@ struct ProjectEditorView: View {
               VStack(alignment: .leading, spacing: 2) {
                 Text(file.filename)
                   .lineLimit(1)
-                Text(ByteCountFormatter.string(fromByteCount: Int64(file.byteCount), countStyle: .file))
+                Text(projectFileDetail(file))
                   .font(.caption)
                   .foregroundStyle(theme.secondaryForegroundColor)
               }
@@ -211,7 +250,7 @@ struct ProjectEditorView: View {
           Text("Project Files")
             .foregroundStyle(theme.secondaryForegroundColor)
         } footer: {
-          Text("Up to 8 files, 20 MB each and 40 MB total. These files are sent as persistent reference context for every chat in this project without being copied into message history.")
+          Text("Up to 8 files, 20 MB each and 40 MB total. Files stay here as a library — attach them from the chat composer when a message needs one. Attached files are sent with that message only, so larger files increase the cost of that request.")
             .foregroundStyle(theme.secondaryForegroundColor)
         }
         .listRowBackground(theme.surfaceColor)
@@ -634,6 +673,269 @@ private struct ProjectToolsEditor: View {
       toolPresets[index].configuration = configuration
     } else {
       toolPresets.append(ProjectToolPreset(name: normalized, configuration: configuration))
+    }
+  }
+}
+
+/// Landing screen for a single project: its chats, its reference-file library,
+/// and a read-only summary of the defaults new chats inherit.
+struct ProjectDetailView: View {
+  let projectID: ProjectID
+  let chats: ChatManagementModel
+  let projects: ProjectManagementModel
+  let providers: ProviderManagementModel
+  let mcp: MCPManagementModel
+  let newChat: (ProjectID?) -> Void
+  let openChat: (ConversationID) -> Void
+
+  private enum Segment: String, CaseIterable, Identifiable {
+    case chats
+    case sources
+    case settings
+
+    var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .chats: "Chats"
+      case .sources: "Sources"
+      case .settings: "Settings"
+      }
+    }
+  }
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var segment: Segment = .chats
+  @State private var showEditor = false
+  @State private var confirmDelete = false
+
+  private var project: ChatProject? {
+    projects.project(projectID)
+  }
+
+  private var conversations: [ChatConversation] {
+    chats.conversations.filter { projects.projectID(for: $0.id) == projectID }
+  }
+
+  var body: some View {
+    Group {
+      if let project {
+        VStack(spacing: 0) {
+          Picker("Section", selection: $segment) {
+            ForEach(Segment.allCases) { value in
+              Text(value.title).tag(value)
+            }
+          }
+          .pickerStyle(.segmented)
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+
+          switch segment {
+          case .chats:
+            chatList(project)
+          case .sources:
+            sourceList(project)
+          case .settings:
+            settingsList(project)
+          }
+        }
+      } else {
+        ContentUnavailableView(
+          "Project Removed",
+          systemImage: "folder.badge.questionmark",
+          description: Text("This project was deleted.")
+        )
+      }
+    }
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle(project?.name ?? "Project")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
+        Button("New Chat", systemImage: "square.and.pencil") {
+          newChat(projectID)
+        }
+        .labelStyle(.iconOnly)
+
+        Button("Edit Project", systemImage: "slider.horizontal.3") {
+          showEditor = true
+        }
+        .labelStyle(.iconOnly)
+      }
+    }
+    .sheet(isPresented: $showEditor) {
+      if let project {
+        ProjectEditorView(
+          project: project,
+          projects: projects,
+          providers: providers,
+          mcp: mcp
+        )
+        .presentationDragIndicator(.visible)
+      }
+    }
+    .confirmationDialog(
+      "Delete project?",
+      isPresented: $confirmDelete,
+      titleVisibility: .visible
+    ) {
+      Button("Delete Project", role: .destructive) {
+        Task { @MainActor in
+          await projects.deleteProject(projectID)
+          await mcp.reloadFromStorage()
+          dismiss()
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Chats in this project will be kept and moved back to standalone chats.")
+    }
+  }
+
+  @ViewBuilder
+  private func chatList(_ project: ChatProject) -> some View {
+    if conversations.isEmpty {
+      ContentUnavailableView {
+        Label("No Chats Yet", systemImage: "bubble.left.and.bubble.right")
+      } description: {
+        Text("New chats here use \(project.name) defaults and instructions.")
+      } actions: {
+        Button("New Chat") { newChat(project.id) }
+          .buttonStyle(.borderedProminent)
+      }
+    } else {
+      List(conversations) { conversation in
+        Button {
+          openChat(conversation.id)
+        } label: {
+          ConversationRow(
+            conversation: conversation,
+            account: providers.accounts.first { $0.id == conversation.accountID }
+          )
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(theme.surfaceColor)
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+    }
+  }
+
+  @ViewBuilder
+  private func sourceList(_ project: ChatProject) -> some View {
+    if project.projectFiles.isEmpty {
+      ContentUnavailableView(
+        "No Files",
+        systemImage: "doc",
+        description: Text("Add reference files with Edit Project, then attach them from the chat composer when a message needs one.")
+      )
+    } else {
+      List(project.projectFiles) { file in
+        HStack(spacing: 10) {
+          Image(systemName: file.mimeType.hasPrefix("image/") ? "photo" : "doc.fill")
+            .foregroundStyle(theme.secondaryForegroundColor)
+
+          VStack(alignment: .leading, spacing: 2) {
+            Text(file.filename)
+              .lineLimit(1)
+            Text(projectFileDetail(file))
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+      .listStyle(.plain)
+      .scrollContentBackground(.hidden)
+    }
+  }
+
+  @ViewBuilder
+  private func settingsList(_ project: ChatProject) -> some View {
+    List {
+      Section {
+        LabeledContent("Provider Account", value: accountLabel(project))
+        LabeledContent("Model", value: modelLabel(project))
+      } header: {
+        Text("New Chat Defaults")
+      } footer: {
+        Text("Applied when a chat is created. Existing chats keep their current provider and model.")
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      Section("Instructions") {
+        let instructions = project.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        if instructions.isEmpty {
+          Text("App default system prompt.")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        } else {
+          Text(instructions)
+        }
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      if !project.projectPromptPresets.isEmpty {
+        Section("Reusable Prompts") {
+          ForEach(project.projectPromptPresets) { preset in
+            VStack(alignment: .leading, spacing: 2) {
+              Text(preset.name)
+              Text(preset.prompt)
+                .font(.caption)
+                .foregroundStyle(theme.secondaryForegroundColor)
+                .lineLimit(1)
+            }
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      Section {
+        LabeledContent("Default Tools", value: toolsLabel(project))
+      } footer: {
+        Text("Chats start with these MCP servers and permissions until they customize Tools themselves.")
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      Section {
+        Button("Delete Project…", role: .destructive) {
+          confirmDelete = true
+        }
+      }
+      .listRowBackground(theme.surfaceColor)
+    }
+    .scrollContentBackground(.hidden)
+  }
+
+  private func accountLabel(_ project: ChatProject) -> String {
+    guard let accountID = project.accountID else { return "App Default" }
+    return providers.accounts.first { $0.id == accountID }?.label ?? "Unavailable Account"
+  }
+
+  private func modelLabel(_ project: ChatProject) -> String {
+    guard let modelID = project.modelID else { return "Account Default" }
+    if let accountID = project.accountID,
+      let record = providers.models(for: accountID, includeHidden: true)
+        .first(where: { $0.model.id == modelID })
+    {
+      return record.model.displayName
+    }
+    return modelID.rawValue
+  }
+
+  private func toolsLabel(_ project: ChatProject) -> String {
+    let serverCount = project.mcpConfiguration?.enabledServerIDs.count ?? 0
+    let presetCount = project.projectToolPresets.count
+    switch (serverCount, presetCount) {
+    case (0, 0):
+      return "None"
+    case (_, 0):
+      return "\(serverCount) server\(serverCount == 1 ? "" : "s")"
+    case (0, _):
+      return "\(presetCount) preset\(presetCount == 1 ? "" : "s")"
+    default:
+      return "\(serverCount) server\(serverCount == 1 ? "" : "s") · \(presetCount) preset\(presetCount == 1 ? "" : "s")"
     }
   }
 }

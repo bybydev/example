@@ -98,6 +98,7 @@ struct ChatListView: View {
             renameTarget = conversation
             renameText = conversation.title
           }
+          ConversationProjectMenu(conversationID: conversation.id, projects: projects)
           Button("Delete", systemImage: "trash", role: .destructive) {
             Task {
               await chats.deleteConversation(conversation.id)
@@ -193,7 +194,7 @@ private struct SearchResultRow: View {
   }
 }
 
-private struct ConversationRow: View {
+struct ConversationRow: View {
   let conversation: ChatConversation
   let account: ProviderAccount?
 

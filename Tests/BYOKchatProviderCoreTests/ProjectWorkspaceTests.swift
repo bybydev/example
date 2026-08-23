@@ -182,3 +182,71 @@ import Testing
     )
   }
 }
+
+@Test func projectWorkspaceQuarantinesUnreadableFileInsteadOfOverwritingIt() async throws {
+  let directory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("byokchat-project-workspace-\(UUID().uuidString)")
+  let fileURL = directory.appendingPathComponent("projects-v1.json")
+  let quarantineURL = fileURL.appendingPathExtension("corrupt")
+  defer { try? FileManager.default.removeItem(at: directory) }
+
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  try Data("definitely not json".utf8).write(to: fileURL)
+
+  let workspace = ProjectWorkspaceStore(
+    persistence: JSONFileProjectWorkspacePersistence(fileURL: fileURL)
+  )
+  var loadError: ProjectWorkspaceError?
+  do {
+    try await workspace.load()
+  } catch let error as ProjectWorkspaceError {
+    loadError = error
+  }
+  #expect(loadError == .loadFailurePreserved)
+
+  #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+  #expect(FileManager.default.fileExists(atPath: quarantineURL.path))
+
+  // The store starts fresh without destroying the preserved original.
+  let created = try await workspace.createProject(
+    name: "Fresh Start",
+    symbolName: "folder.fill",
+    accentID: "blue",
+    accountID: nil,
+    modelID: nil,
+    instructions: ""
+  )
+  #expect(try await workspace.project(id: created.id).name == "Fresh Start")
+  #expect(FileManager.default.fileExists(atPath: quarantineURL.path))
+}
+
+@Test func projectWorkspaceBlocksWritesWhenUnreadableFileCannotBeQuarantined() async throws {
+  let workspace = ProjectWorkspaceStore(persistence: RefusingQuarantinePersistence())
+
+  var loadError: ProjectWorkspaceError?
+  do {
+    try await workspace.load()
+  } catch let error as ProjectWorkspaceError {
+    loadError = error
+  }
+  #expect(loadError == .loadFailurePreserved)
+
+  await #expect(throws: ProjectWorkspaceError.writesBlockedAfterLoadFailure) {
+    _ = try await workspace.createProject(
+      name: "Blocked",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: ""
+    )
+  }
+}
+
+/// Simulates storage that cannot move unreadable data aside (for example a read-only volume),
+/// where overwriting would destroy the only copy of the user's projects.
+private struct RefusingQuarantinePersistence: ProjectWorkspacePersistence {
+  func loadData() async throws -> Data? { Data("unreadable payload".utf8) }
+  func saveData(_ data: Data) async throws {}
+  func quarantineData() async throws -> Bool { false }
+}

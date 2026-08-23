@@ -91,7 +91,8 @@ struct ChatSidebarView: View {
           projects: projects,
           providers: providers,
           mcp: mcp,
-          newChat: newChat
+          newChat: newChat,
+          openChat: selectConversation
         )
         .presentationDragIndicator(.visible)
       case .plugins:
@@ -420,6 +421,7 @@ struct ChatSidebarView: View {
         renameTarget = conversation
         renameText = conversation.title
       }
+      ConversationProjectMenu(conversationID: conversation.id, projects: projects)
       Button("Delete", systemImage: "trash", role: .destructive) {
         removePinned(conversation.id)
         Task { @MainActor in

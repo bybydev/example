@@ -275,7 +275,7 @@ extension NewChatView {
     var parts = ["Uses project defaults and instructions"]
     if !project.projectFiles.isEmpty {
       parts.append(
-        "\(project.projectFiles.count) reference file\(project.projectFiles.count == 1 ? "" : "s")"
+        "\(project.projectFiles.count) file\(project.projectFiles.count == 1 ? "" : "s") to attach"
       )
     }
     if let configuration = project.mcpConfiguration, !configuration.enabledServerIDs.isEmpty {

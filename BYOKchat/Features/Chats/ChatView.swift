@@ -340,7 +340,7 @@ struct ChatView: View {
     )
   }
 
-  private func appendAttachments(_ additions: [ChatAttachment]) {
+  func appendAttachments(_ additions: [ChatAttachment]) {
     guard !additions.isEmpty else { return }
     let combined = pendingAttachments + additions
     guard combined.count <= 8 else {

@@ -27,7 +27,6 @@ public actor ChatRuntime {
   private let providerRuntime: any ProviderStreamingRuntime
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
-  private let projectWorkspace: ProjectWorkspaceStore?
   private let toolRuntime: (any ChatConversationToolExecuting)?
   private let maxToolRounds: Int
   private let telemetry: ChatRuntimeTelemetry
@@ -47,7 +46,6 @@ public actor ChatRuntime {
     providerRuntime: any ProviderStreamingRuntime,
     providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
-    projectWorkspace: ProjectWorkspaceStore? = nil,
     toolRuntime: (any ChatConversationToolExecuting)? = nil,
     telemetryRecorder: TelemetryRecorder? = nil,
     maxToolRounds: Int = 8,
@@ -56,7 +54,6 @@ public actor ChatRuntime {
     self.providerRuntime = providerRuntime
     self.providerWorkspace = providerWorkspace
     self.conversations = conversations
-    self.projectWorkspace = projectWorkspace
     self.toolRuntime = toolRuntime
     self.telemetry = ChatRuntimeTelemetry(recorder: telemetryRecorder)
     self.maxToolRounds = max(1, maxToolRounds)
@@ -194,7 +191,6 @@ public actor ChatRuntime {
         .first { $0.model.id == conversation.modelID }
       let model = modelRecord?.model
       let contextWindowKind = model?.effectiveContextWindowKind ?? .combined
-      let projectAttachments = await projectWorkspace?.files(for: conversationID).map(\.attachment) ?? []
       let tools: [ChatToolDefinition]
       if let toolRuntime {
         tools = await toolRuntime.availableTools(conversationID: conversationID)
@@ -208,7 +204,6 @@ public actor ChatRuntime {
         contextWindowKind: contextWindowKind,
         reservedOutputTokens: conversation.options.maxOutputTokens,
         modelMaxOutputTokens: model?.maxOutputTokens,
-        supplementalAttachments: projectAttachments,
         tools: tools
       )
       try await conversations.setContextOmissionCount(
@@ -222,7 +217,6 @@ public actor ChatRuntime {
         contextWindowKind: contextWindowKind,
         requestIndex: 1,
         toolCount: tools.count,
-        projectFileCount: projectAttachments.count,
         isContinuation: false,
         messageID: turn.assistantMessage.id
       )
@@ -427,7 +421,6 @@ public actor ChatRuntime {
             contextWindowKind: contextWindowKind,
             reservedOutputTokens: conversation.options.maxOutputTokens,
             modelMaxOutputTokens: model?.maxOutputTokens,
-            supplementalAttachments: projectAttachments,
             tools: tools,
             requiredTailMessages: continuationMessages
           )
@@ -443,7 +436,6 @@ public actor ChatRuntime {
             contextWindowKind: contextWindowKind,
             requestIndex: toolRoundCount + 1,
             toolCount: tools.count,
-            projectFileCount: projectAttachments.count,
             isContinuation: true,
             messageID: turn.assistantMessage.id
           )

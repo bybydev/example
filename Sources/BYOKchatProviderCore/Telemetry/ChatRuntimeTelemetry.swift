@@ -50,7 +50,6 @@ struct ChatRuntimeTelemetry: Sendable {
     contextWindowKind: ProviderContextWindowKind,
     requestIndex: Int,
     toolCount: Int,
-    projectFileCount: Int,
     isContinuation: Bool,
     messageID: ChatMessageID
   ) {
@@ -61,7 +60,6 @@ struct ChatRuntimeTelemetry: Sendable {
       "contextWindowKind": contextWindowKind.rawValue,
       "requestIndex": String(requestIndex),
       "toolCount": String(toolCount),
-      "projectFileCount": String(projectFileCount),
       "isContinuation": String(isContinuation),
     ]
     if let contextWindow = model?.contextWindow {

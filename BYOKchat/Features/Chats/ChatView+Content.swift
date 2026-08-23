@@ -225,6 +225,8 @@ extension ChatView {
             openChatSettings: { showTargetSettings = true },
             pickPhoto: { showPhotoPicker = true },
             pickFile: { showFileImporter = true },
+            projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
+            attachProjectFile: { file in appendAttachments([file.attachment]) },
             removeAttachment: removePendingAttachment,
             send: send,
             stop: {

@@ -41,6 +41,8 @@ struct ChatComposer: View {
   let openTarget: () -> Void
   let pickPhoto: () -> Void
   let pickFile: () -> Void
+  let projectFiles: [ProjectFile]
+  let attachProjectFile: (ProjectFile) -> Void
   let removeAttachment: (String) -> Void
   let send: () -> Void
   let stop: (() -> Void)?
@@ -69,6 +71,8 @@ struct ChatComposer: View {
     openTarget: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    projectFiles: [ProjectFile] = [],
+    attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
     send: @escaping () -> Void,
     stop: (() -> Void)? = nil
@@ -82,6 +86,8 @@ struct ChatComposer: View {
     self.openTarget = openTarget
     self.pickPhoto = pickPhoto
     self.pickFile = pickFile
+    self.projectFiles = projectFiles
+    self.attachProjectFile = attachProjectFile
     self.removeAttachment = removeAttachment
     self.send = send
     self.stop = stop
@@ -101,6 +107,8 @@ struct ChatComposer: View {
     openChatSettings: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    projectFiles: [ProjectFile] = [],
+    attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
     send: @escaping () -> Void,
     stop: @escaping () -> Void
@@ -129,6 +137,8 @@ struct ChatComposer: View {
     openTarget = openChatSettings
     self.pickPhoto = pickPhoto
     self.pickFile = pickFile
+    self.projectFiles = projectFiles
+    self.attachProjectFile = attachProjectFile
     self.removeAttachment = removeAttachment
     self.send = send
     self.stop = stop
@@ -147,6 +157,8 @@ struct ChatComposer: View {
     openTarget: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    projectFiles: [ProjectFile] = [],
+    attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
     send: @escaping () -> Void
   ) {
@@ -160,6 +172,8 @@ struct ChatComposer: View {
       openTarget: openTarget,
       pickPhoto: pickPhoto,
       pickFile: pickFile,
+      projectFiles: projectFiles,
+      attachProjectFile: attachProjectFile,
       removeAttachment: removeAttachment,
       send: send
     )
@@ -334,6 +348,13 @@ struct ChatComposer: View {
     Menu {
       Button("Photo", systemImage: "photo", action: pickPhoto)
       Button("File", systemImage: "doc", action: pickFile)
+      if !projectFiles.isEmpty {
+        Menu("Project Files", systemImage: "folder.badge.plus") {
+          ForEach(projectFiles) { file in
+            Button(file.filename) { attachProjectFile(file) }
+          }
+        }
+      }
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 21, weight: .regular))

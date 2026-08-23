@@ -89,7 +89,6 @@ final class AppModel {
       providerRuntime: providerRuntime,
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
-      projectWorkspace: projectWorkspace,
       toolRuntime: conversationToolRuntime
     )
 

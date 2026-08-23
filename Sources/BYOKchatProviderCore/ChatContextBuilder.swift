@@ -75,7 +75,6 @@ public enum ChatContextBuilder {
     contextWindowKind: ProviderContextWindowKind = .combined,
     reservedOutputTokens: Int? = nil,
     modelMaxOutputTokens: Int? = nil,
-    supplementalAttachments: [ChatAttachment] = [],
     tools: [ChatToolDefinition] = [],
     requiredTailMessages: [ProviderMessage] = [],
     policy: ChatContextPolicy = .automatic
@@ -97,15 +96,6 @@ public enum ChatContextBuilder {
     let trimmedSystem = conversation.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedSystem.isEmpty {
       fixedMessages.append(.init(role: .system, content: trimmedSystem))
-    }
-    if !supplementalAttachments.isEmpty {
-      fixedMessages.append(
-        .init(
-          role: .user,
-          content: "Project reference files are attached as persistent context for this conversation. Use them when relevant.",
-          attachments: supplementalAttachments
-        )
-      )
     }
 
     let latestUserIndex = conversation.messages.lastIndex { $0.role == .user }

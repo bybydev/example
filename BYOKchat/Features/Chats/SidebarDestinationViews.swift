@@ -102,17 +102,18 @@ struct SidebarProjectsView: View {
   @Bindable var providers: ProviderManagementModel
   @Bindable var mcp: MCPManagementModel
   let newChat: (ProjectID?) -> Void
+  let openChat: (ConversationID) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
   @Environment(PurchaseManager.self) private var purchaseManager
-  @State private var editorTarget: ChatProject?
-  @State private var showEditor = false
+  @State private var path: [ProjectID] = []
+  @State private var showNewProjectEditor = false
   @State private var showProUpsell = false
   @State private var pendingDelete: ChatProject?
 
   var body: some View {
-    NavigationStack {
+    NavigationStack(path: $path) {
       Group {
         if projects.projects.isEmpty {
           ContentUnavailableView(
@@ -123,8 +124,7 @@ struct SidebarProjectsView: View {
         } else {
           List(projects.projects) { project in
             Button {
-              editorTarget = project
-              showEditor = true
+              path = [project.id]
             } label: {
               HStack(spacing: 12) {
                 ProjectIconView(project: project, size: 34)
@@ -179,18 +179,28 @@ struct SidebarProjectsView: View {
               currentCount: projects.projects.count,
               hasPro: purchaseManager.hasPro
             ) {
-              editorTarget = nil
-              showEditor = true
+              showNewProjectEditor = true
             } else {
               showProUpsell = true
             }
           }
         }
       }
+      .navigationDestination(for: ProjectID.self) { projectID in
+        ProjectDetailView(
+          projectID: projectID,
+          chats: chats,
+          projects: projects,
+          providers: providers,
+          mcp: mcp,
+          newChat: newChat,
+          openChat: openChat
+        )
+      }
     }
-    .sheet(isPresented: $showEditor) {
+    .sheet(isPresented: $showNewProjectEditor) {
       ProjectEditorView(
-        project: editorTarget,
+        project: nil,
         projects: projects,
         providers: providers,
         mcp: mcp

@@ -295,6 +295,8 @@ struct NewChatView: View {
         openTarget: openCurrentTarget,
         pickPhoto: { showPhotoPicker = true },
         pickFile: { showFileImporter = true },
+        projectFiles: project?.projectFiles ?? [],
+        attachProjectFile: { file in appendAttachments([file.attachment]) },
         removeAttachment: removePendingAttachment,
         send: startConversation
       )
