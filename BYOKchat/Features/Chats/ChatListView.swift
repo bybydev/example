@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -13,6 +14,7 @@ struct ChatListView: View {
   @State private var renameText = ""
   @State private var searchText = ""
   @State private var searchTarget: ConversationSearchResult?
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -40,6 +42,9 @@ struct ChatListView: View {
           conversationList
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("BYOKchat")
       .searchable(text: $searchText, prompt: "Search chats and messages")
       .onChange(of: searchText) { _, value in chats.search(value) }
@@ -112,6 +117,7 @@ struct ChatListView: View {
           }
         }
       }
+      .listRowBackground(theme.surfaceColor)
     }
     .listStyle(.plain)
   }
@@ -129,6 +135,7 @@ struct ChatListView: View {
           SearchResultRow(result: result)
         }
         .buttonStyle(.plain)
+        .listRowBackground(theme.surfaceColor)
       }
       .listStyle(.plain)
     }
@@ -147,6 +154,8 @@ struct ChatListView: View {
 private struct SearchResultRow: View {
   let result: ConversationSearchResult
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack {
@@ -156,11 +165,11 @@ private struct SearchResultRow: View {
         Spacer()
         Label(roleLabel, systemImage: roleIcon)
           .labelStyle(.iconOnly)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
       Text(result.snippet)
         .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .lineLimit(3)
     }
     .contentShape(Rectangle())
@@ -188,6 +197,8 @@ private struct ConversationRow: View {
   let conversation: ChatConversation
   let account: ProviderAccount?
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline) {
@@ -197,13 +208,13 @@ private struct ConversationRow: View {
         Spacer()
         Text(conversation.updatedAt, style: .relative)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
 
       if let preview = conversation.lastMessagePreview {
         Text(preview)
           .font(.subheadline)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
           .lineLimit(2)
       }
 
@@ -217,7 +228,7 @@ private struct ConversationRow: View {
         }
       }
       .font(.caption)
-      .foregroundStyle(.tertiary)
+      .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
       .lineLimit(1)
     }
     .padding(.vertical, 4)

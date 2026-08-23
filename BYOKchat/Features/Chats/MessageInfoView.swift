@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -6,6 +7,7 @@ struct MessageInfoView: View {
   let accountLabel: String?
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
 
   private var billing: ChatBillingSnapshot { ChatBilling.snapshot(for: message) }
 
@@ -23,6 +25,7 @@ struct MessageInfoView: View {
             LabeledContent("Model", value: modelID.rawValue)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         if let usage = message.usage {
           Section {
@@ -42,9 +45,12 @@ struct MessageInfoView: View {
             LabeledContent(costLabel, value: costValue)
           } header: {
             Text("Usage")
+              .foregroundStyle(theme.secondaryForegroundColor)
           } footer: {
             Text(costFootnote)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         if billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
@@ -57,9 +63,12 @@ struct MessageInfoView: View {
             }
           } header: {
             Text("Pricing snapshot")
+              .foregroundStyle(theme.secondaryForegroundColor)
           } footer: {
             Text("The price snapshot is stored with this message so later model price changes do not rewrite historical spend.")
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         Section("Request") {
@@ -77,7 +86,11 @@ struct MessageInfoView: View {
               .multilineTextAlignment(.trailing)
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Message Info")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

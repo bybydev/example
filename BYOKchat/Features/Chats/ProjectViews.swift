@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -49,6 +50,7 @@ struct ProjectEditorView: View {
   @Bindable var mcp: MCPManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var name: String
   @State private var symbolName: String
   @State private var accentID: String
@@ -142,6 +144,7 @@ struct ProjectEditorView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           Picker("Provider account", selection: $accountID) {
@@ -161,30 +164,36 @@ struct ProjectEditorView: View {
           }
         } header: {
           Text("New Chat Defaults")
+            .foregroundStyle(theme.secondaryForegroundColor)
         } footer: {
           Text("Project defaults apply when a new chat is created. Existing chats keep their current provider and model.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           TextEditor(text: $instructions)
             .frame(minHeight: 130)
         } header: {
           Text("Instructions")
+            .foregroundStyle(theme.secondaryForegroundColor)
         } footer: {
           Text("Used as the system prompt for new chats in this project. Leave blank to use the app default system prompt.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           ForEach(projectFiles) { file in
             HStack(spacing: 10) {
               Image(systemName: file.mimeType.hasPrefix("image/") ? "photo" : "doc.fill")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
               VStack(alignment: .leading, spacing: 2) {
                 Text(file.filename)
                   .lineLimit(1)
                 Text(ByteCountFormatter.string(fromByteCount: Int64(file.byteCount), countStyle: .file))
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
               Spacer()
               Button("Remove \(file.filename)", systemImage: "trash", role: .destructive) {
@@ -200,9 +209,12 @@ struct ProjectEditorView: View {
           .disabled(projectFiles.count >= 8)
         } header: {
           Text("Project Files")
+            .foregroundStyle(theme.secondaryForegroundColor)
         } footer: {
           Text("Up to 8 files, 20 MB each and 40 MB total. These files are sent as persistent reference context for every chat in this project without being copied into message history.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           ForEach(promptPresets) { preset in
@@ -213,16 +225,15 @@ struct ProjectEditorView: View {
               HStack {
                 VStack(alignment: .leading, spacing: 3) {
                   Text(preset.name)
-                    .foregroundStyle(.primary)
                   Text(preset.prompt)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryForegroundColor)
                     .lineLimit(2)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
                   .font(.caption.weight(.semibold))
-                  .foregroundStyle(.tertiary)
+                  .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
               }
             }
             .swipeActions {
@@ -238,9 +249,12 @@ struct ProjectEditorView: View {
           }
         } header: {
           Text("Reusable Prompts")
+            .foregroundStyle(theme.secondaryForegroundColor)
         } footer: {
           Text("Prompt presets appear in the composer for chats in this project.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           NavigationLink {
@@ -252,13 +266,18 @@ struct ProjectEditorView: View {
           } label: {
             LabeledContent("Default Tools") {
               Text(toolSummary)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
             }
           }
         } footer: {
           Text("Chats inherit these MCP servers and permissions until that chat creates its own override. Tool presets can be applied later to individual chats.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle(existing == nil ? "New Project" : "Edit Project")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -412,6 +431,7 @@ private struct ProjectPromptPresetEditor: View {
   let save: (ProjectPromptPreset) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var name: String
   @State private var prompt: String
 
@@ -426,11 +446,16 @@ private struct ProjectPromptPresetEditor: View {
     NavigationStack {
       Form {
         TextField("Name", text: $name)
+          .listRowBackground(theme.surfaceColor)
         Section("Prompt") {
           TextEditor(text: $prompt)
             .frame(minHeight: 180)
         }
+        .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle(existing == nil ? "New Prompt" : "Edit Prompt")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -462,6 +487,7 @@ private struct ProjectToolsEditor: View {
   @Binding var toolPresets: [ProjectToolPreset]
   @Bindable var mcp: MCPManagementModel
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var showPresetName = false
   @State private var presetName = ""
 
@@ -473,8 +499,9 @@ private struct ProjectToolsEditor: View {
           systemImage: "arrow.triangle.branch"
         )
         .font(.footnote)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       if mcp.servers.isEmpty {
         Section {
@@ -484,10 +511,12 @@ private struct ProjectToolsEditor: View {
             description: Text("Add a remote MCP server in Settings first.")
           )
         }
+        .listRowBackground(theme.surfaceColor)
       } else {
         ForEach(mcp.servers) { server in
           serverSection(server)
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section("Tool Presets") {
@@ -500,7 +529,7 @@ private struct ProjectToolsEditor: View {
               Spacer()
               Text("Apply")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
             }
           }
           .swipeActions {
@@ -515,7 +544,11 @@ private struct ProjectToolsEditor: View {
           showPresetName = true
         }
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Default Tools")
     .navigationBarTitleDisplayMode(.inline)
     .alert("Save Tool Preset", isPresented: $showPresetName) {
@@ -560,7 +593,7 @@ private struct ProjectToolsEditor: View {
               Text(binding.remoteTool.title ?? binding.remoteTool.remoteName)
               Text(binding.remoteTool.description)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .lineLimit(2)
             }
             Spacer()

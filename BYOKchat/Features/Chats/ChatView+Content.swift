@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UIKit
@@ -19,7 +20,7 @@ extension ChatView {
                 systemImage: "text.badge.minus"
               )
               .font(.system(size: 12))
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
               .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -29,7 +30,7 @@ extension ChatView {
                   .font(.system(size: 30, weight: .semibold))
                 Text("Using \(targetLabel(conversation))")
                   .font(.system(size: 14))
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
               .frame(maxWidth: .infinity)
               .padding(.top, 112)
@@ -200,7 +201,7 @@ extension ChatView {
             } label: {
               Image(systemName: "arrow.down")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .frame(width: 32, height: 32)
                 .glassEffect(.clear, in: Circle())
                 .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
@@ -359,6 +360,8 @@ private struct MCPToolApprovalCard: View {
   let request: MCPToolApprovalRequest
   let resolve: (MCPToolApprovalDecision) -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .top, spacing: 10) {
@@ -374,7 +377,7 @@ private struct MCPToolApprovalCard: View {
             .font(.system(size: 13, weight: .medium))
           Text(request.toolDescription)
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .fixedSize(horizontal: false, vertical: true)
         }
       }
@@ -389,7 +392,7 @@ private struct MCPToolApprovalCard: View {
         }
       }
       .font(.system(size: 11, weight: .medium))
-      .foregroundStyle(.secondary)
+      .foregroundStyle(theme.secondaryForegroundColor)
 
       DisclosureGroup("Arguments") {
         Text(request.arguments.prettyJSONString())
@@ -419,11 +422,11 @@ private struct MCPToolApprovalCard: View {
       .font(.system(size: 13, weight: .semibold))
     }
     .padding(14)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .stroke(
-          request.destructiveHint == true ? Color.orange.opacity(0.35) : Color.primary.opacity(0.09),
+          request.destructiveHint == true ? Color.orange.opacity(0.35) : theme.borderColor,
           lineWidth: 0.8
         )
     )
@@ -447,6 +450,8 @@ private struct MCPToolRunningCard: View {
   let displayName: String
   let isWaitingForApproval: Bool
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack(spacing: 10) {
       ProgressView().controlSize(.small)
@@ -455,15 +460,19 @@ private struct MCPToolRunningCard: View {
           .font(.system(size: 12, weight: .semibold))
         Text(displayName)
           .font(.system(size: 12))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer()
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
     .background(
-      Color(uiColor: .secondarySystemBackground),
+      theme.surfaceColor,
       in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(theme.borderColor, lineWidth: 0.75)
     )
   }
 }
@@ -471,6 +480,8 @@ private struct MCPToolRunningCard: View {
 private struct ChatToolRoundView: View {
   let round: ChatToolRound
   let displayName: (String) -> String
+
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -505,22 +516,26 @@ private struct ChatToolRoundView: View {
     } label: {
       HStack(spacing: 8) {
         Image(systemName: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-          .foregroundStyle(failed ? Color.orange : Color.secondary)
+          .foregroundStyle(failed ? Color.orange : theme.secondaryForegroundColor)
         Text(displayName(call.name))
           .font(.system(size: 12, weight: .semibold))
           .lineLimit(2)
         Spacer()
         Text(failed ? "Failed" : "Done")
           .font(.system(size: 11))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
     }
-    .tint(.secondary)
+    .tint(theme.secondaryForegroundColor)
     .padding(.horizontal, 11)
     .padding(.vertical, 9)
     .background(
-      Color(uiColor: .secondarySystemBackground),
+      theme.surfaceColor,
       in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(theme.borderColor, lineWidth: 0.75)
     )
   }
 }
@@ -531,6 +546,8 @@ private struct MCPElicitationCard: View {
 
   @State private var textValues: [String: String]
   @State private var boolValues: [String: Bool]
+
+  @Environment(\.appFoundationTheme) private var theme
 
   init(request: MCPElicitationRequest, resolve: @escaping (MCPElicitationDecision) -> Void) {
     self.request = request
@@ -572,7 +589,7 @@ private struct MCPElicitationCard: View {
           VStack(alignment: .leading, spacing: 8) {
             Text("Complete the requested step in your browser, then return here.")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
             Link(destination: url) {
               Label("Open Link", systemImage: "arrow.up.right.square")
             }
@@ -600,10 +617,10 @@ private struct MCPElicitationCard: View {
       .font(.system(size: 13, weight: .semibold))
     }
     .padding(14)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(Color.primary.opacity(0.09), lineWidth: 0.8)
+        .stroke(theme.borderColor, lineWidth: 0.8)
     )
   }
 
@@ -650,7 +667,7 @@ private struct MCPElicitationCard: View {
           .keyboardType(field.kind == .integer || field.kind == .number ? .decimalPad : .default)
         }
         if let description = field.description, !description.isEmpty {
-          Text(description).font(.caption2).foregroundStyle(.secondary)
+          Text(description).font(.caption2).foregroundStyle(theme.secondaryForegroundColor)
         }
       }
     }

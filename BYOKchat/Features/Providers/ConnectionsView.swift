@@ -88,7 +88,7 @@ struct ConnectionsView: View {
         .font(.system(size: 28, weight: .semibold))
       Text("Add a connection to use your own AI provider and API key in BYOKchat.")
         .font(.system(size: 15))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .multilineTextAlignment(.center)
         .frame(maxWidth: 420)
       Button {
@@ -103,7 +103,7 @@ struct ConnectionsView: View {
       .tint(theme.accentColor)
       Text("API keys are stored in Keychain and sent only to the provider you connect.")
         .font(.caption)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
         .multilineTextAlignment(.center)
         .frame(maxWidth: 360)
     }
@@ -153,7 +153,7 @@ private struct ConnectionRow: View {
           }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer(minLength: 8)
       HStack(spacing: 6) {
@@ -162,17 +162,17 @@ private struct ConnectionRow: View {
           .frame(width: 7, height: 7)
         Text(status.label)
           .font(.caption.weight(.medium))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
       Image(systemName: "chevron.right")
         .font(.caption.weight(.semibold))
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
     }
     .padding(16)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        .stroke(theme.borderColor, lineWidth: 1)
     }
   }
 }

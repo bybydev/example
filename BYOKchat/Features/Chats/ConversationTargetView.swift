@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -7,6 +8,7 @@ struct ConversationTargetView: View {
   @Bindable var providers: ProviderManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var accountID: ProviderAccountID
   @State private var modelID: ModelID
   @State private var systemPrompt: String
@@ -79,6 +81,7 @@ struct ConversationTargetView: View {
             )
             .foregroundStyle(.orange)
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         Section("Provider") {
@@ -104,7 +107,7 @@ struct ConversationTargetView: View {
           } label: {
             LabeledContent("Model") {
               Text(selectedModel?.model.displayName ?? modelID.rawValue)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .lineLimit(1)
             }
           }
@@ -119,6 +122,7 @@ struct ConversationTargetView: View {
             .foregroundStyle(.orange)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("System Prompt") {
           TextEditor(text: $systemPrompt)
@@ -128,6 +132,7 @@ struct ConversationTargetView: View {
           }
           .disabled(systemPrompt == chats.defaultSystemPrompt)
         }
+        .listRowBackground(theme.surfaceColor)
 
         if supportsTemperature || supportsMaximumTokens || supportsReasoning {
           Section("Generation") {
@@ -159,8 +164,12 @@ struct ConversationTargetView: View {
 
             Button("Reset Model Parameters") { resetParameters() }
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Chat Settings")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -217,6 +226,7 @@ private struct ConversationModelSelectionView: View {
   @Bindable var providers: ProviderManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var searchText = ""
 
   private var records: [AccountModelRecord] {
@@ -248,7 +258,7 @@ private struct ConversationModelSelectionView: View {
             }
             Text(record.model.id.rawValue)
               .font(.caption.monospaced())
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
               .lineLimit(2)
             HStack(spacing: 6) {
               if let context = record.model.contextWindow {
@@ -260,7 +270,7 @@ private struct ConversationModelSelectionView: View {
               }
             }
             .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
           }
           .frame(maxWidth: .infinity, alignment: .leading)
           .contentShape(Rectangle())

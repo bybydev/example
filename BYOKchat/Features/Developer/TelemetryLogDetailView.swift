@@ -1,9 +1,12 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
 struct TelemetryLogDetailView: View {
   let event: TelemetryEvent
+
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     List {
@@ -20,6 +23,7 @@ struct TelemetryLogDetailView: View {
             .multilineTextAlignment(.trailing)
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       if hasTargetDetails {
         Section("Target") {
@@ -39,6 +43,7 @@ struct TelemetryLogDetailView: View {
             LabeledContent("Message", value: messageID.rawValue)
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       if hasMetrics {
@@ -71,6 +76,7 @@ struct TelemetryLogDetailView: View {
             LabeledContent("HTTP status", value: value.formatted())
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       if let errorCode = event.errorCode {
@@ -80,6 +86,7 @@ struct TelemetryLogDetailView: View {
             LabeledContent("Classification", value: classification)
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       if !event.metadata.isEmpty {
@@ -90,6 +97,7 @@ struct TelemetryLogDetailView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section {
@@ -106,8 +114,13 @@ struct TelemetryLogDetailView: View {
         }
       } footer: {
         Text("This view contains structured telemetry only. Prompt text, assistant responses, credentials, request bodies, tool arguments, tool results, and attachment contents are not stored by default.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Event Details")
     .navigationBarTitleDisplayMode(.inline)
   }

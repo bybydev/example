@@ -42,7 +42,7 @@ extension NewChatView {
       Text(projectContextSummary)
         .font(.system(size: 15))
         .multilineTextAlignment(.center)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       targetChip
 
       if !project.projectPromptPresets.isEmpty {
@@ -87,7 +87,7 @@ extension NewChatView {
       Text(setupDescription)
         .font(.system(size: 15))
         .multilineTextAlignment(.center)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .frame(maxWidth: 440)
 
       Button { primarySetupAction() } label: {
@@ -102,7 +102,7 @@ extension NewChatView {
       Text("Connections keep your provider, API key, and default model together in one place.")
         .font(.caption)
         .multilineTextAlignment(.center)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
         .frame(maxWidth: 420)
     }
     .frame(maxWidth: .infinity)
@@ -118,7 +118,7 @@ extension NewChatView {
           .font(.caption2.weight(.semibold))
       }
       .font(.system(size: 13, weight: .medium))
-      .foregroundStyle(.secondary)
+      .foregroundStyle(theme.secondaryForegroundColor)
       .padding(.horizontal, 12)
       .padding(.vertical, 7)
       .background(.thinMaterial, in: Capsule())

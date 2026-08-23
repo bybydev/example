@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -7,6 +8,7 @@ struct ComposerTargetPickerView: View {
   @Bindable var providers: ProviderManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var accountID: ProviderAccountID
   @State private var modelID: ModelID
   @State private var reasoningEnabled: Bool
@@ -74,6 +76,7 @@ struct ComposerTargetPickerView: View {
             providerRow(account)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("Model") {
           NavigationLink {
@@ -89,7 +92,7 @@ struct ComposerTargetPickerView: View {
                 .lineLimit(2)
               Text(selectedModel?.model.id.rawValue ?? modelID.rawValue)
                 .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .lineLimit(1)
             }
           }
@@ -98,6 +101,7 @@ struct ComposerTargetPickerView: View {
             modelCapabilitySummary(model)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         if supportsReasoning {
           Section("Reasoning") {
@@ -110,8 +114,12 @@ struct ComposerTargetPickerView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Choose Model")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -149,7 +157,7 @@ struct ComposerTargetPickerView: View {
           {
             Text(definition.displayName)
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
         }
         Spacer()
@@ -176,7 +184,7 @@ struct ComposerTargetPickerView: View {
       }
     }
     .font(.caption)
-    .foregroundStyle(.secondary)
+    .foregroundStyle(theme.secondaryForegroundColor)
   }
 
   private func normalizeReasoningForSelection() {
@@ -239,6 +247,7 @@ private struct ComposerModelPickerView: View {
   @Bindable var providers: ProviderManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var searchText = ""
 
   private var records: [AccountModelRecord] {
@@ -272,7 +281,7 @@ private struct ComposerModelPickerView: View {
 
             Text(record.model.id.rawValue)
               .font(.caption.monospaced())
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
               .lineLimit(1)
 
             HStack(spacing: 8) {
@@ -291,7 +300,7 @@ private struct ComposerModelPickerView: View {
               }
             }
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
           }
           Spacer(minLength: 8)
         }

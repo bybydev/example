@@ -131,17 +131,17 @@ struct ConnectionFlowView: View {
                     .foregroundStyle(.primary)
                   Text(providerDescription(definition))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryForegroundColor)
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
                 }
               }
               .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
               .padding(14)
-              .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+              .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
               .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                  .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                  .stroke(theme.borderColor, lineWidth: 1)
               }
             }
             .buttonStyle(.plain)
@@ -222,15 +222,15 @@ struct ConnectionFlowView: View {
       }
       Text(connectionName)
         .font(.system(size: 15))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       if let selectedModelID {
         Text(modelDisplayName(model: model, accountID: createdAccountID, modelID: selectedModelID))
           .font(.caption)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
       }
       Text("BYOKchat is ready to use this connection.")
         .font(.system(size: 15))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       Spacer()
     }
     .multilineTextAlignment(.center)

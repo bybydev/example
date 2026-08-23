@@ -44,6 +44,8 @@ struct ProviderListView: View {
   @Bindable var model: ProviderManagementModel
   @State private var showCustomProvider = false
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     List {
       if !model.accounts.isEmpty {
@@ -56,6 +58,7 @@ struct ProviderListView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section("Providers") {
@@ -69,19 +72,20 @@ struct ProviderListView: View {
                 Text(definition.displayName)
                 Text(providerSummary(definition))
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
               Spacer()
               let count = model.accounts(for: definition.id).count
               if count > 0 {
                 Text("\(count)")
                   .font(.caption.monospacedDigit())
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
             }
           }
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         Button {
@@ -93,8 +97,13 @@ struct ProviderListView: View {
         Text(
           "Custom providers use an OpenAI-compatible chat-completions API and remain fully local to this device."
         )
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Providers")
     .refreshable { await model.load() }
     .sheet(isPresented: $showCustomProvider) {
@@ -112,16 +121,22 @@ struct ProviderListView: View {
 
 private struct ProviderMark: View {
   let definition: ProviderDefinition
+
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     Image(systemName: definition.isBuiltIn ? "sparkles" : "server.rack")
       .frame(width: 32, height: 32)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+      .background(theme.elevatedSurfaceColor, in: RoundedRectangle(cornerRadius: 8))
   }
 }
 
 private struct AccountRow: View {
   let model: ProviderManagementModel
   let account: ProviderAccount
+
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack {
       VStack(alignment: .leading, spacing: 3) {
@@ -135,11 +150,14 @@ private struct AccountRow: View {
           }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer()
       Image(systemName: model.credentialAccountIDs.contains(account.id) ? "key.fill" : "key.slash")
-        .foregroundStyle(model.credentialAccountIDs.contains(account.id) ? .primary : .secondary)
+        .foregroundStyle(
+          model.credentialAccountIDs.contains(account.id)
+            ? theme.primaryForegroundColor : theme.secondaryForegroundColor
+        )
     }
   }
 }
@@ -149,6 +167,7 @@ struct ProviderDetailView: View {
   let providerID: ProviderID
 
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(\.appFoundationTheme) private var theme
   @State private var showAddAccount = false
   @State private var showProUpsell = false
   @State private var showDeleteConfirmation = false
@@ -163,6 +182,7 @@ struct ProviderDetailView: View {
           LabeledContent("Base URL", value: definition.defaultBaseURL.absoluteString)
           LabeledContent("Authentication", value: authenticationName(definition.authentication))
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section("Accounts") {
@@ -191,15 +211,21 @@ struct ProviderDetailView: View {
           }
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       if definition?.isBuiltIn == false {
         Section {
           Button("Delete Custom Provider", role: .destructive) { showDeleteConfirmation = true }
         } footer: {
           Text("Delete all accounts for this provider first.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle(definition?.displayName ?? providerID.rawValue)
     .sheet(isPresented: $showAddAccount) {
       NavigationStack {
@@ -256,6 +282,8 @@ struct AccountEditorView: View {
     _httpReferer = State(initialValue: existingAccount?.metadata["httpReferer"] ?? "")
   }
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     Form {
       Section("Account") {
@@ -269,6 +297,7 @@ struct AccountEditorView: View {
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         TextField("Use provider default", text: $baseURL)
@@ -277,9 +306,12 @@ struct AccountEditorView: View {
           .keyboardType(.URL)
       } header: {
         Text("Endpoint Override")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Leave empty to use the provider's built-in HTTPS endpoint.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       if providerID == BuiltInProviders.openRouterID {
         Section("OpenRouter") {
@@ -289,6 +321,7 @@ struct AccountEditorView: View {
             .autocorrectionDisabled()
             .keyboardType(.URL)
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section {
@@ -297,12 +330,18 @@ struct AccountEditorView: View {
           .frame(minHeight: 100)
       } header: {
         Text("Additional Headers")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text(
           "One header per line: Name: Value. Authorization and transport-level headers are blocked."
         )
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle(existingAccount == nil ? "Add Account" : "Edit Account")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -370,6 +409,7 @@ struct AccountDetailView: View {
   @Bindable var model: ProviderManagementModel
   let accountID: ProviderAccountID
 
+  @Environment(\.appFoundationTheme) private var theme
   @State private var showEdit = false
   @State private var showManualModel = false
   @State private var showDelete = false
@@ -395,6 +435,7 @@ struct AccountDetailView: View {
             LabeledContent("Endpoint", value: override.absoluteString)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("Actions") {
           Button("Test Connection", systemImage: "bolt.horizontal.circle") {
@@ -408,25 +449,31 @@ struct AccountDetailView: View {
           }
           Button("Add Manual Model", systemImage: "plus") { showManualModel = true }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("Models") {
           if models.isEmpty {
             Text("Refresh models or add one manually.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           } else {
             ForEach(models) { record in
               ModelRow(model: model, account: account, record: record)
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section {
           Button("Delete Account", role: .destructive) { showDelete = true }
         }
+        .listRowBackground(theme.surfaceColor)
       } else {
         ContentUnavailableView("Account Missing", systemImage: "exclamationmark.triangle")
       }
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle(account?.label ?? "Account")
     .toolbar {
       if account != nil {
@@ -461,17 +508,19 @@ private struct ModelRow: View {
   let account: ProviderAccount
   let record: AccountModelRecord
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack(alignment: .top) {
       VStack(alignment: .leading, spacing: 3) {
         Text(record.model.displayName)
         Text(record.model.id.rawValue)
           .font(.caption.monospaced())
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
         if !record.isAvailable {
           Text("Not returned by latest refresh")
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
       Spacer()
@@ -509,6 +558,7 @@ private struct ManualModelView: View {
   let model: ProviderManagementModel
   let accountID: ProviderAccountID
   @State private var modelID = ""
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     NavigationStack {
@@ -516,7 +566,11 @@ private struct ManualModelView: View {
         TextField("Model ID", text: $modelID)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
+          .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Add Model")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -546,6 +600,7 @@ struct CustomProviderEditorView: View {
   @State private var authentication: AuthenticationChoice = .bearer
   @State private var headerName = "X-API-Key"
   @State private var seedModels = ""
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     Form {
@@ -555,6 +610,7 @@ struct CustomProviderEditorView: View {
           .autocorrectionDisabled()
         TextField("Display name", text: $name)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Endpoint") {
         TextField("https://example.com/v1", text: $baseURL)
@@ -568,6 +624,7 @@ struct CustomProviderEditorView: View {
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Authentication") {
         Picker("Type", selection: $authentication) {
@@ -581,6 +638,7 @@ struct CustomProviderEditorView: View {
             .autocorrectionDisabled()
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         TextEditor(text: $seedModels)
@@ -588,12 +646,18 @@ struct CustomProviderEditorView: View {
           .frame(minHeight: 100)
       } header: {
         Text("Seed Models")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text(
           "One model ID per line. These remain available when the provider does not expose model discovery."
         )
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Custom Provider")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {

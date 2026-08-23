@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -15,6 +16,7 @@ struct NewChatTargetPickerView: View {
   let useSelection: (NewChatTargetSelection) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var accountID: ProviderAccountID
   @State private var modelID: ModelID
   @State private var reasoningEnabled: Bool
@@ -72,13 +74,12 @@ struct NewChatTargetPickerView: View {
               HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                   Text(account.label)
-                    .foregroundStyle(.primary)
                   if let provider = providers.provider(for: account.providerID),
                     provider.displayName != account.label
                   {
                     Text(provider.displayName)
                       .font(.caption)
-                      .foregroundStyle(.secondary)
+                      .foregroundStyle(theme.secondaryForegroundColor)
                   }
                 }
                 Spacer()
@@ -92,6 +93,7 @@ struct NewChatTargetPickerView: View {
             .buttonStyle(.plain)
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("Model") {
           NavigationLink {
@@ -107,11 +109,12 @@ struct NewChatTargetPickerView: View {
                 .lineLimit(2)
               Text(selectedModel?.model.id.rawValue ?? modelID.rawValue)
                 .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .lineLimit(1)
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         if supportsReasoning {
           Section("Reasoning") {
@@ -124,8 +127,12 @@ struct NewChatTargetPickerView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Choose Model")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -193,6 +200,7 @@ private struct NewChatModelPickerView: View {
   @Bindable var providers: ProviderManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @State private var searchText = ""
 
   private var records: [AccountModelRecord] {
@@ -225,7 +233,7 @@ private struct NewChatModelPickerView: View {
             }
             Text(record.model.id.rawValue)
               .font(.caption.monospaced())
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
               .lineLimit(1)
           }
           Spacer(minLength: 8)

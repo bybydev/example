@@ -200,7 +200,7 @@ struct ChatSidebarView: View {
   private var searchField: some View {
     HStack(spacing: 9) {
       Image(systemName: "magnifyingglass")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       TextField("Search chats", text: $searchText)
         .font(.system(size: 17))
         .textInputAutocapitalization(.never)
@@ -211,7 +211,7 @@ struct ChatSidebarView: View {
           searchText = ""
         }
         .labelStyle(.iconOnly)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
     }
     .padding(.horizontal, 14)
@@ -293,7 +293,7 @@ struct ChatSidebarView: View {
   private func sidebarSectionTitle(_ title: String, topPadding: CGFloat) -> some View {
     Text(title)
       .font(.system(size: 13, weight: .semibold))
-      .foregroundStyle(.secondary)
+      .foregroundStyle(theme.secondaryForegroundColor)
       .padding(.horizontal, 20)
       .padding(.top, topPadding)
       .padding(.bottom, 4)
@@ -321,7 +321,7 @@ struct ChatSidebarView: View {
                 }
                 Text(result.snippet)
                   .font(.system(size: 13))
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
                   .lineLimit(2)
               }
               .frame(maxWidth: .infinity, alignment: .leading)

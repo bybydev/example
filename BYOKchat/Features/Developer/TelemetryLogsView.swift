@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,6 +11,7 @@ struct TelemetryLogsView: View {
   @State private var showExporter = false
   @State private var exportError: String?
   @State private var hasLoaded = false
+  @Environment(\.appFoundationTheme) private var theme
 
   private var filteredEvents: [TelemetryEvent] {
     TelemetryDiagnostics.filtered(events: events, filter: filter)
@@ -27,6 +29,7 @@ struct TelemetryLogsView: View {
               : "Change or clear the filters to show more events."
           )
         )
+        .listRowBackground(theme.surfaceColor)
       } else {
         ForEach(filteredEvents) { event in
           NavigationLink {
@@ -35,8 +38,12 @@ struct TelemetryLogsView: View {
             TelemetryLogRow(event: event)
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Event Log")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $filter.searchText, prompt: "Search events")
@@ -134,11 +141,13 @@ struct TelemetryLogsView: View {
 private struct TelemetryLogRow: View {
   let event: TelemetryEvent
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       Image(systemName: severityIcon)
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .frame(width: 20, height: 22)
 
       VStack(alignment: .leading, spacing: 3) {
@@ -149,18 +158,18 @@ private struct TelemetryLogRow: View {
           Spacer(minLength: 8)
           Text(event.timestamp, format: .dateTime.hour().minute().second())
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
 
         Text(contextLine)
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
           .lineLimit(1)
 
         if let errorCode = event.errorCode {
           Text(errorCode.replacingOccurrences(of: "_", with: " "))
             .font(.caption2.monospaced())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .lineLimit(1)
         }
       }
@@ -194,6 +203,7 @@ private struct TelemetryLogFilterView: View {
   let conversationIDs: [String]
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     NavigationStack {
@@ -220,6 +230,7 @@ private struct TelemetryLogFilterView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         if !providerIDs.isEmpty {
           Section("Provider") {
@@ -230,6 +241,7 @@ private struct TelemetryLogFilterView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         if !modelIDs.isEmpty {
@@ -241,6 +253,7 @@ private struct TelemetryLogFilterView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         if !conversationIDs.isEmpty {
@@ -252,6 +265,7 @@ private struct TelemetryLogFilterView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         if hasStructuredFilters {
@@ -261,8 +275,12 @@ private struct TelemetryLogFilterView: View {
               filter = TelemetryLogFilter(searchText: search)
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Filters")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

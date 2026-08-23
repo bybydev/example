@@ -9,6 +9,7 @@ struct UsageDashboardView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(\.appFoundationTheme) private var theme
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
   @State private var range: UsageRange = .month
@@ -37,6 +38,7 @@ struct UsageDashboardView: View {
             }
             .pickerStyle(.segmented)
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         usageSummarySection
@@ -56,6 +58,7 @@ struct UsageDashboardView: View {
                 description: Text("Send a few messages to start collecting local performance metrics.")
               )
             }
+            .listRowBackground(theme.surfaceColor)
           }
 
           if let conversation = currentConversation {
@@ -70,6 +73,7 @@ struct UsageDashboardView: View {
                 conversationSummaryLabel(conversation)
               }
             }
+            .listRowBackground(theme.surfaceColor)
           }
 
           if !providerBreakdown.isEmpty {
@@ -78,6 +82,7 @@ struct UsageDashboardView: View {
                 UsageBreakdownRowView(row: row)
               }
             }
+            .listRowBackground(theme.surfaceColor)
           }
 
           if !modelBreakdown.isEmpty {
@@ -86,6 +91,7 @@ struct UsageDashboardView: View {
                 UsageBreakdownRowView(row: row)
               }
             }
+            .listRowBackground(theme.surfaceColor)
           }
 
           monthlyBudgetSection
@@ -103,13 +109,19 @@ struct UsageDashboardView: View {
             }
           } header: {
             Text("Local analytics")
+              .foregroundStyle(theme.secondaryForegroundColor)
           } footer: {
             Text(telemetryFootnote)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
+          .listRowBackground(theme.surfaceColor)
         } else {
           advancedUpsellSection
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Analytics")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -157,15 +169,20 @@ struct UsageDashboardView: View {
       }
     } header: {
       Text(purchaseManager.hasPro ? "Usage" : "Basic Usage · This Month")
+        .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       if filteredAggregate.hasPartialCost {
         Text("Spend is partial because some models did not expose pricing. Usage and spend are reconstructed from persisted assistant messages.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } else if purchaseManager.hasPro {
         Text("Usage and spend come from persisted chat history. Only requests made by BYOKchat are included.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } else {
         Text("Basic analytics includes monthly spend, requests, input tokens, and output tokens.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var advancedUpsellSection: some View {
@@ -178,14 +195,16 @@ struct UsageDashboardView: View {
             .font(.body.weight(.semibold))
           Text("Unlock time ranges, TTFT and speed, reliability, errors, provider/model breakdowns, per-chat details, and monthly budgets.")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 4)
       }
     } footer: {
       Text("Upgrade to Pro for deeper local analytics. Your chat content and provider credentials remain private.")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var performanceSection: some View {
@@ -196,6 +215,7 @@ struct UsageDashboardView: View {
       LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
       LabeledContent("Median speed", value: usageRate(performance.medianOutputTokensPerSecond))
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var reliabilitySection: some View {
@@ -216,9 +236,12 @@ struct UsageDashboardView: View {
       }
     } header: {
       Text("Reliability")
+        .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       Text("Provider success rate excludes user cancellations. Expected MCP legacy-protocol fallback is not counted as an MCP failure.")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var failureSection: some View {
@@ -230,19 +253,22 @@ struct UsageDashboardView: View {
               .lineLimit(1)
             Text("\(failure.category.rawValue.capitalized) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
           Spacer(minLength: 12)
           Text(failure.count.formatted())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .monospacedDigit()
         }
       }
     } header: {
       Text("Errors")
+        .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       Text("Only stable, privacy-safe error codes are shown. Provider response text and request content are never stored in analytics.")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var monthlyBudgetSection: some View {
@@ -251,7 +277,7 @@ struct UsageDashboardView: View {
         Text("Budget")
         Spacer()
         Text("$")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
         TextField("0", value: $monthlyBudgetUSD, format: .number.precision(.fractionLength(0...2)))
           .keyboardType(.decimalPad)
           .multilineTextAlignment(.trailing)
@@ -275,9 +301,12 @@ struct UsageDashboardView: View {
       }
     } header: {
       Text("Monthly budget")
+        .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       Text("The budget is a local BYOKchat warning. It does not include API-key usage from other apps and does not change provider-side spending limits.")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var filteredMessages: [ChatMessage] {
@@ -397,7 +426,7 @@ struct UsageDashboardView: View {
         Text("Details")
         Spacer()
         Text(usageAggregateCostText(aggregate))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
           .monospacedDigit()
       }
       HStack(spacing: 6) {
@@ -412,7 +441,7 @@ struct UsageDashboardView: View {
         }
       }
       .font(.caption)
-      .foregroundStyle(.secondary)
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
   }
 
@@ -458,6 +487,8 @@ struct UsageDashboardView: View {
 private struct UsageBreakdownRowView: View {
   let row: UsageBreakdown
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 3) {
@@ -466,7 +497,7 @@ private struct UsageBreakdownRowView: View {
 
         Text("\(usageCompactTokens(row.aggregate.inputTokens + row.aggregate.outputTokens)) tokens · \(row.aggregate.modelRequestCount.formatted()) requests")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
 
         if row.performance.providerRequestCount > 0 {
           HStack(spacing: 4) {
@@ -477,12 +508,12 @@ private struct UsageBreakdownRowView: View {
             }
           }
           .font(.caption2)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
         }
       }
       Spacer(minLength: 12)
       Text(usageAggregateCostText(row.aggregate))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .monospacedDigit()
     }
   }

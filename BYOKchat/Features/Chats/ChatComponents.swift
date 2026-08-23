@@ -511,6 +511,8 @@ struct MessageEditorSheet: View {
   let save: () -> Void
   let cancel: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     NavigationStack {
       Form {
@@ -520,8 +522,13 @@ struct MessageEditorSheet: View {
             .frame(minHeight: 220)
         } footer: {
           Text("Saving removes every later message and generates a new response in linear history.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Edit Message")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

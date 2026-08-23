@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -13,6 +14,7 @@ struct TelemetryDiagnosticsView: View {
   @State private var isWorking = false
   @State private var confirmClearDiagnostics = false
   @State private var confirmClearAll = false
+  @Environment(\.appFoundationTheme) private var theme
 
   private let configuration = TelemetryStoreConfiguration.default
 
@@ -26,9 +28,12 @@ struct TelemetryDiagnosticsView: View {
         }
       } header: {
         Text("Logs")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Shows the latest local analytics and diagnostic lifecycle events. Event payloads are sanitized before storage.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Health") {
         LabeledContent("Recorder", value: health.isAvailable ? "Available" : "Disabled for this session")
@@ -48,6 +53,7 @@ struct TelemetryDiagnosticsView: View {
           .disabled(isWorking)
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Storage") {
         LabeledContent("Events", value: statistics.eventCount.formatted())
@@ -71,6 +77,7 @@ struct TelemetryDiagnosticsView: View {
           }
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         LabeledContent("Maximum age", value: retentionDays)
@@ -89,9 +96,12 @@ struct TelemetryDiagnosticsView: View {
         .disabled(isWorking)
       } header: {
         Text("Retention")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Oldest telemetry is removed automatically when any retention cap is reached. Usage and cost stored with chat messages are unaffected.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section {
         Button("Clear Diagnostic Logs", systemImage: "eraser") {
@@ -105,10 +115,16 @@ struct TelemetryDiagnosticsView: View {
         .disabled(isWorking || statistics.eventCount == 0)
       } header: {
         Text("Clear")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Clearing telemetry never deletes conversations, billing metadata, API credentials, projects, or provider configuration.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Diagnostics")
     .navigationBarTitleDisplayMode(.inline)
     .task { await reload() }

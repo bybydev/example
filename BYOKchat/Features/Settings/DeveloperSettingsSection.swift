@@ -68,6 +68,7 @@ struct DeveloperSettingsSection: View {
   let replayOnboarding: () -> Void
 
   @Environment(AppModel.self) private var model
+  @Environment(\.appFoundationTheme) private var theme
   @AppStorage("byokchat.dev.simulator.manifestURL") private var simulatorManifestURL = SimulatorConfigurationConstants.defaultManifestURL
   @AppStorage("byokchat.dev.simulator.mcpServerID") private var simulatorMCPServerID = ""
 
@@ -126,12 +127,12 @@ struct DeveloperSettingsSection: View {
           ProgressView()
           Text(simulatorEnabled ? "Configuring simulator…" : "Removing simulator configuration…")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       } else if let simulatorStatus {
         Text(simulatorStatus)
           .font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
 
       if let simulatorError {

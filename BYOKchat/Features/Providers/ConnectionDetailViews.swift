@@ -105,7 +105,7 @@ struct ConnectionDetailView: View {
           .frame(width: 8, height: 8)
         Text(connectionStatus(model: model, account: account).label)
           .font(.system(size: 14, weight: .medium))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
     }
     .frame(maxWidth: .infinity)
@@ -384,6 +384,7 @@ private struct ConnectionAdvancedEditorView: View {
   @State private var headersText: String
   @State private var appTitle: String
   @State private var httpReferer: String
+  @Environment(\.appFoundationTheme) private var theme
 
   init(model: ProviderManagementModel, account: ProviderAccount, provider: ProviderDefinition) {
     self.model = model
@@ -404,9 +405,12 @@ private struct ConnectionAdvancedEditorView: View {
           .keyboardType(.URL)
       } header: {
         Text("Endpoint Override")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Leave empty to use the provider's built-in endpoint.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
 
       if account.providerID == BuiltInProviders.openRouterID {
         Section("OpenRouter") {
@@ -416,6 +420,7 @@ private struct ConnectionAdvancedEditorView: View {
             .autocorrectionDisabled()
             .keyboardType(.URL)
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       Section {
@@ -424,10 +429,16 @@ private struct ConnectionAdvancedEditorView: View {
           .frame(minHeight: 120)
       } header: {
         Text("Additional Headers")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("One header per line as Name: Value. Authentication headers are managed by BYOKchat.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Advanced")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -464,6 +475,7 @@ private struct ConnectionManualModelView: View {
   @Bindable var model: ProviderManagementModel
   let accountID: ProviderAccountID
   @State private var modelID = ""
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     NavigationStack {
@@ -471,7 +483,11 @@ private struct ConnectionManualModelView: View {
         TextField("Model ID", text: $modelID)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
+          .listRowBackground(theme.surfaceColor)
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Add Model")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

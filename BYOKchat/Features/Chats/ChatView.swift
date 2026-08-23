@@ -17,7 +17,8 @@ struct ChatView: View {
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
 
-  @Environment(\.appFoundationTheme) private var theme
+  // Non-private: the chat content extension in ChatView+Content.swift uses it.
+  @Environment(\.appFoundationTheme) var theme
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
   @State var restoredDraft = false
@@ -368,6 +369,7 @@ private struct ConversationToolsView: View {
   @Bindable var mcp: MCPManagementModel
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
 
   private var project: ChatProject? {
     projects.project(for: conversationID)
@@ -382,12 +384,12 @@ private struct ConversationToolsView: View {
             systemImage: "hand.raised"
           )
           .font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
 
           if mcp.inheritsProjectTools(conversationID), let project {
             Label("Inheriting defaults from \(project.name)", systemImage: "arrow.triangle.branch")
               .font(.footnote)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           } else if mcp.hasChatOverride(conversationID), project != nil {
             Button("Reset to Project Defaults", systemImage: "arrow.uturn.backward") {
               Task { @MainActor in
@@ -396,6 +398,7 @@ private struct ConversationToolsView: View {
             }
           }
         }
+        .listRowBackground(theme.surfaceColor)
 
         if let project, !project.projectToolPresets.isEmpty {
           Section("Project Tool Presets") {
@@ -412,6 +415,7 @@ private struct ConversationToolsView: View {
               }
             }
           }
+          .listRowBackground(theme.surfaceColor)
         }
 
         if mcp.servers.isEmpty {
@@ -422,12 +426,17 @@ private struct ConversationToolsView: View {
               description: Text("Add a remote MCP server in Settings first.")
             )
           }
+          .listRowBackground(theme.surfaceColor)
         } else {
           ForEach(mcp.servers) { server in
             serverSection(server)
           }
+          .listRowBackground(theme.surfaceColor)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Tools")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -474,7 +483,7 @@ private struct ConversationToolsView: View {
           VStack(alignment: .leading, spacing: 8) {
             Text("No tools are currently cached for this server.")
               .font(.footnote)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
             Button("Refresh Tools", systemImage: "arrow.clockwise") {
               Task { @MainActor in await mcp.refresh(server.id) }
             }
@@ -509,7 +518,7 @@ private struct ConversationToolsView: View {
             .font(.body.weight(.medium))
           Text(tool.description)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .lineLimit(3)
         }
 
@@ -548,7 +557,7 @@ private struct ConversationToolsView: View {
         }
       }
       .font(.caption2)
-      .foregroundStyle(.tertiary)
+      .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
     }
     .padding(.vertical, 3)
   }

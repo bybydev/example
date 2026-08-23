@@ -7,6 +7,7 @@ struct SidebarLibraryView: View {
   let conversations: [ChatConversation]
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     NavigationStack {
@@ -22,7 +23,7 @@ struct SidebarLibraryView: View {
             HStack(spacing: 12) {
               Image(systemName: item.kind == .image ? "photo" : "doc")
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
                 .frame(width: 28, height: 28)
 
               VStack(alignment: .leading, spacing: 3) {
@@ -31,7 +32,7 @@ struct SidebarLibraryView: View {
                   .lineLimit(1)
                 Text("\(item.conversationTitle) · \(item.byteCountText)")
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
                   .lineLimit(1)
               }
 
@@ -39,13 +40,17 @@ struct SidebarLibraryView: View {
 
               Text(item.date, style: .date)
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
             }
             .padding(.vertical, 3)
+            .listRowBackground(theme.surfaceColor)
           }
           .listStyle(.plain)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Library")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -99,6 +104,7 @@ struct SidebarProjectsView: View {
   let newChat: (ProjectID?) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
   @Environment(PurchaseManager.self) private var purchaseManager
   @State private var editorTarget: ChatProject?
   @State private var showEditor = false
@@ -126,11 +132,10 @@ struct SidebarProjectsView: View {
                 VStack(alignment: .leading, spacing: 3) {
                   Text(project.name)
                     .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
                     .lineLimit(1)
                   Text(projectDetail(project))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryForegroundColor)
                     .lineLimit(1)
                 }
 
@@ -138,7 +143,7 @@ struct SidebarProjectsView: View {
 
                 Image(systemName: "chevron.right")
                   .font(.caption.weight(.semibold))
-                  .foregroundStyle(.tertiary)
+                  .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
               }
               .contentShape(Rectangle())
             }
@@ -154,10 +159,14 @@ struct SidebarProjectsView: View {
                 pendingDelete = project
               }
             }
+            .listRowBackground(theme.surfaceColor)
           }
           .listStyle(.plain)
         }
       }
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
       .navigationTitle("Projects")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

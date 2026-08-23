@@ -15,6 +15,8 @@ struct ConnectionCredentialFields: View {
   @State private var showAdvanced = false
   @State private var showKeyHelp = false
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(spacing: 14) {
       ConnectionSurface {
@@ -22,13 +24,13 @@ struct ConnectionCredentialFields: View {
           if hasStoredCredential && !replaceCredential {
             HStack(spacing: 12) {
               Image(systemName: "checkmark.shield.fill")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
               VStack(alignment: .leading, spacing: 3) {
                 Text("API Key")
                   .font(.system(size: 15, weight: .medium))
                 Text("Saved securely in Keychain")
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
               }
               Spacer()
               Button("Replace") { replaceCredential = true }
@@ -38,7 +40,7 @@ struct ConnectionCredentialFields: View {
             VStack(alignment: .leading, spacing: 8) {
               Text("API Key")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
               SecureField("Paste your API key", text: $credential)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -63,7 +65,7 @@ struct ConnectionCredentialFields: View {
             VStack(alignment: .leading, spacing: 6) {
               Text("Endpoint Override")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
               TextField("Use provider default", text: $baseURL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -73,13 +75,13 @@ struct ConnectionCredentialFields: View {
               VStack(alignment: .leading, spacing: 6) {
                 Text("OpenRouter App Title")
                   .font(.caption.weight(.semibold))
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
                 TextField("BYOKchat", text: $appTitle)
               }
               VStack(alignment: .leading, spacing: 6) {
                 Text("HTTP Referer")
                   .font(.caption.weight(.semibold))
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.secondaryForegroundColor)
                 TextField("Optional", text: $httpReferer)
                   .textInputAutocapitalization(.never)
                   .autocorrectionDisabled()
@@ -89,7 +91,7 @@ struct ConnectionCredentialFields: View {
             VStack(alignment: .leading, spacing: 6) {
               Text("Additional Headers")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryForegroundColor)
               TextEditor(text: $headersText)
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 84)
@@ -104,7 +106,7 @@ struct ConnectionCredentialFields: View {
 
       Text("Your key is stored in Keychain and sent only to \(provider.displayName) when BYOKchat makes a request.")
         .font(.caption)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
         .multilineTextAlignment(.center)
         .padding(.horizontal, 12)
     }
@@ -122,13 +124,15 @@ struct ConnectionPreferencesFields: View {
   @Binding var manualModelID: String
   let models: [AccountModelRecord]
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(spacing: 14) {
       ConnectionSurface {
         VStack(alignment: .leading, spacing: 8) {
           Text("Connection Name")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
           TextField("Personal", text: $connectionName)
             .font(.system(size: 16))
         }
@@ -138,14 +142,14 @@ struct ConnectionPreferencesFields: View {
         VStack(alignment: .leading, spacing: 10) {
           Text("Default Model")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
           if models.isEmpty {
             TextField("Model ID", text: $manualModelID)
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
             Text("No models were discovered. Enter a model ID manually.")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.secondaryForegroundColor)
           } else {
             Picker("Default Model", selection: $selectedModelID) {
               Text("Choose a model").tag(ModelID?.none)
@@ -183,6 +187,8 @@ struct ConnectionStepHeader: View {
     self.subtitle = subtitle
   }
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     VStack(spacing: 12) {
       if let definition {
@@ -191,14 +197,18 @@ struct ConnectionStepHeader: View {
         Image(systemName: icon)
           .font(.system(size: 28, weight: .medium))
           .frame(width: 54, height: 54)
-          .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+          .background(theme.elevatedSurfaceColor, in: RoundedRectangle(cornerRadius: 16))
+          .overlay {
+            RoundedRectangle(cornerRadius: 16)
+              .stroke(theme.borderColor, lineWidth: 1)
+          }
       }
       Text(title)
         .font(.system(size: 28, weight: .semibold))
         .multilineTextAlignment(.center)
       Text(subtitle)
         .font(.system(size: 15))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
         .multilineTextAlignment(.center)
         .frame(maxWidth: 440)
     }
@@ -226,20 +236,27 @@ struct ConnectionProviderMark: View {
   let definition: ProviderDefinition?
   let size: CGFloat
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     Image(systemName: providerSymbol(definition?.id))
       .font(.system(size: size * 0.42, weight: .semibold))
       .frame(width: size, height: size)
-      .background(.thinMaterial, in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
+      .background(
+        theme.elevatedSurfaceColor,
+        in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+      )
       .overlay {
         RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-          .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+          .stroke(theme.borderColor, lineWidth: 1)
       }
   }
 }
 
 struct ConnectionSurface<Content: View>: View {
   let content: Content
+
+  @Environment(\.appFoundationTheme) private var theme
 
   init(@ViewBuilder content: () -> Content) {
     self.content = content()
@@ -251,10 +268,10 @@ struct ConnectionSurface<Content: View>: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(16)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        .stroke(theme.borderColor, lineWidth: 1)
     }
   }
 }
@@ -265,24 +282,26 @@ struct ConnectionDetailButton: View {
   let systemImage: String
   let action: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     Button(action: action) {
       HStack(spacing: 12) {
         Image(systemName: systemImage)
           .frame(width: 24)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.secondaryForegroundColor)
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
             .font(.system(size: 15, weight: .medium))
           Text(value)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.secondaryForegroundColor)
             .lineLimit(1)
         }
         Spacer()
         Image(systemName: "chevron.right")
           .font(.caption.weight(.semibold))
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
       }
       .contentShape(Rectangle())
     }
@@ -294,17 +313,19 @@ struct ConnectionActionLabel: View {
   let title: String
   let systemImage: String
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     HStack(spacing: 12) {
       Image(systemName: systemImage)
         .frame(width: 24)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondaryForegroundColor)
       Text(title)
         .font(.system(size: 15, weight: .medium))
       Spacer()
       Image(systemName: "chevron.right")
         .font(.caption.weight(.semibold))
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
     }
     .contentShape(Rectangle())
   }

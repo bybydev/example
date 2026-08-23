@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
@@ -14,6 +15,7 @@ struct ProviderConsoleView: View {
   @State private var status = "Ready"
   @State private var generationTask: Task<Void, Never>?
   @State private var generationRevision: UInt64 = 0
+  @Environment(\.appFoundationTheme) private var theme
 
   private var selectedAccount: ProviderAccount? {
     model.accounts.first { $0.id == accountID }
@@ -47,11 +49,13 @@ struct ProviderConsoleView: View {
         }
         Toggle("Show reasoning", isOn: $includeReasoning)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Prompt") {
         TextEditor(text: $prompt)
           .frame(minHeight: 120)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Actions") {
         Button("Stream", systemImage: "paperplane.fill") { startStream() }
@@ -59,6 +63,7 @@ struct ProviderConsoleView: View {
         Button("Stop", systemImage: "stop.fill", role: .destructive) { stop() }
           .disabled(generationTask == nil)
       }
+      .listRowBackground(theme.surfaceColor)
 
       Section("Status") {
         Text(status)
@@ -73,7 +78,11 @@ struct ProviderConsoleView: View {
             .textSelection(.enabled)
         }
       }
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Console")
     .onAppear {
       if accountID == nil {

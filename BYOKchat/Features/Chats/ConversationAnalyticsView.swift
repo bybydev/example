@@ -1,3 +1,4 @@
+import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -25,6 +26,8 @@ struct ConversationAnalyticsView: View {
     )
   }
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
     List {
       Section {
@@ -44,11 +47,14 @@ struct ConversationAnalyticsView: View {
         }
       } header: {
         Text("Usage")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         if aggregate.hasPartialCost {
           Text("Spend is partial because some responses do not have known pricing.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
+      .listRowBackground(theme.surfaceColor)
 
       if performance.providerRequestCount > 0 {
         Section("Performance") {
@@ -58,6 +64,7 @@ struct ConversationAnalyticsView: View {
           LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
           LabeledContent("Median speed", value: usageRate(performance.medianOutputTokensPerSecond))
         }
+        .listRowBackground(theme.surfaceColor)
 
         Section("Reliability") {
           LabeledContent("Success rate", value: usagePercent(performance.providerSuccessRate))
@@ -67,6 +74,7 @@ struct ConversationAnalyticsView: View {
             LabeledContent("Cancelled", value: performance.providerCancelledCount.formatted())
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
 
       if performance.toolCallCount > 0 || performance.mcpRequestCount > 0 {
@@ -83,8 +91,12 @@ struct ConversationAnalyticsView: View {
             LabeledContent("MCP failures", value: performance.mcpFailureCount.formatted())
           }
         }
+        .listRowBackground(theme.surfaceColor)
       }
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle(conversation.title)
     .navigationBarTitleDisplayMode(.inline)
   }
