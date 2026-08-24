@@ -5,7 +5,9 @@ import SwiftUI
 import UIKit
 
 struct ChatSidebarView: View {
-  private enum SidebarDestination: String, Identifiable {
+  /// Menu destinations. Library/projects/plugins replace the app's main
+  /// screen; usage still presents as a sheet.
+  enum SidebarDestination: String, Identifiable {
     case library
     case projects
     case plugins
@@ -27,6 +29,9 @@ struct ChatSidebarView: View {
   /// reached from a project and offer a back chevron instead of the hamburger.
   let selectProjectConversation: (ConversationID) -> Void
   let selectSearchResult: (ConversationSearchResult) -> Void
+  /// Library/projects/plugins swap the app's main screen; usage opens as a
+  /// sheet locally.
+  let openDestination: (SidebarDestination) -> Void
   let openSettings: () -> Void
   let close: () -> Void
 
@@ -38,7 +43,7 @@ struct ChatSidebarView: View {
   @State private var renameText = ""
   @State private var showProjectEditor = false
   @State private var projectEditorTarget: ChatProject?
-  @State private var destination: SidebarDestination?
+  @State private var showUsage = false
   @State private var showPaywall = false
   @State private var showCelebration = false
   @State private var showProjectUpsell = false
@@ -84,33 +89,12 @@ struct ChatSidebarView: View {
     .sheet(isPresented: $showProjectUpsell) {
       BYOKProUpsellFlow(feature: .projects)
     }
-    .sheet(item: $destination) { value in
-      switch value {
-      case .library:
-        SidebarLibraryView(conversations: chats.conversations)
-          .presentationDragIndicator(.visible)
-      case .projects:
-        SidebarProjectsView(
-          chats: chats,
-          projects: projects,
-          providers: providers,
-          mcp: mcp,
-          newChat: newChat,
-          openChat: selectProjectConversation
-        )
-        .presentationDragIndicator(.visible)
-      case .plugins:
-        NavigationStack {
-          MCPServerListView(model: mcp)
-        }
-        .presentationDragIndicator(.visible)
-      case .usage:
-        UsageDashboardView(
-          conversations: chats.conversations,
-          currentConversationID: selectedConversationID
-        )
-        .presentationDragIndicator(.visible)
-      }
+    .sheet(isPresented: $showUsage) {
+      UsageDashboardView(
+        conversations: chats.conversations,
+        currentConversationID: selectedConversationID
+      )
+      .presentationDragIndicator(.visible)
     }
     .sheet(isPresented: $showPaywall) {
       ProPaywallView(
@@ -255,19 +239,19 @@ struct ChatSidebarView: View {
       SidebarRichMenuRow(
         systemImage: "books.vertical",
         title: "Library",
-        action: { destination = .library }
+        action: { openDestination(.library) }
       )
 
       SidebarRichMenuRow(
         systemImage: "folder",
         title: "Projects",
-        action: { destination = .projects }
+        action: { openDestination(.projects) }
       )
 
       SidebarRichMenuRow(
         systemImage: "puzzlepiece.extension",
         title: "Plugins",
-        action: { destination = .plugins }
+        action: { openDestination(.plugins) }
       )
     }
     .padding(.horizontal, 8)

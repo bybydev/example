@@ -26,6 +26,9 @@ struct AppRootView: View {
   @State private var openedChatFromProject = false
   /// When set (and no chat is selected), the root shows that project's screen.
   @State private var activeProjectViewID: ProjectID?
+  /// Sidebar menu section currently replacing the main screen
+  /// (library/projects/plugins). Mutually exclusive with the states above.
+  @State private var activeScreen: ChatSidebarView.SidebarDestination?
 
   var body: some View {
     Group {
@@ -84,6 +87,7 @@ struct AppRootView: View {
               selectConversation: selectConversation,
               selectProjectConversation: selectProjectConversation,
               selectSearchResult: selectSearchResult,
+              openDestination: openMainScreen,
               openSettings: openSettings,
               close: closeSidebar
             )
@@ -188,54 +192,91 @@ struct AppRootView: View {
   @ViewBuilder
   private var mainContent: some View {
     NavigationStack {
-      if let selectedConversationID,
-        model.chats.conversation(selectedConversationID) != nil
-      {
-        ChatView(
-          conversationID: selectedConversationID,
-          initialScrollMessageID: initialScrollMessageID,
-          enteredFromProject: openedChatFromProject,
-          chats: model.chats,
-          providers: model.providers,
-          projects: model.projects,
-          mcp: model.mcp,
-          openSidebar: openSidebar,
-          startNewChat: {
-            startNewChat(in: model.projects.projectID(for: selectedConversationID))
-          },
-          openProject: exitToProjectView
-        )
-        .id(
-          ChatPresentationID(
+      Group {
+        if let selectedConversationID,
+          model.chats.conversation(selectedConversationID) != nil
+        {
+          ChatView(
             conversationID: selectedConversationID,
-            messageID: initialScrollMessageID
+            initialScrollMessageID: initialScrollMessageID,
+            enteredFromProject: openedChatFromProject,
+            chats: model.chats,
+            providers: model.providers,
+            projects: model.projects,
+            mcp: model.mcp,
+            openSidebar: openSidebar,
+            startNewChat: {
+              startNewChat(in: model.projects.projectID(for: selectedConversationID))
+            },
+            openProject: exitToProjectView
           )
-        )
-        .background {
-          theme.backgroundColor
-            .ignoresSafeArea()
+          .id(
+            ChatPresentationID(
+              conversationID: selectedConversationID,
+              messageID: initialScrollMessageID
+            )
+          )
+          .background {
+            theme.backgroundColor
+              .ignoresSafeArea()
+          }
+        } else if let activeProjectViewID {
+          ProjectDetailView(
+            projectID: activeProjectViewID,
+            chats: model.chats,
+            projects: model.projects,
+            providers: model.providers,
+            mcp: model.mcp,
+            newChat: startNewChat(in:),
+            openChat: selectProjectConversation,
+            homeExit: { startNewChat(in: nil) }
+          )
+        } else if let activeScreen {
+          switch activeScreen {
+          case .library:
+            SidebarLibraryView(
+              conversations: model.chats.conversations,
+              openSidebar: openSidebar
+            )
+          case .projects:
+            SidebarProjectsView(
+              chats: model.chats,
+              projects: model.projects,
+              providers: model.providers,
+              mcp: model.mcp,
+              newChat: startNewChat(in:),
+              openChat: selectProjectConversation,
+              openSidebar: openSidebar
+            )
+          case .plugins:
+            MCPServerListView(model: model.mcp, openSidebar: openSidebar)
+          case .usage:
+            EmptyView()
+          }
+        } else {
+          NewChatView(
+            chats: model.chats,
+            providers: model.providers,
+            projects: model.projects,
+            mcp: model.mcp,
+            projectID: newChatProjectID,
+            openSidebar: openSidebar,
+            openSettings: openSettings,
+            selectConversation: selectConversation
+          )
         }
-      } else if let activeProjectViewID {
+      }
+      // Project rows in the main-screen projects list push their detail onto
+      // the root stack. Opening a chat from there keeps the project context.
+      .navigationDestination(for: ProjectID.self) { projectID in
         ProjectDetailView(
-          projectID: activeProjectViewID,
+          projectID: projectID,
           chats: model.chats,
           projects: model.projects,
           providers: model.providers,
           mcp: model.mcp,
           newChat: startNewChat(in:),
-          openChat: selectProjectConversation,
-          homeExit: { startNewChat(in: nil) }
-        )
-      } else {
-        NewChatView(
-          chats: model.chats,
-          providers: model.providers,
-          projects: model.projects,
-          mcp: model.mcp,
-          projectID: newChatProjectID,
-          openSidebar: openSidebar,
-          openSettings: openSettings,
-          selectConversation: selectConversation
+          openChat: selectProjectConversation
         )
       }
     }
@@ -283,6 +324,19 @@ struct AppRootView: View {
     initialScrollMessageID = nil
     activeProjectViewID = nil
     openedChatFromProject = false
+    activeScreen = nil
+    closeSidebar()
+  }
+
+  /// Sidebar menu sections (library/projects/plugins) replace the main
+  /// screen; whatever was showing yields.
+  private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
+    selectedConversationID = nil
+    newChatProjectID = nil
+    initialScrollMessageID = nil
+    activeProjectViewID = nil
+    openedChatFromProject = false
+    activeScreen = screen
     closeSidebar()
   }
 
@@ -308,6 +362,7 @@ struct AppRootView: View {
     initialScrollMessageID = nil
     activeProjectViewID = nil
     openedChatFromProject = false
+    activeScreen = nil
     closeSidebar()
   }
 
@@ -317,6 +372,7 @@ struct AppRootView: View {
     initialScrollMessageID = result.messageID
     activeProjectViewID = nil
     openedChatFromProject = false
+    activeScreen = nil
     closeSidebar()
   }
 

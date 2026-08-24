@@ -5,58 +5,60 @@ import SwiftUI
 
 struct SidebarLibraryView: View {
   let conversations: [ChatConversation]
+  /// Opens the sidebar drawer; this view renders as the app's main screen
+  /// inside the root navigation stack rather than as a sheet.
+  var openSidebar: () -> Void = {}
 
-  @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
-    NavigationStack {
-      Group {
-        if items.isEmpty {
-          ContentUnavailableView(
-            "Library is Empty",
-            systemImage: "books.vertical",
-            description: Text("Files and images attached to chats will appear here.")
-          )
-        } else {
-          List(items) { item in
-            HStack(spacing: 12) {
-              Image(systemName: item.kind == .image ? "photo" : "doc")
-                .font(.system(size: 17, weight: .medium))
+    Group {
+      if items.isEmpty {
+        ContentUnavailableView(
+          "Library is Empty",
+          systemImage: "books.vertical",
+          description: Text("Files and images attached to chats will appear here.")
+        )
+      } else {
+        List(items) { item in
+          HStack(spacing: 12) {
+            Image(systemName: item.kind == .image ? "photo" : "doc")
+              .font(.system(size: 17, weight: .medium))
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+              Text(item.filename)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+              Text("\(item.conversationTitle) · \(item.byteCountText)")
+                .font(.caption)
                 .foregroundStyle(theme.secondaryForegroundColor)
-                .frame(width: 28, height: 28)
-
-              VStack(alignment: .leading, spacing: 3) {
-                Text(item.filename)
-                  .font(.body.weight(.medium))
-                  .lineLimit(1)
-                Text("\(item.conversationTitle) · \(item.byteCountText)")
-                  .font(.caption)
-                  .foregroundStyle(theme.secondaryForegroundColor)
-                  .lineLimit(1)
-              }
-
-              Spacer(minLength: 8)
-
-              Text(item.date, style: .date)
-                .font(.caption2)
-                .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+                .lineLimit(1)
             }
-            .padding(.vertical, 3)
-            .listRowBackground(theme.surfaceColor)
+
+            Spacer(minLength: 8)
+
+            Text(item.date, style: .date)
+              .font(.caption2)
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
           }
-          .listStyle(.plain)
+          .padding(.vertical, 3)
+          .listRowBackground(theme.surfaceColor)
         }
+        .listStyle(.plain)
       }
-      .scrollContentBackground(.hidden)
-      .foregroundStyle(theme.primaryForegroundColor)
-      .background(AppThemeBackground(theme: theme))
-      .navigationTitle("Library")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
-        }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Library")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
       }
     }
   }
@@ -103,99 +105,82 @@ struct SidebarProjectsView: View {
   @Bindable var mcp: MCPManagementModel
   let newChat: (ProjectID?) -> Void
   let openChat: (ConversationID) -> Void
+  /// Opens the sidebar drawer; this view renders as the app's main screen
+  /// inside the root navigation stack rather than as a sheet.
+  var openSidebar: () -> Void = {}
 
-  @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
   @Environment(PurchaseManager.self) private var purchaseManager
-  @State private var path: [ProjectID] = []
   @State private var showNewProjectEditor = false
   @State private var showProUpsell = false
   @State private var pendingDelete: ChatProject?
 
   var body: some View {
-    NavigationStack(path: $path) {
-      Group {
-        if projects.projects.isEmpty {
-          ContentUnavailableView(
-            "No Projects",
-            systemImage: "folder",
-            description: Text("Projects keep reusable instructions, files, models, and tools together.")
-          )
-        } else {
-          List(projects.projects) { project in
-            Button {
-              path = [project.id]
-            } label: {
-              HStack(spacing: 12) {
-                ProjectIconView(project: project, size: 34)
-
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(project.name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                  Text(projectDetail(project))
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryForegroundColor)
-                    .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "chevron.right")
-                  .font(.caption.weight(.semibold))
-                  .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
-              }
-              .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .swipeActions(edge: .leading) {
-              Button("New Chat", systemImage: "square.and.pencil") {
-                newChat(project.id)
-              }
-              .tint(.accentColor)
-            }
-            .swipeActions(edge: .trailing) {
-              Button("Delete", systemImage: "trash", role: .destructive) {
-                pendingDelete = project
-              }
-            }
-            .listRowBackground(theme.surfaceColor)
-          }
-          .listStyle(.plain)
-        }
-      }
-      .scrollContentBackground(.hidden)
-      .foregroundStyle(theme.primaryForegroundColor)
-      .background(AppThemeBackground(theme: theme))
-      .navigationTitle("Projects")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Done") { dismiss() }
-        }
-        ToolbarItem(placement: .primaryAction) {
-          Button("New Project", systemImage: "plus") {
-            if BYOKProAccess.canCreateProject(
-              currentCount: projects.projects.count,
-              hasPro: purchaseManager.hasPro
-            ) {
-              showNewProjectEditor = true
-            } else {
-              showProUpsell = true
-            }
-          }
-        }
-      }
-      .navigationDestination(for: ProjectID.self) { projectID in
-        ProjectDetailView(
-          projectID: projectID,
-          chats: chats,
-          projects: projects,
-          providers: providers,
-          mcp: mcp,
-          newChat: newChat,
-          openChat: openChat
+    Group {
+      if projects.projects.isEmpty {
+        ContentUnavailableView(
+          "No Projects",
+          systemImage: "folder",
+          description: Text("Projects keep reusable instructions, files, models, and tools together.")
         )
+      } else {
+        List(projects.projects) { project in
+          NavigationLink(value: project.id) {
+            HStack(spacing: 12) {
+              ProjectIconView(project: project, size: 34)
+
+              VStack(alignment: .leading, spacing: 3) {
+                Text(project.name)
+                  .font(.body.weight(.medium))
+                  .lineLimit(1)
+                Text(projectDetail(project))
+                  .font(.caption)
+                  .foregroundStyle(theme.secondaryForegroundColor)
+                  .lineLimit(1)
+              }
+
+              Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+          }
+          .swipeActions(edge: .leading) {
+            Button("New Chat", systemImage: "square.and.pencil") {
+              newChat(project.id)
+            }
+            .tint(.accentColor)
+          }
+          .swipeActions(edge: .trailing) {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+              pendingDelete = project
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+        .listStyle(.plain)
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Projects")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button("New Project", systemImage: "plus") {
+          if BYOKProAccess.canCreateProject(
+            currentCount: projects.projects.count,
+            hasPro: purchaseManager.hasPro
+          ) {
+            showNewProjectEditor = true
+          } else {
+            showProUpsell = true
+          }
+        }
       }
     }
     .sheet(isPresented: $showNewProjectEditor) {

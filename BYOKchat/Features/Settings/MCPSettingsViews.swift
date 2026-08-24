@@ -4,6 +4,10 @@ import SwiftUI
 
 struct MCPServerListView: View {
   @Bindable var model: MCPManagementModel
+  /// Set when the list renders as the app's main screen (sidebar Plugins
+  /// destination), showing a leading sidebar-hamburger button. Left nil when
+  /// pushed from Settings, where the system back button applies.
+  var openSidebar: (() -> Void)? = nil
 
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
@@ -41,6 +45,13 @@ struct MCPServerListView: View {
     .background(AppThemeBackground(theme: theme))
     .navigationTitle("MCP Servers")
     .toolbar {
+      if let openSidebar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
+      }
       ToolbarItem(placement: .topBarTrailing) {
         Button("Add MCP Server", systemImage: "plus") {
           if BYOKProAccess.canCreateMCPServer(
