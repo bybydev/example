@@ -251,7 +251,10 @@ struct AppRootView: View {
           case .plugins:
             MCPServerListView(model: model.mcp, openSidebar: openSidebar)
           case .usage:
-            EmptyView()
+            UsageDashboardView(
+              conversations: model.chats.conversations,
+              openSidebar: openSidebar
+            )
           }
         } else {
           NewChatView(

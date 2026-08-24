@@ -20,135 +20,161 @@ struct UsageDashboardView: View {
 
   init(
     conversations: [ChatConversation],
-    currentConversationID: ConversationID? = nil
+    currentConversationID: ConversationID? = nil,
+    openSidebar: (() -> Void)? = nil
   ) {
     self.conversations = conversations
     self.currentConversationID = currentConversationID
+    self.openSidebar = openSidebar
   }
 
+  /// Set when this renders as the app's main screen (drawer Usage
+  /// destination): shows a leading sidebar-hamburger button and relies on the
+  /// ambient navigation stack. Left nil for the chat ⋯-menu sheet, which keeps
+  /// its own stack and a Done button.
+  var openSidebar: (() -> Void)? = nil
+
   var body: some View {
-    NavigationStack {
-      List {
-        if purchaseManager.hasPro {
-          Section {
-            Picker("Range", selection: $range) {
-              ForEach(UsageRange.allCases) { value in
-                Text(value.label).tag(value)
-              }
-            }
-            .pickerStyle(.segmented)
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
-        usageSummarySection
-
-        if purchaseManager.hasPro {
-          if hasPerformanceData {
-            performanceSection
-            reliabilitySection
-            if !failureBreakdown.isEmpty {
-              failureSection
-            }
-          } else if hasLoadedTelemetry {
-            Section {
-              ContentUnavailableView(
-                "No Performance Data Yet",
-                systemImage: "waveform.path.ecg",
-                description: Text("Send a few messages to start collecting local performance metrics.")
-              )
-            }
-            .listRowBackground(theme.surfaceColor)
-          }
-
-          if let conversation = currentConversation {
-            Section("This conversation") {
-              NavigationLink {
-                ConversationAnalyticsView(
-                  conversation: conversation,
-                  range: range,
-                  telemetryEvents: filteredTelemetryEvents
-                )
-              } label: {
-                conversationSummaryLabel(conversation)
-              }
-            }
-            .listRowBackground(theme.surfaceColor)
-          }
-
-          if !providerBreakdown.isEmpty {
-            Section("Providers") {
-              ForEach(providerBreakdown) { row in
-                UsageBreakdownRowView(row: row)
-              }
-            }
-            .listRowBackground(theme.surfaceColor)
-          }
-
-          if !modelBreakdown.isEmpty {
-            Section("Models") {
-              ForEach(modelBreakdown) { row in
-                UsageBreakdownRowView(row: row)
-              }
-            }
-            .listRowBackground(theme.surfaceColor)
-          }
-
-          monthlyBudgetSection
-
-          Section {
-            LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
-            if telemetryStatistics.databaseBytes > 0 {
-              LabeledContent(
-                "Local database",
-                value: ByteCountFormatter.string(
-                  fromByteCount: telemetryStatistics.databaseBytes,
-                  countStyle: .file
-                )
-              )
-            }
-          } header: {
-            Text("Local analytics")
-              .foregroundStyle(theme.secondaryForegroundColor)
-          } footer: {
-            Text(telemetryFootnote)
-              .foregroundStyle(theme.secondaryForegroundColor)
-          }
-          .listRowBackground(theme.surfaceColor)
-        } else {
-          advancedUpsellSection
+    Group {
+      if openSidebar != nil {
+        dashboard
+      } else {
+        NavigationStack {
+          dashboard
         }
       }
-      .scrollContentBackground(.hidden)
-      .foregroundStyle(theme.primaryForegroundColor)
-      .background(AppThemeBackground(theme: theme))
-      .navigationTitle("Analytics")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
+    }
+  }
+
+  private var dashboard: some View {
+    List {
+      if purchaseManager.hasPro {
+        Section {
+          Picker("Range", selection: $range) {
+            ForEach(UsageRange.allCases) { value in
+              Text(value.label).tag(value)
+            }
+          }
+          .pickerStyle(.segmented)
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      usageSummarySection
+
+      if purchaseManager.hasPro {
+        if hasPerformanceData {
+          performanceSection
+          reliabilitySection
+          if !failureBreakdown.isEmpty {
+            failureSection
+          }
+        } else if hasLoadedTelemetry {
+          Section {
+            ContentUnavailableView(
+              "No Performance Data Yet",
+              systemImage: "waveform.path.ecg",
+              description: Text("Send a few messages to start collecting local performance metrics.")
+            )
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+
+        if let conversation = currentConversation {
+          Section("This conversation") {
+            NavigationLink {
+              ConversationAnalyticsView(
+                conversation: conversation,
+                range: range,
+                telemetryEvents: filteredTelemetryEvents
+              )
+            } label: {
+              conversationSummaryLabel(conversation)
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+
+        if !providerBreakdown.isEmpty {
+          Section("Providers") {
+            ForEach(providerBreakdown) { row in
+              UsageBreakdownRowView(row: row)
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+
+        if !modelBreakdown.isEmpty {
+          Section("Models") {
+            ForEach(modelBreakdown) { row in
+              UsageBreakdownRowView(row: row)
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+
+        monthlyBudgetSection
+
+        Section {
+          LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
+          if telemetryStatistics.databaseBytes > 0 {
+            LabeledContent(
+              "Local database",
+              value: ByteCountFormatter.string(
+                fromByteCount: telemetryStatistics.databaseBytes,
+                countStyle: .file
+              )
+            )
+          }
+        } header: {
+          Text("Local analytics")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        } footer: {
+          Text(telemetryFootnote)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        .listRowBackground(theme.surfaceColor)
+      } else {
+        advancedUpsellSection
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Analytics")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      if openSidebar != nil {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Open Sidebar", systemImage: "text.alignleft") { openSidebar?() }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
+      } else {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
       }
-      .task {
-        if purchaseManager.hasPro {
-          await loadTelemetry()
-        }
+    }
+    .task {
+      if purchaseManager.hasPro {
+        await loadTelemetry()
       }
-      .onChange(of: purchaseManager.hasPro) { _, hasPro in
-        if hasPro {
-          Task { await loadTelemetry() }
-        } else {
-          range = .month
-        }
+    }
+    .onChange(of: purchaseManager.hasPro) { _, hasPro in
+      if hasPro {
+        Task { await loadTelemetry() }
+      } else {
+        range = .month
       }
-      .refreshable {
-        if purchaseManager.hasPro {
-          await loadTelemetry()
-        }
+    }
+    .refreshable {
+      if purchaseManager.hasPro {
+        await loadTelemetry()
       }
-      .sheet(isPresented: $showProUpsell) {
-        BYOKProUpsellFlow(feature: .analytics)
-      }
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .analytics)
     }
   }
 

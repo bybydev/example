@@ -5,8 +5,8 @@ import SwiftUI
 import UIKit
 
 struct ChatSidebarView: View {
-  /// Menu destinations. Library/projects/plugins replace the app's main
-  /// screen; usage still presents as a sheet.
+  /// Menu destinations. All four replace the app's main screen; usage shows
+  /// the analytics dashboard.
   enum SidebarDestination: String, Identifiable {
     case library
     case projects
@@ -29,8 +29,7 @@ struct ChatSidebarView: View {
   /// reached from a project and offer a back chevron instead of the hamburger.
   let selectProjectConversation: (ConversationID) -> Void
   let selectSearchResult: (ConversationSearchResult) -> Void
-  /// Library/projects/plugins swap the app's main screen; usage opens as a
-  /// sheet locally.
+  /// Swaps the app's main screen to the chosen menu destination.
   let openDestination: (SidebarDestination) -> Void
   let openSettings: () -> Void
   let close: () -> Void
@@ -43,7 +42,6 @@ struct ChatSidebarView: View {
   @State private var renameText = ""
   @State private var showProjectEditor = false
   @State private var projectEditorTarget: ChatProject?
-  @State private var showUsage = false
   @State private var showPaywall = false
   @State private var showCelebration = false
   @State private var showProjectUpsell = false
@@ -88,13 +86,6 @@ struct ChatSidebarView: View {
     }
     .sheet(isPresented: $showProjectUpsell) {
       BYOKProUpsellFlow(feature: .projects)
-    }
-    .sheet(isPresented: $showUsage) {
-      UsageDashboardView(
-        conversations: chats.conversations,
-        currentConversationID: selectedConversationID
-      )
-      .presentationDragIndicator(.visible)
     }
     .sheet(isPresented: $showPaywall) {
       ProPaywallView(
@@ -252,6 +243,12 @@ struct ChatSidebarView: View {
         systemImage: "puzzlepiece.extension",
         title: "Plugins",
         action: { openDestination(.plugins) }
+      )
+
+      SidebarRichMenuRow(
+        systemImage: "chart.bar.xaxis",
+        title: "Usage",
+        action: { openDestination(.usage) }
       )
     }
     .padding(.horizontal, 8)
