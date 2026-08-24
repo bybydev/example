@@ -23,6 +23,9 @@ struct ChatSidebarView: View {
   let selectedConversationID: ConversationID?
   let newChat: (ProjectID?) -> Void
   let selectConversation: (ConversationID) -> Void
+  /// Distinct from `selectConversation` so the root can remember the chat was
+  /// reached from a project and offer a back chevron instead of the hamburger.
+  let selectProjectConversation: (ConversationID) -> Void
   let selectSearchResult: (ConversationSearchResult) -> Void
   let openSettings: () -> Void
   let close: () -> Void
@@ -93,7 +96,7 @@ struct ChatSidebarView: View {
           providers: providers,
           mcp: mcp,
           newChat: newChat,
-          openChat: selectConversation
+          openChat: selectProjectConversation
         )
         .presentationDragIndicator(.visible)
       case .plugins:

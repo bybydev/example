@@ -9,8 +9,12 @@ import UniformTypeIdentifiers
 struct ChatView: View {
   let conversationID: ConversationID
   let initialScrollMessageID: ChatMessageID?
+  /// True when the chat was reached through its project's chat list; swaps the
+  /// leading hamburger for a back chevron next to the project pill.
+  let enteredFromProject: Bool
   let openSidebar: () -> Void
   let startNewChat: () -> Void
+  let openProject: () -> Void
 
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
@@ -46,21 +50,25 @@ struct ChatView: View {
   init(
     conversationID: ConversationID,
     initialScrollMessageID: ChatMessageID? = nil,
+    enteredFromProject: Bool = false,
     chats: ChatManagementModel,
     providers: ProviderManagementModel,
     projects: ProjectManagementModel,
     mcp: MCPManagementModel,
     openSidebar: @escaping () -> Void = {},
-    startNewChat: @escaping () -> Void = {}
+    startNewChat: @escaping () -> Void = {},
+    openProject: @escaping () -> Void = {}
   ) {
     self.conversationID = conversationID
     self.initialScrollMessageID = initialScrollMessageID
+    self.enteredFromProject = enteredFromProject
     self.chats = chats
     self.providers = providers
     self.projects = projects
     self.mcp = mcp
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
+    self.openProject = openProject
   }
 
   var conversation: ChatConversation? {
@@ -93,9 +101,30 @@ struct ChatView: View {
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
-        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
-          .labelStyle(.iconOnly)
-          .accessibilityLabel("Open sidebar")
+        if let project, enteredFromProject {
+          Button("Back to Project", systemImage: "chevron.left", action: openProject)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Back to \(project.name)")
+        } else {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
+      }
+
+      // Project context as the centered title — its own placement, so it
+      // can't merge with the leading control.
+      if let project {
+        ToolbarItem(placement: .principal) {
+          HStack(spacing: 6) {
+            ProjectIconView(project: project, size: 20)
+            Text(project.name)
+              .font(.subheadline.weight(.semibold))
+              .lineLimit(1)
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Project \(project.name)")
+        }
       }
 
       ToolbarItemGroup(placement: .topBarTrailing) {

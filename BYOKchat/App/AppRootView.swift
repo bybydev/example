@@ -21,6 +21,11 @@ struct AppRootView: View {
   @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
+  /// The visible chat was opened from a project's chat list, so it shows a
+  /// back chevron instead of the sidebar hamburger.
+  @State private var openedChatFromProject = false
+  /// When set (and no chat is selected), the root shows that project's screen.
+  @State private var activeProjectViewID: ProjectID?
 
   var body: some View {
     Group {
@@ -77,6 +82,7 @@ struct AppRootView: View {
               selectedConversationID: selectedConversationID,
               newChat: startNewChat(in:),
               selectConversation: selectConversation,
+              selectProjectConversation: selectProjectConversation,
               selectSearchResult: selectSearchResult,
               openSettings: openSettings,
               close: closeSidebar
@@ -96,8 +102,12 @@ struct AppRootView: View {
       initialScrollMessageID = nil
     }
     .onChange(of: model.projects.projects.map(\.id)) { _, ids in
-      guard let newChatProjectID, !ids.contains(newChatProjectID) else { return }
-      self.newChatProjectID = nil
+      if let newChatProjectID, !ids.contains(newChatProjectID) {
+        self.newChatProjectID = nil
+      }
+      if let activeProjectViewID, !ids.contains(activeProjectViewID) {
+        self.activeProjectViewID = nil
+      }
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active {
@@ -184,6 +194,7 @@ struct AppRootView: View {
         ChatView(
           conversationID: selectedConversationID,
           initialScrollMessageID: initialScrollMessageID,
+          enteredFromProject: openedChatFromProject,
           chats: model.chats,
           providers: model.providers,
           projects: model.projects,
@@ -191,7 +202,8 @@ struct AppRootView: View {
           openSidebar: openSidebar,
           startNewChat: {
             startNewChat(in: model.projects.projectID(for: selectedConversationID))
-          }
+          },
+          openProject: exitToProjectView
         )
         .id(
           ChatPresentationID(
@@ -203,6 +215,17 @@ struct AppRootView: View {
           theme.backgroundColor
             .ignoresSafeArea()
         }
+      } else if let activeProjectViewID {
+        ProjectDetailView(
+          projectID: activeProjectViewID,
+          chats: model.chats,
+          projects: model.projects,
+          providers: model.providers,
+          mcp: model.mcp,
+          newChat: startNewChat(in:),
+          openChat: selectProjectConversation,
+          homeExit: { startNewChat(in: nil) }
+        )
       } else {
         NewChatView(
           chats: model.chats,
@@ -258,13 +281,33 @@ struct AppRootView: View {
     selectedConversationID = nil
     newChatProjectID = projectID
     initialScrollMessageID = nil
+    activeProjectViewID = nil
+    openedChatFromProject = false
     closeSidebar()
+  }
+
+  /// Back chevron on a project chat: swap the chat for its project's screen.
+  private func exitToProjectView() {
+    guard let conversationID = selectedConversationID else { return }
+    activeProjectViewID = model.projects.projectID(for: conversationID)
+    openedChatFromProject = false
+    selectedConversationID = nil
+    initialScrollMessageID = nil
+  }
+
+  /// Opening a chat from a project's screen keeps the project context so the
+  /// chat offers a back chevron back into that project.
+  private func selectProjectConversation(_ id: ConversationID) {
+    selectConversation(id)
+    openedChatFromProject = true
   }
 
   private func selectConversation(_ id: ConversationID) {
     selectedConversationID = id
     newChatProjectID = nil
     initialScrollMessageID = nil
+    activeProjectViewID = nil
+    openedChatFromProject = false
     closeSidebar()
   }
 
@@ -272,6 +315,8 @@ struct AppRootView: View {
     selectedConversationID = result.conversationID
     newChatProjectID = nil
     initialScrollMessageID = result.messageID
+    activeProjectViewID = nil
+    openedChatFromProject = false
     closeSidebar()
   }
 

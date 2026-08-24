@@ -687,6 +687,10 @@ struct ProjectDetailView: View {
   let mcp: MCPManagementModel
   let newChat: (ProjectID?) -> Void
   let openChat: (ConversationID) -> Void
+  /// Set when the detail view sits at the root of the navigation stack (shown
+  /// via a chat's back chevron) instead of being pushed in the sidebar sheet;
+  /// renders a leading back chevron and replaces dismiss-on-delete.
+  var homeExit: (() -> Void)? = nil
 
   private enum Segment: String, CaseIterable, Identifiable {
     case chats
@@ -753,6 +757,13 @@ struct ProjectDetailView: View {
     .navigationTitle(project?.name ?? "Project")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      if homeExit != nil {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Back", systemImage: "chevron.left") { homeExit?() }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Back")
+        }
+      }
       ToolbarItemGroup(placement: .primaryAction) {
         Button("New Chat", systemImage: "square.and.pencil") {
           newChat(projectID)
@@ -785,7 +796,11 @@ struct ProjectDetailView: View {
         Task { @MainActor in
           await projects.deleteProject(projectID)
           await mcp.reloadFromStorage()
-          dismiss()
+          if let homeExit {
+            homeExit()
+          } else {
+            dismiss()
+          }
         }
       }
       Button("Cancel", role: .cancel) {}
