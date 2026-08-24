@@ -16,34 +16,22 @@ struct MCPServerListView: View {
   @State private var pendingDelete: MCPRemoteServer?
 
   var body: some View {
-    List {
+    Group {
       if model.servers.isEmpty {
         ContentUnavailableView(
           "No MCP Servers",
           systemImage: "shippingbox.and.arrow.backward",
           description: Text("Add a remote Streamable HTTP MCP endpoint to discover its tools.")
         )
-        .listRowBackground(theme.surfaceColor)
       } else {
-        ForEach(model.servers) { server in
-          NavigationLink {
-            MCPServerEditorView(model: model, server: server)
-          } label: {
-            serverRow(server)
-          }
-          .swipeActions(edge: .trailing) {
-            Button("Delete", systemImage: "trash", role: .destructive) {
-              pendingDelete = server
-            }
-          }
-        }
-        .listRowBackground(theme.surfaceColor)
+        serverList
       }
     }
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
     .navigationTitle("MCP Servers")
+    .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       if let openSidebar {
         ToolbarItem(placement: .cancellationAction) {
@@ -101,6 +89,26 @@ struct MCPServerListView: View {
     } message: {
       Text("The server configuration, cached tool catalog, chat selections, and its Keychain credential will be removed.")
     }
+  }
+
+  private var serverList: some View {
+    List {
+      ForEach(model.servers) { server in
+        NavigationLink {
+          MCPServerEditorView(model: model, server: server)
+        } label: {
+          serverRow(server)
+        }
+        .swipeActions(edge: .trailing) {
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            pendingDelete = server
+          }
+        }
+      }
+      .listRowBackground(Color.clear)
+    }
+    .listStyle(.plain)
+    .listRowSeparatorTint(theme.borderColor)
   }
 
   @ViewBuilder

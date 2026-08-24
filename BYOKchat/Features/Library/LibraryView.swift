@@ -165,6 +165,7 @@ struct LibraryView: View {
       }
     }
     .listStyle(.plain)
+    .listRowSeparatorTint(theme.borderColor)
   }
 
   private func row(_ entry: LibraryEntry) -> some View {
@@ -195,7 +196,7 @@ struct LibraryView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .listRowBackground(theme.surfaceColor)
+    .listRowBackground(Color.clear)
     .contextMenu { contextActions(entry) }
   }
 

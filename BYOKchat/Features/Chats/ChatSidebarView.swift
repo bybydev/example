@@ -205,13 +205,13 @@ struct ChatSidebarView: View {
 
       SidebarRichMenuRow(
         systemImage: "puzzlepiece.extension",
-        title: "Plugins",
+        title: "MCP Servers",
         action: { openDestination(.plugins) }
       )
 
       SidebarRichMenuRow(
         systemImage: "chart.bar.xaxis",
-        title: "Usage",
+        title: "Analytics",
         action: { openDestination(.usage) }
       )
     }

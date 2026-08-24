@@ -59,9 +59,10 @@ struct SidebarProjectsView: View {
               pendingDelete = project
             }
           }
-          .listRowBackground(theme.surfaceColor)
+          .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
+        .listRowSeparatorTint(theme.borderColor)
       }
     }
     .scrollContentBackground(.hidden)

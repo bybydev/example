@@ -17,29 +17,15 @@ struct ConnectionsView: View {
   }
 
   var body: some View {
-    ZStack {
-      theme.backgroundColor.ignoresSafeArea()
-      ScrollView {
-        LazyVStack(spacing: 12) {
-          if model.accounts.isEmpty {
-            emptyState
-              .padding(.top, 72)
-          } else {
-            ForEach(model.accounts) { account in
-              NavigationLink {
-                ConnectionDetailView(model: model, accountID: account.id)
-              } label: {
-                ConnectionRow(model: model, account: account)
-              }
-              .buttonStyle(.plain)
-            }
-          }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+    Group {
+      if model.accounts.isEmpty {
+        emptyState
+      } else {
+        accountList
       }
-      .refreshable { await model.load() }
     }
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
     .navigationTitle("Connections")
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
@@ -79,36 +65,30 @@ struct ConnectionsView: View {
     }
   }
 
-  private var emptyState: some View {
-    VStack(spacing: 16) {
-      Image(systemName: "link")
-        .font(.system(size: 38, weight: .medium))
-        .foregroundStyle(theme.accentColor)
-      Text("Connect your AI")
-        .font(.system(size: 28, weight: .semibold))
-      Text("Add a connection to use your own AI provider and API key in BYOKchat.")
-        .font(.system(size: 15))
-        .foregroundStyle(theme.secondaryForegroundColor)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: 420)
-      Button {
-        addConnection()
+  private var accountList: some View {
+    List(model.accounts) { account in
+      NavigationLink {
+        ConnectionDetailView(model: model, accountID: account.id)
       } label: {
-        Label("Add Connection", systemImage: "plus.circle.fill")
-          .font(.system(size: 16, weight: .semibold))
-          .frame(maxWidth: 280)
-          .padding(.vertical, 11)
+        ConnectionRow(model: model, account: account)
       }
-      .buttonStyle(.borderedProminent)
-      .tint(theme.accentColor)
-      Text("API keys are stored in Keychain and sent only to the provider you connect.")
-        .font(.caption)
-        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: 360)
+      .buttonStyle(.plain)
+      .listRowBackground(Color.clear)
     }
-    .frame(maxWidth: .infinity)
-    .padding(.horizontal, 24)
+    .listStyle(.plain)
+    .listRowSeparatorTint(theme.borderColor)
+    .refreshable { await model.load() }
+  }
+
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("Connect your AI", systemImage: "link")
+    } description: {
+      Text("Add a connection to use your own AI provider and API key in BYOKchat.")
+    } actions: {
+      Button("Add Connection", action: addConnection)
+        .buttonStyle(.borderedProminent)
+    }
   }
 
   private func addConnection() {
@@ -143,7 +123,7 @@ private struct ConnectionRow: View {
       VStack(alignment: .leading, spacing: 4) {
         Text(account.label)
           .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(.primary)
+          .foregroundStyle(theme.primaryForegroundColor)
         HStack(spacing: 5) {
           Text(provider?.displayName ?? account.providerID.rawValue)
           if let modelID = account.defaultModelID {
@@ -164,15 +144,8 @@ private struct ConnectionRow: View {
           .font(.caption.weight(.medium))
           .foregroundStyle(theme.secondaryForegroundColor)
       }
-      Image(systemName: "chevron.right")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
     }
-    .padding(16)
-    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(theme.borderColor, lineWidth: 1)
-    }
+    .padding(.vertical, 2)
+    .contentShape(Rectangle())
   }
 }
