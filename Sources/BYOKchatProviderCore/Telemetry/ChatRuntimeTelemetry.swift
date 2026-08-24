@@ -415,6 +415,8 @@ struct ChatRuntimeTelemetry: Sendable {
       return .init(errorCode: "workspace_version_unsupported", classification: "storage")
     case .conversationVersionUnsupported:
       return .init(errorCode: "conversation_version_unsupported", classification: "storage")
+    case .libraryVersionUnsupported:
+      return .init(errorCode: "library_version_unsupported", classification: "storage")
     case .backupVersionUnsupported:
       return .init(errorCode: "backup_version_unsupported", classification: "storage")
     case .conversationNotFound:

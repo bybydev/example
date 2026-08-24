@@ -687,6 +687,10 @@ struct ProjectDetailView: View {
   let mcp: MCPManagementModel
   let newChat: (ProjectID?) -> Void
   let openChat: (ConversationID) -> Void
+  /// Set when the detail view is *pushed* onto the stack: the composer pushes
+  /// on top of it instead of swapping the main screen underneath. Back then
+  /// returns to this project.
+  var newChatInStack: (() -> Void)? = nil
   /// Set when the detail view sits at the root of the navigation stack (shown
   /// via a chat's back chevron) instead of being pushed in the sidebar sheet;
   /// renders a leading back chevron and replaces dismiss-on-delete.
@@ -719,8 +723,16 @@ struct ProjectDetailView: View {
   }
 
   private var conversations: [ChatConversation] {
-    chats.conversations.filter { projects.projectID(for: $0.id) == projectID }
+    // Untouched chats are transient; hide them unless one is on screen.
+    chats.conversations.filter {
+      projects.projectID(for: $0.id) == projectID
+        && (!($0.messages.isEmpty) || $0.id == visibleConversationID)
+    }
   }
+
+  /// The conversation currently presented from this project (root-level detail
+  /// keeps its chat's identity so the list doesn't flicker).
+  var visibleConversationID: ConversationID? = nil
 
   var body: some View {
     Group {
@@ -765,10 +777,8 @@ struct ProjectDetailView: View {
         }
       }
       ToolbarItemGroup(placement: .primaryAction) {
-        Button("New Chat", systemImage: "square.and.pencil") {
-          newChat(projectID)
-        }
-        .labelStyle(.iconOnly)
+        Button("New Chat", systemImage: "square.and.pencil", action: startChatHere)
+          .labelStyle(.iconOnly)
 
         Button("Edit Project", systemImage: "slider.horizontal.3") {
           showEditor = true
@@ -809,6 +819,16 @@ struct ProjectDetailView: View {
     }
   }
 
+  /// Pushed details keep their context: the composer layers on top instead of
+  /// swapping the main screen underneath.
+  private func startChatHere() {
+    if let newChatInStack {
+      newChatInStack()
+    } else {
+      newChat(projectID)
+    }
+  }
+
   @ViewBuilder
   private func chatList(_ project: ChatProject) -> some View {
     if conversations.isEmpty {
@@ -817,7 +837,7 @@ struct ProjectDetailView: View {
       } description: {
         Text("New chats here use \(project.name) defaults and instructions.")
       } actions: {
-        Button("New Chat") { newChat(project.id) }
+        Button("New Chat", action: startChatHere)
           .buttonStyle(.borderedProminent)
       }
     } else {

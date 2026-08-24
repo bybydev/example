@@ -8,6 +8,7 @@ import Observation
 final class AppModel {
   let providers: ProviderManagementModel
   let chats: ChatManagementModel
+  let library: LibraryManagementModel
   let projects: ProjectManagementModel
   let projectSync: ProjectSyncModel
   let mcp: MCPManagementModel
@@ -50,9 +51,21 @@ final class AppModel {
       workspace: providerWorkspace,
       accounts: accountManager
     )
+    let attachmentBlobStore = FileAttachmentBlobStore(
+      directory: supportDirectory.appendingPathComponent("attachments-v1", isDirectory: true)
+    )
     let conversationStore = ConversationStore(
       persistence: JSONFileConversationWorkspacePersistence(
         fileURL: supportDirectory.appendingPathComponent("conversations-v1.json")
+      ),
+      blobs: attachmentBlobStore
+    )
+    let libraryStore = LibraryStore(
+      persistence: JSONFileLibraryWorkspacePersistence(
+        fileURL: supportDirectory.appendingPathComponent("library-v1.json")
+      ),
+      blobs: FileAttachmentBlobStore(
+        directory: supportDirectory.appendingPathComponent("library-v1", isDirectory: true)
       )
     )
     let projectWorkspace = ProjectWorkspaceStore(
@@ -108,6 +121,7 @@ final class AppModel {
       mcpWorkspace: mcpWorkspace,
       projectWorkspace: projectWorkspace
     )
+    let libraryModel = LibraryManagementModel(store: libraryStore)
     let mcpModel = MCPManagementModel(
       runtime: mcpRuntime,
       workspace: mcpWorkspace,
@@ -138,13 +152,15 @@ final class AppModel {
     let projectAwareDataPortability = ProjectAwareDataPortabilityService(
       base: baseDataPortability,
       projects: projectWorkspace,
-      conversations: conversationStore
+      conversations: conversationStore,
+      library: libraryStore
     )
 
     providers = providerModel
     projects = projectModel
     projectSync = projectSyncModel
     chats = chatModel
+    library = libraryModel
     mcp = mcpModel
     dataPortability = DataPortabilityModel(
       service: projectAwareDataPortability,
@@ -165,6 +181,7 @@ final class AppModel {
     await projects.load()
     await mcp.load()
     await chats.load()
+    await library.load()
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
     await projectSync.load()

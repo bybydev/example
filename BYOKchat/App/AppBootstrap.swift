@@ -34,6 +34,9 @@ final class AppBootstrapController {
       await model.chats.load()
       try Self.throwIfModelFailed(model.chats.errorMessage, stage: .loadingChats)
 
+      await model.library.load()
+      try Self.throwIfModelFailed(model.library.errorMessage, stage: .loadingChats)
+
       state = .loading(.reconciling)
       await model.projects.reconcile(conversations: model.chats.conversations)
       try Self.throwIfModelFailed(model.projects.errorMessage, stage: .reconciling)
@@ -386,10 +389,22 @@ enum AppStorageBootstrap {
   private static func createResetBackup(root: URL) throws {
     let fileManager = FileManager.default
     let existing = localDataURLs(root: root).filter { fileManager.fileExists(atPath: $0.path) }
-    guard !existing.isEmpty else { return }
+    let blobDirectories = blobDirectoryURLs(root: root)
+      .filter { fileManager.fileExists(atPath: $0.path) }
+      .flatMap { directory -> [URL] in
+        (try? fileManager.contentsOfDirectory(
+          at: directory,
+          includingPropertiesForKeys: [.isRegularFileKey]
+        ))?.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+          ?? []
+      }
+    guard !existing.isEmpty || !blobDirectories.isEmpty else { return }
     let directory = try newBackupDirectory(root: root, group: "ResetBackups")
     for url in existing {
       try fileManager.copyItem(at: url, to: directory.appendingPathComponent(url.lastPathComponent))
+    }
+    for url in blobDirectories {
+      try fileManager.copyItem(at: url, to: directory.appendingPathComponent("blob--\(url.lastPathComponent)"))
     }
     try pruneBackups(root: root, directory: "ResetBackups", keeping: 3)
   }
@@ -425,13 +440,29 @@ enum AppStorageBootstrap {
 
   private static func localDataURLs(root: URL) -> [URL] {
     stores.map { root.appendingPathComponent($0.fileName) }
-      + [root.appendingPathComponent("project-sync-local-v1.json")]
+      + [
+        root.appendingPathComponent("project-sync-local-v1.json"),
+        root.appendingPathComponent("library-v1.json"),
+      ]
+  }
+
+  /// Attachment/library byte payloads live in per-store directories next to
+  /// the JSON workspaces.
+  private static func blobDirectoryURLs(root: URL) -> [URL] {
+    [
+      root.appendingPathComponent("attachments-v1", isDirectory: true),
+      root.appendingPathComponent("library-v1", isDirectory: true),
+    ]
   }
 
   private static func removeLocalFiles(root: URL) throws {
     let fileManager = FileManager.default
     for url in localDataURLs(root: root) where fileManager.fileExists(atPath: url.path) {
       try fileManager.removeItem(at: url)
+    }
+    for directory in blobDirectoryURLs(root: root)
+    where fileManager.fileExists(atPath: directory.path) {
+      try fileManager.removeItem(at: directory)
     }
   }
 
@@ -451,6 +482,20 @@ enum AppStorageBootstrap {
 
     for url in localDataURLs(root: root) where fileManager.fileExists(atPath: url.path) {
       result[url.lastPathComponent] = try Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    // Blob payloads carry the actual attachment/library bytes; without them a
+    // post-migration recovery package could not restore chat images.
+    for directory in blobDirectoryURLs(root: root) {
+      let contents = (try? fileManager.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: [.isRegularFileKey]
+      )) ?? []
+      for url in contents
+      where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+        result["blobs--\(directory.lastPathComponent)--\(url.lastPathComponent)"] =
+          try? Data(contentsOf: url, options: .mappedIfSafe)
+      }
     }
 
     let telemetry = TelemetryRecorder.defaultDatabaseURL()

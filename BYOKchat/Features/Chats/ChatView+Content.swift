@@ -6,6 +6,51 @@ import UIKit
 extension ChatView {
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
+    let isUntouched = conversation.messages.isEmpty && !chats.isGenerating(conversation.id)
+    if isUntouched {
+      // An untouched chat has no scroll view: the empty state *is* the content
+      // area, centered between the nav bar and the composer.
+      VStack(spacing: 0) {
+        Spacer(minLength: 0)
+        existingEmptyState(conversation)
+          .padding(.horizontal, 24)
+        Spacer(minLength: 0)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .contentShape(Rectangle())
+      .onTapGesture {
+        dismissKeyboard()
+      }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        ChatInputComposer(
+          draft: $draft,
+          attachments: pendingAttachments,
+          isGenerating: false,
+          canSend: configurationIssue(conversation) == nil,
+          conversation: conversation,
+          chats: chats,
+          providers: providers,
+          openChatSettings: { showTargetSettings = true },
+          pickPhoto: { showPhotoPicker = true },
+          pickFile: { showFileImporter = true },
+          pickFromLibrary: { showLibraryPicker = true },
+          projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
+          attachProjectFile: { file in appendAttachments([file.attachment]) },
+          removeAttachment: removePendingAttachment,
+          send: send,
+          stop: {
+            Task { @MainActor in
+              await chats.stop(conversationID)
+            }
+          }
+        )
+      }
+    } else {
+      scrollViewContent(conversation)
+    }
+  }
+
+  private func scrollViewContent(_ conversation: ChatConversation) -> some View {
     ScrollViewReader { proxy in
       ScrollView {
         VStack(spacing: 0) {
@@ -24,18 +69,7 @@ extension ChatView {
               .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if conversation.messages.isEmpty {
-              VStack(spacing: 12) {
-                Text("How can I help?")
-                  .font(.system(size: 30, weight: .semibold))
-                Text("Using \(targetLabel(conversation))")
-                  .font(.system(size: 14))
-                  .foregroundStyle(theme.secondaryForegroundColor)
-              }
-              .frame(maxWidth: .infinity)
-              .padding(.top, 112)
-            } else {
-              ForEach(conversation.messages) { stored in
+            ForEach(conversation.messages) { stored in
                 let displayed = chats.displayMessage(stored)
                 VStack(alignment: .leading, spacing: 10) {
                   ChatMessageView(
@@ -45,6 +79,8 @@ extension ChatView {
                     canEdit: stored.role == .user && !chats.isGenerating(conversationID),
                     canRegenerate: stored.id == latestAssistantID
                       && !chats.isGenerating(conversationID),
+                    conversationID: conversationID,
+                    library: library,
                     edit: {
                       editText = stored.content
                       editTarget = stored
@@ -67,7 +103,6 @@ extension ChatView {
                 }
                 .id(stored.id)
               }
-            }
 
             let approvals = mcp.pendingApprovals(for: conversationID)
             let approvalCallIDs = Set(approvals.map(\.callID))
@@ -225,6 +260,7 @@ extension ChatView {
             openChatSettings: { showTargetSettings = true },
             pickPhoto: { showPhotoPicker = true },
             pickFile: { showFileImporter = true },
+            pickFromLibrary: { showLibraryPicker = true },
             projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
             attachProjectFile: { file in appendAttachments([file.attachment]) },
             removeAttachment: removePendingAttachment,
@@ -736,5 +772,501 @@ private extension JSONValue {
       return String(describing: self)
     }
     return value
+  }
+}
+
+// MARK: - Empty-state surface (ported from the retired NewChatView)
+
+extension ChatView {
+  /// Provider/model resolution for fresh mode: target override, then project
+  /// pinning, then global defaults.
+  var defaultAccount: ProviderAccount? {
+    let enabled = providers.accounts.filter(\.isEnabled)
+
+    if let targetOverride {
+      return enabled.first { $0.id == targetOverride.accountID }
+    }
+    if let accountID = project?.accountID {
+      return enabled.first { $0.id == accountID }
+    }
+    if let ready = enabled.first(where: isConnectionReady) {
+      return ready
+    }
+    return enabled.first
+  }
+
+  var defaultProvider: ProviderDefinition? {
+    guard let account = defaultAccount else { return nil }
+    return providers.provider(for: account.providerID)
+  }
+
+  var defaultModelID: ModelID? {
+    guard let account = defaultAccount else { return nil }
+    let models = providers.models(for: account.id).filter(\.isAvailable)
+
+    if let targetOverride, targetOverride.accountID == account.id {
+      return models.contains(where: { $0.model.id == targetOverride.modelID })
+        ? targetOverride.modelID
+        : nil
+    }
+    if let projectModelID = project?.modelID {
+      return models.contains(where: { $0.model.id == projectModelID }) ? projectModelID : nil
+    }
+    if let accountModelID = account.defaultModelID,
+      models.contains(where: { $0.model.id == accountModelID })
+    {
+      return accountModelID
+    }
+    return models.first?.model.id
+  }
+
+  var selectedModel: ProviderModel? {
+    guard let account = defaultAccount, let modelID = defaultModelID else { return nil }
+    return providers.models(for: account.id, includeHidden: true)
+      .first(where: { $0.model.id == modelID })?.model
+  }
+
+  var readiness: ChatReadiness {
+    guard defaultAccount != nil else { return .noConnection }
+    if let account = defaultAccount,
+      providerRequiresCredential(account.providerID),
+      !providers.credentialAccountIDs.contains(account.id)
+    {
+      return .missingCredential
+    }
+    guard defaultModelID != nil else { return .noModel }
+    return .ready
+  }
+
+  var canStartFreshConversation: Bool {
+    readiness == .ready
+  }
+
+  var targetReasoning: ReasoningOptions? {
+    if let conversation { return conversation.options.reasoning }
+    if let targetOverride { return targetOverride.reasoning }
+    guard let providerID = defaultAccount?.providerID else { return nil }
+    switch providerID {
+    case BuiltInProviders.deepSeekID, BuiltInProviders.anthropicID:
+      return .init(enabled: true, effort: .high)
+    case BuiltInProviders.geminiID:
+      return .init(enabled: true, effort: .medium)
+    default:
+      return nil
+    }
+  }
+
+  /// Account feeding the target chip / picker sheet: the conversation's own
+  /// for existing chats, resolved defaults for fresh mode.
+  var targetPickerAccount: ProviderAccount? {
+    if let conversation {
+      return providers.accounts.first { $0.id == conversation.accountID }
+    }
+    return defaultAccount
+  }
+
+  var targetPickerInitialModelID: ModelID? {
+    conversation?.modelID ?? defaultModelID
+  }
+
+  var targetSummary: String {
+    if let conversation {
+      let account = targetPickerAccount
+      let providerName = account.flatMap { providers.provider(for: $0.providerID)?.displayName }
+        ?? account?.label
+        ?? conversation.providerID.rawValue
+      let model = providers.models(for: conversation.accountID, includeHidden: true)
+        .first(where: { $0.model.id == conversation.modelID })?.model
+      return ComposerTargetLabelFormatter.make(
+        providerID: conversation.providerID,
+        providerName: providerName,
+        modelName: model?.displayName ?? conversation.modelID.rawValue,
+        modelID: conversation.modelID.rawValue,
+        supportedParameters: model?.supportedParameters ?? [],
+        reasoning: conversation.options.reasoning
+      )
+    }
+    if project?.accountID != nil && defaultAccount == nil {
+      return "Project connection unavailable"
+    }
+    if project?.modelID != nil && defaultAccount != nil && defaultModelID == nil {
+      return "Project model unavailable"
+    }
+    switch readiness {
+    case .noConnection:
+      return "Set up connection"
+    case .missingCredential:
+      return "Add API key"
+    case .noModel:
+      return "Choose model"
+    case .ready:
+      guard let account = defaultAccount, let modelID = defaultModelID else {
+        return "Choose model"
+      }
+      let providerName = providers.provider(for: account.providerID)?.displayName ?? account.label
+      let model = selectedModel
+      return ComposerTargetLabelFormatter.make(
+        providerID: account.providerID,
+        providerName: providerName,
+        modelName: model?.displayName ?? modelID.rawValue,
+        modelID: modelID.rawValue,
+        supportedParameters: model?.supportedParameters ?? [],
+        reasoning: targetReasoning
+      )
+    }
+  }
+
+  /// Applies a chip-picked target. Fresh mode stages it pre-send; existing
+  /// conversations update in place.
+  func applyPickedTarget(_ selection: NewChatTargetSelection) {
+    if isFresh {
+      targetOverride = selection
+      return
+    }
+    guard let conversation,
+      let account = providers.accounts.first(where: { $0.id == selection.accountID })
+    else { return }
+    var options = conversation.options
+    options.reasoning = selection.reasoning
+    Task {
+      _ = await chats.updateTarget(
+        conversationID: conversation.id,
+        account: account,
+        modelID: selection.modelID,
+        systemPrompt: conversation.systemPrompt,
+        options: options
+      )
+    }
+  }
+
+  var targetDetails: String {
+    guard let account = defaultAccount else { return "No connection configured" }
+    switch readiness {
+    case .missingCredential:
+      return "\(account.label) · API key required"
+    case .noModel:
+      return "\(account.label) · No available model"
+    case .noConnection:
+      return "No connection configured"
+    case .ready:
+      let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
+      return "\(account.label) · \(modelName)"
+    }
+  }
+
+  @ViewBuilder
+  var emptyStateContent: some View {
+    switch readiness {
+    case .ready:
+      readyChatContent(subline: usingFreshModelLabel)
+    case .noConnection, .missingCredential, .noModel:
+      setupContent
+    }
+  }
+
+  /// One hero for every untouched chat — project or not. Project identity
+  /// lives in the nav pill only.
+  @ViewBuilder
+  func existingEmptyState(_ conversation: ChatConversation) -> some View {
+    if let issue = configurationIssue(conversation) {
+      existingIssueCard(issue)
+    } else {
+      readyChatContent(subline: "Using \(targetLabel(conversation))")
+    }
+  }
+
+  private func readyChatContent(subline: String?) -> some View {
+    VStack(spacing: 18) {
+      Image(systemName: "bubble.left.and.bubble.right")
+        .font(.system(size: 30, weight: .medium))
+        .foregroundStyle(theme.accentColor)
+        .accessibilityHidden(true)
+      Text("How can I help?")
+        .font(.system(size: 30, weight: .semibold))
+        .multilineTextAlignment(.center)
+      if let subline {
+        Text(subline)
+          .font(.system(size: 14))
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .multilineTextAlignment(.center)
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var usingFreshModelLabel: String? {
+    guard let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue else {
+      return nil
+    }
+    return "Using \(modelName)"
+  }
+
+  /// Configuration-problem variant of the hero for existing conversations —
+  /// the old RepairBanner's content in the setup-card visual language.
+  private func existingIssueCard(_ issue: String) -> some View {
+    VStack(spacing: 16) {
+      Image(systemName: "wrench.and.screwdriver")
+        .font(.system(size: 32, weight: .medium))
+        .foregroundStyle(theme.accentColor)
+        .accessibilityHidden(true)
+      Text("Finish setting up this chat")
+        .font(.system(size: 28, weight: .semibold))
+        .multilineTextAlignment(.center)
+      Text(issue)
+        .font(.system(size: 15))
+        .multilineTextAlignment(.center)
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .frame(maxWidth: 440)
+
+      Button {
+        showTargetSettings = true
+      } label: {
+        Label("Repair Chat Configuration", systemImage: "wrench.and.screwdriver")
+          .font(.system(size: 16, weight: .semibold))
+          .frame(maxWidth: 320)
+          .padding(.vertical, 12)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(theme.accentColor)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var setupContent: some View {
+    VStack(spacing: 16) {
+      Image(systemName: setupIcon)
+        .font(.system(size: 32, weight: .medium))
+        .foregroundStyle(theme.accentColor)
+        .accessibilityHidden(true)
+      Text(setupTitle)
+        .font(.system(size: 28, weight: .semibold))
+        .multilineTextAlignment(.center)
+      Text(setupDescription)
+        .font(.system(size: 15))
+        .multilineTextAlignment(.center)
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .frame(maxWidth: 440)
+
+      Button { primarySetupAction() } label: {
+        Label(primarySetupTitle, systemImage: primarySetupIcon)
+          .font(.system(size: 16, weight: .semibold))
+          .frame(maxWidth: 320)
+          .padding(.vertical, 12)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(theme.accentColor)
+
+      Text("Connections keep your provider, API key, and default model together in one place.")
+        .font(.caption)
+        .multilineTextAlignment(.center)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+        .frame(maxWidth: 420)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var setupIcon: String {
+    switch readiness {
+    case .noConnection: "link"
+    case .missingCredential: "key.slash"
+    case .noModel: "rectangle.stack.badge.plus"
+    case .ready: "bubble.left.and.bubble.right"
+    }
+  }
+
+  private var setupTitle: String {
+    switch readiness {
+    case .noConnection:
+      return project == nil ? "Connect your AI" : "Set up a connection"
+    case .missingCredential:
+      return "Finish setting up \(defaultProvider?.displayName ?? defaultAccount?.label ?? "connection")"
+    case .noModel:
+      return "Choose a model"
+    case .ready:
+      return "How can I help?"
+    }
+  }
+
+  private var setupDescription: String {
+    switch readiness {
+    case .noConnection:
+      if let project {
+        return "Add a connection before starting a chat in \(project.name)."
+      }
+      return "Connect an AI provider with your own API key to start chatting."
+    case .missingCredential:
+      return "\(defaultAccount?.label ?? "This connection") needs an API key before it can be used."
+    case .noModel:
+      if let project, project.modelID != nil {
+        return "The model selected for \(project.name) is no longer available. Choose another project model."
+      }
+      return "Choose a default model for \(defaultAccount?.label ?? "this connection") before starting a chat."
+    case .ready:
+      return ""
+    }
+  }
+
+  private var primarySetupTitle: String {
+    switch readiness {
+    case .noConnection: "Set Up Connection"
+    case .missingCredential, .noModel: "Open Connections"
+    case .ready: "Start Chatting"
+    }
+  }
+
+  private var primarySetupIcon: String {
+    switch readiness {
+    case .noConnection: "plus.circle.fill"
+    case .missingCredential: "key.fill"
+    case .noModel: "rectangle.stack.fill"
+    case .ready: "arrow.up.circle.fill"
+    }
+  }
+
+  private func primarySetupAction() {
+    switch readiness {
+    case .noConnection, .missingCredential, .noModel:
+      if (project?.accountID != nil && defaultAccount == nil)
+        || (project?.modelID != nil && defaultModelID == nil)
+      {
+        showProjectEditorSheet = true
+      } else {
+        showConnections = true
+      }
+    case .ready:
+      break
+    }
+  }
+
+  func openCurrentTarget() {
+    switch readiness {
+    case .ready:
+      showTargetPicker = true
+    case .noConnection, .missingCredential, .noModel:
+      if (project?.accountID != nil && defaultAccount == nil)
+        || (project?.modelID != nil && defaultModelID == nil)
+      {
+        showProjectEditorSheet = true
+      } else {
+        showConnections = true
+      }
+    }
+  }
+
+  func isConnectionReady(_ account: ProviderAccount) -> Bool {
+    if providerRequiresCredential(account.providerID),
+      !providers.credentialAccountIDs.contains(account.id)
+    {
+      return false
+    }
+    let models = providers.models(for: account.id).filter(\.isAvailable)
+    if let modelID = account.defaultModelID,
+      models.contains(where: { $0.model.id == modelID })
+    {
+      return true
+    }
+    return !models.isEmpty
+  }
+
+  func providerRequiresCredential(_ providerID: ProviderID) -> Bool {
+    guard let provider = providers.provider(for: providerID) else { return true }
+    switch provider.authentication {
+    case .none: return false
+    case .bearer, .header: return true
+    }
+  }
+
+  // MARK: Starters
+
+  var starterActions: [StarterAction] {
+    let model = effectiveStarterModel
+    var actions = [
+      StarterAction(
+        id: "write",
+        title: "Write",
+        systemImage: "square.and.pencil",
+        kind: .draft("Help me write a")
+      ),
+      StarterAction(
+        id: "brainstorm",
+        title: "Brainstorm",
+        systemImage: "lightbulb",
+        kind: .draft("Give me ideas for")
+      ),
+    ]
+
+    if model?.inputModalities.contains("image") == true {
+      actions.append(
+        StarterAction(id: "photo", title: "Analyze a photo", systemImage: "photo", kind: .photo)
+      )
+    }
+    if model?.inputModalities.contains("file") == true {
+      actions.append(
+        StarterAction(id: "file", title: "Summarize a file", systemImage: "doc.text", kind: .file)
+      )
+    }
+    if actions.count < 4 {
+      actions.append(
+        StarterAction(
+          id: "explain",
+          title: "Explain",
+          systemImage: "text.magnifyingglass",
+          kind: .draft("Explain this to me:")
+        )
+      )
+    }
+    if actions.count < 4 {
+      actions.append(
+        StarterAction(
+          id: "summarize",
+          title: "Summarize",
+          systemImage: "text.alignleft",
+          kind: .draft("Summarize this for me:")
+        )
+      )
+    }
+    return Array(actions.prefix(4))
+  }
+
+  /// Model whose modalities gate the starter tiles.
+  private var effectiveStarterModel: ProviderModel? {
+    if !isFresh, let conversation {
+      return providers.models(for: conversation.accountID, includeHidden: true)
+        .first(where: { $0.model.id == conversation.modelID })?.model
+    }
+    return selectedModel
+  }
+
+  func starterActionButton(_ action: StarterAction) -> some View {
+    Button { applyStarterAction(action) } label: {
+      HStack(spacing: 9) {
+        Image(systemName: action.systemImage)
+          .foregroundStyle(theme.accentColor)
+        Text(action.title)
+          .lineLimit(2)
+        Spacer(minLength: 0)
+      }
+      .font(.system(size: 14, weight: .medium))
+      .multilineTextAlignment(.leading)
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+      .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14)
+          .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+      }
+    }
+    .buttonStyle(.plain)
+  }
+
+  func applyStarterAction(_ action: StarterAction) {
+    switch action.kind {
+    case .draft(let value):
+      draft = value
+    case .photo:
+      showPhotoPicker = true
+    case .file:
+      showFileImporter = true
+    }
   }
 }

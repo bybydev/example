@@ -7,6 +7,7 @@ struct ChatListView: View {
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
+  let library: LibraryManagementModel
   let openProviders: () -> Void
 
   @State private var path: [ConversationID] = []
@@ -56,13 +57,14 @@ struct ChatListView: View {
       }
       .navigationDestination(for: ConversationID.self) { id in
         ChatView(
-          conversationID: id,
+          subject: .existing(id),
           initialScrollMessageID: searchTarget?.conversationID == id
             ? searchTarget?.messageID : nil,
           chats: chats,
           providers: providers,
           projects: projects,
-          mcp: mcp
+          mcp: mcp,
+          library: library
         )
       }
     }

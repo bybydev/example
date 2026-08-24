@@ -1,7 +1,30 @@
 import Foundation
 
+/// Self-contained library entry for backups: metadata plus the byte payload,
+/// so a single document restores on any device.
+public struct PortableLibraryEntry: Codable, Sendable, Equatable {
+  public var id: LibraryEntryID
+  public var filename: String
+  public var kind: ChatAttachmentKind
+  public var mimeType: String
+  public var createdAt: Date
+  public var source: LibraryEntrySource
+  public var data: Data
+
+  public init(entry: LibraryEntry, data: Data) {
+    id = entry.id
+    filename = entry.filename
+    kind = entry.kind
+    mimeType = entry.mimeType
+    createdAt = entry.createdAt
+    source = entry.source
+    self.data = data
+  }
+}
+
 /// Backward-compatible full-backup envelope. `projectWorkspace` is optional so older
 /// schema-v1 backups written before project data was added continue to decode.
+/// `libraryEntries` is likewise optional for backups predating the library store.
 public struct ProjectAwareBYOKchatBackup: Codable, Sendable, Equatable {
   public var schemaVersion: Int
   public var exportedAt: Date
@@ -9,6 +32,7 @@ public struct ProjectAwareBYOKchatBackup: Codable, Sendable, Equatable {
   public var conversationWorkspace: ConversationWorkspaceState
   public var mcpWorkspace: MCPWorkspaceState?
   public var projectWorkspace: ProjectWorkspaceState?
+  public var libraryEntries: [PortableLibraryEntry]?
   public var preferences: BYOKchatBackupPreferences
 
   public init(
@@ -18,6 +42,7 @@ public struct ProjectAwareBYOKchatBackup: Codable, Sendable, Equatable {
     conversationWorkspace: ConversationWorkspaceState,
     mcpWorkspace: MCPWorkspaceState? = nil,
     projectWorkspace: ProjectWorkspaceState? = nil,
+    libraryEntries: [PortableLibraryEntry]? = nil,
     preferences: BYOKchatBackupPreferences
   ) {
     self.schemaVersion = schemaVersion
@@ -26,6 +51,7 @@ public struct ProjectAwareBYOKchatBackup: Codable, Sendable, Equatable {
     self.conversationWorkspace = conversationWorkspace
     self.mcpWorkspace = mcpWorkspace
     self.projectWorkspace = projectWorkspace
+    self.libraryEntries = libraryEntries
     self.preferences = preferences
   }
 }
@@ -34,22 +60,37 @@ public actor ProjectAwareDataPortabilityService {
   private let base: DataPortabilityService
   private let projects: ProjectWorkspaceStore
   private let conversations: ConversationStore
+  private let library: LibraryStore?
   private let projectPortability: ProjectPortabilityService
 
   public init(
     base: DataPortabilityService,
     projects: ProjectWorkspaceStore,
-    conversations: ConversationStore
+    conversations: ConversationStore,
+    library: LibraryStore? = nil
   ) {
     self.base = base
     self.projects = projects
     self.conversations = conversations
+    self.library = library
     self.projectPortability = ProjectPortabilityService(workspace: projects)
   }
 
   public func exportBackup(defaultSystemPrompt: String) async throws -> Data {
     let baseData = try await base.exportBackup(defaultSystemPrompt: defaultSystemPrompt)
     let backup = try JSONDecoder.provider.decode(BYOKchatBackup.self, from: baseData)
+
+    var portableEntries: [PortableLibraryEntry]?
+    if let library {
+      var collected: [PortableLibraryEntry] = []
+      for entry in await library.entries() {
+        if let data = await library.data(for: entry), !data.isEmpty {
+          collected.append(PortableLibraryEntry(entry: entry, data: data))
+        }
+      }
+      portableEntries = collected
+    }
+
     let extended = ProjectAwareBYOKchatBackup(
       schemaVersion: backup.schemaVersion,
       exportedAt: backup.exportedAt,
@@ -57,6 +98,7 @@ public actor ProjectAwareDataPortabilityService {
       conversationWorkspace: backup.conversationWorkspace,
       mcpWorkspace: backup.mcpWorkspace,
       projectWorkspace: await projects.snapshot(),
+      libraryEntries: portableEntries,
       preferences: backup.preferences
     )
     return try JSONEncoder.providerEncoder.encode(extended)
@@ -91,6 +133,17 @@ public actor ProjectAwareDataPortabilityService {
       strategy: strategy,
       conversationIDMapping: mapping
     )
+    if let library {
+      do {
+        try await library.restorePortableEntries(extended.libraryEntries ?? [], strategy: strategy)
+      } catch {
+        // Library restore failures must not roll back the chats/providers that
+        // already imported; surface the error with context instead.
+        throw ProviderError.importConflict(
+          "Chats and providers were restored, but the library could not be: \(error.localizedDescription)"
+        )
+      }
+    }
     return summary
   }
 

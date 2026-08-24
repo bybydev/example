@@ -28,6 +28,7 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
   case contextWindowExceeded(estimatedInputTokens: Int, limit: Int)
   case workspaceVersionUnsupported(Int)
   case conversationVersionUnsupported(Int)
+  case libraryVersionUnsupported(Int)
   case backupVersionUnsupported(Int)
   case conversationNotFound(ConversationID)
   case conversationBusy(ConversationID)
@@ -68,6 +69,8 @@ public enum ProviderError: Error, LocalizedError, Sendable, Equatable {
       "Provider workspace version \(version) is unsupported."
     case .conversationVersionUnsupported(let version):
       "Conversation workspace version \(version) is unsupported."
+    case .libraryVersionUnsupported(let version):
+      "Library workspace version \(version) is unsupported."
     case .backupVersionUnsupported(let version):
       "BYOKchat backup version \(version) is unsupported."
     case .conversationNotFound(let id): "Conversation not found: \(id.rawValue)"

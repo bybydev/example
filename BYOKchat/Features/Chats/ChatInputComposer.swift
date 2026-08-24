@@ -41,6 +41,8 @@ struct ChatComposer: View {
   let openTarget: () -> Void
   let pickPhoto: () -> Void
   let pickFile: () -> Void
+  /// Presents the attach-from-library picker. Hidden from the menu when nil.
+  var pickFromLibrary: (() -> Void)?
   let projectFiles: [ProjectFile]
   let attachProjectFile: (ProjectFile) -> Void
   let removeAttachment: (String) -> Void
@@ -71,6 +73,7 @@ struct ChatComposer: View {
     openTarget: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    pickFromLibrary: (() -> Void)? = nil,
     projectFiles: [ProjectFile] = [],
     attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
@@ -86,6 +89,7 @@ struct ChatComposer: View {
     self.openTarget = openTarget
     self.pickPhoto = pickPhoto
     self.pickFile = pickFile
+    self.pickFromLibrary = pickFromLibrary
     self.projectFiles = projectFiles
     self.attachProjectFile = attachProjectFile
     self.removeAttachment = removeAttachment
@@ -107,6 +111,7 @@ struct ChatComposer: View {
     openChatSettings: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    pickFromLibrary: (() -> Void)? = nil,
     projectFiles: [ProjectFile] = [],
     attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
@@ -137,6 +142,7 @@ struct ChatComposer: View {
     openTarget = openChatSettings
     self.pickPhoto = pickPhoto
     self.pickFile = pickFile
+    self.pickFromLibrary = pickFromLibrary
     self.projectFiles = projectFiles
     self.attachProjectFile = attachProjectFile
     self.removeAttachment = removeAttachment
@@ -157,6 +163,7 @@ struct ChatComposer: View {
     openTarget: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
     pickFile: @escaping () -> Void,
+    pickFromLibrary: (() -> Void)? = nil,
     projectFiles: [ProjectFile] = [],
     attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
     removeAttachment: @escaping (String) -> Void,
@@ -172,6 +179,7 @@ struct ChatComposer: View {
       openTarget: openTarget,
       pickPhoto: pickPhoto,
       pickFile: pickFile,
+      pickFromLibrary: pickFromLibrary,
       projectFiles: projectFiles,
       attachProjectFile: attachProjectFile,
       removeAttachment: removeAttachment,
@@ -348,6 +356,9 @@ struct ChatComposer: View {
     Menu {
       Button("Photo", systemImage: "photo", action: pickPhoto)
       Button("File", systemImage: "doc", action: pickFile)
+      if let pickFromLibrary {
+        Button("From Library…", systemImage: "books.vertical", action: pickFromLibrary)
+      }
       if !projectFiles.isEmpty {
         Menu("Project Files", systemImage: "folder.badge.plus") {
           ForEach(projectFiles) { file in

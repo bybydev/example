@@ -40,11 +40,8 @@ struct ChatSidebarView: View {
   @State private var isSearching = false
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
-  @State private var showProjectEditor = false
-  @State private var projectEditorTarget: ChatProject?
   @State private var showPaywall = false
   @State private var showCelebration = false
-  @State private var showProjectUpsell = false
   @FocusState private var searchFocused: Bool
 
   var body: some View {
@@ -75,18 +72,6 @@ struct ChatSidebarView: View {
         }
     )
     .animation(.snappy(duration: 0.2), value: isSearching)
-    .sheet(isPresented: $showProjectEditor) {
-      ProjectEditorView(
-        project: projectEditorTarget,
-        projects: projects,
-        providers: providers,
-        mcp: mcp
-      )
-      .presentationDragIndicator(.visible)
-    }
-    .sheet(isPresented: $showProjectUpsell) {
-      BYOKProUpsellFlow(feature: .projects)
-    }
     .sheet(isPresented: $showPaywall) {
       ProPaywallView(
         purchases: purchases.manager,
@@ -136,27 +121,6 @@ struct ChatSidebarView: View {
       brandTitle
 
       Spacer()
-
-      Button("New Project", systemImage: "folder.badge.plus") {
-        if BYOKProAccess.canCreateProject(
-          currentCount: projects.projects.count,
-          hasPro: purchases.hasPro
-        ) {
-          projectEditorTarget = nil
-          showProjectEditor = true
-        } else {
-          showProjectUpsell = true
-        }
-      }
-      .labelStyle(.iconOnly)
-      .font(.system(size: 17, weight: .semibold))
-      .symbolRenderingMode(.hierarchical)
-      .frame(width: 40, height: 40)
-      .background(.thinMaterial, in: Circle())
-      .overlay(Circle().stroke(theme.borderColor, lineWidth: 0.5))
-      .contentShape(Circle())
-      .buttonStyle(.plain)
-      .shadow(color: theme.appearance.shadow.color, radius: 9, y: 3)
 
       Button("Search Chats", systemImage: isSearching ? "xmark" : "magnifyingglass") {
         isSearching.toggle()
@@ -447,15 +411,21 @@ struct ChatSidebarView: View {
     )
   }
 
+  /// Untouched chats are transient (they're discarded on exit), so they only
+  /// appear while actually on screen.
+  private func isListable(_ conversation: ChatConversation) -> Bool {
+    !conversation.messages.isEmpty || conversation.id == selectedConversationID
+  }
+
   private var pinnedConversations: [ChatConversation] {
     chats.conversations
-      .filter { pinnedIDSet.contains($0.id.rawValue) }
+      .filter { pinnedIDSet.contains($0.id.rawValue) && isListable($0) }
       .sorted { $0.updatedAt > $1.updatedAt }
   }
 
   private var recentConversations: [ChatConversation] {
     chats.conversations
-      .filter { !pinnedIDSet.contains($0.id.rawValue) }
+      .filter { !pinnedIDSet.contains($0.id.rawValue) && isListable($0) }
       .sorted { $0.updatedAt > $1.updatedAt }
   }
 

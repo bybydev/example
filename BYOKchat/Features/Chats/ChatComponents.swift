@@ -225,6 +225,10 @@ struct ChatMessageView: View {
   var failureContext: String? = nil
   let canEdit: Bool
   let canRegenerate: Bool
+  /// Library saving ("Save to Library" / "Save Images…") is only offered when
+  /// both are provided.
+  var conversationID: ConversationID? = nil
+  var library: LibraryManagementModel? = nil
   let edit: () -> Void
   let regenerate: () -> Void
   let copy: () -> Void
@@ -233,6 +237,12 @@ struct ChatMessageView: View {
   @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
   @State private var showSourcesSheet = false
+  @State private var showImageSaveSheet = false
+
+  private var imageCandidates: [ResponseImageCandidate] {
+    guard library != nil, conversationID != nil, !message.content.isEmpty else { return [] }
+    return ResponseImageScanner.imageCandidates(in: message.content)
+  }
 
   var body: some View {
     Group {
@@ -321,6 +331,18 @@ struct ChatMessageView: View {
     .sheet(isPresented: $showSourcesSheet) {
       AnswerSourcesSheet(sources: messageSources)
     }
+    .sheet(isPresented: $showImageSaveSheet) {
+      if let conversationID, let library {
+        ResponseImageSaveSheet(
+          candidates: imageCandidates,
+          conversationID: conversationID,
+          messageID: message.id,
+          library: library
+        ) { error in
+          library.errorMessage = error
+        }
+      }
+    }
   }
 
   /// Links extracted from the answer body. They stay tappable inline in the
@@ -360,6 +382,7 @@ struct ChatMessageView: View {
             UIPasteboard.general.string = message.reasoning
           }
         }
+        libraryActions
       } label: {
         Image(systemName: "ellipsis")
           .frame(width: 38, height: 38)
@@ -371,6 +394,38 @@ struct ChatMessageView: View {
     .foregroundStyle(theme.secondaryForegroundColor)
     .buttonStyle(.plain)
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Save-into-library actions. Rendered inside the More menu only when the
+  /// caller provided library context.
+  @ViewBuilder
+  private var libraryActions: some View {
+    if let conversationID, let library {
+      Button("Save to Library", systemImage: "books.vertical") {
+        Task { @MainActor in
+          // Locale-independent stamp keeps generated filenames predictable.
+          let parts = Calendar.current.dateComponents([.year, .month, .day], from: message.createdAt)
+          let name =
+            "Response-\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0).md"
+          _ = await library.addAttachment(
+            ChatAttachment(
+              kind: .file,
+              filename: name,
+              mimeType: "text/markdown",
+              data: Data(message.content.utf8)
+            ),
+            source: .chat(conversationID: conversationID, messageID: message.id)
+          )
+        }
+      }
+      .disabled(message.content.isEmpty)
+
+      if !imageCandidates.isEmpty {
+        Button("Save Images…", systemImage: "photo.on.rectangle") {
+          showImageSaveSheet = true
+        }
+      }
+    }
   }
 
   @ViewBuilder

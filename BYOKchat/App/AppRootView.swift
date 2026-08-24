@@ -2,6 +2,22 @@ import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
+/// Explicit push destinations for the root navigation stack. Only flows that
+/// must layer *on top of* the current main screen live here; everything else
+/// keeps swapping the root.
+enum AppRoute: Hashable {
+  case project(ProjectID)
+  /// A live conversation shown inside the stack. "New chat" inside a project
+  /// creates the conversation eagerly, so this is the only chat shape there
+  /// is — an empty one is just a chat with no messages yet.
+  case chat(ConversationID)
+
+  var chatID: ConversationID? {
+    if case .chat(let id) = self { return id }
+    return nil
+  }
+}
+
 struct AppRootView: View {
   private struct ChatPresentationID: Hashable {
     let conversationID: ConversationID
@@ -16,8 +32,12 @@ struct AppRootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
   @State private var bootstrap = AppBootstrapController()
+  /// Pushed screens layered above the main content (project details, pushed
+  /// project chats).
+  @State private var navigationPath: [AppRoute] = []
+  /// Guards double-taps on a project's New Chat from stacking two empties.
+  @State private var isCreatingStackChat = false
   @State private var selectedConversationID: ConversationID?
-  @State private var newChatProjectID: ProjectID?
   @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
@@ -105,10 +125,16 @@ struct AppRootView: View {
       self.selectedConversationID = nil
       initialScrollMessageID = nil
     }
-    .onChange(of: model.projects.projects.map(\.id)) { _, ids in
-      if let newChatProjectID, !ids.contains(newChatProjectID) {
-        self.newChatProjectID = nil
+    // A pushed project chat that never received a message is discarded when
+    // it leaves the stack, so backing out of "New Chat" leaves no clutter.
+    .onChange(of: navigationPath) { oldValue, newValue in
+      let oldChats = oldValue.compactMap(\.chatID)
+      let kept = Set(newValue.compactMap(\.chatID))
+      for id in oldChats where !kept.contains(id) {
+        discardIfEmpty(id)
       }
+    }
+    .onChange(of: model.projects.projects.map(\.id)) { _, ids in
       if let activeProjectViewID, !ids.contains(activeProjectViewID) {
         self.activeProjectViewID = nil
       }
@@ -191,19 +217,20 @@ struct AppRootView: View {
 
   @ViewBuilder
   private var mainContent: some View {
-    NavigationStack {
+    NavigationStack(path: $navigationPath) {
       Group {
         if let selectedConversationID,
           model.chats.conversation(selectedConversationID) != nil
         {
           ChatView(
-            conversationID: selectedConversationID,
+            subject: .existing(selectedConversationID),
             initialScrollMessageID: initialScrollMessageID,
             enteredFromProject: openedChatFromProject,
             chats: model.chats,
             providers: model.providers,
             projects: model.projects,
             mcp: model.mcp,
+            library: model.library,
             openSidebar: openSidebar,
             startNewChat: {
               startNewChat(in: model.projects.projectID(for: selectedConversationID))
@@ -234,9 +261,11 @@ struct AppRootView: View {
         } else if let activeScreen {
           switch activeScreen {
           case .library:
-            SidebarLibraryView(
-              conversations: model.chats.conversations,
-              openSidebar: openSidebar
+            LibraryView(
+              library: model.library,
+              chats: model.chats,
+              openSidebar: openSidebar,
+              openSourceChat: openLibrarySourceChat
             )
           case .projects:
             SidebarProjectsView(
@@ -257,30 +286,54 @@ struct AppRootView: View {
             )
           }
         } else {
-          NewChatView(
+          // Home: fresh pre-creation chat surface.
+          ChatView(
+            subject: .fresh(projectID: nil),
             chats: model.chats,
             providers: model.providers,
             projects: model.projects,
             mcp: model.mcp,
-            projectID: newChatProjectID,
+            library: model.library,
+            onFreshConversationCreated: selectConversation,
             openSidebar: openSidebar,
-            openSettings: openSettings,
-            selectConversation: selectConversation
+            openSettings: openSettings
           )
         }
       }
       // Project rows in the main-screen projects list push their detail onto
-      // the root stack. Opening a chat from there keeps the project context.
-      .navigationDestination(for: ProjectID.self) { projectID in
-        ProjectDetailView(
-          projectID: projectID,
-          chats: model.chats,
-          projects: model.projects,
-          providers: model.providers,
-          mcp: model.mcp,
-          newChat: startNewChat(in:),
-          openChat: selectProjectConversation
-        )
+      // the root stack; the detail's new-chat composer pushes on top of it so
+      // back returns to the project instead of swapping the main screen.
+      .navigationDestination(for: AppRoute.self) { route in
+        switch route {
+        case .project(let projectID):
+          ProjectDetailView(
+            projectID: projectID,
+            chats: model.chats,
+            projects: model.projects,
+            providers: model.providers,
+            mcp: model.mcp,
+            newChat: startNewChat(in:),
+            openChat: selectProjectConversation,
+            newChatInStack: { pushEmptyProjectChat(projectID) }
+          )
+        case .chat(let conversationID):
+          ChatView(
+            subject: .existing(conversationID),
+            chats: model.chats,
+            providers: model.providers,
+            projects: model.projects,
+            mcp: model.mcp,
+            library: model.library,
+            pushedFromStack: true,
+            openSidebar: {},
+            startNewChat: {
+              if let projectID = model.projects.projectID(for: conversationID) {
+                pushEmptyProjectChat(projectID)
+              }
+            },
+            openProject: {}
+          )
+        }
       }
     }
     .background {
@@ -321,9 +374,43 @@ struct AppRootView: View {
     withAnimation { isSidebarPresented = false }
   }
 
+  /// "New chat" inside a project is just a chat with no messages yet: create
+  /// the conversation with the project's defaults and push a real ChatView.
+  private func pushEmptyProjectChat(_ projectID: ProjectID) {
+    guard !isCreatingStackChat else { return }
+    isCreatingStackChat = true
+    Task { @MainActor in
+      defer { isCreatingStackChat = false }
+      guard
+        let id = await model.chats.createConversation(projectID: projectID)
+      else { return }
+      await model.projects.reloadFromStorage()
+      await model.mcp.reloadFromStorage()
+      navigationPath.append(.chat(id))
+    }
+  }
+
+  /// A zero-message conversation stops existing the moment it stops being the
+  /// visible chat — drafts included, per the strict-cleanup rule.
+  private func discardIfEmpty(_ id: ConversationID?) {
+    guard let id,
+      let conversation = model.chats.conversation(id),
+      conversation.messages.isEmpty,
+      !model.chats.isGenerating(id)
+    else { return }
+    Task { await model.chats.deleteConversation(id) }
+  }
+
   private func startNewChat(in projectID: ProjectID?) {
+    if let projectID {
+      // Every project-scoped new chat is a real, eagerly created conversation.
+      closeSidebar()
+      pushEmptyProjectChat(projectID)
+      return
+    }
+    navigationPath = []
+    discardIfEmpty(selectedConversationID)
     selectedConversationID = nil
-    newChatProjectID = projectID
     initialScrollMessageID = nil
     activeProjectViewID = nil
     openedChatFromProject = false
@@ -334,8 +421,9 @@ struct AppRootView: View {
   /// Sidebar menu sections (library/projects/plugins) replace the main
   /// screen; whatever was showing yields.
   private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
+    navigationPath = []
+    discardIfEmpty(selectedConversationID)
     selectedConversationID = nil
-    newChatProjectID = nil
     initialScrollMessageID = nil
     activeProjectViewID = nil
     openedChatFromProject = false
@@ -348,6 +436,7 @@ struct AppRootView: View {
     guard let conversationID = selectedConversationID else { return }
     activeProjectViewID = model.projects.projectID(for: conversationID)
     openedChatFromProject = false
+    discardIfEmpty(conversationID)
     selectedConversationID = nil
     initialScrollMessageID = nil
   }
@@ -360,8 +449,9 @@ struct AppRootView: View {
   }
 
   private func selectConversation(_ id: ConversationID) {
+    navigationPath = []
+    discardIfEmpty(selectedConversationID == id ? nil : selectedConversationID)
     selectedConversationID = id
-    newChatProjectID = nil
     initialScrollMessageID = nil
     activeProjectViewID = nil
     openedChatFromProject = false
@@ -370,13 +460,29 @@ struct AppRootView: View {
   }
 
   private func selectSearchResult(_ result: ConversationSearchResult) {
+    navigationPath = []
+    discardIfEmpty(selectedConversationID == result.conversationID ? nil : selectedConversationID)
     selectedConversationID = result.conversationID
-    newChatProjectID = nil
     initialScrollMessageID = result.messageID
     activeProjectViewID = nil
     openedChatFromProject = false
     activeScreen = nil
     closeSidebar()
+  }
+
+  /// A library entry saved from a chat jumps back to its source message.
+  private func openLibrarySourceChat(_ entry: LibraryEntry) {
+    guard case let .chat(conversationID, messageID) = entry.source else { return }
+    selectSearchResult(
+      ConversationSearchResult(
+        conversationID: conversationID,
+        messageID: messageID,
+        role: .user,
+        title: model.chats.conversation(conversationID)?.title ?? "Chat",
+        snippet: "Saved: \(entry.filename)",
+        updatedAt: entry.createdAt
+      )
+    )
   }
 
   private func openSettings() {

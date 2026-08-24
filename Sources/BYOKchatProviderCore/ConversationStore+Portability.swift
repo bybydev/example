@@ -5,12 +5,6 @@ extension ConversationStore {
     try JSONEncoder.providerEncoder.encode(snapshot())
   }
 
-  public func deleteAllConversations() async throws {
-    for conversation in allConversations() {
-      try await deleteConversation(conversation.id)
-    }
-  }
-
   /// Imports conversations and returns a mapping from source conversation IDs to the
   /// effective local IDs. Merge imports can map a source conversation onto an existing
   /// local conversation when the ID or portable fingerprint already exists.

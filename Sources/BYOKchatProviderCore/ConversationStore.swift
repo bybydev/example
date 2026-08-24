@@ -34,11 +34,16 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
 
 public actor ConversationStore {
   private let persistence: any ConversationWorkspacePersistence
+  private let blobs: any AttachmentBlobStoring
   private var state = ConversationWorkspaceState()
   private var hasLoaded = false
 
-  public init(persistence: any ConversationWorkspacePersistence) {
+  public init(
+    persistence: any ConversationWorkspacePersistence,
+    blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore()
+  ) {
     self.persistence = persistence
+    self.blobs = blobs
   }
 
   public func load() async throws {
@@ -51,7 +56,10 @@ public actor ConversationStore {
       state = decoded
     }
     hasLoaded = true
-    if repairInterruptedMessages() {
+    let repaired = repairInterruptedMessages()
+    await hydrateAttachmentBlobs()
+    let prunedOrphans = await pruneOrphanBlobs()
+    if repaired || prunedOrphans {
       try await persist()
     }
   }
@@ -95,6 +103,16 @@ public actor ConversationStore {
   public func deleteConversation(_ id: ConversationID) async throws {
     state.conversations.removeAll { $0.id == id }
     try await persist()
+    await pruneOrphanBlobs()
+  }
+
+  /// Bulk removal used by replace-existing imports; one persist + one sweep
+  /// instead of one per conversation.
+  public func deleteAllConversations() async throws {
+    guard !state.conversations.isEmpty else { return }
+    state.conversations.removeAll()
+    try await persist()
+    await pruneOrphanBlobs()
   }
 
   public func renameConversation(_ id: ConversationID, title: String) async throws {
@@ -440,6 +458,69 @@ public actor ConversationStore {
     try await persist()
   }
 
+  /// Loads attachment bytes from blob files into the in-memory state so every
+  /// consumer (adapters, context builder, UI) keeps reading `attachment.data`
+  /// synchronously. Missing blobs leave empty data behind.
+  private func hydrateAttachmentBlobs() async {
+    for conversationIndex in state.conversations.indices {
+      for messageIndex in state.conversations[conversationIndex].messages.indices {
+        guard
+          var attachments = state.conversations[conversationIndex].messages[messageIndex]
+            .attachments
+        else { continue }
+        var didHydrate = false
+        for attachmentIndex in attachments.indices where attachments[attachmentIndex].data.isEmpty {
+          guard
+            let data = try? await blobs.loadData(attachments[attachmentIndex].id),
+            !data.isEmpty
+          else { continue }
+          attachments[attachmentIndex].data = data
+          didHydrate = true
+        }
+        if didHydrate {
+          state.conversations[conversationIndex].messages[messageIndex].attachments = attachments
+        }
+      }
+    }
+  }
+
+  /// Removes blob files no longer referenced by any message. Returns true
+  /// when something was deleted.
+  @discardableResult
+  private func pruneOrphanBlobs() async -> Bool {
+    let referenced = Self.referencedAttachmentIDs(in: state.conversations)
+    let stored = (try? await blobs.storedIDs()) ?? []
+    let orphans = stored.subtracting(referenced)
+    guard !orphans.isEmpty else { return false }
+    try? await blobs.deleteIDs(orphans)
+    return true
+  }
+
+  private static func referencedAttachmentIDs(in conversations: [ChatConversation]) -> Set<String> {
+    var ids = Set<String>()
+    for conversation in conversations {
+      for message in conversation.messages {
+        for attachment in message.attachments ?? [] {
+          ids.insert(attachment.id)
+        }
+      }
+    }
+    return ids
+  }
+
+  /// Writes any not-yet-stored payloads to blob files before the JSON lands.
+  /// Crash between the two steps leaves an orphan blob (cleaned by the sweep),
+  /// never a metadata row pointing at nothing.
+  private func offloadAttachmentBlobs() async throws {
+    for conversation in state.conversations {
+      for message in conversation.messages {
+        for attachment in message.attachments ?? [] where !attachment.data.isEmpty {
+          try await blobs.writeIfAbsent(attachment.id, data: attachment.data)
+        }
+      }
+    }
+  }
+
   private func mutateConversation(
     _ id: ConversationID,
     mutation: (inout ChatConversation) throws -> Void
@@ -532,7 +613,10 @@ public actor ConversationStore {
   }
 
   private func persist() async throws {
-    try await persistence.saveData(JSONEncoder.providerEncoder.encode(state))
+    try await offloadAttachmentBlobs()
+    try await persistence.saveData(
+      JSONEncoder.providerEncoderWithoutAttachmentData.encode(state)
+    )
   }
 
   private static func generatedTitle(from text: String) -> String {

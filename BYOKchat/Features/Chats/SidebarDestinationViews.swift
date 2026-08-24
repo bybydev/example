@@ -3,101 +3,6 @@ import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 
-struct SidebarLibraryView: View {
-  let conversations: [ChatConversation]
-  /// Opens the sidebar drawer; this view renders as the app's main screen
-  /// inside the root navigation stack rather than as a sheet.
-  var openSidebar: () -> Void = {}
-
-  @Environment(\.appFoundationTheme) private var theme
-
-  var body: some View {
-    Group {
-      if items.isEmpty {
-        ContentUnavailableView(
-          "Library is Empty",
-          systemImage: "books.vertical",
-          description: Text("Files and images attached to chats will appear here.")
-        )
-      } else {
-        List(items) { item in
-          HStack(spacing: 12) {
-            Image(systemName: item.kind == .image ? "photo" : "doc")
-              .font(.system(size: 17, weight: .medium))
-              .foregroundStyle(theme.secondaryForegroundColor)
-              .frame(width: 28, height: 28)
-
-            VStack(alignment: .leading, spacing: 3) {
-              Text(item.filename)
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-              Text("\(item.conversationTitle) · \(item.byteCountText)")
-                .font(.caption)
-                .foregroundStyle(theme.secondaryForegroundColor)
-                .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(item.date, style: .date)
-              .font(.caption2)
-              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
-          }
-          .padding(.vertical, 3)
-          .listRowBackground(theme.surfaceColor)
-        }
-        .listStyle(.plain)
-      }
-    }
-    .scrollContentBackground(.hidden)
-    .foregroundStyle(theme.primaryForegroundColor)
-    .background(AppThemeBackground(theme: theme))
-    .navigationTitle("Library")
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
-          .labelStyle(.iconOnly)
-          .accessibilityLabel("Open sidebar")
-      }
-    }
-  }
-
-  private var items: [SidebarLibraryItem] {
-    var result: [SidebarLibraryItem] = []
-    for conversation in conversations {
-      for message in conversation.messages {
-        for attachment in message.attachments ?? [] {
-          result.append(
-            SidebarLibraryItem(
-              id: "\(message.id.rawValue)::\(attachment.id)",
-              filename: attachment.filename,
-              kind: attachment.kind,
-              byteCount: attachment.byteCount,
-              conversationTitle: conversation.title,
-              date: message.createdAt
-            )
-          )
-        }
-      }
-    }
-    return result.sorted { $0.date > $1.date }
-  }
-}
-
-private struct SidebarLibraryItem: Identifiable {
-  let id: String
-  let filename: String
-  let kind: ChatAttachmentKind
-  let byteCount: Int
-  let conversationTitle: String
-  let date: Date
-
-  var byteCountText: String {
-    ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
-  }
-}
-
 struct SidebarProjectsView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var projects: ProjectManagementModel
@@ -125,7 +30,7 @@ struct SidebarProjectsView: View {
         )
       } else {
         List(projects.projects) { project in
-          NavigationLink(value: project.id) {
+          NavigationLink(value: AppRoute.project(project.id)) {
             HStack(spacing: 12) {
               ProjectIconView(project: project, size: 34)
 

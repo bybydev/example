@@ -6,26 +6,78 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// Which chat surface `ChatView` presents. There is exactly one chat view in
+/// the app; a "new chat" is the same surface before its first send.
+enum ChatSubject {
+  /// A persisted conversation (root-selected or stack-pushed).
+  case existing(ConversationID)
+  /// Home-screen pre-creation mode: hero + composer, no store writes until
+  /// the first message creates the conversation.
+  case fresh(projectID: ProjectID?)
+
+  var existingID: ConversationID? {
+    if case .existing(let id) = self { return id }
+    return nil
+  }
+}
+
+enum ChatReadiness: String {
+  case ready
+  case noConnection
+  case missingCredential
+  case noModel
+}
+
+/// Quick-start tile on an empty chat surface.
+struct StarterAction: Identifiable {
+  enum Kind {
+    case draft(String)
+    case photo
+    case file
+  }
+
+  let id: String
+  let title: String
+  let systemImage: String
+  let kind: Kind
+}
+
 struct ChatView: View {
+  /// Identity of the backing conversation. Only meaningful for `.existing`;
+  /// fresh mode never touches the store under this ID.
   let conversationID: ConversationID
+  let subject: ChatSubject
   let initialScrollMessageID: ChatMessageID?
   /// True when the chat was reached through its project's chat list; swaps the
   /// leading hamburger for a back chevron next to the project pill.
   let enteredFromProject: Bool
   let openSidebar: () -> Void
+  /// Presents app Settings (fresh mode menu + Connections sheet link-through).
+  var openSettings: () -> Void = {}
   let startNewChat: () -> Void
   let openProject: () -> Void
+  /// Fresh mode only: hands off after the first send creates the conversation.
+  var onFreshConversationCreated: (ConversationID) -> Void = { _ in }
 
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
+  let library: LibraryManagementModel
+  /// Chat lives inside the navigation stack (pushed from a project): the
+  /// leading slot stays empty so the system back button shows.
+  var pushedFromStack: Bool = false
 
   // Non-private: the chat content extension in ChatView+Content.swift uses it.
   @Environment(\.appFoundationTheme) var theme
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
   @State var restoredDraft = false
+  @State var isCreatingFresh = false
+  @State var targetOverride: NewChatTargetSelection?
+  @State var showTargetPicker = false
+  @State var showConnections = false
+  @State var showProjectEditorSheet = false
   @State var showTargetSettings = false
   @State var showToolSettings = false
   @State var showUsage = false
@@ -46,37 +98,59 @@ struct ChatView: View {
   @State var showPhotoPicker = false
   @State var photoPickerItems: [PhotosPickerItem] = []
   @State var showFileImporter = false
+  @State var showLibraryPicker = false
 
   init(
-    conversationID: ConversationID,
+    subject: ChatSubject,
     initialScrollMessageID: ChatMessageID? = nil,
     enteredFromProject: Bool = false,
     chats: ChatManagementModel,
     providers: ProviderManagementModel,
     projects: ProjectManagementModel,
     mcp: MCPManagementModel,
+    library: LibraryManagementModel,
+    pushedFromStack: Bool = false,
+    onFreshConversationCreated: @escaping (ConversationID) -> Void = { _ in },
     openSidebar: @escaping () -> Void = {},
+    openSettings: @escaping () -> Void = {},
     startNewChat: @escaping () -> Void = {},
     openProject: @escaping () -> Void = {}
   ) {
-    self.conversationID = conversationID
+    self.subject = subject
+    // Placeholder identity so non-fresh code paths keep a stable value; fresh
+    // mode branches away before anything reads the store through it.
+    self.conversationID =
+      subject.existingID ?? ConversationID(rawValue: "fresh-\(UUID().uuidString.lowercased())")
     self.initialScrollMessageID = initialScrollMessageID
     self.enteredFromProject = enteredFromProject
     self.chats = chats
     self.providers = providers
     self.projects = projects
     self.mcp = mcp
+    self.library = library
+    self.pushedFromStack = pushedFromStack
+    self.onFreshConversationCreated = onFreshConversationCreated
+    self.openSettings = openSettings
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
     self.openProject = openProject
   }
 
+  var isFresh: Bool {
+    if case .fresh = subject { return true }
+    return false
+  }
+
   var conversation: ChatConversation? {
-    chats.conversation(conversationID)
+    guard !isFresh else { return nil }
+    return chats.conversation(conversationID)
   }
 
   var project: ChatProject? {
-    projects.project(for: conversationID)
+    if case .fresh(let projectID) = subject {
+      return projectID.flatMap { projects.project($0) }
+    }
+    return projects.project(for: conversationID)
   }
 
   var latestAssistantID: ChatMessageID? {
@@ -91,6 +165,53 @@ struct ChatView: View {
 
   var body: some View {
     Group {
+      switch subject {
+      case .fresh(let projectID):
+        freshContent(projectID)
+      case .existing:
+        existingContent
+      }
+    }
+    .photosPicker(
+      isPresented: $showPhotoPicker,
+      selection: $photoPickerItems,
+      maxSelectionCount: 8,
+      matching: .images
+    )
+    .sheet(isPresented: $showTargetPicker) {
+      if let account = targetPickerAccount, let modelID = targetPickerInitialModelID {
+        NewChatTargetPickerView(
+          initialAccountID: account.id,
+          initialModelID: modelID,
+          initialReasoning: targetReasoning,
+          providers: providers
+        ) { selection in
+          applyPickedTarget(selection)
+        }
+      }
+    }
+    .onChange(of: photoPickerItems) { _, items in
+      importPhotos(items)
+    }
+    .fileImporter(
+      isPresented: $showFileImporter,
+      allowedContentTypes: [.item],
+      allowsMultipleSelection: true
+    ) { result in
+      importFiles(result)
+    }
+    .sheet(isPresented: $showLibraryPicker) {
+      LibraryAttachmentPickerView(library: library, chats: chats) { attachments in
+        appendAttachments(attachments)
+      }
+      .presentationDragIndicator(.visible)
+    }
+  }
+
+  /// The persisted-conversation surface. Everything here assumes the store
+  /// knows this conversation.
+  private var existingContent: some View {
+    Group {
       if let conversation {
         chatContent(conversation)
       } else {
@@ -101,7 +222,9 @@ struct ChatView: View {
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
-        if let project, enteredFromProject {
+        if pushedFromStack {
+          // System back owns the leading slot for stack-pushed chats.
+        } else if let project, enteredFromProject {
           Button("Back to Project", systemImage: "chevron.left", action: openProject)
             .labelStyle(.iconOnly)
             .accessibilityLabel("Back to \(project.name)")
@@ -161,8 +284,14 @@ struct ChatView: View {
               await chats.deleteConversation(conversationID)
               await projects.reloadFromStorage()
               await mcp.reloadFromStorage()
-              startNewChat()
-              dismiss()
+              if pushedFromStack {
+                // Popping lands on the screen beneath; starting a "next" chat
+                // here would push and immediately pop it.
+                dismiss()
+              } else {
+                startNewChat()
+                dismiss()
+              }
             }
           }
         } label: {
@@ -234,22 +363,6 @@ struct ChatView: View {
         "The previous request may have completed at the provider. Regenerating could create another billable request."
       )
     }
-    .photosPicker(
-      isPresented: $showPhotoPicker,
-      selection: $photoPickerItems,
-      maxSelectionCount: 8,
-      matching: .images
-    )
-    .onChange(of: photoPickerItems) { _, items in
-      importPhotos(items)
-    }
-    .fileImporter(
-      isPresented: $showFileImporter,
-      allowedContentTypes: [.item],
-      allowsMultipleSelection: true
-    ) { result in
-      importFiles(result)
-    }
     .fileExporter(
       isPresented: $showMarkdownExporter,
       document: markdownDocument,
@@ -273,7 +386,161 @@ struct ChatView: View {
     }
   }
 
-  private func applyPromptPreset(_ preset: ProjectPromptPreset) {
+  // MARK: Fresh mode (home pre-creation surface)
+
+  private func freshContent(_ projectID: ProjectID?) -> some View {
+    ZStack {
+      theme.backgroundColor.ignoresSafeArea()
+      VStack(spacing: 0) {
+        Spacer(minLength: 52)
+        emptyStateContent
+          .padding(.horizontal, 24)
+        Spacer(minLength: 24)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .contentShape(Rectangle())
+    .onTapGesture {
+      UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder),
+        to: nil,
+        from: nil,
+        for: nil
+      )
+    }
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
+      }
+
+      if let project {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Menu {
+            if !project.projectPromptPresets.isEmpty {
+              Menu("Prompts", systemImage: "text.bubble") {
+                ForEach(project.projectPromptPresets) { preset in
+                  Button(preset.name) { applyPromptPreset(preset) }
+                }
+              }
+            }
+            Button("Project Settings", systemImage: "folder.badge.gearshape") {
+              showProjectEditorSheet = true
+            }
+            Button("Settings", systemImage: "gearshape", action: openSettings)
+          } label: {
+            Image(systemName: "ellipsis")
+          }
+          .accessibilityLabel("More options")
+        }
+      } else {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button("New Chat", systemImage: "square.and.pencil", action: resetFreshChat)
+            .labelStyle(.iconOnly)
+
+          Menu {
+            Button("Settings", systemImage: "gearshape", action: openSettings)
+          } label: {
+            Image(systemName: "ellipsis")
+          }
+          .accessibilityLabel("More options")
+        }
+      }
+    }
+    .sheet(isPresented: $showConnections) {
+      NavigationStack {
+        ConnectionsView(model: providers) {
+          openSettings()
+        }
+      }
+      .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showProjectEditorSheet) {
+      if let project {
+        ProjectEditorView(
+          project: project,
+          projects: projects,
+          providers: providers,
+          mcp: mcp
+        )
+        .presentationDragIndicator(.visible)
+      }
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      freshComposer
+    }
+  }
+
+  private var freshComposer: ChatComposer {
+    ChatComposer(
+      draft: $draft,
+      attachments: pendingAttachments,
+      activity: isCreatingFresh ? ChatComposerActivity.creating : ChatComposerActivity.idle,
+      canSend: canStartFreshConversation,
+      targetSummary: targetSummary,
+      targetDetails: targetDetails,
+      openTarget: openCurrentTarget,
+      pickPhoto: { showPhotoPicker = true },
+      pickFile: { showFileImporter = true },
+      pickFromLibrary: { showLibraryPicker = true },
+      projectFiles: [],
+      attachProjectFile: { _ in },
+      removeAttachment: removePendingAttachment,
+      send: startFreshConversation
+    )
+  }
+
+  private func resetFreshChat() {
+    draft = ""
+    pendingAttachments = []
+    photoPickerItems = []
+    targetOverride = nil
+  }
+
+  private func startFreshConversation() {
+    let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let attachments = pendingAttachments
+    guard !normalized.isEmpty || !attachments.isEmpty else { return }
+    guard !isCreatingFresh else { return }
+    guard case .ready = readiness, defaultAccount != nil, defaultModelID != nil else {
+      return
+    }
+    guard case .fresh(let projectID) = subject else { return }
+
+    isCreatingFresh = true
+    Task { @MainActor in
+      defer { isCreatingFresh = false }
+      guard let id = await chats.createConversation(projectID: projectID) else { return }
+      await projects.reloadFromStorage()
+      await mcp.reloadFromStorage()
+
+      if let targetOverride,
+        let account = providers.accounts.first(where: { $0.id == targetOverride.accountID }),
+        let created = chats.conversation(id)
+      {
+        var options = created.options
+        options.reasoning = targetOverride.reasoning
+        guard await chats.updateTarget(
+          conversationID: id,
+          account: account,
+          modelID: targetOverride.modelID,
+          systemPrompt: created.systemPrompt,
+          options: options
+        ) else { return }
+      }
+
+      resetFreshChat()
+      chats.send(conversationID: id, text: normalized, attachments: attachments)
+      onFreshConversationCreated(id)
+    }
+  }
+
+  /// Internal: also called from the empty-state preset grid in
+  /// ChatView+Content.swift.
+  func applyPromptPreset(_ preset: ProjectPromptPreset) {
     let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return }
     if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

@@ -41,10 +41,28 @@ public enum JSONValue: Codable, Sendable, Equatable {
   }
 }
 
+public extension CodingUserInfoKey {
+  /// When `false`, `ChatAttachment` omits its inline `data` payload while
+  /// encoding. Persistence uses this so attachment bytes live in blob files
+  /// instead of the workspace JSON; exports and fingerprints keep the default
+  /// (`true`), which embeds data for self-contained payloads.
+  static let byokEmbedsAttachmentData = CodingUserInfoKey(
+    rawValue: "byokchat.embedsAttachmentData"
+  )!
+}
+
 extension JSONEncoder {
   static var providerEncoder: JSONEncoder {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    return encoder
+  }
+
+  /// Like `providerEncoder`, but strips attachment byte payloads so persisted
+  /// workspace JSON carries metadata only.
+  static var providerEncoderWithoutAttachmentData: JSONEncoder {
+    let encoder = providerEncoder
+    encoder.userInfo[.byokEmbedsAttachmentData] = false
     return encoder
   }
 }

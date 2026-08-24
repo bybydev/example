@@ -34,6 +34,35 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
   public var mimeType: String
   public var data: Data
 
+  private enum CodingKeys: String, CodingKey {
+    case id, kind, filename, mimeType, data
+  }
+
+  /// Decoding tolerates a missing `data` key (the persisted metadata-only
+  /// shape); the store hydrates bytes from blob files afterwards.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    kind = try container.decode(ChatAttachmentKind.self, forKey: .kind)
+    filename = try container.decode(String.self, forKey: .filename)
+    mimeType = try container.decode(String.self, forKey: .mimeType)
+    data = try container.decodeIfPresent(Data.self, forKey: .data) ?? Data()
+  }
+
+  /// Encoding emits `data` unless the encoder opted out via
+  /// ``CodingUserInfoKey/byokEmbedsAttachmentData``.
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(kind, forKey: .kind)
+    try container.encode(filename, forKey: .filename)
+    try container.encode(mimeType, forKey: .mimeType)
+    let embedsData = encoder.userInfo[.byokEmbedsAttachmentData] as? Bool ?? true
+    if embedsData {
+      try container.encode(data, forKey: .data)
+    }
+  }
+
   public init(
     id: String = UUID().uuidString.lowercased(),
     kind: ChatAttachmentKind,
@@ -201,7 +230,9 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
-  public static let currentSchemaVersion = 1
+  /// v2: attachment byte payloads no longer live in the JSON; they rest in
+  /// blob files referenced by attachment ID.
+  public static let currentSchemaVersion = 2
 
   public var schemaVersion: Int
   public var conversations: [ChatConversation]
