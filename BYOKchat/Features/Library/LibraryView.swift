@@ -15,21 +15,46 @@ struct LibraryView: View {
   var openSourceChat: (LibraryEntry) -> Void = { _ in }
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var viewerEntry: LibraryEntry?
   @State private var viewerImage: UIImage?
   @State private var viewerShareData: Data?
   @State private var quickLookFiles: [(filename: String, data: Data)]?
   @State private var renameTarget: LibraryEntry?
   @State private var renameText = ""
-  @State private var deleteTarget: LibraryEntry?
+  @State private var deleteTargets: Set<LibraryEntryID> = []
   @State private var photoPickerItems: [PhotosPickerItem] = []
   @State private var isPhotoPickerPresented = false
   @State private var isFileImporterPresented = false
+  @State private var searchText = ""
+  @State private var kindFilter: KindFilter = .all
+  @State private var isInSelectMode = false
+  @State private var selectedEntryIDs: Set<LibraryEntryID> = []
+  @State private var sharePayload: LibrarySharePayload?
+  @State private var showProUpsell = false
+
+  private enum KindFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case images = "Images"
+    case files = "Files"
+
+    var id: String { rawValue }
+
+    func matches(_ entry: LibraryEntry) -> Bool {
+      switch self {
+      case .all: true
+      case .images: entry.isImage
+      case .files: !entry.isImage
+      }
+    }
+  }
 
   var body: some View {
     Group {
       if library.entries.isEmpty {
         emptyState
+      } else if visibleEntries.isEmpty {
+        noResultsState
       } else {
         entryList
       }
@@ -39,22 +64,42 @@ struct LibraryView: View {
     .background(AppThemeBackground(theme: theme))
     .navigationTitle("Library")
     .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search files")
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
-        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
-          .labelStyle(.iconOnly)
-          .accessibilityLabel("Open sidebar")
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Menu {
-          Button("Photo", systemImage: "photo") { isPhotoPickerPresented = true }
-          Button("File", systemImage: "doc") { isFileImporterPresented = true }
-        } label: {
-          Image(systemName: "plus")
-            .font(.system(size: 17, weight: .semibold))
+        if isInSelectMode {
+          Button("Cancel") { exitSelectMode() }
+        } else {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
             .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
         }
-        .accessibilityLabel("Save a file to the library")
+      }
+      ToolbarItemGroup(placement: .primaryAction) {
+        if isInSelectMode {
+          Button(allSelected ? "Deselect All" : "Select All") { toggleSelectAll() }
+
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            requestDelete(selectedEntryIDs)
+          }
+          .disabled(selectedEntryIDs.isEmpty)
+        } else {
+          if !library.entries.isEmpty {
+            Button("Select") { enterSelectMode() }
+          }
+
+          kindFilterMenu
+
+          Menu {
+            Button("Photo", systemImage: "photo") { isPhotoPickerPresented = true }
+            Button("File", systemImage: "doc") { isFileImporterPresented = true }
+          } label: {
+            Image(systemName: "plus")
+              .font(.system(size: 17, weight: .semibold))
+              .labelStyle(.iconOnly)
+          }
+          .accessibilityLabel("Save a file to the library")
+        }
       }
     }
     .photosPicker(
@@ -113,30 +158,157 @@ struct LibraryView: View {
       }
     }
     .confirmationDialog(
-      "Delete file?",
+      deleteTargets.count == 1 ? "Delete file?" : "Delete \(deleteTargets.count) files?",
       isPresented: Binding(
-        get: { deleteTarget != nil },
-        set: { if !$0 { deleteTarget = nil } }
+        get: { !deleteTargets.isEmpty },
+        set: { if !$0 { deleteTargets = [] } }
       ),
       titleVisibility: .visible
     ) {
       Button("Delete", role: .destructive) {
-        guard let target = deleteTarget else { return }
-        Task { await library.deleteEntries([target.id]) }
-        deleteTarget = nil
+        let targets = deleteTargets
+        deleteTargets = []
+        if isInSelectMode { exitSelectMode() }
+        Task { await library.deleteEntries(targets) }
       }
-      Button("Cancel", role: .cancel) { deleteTarget = nil }
+      Button("Cancel", role: .cancel) { deleteTargets = [] }
     } message: {
-      Text("\((deleteTarget?.filename ?? "This file")) will be removed from your library. Chats are unaffected.")
+      Text(deleteMessage)
+    }
+    .sheet(item: $sharePayload) { payload in
+      ActivityShareSheet(items: [Self.shareURL(for: payload)])
+        .ignoresSafeArea()
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .libraryItems)
+    }
+    .alert(
+      "Library Error",
+      isPresented: Binding(
+        get: { library.errorMessage != nil },
+        set: { if !$0 { library.errorMessage = nil } }
+      )
+    ) {
+      Button("OK") { library.errorMessage = nil }
+    } message: {
+      Text(library.errorMessage ?? "Unknown error")
     }
   }
 
+  private var deleteMessage: String {
+    if deleteTargets.count == 1,
+      let target = library.entries.first(where: { $0.id == deleteTargets.first })
+    {
+      return "\(target.filename) will be removed from your library. Chats are unaffected."
+    }
+    return "\(deleteTargets.count) files will be removed from your library. Chats are unaffected."
+  }
+
   private var emptyState: some View {
-    ContentUnavailableView(
-      "Library is Empty",
-      systemImage: "books.vertical",
-      description: Text("Save images and documents from chats, or add them here with +.")
-    )
+    ContentUnavailableView {
+      Label("Library is Empty", systemImage: "books.vertical")
+    } description: {
+      Text("Save images and documents from chats, or add them here.")
+    } actions: {
+      Button("Add Photo", systemImage: "photo") {
+        isPhotoPickerPresented = true
+      }
+      .buttonStyle(.borderedProminent)
+
+      Button("Add File", systemImage: "doc") {
+        isFileImporterPresented = true
+      }
+      .buttonStyle(.bordered)
+    }
+  }
+
+  private var noResultsState: some View {
+    ContentUnavailableView {
+      if searchText.isEmpty {
+        Label("No \(kindFilter.rawValue)", systemImage: kindFilter == .images ? "photo" : "doc")
+      } else {
+        Label("No Matches", systemImage: "magnifyingglass")
+      }
+    } description: {
+      if searchText.isEmpty {
+        Text("Nothing matches the current filter.")
+      } else {
+        Text("Try a different name or clear the filter.")
+      }
+    }
+  }
+
+  private var kindFilterMenu: some View {
+    Menu {
+      Picker("Kind", selection: $kindFilter) {
+        ForEach(KindFilter.allCases) { filter in
+          Text(filter.rawValue).tag(filter)
+        }
+      }
+    } label: {
+      Image(
+        systemName: kindFilter == .all
+          ? "line.3.horizontal.decrease.circle"
+          : "line.3.horizontal.decrease.circle.fill"
+      )
+      .font(.system(size: 17, weight: .semibold))
+      .labelStyle(.iconOnly)
+    }
+    .accessibilityLabel("Filter by kind")
+  }
+
+  /// Entries surviving both the kind filter and search; drives sections,
+  /// select-all, and the no-results branch.
+  private var visibleEntries: [LibraryEntry] {
+    var result = library.entries
+    if kindFilter != .all {
+      result = result.filter { kindFilter.matches($0) }
+    }
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return result }
+    return result.filter { entry in
+      entry.filename.localizedCaseInsensitiveContains(query)
+        || sourceChatTitle(for: entry)?.localizedCaseInsensitiveContains(query) == true
+    }
+  }
+
+  private func sourceChatTitle(for entry: LibraryEntry) -> String? {
+    guard case .chat(let conversationID, _) = entry.source else { return nil }
+    return chats.conversation(conversationID)?.title
+  }
+
+  private var allSelected: Bool {
+    !visibleEntries.isEmpty && selectedEntryIDs.count >= visibleEntries.count
+  }
+
+  // MARK: - Selection
+
+  private func enterSelectMode() {
+    isInSelectMode = true
+    selectedEntryIDs = []
+  }
+
+  private func exitSelectMode() {
+    isInSelectMode = false
+    selectedEntryIDs = []
+  }
+
+  private func toggleSelection(_ id: LibraryEntryID) {
+    if !selectedEntryIDs.insert(id).inserted {
+      selectedEntryIDs.remove(id)
+    }
+  }
+
+  private func toggleSelectAll() {
+    if allSelected {
+      selectedEntryIDs.removeAll()
+    } else {
+      selectedEntryIDs = Set(visibleEntries.map(\.id))
+    }
+  }
+
+  private func requestDelete(_ ids: Set<LibraryEntryID>) {
+    deleteTargets = ids
   }
 
   private var storageSummary: some View {
@@ -151,12 +323,14 @@ struct LibraryView: View {
 
   private var entryList: some View {
     List {
-      storageSummary
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+      if searchText.isEmpty {
+        storageSummary
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
+      }
 
-      ForEach(LibraryDateGrouper.sections(for: library.entries), id: \.title) { section in
+      ForEach(LibraryDateGrouper.sections(for: visibleEntries), id: \.title) { section in
         Section(section.title) {
           ForEach(section.entries) { entry in
             row(entry)
@@ -168,40 +342,75 @@ struct LibraryView: View {
     .listRowSeparatorTint(theme.borderColor)
   }
 
+  /// Select mode swaps open-for-tap into toggle-selection and drops the
+  /// context menu and swipe actions.
   private func row(_ entry: LibraryEntry) -> some View {
-    Button {
-      open(entry)
-    } label: {
-      HStack(spacing: 12) {
-        LibraryEntryThumbnailView(entry: entry, library: library)
-
-        VStack(alignment: .leading, spacing: 3) {
-          Text(entry.filename)
-            .font(.body.weight(.medium))
-            .foregroundStyle(theme.primaryForegroundColor)
-            .lineLimit(1)
-          Text(subtitle(for: entry))
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .lineLimit(1)
+    Group {
+      if isInSelectMode {
+        Button {
+          toggleSelection(entry.id)
+        } label: {
+          rowContent(entry, isSelected: selectedEntryIDs.contains(entry.id))
         }
-
-        Spacer(minLength: 8)
-
-        Text(entry.createdAt, format: .dateTime.month(.abbreviated).day())
-          .font(.caption2)
-          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+        .buttonStyle(.plain)
+      } else {
+        Button {
+          open(entry)
+        } label: {
+          rowContent(entry, isSelected: nil)
+        }
+        .buttonStyle(.plain)
+        .contextMenu { contextActions(entry) }
+        .swipeActions(edge: .trailing) {
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            requestDelete([entry.id])
+          }
+        }
       }
-      .padding(.vertical, 2)
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
     .listRowBackground(Color.clear)
-    .contextMenu { contextActions(entry) }
+  }
+
+  @ViewBuilder
+  private func rowContent(_ entry: LibraryEntry, isSelected: Bool?) -> some View {
+    HStack(spacing: 12) {
+      if let isSelected {
+        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 20))
+          .foregroundStyle(isSelected ? theme.accentColor : theme.secondaryForegroundColor)
+          .symbolRenderingMode(.hierarchical)
+      }
+
+      LibraryEntryThumbnailView(entry: entry, library: library)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(entry.filename)
+          .font(.body.weight(.medium))
+          .foregroundStyle(theme.primaryForegroundColor)
+          .lineLimit(1)
+        Text(subtitle(for: entry))
+          .font(.caption)
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .lineLimit(1)
+      }
+
+      Spacer(minLength: 8)
+
+      Text(entry.createdAt, format: .dateTime.month(.abbreviated).day())
+        .font(.caption2)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+    }
+    .padding(.vertical, 2)
+    .contentShape(Rectangle())
   }
 
   @ViewBuilder
   private func contextActions(_ entry: LibraryEntry) -> some View {
+    Button {
+      Task { await share(entry) }
+    } label: {
+      Label("Share", systemImage: "square.and.arrow.up")
+    }
     Button("Preview", systemImage: "eye") { open(entry) }
     if entry.isImage {
       Button("Save Image", systemImage: "square.and.arrow.down") {
@@ -218,7 +427,7 @@ struct LibraryView: View {
       renameText = entry.filename
     }
     Button("Delete", systemImage: "trash", role: .destructive) {
-      deleteTarget = entry
+      requestDelete([entry.id])
     }
   }
 
@@ -256,18 +465,33 @@ struct LibraryView: View {
     }
   }
 
+  private func share(_ entry: LibraryEntry) async {
+    guard let data = await library.data(for: entry) else { return }
+    sharePayload = LibrarySharePayload(entry: entry, data: data)
+  }
+
   private func importPhotos(_ items: [PhotosPickerItem]) {
     guard !items.isEmpty else { return }
     Task { @MainActor in
       defer { photoPickerItems = [] }
+      let stamp = Self.importStamp()
+      var batchIndex = 0
       for item in items {
+        // Free tier: fill the remaining slots, then surface the upsell once.
+        guard BYOKProAccess.canCreateLibraryItem(
+          currentCount: library.entries.count,
+          hasPro: purchaseManager.hasPro
+        ) else {
+          showProUpsell = true
+          break
+        }
         do {
           guard let data = try await item.loadTransferable(type: Data.self),
             let jpeg = Self.normalizedJPEG(from: data)
           else { continue }
-          let index = library.entries.count + 1
+          batchIndex += 1
           _ = await library.add(
-            filename: "image-\(index).jpg",
+            filename: Self.importFilename(stamp: stamp, index: batchIndex),
             mimeType: "image/jpeg",
             data: jpeg
           )
@@ -285,6 +509,14 @@ struct LibraryView: View {
     case .success(let urls):
       Task { @MainActor in
         for url in urls {
+          // Free tier: fill the remaining slots, then surface the upsell once.
+          guard BYOKProAccess.canCreateLibraryItem(
+            currentCount: library.entries.count,
+            hasPro: purchaseManager.hasPro
+          ) else {
+            showProUpsell = true
+            break
+          }
           do {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -325,9 +557,52 @@ struct LibraryView: View {
     guard let image = UIImage(data: data) else { return nil }
     return image.jpegData(compressionQuality: 0.9)
   }
+
+  /// Locale-independent timestamp keeps generated photo names unique after
+  /// deletions (the old entries-count scheme collided) and sortable.
+  private static func importStamp() -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd'T'HHmmss"
+    return formatter.string(from: .now)
+  }
+
+  private static func importFilename(stamp: String, index: Int) -> String {
+    index == 1 ? "image-\(stamp).jpg" : "image-\(stamp)-\(index).jpg"
+  }
+
+  /// Shares go through a temp file so the payload carries its real filename;
+  /// raw `Data` items would arrive in the share sheet nameless.
+  private static func shareURL(for payload: LibrarySharePayload) -> URL {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(payload.entry.id.rawValue, isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let url = directory.appendingPathComponent(payload.entry.filename)
+    try? payload.data.write(to: url, options: .atomic)
+    return url
+  }
 }
 
-/// Identifiable wrappers so `sheet(item:)` can drive the two previews.
+/// Identifiable wrappers so `sheet(item:)` can drive the viewer previews.
+private struct LibrarySharePayload: Identifiable {
+  let entry: LibraryEntry
+  let data: Data
+
+  var id: String { entry.id.rawValue }
+}
+
+/// System share sheet; used instead of `ShareLink` because row sharing loads
+/// bytes async before anything can be handed to the share sheet.
+private struct ActivityShareSheet: UIViewControllerRepresentable {
+  let items: [Any]
+
+  func makeUIViewController(context: Context) -> UIActivityViewController {
+    UIActivityViewController(activityItems: items, applicationActivities: nil)
+  }
+
+  func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
 private struct LibraryViewerPresentation: Identifiable, Equatable {
   let entry: LibraryEntry
   var id: String { entry.id.rawValue }

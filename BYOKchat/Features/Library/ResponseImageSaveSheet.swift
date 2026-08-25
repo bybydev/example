@@ -14,6 +14,7 @@ struct ResponseImageSaveSheet: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var selected: Set<String> = []
   @State private var isSaving = false
 
@@ -90,6 +91,17 @@ struct ResponseImageSaveSheet: View {
     var savedCount = 0
     for (index, candidate) in candidates.enumerated()
     where selected.contains(candidate.id) {
+      // The free tier caps total saved files; stop at the cap instead of
+      // failing mid-download.
+      guard BYOKProAccess.canCreateLibraryItem(
+        currentCount: library.entries.count,
+        hasPro: purchaseManager.hasPro
+      ) else {
+        onError(
+          "Saved \(savedCount) of \(selected.count) — free includes \(BYOKProAccess.freeLibraryItemLimit) saved files."
+        )
+        break
+      }
       guard
         let data = await ResponseImageScanner.fetchData(
           for: candidate.source,

@@ -7,6 +7,7 @@ enum BYOKProFeature: String, Sendable {
   case projects
   case mcpServers
   case analytics
+  case libraryItems
 
   var upsellConfiguration: LimitReachedUpsellConfiguration {
     LimitReachedUpsellConfiguration(
@@ -35,6 +36,8 @@ enum BYOKProFeature: String, Sendable {
       "Free includes 1 MCP server"
     case .analytics:
       "Unlock advanced analytics"
+    case .libraryItems:
+      "Free includes 10 saved files"
     }
   }
 
@@ -50,6 +53,8 @@ enum BYOKProFeature: String, Sendable {
       "Keep your existing server, or upgrade to connect unlimited MCP servers."
     case .analytics:
       "Basic monthly usage stays free. Pro adds performance, reliability, breakdowns, budgets, and deeper insights."
+    case .libraryItems:
+      "Keep your existing files, or upgrade to save unlimited files."
     }
   }
 
@@ -60,6 +65,7 @@ enum BYOKProFeature: String, Sendable {
     case .projects: "folder.fill"
     case .mcpServers: "shippingbox.fill"
     case .analytics: "chart.bar.xaxis"
+    case .libraryItems: "books.vertical.fill"
     }
   }
 }
@@ -69,12 +75,14 @@ enum BYOKProAccess {
   static let freeProviderAccountLimit = 1
   static let freeProjectLimit = 1
   static let freeMCPServerLimit = 1
+  static let freeLibraryItemLimit = 10
 
   static let comparisonRows: [LimitReachedComparisonRow] = [
     LimitReachedComparisonRow(feature: "Themes", freeValue: "2", proValue: "All themes"),
     LimitReachedComparisonRow(feature: "Connections", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Projects", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "MCP servers", freeValue: "1", proValue: "Unlimited"),
+    LimitReachedComparisonRow(feature: "Saved files", freeValue: "10", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Usage analytics", freeValue: "Basic", proValue: "Advanced"),
   ]
 
@@ -88,6 +96,10 @@ enum BYOKProAccess {
 
   static func canCreateMCPServer(currentCount: Int, hasPro: Bool) -> Bool {
     hasPro || currentCount < freeMCPServerLimit
+  }
+
+  static func canCreateLibraryItem(currentCount: Int, hasPro: Bool) -> Bool {
+    hasPro || currentCount < freeLibraryItemLimit
   }
 }
 

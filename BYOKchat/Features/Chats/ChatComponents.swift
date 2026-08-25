@@ -234,10 +234,12 @@ struct ChatMessageView: View {
   let copy: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
   @State private var showSourcesSheet = false
   @State private var showImageSaveSheet = false
+  @State private var showLibraryUpsell = false
 
   private var imageCandidates: [ResponseImageCandidate] {
     guard library != nil, conversationID != nil, !message.content.isEmpty else { return [] }
@@ -343,6 +345,18 @@ struct ChatMessageView: View {
         }
       }
     }
+    .sheet(isPresented: $showLibraryUpsell) {
+      BYOKProUpsellFlow(feature: .libraryItems)
+    }
+  }
+
+  /// Library saves count against the free tier; at the cap the upsell flow
+  /// replaces the save instead of silently failing.
+  private func canSaveToLibrary(_ library: LibraryManagementModel) -> Bool {
+    BYOKProAccess.canCreateLibraryItem(
+      currentCount: library.entries.count,
+      hasPro: purchaseManager.hasPro
+    )
   }
 
   /// Links extracted from the answer body. They stay tappable inline in the
@@ -402,6 +416,10 @@ struct ChatMessageView: View {
   private var libraryActions: some View {
     if let conversationID, let library {
       Button("Save to Library", systemImage: "books.vertical") {
+        guard canSaveToLibrary(library) else {
+          showLibraryUpsell = true
+          return
+        }
         Task { @MainActor in
           // Locale-independent stamp keeps generated filenames predictable.
           let parts = Calendar.current.dateComponents([.year, .month, .day], from: message.createdAt)
@@ -422,6 +440,10 @@ struct ChatMessageView: View {
 
       if !imageCandidates.isEmpty {
         Button("Save Images…", systemImage: "photo.on.rectangle") {
+          guard canSaveToLibrary(library) else {
+            showLibraryUpsell = true
+            return
+          }
           showImageSaveSheet = true
         }
       }
