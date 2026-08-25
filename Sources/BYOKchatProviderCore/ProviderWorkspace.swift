@@ -30,6 +30,7 @@ public struct AccountModelRecord: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
+  /// Single pre-release schema; evolves in place, users fresh-install.
   public static let currentSchemaVersion = 1
   public var schemaVersion: Int
   public var customProviders: [ProviderDefinition]
@@ -37,6 +38,8 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
   public var modelRecords: [AccountModelRecord]
   public var defaultAccountID: ProviderAccountID?
   public var providerDefaultAccountIDs: [String: String]
+  /// accountID → deletedAt. Pruned on load after the retention window.
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
@@ -44,7 +47,8 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     accounts: [ProviderAccount] = [],
     modelRecords: [AccountModelRecord] = [],
     defaultAccountID: ProviderAccountID? = nil,
-    providerDefaultAccountIDs: [String: String] = [:]
+    providerDefaultAccountIDs: [String: String] = [:],
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.customProviders = customProviders
@@ -52,6 +56,7 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     self.modelRecords = modelRecords
     self.defaultAccountID = defaultAccountID
     self.providerDefaultAccountIDs = providerDefaultAccountIDs
+    self.tombstones = tombstones
   }
 }
 
@@ -107,6 +112,7 @@ public actor ProviderWorkspaceStore {
     }
     try WorkspaceImportValidator.validateProviderWorkspace(decoded)
     state = decoded
+    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
   }
 
@@ -159,6 +165,7 @@ public actor ProviderWorkspaceStore {
       candidate.providerDefaultAccountIDs[account.providerID.rawValue] =
         candidate.accounts.first(where: { $0.providerID == account.providerID })?.id.rawValue
     }
+    candidate.tombstones[id.rawValue] = .now
     try await commit(candidate)
   }
 

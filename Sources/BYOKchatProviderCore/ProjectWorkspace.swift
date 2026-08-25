@@ -159,20 +159,25 @@ public struct ChatProject: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ProjectWorkspaceState: Codable, Sendable, Equatable {
+  /// Single pre-release schema; evolves in place, users fresh-install.
   public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
   public var projects: [ChatProject]
   public var conversationProjectIDs: [String: String]
+  /// projectID → deletedAt. Pruned on load after the retention window.
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
     projects: [ChatProject] = [],
-    conversationProjectIDs: [String: String] = [:]
+    conversationProjectIDs: [String: String] = [:],
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.projects = projects
     self.conversationProjectIDs = conversationProjectIDs
+    self.tombstones = tombstones
   }
 }
 
@@ -299,6 +304,7 @@ public actor ProjectWorkspaceStore {
       state = decoded
       await hydrateFileBlobs()
       state = try Self.sanitized(state)
+      state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
       await pruneOrphanBlobs()
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
@@ -438,6 +444,7 @@ public actor ProjectWorkspaceStore {
     guard state.projects.contains(where: { $0.id == id }) else { return }
     state.projects.removeAll { $0.id == id }
     state.conversationProjectIDs = state.conversationProjectIDs.filter { $0.value != id.rawValue }
+    state.tombstones[id.rawValue] = .now
     // Orphaned file blobs are swept by pruneOrphanBlobs on the next load.
     try await persistJSON()
   }

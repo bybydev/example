@@ -28,6 +28,8 @@ public struct LibraryEntry: Codable, Sendable, Equatable, Identifiable {
   /// derive it from.
   public var byteCount: Int
   public var createdAt: Date
+  /// Last metadata edit (rename); LWW ordering input for sync.
+  public var updatedAt: Date
   public var source: LibraryEntrySource
 
   public init(
@@ -37,6 +39,7 @@ public struct LibraryEntry: Codable, Sendable, Equatable, Identifiable {
     mimeType: String,
     byteCount: Int,
     createdAt: Date = .now,
+    updatedAt: Date = .now,
     source: LibraryEntrySource = .manual
   ) {
     self.id = id
@@ -45,6 +48,7 @@ public struct LibraryEntry: Codable, Sendable, Equatable, Identifiable {
     self.mimeType = mimeType
     self.byteCount = byteCount
     self.createdAt = createdAt
+    self.updatedAt = updatedAt
     self.source = source
   }
 
@@ -58,16 +62,21 @@ public struct LibraryEntry: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct LibraryWorkspaceState: Codable, Sendable, Equatable {
+  /// Single pre-release schema; evolves in place, users fresh-install.
   public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
   public var entries: [LibraryEntry]
+  /// entryID → deletedAt. Pruned on load after the retention window.
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
-    entries: [LibraryEntry] = []
+    entries: [LibraryEntry] = [],
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.entries = entries
+    self.tombstones = tombstones
   }
 }

@@ -40,6 +40,14 @@ public actor ConversationStore {
       }
     }
     state = ConversationWorkspaceState(conversations: loaded)
+    // Rows above are authoritative; the index contributes only its
+    // tombstones (deletions live nowhere else once shards are gone).
+    if let indexData = try await persistence.loadIndex(),
+      let index = try? JSONDecoder.provider.decode(ConversationIndexState.self, from: indexData)
+    {
+      state.tombstones = index.tombstones.merging(state.tombstones) { max($0, $1) }
+    }
+    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
     let repairedIDs = repairInterruptedMessages()
     await hydrateAttachmentBlobs()
@@ -91,6 +99,7 @@ public actor ConversationStore {
   public func deleteConversation(_ id: ConversationID) async throws {
     state.conversations.removeAll { $0.id == id }
     deferredDirtyIDs.remove(id)
+    state.tombstones[id.rawValue] = .now
     try await persistence.deleteShard(id: id.rawValue)
     try await persistIndex()
     await pruneOrphanBlobs()
@@ -100,12 +109,14 @@ public actor ConversationStore {
   /// instead of one per conversation.
   public func deleteAllConversations() async throws {
     guard !state.conversations.isEmpty else { return }
+    let removed = state.conversations
     state.conversations.removeAll()
     deferredDirtyIDs.removeAll()
+    for conversation in removed {
+      state.tombstones[conversation.id.rawValue] = .now
+    }
     try await persistence.deleteAllShards()
-    try await persistence.saveIndex(
-      JSONEncoder.providerEncoder.encode(ConversationIndexState())
-    )
+    try await persistIndex()
     await pruneOrphanBlobs()
   }
 
@@ -665,7 +676,10 @@ public actor ConversationStore {
   }
 
   private func persistIndex() async throws {
-    let index = ConversationIndexState(entries: state.conversations.map(ConversationIndexEntry.init))
+    let index = ConversationIndexState(
+      entries: state.conversations.map(ConversationIndexEntry.init),
+      tombstones: state.tombstones
+    )
     try await persistence.saveIndex(JSONEncoder.providerEncoder.encode(index))
   }
 

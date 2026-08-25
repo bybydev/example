@@ -1,6 +1,7 @@
 import Foundation
 
 public struct MCPWorkspaceState: Codable, Sendable, Equatable {
+  /// Single pre-release schema; evolves in place, users fresh-install.
   public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
@@ -8,17 +9,21 @@ public struct MCPWorkspaceState: Codable, Sendable, Equatable {
   public var snapshots: [MCPServerSnapshot]
   /// Optional so older schema-v1 MCP workspaces and full backups still decode.
   public var chatConfigurations: [String: MCPChatToolConfiguration]?
+  /// serverID → deletedAt. Pruned on load after the retention window.
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
     servers: [MCPRemoteServer] = [],
     snapshots: [MCPServerSnapshot] = [],
-    chatConfigurations: [String: MCPChatToolConfiguration]? = nil
+    chatConfigurations: [String: MCPChatToolConfiguration]? = nil,
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.servers = servers
     self.snapshots = snapshots
     self.chatConfigurations = chatConfigurations
+    self.tombstones = tombstones
   }
 }
 
@@ -73,6 +78,7 @@ public actor MCPWorkspaceStore {
     }
     try Self.validate(decoded)
     state = decoded
+    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
   }
 
@@ -170,6 +176,7 @@ public actor MCPWorkspaceStore {
     )
     state.servers.removeAll { $0.id == id }
     state.snapshots.removeAll { $0.serverID == id }
+    state.tombstones[id.rawValue] = .now
 
     if var configurations = state.chatConfigurations {
       for key in Array(configurations.keys) {

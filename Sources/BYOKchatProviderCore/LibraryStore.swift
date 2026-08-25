@@ -61,6 +61,7 @@ public actor LibraryStore {
       }
       state = decoded
     }
+    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
     await pruneOrphanBlobs()
   }
@@ -167,14 +168,19 @@ public actor LibraryStore {
     }
     guard let index = state.entries.firstIndex(where: { $0.id == id }) else { return }
     state.entries[index].filename = trimmed
+    state.entries[index].updatedAt = .now
     try await persist()
   }
 
   public func deleteEntries(_ ids: Set<LibraryEntryID>) async throws {
     guard !ids.isEmpty else { return }
     state.entries.removeAll { ids.contains($0.id) }
+    for id in ids {
+      state.tombstones[id.rawValue] = .now
+    }
     try await persist()
-    try await blobs.deleteIDs(Set(ids.map(\.rawValue)))
+    // Bytes are NOT removed here: chats/projects may still reference the file.
+    // AppModel.sweepOrphanFiles() deletes them once no reference remains.
   }
 
   /// Loads an entry's bytes. Returns nil when the blob is missing (degraded
@@ -190,6 +196,9 @@ public actor LibraryStore {
     strategy: ProviderImportStrategy
   ) async throws {
     if case .replaceExisting = strategy {
+      for entry in state.entries {
+        state.tombstones[entry.id.rawValue] = .now
+      }
       state.entries.removeAll()
     }
     let existing = Set(state.entries.map(\.id))

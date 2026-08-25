@@ -230,19 +230,23 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
-  /// v2: attachment byte payloads no longer live in the JSON; they rest in
-  /// blob files referenced by attachment ID.
-  public static let currentSchemaVersion = 2
+  /// Single pre-release schema; evolves in place, users fresh-install.
+  /// Attachment bytes live in blob files; tombstones record deletions for sync.
+  public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
   public var conversations: [ChatConversation]
+  /// conversationID → deletedAt. Pruned on load after the retention window.
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
-    conversations: [ChatConversation] = []
+    conversations: [ChatConversation] = [],
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.conversations = conversations
+    self.tombstones = tombstones
   }
 }
 
@@ -267,21 +271,32 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
   }
 }
 
-/// The persisted index file's shape in the sharded layout. Loads never treat
-/// it as authoritative — shards are the source of truth and the index is
-/// rebuilt from them — so a stale or missing index is harmless.
+/// The persisted index file's shape in the sharded layout. Rows are a derived
+/// cache rebuilt from shards on load; the tombstones section is authoritative
+/// (deletions exist nowhere else once a shard file is gone).
 public struct ConversationIndexState: Codable, Sendable, Equatable {
   public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
   public var entries: [ConversationIndexEntry]
+  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
-    entries: [ConversationIndexEntry] = []
+    entries: [ConversationIndexEntry] = [],
+    tombstones: [String: Date] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.entries = entries
+    self.tombstones = tombstones
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+      ?? Self.currentSchemaVersion
+    entries = try container.decodeIfPresent([ConversationIndexEntry].self, forKey: .entries) ?? []
+    tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
   }
 }
 
