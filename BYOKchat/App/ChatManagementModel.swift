@@ -25,6 +25,10 @@ final class ChatManagementModel {
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   var isBusy = false
   var errorMessage: String?
+  /// App-layer hook fired whenever snapshots refresh after file-reference
+  ///-affecting mutations (deletes, edits). AppModel sets it to run the
+  /// orphan-file sweep.
+  var onFileReferencesChanged: (() -> Void)?
 
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversationStore: ConversationStore
@@ -485,6 +489,7 @@ final class ChatManagementModel {
     }
     liveMessages = liveMessages.filter { currentMessageIDs.contains($0.key) }
     streamTargets = streamTargets.filter { currentMessageIDs.contains($0.key) }
+    onFileReferencesChanged?()
   }
 
   private func clearLiveMessages(for conversationID: ConversationID) {

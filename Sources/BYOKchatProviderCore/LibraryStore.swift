@@ -127,6 +127,39 @@ public actor LibraryStore {
     )
   }
 
+  /// Lists an already-stored file without touching its bytes: the entry ID
+  /// doubles as the blob ID in the shared file store, so this only adds the
+  /// metadata row (one more reference owner). Idempotent — an existing row for
+  /// the same file wins and is returned unchanged.
+  @discardableResult
+  public func ensureListed(
+    fileID: String,
+    filename: String,
+    mimeType: String,
+    byteCount: Int,
+    source: LibraryEntrySource,
+    at date: Date = .now
+  ) async throws -> LibraryEntry {
+    if let existing = state.entries.first(where: { $0.id.rawValue == fileID }) {
+      return existing
+    }
+    guard byteCount > 0 else {
+      throw ProviderError.invalidRequest("A library entry cannot reference empty bytes.")
+    }
+    let entry = LibraryEntry(
+      id: LibraryEntryID(rawValue: fileID),
+      filename: filename,
+      kind: mimeType.lowercased().hasPrefix("image/") ? .image : .file,
+      mimeType: mimeType,
+      byteCount: byteCount,
+      createdAt: date,
+      source: source
+    )
+    state.entries.append(entry)
+    try await persist()
+    return entry
+  }
+
   public func rename(_ id: LibraryEntryID, filename: String) async throws {
     let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {

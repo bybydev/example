@@ -16,6 +16,7 @@ public struct LibraryEntryID: RawRepresentable, Hashable, Codable, Sendable,
 public enum LibraryEntrySource: Codable, Sendable, Equatable {
   case chat(conversationID: ConversationID, messageID: ChatMessageID)
   case manual
+  case project(ProjectID)
 }
 
 public struct LibraryEntry: Codable, Sendable, Equatable, Identifiable {

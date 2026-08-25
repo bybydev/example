@@ -103,19 +103,19 @@ import Testing
     modelID: "model",
     messages: [message]
   )
-  let current = ConversationWorkspaceState(conversations: [conversation])
-  let encoded = try JSONEncoder.providerEncoder.encode(current)
-  var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-  var conversations = try #require(root["conversations"] as? [[String: Any]])
-  conversations[0].removeValue(forKey: "draftText")
-  var messages = try #require(conversations[0]["messages"] as? [[String: Any]])
+  // Strip keys that older files lacked; shard decoding must tolerate them.
+  let encoded = try JSONEncoder.providerEncoder.encode(conversation)
+  var shard = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  shard.removeValue(forKey: "draftText")
+  var messages = try #require(shard["messages"] as? [[String: Any]])
   messages[0].removeValue(forKey: "completionUncertain")
-  conversations[0]["messages"] = messages
-  root["conversations"] = conversations
-  let legacyData = try JSONSerialization.data(withJSONObject: root)
+  shard["messages"] = messages
+  let legacyData = try JSONSerialization.data(withJSONObject: shard)
 
   let store = ConversationStore(
-    persistence: InMemoryConversationWorkspacePersistence(data: legacyData)
+    persistence: InMemoryConversationWorkspacePersistence(
+      shards: [conversation.id.rawValue: legacyData]
+    )
   )
   try await store.load()
   let decoded = try await store.conversation(id: conversation.id)

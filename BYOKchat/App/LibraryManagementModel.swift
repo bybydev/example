@@ -10,6 +10,9 @@ final class LibraryManagementModel {
   private(set) var entries: [LibraryEntry] = []
   var isBusy = false
   var errorMessage: String?
+  /// App-layer hook invoked after mutations that change file references.
+  /// AppModel sets it to run the orphan-file sweep.
+  var onFileReferencesChanged: (() -> Void)?
 
   private let store: LibraryStore
 
@@ -66,6 +69,26 @@ final class LibraryManagementModel {
   func deleteEntries(_ ids: Set<LibraryEntryID>) async {
     await perform {
       try await self.store.deleteEntries(ids)
+    }
+    onFileReferencesChanged?()
+  }
+
+  @discardableResult
+  func ensureListed(
+    fileID: String,
+    filename: String,
+    mimeType: String,
+    byteCount: Int,
+    source: LibraryEntrySource
+  ) async -> LibraryEntry? {
+    await performReturning {
+      try await self.store.ensureListed(
+        fileID: fileID,
+        filename: filename,
+        mimeType: mimeType,
+        byteCount: byteCount,
+        source: source
+      )
     }
   }
 

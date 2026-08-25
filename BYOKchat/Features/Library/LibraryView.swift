@@ -28,6 +28,7 @@ struct LibraryView: View {
   @State private var isFileImporterPresented = false
   @State private var searchText = ""
   @State private var kindFilter: KindFilter = .all
+  @State private var sourceFilter: SourceFilter = .all
   @State private var isInSelectMode = false
   @State private var selectedEntryIDs: Set<LibraryEntryID> = []
   @State private var sharePayload: LibrarySharePayload?
@@ -45,6 +46,31 @@ struct LibraryView: View {
       case .all: true
       case .images: entry.isImage
       case .files: !entry.isImage
+      }
+    }
+  }
+
+  /// Entries are references; their source says which view saved them here.
+  private enum SourceFilter: String, CaseIterable, Identifiable {
+    case all = "All Sources"
+    case manual = "Saved"
+    case chats = "From Chats"
+    case projects = "Project Files"
+
+    var id: String { rawValue }
+
+    func matches(_ entry: LibraryEntry) -> Bool {
+      switch self {
+      case .all:
+        return true
+      case .manual:
+        return entry.source == .manual
+      case .chats:
+        if case .chat = entry.source { return true }
+        return false
+      case .projects:
+        if case .project = entry.source { return true }
+        return false
       }
     }
   }
@@ -245,24 +271,32 @@ struct LibraryView: View {
           Text(filter.rawValue).tag(filter)
         }
       }
+      Picker("Source", selection: $sourceFilter) {
+        ForEach(SourceFilter.allCases) { filter in
+          Text(filter.rawValue).tag(filter)
+        }
+      }
     } label: {
       Image(
-        systemName: kindFilter == .all
+        systemName: kindFilter == .all && sourceFilter == .all
           ? "line.3.horizontal.decrease.circle"
           : "line.3.horizontal.decrease.circle.fill"
       )
       .font(.system(size: 17, weight: .semibold))
       .labelStyle(.iconOnly)
     }
-    .accessibilityLabel("Filter by kind")
+    .accessibilityLabel("Filter files")
   }
 
-  /// Entries surviving both the kind filter and search; drives sections,
-  /// select-all, and the no-results branch.
+  /// Entries surviving both filters and search; drives sections, select-all,
+  /// and the no-results branch.
   private var visibleEntries: [LibraryEntry] {
     var result = library.entries
     if kindFilter != .all {
       result = result.filter { kindFilter.matches($0) }
+    }
+    if sourceFilter != .all {
+      result = result.filter { sourceFilter.matches($0) }
     }
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !query.isEmpty else { return result }
@@ -436,6 +470,8 @@ struct LibraryView: View {
     case .chat(let conversationID, _):
       let title = chats.conversation(conversationID)?.title ?? "Chat"
       return "\(title) · \(entry.byteCountText)"
+    case .project:
+      return entry.byteCountText
     case .manual:
       return entry.byteCountText
     }

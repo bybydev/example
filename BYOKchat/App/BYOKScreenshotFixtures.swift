@@ -88,8 +88,18 @@ enum BYOKScreenshotFixtures {
 
     try encode(providerState(now: now))
       .write(to: supportDirectory.appendingPathComponent("providers-v1.json"), options: .atomic)
-    try encode(conversationState(now: now))
-      .write(to: supportDirectory.appendingPathComponent("conversations-v1.json"), options: .atomic)
+    let conversationsDirectory = supportDirectory
+      .appendingPathComponent("conversations-v1", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: conversationsDirectory,
+      withIntermediateDirectories: true
+    )
+    for conversation in conversationState(now: now).conversations {
+      try encode(conversation).write(
+        to: conversationsDirectory.appendingPathComponent("\(conversation.id.rawValue).json"),
+        options: .atomic
+      )
+    }
     try encodeProject(projectState(now: now))
       .write(to: supportDirectory.appendingPathComponent("projects-v1.json"), options: .atomic)
     try encode(mcpState(now: now))

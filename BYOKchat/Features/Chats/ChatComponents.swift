@@ -71,6 +71,9 @@ struct ChatAttachmentStrip: View {
   var removeAttachment: ((String) -> Void)?
   var pickPhoto: (() -> Void)?
   var pickFile: (() -> Void)?
+  /// Message-surface hook adding a Library reference to an already-stored
+  /// file (+1, no byte copy). Nil hides the tile menu.
+  var saveToLibrary: ((ChatAttachment) -> Void)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
 
@@ -146,6 +149,18 @@ struct ChatAttachmentStrip: View {
         .buttonStyle(.plain)
         .padding(6)
         .accessibilityLabel("Remove \(attachment.filename)")
+      }
+    }
+    .contextMenu { tileContextItems(for: attachment) }
+  }
+
+  @ViewBuilder
+  private func tileContextItems(for attachment: ChatAttachment) -> some View {
+    if presentation == .message || presentation == .bubble, let saveToLibrary {
+      Button {
+        saveToLibrary(attachment)
+      } label: {
+        Label("Save to Library", systemImage: "books.vertical")
       }
     }
   }
@@ -289,7 +304,8 @@ struct ChatMessageView: View {
       if hasMedia {
         ChatAttachmentStrip(
           attachments: attachments,
-          presentation: .bubble
+          presentation: .bubble,
+          saveToLibrary: attachmentSaveClosure
         )
       }
 
@@ -305,6 +321,24 @@ struct ChatMessageView: View {
 
   private var userBubbleShape: RoundedRectangle {
     RoundedRectangle(cornerRadius: 22, style: .continuous)
+  }
+
+  /// Save-to-Library is offered on sent attachments only when library context
+  /// exists; the closure adds a Library reference without copying bytes.
+  private var attachmentSaveClosure: ((ChatAttachment) -> Void)? {
+    guard conversationID != nil, library != nil else { return nil }
+    return { attachment in
+      guard let conversationID, let library else { return }
+      Task {
+        _ = await library.ensureListed(
+          fileID: attachment.id,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          byteCount: attachment.byteCount,
+          source: .chat(conversationID: conversationID, messageID: message.id)
+        )
+      }
+    }
   }
 
   private var assistantMessage: some View {
@@ -459,7 +493,8 @@ struct ChatMessageView: View {
     if let attachments = message.attachments, !attachments.isEmpty {
       ChatAttachmentStrip(
         attachments: attachments,
-        presentation: .message
+        presentation: .message,
+        saveToLibrary: attachmentSaveClosure
       )
     }
 

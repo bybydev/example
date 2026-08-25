@@ -86,7 +86,10 @@ import Testing
 
 @Test func projectWorkspacePersistsFilesToolsAndPresetsForConversation() async throws {
   let persistence = InMemoryProjectWorkspacePersistence()
-  let workspace = ProjectWorkspaceStore(persistence: persistence)
+  // Both store instances must see the same blobs: persisted JSON carries
+  // metadata only, bytes rest in the shared blob store.
+  let blobs = InMemoryAttachmentBlobStore()
+  let workspace = ProjectWorkspaceStore(persistence: persistence, blobs: blobs)
   try await workspace.load()
 
   let file = ProjectFile(
@@ -121,7 +124,7 @@ import Testing
   #expect(await workspace.promptPresets(for: conversationID) == [prompt])
   #expect(await workspace.toolPresets(for: conversationID) == [toolPreset])
 
-  let reloaded = ProjectWorkspaceStore(persistence: persistence)
+  let reloaded = ProjectWorkspaceStore(persistence: persistence, blobs: blobs)
   try await reloaded.load()
   #expect(try await reloaded.project(id: project.id).projectFiles == [file])
   #expect(await reloaded.mcpConfiguration(for: conversationID) == configuration)

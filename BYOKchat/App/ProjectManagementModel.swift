@@ -10,6 +10,9 @@ final class ProjectManagementModel {
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
+  /// App-layer hook fired after snapshot refreshes; AppModel runs the
+  /// orphan-file sweep in response (project file pointers may have shrunk).
+  var onFileReferencesChanged: (() -> Void)?
 
   private let workspace: ProjectWorkspaceStore
 
@@ -150,6 +153,7 @@ final class ProjectManagementModel {
         return (ConversationID(rawValue: key), ProjectID(rawValue: value))
       }
     )
+    onFileReferencesChanged?()
   }
 
   private func perform(_ successMessage: String?, operation: () async throws -> Void) async {

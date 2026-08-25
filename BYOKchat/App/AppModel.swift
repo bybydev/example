@@ -16,6 +16,9 @@ final class AppModel {
   let dataPortability: DataPortabilityModel
   let themeManager: ThemeManager
   let toolRuntime: ToolRuntime
+  /// Shared byte store behind chat attachments, library entries, and project
+  /// reference files; `sweepOrphanFiles` garbage-collects it.
+  let fileBlobStore: FileAttachmentBlobStore
 
   private(set) var hasLoaded = false
 
@@ -51,27 +54,28 @@ final class AppModel {
       workspace: providerWorkspace,
       accounts: accountManager
     )
-    let attachmentBlobStore = FileAttachmentBlobStore(
-      directory: supportDirectory.appendingPathComponent("attachments-v1", isDirectory: true)
+    // One shared file-byte store backs chat attachments, library entries, and
+    // project reference files; everything else stores metadata only.
+    fileBlobStore = FileAttachmentBlobStore(
+      directory: supportDirectory.appendingPathComponent("files-v1", isDirectory: true)
     )
     let conversationStore = ConversationStore(
       persistence: JSONFileConversationWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("conversations-v1.json")
+        directory: supportDirectory.appendingPathComponent("conversations-v1", isDirectory: true)
       ),
-      blobs: attachmentBlobStore
+      blobs: fileBlobStore
     )
     let libraryStore = LibraryStore(
       persistence: JSONFileLibraryWorkspacePersistence(
         fileURL: supportDirectory.appendingPathComponent("library-v1.json")
       ),
-      blobs: FileAttachmentBlobStore(
-        directory: supportDirectory.appendingPathComponent("library-v1", isDirectory: true)
-      )
+      blobs: fileBlobStore
     )
     let projectWorkspace = ProjectWorkspaceStore(
       persistence: JSONFileProjectWorkspacePersistence(
         fileURL: supportDirectory.appendingPathComponent("projects-v1.json")
-      )
+      ),
+      blobs: fileBlobStore
     )
 
     let mcpWorkspace = MCPWorkspaceStore(
@@ -173,6 +177,42 @@ final class AppModel {
       projectsModel: projectModel,
       mcpModel: mcpModel
     )
+
+    // Reference counting: every mutation that can drop file edges funnels
+    // through a model's snapshot refresh; respond by sweeping orphan bytes.
+    let sweep: () -> Void = { [weak self] in
+      _ = Task { await self?.sweepOrphanFiles() }
+    }
+    chats.onFileReferencesChanged = sweep
+    projects.onFileReferencesChanged = sweep
+    library.onFileReferencesChanged = sweep
+  }
+
+  /// Derived reference counting, exact because every edge lives in queryable
+  /// state: a blob survives while any chat message attachment, project file
+  /// pointer, or library entry references its ID.
+  func sweepOrphanFiles() async {
+    var referenced = Set<String>()
+    for conversation in chats.conversations {
+      for message in conversation.messages {
+        for attachment in message.attachments ?? [] {
+          referenced.insert(attachment.id)
+        }
+      }
+    }
+    for project in projects.projects {
+      for file in project.projectFiles {
+        referenced.insert(file.id)
+      }
+    }
+    for entry in library.entries {
+      referenced.insert(entry.id.rawValue)
+    }
+
+    let stored = (try? await fileBlobStore.storedIDs()) ?? []
+    let orphans = stored.subtracting(referenced)
+    guard !orphans.isEmpty else { return }
+    try? await fileBlobStore.deleteIDs(orphans)
   }
 
   func load() async {
@@ -184,6 +224,7 @@ final class AppModel {
     await library.load()
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
+    await sweepOrphanFiles()
     await projectSync.load()
     hasLoaded = true
   }

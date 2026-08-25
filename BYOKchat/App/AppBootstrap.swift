@@ -43,6 +43,9 @@ final class AppBootstrapController {
       await model.mcp.reloadFromStorage()
       try Self.throwIfModelFailed(model.mcp.errorMessage, stage: .reconciling)
 
+      // Self-healing GC pass: removes bytes orphaned by any missed decrement.
+      await model.sweepOrphanFiles()
+
       state = .ready
 
       // iCloud is optional and can continue after the local app is usable.
@@ -193,7 +196,8 @@ enum AppStorageBootstrap {
 
   static let stores: [StoreDescriptor] = [
     .init(kind: .providers, fileName: "providers-v1.json", currentSchemaVersion: ProviderWorkspaceState.currentSchemaVersion),
-    .init(kind: .conversations, fileName: "conversations-v1.json", currentSchemaVersion: ConversationWorkspaceState.currentSchemaVersion),
+    // Conversations are sharded under conversations-v1/ and carry no monolith
+    // migration; see ConversationShardPersistence.swift.
     .init(kind: .projects, fileName: "projects-v1.json", currentSchemaVersion: ProjectWorkspaceState.currentSchemaVersion),
     .init(kind: .mcp, fileName: "mcp-servers-v1.json", currentSchemaVersion: MCPWorkspaceState.currentSchemaVersion),
   ]
@@ -443,15 +447,22 @@ enum AppStorageBootstrap {
       + [
         root.appendingPathComponent("project-sync-local-v1.json"),
         root.appendingPathComponent("library-v1.json"),
+        // Pre-sharding conversations file; kept so resets on older installs
+        // still clean it up.
+        root.appendingPathComponent("conversations-v1.json"),
       ]
   }
 
-  /// Attachment/library byte payloads live in per-store directories next to
-  /// the JSON workspaces.
+  /// Byte payloads live in shared per-store directories next to the JSON
+  /// workspaces. `files-v1` holds all file bytes (chat attachments, library
+  /// entries, project reference files); the other two are pre-unification
+  /// locations kept so resets on older installs still clean them up.
   private static func blobDirectoryURLs(root: URL) -> [URL] {
     [
+      root.appendingPathComponent("files-v1", isDirectory: true),
       root.appendingPathComponent("attachments-v1", isDirectory: true),
       root.appendingPathComponent("library-v1", isDirectory: true),
+      root.appendingPathComponent("conversations-v1", isDirectory: true),
     ]
   }
 

@@ -18,6 +18,35 @@ public struct ProjectFile: Codable, Sendable, Equatable, Identifiable {
   public var data: Data
   public var createdAt: Date
 
+  private enum CodingKeys: String, CodingKey {
+    case id, filename, mimeType, data, createdAt
+  }
+
+  /// Decoding tolerates a missing `data` key (the persisted metadata-only
+  /// shape); the store hydrates bytes from blob files afterwards.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    filename = try container.decode(String.self, forKey: .filename)
+    mimeType = try container.decode(String.self, forKey: .mimeType)
+    data = try container.decodeIfPresent(Data.self, forKey: .data) ?? Data()
+    createdAt = try container.decode(Date.self, forKey: .createdAt)
+  }
+
+  /// Encoding emits `data` unless the encoder opted out via
+  /// ``CodingUserInfoKey/byokEmbedsAttachmentData``.
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(filename, forKey: .filename)
+    try container.encode(mimeType, forKey: .mimeType)
+    let embedsData = encoder.userInfo[.byokEmbedsAttachmentData] as? Bool ?? true
+    if embedsData {
+      try container.encode(data, forKey: .data)
+    }
+    try container.encode(createdAt, forKey: .createdAt)
+  }
+
   public init(
     id: String = UUID().uuidString.lowercased(),
     filename: String,
@@ -242,11 +271,17 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
 public actor ProjectWorkspaceStore {
   private var state = ProjectWorkspaceState()
   private let persistence: any ProjectWorkspacePersistence
+  /// Reference-file bytes rest here; the JSON carries metadata only.
+  private let blobs: any AttachmentBlobStoring
   private var hasLoaded = false
   private var blocksWritesAfterFailedLoad = false
 
-  public init(persistence: any ProjectWorkspacePersistence) {
+  public init(
+    persistence: any ProjectWorkspacePersistence,
+    blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore()
+  ) {
     self.persistence = persistence
+    self.blobs = blobs
   }
 
   public func load() async throws {
@@ -261,7 +296,10 @@ public actor ProjectWorkspaceStore {
       guard decoded.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
         throw ProjectWorkspaceError.unsupportedVersion(decoded.schemaVersion)
       }
-      state = try Self.sanitized(decoded)
+      state = decoded
+      await hydrateFileBlobs()
+      state = try Self.sanitized(state)
+      await pruneOrphanBlobs()
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
       // When it cannot be moved aside, block all writes outright.
@@ -345,7 +383,7 @@ public actor ProjectWorkspaceStore {
       toolPresets: normalizedTools.isEmpty ? nil : normalizedTools
     )
     state.projects.append(project)
-    try await persist()
+    try await persistMutatingProject(project.id)
     return project
   }
 
@@ -392,7 +430,7 @@ public actor ProjectWorkspaceStore {
 
     state.projects[index].updatedAt = date
     let result = state.projects[index]
-    try await persist()
+    try await persistMutatingProject(id)
     return result
   }
 
@@ -400,7 +438,8 @@ public actor ProjectWorkspaceStore {
     guard state.projects.contains(where: { $0.id == id }) else { return }
     state.projects.removeAll { $0.id == id }
     state.conversationProjectIDs = state.conversationProjectIDs.filter { $0.value != id.rawValue }
-    try await persist()
+    // Orphaned file blobs are swept by pruneOrphanBlobs on the next load.
+    try await persistJSON()
   }
 
   public func assignConversation(_ conversationID: ConversationID, to projectID: ProjectID?) async throws {
@@ -410,12 +449,12 @@ public actor ProjectWorkspaceStore {
     } else {
       state.conversationProjectIDs.removeValue(forKey: conversationID.rawValue)
     }
-    try await persist()
+    try await persistJSON()
   }
 
   public func removeConversation(_ conversationID: ConversationID) async throws {
     guard state.conversationProjectIDs.removeValue(forKey: conversationID.rawValue) != nil else { return }
-    try await persist()
+    try await persistJSON()
   }
 
   public func reconcileConversationIDs(_ validIDs: Set<ConversationID>) async throws {
@@ -423,7 +462,7 @@ public actor ProjectWorkspaceStore {
     let before = state.conversationProjectIDs.count
     state.conversationProjectIDs = state.conversationProjectIDs.filter { validRawIDs.contains($0.key) }
     if state.conversationProjectIDs.count != before {
-      try await persist()
+      try await persistJSON()
     }
   }
 
@@ -439,14 +478,69 @@ public actor ProjectWorkspaceStore {
     return normalized
   }
 
-  private func persist() async throws {
+  // MARK: - File-blob persistence
+
+  /// Reference-file bytes rest in blob files; persisted JSON carries metadata
+  /// only. Blobs land before the JSON for the same crash-ordering reason as
+  /// ConversationStore.persist.
+  private func hydrateFileBlobs() async {
+    for projectIndex in state.projects.indices {
+      guard var files = state.projects[projectIndex].files, !files.isEmpty else { continue }
+      var didHydrate = false
+      for fileIndex in files.indices where files[fileIndex].data.isEmpty {
+        guard
+          let data = try? await blobs.loadData(files[fileIndex].id),
+          !data.isEmpty
+        else { continue }
+        files[fileIndex].data = data
+        didHydrate = true
+      }
+      if didHydrate {
+        state.projects[projectIndex].files = files
+      }
+    }
+  }
+
+  private func offloadFileBlobs(projectID: ProjectID) async throws {
+    guard let project = state.projects.first(where: { $0.id == projectID }) else { return }
+    for file in project.projectFiles where !file.data.isEmpty {
+      try await blobs.writeIfAbsent(file.id, data: file.data)
+    }
+  }
+
+  /// Removes blob files no longer referenced by any project.
+  @discardableResult
+  private func pruneOrphanBlobs() async -> Bool {
+    let referenced = Set(state.projects.flatMap { $0.projectFiles.map(\.id) })
+    let stored = (try? await blobs.storedIDs()) ?? []
+    let orphans = stored.subtracting(referenced)
+    guard !orphans.isEmpty else { return false }
+    try? await blobs.deleteIDs(orphans)
+    return true
+  }
+
+  private func persistJSON() async throws {
     guard !blocksWritesAfterFailedLoad else {
       throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
     }
+    try await persistence.saveData(Self.metadataEncoder().encode(state))
+  }
+
+  /// Persists one project's file bytes to blobs, then the metadata JSON.
+  private func persistMutatingProject(_ id: ProjectID) async throws {
+    guard !blocksWritesAfterFailedLoad else {
+      throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
+    }
+    try await offloadFileBlobs(projectID: id)
+    try await persistJSON()
+  }
+
+  private static func metadataEncoder() -> JSONEncoder {
     let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
-    try await persistence.saveData(encoder.encode(state))
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    encoder.userInfo[.byokEmbedsAttachmentData] = false
+    return encoder
   }
 
   private static func sanitized(_ value: ProjectWorkspaceState) throws -> ProjectWorkspaceState {

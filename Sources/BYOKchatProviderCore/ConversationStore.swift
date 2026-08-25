@@ -1,42 +1,22 @@
 import Foundation
 
-public protocol ConversationWorkspacePersistence: Sendable {
-  func loadData() async throws -> Data?
-  func saveData(_ data: Data) async throws
-}
-
-public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePersistence {
-  private var data: Data?
-
-  public init(data: Data? = nil) { self.data = data }
-  public func loadData() -> Data? { data }
-  public func saveData(_ data: Data) { self.data = data }
-}
-
-public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePersistence {
-  public let fileURL: URL
-
-  public init(fileURL: URL) { self.fileURL = fileURL }
-
-  public func loadData() throws -> Data? {
-    guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-    return try Data(contentsOf: fileURL)
-  }
-
-  public func saveData(_ data: Data) throws {
-    try FileManager.default.createDirectory(
-      at: fileURL.deletingLastPathComponent(),
-      withIntermediateDirectories: true
-    )
-    try data.write(to: fileURL, options: .atomic)
-  }
-}
+// The conversation workspace persistence lives in ConversationShardPersistence.swift:
+// one shard file per conversation plus a derived index cache.
 
 public actor ConversationStore {
   private let persistence: any ConversationWorkspacePersistence
   private let blobs: any AttachmentBlobStoring
   private var state = ConversationWorkspaceState()
   private var hasLoaded = false
+  /// Conversations mutated by streaming deltas awaiting the debounced flush.
+  private var deferredDirtyIDs: Set<ConversationID> = []
+  private var isDeferredFlushScheduled = false
+  /// Best-effort record of a failed debounced flush; hard persists retry the
+  /// same conversations and clear it on success.
+  public private(set) var flushError: Error?
+  /// Shards quarantined as unreadable during load. Those conversations are
+  /// skipped rather than failing the whole workspace.
+  public private(set) var quarantinedShardCount = 0
 
   public init(
     persistence: any ConversationWorkspacePersistence,
@@ -48,19 +28,27 @@ public actor ConversationStore {
 
   public func load() async throws {
     guard !hasLoaded else { return }
-    if let data = try await persistence.loadData() {
-      let decoded = try JSONDecoder.provider.decode(ConversationWorkspaceState.self, from: data)
-      guard decoded.schemaVersion == ConversationWorkspaceState.currentSchemaVersion else {
-        throw ProviderError.conversationVersionUnsupported(decoded.schemaVersion)
+    // Shards are authoritative; the index cache is rebuilt, never trusted.
+    var loaded: [ChatConversation] = []
+    for id in try await persistence.shardIDs() {
+      guard let data = try await persistence.loadShard(id: id) else { continue }
+      do {
+        loaded.append(try JSONDecoder.provider.decode(ChatConversation.self, from: data))
+      } catch {
+        _ = try? await persistence.quarantineShard(id: id)
+        quarantinedShardCount += 1
       }
-      state = decoded
     }
+    state = ConversationWorkspaceState(conversations: loaded)
     hasLoaded = true
-    let repaired = repairInterruptedMessages()
+    let repairedIDs = repairInterruptedMessages()
     await hydrateAttachmentBlobs()
     let prunedOrphans = await pruneOrphanBlobs()
-    if repaired || prunedOrphans {
-      try await persist()
+    if !repairedIDs.isEmpty || prunedOrphans {
+      // Repairs must reach disk, not just memory, or every launch re-repairs.
+      try await persist(conversationIDs: repairedIDs)
+    } else if !state.conversations.isEmpty {
+      try await persistIndex()
     }
   }
 
@@ -96,22 +84,28 @@ public actor ConversationStore {
       options: options
     )
     state.conversations.append(value)
-    try await persist()
+    try await persist(conversationIDs: [value.id])
     return value
   }
 
   public func deleteConversation(_ id: ConversationID) async throws {
     state.conversations.removeAll { $0.id == id }
-    try await persist()
+    deferredDirtyIDs.remove(id)
+    try await persistence.deleteShard(id: id.rawValue)
+    try await persistIndex()
     await pruneOrphanBlobs()
   }
 
-  /// Bulk removal used by replace-existing imports; one persist + one sweep
+  /// Bulk removal used by replace-existing imports; one pass + one sweep
   /// instead of one per conversation.
   public func deleteAllConversations() async throws {
     guard !state.conversations.isEmpty else { return }
     state.conversations.removeAll()
-    try await persist()
+    deferredDirtyIDs.removeAll()
+    try await persistence.deleteAllShards()
+    try await persistence.saveIndex(
+      JSONEncoder.providerEncoder.encode(ConversationIndexState())
+    )
     await pruneOrphanBlobs()
   }
 
@@ -124,7 +118,7 @@ public actor ConversationStore {
       conversation.title = trimmed
       conversation.updatedAt = .now
     }
-    try await persist()
+    try await persist(conversationIDs: [id])
   }
 
   public func updateTarget(
@@ -143,7 +137,7 @@ public actor ConversationStore {
       conversation.options = options
       conversation.updatedAt = .now
     }
-    try await persist()
+    try await persist(conversationIDs: [id])
   }
 
   public func setDraft(_ text: String, conversationID: ConversationID) async throws {
@@ -152,7 +146,7 @@ public actor ConversationStore {
       guard conversation.draftText != value else { return }
       conversation.draftText = value
     }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
   }
 
   public func search(_ query: String, limit: Int = 100) -> [ConversationSearchResult] {
@@ -254,7 +248,7 @@ public actor ConversationStore {
         removedMessageCount: removedCount
       )
     }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -290,7 +284,7 @@ public actor ConversationStore {
         removedMessageCount: removedCount
       )
     }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -333,7 +327,7 @@ public actor ConversationStore {
         assistantMessage: assistant
       )
     }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -353,7 +347,8 @@ public actor ConversationStore {
       message.updatedAt = date
     }
     try mutateConversation(conversationID) { $0.updatedAt = date }
-    try await persist()
+    // Streaming deltas only dirty memory here; a debounced flush lands them.
+    markConversationDirty(conversationID)
   }
 
   public func appendToolRound(
@@ -374,7 +369,7 @@ public actor ConversationStore {
       result = message
     }
     try mutateConversation(conversationID) { $0.updatedAt = date }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -402,7 +397,7 @@ public actor ConversationStore {
       result = message
     }
     try mutateConversation(conversationID) { $0.updatedAt = date }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -423,7 +418,7 @@ public actor ConversationStore {
       result = message
     }
     try mutateConversation(conversationID) { $0.updatedAt = date }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -447,7 +442,7 @@ public actor ConversationStore {
       result = message
     }
     try mutateConversation(conversationID) { $0.updatedAt = date }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
     return result!
   }
 
@@ -455,7 +450,7 @@ public actor ConversationStore {
     try mutateConversation(conversationID) { conversation in
       conversation.lastContextOmittedMessageCount = max(0, count)
     }
-    try await persist()
+    try await persist(conversationIDs: [conversationID])
   }
 
   /// Loads attachment bytes from blob files into the in-memory state so every
@@ -508,11 +503,13 @@ public actor ConversationStore {
     return ids
   }
 
-  /// Writes any not-yet-stored payloads to blob files before the JSON lands.
-  /// Crash between the two steps leaves an orphan blob (cleaned by the sweep),
-  /// never a metadata row pointing at nothing.
-  private func offloadAttachmentBlobs() async throws {
-    for conversation in state.conversations {
+  /// Writes any not-yet-stored payloads of the given conversations to blob
+  /// files before their shard JSON lands. Crash between the two steps leaves
+  /// an orphan blob (cleaned by the sweep), never a metadata row pointing at
+  /// nothing.
+  private func offloadAttachmentBlobs(for ids: Set<ConversationID>) async throws {
+    for id in ids {
+      guard let conversation = state.conversations.first(where: { $0.id == id }) else { continue }
       for message in conversation.messages {
         for attachment in message.attachments ?? [] where !attachment.data.isEmpty {
           try await blobs.writeIfAbsent(attachment.id, data: attachment.data)
@@ -594,8 +591,8 @@ public actor ConversationStore {
     return completionUnknown
   }
 
-  private func repairInterruptedMessages() -> Bool {
-    var changed = false
+  private func repairInterruptedMessages() -> Set<ConversationID> {
+    var changed: Set<ConversationID> = []
     for conversationIndex in state.conversations.indices {
       for messageIndex in state.conversations[conversationIndex].messages.indices {
         let status = state.conversations[conversationIndex].messages[messageIndex].status
@@ -606,17 +603,70 @@ public actor ConversationStore {
           "Generation was interrupted before completion."
         state.conversations[conversationIndex].messages[messageIndex].completionUncertain = false
         state.conversations[conversationIndex].messages[messageIndex].updatedAt = .now
-        changed = true
+        changed.insert(state.conversations[conversationIndex].id)
       }
     }
     return changed
   }
 
-  private func persist() async throws {
-    try await offloadAttachmentBlobs()
-    try await persistence.saveData(
-      JSONEncoder.providerEncoderWithoutAttachmentData.encode(state)
-    )
+  // MARK: - Sharded persistence
+
+  /// Persists the given conversations' shards plus the derived index. The
+  /// deferred (streaming) dirty set rides along so a hard flush after a turn
+  /// also lands any deltas still waiting on the debounce timer.
+  private func persist(conversationIDs involved: Set<ConversationID>) async throws {
+    let targets = involved.union(deferredDirtyIDs)
+    try await offloadAttachmentBlobs(for: targets)
+    for id in targets.map(\.rawValue).sorted() {
+      guard
+        let conversation = state.conversations.first(where: { $0.id.rawValue == id })
+      else {
+        // Stale dirt for a conversation that no longer exists.
+        deferredDirtyIDs.remove(ConversationID(rawValue: id))
+        continue
+      }
+      try await persistence.saveShard(id: id, data: shardData(conversation))
+      deferredDirtyIDs.remove(conversation.id)
+    }
+    flushError = nil
+    try await persistIndex()
+  }
+
+  private func markConversationDirty(_ id: ConversationID) {
+    deferredDirtyIDs.insert(id)
+    scheduleDeferredFlush()
+  }
+
+  /// Streaming deltas mutate memory immediately but land on disk at most ~2s
+  /// later, so a long reply costs a handful of single-shard writes instead of
+  /// one whole-corpus write per delta. Crash exposure stays within the
+  /// current turn — the same window the interrupted-repair pass covers.
+  private func scheduleDeferredFlush() {
+    guard !isDeferredFlushScheduled else { return }
+    isDeferredFlushScheduled = true
+    Task { [weak self] in
+      try? await Task.sleep(for: .seconds(2))
+      await self?.performDeferredFlushIfDue()
+    }
+  }
+
+  private func performDeferredFlushIfDue() async {
+    isDeferredFlushScheduled = false
+    guard !deferredDirtyIDs.isEmpty else { return }
+    do {
+      try await persist(conversationIDs: [])
+    } catch {
+      flushError = error
+    }
+  }
+
+  private func shardData(_ conversation: ChatConversation) throws -> Data {
+    try JSONEncoder.providerEncoderWithoutAttachmentData.encode(conversation)
+  }
+
+  private func persistIndex() async throws {
+    let index = ConversationIndexState(entries: state.conversations.map(ConversationIndexEntry.init))
+    try await persistence.saveIndex(JSONEncoder.providerEncoder.encode(index))
   }
 
   private static func generatedTitle(from text: String) -> String {

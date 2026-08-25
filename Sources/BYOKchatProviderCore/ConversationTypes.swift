@@ -246,6 +246,45 @@ public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
   }
 }
 
+/// List-row metadata for one conversation in the sharded layout. Derived from
+/// a `ChatConversation`; carries everything a chat list needs without the
+/// message bodies.
+public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable {
+  public var id: ConversationID
+  public var title: String
+  public var createdAt: Date
+  public var updatedAt: Date
+  public var messageCount: Int
+  public var lastMessagePreview: String?
+
+  public init(conversation: ChatConversation) {
+    id = conversation.id
+    title = conversation.title
+    createdAt = conversation.createdAt
+    updatedAt = conversation.updatedAt
+    messageCount = conversation.messages.count
+    lastMessagePreview = conversation.lastMessagePreview
+  }
+}
+
+/// The persisted index file's shape in the sharded layout. Loads never treat
+/// it as authoritative — shards are the source of truth and the index is
+/// rebuilt from them — so a stale or missing index is harmless.
+public struct ConversationIndexState: Codable, Sendable, Equatable {
+  public static let currentSchemaVersion = 1
+
+  public var schemaVersion: Int
+  public var entries: [ConversationIndexEntry]
+
+  public init(
+    schemaVersion: Int = Self.currentSchemaVersion,
+    entries: [ConversationIndexEntry] = []
+  ) {
+    self.schemaVersion = schemaVersion
+    self.entries = entries
+  }
+}
+
 public enum ConversationSearchMatchRole: String, Codable, Sendable {
   case title
   case user
