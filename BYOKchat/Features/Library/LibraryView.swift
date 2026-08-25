@@ -231,21 +231,11 @@ struct LibraryView: View {
   }
 
   private var emptyState: some View {
-    ContentUnavailableView {
-      Label("Library is Empty", systemImage: "books.vertical")
-    } description: {
-      Text("Save images and documents from chats, or add them here.")
-    } actions: {
-      Button("Add Photo", systemImage: "photo") {
-        isPhotoPickerPresented = true
-      }
-      .buttonStyle(.borderedProminent)
-
-      Button("Add File", systemImage: "doc") {
-        isFileImporterPresented = true
-      }
-      .buttonStyle(.bordered)
-    }
+    ContentUnavailableView(
+      "Library is Empty",
+      systemImage: "books.vertical",
+      description: Text("Save images and documents from chats, or add them with +.")
+    )
   }
 
   private var noResultsState: some View {
