@@ -1,10 +1,6 @@
 import Foundation
 
 extension ConversationStore {
-  public func exportWorkspace() throws -> Data {
-    try JSONEncoder.providerEncoder.encode(snapshot())
-  }
-
   /// Imports conversations and returns a mapping from source conversation IDs to the
   /// effective local IDs. Merge imports can map a source conversation onto an existing
   /// local conversation when the ID or portable fingerprint already exists.

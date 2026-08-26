@@ -50,9 +50,7 @@ public actor ConversationStore {
     state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
     let repairedIDs = repairInterruptedMessages()
-    await hydrateAttachmentBlobs()
-    let prunedOrphans = await pruneOrphanBlobs()
-    if !repairedIDs.isEmpty || prunedOrphans {
+    if !repairedIDs.isEmpty {
       // Repairs must reach disk, not just memory, or every launch re-repairs.
       try await persist(conversationIDs: repairedIDs)
     } else if !state.conversations.isEmpty {
@@ -61,6 +59,34 @@ public actor ConversationStore {
   }
 
   public func snapshot() -> ConversationWorkspaceState { state }
+
+  /// Encodes every conversation with attachment bytes fetched from disk at
+  /// export time, so backups stay self-contained regardless of which chats
+  /// this session has open. Attachments whose bytes are gone are left out:
+  /// import validation rejects empty payloads.
+  public func exportWorkspace() async throws -> Data {
+    var exported = state
+    for conversationIndex in exported.conversations.indices {
+      for messageIndex in exported.conversations[conversationIndex].messages.indices {
+        guard
+          let attachments = exported.conversations[conversationIndex].messages[messageIndex]
+            .attachments,
+          !attachments.isEmpty
+        else { continue }
+        var kept: [ChatAttachment] = []
+        kept.reserveCapacity(attachments.count)
+        for var attachment in attachments {
+          if attachment.data.isEmpty {
+            attachment.data = (try? await blobs.loadData(attachment.id)) ?? Data()
+          }
+          if !attachment.data.isEmpty { kept.append(attachment) }
+        }
+        exported.conversations[conversationIndex].messages[messageIndex].attachments =
+          kept.isEmpty ? nil : kept
+      }
+    }
+    return try JSONEncoder.providerEncoder.encode(exported)
+  }
 
   public func allConversations() -> [ChatConversation] {
     state.conversations.sorted { lhs, rhs in
@@ -102,7 +128,7 @@ public actor ConversationStore {
     state.tombstones[id.rawValue] = .now
     try await persistence.deleteShard(id: id.rawValue)
     try await persistIndex()
-    await pruneOrphanBlobs()
+    // Orphaned blobs are swept by the app-level sweepOrphanFiles.
   }
 
   /// Bulk removal used by replace-existing imports; one pass + one sweep
@@ -117,7 +143,7 @@ public actor ConversationStore {
     }
     try await persistence.deleteAllShards()
     try await persistIndex()
-    await pruneOrphanBlobs()
+    // Orphaned blobs are swept by the app-level sweepOrphanFiles.
   }
 
   public func renameConversation(_ id: ConversationID, title: String) async throws {
@@ -464,54 +490,49 @@ public actor ConversationStore {
     try await persist(conversationIDs: [conversationID])
   }
 
-  /// Loads attachment bytes from blob files into the in-memory state so every
-  /// consumer (adapters, context builder, UI) keeps reading `attachment.data`
-  /// synchronously. Missing blobs leave empty data behind.
-  private func hydrateAttachmentBlobs() async {
-    for conversationIndex in state.conversations.indices {
-      for messageIndex in state.conversations[conversationIndex].messages.indices {
-        guard
-          var attachments = state.conversations[conversationIndex].messages[messageIndex]
-            .attachments
-        else { continue }
-        var didHydrate = false
-        for attachmentIndex in attachments.indices where attachments[attachmentIndex].data.isEmpty {
-          guard
-            let data = try? await blobs.loadData(attachments[attachmentIndex].id),
-            !data.isEmpty
-          else { continue }
-          attachments[attachmentIndex].data = data
-          didHydrate = true
-        }
-        if didHydrate {
-          state.conversations[conversationIndex].messages[messageIndex].attachments = attachments
-        }
-      }
-    }
-  }
+  /// Reads one conversation's attachment bytes from disk so the open chat can
+  /// display and send them. Called when a chat is opened, and cheap to repeat:
+  /// attachments already holding bytes are skipped. Attachments whose bytes
+  /// are gone are removed from the message and the removal is saved — there is
+  /// nothing left to show or send, and request builders reject empty payloads.
+  public func loadFileData(for conversationID: ConversationID) async throws {
+    guard
+      let conversationIndex = state.conversations.firstIndex(where: { $0.id == conversationID })
+    else { return }
 
-  /// Removes blob files no longer referenced by any message. Returns true
-  /// when something was deleted.
-  @discardableResult
-  private func pruneOrphanBlobs() async -> Bool {
-    let referenced = Self.referencedAttachmentIDs(in: state.conversations)
-    let stored = (try? await blobs.storedIDs()) ?? []
-    let orphans = stored.subtracting(referenced)
-    guard !orphans.isEmpty else { return false }
-    try? await blobs.deleteIDs(orphans)
-    return true
-  }
+    var droppedAny = false
+    for messageIndex in state.conversations[conversationIndex].messages.indices {
+      guard
+        let attachments = state.conversations[conversationIndex].messages[messageIndex]
+          .attachments,
+        !attachments.isEmpty
+      else { continue }
 
-  private static func referencedAttachmentIDs(in conversations: [ChatConversation]) -> Set<String> {
-    var ids = Set<String>()
-    for conversation in conversations {
-      for message in conversation.messages {
-        for attachment in message.attachments ?? [] {
-          ids.insert(attachment.id)
+      var kept: [ChatAttachment] = []
+      kept.reserveCapacity(attachments.count)
+      var filledAny = false
+
+      for var attachment in attachments {
+        if attachment.data.isEmpty {
+          guard let data = try? await blobs.loadData(attachment.id), !data.isEmpty else {
+            droppedAny = true
+            continue
+          }
+          attachment.data = data
+          filledAny = true
         }
+        kept.append(attachment)
       }
+
+      guard filledAny || droppedAny else { continue }
+      state.conversations[conversationIndex].messages[messageIndex].attachments =
+        kept.isEmpty ? nil : kept
     }
-    return ids
+
+    // Removals must reach disk or every open of this chat repeats them.
+    if droppedAny {
+      try await persist(conversationIDs: [conversationID])
+    }
   }
 
   /// Writes any not-yet-stored payloads of the given conversations to blob

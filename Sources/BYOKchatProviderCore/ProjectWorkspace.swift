@@ -302,10 +302,8 @@ public actor ProjectWorkspaceStore {
         throw ProjectWorkspaceError.unsupportedVersion(decoded.schemaVersion)
       }
       state = decoded
-      await hydrateFileBlobs()
       state = try Self.sanitized(state)
       state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
-      await pruneOrphanBlobs()
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
       // When it cannot be moved aside, block all writes outright.
@@ -445,7 +443,7 @@ public actor ProjectWorkspaceStore {
     state.projects.removeAll { $0.id == id }
     state.conversationProjectIDs = state.conversationProjectIDs.filter { $0.value != id.rawValue }
     state.tombstones[id.rawValue] = .now
-    // Orphaned file blobs are swept by pruneOrphanBlobs on the next load.
+    // Orphaned file blobs are swept by the app-level sweepOrphanFiles.
     try await persistJSON()
   }
 
@@ -490,22 +488,25 @@ public actor ProjectWorkspaceStore {
   /// Reference-file bytes rest in blob files; persisted JSON carries metadata
   /// only. Blobs land before the JSON for the same crash-ordering reason as
   /// ConversationStore.persist.
-  private func hydrateFileBlobs() async {
-    for projectIndex in state.projects.indices {
-      guard var files = state.projects[projectIndex].files, !files.isEmpty else { continue }
-      var didHydrate = false
-      for fileIndex in files.indices where files[fileIndex].data.isEmpty {
-        guard
-          let data = try? await blobs.loadData(files[fileIndex].id),
-          !data.isEmpty
-        else { continue }
-        files[fileIndex].data = data
-        didHydrate = true
+
+  /// Snapshot for backups: fetches each reference file's bytes from disk at
+  /// export time so backups stay self-contained. Files whose bytes are gone
+  /// are left out.
+  public func exportSnapshot() async -> ProjectWorkspaceState {
+    var exported = state
+    for projectIndex in exported.projects.indices {
+      guard let files = exported.projects[projectIndex].files, !files.isEmpty else { continue }
+      var kept: [ProjectFile] = []
+      kept.reserveCapacity(files.count)
+      for var file in files {
+        if file.data.isEmpty {
+          file.data = (try? await blobs.loadData(file.id)) ?? Data()
+        }
+        if !file.data.isEmpty { kept.append(file) }
       }
-      if didHydrate {
-        state.projects[projectIndex].files = files
-      }
+      exported.projects[projectIndex].files = kept.isEmpty ? nil : kept
     }
+    return exported
   }
 
   private func offloadFileBlobs(projectID: ProjectID) async throws {
@@ -513,17 +514,6 @@ public actor ProjectWorkspaceStore {
     for file in project.projectFiles where !file.data.isEmpty {
       try await blobs.writeIfAbsent(file.id, data: file.data)
     }
-  }
-
-  /// Removes blob files no longer referenced by any project.
-  @discardableResult
-  private func pruneOrphanBlobs() async -> Bool {
-    let referenced = Set(state.projects.flatMap { $0.projectFiles.map(\.id) })
-    let stored = (try? await blobs.storedIDs()) ?? []
-    let orphans = stored.subtracting(referenced)
-    guard !orphans.isEmpty else { return false }
-    try? await blobs.deleteIDs(orphans)
-    return true
   }
 
   private func persistJSON() async throws {

@@ -362,6 +362,7 @@ struct ChatView: View {
     .task(id: conversationID) {
       pendingAttachments = []
       photoPickerItems = []
+      await chats.loadFileData(conversationID: conversationID)
       guard !restoredDraft else { return }
       draft = chats.draft(for: conversationID)
       restoredDraft = true

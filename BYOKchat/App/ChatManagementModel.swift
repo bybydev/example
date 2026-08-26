@@ -293,6 +293,17 @@ final class ChatManagementModel {
     )
   }
 
+  /// Reads the conversation's file bytes off disk for the now-open chat.
+  /// Attachment rows carry no bytes until this runs; see ConversationStore.
+  func loadFileData(conversationID: ConversationID) async {
+    do {
+      try await conversationStore.loadFileData(for: conversationID)
+      conversations = await conversationStore.allConversations()
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
   func send(
     conversationID: ConversationID,
     text: String,
@@ -399,6 +410,9 @@ final class ChatManagementModel {
         generationTasks.removeValue(forKey: conversationID)
       }
       do {
+        // History attachments hold no bytes until fetched; make sure this
+        // conversation's files are in memory before any request is built.
+        try await conversationStore.loadFileData(for: conversationID)
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
         case .send(let text, let attachments):

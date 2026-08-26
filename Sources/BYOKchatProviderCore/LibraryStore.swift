@@ -62,8 +62,9 @@ public actor LibraryStore {
       state = decoded
     }
     state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
+    try await dropEntriesWithoutBlobs()
     hasLoaded = true
-    await pruneOrphanBlobs()
+    // Orphaned blobs are swept by the app-level sweepOrphanFiles.
   }
 
   /// Newest first.
@@ -221,14 +222,22 @@ public actor LibraryStore {
     try await persist()
   }
 
-  /// Removes blob files whose entries no longer exist (e.g. after a crash
-  /// between blob write and JSON write, or an interrupted delete).
-  private func pruneOrphanBlobs() async {
-    let referenced = Set(state.entries.map(\.id.rawValue))
-    let stored = (try? await blobs.storedIDs()) ?? []
-    let orphans = stored.subtracting(referenced)
-    guard !orphans.isEmpty else { return }
-    try? await blobs.deleteIDs(orphans)
+  /// Drops entries whose blob file is gone (bytes lost to a crash or an
+  /// older build's over-eager pruning). A metadata row without bytes has
+  /// nothing to open, preview, or share, so it would only render as a row
+  /// that never loads. Enumerating the blob store failing is treated as
+  /// "don't know" — cleanup is skipped rather than dropping every entry.
+  private func dropEntriesWithoutBlobs() async throws {
+    guard let stored = try? await blobs.storedIDs() else { return }
+    let deadIDs = Set(
+      state.entries.filter { !stored.contains($0.id.rawValue) }.map(\.id)
+    )
+    guard !deadIDs.isEmpty else { return }
+    state.entries.removeAll { deadIDs.contains($0.id) }
+    for id in deadIDs {
+      state.tombstones[id.rawValue] = .now
+    }
+    try await persist()
   }
 
   private func persist() async throws {

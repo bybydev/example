@@ -21,7 +21,7 @@ public actor ProjectPortabilityService {
   }
 
   public func exportWorkspace() async -> ProjectWorkspaceState {
-    await workspace.snapshot()
+    await workspace.exportSnapshot()
   }
 
   @discardableResult
