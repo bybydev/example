@@ -44,7 +44,11 @@ final class AppBootstrapController {
       try Self.throwIfModelFailed(model.mcp.errorMessage, stage: .reconciling)
 
       // Self-healing GC pass: removes bytes orphaned by any missed decrement.
+      // Runs while every store is loaded; mutation-hooked sweeps only arm
+      // afterwards (hook firings during the loading stages above see
+      // half-empty stores and would delete live blobs).
       await model.sweepOrphanFiles()
+      model.enableOrphanSweeps()
 
       state = .ready
     } catch {

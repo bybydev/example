@@ -20,6 +20,11 @@ final class AppModel {
   let fileBlobStore: FileAttachmentBlobStore
 
   private(set) var hasLoaded = false
+  /// Mutation-hooked sweeping stays disabled until startup has loaded every
+  /// store and run the first sweep. Hook firings during loading would
+  /// otherwise compute references from half-empty stores and delete live
+  /// blobs (the lost-files-after-relaunch bug).
+  private var canSweepOrphans = false
 
   init() {
     let preferences = AppPreferencesModel()
@@ -166,33 +171,35 @@ final class AppModel {
     // Reference counting: every mutation that can drop file edges funnels
     // through a model's snapshot refresh; respond by sweeping orphan bytes.
     let sweep: () -> Void = { [weak self] in
-      _ = Task { await self?.sweepOrphanFiles() }
+      _ = Task { await self?.sweepForOrphansIfNeeded() }
     }
     chats.onFileReferencesChanged = sweep
     projects.onFileReferencesChanged = sweep
     library.onFileReferencesChanged = sweep
   }
 
+  /// Mutation-hook entry point; inert until startup completes (see
+  /// `canSweepOrphans`).
+  func sweepForOrphansIfNeeded() async {
+    guard canSweepOrphans else { return }
+    await sweepOrphanFiles()
+  }
+
+  /// Arms mutation-hooked sweeping; called once every store is loaded and the
+  /// startup sweep has run.
+  func enableOrphanSweeps() {
+    canSweepOrphans = true
+  }
+
   /// Derived reference counting, exact because every edge lives in queryable
   /// state: a blob survives while any chat message attachment, project file
-  /// pointer, or library entry references its ID.
+  /// pointer, or library entry references its ID. Edges are read from the
+  /// stores themselves — UI-model snapshots can be stale or half-loaded at
+  /// sweep time, which previously made the sweep delete live blobs.
   func sweepOrphanFiles() async {
-    var referenced = Set<String>()
-    for conversation in chats.conversations {
-      for message in conversation.messages {
-        for attachment in message.attachments ?? [] {
-          referenced.insert(attachment.id)
-        }
-      }
-    }
-    for project in projects.projects {
-      for file in project.projectFiles {
-        referenced.insert(file.id)
-      }
-    }
-    for entry in library.entries {
-      referenced.insert(entry.id.rawValue)
-    }
+    var referenced = await chats.referencedAttachmentIDs()
+    referenced.formUnion(await projects.referencedFileIDs())
+    referenced.formUnion(await library.referencedEntryIDs())
 
     let stored = (try? await fileBlobStore.storedIDs()) ?? []
     let orphans = stored.subtracting(referenced)
@@ -210,6 +217,7 @@ final class AppModel {
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
     await sweepOrphanFiles()
+    enableOrphanSweeps()
     hasLoaded = true
   }
 }

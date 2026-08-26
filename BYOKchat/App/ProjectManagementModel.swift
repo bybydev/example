@@ -33,6 +33,11 @@ final class ProjectManagementModel {
     }
   }
 
+  /// Authoritative reference-file IDs for the app-level orphan sweep.
+  func referencedFileIDs() async -> Set<String> {
+    await workspace.referencedFileIDs()
+  }
+
   func project(_ id: ProjectID?) -> ChatProject? {
     guard let id else { return nil }
     return projects.first { $0.id == id }

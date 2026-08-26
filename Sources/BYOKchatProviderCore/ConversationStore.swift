@@ -60,6 +60,19 @@ public actor ConversationStore {
 
   public func snapshot() -> ConversationWorkspaceState { state }
 
+  /// Attachment IDs still referenced anywhere in history, for the app-level
+  /// blob GC. Reads authoritative state so a half-refreshed UI snapshot can
+  /// never make live blobs look collectable.
+  public func referencedAttachmentIDs() -> Set<String> {
+    Set(
+      state.conversations.flatMap { conversation in
+        conversation.messages.flatMap { message in
+          (message.attachments ?? []).map(\.id)
+        }
+      }
+    )
+  }
+
   /// Encodes every conversation with attachment bytes fetched from disk at
   /// export time, so backups stay self-contained regardless of which chats
   /// this session has open. Attachments whose bytes are gone are left out:
@@ -495,6 +508,8 @@ public actor ConversationStore {
   /// attachments already holding bytes are skipped. Attachments whose bytes
   /// are gone are removed from the message and the removal is saved — there is
   /// nothing left to show or send, and request builders reject empty payloads.
+  /// A thrown read error is different: the row stays untouched so a later open
+  /// can retry; only a confirmed-missing blob counts as gone.
   public func loadFileData(for conversationID: ConversationID) async throws {
     guard
       let conversationIndex = state.conversations.firstIndex(where: { $0.id == conversationID })
@@ -514,12 +529,19 @@ public actor ConversationStore {
 
       for var attachment in attachments {
         if attachment.data.isEmpty {
-          guard let data = try? await blobs.loadData(attachment.id), !data.isEmpty else {
-            droppedAny = true
+          do {
+            guard let data = try await blobs.loadData(attachment.id), !data.isEmpty else {
+              droppedAny = true
+              continue
+            }
+            attachment.data = data
+            filledAny = true
+          } catch {
+            // A read error is not evidence the blob is gone; keep the row so a
+            // later open retries instead of permanently stripping the file.
+            kept.append(attachment)
             continue
           }
-          attachment.data = data
-          filledAny = true
         }
         kept.append(attachment)
       }

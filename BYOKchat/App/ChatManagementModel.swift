@@ -304,6 +304,12 @@ final class ChatManagementModel {
     }
   }
 
+  /// Authoritative attachment IDs for the app-level orphan sweep; reads the
+  /// store so stale UI snapshots cannot mislabel live blobs as orphans.
+  func referencedAttachmentIDs() async -> Set<String> {
+    await conversationStore.referencedAttachmentIDs()
+  }
+
   func send(
     conversationID: ConversationID,
     text: String,

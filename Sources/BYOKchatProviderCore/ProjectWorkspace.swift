@@ -304,6 +304,7 @@ public actor ProjectWorkspaceStore {
       state = decoded
       state = try Self.sanitized(state)
       state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
+      await hydrateFileBlobs()
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
       // When it cannot be moved aside, block all writes outright.
@@ -488,6 +489,30 @@ public actor ProjectWorkspaceStore {
   /// Reference-file bytes rest in blob files; persisted JSON carries metadata
   /// only. Blobs land before the JSON for the same crash-ordering reason as
   /// ConversationStore.persist.
+
+  /// Fills each reference file's bytes from its blob right after load; decoded
+  /// metadata rows carry none, and attaching or previewing needs them at once.
+  /// Project caps (8 files × 20 MB) keep holding them all in memory cheap. A
+  /// read error leaves the row as-is rather than dropping it.
+  private func hydrateFileBlobs() async {
+    for projectIndex in state.projects.indices {
+      guard let files = state.projects[projectIndex].files, !files.isEmpty else { continue }
+      var hydrated: [ProjectFile] = []
+      hydrated.reserveCapacity(files.count)
+      for var file in files {
+        if file.data.isEmpty {
+          file.data = (try? await blobs.loadData(file.id)) ?? Data()
+        }
+        hydrated.append(file)
+      }
+      state.projects[projectIndex].files = hydrated
+    }
+  }
+
+  /// Reference-file IDs currently pointed at, for the app-level blob GC.
+  public func referencedFileIDs() -> Set<String> {
+    Set(state.projects.flatMap { $0.projectFiles.map(\.id) })
+  }
 
   /// Snapshot for backups: fetches each reference file's bytes from disk at
   /// export time so backups stay self-contained. Files whose bytes are gone

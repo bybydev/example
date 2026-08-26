@@ -33,6 +33,11 @@ final class LibraryManagementModel {
     entries = await store.entries()
   }
 
+  /// Authoritative entry IDs for the app-level orphan sweep.
+  func referencedEntryIDs() async -> Set<String> {
+    await store.referencedEntryIDs()
+  }
+
   @discardableResult
   func add(
     filename: String,

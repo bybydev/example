@@ -79,6 +79,11 @@ public actor LibraryStore {
     state.entries.first { $0.id == id }
   }
 
+  /// Listed entry IDs, for the app-level blob GC.
+  public func referencedEntryIDs() -> Set<String> {
+    Set(state.entries.map(\.id.rawValue))
+  }
+
   @discardableResult
   public func add(
     filename: String,
