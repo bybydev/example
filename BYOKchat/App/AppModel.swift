@@ -10,7 +10,6 @@ final class AppModel {
   let chats: ChatManagementModel
   let library: LibraryManagementModel
   let projects: ProjectManagementModel
-  let projectSync: ProjectSyncModel
   let mcp: MCPManagementModel
   let preferences: AppPreferencesModel
   let dataPortability: DataPortabilityModel
@@ -133,19 +132,6 @@ final class AppModel {
       approvals: approvalCenter,
       elicitations: elicitationCenter
     )
-    let syncService = ProjectSyncService(
-      workspace: projectWorkspace,
-      remote: ICloudProjectSyncStorage(),
-      localPersistence: JSONFileProjectSyncLocalPersistence(
-        fileURL: supportDirectory.appendingPathComponent("project-sync-local-v1.json")
-      )
-    )
-    let projectSyncModel = ProjectSyncModel(
-      service: syncService,
-      projects: projectModel,
-      mcp: mcpModel
-    )
-
     let baseDataPortability = DataPortabilityService(
       providers: providerWorkspace,
       conversations: conversationStore,
@@ -162,7 +148,6 @@ final class AppModel {
 
     providers = providerModel
     projects = projectModel
-    projectSync = projectSyncModel
     chats = chatModel
     library = libraryModel
     mcp = mcpModel
@@ -225,7 +210,6 @@ final class AppModel {
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
     await sweepOrphanFiles()
-    await projectSync.load()
     hasLoaded = true
   }
 }

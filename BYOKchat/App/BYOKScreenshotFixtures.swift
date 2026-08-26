@@ -40,7 +40,6 @@ enum BYOKScreenshotFixtures {
   private static func prepareDefaults() {
     let defaults = UserDefaults.standard
     defaults.set(true, forKey: "byokchat.onboarding.completed.v1")
-    defaults.set(false, forKey: "byokchat.projectSync.enabled.v1")
     defaults.set(true, forKey: "byokchat.developer.simulatedPurchases")
     defaults.removeObject(forKey: "byokchat.simulatedPurchases")
     defaults.removeObject(forKey: "byokchat.themeState.v1")

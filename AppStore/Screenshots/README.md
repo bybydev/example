@@ -6,7 +6,6 @@ The screenshot launch mode is deterministic and isolated:
 
 - `UI_TEST_SCREENSHOTS` seeds local provider accounts, chats, projects, attachments, usage, and MCP discovery data.
 - onboarding is marked complete for the screenshot process.
-- iCloud project sync is disabled.
 - AppFoundation purchases use BYOKchat's built-in simulated catalog.
 - fixture provider credentials use screenshot-only account IDs in the simulator Keychain.
 - no provider or MCP network request is required to render the seeded screens.

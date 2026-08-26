@@ -132,7 +132,7 @@ struct AppStartupFailureView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "BYOKchat will make a local recovery backup, then remove chats, connections, projects, tools, local sync state, and saved credentials from this device. iCloud data is not deleted."
+        "BYOKchat will make a local recovery backup, then remove chats, connections, projects, tools, and saved credentials from this device."
       )
     }
     .alert(

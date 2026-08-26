@@ -13,7 +13,7 @@ CHAT WITH THE MODELS YOU CHOOSE
 • Choose the provider and model for each conversation
 
 PROJECTS FOR FOCUSED WORK
-Organize conversations into projects with reusable instructions, files, presets, and tool defaults. Optional iCloud project sync keeps project configuration available across your devices while chat history and credentials remain local.
+Organize conversations into projects with reusable instructions, files, presets, and tool defaults. Your project configuration stays on your device along with your chat history and credentials.
 
 MCP TOOLS
 Connect remote MCP servers, discover their tools, choose which chats can use them, and control tool permissions with Ask, Always Allow, or Disabled policies.

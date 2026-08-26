@@ -140,9 +140,7 @@ struct AppRootView: View {
       }
     }
     .onChange(of: scenePhase) { _, phase in
-      if phase == .active {
-        Task { await model.projectSync.syncIfEnabled() }
-      } else {
+      if phase != .active {
         Task { await model.chats.persistActiveMessages() }
       }
     }
@@ -183,7 +181,6 @@ struct AppRootView: View {
             || model.chats.errorMessage != nil
             || model.projects.errorMessage != nil
             || model.mcp.errorMessage != nil
-            || model.projectSync.errorMessage != nil
         },
         set: { presented in
           if !presented {
@@ -191,7 +188,6 @@ struct AppRootView: View {
             model.chats.errorMessage = nil
             model.projects.errorMessage = nil
             model.mcp.errorMessage = nil
-            model.projectSync.errorMessage = nil
           }
         }
       )
@@ -201,7 +197,6 @@ struct AppRootView: View {
         model.chats.errorMessage = nil
         model.projects.errorMessage = nil
         model.mcp.errorMessage = nil
-        model.projectSync.errorMessage = nil
       }
     } message: {
       Text(
@@ -209,7 +204,6 @@ struct AppRootView: View {
           ?? model.projects.errorMessage
           ?? model.providers.errorMessage
           ?? model.mcp.errorMessage
-          ?? model.projectSync.errorMessage
           ?? "Unknown error"
       )
     }

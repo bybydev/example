@@ -47,9 +47,6 @@ final class AppBootstrapController {
       await model.sweepOrphanFiles()
 
       state = .ready
-
-      // iCloud is optional and can continue after the local app is usable.
-      await model.projectSync.load()
     } catch {
       state = .failed(AppBootstrapFailure(stage: currentStage, error: error))
     }
@@ -230,7 +227,6 @@ enum AppStorageBootstrap {
 
     await TelemetryRecorder.shared.clearAllTelemetry()
     let defaults = UserDefaults.standard
-    defaults.set(false, forKey: "byokchat.projectSync.enabled.v1")
     defaults.set(false, forKey: "byokchat.onboarding.completed.v1")
   }
 
@@ -445,6 +441,8 @@ enum AppStorageBootstrap {
   private static func localDataURLs(root: URL) -> [URL] {
     stores.map { root.appendingPathComponent($0.fileName) }
       + [
+        // Legacy iCloud project-sync state; kept so resets on installs that
+        // used sync still clean it up.
         root.appendingPathComponent("project-sync-local-v1.json"),
         root.appendingPathComponent("library-v1.json"),
         // Pre-sharding conversations file; kept so resets on older installs

@@ -1,17 +1,16 @@
 # Data Storage Map
 
 Where every kind of data lives in BYOKchat, today and planned. Companion to
-`DataPortability.md` (backup/export formats) and the iCloud sync plan.
+`DataPortability.md` (backup/export formats).
 
-Legend: `✗` intentionally device-local · `⚠️` known structural debt · `☁️`
-future CloudKit mapping from the sync plan · `✅` syncs today.
+Legend: `✗` intentionally device-local · `⚠️` known structural debt.
 
 ```
 📱 ON-DEVICE (app sandbox)
 │
 ├── Library/Preferences/com.hoangbkit.byokchat.plist      ← UserDefaults
 │     · theme choice, onboarding/pro flags, device ID
-│     · sidebar pinned-chat IDs · project-sync toggle
+│     · sidebar pinned-chat IDs
 │     · (AppFoundation ThemeManager settings)
 │
 ├── tmp/                                                   ← transient
@@ -26,35 +25,31 @@ future CloudKit mapping from the sync plan · `✅` syncs today.
     ├── providers-v1.json                 ← JSON, whole-file atomic write
     │     · model catalog, custom providers,
     │       account METADATA (label/baseURL/headers/default model)
-    │       [sync later: ☁️ per-account CKRecords]
     │
     ├── conversations-v1/                 ← SHARDED store
     │     ├── index.json                  · derived list-row cache, never authoritative
     │     └── <conversation-id>.json      · one full ChatConversation per file
-    │       [sync later: ☁️ record per conversation + message pages]
     │
     ├── files-v1/                         ← ALL file bytes, one blob per ID
     │     └── <file-id>                   · chat attachments, library saves,
     │                                       project reference files — shared store;
     │                                       JSON workspaces hold metadata only
-    │       [sync later: ☁️ content-addressed CKAssets, lazy fetch]
     │
     ├── library-v1.json                   ← library entry metadata (JSON)
-    │       [sync later: ☁️ records]
     │
     ├── projects-v1.json                  ← JSON, metadata only
     │     · project settings/instructions/presets/tools config
     │     · reference-file POINTERS (bytes live in files-v1/)
     │     · conversation↔project membership map
-    │       [sync today: ✅ iCloud envelope · later: ☁️ per-project records]
     │
     ├── mcp-servers-v1.json               ← JSON
     │     · server configs (endpoint/auth-kind/headers)
-    │     · tool-catalog SNAPSHOTS        (runtime cache → never synced ✗)
+    │     · tool-catalog SNAPSHOTS        (runtime cache ✗)
     │     · per-chat tool configurations
-    │       [sync later: ☁️ per-server records, snapshots excluded]
     │
-    ├── project-sync-local-v1.json        ← sync identity map (localID ↔ syncID)
+    ├── project-sync-local-v1.json        ← legacy sync identity map; kept so
+    │                                       resets on installs that used sync
+    │                                       still clean it up
     │
     ├── Telemetry/telemetry.sqlite        ← SQLite diagnostics log ✗ never synced
     │
@@ -63,15 +58,6 @@ future CloudKit mapping from the sync plan · `✅` syncs today.
     │                                       still clean them up
     ├── MigrationBackups/                 ← pre-migration copies (keep 3)
     └── ResetBackups/                     ← pre-reset copies (keep 3)
-
-☁️ ICLOUD — TODAY
-└── <ubiquity container>/Documents/BYOKchat/project-sync-v1.json
-      · monolithic projects envelope, LWW merge w/ tombstones
-
-☁️ ICLOUD — PLANNED (Pro)
-└── CloudKit private database
-      · per-entity CKRecords (projects/MCP/accounts first,
-        conversations next, media assets last)
 ```
 
 ## Shape of the system
@@ -89,7 +75,7 @@ Three storage technologies total:
 3. **One SQLite database** — telemetry/diagnostics only.
 
 No Core Data or SwiftData anywhere; every entity has a stable string ID and
-timestamps, which is what makes each box map cleanly onto a future `CKRecord`.
+timestamps.
 
 ## Key sources
 
@@ -99,5 +85,4 @@ timestamps, which is what makes each box map cleanly onto a future `CKRecord`.
 | Sharded conversation persistence | `Sources/BYOKchatProviderCore/ConversationShardPersistence.swift` |
 | Reset/recovery file enumeration | `BYOKchat/App/AppBootstrap.swift` (`localDataURLs`, `blobDirectoryURLs`) |
 | Keychain vaults | `CredentialVault.swift`, `MCPCredentialVault.swift` |
-| Project sync envelope | `ProjectSync.swift`, `App/ProjectSyncModel.swift` |
 | Telemetry DB path | `TelemetryRecorder.defaultDatabaseURL` |
