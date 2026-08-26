@@ -116,19 +116,17 @@ struct NewChatTargetPickerView: View {
         }
         .listRowBackground(theme.surfaceColor)
 
-        if supportsReasoning {
-          Section("Reasoning") {
-            Toggle("Reasoning", isOn: $reasoningEnabled)
-            if reasoningEnabled {
-              Picker("Effort", selection: $reasoningEffort) {
-                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                  Text(reasoningTitle(effort)).tag(effort)
-                }
+        Section("Reasoning") {
+          Toggle("Reasoning", isOn: $reasoningEnabled)
+          if reasoningEnabled {
+            Picker("Effort", selection: $reasoningEffort) {
+              ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                Text(reasoningTitle(effort)).tag(effort)
               }
             }
           }
-          .listRowBackground(theme.surfaceColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
       .scrollContentBackground(.hidden)
       .foregroundStyle(theme.primaryForegroundColor)
@@ -160,17 +158,14 @@ struct NewChatTargetPickerView: View {
   }
 
   private func normalizeReasoning() {
-    guard supportsReasoning else {
-      reasoningEnabled = false
-      return
-    }
-    reasoningEnabled = true
+    // Manifest data seeds the default; the toggle itself is never locked off.
+    reasoningEnabled = supportsReasoning
     reasoningEffort = selectedAccount?.providerID == BuiltInProviders.geminiID ? .medium : .high
   }
 
   private func save() {
     guard selectedAccount != nil, selectedModel?.isAvailable == true else { return }
-    let reasoning = supportsReasoning && reasoningEnabled
+    let reasoning = reasoningEnabled
       ? ReasoningOptions(enabled: true, effort: reasoningEffort)
       : nil
     useSelection(

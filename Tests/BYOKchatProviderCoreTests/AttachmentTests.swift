@@ -91,7 +91,7 @@ import Testing
   #expect(payload["file_data"] == .string("data:application/pdf;base64,JVBERg=="))
 }
 
-@Test func deepSeekRejectsImageInputWithRetryFriendlyMessage() throws {
+@Test func deepSeekPassesImageAttachmentThroughToProvider() throws {
   let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
   let image = ChatAttachment(
     kind: .image,
@@ -110,19 +110,11 @@ import Testing
     apiKey: "secret"
   )
 
-  do {
-    _ = try adapter.validate(request: request, account: account)
-    Issue.record("Expected DeepSeek image input to be rejected")
-  } catch let error as ProviderError {
-    guard case .invalidRequest(let message) = error else {
-      Issue.record("Expected invalidRequest, got \(error)")
-      return
-    }
-    #expect(message == "This model can’t read images. Switch to a vision-capable model, then retry.")
-  }
+  let validated = try adapter.validate(request: request, account: account)
+  #expect(validated.messages.first?.attachments == [image])
 }
 
-@Test func deepSeekRejectsBinaryDocumentWithRetryFriendlyMessage() throws {
+@Test func deepSeekPassesBinaryDocumentThroughToProvider() throws {
   let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek)
   let pdf = ChatAttachment(
     kind: .file,
@@ -141,16 +133,8 @@ import Testing
     apiKey: "secret"
   )
 
-  do {
-    _ = try adapter.validate(request: request, account: account)
-    Issue.record("Expected DeepSeek binary document input to be rejected")
-  } catch let error as ProviderError {
-    guard case .invalidRequest(let message) = error else {
-      Issue.record("Expected invalidRequest, got \(error)")
-      return
-    }
-    #expect(message == "This model can’t read this file type. Switch to a file-capable model, then retry.")
-  }
+  let validated = try adapter.validate(request: request, account: account)
+  #expect(validated.messages.first?.attachments == [pdf])
 }
 
 @Test func deepSeekStillAllowsTextFileContext() throws {

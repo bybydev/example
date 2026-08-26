@@ -54,20 +54,6 @@ struct ComposerTargetPickerView: View {
     ])
   }
 
-  private var supportsTemperature: Bool {
-    supportedParameters.contains("temperature")
-  }
-
-  private var supportsTopP: Bool {
-    supportedParameters.contains("top_p") || supportedParameters.contains("topP")
-  }
-
-  private var supportsMaximumTokens: Bool {
-    !supportedParameters.isDisjoint(with: [
-      "max_tokens", "max_output_tokens", "maxOutputTokens",
-    ])
-  }
-
   var body: some View {
     NavigationStack {
       List {
@@ -103,19 +89,17 @@ struct ComposerTargetPickerView: View {
         }
         .listRowBackground(theme.surfaceColor)
 
-        if supportsReasoning {
-          Section("Reasoning") {
-            Toggle("Reasoning", isOn: $reasoningEnabled)
-            if reasoningEnabled {
-              Picker("Effort", selection: $reasoningEffort) {
-                ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                  Text(reasoningTitle(effort)).tag(effort)
-                }
+        Section("Reasoning") {
+          Toggle("Reasoning", isOn: $reasoningEnabled)
+          if reasoningEnabled {
+            Picker("Effort", selection: $reasoningEffort) {
+              ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                Text(reasoningTitle(effort)).tag(effort)
               }
             }
           }
-          .listRowBackground(theme.surfaceColor)
         }
+        .listRowBackground(theme.surfaceColor)
       }
       .scrollContentBackground(.hidden)
       .foregroundStyle(theme.primaryForegroundColor)
@@ -188,18 +172,14 @@ struct ComposerTargetPickerView: View {
   }
 
   private func normalizeReasoningForSelection() {
-    guard supportsReasoning else {
-      reasoningEnabled = false
-      return
-    }
-
     if accountID == conversation.accountID, modelID == conversation.modelID {
       reasoningEnabled = conversation.options.reasoning?.enabled ?? false
       reasoningEffort = conversation.options.reasoning?.effort ?? .high
       return
     }
 
-    reasoningEnabled = true
+    // Manifest data seeds the default; the toggle itself is never locked off.
+    reasoningEnabled = supportsReasoning
     reasoningEffort = selectedAccount?.providerID == BuiltInProviders.geminiID ? .medium : .high
   }
 
@@ -217,13 +197,10 @@ struct ComposerTargetPickerView: View {
     guard let account = selectedAccount else { return }
 
     var options = conversation.options
-    if !supportsTemperature { options.temperature = nil }
-    if !supportsTopP { options.topP = nil }
-    if !supportsMaximumTokens { options.maxOutputTokens = nil }
     if account.providerID != BuiltInProviders.openRouterID {
       options.openRouterRouting = nil
     }
-    options.reasoning = supportsReasoning && reasoningEnabled
+    options.reasoning = reasoningEnabled
       ? .init(enabled: true, effort: reasoningEffort)
       : nil
 

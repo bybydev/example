@@ -50,26 +50,6 @@ struct ConversationTargetView: View {
     availableModels.first { $0.model.id == modelID }
   }
 
-  private var supportedParameters: Set<String> {
-    selectedModel?.model.supportedParameters ?? []
-  }
-
-  private var supportsTemperature: Bool {
-    supportedParameters.contains("temperature")
-  }
-
-  private var supportsMaximumTokens: Bool {
-    !supportedParameters.isDisjoint(with: [
-      "max_tokens", "max_output_tokens", "maxOutputTokens",
-    ])
-  }
-
-  private var supportsReasoning: Bool {
-    !supportedParameters.isDisjoint(with: [
-      "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
-    ])
-  }
-
   var body: some View {
     NavigationStack {
       Form {
@@ -134,38 +114,30 @@ struct ConversationTargetView: View {
         }
         .listRowBackground(theme.surfaceColor)
 
-        if supportsTemperature || supportsMaximumTokens || supportsReasoning {
-          Section("Generation") {
-            if supportsReasoning {
-              Toggle("Reasoning", isOn: $reasoningEnabled)
-              if reasoningEnabled {
-                Picker("Reasoning Effort", selection: $reasoningEffort) {
-                  ForEach(ReasoningEffort.allCases, id: \.self) { effort in
-                    Text(effort.rawValue.capitalized).tag(effort)
-                  }
-                }
+        Section("Generation") {
+          Toggle("Reasoning", isOn: $reasoningEnabled)
+          if reasoningEnabled {
+            Picker("Reasoning Effort", selection: $reasoningEffort) {
+              ForEach(ReasoningEffort.allCases, id: \.self) { effort in
+                Text(effort.rawValue.capitalized).tag(effort)
               }
             }
-
-            if supportsTemperature {
-              Toggle("Override Temperature", isOn: $temperatureEnabled)
-              if temperatureEnabled {
-                LabeledContent("Temperature") {
-                  Text(temperature, format: .number.precision(.fractionLength(1)))
-                }
-                Slider(value: $temperature, in: 0...2, step: 0.1)
-              }
-            }
-
-            if supportsMaximumTokens {
-              TextField("Maximum output tokens", text: $maxOutputTokens)
-                .keyboardType(.numberPad)
-            }
-
-            Button("Reset Model Parameters") { resetParameters() }
           }
-          .listRowBackground(theme.surfaceColor)
+
+          Toggle("Override Temperature", isOn: $temperatureEnabled)
+          if temperatureEnabled {
+            LabeledContent("Temperature") {
+              Text(temperature, format: .number.precision(.fractionLength(1)))
+            }
+            Slider(value: $temperature, in: 0...2, step: 0.1)
+          }
+
+          TextField("Maximum output tokens", text: $maxOutputTokens)
+            .keyboardType(.numberPad)
+
+          Button("Reset Model Parameters") { resetParameters() }
         }
+        .listRowBackground(theme.surfaceColor)
       }
       .scrollContentBackground(.hidden)
       .foregroundStyle(theme.primaryForegroundColor)
@@ -200,9 +172,9 @@ struct ConversationTargetView: View {
   private func save() {
     guard let account = selectedAccount else { return }
     let options = ProviderRequestOptions(
-      temperature: supportsTemperature && temperatureEnabled ? temperature : nil,
-      maxOutputTokens: supportsMaximumTokens ? Int(maxOutputTokens) : nil,
-      reasoning: supportsReasoning && reasoningEnabled
+      temperature: temperatureEnabled ? temperature : nil,
+      maxOutputTokens: Int(maxOutputTokens),
+      reasoning: reasoningEnabled
         ? .init(enabled: true, effort: reasoningEffort)
         : nil
     )

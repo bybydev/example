@@ -28,20 +28,6 @@ enum ChatReadiness: String {
   case noModel
 }
 
-/// Quick-start tile on an empty chat surface.
-struct StarterAction: Identifiable {
-  enum Kind {
-    case draft(String)
-    case photo
-    case file
-  }
-
-  let id: String
-  let title: String
-  let systemImage: String
-  let kind: Kind
-}
-
 struct ChatView: View {
   /// Identity of the backing conversation. Only meaningful for `.existing`;
   /// fresh mode never touches the store under this ID.

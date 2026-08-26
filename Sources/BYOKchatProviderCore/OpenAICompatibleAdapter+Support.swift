@@ -79,19 +79,6 @@ extension OpenAICompatibleAdapter {
         "Unsupported image type for \(unsupportedImage.filename). Use PNG, JPEG, WebP, or GIF."
       )
     }
-
-    if definition.behavior == .deepSeek {
-      if attachments.contains(where: \.isImage) {
-        throw ProviderError.invalidRequest(
-          "This model can’t read images. Switch to a vision-capable model, then retry."
-        )
-      }
-      if attachments.contains(where: { !$0.isImage && $0.utf8Text == nil }) {
-        throw ProviderError.invalidRequest(
-          "This model can’t read this file type. Switch to a file-capable model, then retry."
-        )
-      }
-    }
   }
 
   func makeRequest(
