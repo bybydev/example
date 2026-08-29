@@ -99,6 +99,7 @@
 		D747DED45399AD5E72AD5C69 /* ConnectionFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58571E9C504B909F9F3BA0DA /* ConnectionFlowView.swift */; };
 		D87921410CCF99F63B7CA87F /* BYOKProAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9E4E27EAED1F440936E1A62 /* BYOKProAccess.swift */; };
 		D91A65F329A269310EE8DB6C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B63712945BE28B84186159 /* AppModel.swift */; };
+		DAFB72C81D4598CD2BD478DA /* BackgroundActivityKeeper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EC0C61DEFF2E3211832EBFA /* BackgroundActivityKeeper.swift */; };
 		DC1D74779E28D241EF9E347A /* ChatContextWindowKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FC4066F07CA30E394EBFF9 /* ChatContextWindowKindTests.swift */; };
 		DD38F6365B1654164218D87D /* ProviderRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B94A134AADA4EFB5AB8B7ABA /* ProviderRegistryTests.swift */; };
 		DDDC782637CE8D20174235F1 /* MessageInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA045CE6F666920E98857755 /* MessageInfoView.swift */; };
@@ -175,6 +176,7 @@
 		4D01C982611E7A7630D7F474 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		4D6C68BC16333CDA5B9B8805 /* NativeProviderAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProviderAdapterTests.swift; sourceTree = "<group>"; };
 		4EB3846BAA52007F9D107EAE /* ConnectionDetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDetailViews.swift; sourceTree = "<group>"; };
+		4EC0C61DEFF2E3211832EBFA /* BackgroundActivityKeeper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundActivityKeeper.swift; sourceTree = "<group>"; };
 		50A7F49C81C79E77B13D255C /* MCPHTTPTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPHTTPTransportTests.swift; sourceTree = "<group>"; };
 		52D9FB60FB7AEA4DE511DF69 /* UsageDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDashboardView.swift; sourceTree = "<group>"; };
 		53BF1A4153B3163E0D752C3B /* ReasoningSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningSheet.swift; sourceTree = "<group>"; };
@@ -393,6 +395,7 @@
 				FD2B9CD4751476FE251BE25B /* AppPreferencesModel.swift */,
 				0549189CF7DBDD0F0364EFBA /* AppRootView.swift */,
 				6ED7B38BCC93227198286EEF /* AppStartupView.swift */,
+				4EC0C61DEFF2E3211832EBFA /* BackgroundActivityKeeper.swift */,
 				2925788434A51E9708D31261 /* BYOKchatApp.swift */,
 				B7C1FCD12634395DF775B663 /* BYOKchatThemes.swift */,
 				DC8078A87E58CAB8FB7761C5 /* BYOKOnboardingDemos.swift */,
@@ -666,6 +669,7 @@
 				1383CF9AC730DFFEEF09D560 /* BYOKScreenshotStudioView.swift in Sources */,
 				6A5F9C578F011AE0B98E6E36 /* BYOKchatApp.swift in Sources */,
 				99C6CBD0062FF654A11214AE /* BYOKchatThemes.swift in Sources */,
+				DAFB72C81D4598CD2BD478DA /* BackgroundActivityKeeper.swift in Sources */,
 				7C132209589F41FDF72C114B /* ChatComponents.swift in Sources */,
 				C8FCDAD0DE27C010886298F4 /* ChatInputComposer.swift in Sources */,
 				AB70CE10E8E88F6152AE4151 /* ChatListView.swift in Sources */,

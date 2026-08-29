@@ -29,6 +29,9 @@ final class ChatManagementModel {
   ///-affecting mutations (deletes, edits). AppModel sets it to run the
   /// orphan-file sweep.
   var onFileReferencesChanged: (() -> Void)?
+  /// Background-task assertion held while any generation is active; set by
+  /// AppModel after init so fixtures and call sites stay unchanged.
+  var backgroundKeeper: BackgroundActivityKeeper?
 
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversationStore: ConversationStore
@@ -400,11 +403,23 @@ final class ChatManagementModel {
       .contains { $0.requiresRegenerationConfirmation }
   }
 
+  /// System revocation of the background window: stop every active stream so
+  /// each persists its partial text through the runtime's cancel path.
+  func handleBackgroundExpiration() async {
+    for id in activeConversationIDs {
+      await stop(id)
+    }
+    backgroundKeeper?.end()
+  }
+
   private func startGeneration(
     conversationID: ConversationID,
     action: GenerationAction
   ) {
     guard generationTasks[conversationID] == nil else { return }
+    if activeConversationIDs.isEmpty {
+      backgroundKeeper?.begin()
+    }
     activeConversationIDs.insert(conversationID)
     activeToolCallsByConversation.removeValue(forKey: conversationID)
     generationTasks[conversationID] = Task { @MainActor [weak self] in
@@ -413,6 +428,9 @@ final class ChatManagementModel {
       defer {
         clearLiveMessages(for: conversationID)
         activeConversationIDs.remove(conversationID)
+        if activeConversationIDs.isEmpty {
+          backgroundKeeper?.end()
+        }
         activeToolCallsByConversation.removeValue(forKey: conversationID)
         generationTasks.removeValue(forKey: conversationID)
       }

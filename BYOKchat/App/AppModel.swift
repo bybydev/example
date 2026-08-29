@@ -154,6 +154,10 @@ final class AppModel {
     providers = providerModel
     projects = projectModel
     chats = chatModel
+    let backgroundKeeper = BackgroundActivityKeeper { [weak chatModel] in
+      Task { await chatModel?.handleBackgroundExpiration() }
+    }
+    chatModel.backgroundKeeper = backgroundKeeper
     library = libraryModel
     mcp = mcpModel
     dataPortability = DataPortabilityModel(
