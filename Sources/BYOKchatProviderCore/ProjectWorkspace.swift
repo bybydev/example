@@ -16,20 +16,24 @@ public struct ProjectFile: Codable, Sendable, Equatable, Identifiable {
   public var filename: String
   public var mimeType: String
   public var data: Data
+  /// Blob size, persisted so size surfaces and validation stay correct while
+  /// rows are metadata-only. Optional for backward compatibility.
+  public var declaredByteCount: Int?
   public var createdAt: Date
 
   private enum CodingKeys: String, CodingKey {
-    case id, filename, mimeType, data, createdAt
+    case id, filename, mimeType, data, declaredByteCount, createdAt
   }
 
   /// Decoding tolerates a missing `data` key (the persisted metadata-only
-  /// shape); the store hydrates bytes from blob files afterwards.
+  /// shape); the store hydrates bytes from blob files on demand.
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
     filename = try container.decode(String.self, forKey: .filename)
     mimeType = try container.decode(String.self, forKey: .mimeType)
     data = try container.decodeIfPresent(Data.self, forKey: .data) ?? Data()
+    declaredByteCount = try container.decodeIfPresent(Int.self, forKey: .declaredByteCount)
     createdAt = try container.decode(Date.self, forKey: .createdAt)
   }
 
@@ -44,6 +48,7 @@ public struct ProjectFile: Codable, Sendable, Equatable, Identifiable {
     if embedsData {
       try container.encode(data, forKey: .data)
     }
+    try container.encodeIfPresent(declaredByteCount, forKey: .declaredByteCount)
     try container.encode(createdAt, forKey: .createdAt)
   }
 
@@ -52,16 +57,20 @@ public struct ProjectFile: Codable, Sendable, Equatable, Identifiable {
     filename: String,
     mimeType: String,
     data: Data,
+    declaredByteCount: Int? = nil,
     createdAt: Date = .now
   ) {
     self.id = id
     self.filename = filename
     self.mimeType = mimeType
     self.data = data
+    self.declaredByteCount = declaredByteCount
     self.createdAt = createdAt
   }
 
-  public var byteCount: Int { data.count }
+  /// Blob size: the persisted declaration when the row carries no bytes
+  /// (metadata-only state), the in-memory count otherwise.
+  public var byteCount: Int { data.isEmpty ? (declaredByteCount ?? 0) : data.count }
 
   public var attachment: ChatAttachment {
     ChatAttachment(
@@ -304,7 +313,7 @@ public actor ProjectWorkspaceStore {
       state = decoded
       state = try Self.sanitized(state)
       state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
-      await hydrateFileBlobs()
+      await backfillFileByteCounts()
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
       // When it cannot be moved aside, block all writes outright.
@@ -490,23 +499,54 @@ public actor ProjectWorkspaceStore {
   /// only. Blobs land before the JSON for the same crash-ordering reason as
   /// ConversationStore.persist.
 
-  /// Fills each reference file's bytes from its blob right after load; decoded
-  /// metadata rows carry none, and attaching or previewing needs them at once.
-  /// Project caps (8 files × 20 MB) keep holding them all in memory cheap. A
-  /// read error leaves the row as-is rather than dropping it.
-  private func hydrateFileBlobs() async {
+  /// Rows are metadata-only in memory; sizes shown by the editor and by
+  /// validation come from `declaredByteCount`. Projects saved before that
+  /// field existed are repaired here from the blob store's index. Best-effort:
+  /// an unavailable index leaves rows as-is. Rows stay byte-free — previews
+  /// fetch on demand through `fileData`.
+  private func backfillFileByteCounts() async {
+    var missingIDs: Set<String> = []
+    for project in state.projects {
+      for file in project.projectFiles where file.declaredByteCount == nil && file.data.isEmpty {
+        missingIDs.insert(file.id)
+      }
+    }
+    guard !missingIDs.isEmpty else { return }
+
+    var byteCountByID: [String: Int] = [:]
+    for id in missingIDs {
+      if let metadata = try? await blobs.metadata(for: id), metadata.byteCount > 0 {
+        byteCountByID[id] = metadata.byteCount
+      }
+    }
+
+    var changed = false
     for projectIndex in state.projects.indices {
       guard let files = state.projects[projectIndex].files, !files.isEmpty else { continue }
-      var hydrated: [ProjectFile] = []
-      hydrated.reserveCapacity(files.count)
-      for var file in files {
-        if file.data.isEmpty {
-          file.data = (try? await blobs.loadData(file.id)) ?? Data()
+      var repaired = files
+      for fileIndex in repaired.indices where repaired[fileIndex].declaredByteCount == nil {
+        if !repaired[fileIndex].data.isEmpty {
+          repaired[fileIndex].declaredByteCount = repaired[fileIndex].data.count
+        } else if let byteCount = byteCountByID[repaired[fileIndex].id] {
+          repaired[fileIndex].declaredByteCount = byteCount
+        } else {
+          continue
         }
-        hydrated.append(file)
+        changed = true
       }
-      state.projects[projectIndex].files = hydrated
+      state.projects[projectIndex].files = repaired
     }
+    if changed {
+      // Repairs must reach disk or every launch repeats the backfill.
+      try? await persistJSON()
+    }
+  }
+
+  /// Pass-through byte access for surfaces that need the original on demand
+  /// (previews, attach-to-composer, QuickLook). nil when the blob is missing.
+  public func fileData(_ id: String) async -> Data? {
+    guard !id.isEmpty else { return nil }
+    return (try? await blobs.loadData(id)) ?? nil
   }
 
   /// Reference-file IDs currently pointed at, for the app-level blob GC.
@@ -534,10 +574,30 @@ public actor ProjectWorkspaceStore {
     return exported
   }
 
+  /// Writes any not-yet-stored payloads of the project's files to blobs, then
+  /// drops the in-memory bytes — metadata-only is the live row shape; previews
+  /// and composer attach re-fetch on demand. Rows keep their persisted
+  /// `declaredByteCount` so size surfaces and validation stay correct.
   private func offloadFileBlobs(projectID: ProjectID) async throws {
-    guard let project = state.projects.first(where: { $0.id == projectID }) else { return }
-    for file in project.projectFiles where !file.data.isEmpty {
-      try await blobs.writeIfAbsent(file.id, data: file.data)
+    guard let projectIndex = state.projects.firstIndex(where: { $0.id == projectID }) else { return }
+    let project = state.projects[projectIndex]
+    for fileIndex in project.projectFiles.indices {
+      let file = project.projectFiles[fileIndex]
+      guard !file.data.isEmpty else { continue }
+      try await blobs.writeIfAbsent(
+        file.id,
+        data: file.data,
+        metadata: AttachmentBlobMetadata(
+          filename: file.filename,
+          mimeType: file.mimeType,
+          byteCount: file.data.count,
+          createdAt: file.createdAt
+        )
+      )
+      state.projects[projectIndex].files?[fileIndex].data = Data()
+      if state.projects[projectIndex].files?[fileIndex].declaredByteCount == nil {
+        state.projects[projectIndex].files?[fileIndex].declaredByteCount = file.data.count
+      }
     }
   }
 

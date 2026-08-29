@@ -33,13 +33,17 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
   public var filename: String
   public var mimeType: String
   public var data: Data
+  /// Blob size, persisted so byte-count surfaces (tiles, pickers, validation)
+  /// stay correct while rows are metadata-only. Optional for backward
+  /// compatibility with shards written before it existed.
+  public var declaredByteCount: Int?
 
   private enum CodingKeys: String, CodingKey {
-    case id, kind, filename, mimeType, data
+    case id, kind, filename, mimeType, data, declaredByteCount
   }
 
   /// Decoding tolerates a missing `data` key (the persisted metadata-only
-  /// shape); the store hydrates bytes from blob files afterwards.
+  /// shape); the store hydrates bytes from blob files on demand.
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
@@ -47,6 +51,7 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
     filename = try container.decode(String.self, forKey: .filename)
     mimeType = try container.decode(String.self, forKey: .mimeType)
     data = try container.decodeIfPresent(Data.self, forKey: .data) ?? Data()
+    declaredByteCount = try container.decodeIfPresent(Int.self, forKey: .declaredByteCount)
   }
 
   /// Encoding emits `data` unless the encoder opted out via
@@ -61,6 +66,7 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
     if embedsData {
       try container.encode(data, forKey: .data)
     }
+    try container.encodeIfPresent(declaredByteCount, forKey: .declaredByteCount)
   }
 
   public init(
@@ -68,16 +74,20 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
     kind: ChatAttachmentKind,
     filename: String,
     mimeType: String,
-    data: Data
+    data: Data,
+    declaredByteCount: Int? = nil
   ) {
     self.id = id
     self.kind = kind
     self.filename = filename
     self.mimeType = mimeType
     self.data = data
+    self.declaredByteCount = declaredByteCount
   }
 
-  public var byteCount: Int { data.count }
+  /// Blob size: the persisted declaration when the row carries no bytes
+  /// (metadata-only state), the in-memory count otherwise.
+  public var byteCount: Int { data.isEmpty ? (declaredByteCount ?? 0) : data.count }
 
   public var isImage: Bool {
     kind == .image || mimeType.lowercased().hasPrefix("image/")

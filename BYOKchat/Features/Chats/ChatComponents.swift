@@ -74,6 +74,10 @@ struct ChatAttachmentStrip: View {
   /// Message-surface hook adding a Library reference to an already-stored
   /// file (+1, no byte copy). Nil hides the tile menu.
   var saveToLibrary: ((ChatAttachment) -> Void)? = nil
+  /// Async byte/thumbnail access for already-persisted attachments (the
+  /// remote-image model: tiles fetch on demand). Composer tiles hold fresh
+  /// in-memory bytes and can render without it.
+  var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
 
@@ -123,14 +127,15 @@ struct ChatAttachmentStrip: View {
   @ViewBuilder
   private func attachmentView(_ attachment: ChatAttachment) -> some View {
     ZStack(alignment: .topTrailing) {
-      if attachment.isImage, let image = UIImage(data: attachment.data) {
-        Image(uiImage: image)
-          .resizable()
-          .scaledToFill()
-          .frame(width: presentation.imageWidth, height: presentation.imageHeight)
-          .clipShape(tileShape)
-          .overlay(tileShape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
-          .accessibilityLabel("Image attachment \(attachment.filename)")
+      if attachment.isImage {
+        AsyncAttachmentThumbnail(
+          attachment: attachment,
+          sideLength: presentation.imageWidth,
+          height: presentation.imageHeight,
+          cornerRadius: 14,
+          loadThumbnail: loadThumbnail
+        )
+        .accessibilityLabel("Image attachment \(attachment.filename)")
       } else {
         fileTile(attachment)
       }
@@ -232,6 +237,126 @@ struct ChatAttachmentStrip: View {
   }
 }
 
+/// Async image tile for an attachment — the remote-image pattern: the row
+/// holds ID + metadata only, the view fetches a downsampled thumbnail and
+/// shows a placeholder while loading and an explicit unavailable state when
+/// the blob is gone. Bytes in hand (composer tiles, fresh imports) render
+/// directly without a fetch.
+struct AsyncAttachmentThumbnail: View {
+  let attachment: ChatAttachment
+  var sideLength: CGFloat
+  var height: CGFloat
+  var cornerRadius: CGFloat
+  /// Async fetcher for persisted blobs (id, maxPixelSize) → downsampled
+  /// bytes. Nil means only in-memory bytes can be shown.
+  var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
+
+  @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.displayScale) private var displayScale
+  @State private var image: UIImage?
+  /// Distinguishes "still loading" from "confirmed missing" once a fetch has
+  /// completed without bytes.
+  @State private var isUnavailable = false
+
+  var body: some View {
+    ZStack {
+      if let image {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFill()
+          .frame(width: sideLength, height: height)
+          .clipShape(shape)
+          .overlay(shape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
+      } else if isUnavailable {
+        unavailableTile
+      } else if attachment.data.isEmpty {
+        loadingTile
+      } else {
+        // Bytes are in memory but not decodable as an image; show the file tile.
+        nonImageTile
+      }
+    }
+    .frame(width: sideLength, height: height)
+    .task(id: attachment.id) {
+      await load()
+    }
+  }
+
+  private var shape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+  }
+
+  private var loadingTile: some View {
+    ZStack {
+      theme.surfaceColor
+      ProgressView()
+        .tint(theme.secondaryForegroundColor)
+    }
+    .clipShape(shape)
+    .overlay(shape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
+  }
+
+  private var unavailableTile: some View {
+    ZStack {
+      theme.surfaceColor
+      VStack(spacing: 5) {
+        Image(systemName: "photo.badge.exclamationmark")
+          .font(.system(size: sideLength * 0.24, weight: .medium))
+        Text("Unavailable")
+          .font(.system(size: 9, weight: .medium))
+      }
+      .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .clipShape(shape)
+    .overlay(shape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
+    .accessibilityLabel("Image attachment \(attachment.filename) is unavailable")
+  }
+
+  private var nonImageTile: some View {
+    ZStack {
+      theme.surfaceColor
+      Image(systemName: "photo")
+        .font(.system(size: sideLength * 0.3, weight: .medium))
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .clipShape(shape)
+    .overlay(shape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
+  }
+
+  private func load() async {
+    // Fresh in-memory bytes (composer, just-imported) decode directly.
+    if !attachment.data.isEmpty {
+      isUnavailable = false
+      image = AttachmentThumbnailLoader.downsampledImage(
+        from: attachment.data,
+        cacheKey: "inline::\(attachment.id)",
+        maxPixelSize: sideLength * displayScale
+      )
+      if image != nil { return }
+    }
+    guard let loadThumbnail else {
+      // No fetcher wired (fresh mode): in-memory bytes were the only source.
+      isUnavailable = attachment.data.isEmpty
+      return
+    }
+    let bytes = await loadThumbnail(
+      attachment.id,
+      sideLength * displayScale
+    )
+    guard let bytes, !bytes.isEmpty else {
+      isUnavailable = true
+      return
+    }
+    isUnavailable = false
+    image = AttachmentThumbnailLoader.downsampledImage(
+      from: bytes,
+      cacheKey: "blob::\(attachment.id)",
+      maxPixelSize: sideLength * displayScale
+    )
+    if image == nil { isUnavailable = true }
+  }
+}
+
 struct ChatMessageView: View {
   let message: ChatMessage
   let accountLabel: String?
@@ -244,6 +369,9 @@ struct ChatMessageView: View {
   /// both are provided.
   var conversationID: ConversationID? = nil
   var library: LibraryManagementModel? = nil
+  /// Async thumbnail fetch for persisted attachment blobs (nil hides the
+  /// loading/unavailable pipeline; only in-memory bytes render).
+  var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
   let edit: () -> Void
   let regenerate: () -> Void
   let copy: () -> Void
@@ -305,7 +433,8 @@ struct ChatMessageView: View {
         ChatAttachmentStrip(
           attachments: attachments,
           presentation: .bubble,
-          saveToLibrary: attachmentSaveClosure
+          saveToLibrary: attachmentSaveClosure,
+          loadThumbnail: loadThumbnail
         )
       }
 
@@ -494,7 +623,8 @@ struct ChatMessageView: View {
       ChatAttachmentStrip(
         attachments: attachments,
         presentation: .message,
-        saveToLibrary: attachmentSaveClosure
+        saveToLibrary: attachmentSaveClosure,
+        loadThumbnail: loadThumbnail
       )
     }
 

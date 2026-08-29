@@ -301,6 +301,12 @@ public enum ChatContextBuilder {
       if let text = attachment.utf8Text {
         return partial + 16 + metadataCost + estimateTokens(text)
       }
+      if attachment.data.isEmpty, attachment.declaredByteCount ?? 0 > 0 {
+        // Metadata-only row: the bytes will be fetched before the provider
+        // call, so keep the same placeholder cost rather than dropping to the
+        // bare metadata floor.
+        return partial + metadataCost + (attachment.isImage ? 1_024 : 2_048)
+      }
       return partial + metadataCost + (attachment.isImage ? 1_024 : 2_048)
     }
   }

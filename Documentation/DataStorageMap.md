@@ -31,9 +31,17 @@ Legend: `✗` intentionally device-local · `⚠️` known structural debt.
     │     └── <conversation-id>.json      · one full ChatConversation per file
     │
     ├── files-v1/                         ← ALL file bytes, one blob per ID
+    │     ├── index.json                  · derived metadata cache (name/
+    │     │                                 type/size per ID), rebuilt from the
+    │     │                                 directory listing when missing
+    │     ├── derived/<id>-<px>           · persisted downsampled thumbnails,
+    │     │                                 generated on first request
     │     └── <file-id>                   · chat attachments, library saves,
-    │                                       project reference files — shared store;
-    │                                       JSON workspaces hold metadata only
+    │                                       project reference files — shared
+    │                                       on-demand store; JSON workspaces
+    │                                       hold metadata only (rows are
+    │                                       metadata-only in memory too; bytes
+    │                                       are fetched when displayed/sent)
     │
     ├── library-v1.json                   ← library entry metadata (JSON)
     │
@@ -71,7 +79,10 @@ Three storage technologies total:
 2. **Flat blob directories** (`attachments-v1/`, `library-v1/`,
    `conversations-v1/<id>.json` shards) — byte payloads named by stable ID,
    written before their metadata lands (crash leaves an orphan blob that the
-   load-time sweep prunes, never metadata pointing at nothing).
+   load-time sweep prunes, never metadata pointing at nothing). `files-v1`
+   works like an object store: an index answers "what is stored" without
+   touching bytes, and reads are on demand — thumbnails and originals are
+   fetched when a surface displays or sends them, never eagerly hydrated.
 3. **One SQLite database** — telemetry/diagnostics only.
 
 No Core Data or SwiftData anywhere; every entity has a stable string ID and

@@ -41,6 +41,7 @@
 		4812608BB5868837FAD7D95F /* ChatView+Content.swift in Sources */ = {isa = PBXBuildFile; fileRef = A539DA1482A5E95030F5AD50 /* ChatView+Content.swift */; };
 		489407CDB48CCFD30BFDFEC0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EE73D293A7A14460256C7E90 /* Assets.xcassets */; };
 		4B59413243CBBA32F1E533FC /* ProviderConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C87D03ADB8D15F396E785F7C /* ProviderConsoleView.swift */; };
+		4BEB1DF5FB29A9E46A46AAE0 /* AttachmentBlobStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A0C412341E13C011AE7C91 /* AttachmentBlobStoreTests.swift */; };
 		4BF7B9BE5005DDE158A658C1 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = F78B593A19B9845685D057AE /* LaTeXSwiftUI */; };
 		4E5C45A02877A25033A9C5EB /* Swift6CorrectnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54E1E1920241DE164CA6D96F /* Swift6CorrectnessTests.swift */; };
 		500966B63C523B025DD1E68A /* ResponseImageScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A619588F52136172191C90B7 /* ResponseImageScanner.swift */; };
@@ -236,6 +237,7 @@
 		E285AA83EE75D9720CCC4489 /* ChatContextToolLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContextToolLoopTests.swift; sourceTree = "<group>"; };
 		E29B8BBB93B2F484C6D7C95F /* AnswerContentParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerContentParser.swift; sourceTree = "<group>"; };
 		E5AE6A97A9D345C136F9C272 /* AnswerContentParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerContentParserTests.swift; sourceTree = "<group>"; };
+		E7A0C412341E13C011AE7C91 /* AttachmentBlobStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentBlobStoreTests.swift; sourceTree = "<group>"; };
 		EA045CE6F666920E98857755 /* MessageInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInfoView.swift; sourceTree = "<group>"; };
 		EE73D293A7A14460256C7E90 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EFDC85555333BFDA69D7E532 /* ChatInputComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInputComposer.swift; sourceTree = "<group>"; };
@@ -313,6 +315,7 @@
 		1E7016F48EDB5DE0FFE06B83 /* BYOKchatProviderCoreTests */ = {
 			isa = PBXGroup;
 			children = (
+				E7A0C412341E13C011AE7C91 /* AttachmentBlobStoreTests.swift */,
 				773598F0890E4BFA6E511C8D /* AttachmentImportValidationTests.swift */,
 				1326DD8D58B2F5DF3C57E1AD /* AttachmentTests.swift */,
 				5779F45BE5492D7D1659DE93 /* ChatContextManagementTests.swift */,
@@ -724,6 +727,7 @@
 			files = (
 				F9E1740E56BBC43F568DAFB4 /* AnswerContentParserTests.swift in Sources */,
 				055BA7FBE4196C3FC7147138 /* AppStorageBootstrapTests.swift in Sources */,
+				4BEB1DF5FB29A9E46A46AAE0 /* AttachmentBlobStoreTests.swift in Sources */,
 				B5D0658EA31D4BC1139387B8 /* AttachmentImportValidationTests.swift in Sources */,
 				0A50084FD871EEF63058EB54 /* AttachmentTests.swift in Sources */,
 				5EFF461D520C1865F85DCF68 /* BYOKProAccessTests.swift in Sources */,

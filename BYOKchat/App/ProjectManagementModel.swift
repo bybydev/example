@@ -38,6 +38,12 @@ final class ProjectManagementModel {
     await workspace.referencedFileIDs()
   }
 
+  /// On-demand original bytes for a project reference file (composer attach,
+  /// previews). nil when the blob is missing.
+  func fileData(_ id: String) async -> Data? {
+    await workspace.fileData(id)
+  }
+
   func project(_ id: ProjectID?) -> ChatProject? {
     guard let id else { return nil }
     return projects.first { $0.id == id }

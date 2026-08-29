@@ -113,7 +113,16 @@ public actor LibraryStore {
     )
     // Blobs land before metadata for the same crash-ordering reason as
     // ConversationStore.persist.
-    try await blobs.writeIfAbsent(entry.id.rawValue, data: data)
+    try await blobs.writeIfAbsent(
+      entry.id.rawValue,
+      data: data,
+      metadata: AttachmentBlobMetadata(
+        filename: trimmedName,
+        mimeType: mimeType,
+        byteCount: data.count,
+        createdAt: date
+      )
+    )
     state.entries.append(entry)
     try await persist()
     return entry
@@ -195,6 +204,13 @@ public actor LibraryStore {
     (try? await blobs.loadData(entry.id.rawValue)) ?? nil
   }
 
+  /// Downsampled thumbnail bytes for tiles. The store persists the derived
+  /// variant, so the full original is never loaded just to fill a small view.
+  public func thumbnailData(for entry: LibraryEntry, maxPixelSize: CGFloat) async -> Data? {
+    guard maxPixelSize > 0 else { return nil }
+    return (try? await blobs.thumbnailData(entry.id.rawValue, maxPixelSize: maxPixelSize)) ?? nil
+  }
+
   /// Restores self-contained entries from a backup document. keepExisting
   /// merges by entry ID; replaceExisting clears the library first.
   public func restorePortableEntries(
@@ -211,7 +227,16 @@ public actor LibraryStore {
 
     for value in values where !existing.contains(value.id) {
       guard !value.data.isEmpty, value.data.count <= Self.maxByteCount else { continue }
-      try await blobs.writeIfAbsent(value.id.rawValue, data: value.data)
+      try await blobs.writeIfAbsent(
+        value.id.rawValue,
+        data: value.data,
+        metadata: AttachmentBlobMetadata(
+          filename: value.filename,
+          mimeType: value.mimeType,
+          byteCount: value.data.count,
+          createdAt: value.createdAt
+        )
+      )
       state.entries.append(
         LibraryEntry(
           id: value.id,

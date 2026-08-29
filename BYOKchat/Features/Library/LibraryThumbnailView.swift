@@ -87,9 +87,11 @@ struct LibraryEntryThumbnailView: View {
     .accessibilityHidden(true)
     .task(id: entry.id) {
       guard image == nil, entry.isImage else { return }
-      let bytes = await library.data(for: entry)
-      guard let bytes else { return }
+      // Downsampled bytes are served from the blob store's persisted
+      // derivative when available; the full original is never loaded for a tile.
       let maxPixelSize = sideLength * displayScale
+      let bytes = await library.thumbnailData(for: entry, maxPixelSize: maxPixelSize)
+      guard let bytes else { return }
       image = await Task.detached(priority: .userInitiated) {
         AttachmentThumbnailLoader.downsampledImage(
           from: bytes,

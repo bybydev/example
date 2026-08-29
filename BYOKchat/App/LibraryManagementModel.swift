@@ -102,6 +102,12 @@ final class LibraryManagementModel {
     await store.data(for: entry)
   }
 
+  /// Downsampled thumbnail bytes, served from the blob store's persisted
+  /// derivative when available (never loads the full original for a tile).
+  func thumbnailData(for entry: LibraryEntry, maxPixelSize: CGFloat) async -> Data? {
+    await store.thumbnailData(for: entry, maxPixelSize: maxPixelSize)
+  }
+
   private func perform(_ operation: () async throws -> Void) async {
     isBusy = true
     defer { isBusy = false }

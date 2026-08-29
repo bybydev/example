@@ -293,21 +293,22 @@ final class ChatManagementModel {
     )
   }
 
-  /// Reads the conversation's file bytes off disk for the now-open chat.
-  /// Attachment rows carry no bytes until this runs; see ConversationStore.
-  func loadFileData(conversationID: ConversationID) async {
-    do {
-      try await conversationStore.loadFileData(for: conversationID)
-      conversations = await conversationStore.allConversations()
-    } catch {
-      errorMessage = error.localizedDescription
-    }
-  }
-
   /// Authoritative attachment IDs for the app-level orphan sweep; reads the
   /// store so stale UI snapshots cannot mislabel live blobs as orphans.
   func referencedAttachmentIDs() async -> Set<String> {
     await conversationStore.referencedAttachmentIDs()
+  }
+
+  /// On-demand downsampled thumbnail for a persisted attachment blob
+  /// (remote-image style display). nil when the blob is missing.
+  func attachmentThumbnail(_ id: String, maxPixelSize: CGFloat) async -> Data? {
+    await conversationStore.attachmentThumbnail(id, maxPixelSize: maxPixelSize)
+  }
+
+  /// On-demand original bytes for a persisted attachment blob (share, save,
+  /// QuickLook). nil when the blob is missing.
+  func attachmentData(_ id: String) async -> Data? {
+    await conversationStore.attachmentData(id)
   }
 
   func send(
@@ -416,9 +417,8 @@ final class ChatManagementModel {
         generationTasks.removeValue(forKey: conversationID)
       }
       do {
-        // History attachments hold no bytes until fetched; make sure this
-        // conversation's files are in memory before any request is built.
-        try await conversationStore.loadFileData(for: conversationID)
+        // Attachment rows are metadata-only; the runtime fetches bytes for
+        // the built request just before the provider call.
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
         case .send(let text, let attachments):

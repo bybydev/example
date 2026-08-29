@@ -30,6 +30,10 @@ public actor ChatRuntime {
   private let toolRuntime: (any ChatConversationToolExecuting)?
   private let maxToolRounds: Int
   private let telemetry: ChatRuntimeTelemetry
+  /// Attachment rows are metadata-only; bytes are fetched into the built
+  /// request messages right before the provider call. nil (tests) skips the
+  /// fetch, matching legacy in-memory fixtures.
+  private let attachmentByteLoader: (@Sendable (String) async -> Data?)?
 
   private struct ActiveGenerationState: Sendable {
     var assistantID: ChatMessageID
@@ -49,7 +53,8 @@ public actor ChatRuntime {
     toolRuntime: (any ChatConversationToolExecuting)? = nil,
     telemetryRecorder: TelemetryRecorder? = nil,
     maxToolRounds: Int = 8,
-    partialPersistenceInterval: Duration = .milliseconds(300)
+    partialPersistenceInterval: Duration = .milliseconds(300),
+    attachmentByteLoader: (@Sendable (String) async -> Data?)? = nil
   ) {
     self.providerRuntime = providerRuntime
     self.providerWorkspace = providerWorkspace
@@ -58,6 +63,8 @@ public actor ChatRuntime {
     self.telemetry = ChatRuntimeTelemetry(recorder: telemetryRecorder)
     self.maxToolRounds = max(1, maxToolRounds)
     self.partialPersistenceInterval = partialPersistenceInterval
+    self.attachmentByteLoader = attachmentByteLoader
+      ?? { [conversations] id in await conversations.attachmentData(id) }
   }
 
   public func send(
@@ -222,6 +229,9 @@ public actor ChatRuntime {
       )
 
       var requestMessages = context.messages
+      // Attachment rows carry metadata only; fetch bytes for exactly the
+      // messages in the built context before the first provider call.
+      try await hydrateAttachments(into: &requestMessages)
       var continuationMessages: [ProviderMessage] = []
       var accumulatedUsage: ProviderUsage?
       var toolRoundCount = 0
@@ -425,6 +435,9 @@ public actor ChatRuntime {
             requiredTailMessages: continuationMessages
           )
           requestMessages = continuedContext.messages
+          // Tool-round continuations rebuild context; the newest fetched bytes
+          // ride along in continuationMessages, so hydrate the rebuilt tail.
+          try await hydrateAttachments(into: &requestMessages)
           try await conversations.setContextOmissionCount(
             continuedContext.omittedMessageCount,
             conversationID: conversationID
@@ -523,6 +536,31 @@ public actor ChatRuntime {
         )
         continuation.finish(throwing: error)
       }
+    }
+  }
+
+  /// Fills attachment bytes for the request messages through the blob store
+  /// (just-in-time, scoped to this request). A missing blob drops the
+  /// attachment — adapters reject empty payloads — while a read error keeps
+  /// the row for a later retry.
+  private func hydrateAttachments(into messages: inout [ProviderMessage]) async throws {
+    guard let attachmentByteLoader else { return }
+    guard messages.contains(where: { !($0.attachments ?? []).isEmpty }) else { return }
+    for messageIndex in messages.indices {
+      guard let attachments = messages[messageIndex].attachments, !attachments.isEmpty else {
+        continue
+      }
+      var hydrated: [ChatAttachment] = []
+      hydrated.reserveCapacity(attachments.count)
+      for var attachment in attachments {
+        if attachment.data.isEmpty, let data = await attachmentByteLoader(attachment.id),
+          !data.isEmpty
+        {
+          attachment.data = data
+        }
+        hydrated.append(attachment)
+      }
+      messages[messageIndex].attachments = hydrated
     }
   }
 

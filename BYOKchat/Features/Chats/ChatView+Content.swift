@@ -35,7 +35,11 @@ extension ChatView {
           pickFile: { showFileImporter = true },
           pickFromLibrary: { showLibraryPicker = true },
           projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
-          attachProjectFile: { file in appendAttachments([file.attachment]) },
+          attachProjectFile: { file in
+            Task { @MainActor in
+              await self.attachProjectFile(file)
+            }
+          },
           removeAttachment: removePendingAttachment,
           send: send,
           stop: {
@@ -81,6 +85,7 @@ extension ChatView {
                       && !chats.isGenerating(conversationID),
                     conversationID: conversationID,
                     library: library,
+                    loadThumbnail: chats.attachmentThumbnail,
                     edit: {
                       editText = stored.content
                       editTarget = stored
@@ -262,7 +267,11 @@ extension ChatView {
             pickFile: { showFileImporter = true },
             pickFromLibrary: { showLibraryPicker = true },
             projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
-            attachProjectFile: { file in appendAttachments([file.attachment]) },
+            attachProjectFile: { file in
+              Task { @MainActor in
+                await self.attachProjectFile(file)
+              }
+            },
             removeAttachment: removePendingAttachment,
             send: send,
             stop: {

@@ -48,6 +48,7 @@ public actor ConversationStore {
       state.tombstones = index.tombstones.merging(state.tombstones) { max($0, $1) }
     }
     state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
+    await backfillAttachmentByteCounts()
     hasLoaded = true
     let repairedIDs = repairInterruptedMessages()
     if !repairedIDs.isEmpty {
@@ -503,71 +504,142 @@ public actor ConversationStore {
     try await persist(conversationIDs: [conversationID])
   }
 
-  /// Reads one conversation's attachment bytes from disk so the open chat can
-  /// display and send them. Called when a chat is opened, and cheap to repeat:
-  /// attachments already holding bytes are skipped. Attachments whose bytes
-  /// are gone are removed from the message and the removal is saved — there is
-  /// nothing left to show or send, and request builders reject empty payloads.
-  /// A thrown read error is different: the row stays untouched so a later open
-  /// can retry; only a confirmed-missing blob counts as gone.
-  public func loadFileData(for conversationID: ConversationID) async throws {
-    guard
-      let conversationIndex = state.conversations.firstIndex(where: { $0.id == conversationID })
-    else { return }
-
-    var droppedAny = false
-    for messageIndex in state.conversations[conversationIndex].messages.indices {
-      guard
-        let attachments = state.conversations[conversationIndex].messages[messageIndex]
-          .attachments,
-        !attachments.isEmpty
-      else { continue }
-
+  /// Fills the blob bytes of every attachment referenced by the given
+  /// request messages, called just before the provider request is built.
+  /// Rows are metadata-only in memory; this is the only send-path fetch, and
+  /// it covers exactly the messages in the built context (omitted history is
+  /// never read). Attachments whose blob is missing are dropped from the
+  /// message — request builders reject empty payloads. A read error leaves
+  /// the row as-is so a later send can retry.
+  public func hydrateRequestAttachments(in messages: inout [ProviderMessage]) async throws {
+    guard messages.contains(where: { !($0.attachments ?? []).isEmpty }) else { return }
+    for messageIndex in messages.indices {
+      guard let attachments = messages[messageIndex].attachments, !attachments.isEmpty else {
+        continue
+      }
       var kept: [ChatAttachment] = []
       kept.reserveCapacity(attachments.count)
-      var filledAny = false
-
-      for var attachment in attachments {
-        if attachment.data.isEmpty {
-          do {
-            guard let data = try await blobs.loadData(attachment.id), !data.isEmpty else {
-              droppedAny = true
-              continue
-            }
+      for var attachment in attachments where attachment.data.isEmpty {
+        do {
+          if let data = try await blobs.loadData(attachment.id), !data.isEmpty {
             attachment.data = data
-            filledAny = true
-          } catch {
-            // A read error is not evidence the blob is gone; keep the row so a
-            // later open retries instead of permanently stripping the file.
-            kept.append(attachment)
-            continue
           }
+        } catch {
+          // A read error is not evidence the blob is gone; keep the row so a
+          // later send retries instead of silently stripping the file.
         }
         kept.append(attachment)
       }
+      messages[messageIndex].attachments = kept.isEmpty ? nil : kept
+    }
+  }
 
-      guard filledAny || droppedAny else { continue }
-      state.conversations[conversationIndex].messages[messageIndex].attachments =
-        kept.isEmpty ? nil : kept
+  /// Pass-through byte access for surfaces that need the original on demand
+  /// (QuickLook, share, save). nil when the blob is missing.
+  public func attachmentData(_ id: String) async -> Data? {
+    guard !id.isEmpty else { return nil }
+    return (try? await blobs.loadData(id)) ?? nil
+  }
+
+  /// Pass-through thumbnail access; the store persists the downsampled
+  /// derivative so later requests skip regeneration.
+  public func attachmentThumbnail(_ id: String, maxPixelSize: CGFloat) async -> Data? {
+    guard !id.isEmpty else { return nil }
+    return (try? await blobs.thumbnailData(id, maxPixelSize: maxPixelSize)) ?? nil
+  }
+
+  /// Blob metadata by ID. nil when the blob is not stored or the store keeps
+  /// no index entry for it.
+  public func attachmentMetadata(_ id: String) async -> AttachmentBlobMetadata? {
+    guard !id.isEmpty else { return nil }
+    return (try? await blobs.metadata(for: id)) ?? nil
+  }
+
+  /// Rows are metadata-only in memory; sizes shown by tiles and pickers come
+  /// from `declaredByteCount`. Shards written before that field existed are
+  /// repaired here from the blob store's index so their surfaces do not read
+  /// as zero bytes. Best-effort: an unavailable index leaves the shard as-is.
+  private func backfillAttachmentByteCounts() async {
+    var missingIDs: Set<String> = []
+    for conversation in state.conversations {
+      for message in conversation.messages {
+        for attachment in message.attachments ?? []
+        where attachment.declaredByteCount == nil && attachment.data.isEmpty {
+          missingIDs.insert(attachment.id)
+        }
+      }
+    }
+    guard !missingIDs.isEmpty else { return }
+
+    var metadataByID: [String: Int] = [:]
+    for id in missingIDs {
+      if let metadata = try? await blobs.metadata(for: id), metadata.byteCount > 0 {
+        metadataByID[id] = metadata.byteCount
+      }
     }
 
-    // Removals must reach disk or every open of this chat repeats them.
-    if droppedAny {
-      try await persist(conversationIDs: [conversationID])
+    var changedConversations: Set<ConversationID> = []
+    for conversationIndex in state.conversations.indices {
+      for messageIndex in state.conversations[conversationIndex].messages.indices {
+        guard
+          let attachments = state.conversations[conversationIndex].messages[messageIndex]
+            .attachments
+        else { continue }
+        var repaired = attachments
+        for attachmentIndex in repaired.indices
+        where repaired[attachmentIndex].declaredByteCount == nil {
+          if !repaired[attachmentIndex].data.isEmpty {
+            repaired[attachmentIndex].declaredByteCount = repaired[attachmentIndex].data.count
+          } else if let byteCount = metadataByID[repaired[attachmentIndex].id] {
+            repaired[attachmentIndex].declaredByteCount = byteCount
+          } else {
+            continue
+          }
+          changedConversations.insert(state.conversations[conversationIndex].id)
+        }
+        state.conversations[conversationIndex].messages[messageIndex].attachments = repaired
+      }
     }
+    guard !changedConversations.isEmpty else { return }
+    // Repairs must reach disk or every launch repeats the backfill.
+    try? await persist(conversationIDs: changedConversations)
   }
 
   /// Writes any not-yet-stored payloads of the given conversations to blob
   /// files before their shard JSON lands. Crash between the two steps leaves
   /// an orphan blob (cleaned by the sweep), never a metadata row pointing at
-  /// nothing.
+  /// nothing. Rows drop their in-memory bytes once stored — metadata-only is
+  /// the live shape too; surfaces re-fetch on demand.
   private func offloadAttachmentBlobs(for ids: Set<ConversationID>) async throws {
     for id in ids {
-      guard let conversation = state.conversations.first(where: { $0.id == id }) else { continue }
-      for message in conversation.messages {
-        for attachment in message.attachments ?? [] where !attachment.data.isEmpty {
-          try await blobs.writeIfAbsent(attachment.id, data: attachment.data)
+      guard let conversationIndex = state.conversations.firstIndex(where: { $0.id == id }) else {
+        continue
+      }
+      let conversation = state.conversations[conversationIndex]
+      for messageIndex in conversation.messages.indices {
+        guard let attachments = conversation.messages[messageIndex].attachments,
+          !attachments.isEmpty
+        else { continue }
+        var stored = attachments
+        for attachmentIndex in stored.indices {
+          let attachment = stored[attachmentIndex]
+          guard !attachment.data.isEmpty else { continue }
+          try await blobs.writeIfAbsent(
+            attachment.id,
+            data: attachment.data,
+            metadata: AttachmentBlobMetadata(
+              filename: attachment.filename,
+              mimeType: attachment.mimeType,
+              byteCount: attachment.data.count,
+              createdAt: conversation.createdAt
+            )
+          )
+          stored[attachmentIndex].data = Data()
+          if stored[attachmentIndex].declaredByteCount == nil {
+            stored[attachmentIndex].declaredByteCount = attachment.data.count
+          }
         }
+        state.conversations[conversationIndex].messages[messageIndex].attachments = stored
       }
     }
   }

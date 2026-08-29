@@ -133,18 +133,14 @@ struct LibraryAttachmentPickerView: View {
 
   @ViewBuilder
   private func chatThumbnail(_ item: ChatLibraryItem) -> some View {
-    if item.attachment.isImage,
-      let image = AttachmentThumbnailLoader.downsampledImage(
-        from: item.attachment.data,
-        cacheKey: "chat::\(item.id)",
-        maxPixelSize: 44 * displayScale
+    if item.attachment.isImage {
+      AsyncAttachmentThumbnail(
+        attachment: item.attachment,
+        sideLength: 44,
+        height: 44,
+        cornerRadius: 9,
+        loadThumbnail: chats.attachmentThumbnail
       )
-    {
-      Image(uiImage: image)
-        .resizable()
-        .scaledToFill()
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     } else {
       Image(systemName: "doc")
         .font(.system(size: 17))
@@ -217,9 +213,11 @@ struct LibraryAttachmentPickerView: View {
 
   private var chatItems: [ChatLibraryItem] {
     var items: [ChatLibraryItem] = []
+    var seenIDs: Set<String> = []
     for conversation in chats.conversations {
       for message in conversation.messages {
-        for attachment in message.attachments ?? [] where !attachment.data.isEmpty {
+        // Rows are metadata-only; presence is decided by ID, not by bytes.
+        for attachment in message.attachments ?? [] where seenIDs.insert(attachment.id).inserted {
           items.append(
             ChatLibraryItem(
               id: attachment.id,
@@ -254,7 +252,17 @@ struct LibraryAttachmentPickerView: View {
     switch tab {
     case .fromChats:
       let wanted = selectedChatItemIDs
-      result = chatItems.filter { wanted.contains($0.id) }.map(\.attachment)
+      var fetched: [ChatAttachment] = []
+      for item in chatItems where wanted.contains(item.id) {
+        // Rows hold metadata only; fetch the original now that it is
+        // actually being attached.
+        if let data = await chats.attachmentData(item.id), !data.isEmpty {
+          var attachment = item.attachment
+          attachment.data = data
+          fetched.append(attachment)
+        }
+      }
+      result = fetched
     case .saved:
       let entries = library.entries.filter { selectedSavedIDs.contains($0.id) }
       for entry in entries {

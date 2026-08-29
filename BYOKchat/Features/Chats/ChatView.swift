@@ -362,7 +362,6 @@ struct ChatView: View {
     .task(id: conversationID) {
       pendingAttachments = []
       photoPickerItems = []
-      await chats.loadFileData(conversationID: conversationID)
       guard !restoredDraft else { return }
       draft = chats.draft(for: conversationID)
       restoredDraft = true
@@ -639,6 +638,19 @@ struct ChatView: View {
       return
     }
     pendingAttachments = combined
+  }
+
+  /// Attaches a project reference file to the composer. Rows are
+  /// metadata-only, so the original bytes are fetched on demand; a missing
+  /// blob surfaces an error instead of a silent empty attachment.
+  func attachProjectFile(_ file: ProjectFile) async {
+    guard let data = await projects.fileData(file.id), !data.isEmpty else {
+      chats.errorMessage = "The file '\(file.filename)' could not be loaded."
+      return
+    }
+    var attachment = file.attachment
+    attachment.data = data
+    appendAttachments([attachment])
   }
 
   func removePendingAttachment(_ id: String) {
