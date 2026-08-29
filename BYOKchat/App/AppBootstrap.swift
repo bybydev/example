@@ -18,6 +18,12 @@ final class AppBootstrapController {
       state = .loading(.preparingStorage)
       try await AppStorageBootstrap.prepare()
 
+      // Index first: stores read blob metadata (sizes) during their loads.
+      // Both steps are best-effort self-healing; a failure just leaves the
+      // index as-is for on-demand repair.
+      try await model.fileBlobStore.rebuildIndexIfMissing()
+      try await model.fileBlobStore.fillUnknownMetadata()
+
       state = .loading(.loadingProviders)
       await model.providers.load()
       try Self.throwIfModelFailed(model.providers.errorMessage, stage: .loadingProviders)

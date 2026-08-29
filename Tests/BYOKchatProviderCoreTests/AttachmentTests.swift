@@ -192,10 +192,14 @@ import Testing
 
   let stored = try await store.conversation(id: conversation.id)
   #expect(stored.title == "receipt.jpg")
+  // Persisting the turn offloads bytes to the blob store; the context build
+  // happens on metadata-only rows (the runtime refetches bytes before send).
   let context = try ChatContextBuilder.build(conversation: stored, contextWindow: nil)
   let user = try #require(context.messages.first { $0.role == .user })
   #expect(user.content.isEmpty)
-  #expect(user.attachments == [image])
+  #expect(user.attachments?.first?.data.isEmpty == true)
+  #expect(user.attachments?.first?.declaredByteCount == 1)
+  #expect(user.attachments?.first?.byteCount == 1)
 }
 
 @Test func regenerationReusesFailedTurnAttachments() async throws {
@@ -234,7 +238,9 @@ import Testing
     confirmingUncertainCompletion: false
   )
   #expect(retry.turn.userMessage.id == first.userMessage.id)
-  #expect(retry.turn.userMessage.attachments == [image])
+  // Rows are metadata-only after the first persist; size survives.
+  #expect(retry.turn.userMessage.attachments?.first?.id == image.id)
+  #expect(retry.turn.userMessage.attachments?.first?.byteCount == 1)
   #expect(retry.turn.assistantMessage.status == .pending)
 }
 

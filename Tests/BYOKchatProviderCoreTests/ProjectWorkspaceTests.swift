@@ -119,14 +119,18 @@ import Testing
   let conversationID: ConversationID = "project-files-chat"
   try await workspace.assignConversation(conversationID, to: project.id)
 
-  #expect(await workspace.files(for: conversationID) == [file])
+  // Rows are metadata-only after persist; the ID and declared size survive.
+  var storedFile = file
+  storedFile.data = Data()
+  storedFile.declaredByteCount = file.data.count
+  #expect(await workspace.files(for: conversationID) == [storedFile])
   #expect(await workspace.mcpConfiguration(for: conversationID) == configuration)
   #expect(await workspace.promptPresets(for: conversationID) == [prompt])
   #expect(await workspace.toolPresets(for: conversationID) == [toolPreset])
 
   let reloaded = ProjectWorkspaceStore(persistence: persistence, blobs: blobs)
   try await reloaded.load()
-  #expect(try await reloaded.project(id: project.id).projectFiles == [file])
+  #expect(try await reloaded.project(id: project.id).projectFiles == [storedFile])
   #expect(await reloaded.mcpConfiguration(for: conversationID) == configuration)
 }
 

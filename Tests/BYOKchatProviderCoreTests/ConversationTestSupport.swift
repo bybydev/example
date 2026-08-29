@@ -99,7 +99,13 @@ func makeConversationEnvironment(
   )
 
   let conversationPersistence = InMemoryConversationWorkspacePersistence()
-  let conversations = ConversationStore(persistence: conversationPersistence)
+  // Blob bytes must survive the runtime's metadata-only offload so the JIT
+  // request hydration can refill them; rows themselves stay byte-free.
+  let blobs = InMemoryAttachmentBlobStore()
+  let conversations = ConversationStore(
+    persistence: conversationPersistence,
+    blobs: blobs
+  )
   try await conversations.load()
   let conversation = try await conversations.createConversation(
     providerID: account.providerID,
@@ -113,7 +119,8 @@ func makeConversationEnvironment(
     providerWorkspace: providerWorkspace,
     conversations: conversations,
     telemetryRecorder: telemetryRecorder,
-    partialPersistenceInterval: partialPersistenceInterval
+    partialPersistenceInterval: partialPersistenceInterval,
+    attachmentByteLoader: { id in await conversations.attachmentData(id) }
   )
   return (conversations, providerWorkspace, runtime, chat, conversation)
 }

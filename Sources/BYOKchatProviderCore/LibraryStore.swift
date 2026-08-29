@@ -159,7 +159,16 @@ public actor LibraryStore {
     if let existing = state.entries.first(where: { $0.id.rawValue == fileID }) {
       return existing
     }
-    guard byteCount > 0 else {
+    // A metadata-only attachment row can report zero bytes until its shard
+    // was backfilled; the blob store's index knows the real size, so trust
+    // it over the caller's count before rejecting the save.
+    var effectiveByteCount = byteCount
+    if effectiveByteCount <= 0,
+      let blobMetadata = try? await blobs.metadata(for: fileID)
+    {
+      effectiveByteCount = blobMetadata.byteCount
+    }
+    guard effectiveByteCount > 0 else {
       throw ProviderError.invalidRequest("A library entry cannot reference empty bytes.")
     }
     let entry = LibraryEntry(
@@ -167,7 +176,7 @@ public actor LibraryStore {
       filename: filename,
       kind: mimeType.lowercased().hasPrefix("image/") ? .image : .file,
       mimeType: mimeType,
-      byteCount: byteCount,
+      byteCount: effectiveByteCount,
       createdAt: date,
       source: source
     )

@@ -20,7 +20,6 @@ struct LibraryAttachmentPickerView: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
-  @Environment(\.displayScale) private var displayScale
   @State private var tab: Tab = .saved
   @State private var selectedSavedIDs: Set<LibraryEntryID> = []
   @State private var selectedChatItemIDs: Set<String> = []

@@ -64,7 +64,12 @@ import Testing
 
   let restored = try await environment.conversations.conversation(id: restoredID)
   #expect(restored.messages.count == 2)
-  #expect(restored.messages[0].attachments == [attachment])
+  // Export re-embeds bytes at export time; the restore path re-offloads them
+  // to the blob store, so the restored row is metadata-only again.
+  let restoredAttachment = try #require(restored.messages[0].attachments?.first)
+  #expect(restoredAttachment.id == attachment.id)
+  #expect(restoredAttachment.data.isEmpty)
+  #expect(restoredAttachment.declaredByteCount == attachment.data.count)
   #expect(restored.messages[1].toolRounds == [round])
   #expect(restored.messages[1].content == "Finished")
   #expect(restored.messages[1].status == .complete)

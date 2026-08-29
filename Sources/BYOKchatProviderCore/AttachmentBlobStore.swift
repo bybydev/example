@@ -110,7 +110,9 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     guard Self.isValidID(id) else {
       throw ProviderError.invalidRequest("Attachment blob ID is not usable as a file name.")
     }
-    var known = knownIDs ?? Self.blobIDs(fromContents: (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? [])
+    var known = knownIDs ?? Self.blobIDs(
+      fromContents: (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+    )
     if known.contains(id) { return }
 
     try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -137,7 +139,21 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
   public func metadata(for id: String) async throws -> AttachmentBlobMetadata? {
     guard Self.isValidID(id) else { return nil }
     guard try await storedIDs().contains(id) else { return nil }
-    return currentIndex().entries[id]
+    if let existing = currentIndex().entries[id], existing.byteCount > 0,
+      !existing.filename.isEmpty
+    {
+      return existing
+    }
+    // Legacy blob written before the index existed, or a placeholder row
+    // from an index rebuild: fill what we can from file attributes (never
+    // reading the bytes) and persist it so later lookups are cheap.
+    var filled = currentIndex().entries[id] ?? .unknown()
+    if let attributes = try? fileManager.attributesOfItem(atPath: url(for: id).path) {
+      if let size = attributes[.size] as? Int, size > 0 { filled.byteCount = size }
+      if let created = attributes[.creationDate] as? Date { filled.createdAt = created }
+    }
+    updateIndex { $0.entries[id] = filled }
+    return filled
   }
 
   public func thumbnailData(_ id: String, maxPixelSize: CGFloat) async throws -> Data? {
@@ -186,8 +202,9 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
 
   /// Rebuilds a missing/unreadable index from the directory listing. Sizes
   /// are unknown without reading each blob, so rows carry placeholder
-  /// metadata until the next write of that ID supplies real values.
-  func rebuildIndexIfMissing() async throws {
+  /// metadata; `metadata(for:)` fills real sizes from file attributes on
+  /// demand. Invoked by the app once at startup.
+  public func rebuildIndexIfMissing() async throws {
     guard currentIndex().entries.isEmpty else { return }
     let ids = try await storedIDs()
     guard !ids.isEmpty else { return }
@@ -197,6 +214,22 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
       rebuilt.entries[id] = existing[id] ?? .unknown()
     }
     index = rebuilt
+    persistIndex()
+  }
+
+  /// Backfills placeholder index rows with real file sizes (attributes, not
+  /// byte reads). Safe to call repeatedly; only placeholder rows are touched.
+  public func fillUnknownMetadata() async throws {
+    let current = currentIndex()
+    guard current.entries.contains(where: { $0.value.byteCount == 0 }) else { return }
+    var updated = current
+    for (id, entry) in updated.entries where entry.byteCount == 0 {
+      guard let attributes = try? fileManager.attributesOfItem(atPath: url(for: id).path),
+        let size = attributes[.size] as? Int, size > 0
+      else { continue }
+      updated.entries[id]?.byteCount = size
+    }
+    index = updated
     persistIndex()
   }
 

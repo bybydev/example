@@ -528,7 +528,12 @@ public actor ConversationStore {
           // A read error is not evidence the blob is gone; keep the row so a
           // later send retries instead of silently stripping the file.
         }
-        kept.append(attachment)
+        // Adapters reject empty payloads; a confirmed-missing blob (read
+        // returned nil) drops the attachment from the request, while the
+        // stored row itself is untouched and still displays "unavailable".
+        if !attachment.data.isEmpty {
+          kept.append(attachment)
+        }
       }
       messages[messageIndex].attachments = kept.isEmpty ? nil : kept
     }
@@ -686,7 +691,11 @@ public actor ConversationStore {
     guard attachments.count <= 8 else {
       throw ProviderError.invalidRequest("A message can include at most 8 attachments.")
     }
-    guard attachments.allSatisfy({ !$0.data.isEmpty && $0.byteCount <= 20 * 1_024 * 1_024 }) else {
+    // `declaredByteCount` keeps validation working on metadata-only rows
+    // (re-sent history attachments hold no bytes until the runtime refetches).
+    guard attachments.allSatisfy({
+      (!$0.data.isEmpty || ($0.declaredByteCount ?? 0) > 0) && $0.byteCount <= 20 * 1_024 * 1_024
+    }) else {
       throw ProviderError.invalidRequest("Each attachment must be non-empty and no larger than 20 MB.")
     }
     guard attachments.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {

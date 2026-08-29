@@ -53,12 +53,23 @@ struct AttachmentBlobStoreTests {
 
     let id = "abc-3"
     try await store.writeIfAbsent(id, data: Data([1, 2, 3]), metadata: metadata)
-    _ = try await store.deleteIDs([id])
+    try await store.deleteIDs([id])
 
     #expect(try await store.metadata(for: id) == nil)
     #expect(try await store.loadData(id) == nil)
     let derived = directory.appendingPathComponent("derived", isDirectory: true)
     #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent(id).path) == false)
+  }
+
+  @Test func legacyBlobWithoutIndexRowStillReportsSize() async throws {
+    let (store, directory) = makeStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // Write the blob bypassing the metadata path (the old two-argument
+    // overload writes without an index row).
+    try await store.writeIfAbsent("legacy-1", data: Data([1, 2, 3, 4]))
+    let loaded = try #require(await store.metadata(for: "legacy-1"))
+    #expect(loaded.byteCount == 4)
   }
 
   @Test func storedIDsExcludeIndexAndDerivedDirectory() async throws {
@@ -135,10 +146,11 @@ struct AttachmentBlobStoreTests {
     try await store.hydrateRequestAttachments(in: &messages)
 
     let kept = try #require(messages[0].attachments)
-    #expect(kept.count == 2)
+    #expect(kept.count == 1)
     #expect(kept[0].data == Data([7]))
-    // Confirmed-missing stays as metadata (surfaces show "unavailable"); the
-    // row is no longer silently deleted.
-    #expect(kept[1].data.isEmpty && kept[1].declaredByteCount == 4)
+    // Confirmed-missing blobs drop out of the request (adapters reject empty
+    // payloads) but the stored row is untouched and still surfaces the
+    // "unavailable" state in the UI.
+    #expect(store.referencedAttachmentIDs() == [])
   }
 }
