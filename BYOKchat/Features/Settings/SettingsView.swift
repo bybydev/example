@@ -9,7 +9,6 @@ struct SettingsView: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
-  @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = true
   @State private var backupDocument: JSONExportDocument?
   @State private var providerDocument: JSONExportDocument?
   @State private var showBackupExporter = false
@@ -234,23 +233,6 @@ struct SettingsView: View {
         .listRowBackground(theme.surfaceColor)
       }
 
-      #if DEBUG
-      DeveloperSettingsSection(purchases: purchases) {
-        hasCompletedOnboarding = false
-        dismiss()
-      }
-      .listRowBackground(theme.surfaceColor)
-
-      Section("Developer Tools") {
-        NavigationLink {
-          ProviderConsoleView(model: model.providers)
-        } label: {
-          Label("Provider Console", systemImage: "terminal")
-        }
-      }
-      .listRowBackground(theme.surfaceColor)
-      #endif
-
       Section("About") {
         LabeledContent("Storage", value: "Local on this iPhone")
         LabeledContent("Credentials", value: "Keychain")
@@ -259,6 +241,17 @@ struct SettingsView: View {
           .foregroundStyle(theme.secondaryForegroundColor)
       }
       .listRowBackground(theme.surfaceColor)
+
+      #if DEBUG
+      Section("Developer") {
+        NavigationLink {
+          BYOKDeveloperToolsView(purchases: purchases)
+        } label: {
+          Label("Developer Tools", systemImage: "hammer")
+        }
+      }
+      .listRowBackground(theme.surfaceColor)
+      #endif
     }
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
