@@ -32,6 +32,9 @@ struct BYOKDeveloperToolsView: View {
       configuration: configuration
     )
     .environment(purchases.manager)
+    .onChange(of: purchases.manager.isUsingSimulatedPurchases) { _, enabled in
+      UserDefaults.standard.set(enabled, forKey: BYOKPurchaseStore.simulatedModeKey)
+    }
   }
 
   private var configuration: FoundationDeveloperConfiguration {
