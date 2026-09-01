@@ -22,12 +22,16 @@ struct ConnectionsView: View {
     self.onConnectionReady = onConnectionReady
   }
 
+  private var customProviders: [ProviderDefinition] {
+    model.definitions.filter { !$0.isBuiltIn }
+  }
+
   var body: some View {
     Group {
-      if model.accounts.isEmpty {
+      if model.accounts.isEmpty && customProviders.isEmpty {
         emptyState
       } else {
-        accountList
+        managerList
       }
     }
     .foregroundStyle(theme.primaryForegroundColor)
@@ -75,7 +79,7 @@ struct ConnectionsView: View {
     }
   }
 
-  private var accountList: some View {
+  private var managerList: some View {
     List {
       if let defaultID = model.defaultAccountID,
         let account = model.accounts.first(where: { $0.id == defaultID })
@@ -91,6 +95,37 @@ struct ConnectionsView: View {
           ForEach(remaining) { account in
             connectionLink(account)
           }
+        }
+      }
+
+      if !customProviders.isEmpty {
+        Section {
+          ForEach(customProviders) { definition in
+            NavigationLink {
+              CustomProviderManagementView(model: model, providerID: definition.id)
+            } label: {
+              HStack(spacing: 12) {
+                ConnectionProviderMark(definition: definition, size: 38)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(definition.displayName)
+                    .foregroundStyle(theme.primaryForegroundColor)
+                  Text(definition.defaultBaseURL.host ?? definition.defaultBaseURL.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                    .lineLimit(1)
+                }
+                Spacer()
+                Text("\(model.accounts(for: definition.id).count)")
+                  .font(.caption.monospacedDigit())
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              }
+            }
+          }
+        } header: {
+          Text("Custom Providers")
+        } footer: {
+          Text("Custom provider definitions are shared by every connection that uses them.")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
     }
@@ -198,7 +233,7 @@ private struct ConnectionRow: View {
         Circle()
           .fill(status.isReady ? theme.accentColor : Color.secondary)
           .frame(width: 7, height: 7)
-        Text(status.label)
+        Text(status.isReady ? "Configured" : status.label)
           .font(.caption.weight(.medium))
           .foregroundStyle(theme.secondaryForegroundColor)
       }
