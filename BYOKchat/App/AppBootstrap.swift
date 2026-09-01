@@ -14,6 +14,11 @@ final class AppBootstrapController {
     guard !didStart else { return }
     didStart = true
 
+    if let failure = model.startupCompositionFailure {
+      state = .failed(failure)
+      return
+    }
+
     do {
       state = .loading(.preparingStorage)
       try await AppStorageBootstrap.prepare(environment: model.storageEnvironment)
