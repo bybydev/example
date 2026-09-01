@@ -172,9 +172,15 @@ enum AppStorageBootstrap {
 
   static func makeRecoveryDocument(failure: AppBootstrapFailure) async throws -> AppRecoveryPackageDocument {
     let diagnostics = failure.diagnosticText
-    let root = AppStorageEnvironment.current.rootDirectory
+    let environment = AppStorageEnvironment.current
+    let root = environment.rootDirectory
+    let telemetryDatabaseURL = environment.telemetryDatabaseURL
     let files = try await Task.detached(priority: .userInitiated) {
-      try recoveryFiles(root: root, diagnostics: diagnostics)
+      try recoveryFiles(
+        root: root,
+        diagnostics: diagnostics,
+        telemetryDatabaseURL: telemetryDatabaseURL
+      )
     }.value
     return AppRecoveryPackageDocument(files: files)
   }
@@ -192,7 +198,7 @@ enum AppStorageBootstrap {
       try await KeychainMCPCredentialVault(service: environment.mcpCredentialService).removeAllCredentials()
     #endif
 
-    await TelemetryRecorder.shared.clearAllTelemetry()
+    await environment.makeTelemetryRecorder().clearAllTelemetry()
     environment.makeUserDefaults().set(false, forKey: "byokchat.onboarding.completed.v1")
   }
 
@@ -304,7 +310,11 @@ enum AppStorageBootstrap {
     }
   }
 
-  private static func recoveryFiles(root: URL, diagnostics: String) throws -> [String: Data] {
+  private static func recoveryFiles(
+    root: URL,
+    diagnostics: String,
+    telemetryDatabaseURL: URL
+  ) throws -> [String: Data] {
     let fileManager = FileManager.default
     var result: [String: Data] = [
       "diagnostics.txt": Data(diagnostics.utf8),
@@ -336,11 +346,10 @@ enum AppStorageBootstrap {
       }
     }
 
-    let telemetry = TelemetryRecorder.defaultDatabaseURL()
     for url in [
-      telemetry,
-      URL(fileURLWithPath: telemetry.path + "-wal"),
-      URL(fileURLWithPath: telemetry.path + "-shm"),
+      telemetryDatabaseURL,
+      URL(fileURLWithPath: telemetryDatabaseURL.path + "-wal"),
+      URL(fileURLWithPath: telemetryDatabaseURL.path + "-shm"),
     ] where fileManager.fileExists(atPath: url.path) {
       result["telemetry--\(url.lastPathComponent)"] = try Data(contentsOf: url, options: .mappedIfSafe)
     }
