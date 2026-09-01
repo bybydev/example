@@ -28,11 +28,30 @@ public struct BYOKStorageEnvironment: Sendable, Equatable {
     BYOKStorageLayout(rootDirectory: rootDirectory)
   }
 
+  public var telemetryDatabaseURL: URL {
+    telemetryDirectory.appendingPathComponent("telemetry.sqlite", isDirectory: false)
+  }
+
   public func makeUserDefaults() -> UserDefaults {
     guard let userDefaultsSuiteName, !userDefaultsSuiteName.isEmpty else {
       return .standard
     }
     return UserDefaults(suiteName: userDefaultsSuiteName) ?? .standard
+  }
+
+  /// Creates the telemetry recorder for this host environment. App targets
+  /// should create one recorder during composition and inject that instance
+  /// into runtimes and UI instead of relying on Bundle.main-derived defaults.
+  public func makeTelemetryRecorder(
+    configuration: TelemetryStoreConfiguration = .default,
+    sessionID: String = UUID().uuidString.lowercased()
+  ) -> TelemetryRecorder {
+    TelemetryRecorder(
+      databaseURL: telemetryDatabaseURL,
+      configuration: configuration,
+      deviceID: TelemetryRecorder.loadOrCreateDeviceID(defaults: makeUserDefaults()),
+      sessionID: sessionID
+    )
   }
 }
 
