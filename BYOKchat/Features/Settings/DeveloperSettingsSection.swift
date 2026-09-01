@@ -20,6 +20,115 @@ struct TelemetrySettingsSection: View {
 }
 
 #if DEBUG
+struct BYOKDeveloperToolsView: View {
+  let purchases: BYOKPurchaseStore
+
+  @Environment(AppModel.self) private var model
+  @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = true
+
+  var body: some View {
+    FoundationDeveloperView(
+      purchaseManager: purchases.manager,
+      configuration: configuration
+    )
+    .environment(purchases.manager)
+  }
+
+  private var configuration: FoundationDeveloperConfiguration {
+    FoundationDeveloperConfiguration(
+      replays: [
+        FoundationDeveloperReplay(
+          id: "paywall",
+          title: "Paywall",
+          systemImage: "rectangle.portrait.and.arrow.forward"
+        ) { _ in
+          ProPaywallView(
+            purchases: purchases.manager,
+            configuration: BYOKPurchaseStore.paywallConfiguration,
+            initialSelectedProductID: BYOKPurchaseStore.yearlyProductID
+          )
+          .environment(purchases.manager)
+        },
+        FoundationDeveloperReplay(
+          id: "provider-upsell",
+          title: "Connection Limit Upsell",
+          systemImage: "crown"
+        ) { _ in
+          BYOKProUpsellFlow(feature: .providerAccounts)
+            .environment(purchases.manager)
+        },
+        FoundationDeveloperReplay(
+          id: "onboarding",
+          title: "Onboarding",
+          systemImage: "rectangle.stack.fill",
+          presentation: .fullScreen
+        ) { close in
+          BYOKOnboardingView(onCompletion: close)
+        },
+      ],
+      resetOnboarding: FoundationDeveloperAction(
+        id: "reset-onboarding",
+        title: "Reset Onboarding",
+        systemImage: "arrow.counterclockwise",
+        role: .destructive
+      ) {
+        hasCompletedOnboarding = false
+      },
+      additionalSections: [
+        FoundationDeveloperSection(
+          id: "byokchat",
+          title: "BYOKchat",
+          items: [
+            .value(
+              FoundationDeveloperValue(
+                id: "connections",
+                title: "Connections",
+                value: { String(model.providers.accounts.count) }
+              )
+            ),
+            .value(
+              FoundationDeveloperValue(
+                id: "mcp-servers",
+                title: "MCP servers",
+                value: { String(model.mcp.servers.count) }
+              )
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "provider-simulator",
+                title: "AI Provider Simulator",
+                systemImage: "server.rack"
+              ) {
+                ProviderSimulatorDeveloperView()
+              }
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "provider-console",
+                title: "Provider Console",
+                systemImage: "terminal"
+              ) {
+                ProviderConsoleView(model: model.providers)
+              }
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "screenshot-studio",
+                title: "Screenshot Studio",
+                systemImage: "photo.stack.fill"
+              ) {
+                BYOKScreenshotStudioView()
+                  .navigationTitle("Screenshot Studio")
+                  .navigationBarTitleDisplayMode(.inline)
+              }
+            ),
+          ]
+        )
+      ]
+    )
+  }
+}
+
 private enum SimulatorConfigurationConstants {
   static let sourceKey = "configurationSource"
   static let sourceValue = "ai-provider-simulator"
@@ -63,16 +172,12 @@ private struct SimulatorProviderConfiguration {
   var metadata: [String: String]
 }
 
-struct DeveloperSettingsSection: View {
-  let purchases: BYOKPurchaseStore
-  let replayOnboarding: () -> Void
-
+private struct ProviderSimulatorDeveloperView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
   @AppStorage("byokchat.dev.simulator.manifestURL") private var simulatorManifestURL = SimulatorConfigurationConstants.defaultManifestURL
   @AppStorage("byokchat.dev.simulator.mcpServerID") private var simulatorMCPServerID = ""
 
-  @State private var simulatedPurchasesEnabled = false
   @State private var simulatorEnabled = false
   @State private var simulatorAPIKey = ""
   @State private var simulatorBusy = false
@@ -80,85 +185,66 @@ struct DeveloperSettingsSection: View {
   @State private var simulatorError: String?
 
   var body: some View {
-    Section {
-      Toggle(
-        "Simulated Purchases",
-        isOn: Binding(
-          get: { simulatedPurchasesEnabled },
-          set: { enabled in
-            simulatedPurchasesEnabled = enabled
-            Task { @MainActor in
-              await purchases.setSimulatedPurchasesEnabled(enabled)
+    Form {
+      Section {
+        Toggle(
+          "AI Provider Simulator",
+          isOn: Binding(
+            get: { simulatorEnabled },
+            set: { enabled in
+              simulatorEnabled = enabled
+              Task { @MainActor in
+                await setSimulatorEnabled(enabled)
+              }
             }
-          }
+          )
         )
-      )
-      .disabled(purchases.manager.isBusy)
+        .disabled(simulatorBusy)
 
-      Toggle(
-        "AI Provider Simulator",
-        isOn: Binding(
-          get: { simulatorEnabled },
-          set: { enabled in
-            simulatorEnabled = enabled
-            Task { @MainActor in
-              await setSimulatorEnabled(enabled)
-            }
-          }
+        TextField(
+          "Manifest URL",
+          text: $simulatorManifestURL,
+          prompt: Text("https://…/manifest.json")
         )
-      )
-      .disabled(simulatorBusy)
-
-      TextField(
-        "Manifest URL",
-        text: $simulatorManifestURL,
-        prompt: Text("https://…/manifest.json")
-      )
-      .textInputAutocapitalization(.never)
-      .autocorrectionDisabled()
-      .keyboardType(.URL)
-
-      SecureField("Simulator API Key", text: $simulatorAPIKey)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .keyboardType(.URL)
 
-      if simulatorBusy {
-        HStack(spacing: 10) {
-          ProgressView()
-          Text(simulatorEnabled ? "Configuring simulator…" : "Removing simulator configuration…")
+        SecureField("Simulator API Key", text: $simulatorAPIKey)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+
+        if simulatorBusy {
+          HStack(spacing: 10) {
+            ProgressView()
+            Text(simulatorEnabled ? "Configuring simulator…" : "Removing simulator configuration…")
+              .font(.footnote)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        } else if let simulatorStatus {
+          Text(simulatorStatus)
             .font(.footnote)
             .foregroundStyle(theme.secondaryForegroundColor)
         }
-      } else if let simulatorStatus {
-        Text(simulatorStatus)
-          .font(.footnote)
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
 
-      if let simulatorError {
-        Text(simulatorError)
-          .font(.footnote)
-          .foregroundStyle(.red)
+        if let simulatorError {
+          Text(simulatorError)
+            .font(.footnote)
+            .foregroundStyle(.red)
+        }
+      } header: {
+        Text("Simulator")
+      } footer: {
+        Text("Simulator mode creates managed provider accounts and an MCP server from the simulator manifest. Turning it off removes only those generated entries and their credentials.")
       }
-
-      Button("Replay Onboarding", systemImage: "rectangle.portrait.and.arrow.forward") {
-        replayOnboarding()
-      }
-
-      NavigationLink {
-        BYOKScreenshotStudioView()
-          .navigationTitle("Screenshot Studio")
-          .navigationBarTitleDisplayMode(.inline)
-      } label: {
-        Label("Screenshot Studio", systemImage: "photo.stack.fill")
-      }
-    } header: {
-      Text("Developer")
-    } footer: {
-      Text("Simulator mode creates managed provider accounts and an MCP server from the simulator manifest. Turning it off removes only those generated entries and their credentials.")
+      .listRowBackground(theme.surfaceColor)
     }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Provider Simulator")
+    .navigationBarTitleDisplayMode(.inline)
     .onAppear {
-      simulatedPurchasesEnabled = purchases.isUsingSimulatedPurchases
       synchronizeSimulatorToggle()
     }
   }
