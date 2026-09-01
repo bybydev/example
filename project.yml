@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.hoangbkit
   deploymentTarget:
     iOS: "26.0"
+    macOS: "15.0"
   xcodeVersion: "26.0"
   createIntermediateGroups: true
 
@@ -69,6 +70,27 @@ targets:
       - package: BeautifulMermaid
         product: BeautifulMermaid
 
+  BYOKmac:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: BYOKmac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokmac
+        PRODUCT_NAME: BYOKmac
+        DEVELOPMENT_TEAM: J458WW3452
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: 0.1
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: BYOKchatProviderCore
+        product: BYOKchatProviderCore
+
   BYOKchatTests:
     type: bundle.unit-test
     platform: iOS
@@ -127,6 +149,22 @@ schemes:
       shared: true
       orderHint: 0
 
+  BYOKmac:
+    build:
+      targets:
+        BYOKmac: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    management:
+      shared: true
+      orderHint: 1
+
   BYOKchatScreenshots:
     build:
       targets:
@@ -142,4 +180,4 @@ schemes:
         - name: BYOKchatUITests
     management:
       shared: true
-      orderHint: 1
+      orderHint: 2
