@@ -17,6 +17,7 @@ final class AppModel {
   let toolRuntime: ToolRuntime
   let storageEnvironment: BYOKStorageEnvironment
   let telemetryRecorder: TelemetryRecorder
+  let startupCompositionFailure: AppBootstrapFailure?
   /// Shared byte store behind chat attachments, library entries, and project
   /// reference files; `sweepOrphanFiles` garbage-collects it.
   let fileBlobStore: FileAttachmentBlobStore
@@ -31,9 +32,25 @@ final class AppModel {
 
   init() {
     let storageEnvironment = AppStorageEnvironment.current
-    let coreServices = try! BYOKCoreServices.secure(environment: storageEnvironment)
+    let coreServices: BYOKCoreServices
+    let startupCompositionFailure: AppBootstrapFailure?
+    do {
+      coreServices = try BYOKCoreServices.secure(environment: storageEnvironment)
+      startupCompositionFailure = nil
+    } catch {
+      // AppModel exists before AppBootstrapController, so composition must not
+      // trap here. Build a recovery-only empty-provider graph and let startup
+      // present the normal failure/recovery UI without touching user stores.
+      coreServices = BYOKCoreServices.secureRecoveryFallback(environment: storageEnvironment)
+      startupCompositionFailure = AppBootstrapFailure(
+        stage: .preparingStorage,
+        error: error
+      )
+    }
+
     self.coreServices = coreServices
     self.storageEnvironment = coreServices.environment
+    self.startupCompositionFailure = startupCompositionFailure
     telemetryRecorder = coreServices.telemetryRecorder
     toolRuntime = coreServices.toolRuntime
     fileBlobStore = coreServices.fileBlobStore
