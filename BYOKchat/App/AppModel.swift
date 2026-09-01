@@ -391,7 +391,7 @@ final class MCPManagementModel {
     await perform(nil) {
       try await runtime.setEnabled(enabled, serverID: serverID)
       if enabled {
-        _ = try await runtime.refreshServer(serverID)
+        _ = try await runtime.refreshServer(serverID, force: true)
       }
       try await reloadSnapshot()
     }
@@ -448,8 +448,8 @@ final class MCPManagementModel {
   func removeChatConfiguration(_ conversationID: ConversationID) async {
     await perform(nil) {
       try await workspace.removeChatConfiguration(conversationID: conversationID)
+      try await reloadSnapshot()
     }
-    await reloadSnapshot()
   }
 
   func refresh(_ serverID: MCPServerID) async {
