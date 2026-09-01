@@ -25,7 +25,7 @@ extension ConversationStore {
       try await deleteAllConversations()
     }
 
-    let current = allConversations()
+    let current = await allConversations()
     let existingByID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
     var fingerprintToID: [String: ConversationID] = [:]
     if !replacing {

@@ -33,17 +33,12 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
   public var filename: String
   public var mimeType: String
   public var data: Data
-  /// Blob size, persisted so byte-count surfaces (tiles, pickers, validation)
-  /// stay correct while rows are metadata-only. Optional for backward
-  /// compatibility with shards written before it existed.
   public var declaredByteCount: Int?
 
   private enum CodingKeys: String, CodingKey {
     case id, kind, filename, mimeType, data, declaredByteCount
   }
 
-  /// Decoding tolerates a missing `data` key (the persisted metadata-only
-  /// shape); the store hydrates bytes from blob files on demand.
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
@@ -54,8 +49,6 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
     declaredByteCount = try container.decodeIfPresent(Int.self, forKey: .declaredByteCount)
   }
 
-  /// Encoding emits `data` unless the encoder opted out via
-  /// ``CodingUserInfoKey/byokEmbedsAttachmentData``.
   public func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(id, forKey: .id)
@@ -85,8 +78,6 @@ public struct ChatAttachment: Codable, Sendable, Equatable, Identifiable {
     self.declaredByteCount = declaredByteCount
   }
 
-  /// Blob size: the persisted declaration when the row carries no bytes
-  /// (metadata-only state), the in-memory count otherwise.
   public var byteCount: Int { data.isEmpty ? (declaredByteCount ?? 0) : data.count }
 
   public var isImage: Bool {
@@ -205,6 +196,11 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
   public var lastContextOmittedMessageCount: Int
   public var draftText: String?
 
+  /// Present only on the lightweight conversation objects synthesized from
+  /// `index.json`. Full conversation shards leave these nil.
+  public var indexedMessageCount: Int?
+  public var indexedLastMessagePreview: String?
+
   public init(
     id: ConversationID = .init(),
     title: String = "New Chat",
@@ -217,7 +213,9 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     options: ProviderRequestOptions = .init(),
     messages: [ChatMessage] = [],
     lastContextOmittedMessageCount: Int = 0,
-    draftText: String? = nil
+    draftText: String? = nil,
+    indexedMessageCount: Int? = nil,
+    indexedLastMessagePreview: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -231,22 +229,46 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     self.messages = messages
     self.lastContextOmittedMessageCount = lastContextOmittedMessageCount
     self.draftText = draftText
+    self.indexedMessageCount = indexedMessageCount
+    self.indexedLastMessagePreview = indexedLastMessagePreview
   }
 
+  public var messageCount: Int { indexedMessageCount ?? messages.count }
+
   public var lastMessagePreview: String? {
-    messages.last(where: { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })?
+    if let indexedLastMessagePreview { return indexedLastMessagePreview }
+    return messages.last(where: { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })?
       .content
   }
 }
 
+/// Versioned envelope for one authoritative conversation shard. Version fields
+/// are intentionally outside `ChatConversation` so readers can reject newer
+/// formats before attempting to decode the conversation payload.
+public struct ConversationShardRecord: Codable, Sendable, Equatable {
+  public static let currentSchemaVersion = 1
+  public static let currentReaderVersion = 1
+
+  public var schemaVersion: Int
+  public var minimumReaderVersion: Int
+  public var conversation: ChatConversation
+
+  public init(
+    schemaVersion: Int = Self.currentSchemaVersion,
+    minimumReaderVersion: Int = Self.currentReaderVersion,
+    conversation: ChatConversation
+  ) {
+    self.schemaVersion = schemaVersion
+    self.minimumReaderVersion = minimumReaderVersion
+    self.conversation = conversation
+  }
+}
+
 public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
-  /// Single pre-release schema; evolves in place, users fresh-install.
-  /// Attachment bytes live in blob files; tombstones record deletions for sync.
   public static let currentSchemaVersion = 1
 
   public var schemaVersion: Int
   public var conversations: [ChatConversation]
-  /// conversationID → deletedAt. Pruned on load after the retention window.
   public var tombstones: [String: Date]
 
   public init(
@@ -260,32 +282,139 @@ public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
   }
 }
 
-/// List-row metadata for one conversation in the sharded layout. Derived from
-/// a `ChatConversation`; carries everything a chat list needs without the
-/// message bodies.
+/// Compact message metadata kept in index.json for analytics and attachment
+/// history without storing message content/reasoning/tool payloads there.
+public struct ConversationIndexMessage: Codable, Sendable, Equatable {
+  public var id: ChatMessageID
+  public var role: ChatMessageRole
+  public var createdAt: Date
+  public var updatedAt: Date
+  public var status: ChatMessageStatus
+  public var providerID: ProviderID?
+  public var accountID: ProviderAccountID?
+  public var modelID: ModelID?
+  public var usage: ProviderUsage?
+  public var metadata: [String: String]
+  public var attachments: [ChatAttachment]?
+
+  public init(message: ChatMessage) {
+    id = message.id
+    role = message.role
+    createdAt = message.createdAt
+    updatedAt = message.updatedAt
+    status = message.status
+    providerID = message.providerID
+    accountID = message.accountID
+    modelID = message.modelID
+    usage = message.usage
+
+    var compactMetadata = message.metadata
+    if compactMetadata[ChatBilling.modelRequestCountKey] == nil,
+      message.role == .assistant,
+      message.status == .complete
+    {
+      compactMetadata[ChatBilling.modelRequestCountKey] = String(
+        max(1, (message.toolRounds?.count ?? 0) + 1)
+      )
+    }
+    if compactMetadata[ChatBilling.toolCallCountKey] == nil {
+      let count = (message.toolRounds ?? []).reduce(0) { $0 + $1.calls.count }
+      compactMetadata[ChatBilling.toolCallCountKey] = String(count)
+    }
+    metadata = compactMetadata
+
+    attachments = message.attachments?.map { attachment in
+      var value = attachment
+      if value.declaredByteCount == nil, !value.data.isEmpty {
+        value.declaredByteCount = value.data.count
+      }
+      value.data = Data()
+      return value
+    }
+  }
+
+  public var summaryMessage: ChatMessage {
+    ChatMessage(
+      id: id,
+      role: role,
+      attachments: attachments,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      status: status,
+      providerID: providerID,
+      accountID: accountID,
+      modelID: modelID,
+      usage: usage,
+      metadata: metadata
+    )
+  }
+}
+
+/// Lightweight list metadata for one sharded conversation. It deliberately
+/// omits message content/reasoning while retaining compact per-message usage
+/// and attachment metadata needed by existing analytics/library surfaces.
 public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable {
   public var id: ConversationID
   public var title: String
   public var createdAt: Date
   public var updatedAt: Date
+  public var providerID: ProviderID
+  public var accountID: ProviderAccountID
+  public var modelID: ModelID
+  public var draftText: String?
   public var messageCount: Int
   public var lastMessagePreview: String?
+  public var messages: [ConversationIndexMessage]
+  public var referencedAttachmentIDs: [String]
+  public var shardSchemaVersion: Int
+  public var minimumReaderVersion: Int
 
   public init(conversation: ChatConversation) {
     id = conversation.id
     title = conversation.title
     createdAt = conversation.createdAt
     updatedAt = conversation.updatedAt
+    providerID = conversation.providerID
+    accountID = conversation.accountID
+    modelID = conversation.modelID
+    draftText = conversation.draftText
     messageCount = conversation.messages.count
-    lastMessagePreview = conversation.lastMessagePreview
+    lastMessagePreview = conversation.messages.last(where: {
+      !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    })?.content
+    messages = conversation.messages.map(ConversationIndexMessage.init)
+    referencedAttachmentIDs = Array(
+      Set(
+        conversation.messages.flatMap { message in
+          (message.attachments ?? []).map(\.id)
+        }
+      )
+    ).sorted()
+    shardSchemaVersion = ConversationShardRecord.currentSchemaVersion
+    minimumReaderVersion = ConversationShardRecord.currentReaderVersion
+  }
+
+  public var summaryConversation: ChatConversation {
+    ChatConversation(
+      id: id,
+      title: title,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      providerID: providerID,
+      accountID: accountID,
+      modelID: modelID,
+      messages: messages.map(\.summaryMessage),
+      draftText: draftText,
+      indexedMessageCount: messageCount,
+      indexedLastMessagePreview: lastMessagePreview
+    )
   }
 }
 
-/// The persisted index file's shape in the sharded layout. Rows are a derived
-/// cache rebuilt from shards on load; the tombstones section is authoritative
-/// (deletions exist nowhere else once a shard file is gone).
+/// Startup catalog for the sharded layout. Version 2 is intentionally rich
+/// enough that normal launch never needs to decode conversation shards.
 public struct ConversationIndexState: Codable, Sendable, Equatable {
-  public static let currentSchemaVersion = 1
+  public static let currentSchemaVersion = 2
 
   public var schemaVersion: Int
   public var entries: [ConversationIndexEntry]
@@ -303,8 +432,8 @@ public struct ConversationIndexState: Codable, Sendable, Equatable {
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
-      ?? Self.currentSchemaVersion
+    // Missing schemaVersion is an old index, never silently treated as v2.
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
     entries = try container.decodeIfPresent([ConversationIndexEntry].self, forKey: .entries) ?? []
     tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
   }

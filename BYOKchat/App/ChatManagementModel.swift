@@ -17,6 +17,8 @@ final class ChatManagementModel {
     case regenerate(confirmingUncertainCompletion: Bool)
   }
 
+  /// Lightweight index-backed rows. They retain compact usage/attachment metadata
+  /// but never full message content; full chat bodies live in hydratedConversations.
   private(set) var conversations: [ChatConversation] = []
   private(set) var liveMessages: [ChatMessageID: LiveMessage] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
@@ -25,12 +27,7 @@ final class ChatManagementModel {
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   var isBusy = false
   var errorMessage: String?
-  /// App-layer hook fired whenever snapshots refresh after file-reference
-  ///-affecting mutations (deletes, edits). AppModel sets it to run the
-  /// orphan-file sweep.
   var onFileReferencesChanged: (() -> Void)?
-  /// Background-task assertion held while any generation is active; set by
-  /// AppModel after init so fixtures and call sites stay unchanged.
   var backgroundKeeper: BackgroundActivityKeeper?
 
   private let providerWorkspace: ProviderWorkspaceStore
@@ -39,6 +36,9 @@ final class ChatManagementModel {
   private let preferences: AppPreferencesModel
   private let mcpWorkspace: MCPWorkspaceStore?
   private let projectWorkspace: ProjectWorkspaceStore?
+  private var hydratedConversations: [ConversationID: ChatConversation] = [:]
+  private var loadingConversationIDs: Set<ConversationID> = []
+  private var conversationLoadFailures: Set<ConversationID> = []
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftRevisions: [ConversationID: UInt] = [:]
@@ -74,8 +74,36 @@ final class ChatManagementModel {
     }
   }
 
+  /// Returns a full hydrated chat only. If the chat exists only as an index row,
+  /// kick off one shard read and return nil for this render pass. This lets the
+  /// existing root navigation wait naturally without ever treating summaries
+  /// as full message histories.
   func conversation(_ id: ConversationID) -> ChatConversation? {
-    conversations.first { $0.id == id }
+    if let hydrated = hydratedConversations[id] { return hydrated }
+    guard conversations.contains(where: { $0.id == id }), !conversationLoadFailures.contains(id) else {
+      return nil
+    }
+    Task { @MainActor [weak self] in
+      await self?.loadConversation(id)
+    }
+    return nil
+  }
+
+  func hasConversation(_ id: ConversationID) -> Bool {
+    conversations.contains { $0.id == id }
+  }
+
+  func loadConversation(_ id: ConversationID) async {
+    guard hydratedConversations[id] == nil, loadingConversationIDs.insert(id).inserted else { return }
+    defer { loadingConversationIDs.remove(id) }
+    do {
+      hydratedConversations[id] = try await conversationStore.conversation(id: id)
+      conversationLoadFailures.remove(id)
+      try await reloadSnapshot()
+    } catch {
+      conversationLoadFailures.insert(id)
+      errorMessage = error.localizedDescription
+    }
   }
 
   func displayMessage(_ message: ChatMessage) -> ChatMessage {
@@ -103,8 +131,13 @@ final class ChatManagementModel {
   var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
 
   func saveDraft(_ text: String, conversationID: ConversationID) {
+    let value = text.isEmpty ? nil : text
+    if var loaded = hydratedConversations[conversationID] {
+      loaded.draftText = value
+      hydratedConversations[conversationID] = loaded
+    }
     if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
-      conversations[index].draftText = text.isEmpty ? nil : text
+      conversations[index].draftText = value
     }
 
     draftTasks[conversationID]?.cancel()
@@ -212,12 +245,14 @@ final class ChatManagementModel {
         systemPrompt: systemPrompt,
         options: defaultOptions(providerID: account.providerID)
       )
+      hydratedConversations[conversation.id] = conversation
 
       if let projectID, let projectWorkspace {
         do {
           try await projectWorkspace.assignConversation(conversation.id, to: projectID)
         } catch {
           try? await conversationStore.deleteConversation(conversation.id)
+          hydratedConversations.removeValue(forKey: conversation.id)
           throw error
         }
       }
@@ -237,6 +272,8 @@ final class ChatManagementModel {
     draftRevisions.removeValue(forKey: id)
     streamRevisions.removeValue(forKey: id)
     activeToolCallsByConversation.removeValue(forKey: id)
+    hydratedConversations.removeValue(forKey: id)
+    conversationLoadFailures.remove(id)
     do {
       try await conversationStore.deleteConversation(id)
       try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
@@ -296,20 +333,14 @@ final class ChatManagementModel {
     )
   }
 
-  /// Authoritative attachment IDs for the app-level orphan sweep; reads the
-  /// store so stale UI snapshots cannot mislabel live blobs as orphans.
   func referencedAttachmentIDs() async -> Set<String> {
     await conversationStore.referencedAttachmentIDs()
   }
 
-  /// On-demand downsampled thumbnail for a persisted attachment blob
-  /// (remote-image style display). nil when the blob is missing.
   func attachmentThumbnail(_ id: String, maxPixelSize: CGFloat) async -> Data? {
     await conversationStore.attachmentThumbnail(id, maxPixelSize: maxPixelSize)
   }
 
-  /// On-demand original bytes for a persisted attachment blob (share, save,
-  /// QuickLook). nil when the blob is missing.
   func attachmentData(_ id: String) async -> Data? {
     await conversationStore.attachmentData(id)
   }
@@ -323,12 +354,7 @@ final class ChatManagementModel {
 
     saveDraft("", conversationID: conversationID)
 
-    // The runtime persists attachments before it can emit turnStarted. Large image/file payloads
-    // can therefore leave a visible frame where the composer has already cleared but the sent
-    // message has not appeared yet. Mirror the user message into the observable snapshot now;
-    // turnStarted reloads the persisted store and replaces this optimistic copy atomically.
-    if let index = conversations.firstIndex(where: { $0.id == conversationID }) {
-      let conversation = conversations[index]
+    if var conversation = hydratedConversations[conversationID] {
       let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
       if !trimmed.isEmpty || !attachments.isEmpty {
         let now = Date.now
@@ -343,8 +369,9 @@ final class ChatManagementModel {
           accountID: conversation.accountID,
           modelID: conversation.modelID
         )
-        conversations[index].messages.append(optimistic)
-        conversations[index].updatedAt = now
+        conversation.messages.append(optimistic)
+        conversation.updatedAt = now
+        hydratedConversations[conversationID] = conversation
       }
     }
 
@@ -403,8 +430,6 @@ final class ChatManagementModel {
       .contains { $0.requiresRegenerationConfirmation }
   }
 
-  /// System revocation of the background window: stop every active stream so
-  /// each persists its partial text through the runtime's cancel path.
   func handleBackgroundExpiration() async {
     for id in activeConversationIDs {
       await stop(id)
@@ -435,8 +460,6 @@ final class ChatManagementModel {
         generationTasks.removeValue(forKey: conversationID)
       }
       do {
-        // Attachment rows are metadata-only; the runtime fetches bytes for
-        // the built request just before the provider call.
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
         case .send(let text, let attachments):
@@ -499,8 +522,6 @@ final class ChatManagementModel {
       activeToolCallsByConversation[conversationID] = calls
       advanceStreamRevision(for: conversationID)
     case .toolRound(let messageID, _):
-      // The model has finished an intermediate assistant/tool step. Persisted structured
-      // round data becomes the source of truth; reset the live overlay for the next model pass.
       await flushStreamPresentation(messageID, conversationID: conversationID)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       let live = LiveMessage()
@@ -519,8 +540,18 @@ final class ChatManagementModel {
   }
 
   private func reloadSnapshot() async throws {
-    conversations = await conversationStore.allConversations()
-    let currentMessageIDs = Set(conversations.flatMap(\.messages).map(\.id))
+    conversations = await conversationStore.conversationSummaries()
+    let validIDs = Set(conversations.map(\.id))
+    for id in Array(hydratedConversations.keys) where !validIDs.contains(id) {
+      hydratedConversations.removeValue(forKey: id)
+    }
+    for id in Array(hydratedConversations.keys) {
+      if let refreshed = await conversationStore.cachedConversation(id: id) {
+        hydratedConversations[id] = refreshed
+      }
+    }
+
+    let currentMessageIDs = Set(hydratedConversations.values.flatMap(\.messages).map(\.id))
     let stalePresentationIDs = Set(streamPresentationTasks.keys).subtracting(currentMessageIDs)
     for messageID in stalePresentationIDs {
       streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
@@ -531,7 +562,7 @@ final class ChatManagementModel {
   }
 
   private func clearLiveMessages(for conversationID: ConversationID) {
-    guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+    guard let conversation = hydratedConversations[conversationID] else { return }
     let messageIDs = Set(conversation.messages.map(\.id))
     let previousCount = liveMessages.count
     for messageID in messageIDs {

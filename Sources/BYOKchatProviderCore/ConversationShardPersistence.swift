@@ -1,12 +1,12 @@
 import Foundation
 
 /// Persistence for the sharded conversation layout: a dedicated directory
-/// holding one file per conversation plus a derived index cache.
+/// holding one file per conversation plus a lightweight startup index.
 ///
-/// - Shard files are named `<conversationID>.json` and hold one encoded
-///   `ChatConversation` (attachment bytes excluded, blob files carry them).
-/// - `index.json` is a write-through cache of list-row metadata. Stores may
-///   ignore it on load and rebuild from shards, so it is never authoritative.
+/// - Shard files are named `<conversationID>.json` and hold one versioned
+///   `ConversationShardRecord` (attachment bytes excluded; blob files carry them).
+/// - `index.json` is the startup/list catalog. Full message history is loaded
+///   from a shard only when a feature actually needs that conversation.
 public protocol ConversationWorkspacePersistence: Sendable {
   func loadIndex() async throws -> Data?
   func saveIndex(_ data: Data) async throws
@@ -15,8 +15,8 @@ public protocol ConversationWorkspacePersistence: Sendable {
   func saveShard(id: String, data: Data) async throws
   func deleteShard(id: String) async throws
   func deleteAllShards() async throws
-  /// Moves an unreadable shard aside so one bad conversation cannot break
-  /// every subsequent load. Returns false when there was nothing to quarantine.
+  /// Moves a genuinely unreadable shard aside so one bad conversation cannot
+  /// break the workspace. Unsupported/newer formats must never be quarantined.
   func quarantineShard(id: String) async throws -> Bool
 }
 
@@ -24,6 +24,7 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
   private var index: Data?
   private var shards: [String: Data]
   private var quarantined: [String: Data] = [:]
+  private var shardReadCount = 0
 
   public init() { shards = [:] }
 
@@ -35,7 +36,10 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
   public func loadIndex() -> Data? { index }
   public func saveIndex(_ data: Data) { index = data }
   public func shardIDs() -> [String] { Array(shards.keys).sorted() }
-  public func loadShard(id: String) -> Data? { shards[id] }
+  public func loadShard(id: String) -> Data? {
+    shardReadCount += 1
+    return shards[id]
+  }
   public func saveShard(id: String, data: Data) { shards[id] = data }
   public func deleteShard(id: String) { shards.removeValue(forKey: id) }
   public func deleteAllShards() { shards.removeAll() }
@@ -44,6 +48,9 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
     quarantined[id] = data
     return true
   }
+
+  /// Test/diagnostic hook proving normal startup did not read full shards.
+  public func shardLoadCount() -> Int { shardReadCount }
 }
 
 public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePersistence {
@@ -77,8 +84,6 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
   }
 
   public func shardIDs() throws -> [String] {
-    // A missing directory means an empty workspace (fresh install), not an
-    // error — contentsOfDirectory would otherwise throw NoSuchFile here.
     guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
     let contents = try FileManager.default.contentsOfDirectory(
       at: directory,
