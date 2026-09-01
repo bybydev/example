@@ -175,7 +175,6 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
   public func deleteIDs(_ ids: Set<String>) async throws {
     guard !ids.isEmpty else { return }
     let validIDs = Set(ids.filter(Self.isValidID))
-    guard !validIDs.isEmpty else { return }
 
     for id in validIDs {
       try? fileManager.removeItem(at: url(for: id))
@@ -197,7 +196,7 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     }
 
     updateIndex { index in
-      for id in validIDs { index.entries.removeValue(forKey: id) }
+      for id in ids { index.entries.removeValue(forKey: id) }
     }
   }
 
