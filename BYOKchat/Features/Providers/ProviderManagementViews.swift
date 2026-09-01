@@ -1,5 +1,6 @@
 import AppFoundation
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 
 /// Custom provider definition editor shared by connection setup and future
@@ -36,7 +37,9 @@ struct CustomProviderEditorView: View {
     _chatPath = State(initialValue: existing?.chatCompletionsPath ?? "/chat/completions")
     _modelsPath = State(initialValue: existing?.modelsPath ?? "/models")
     _authentication = State(initialValue: Self.authenticationChoice(existing?.authentication))
-    if case .header(let header) = existing?.authentication {
+    if let existingAuthentication = existing?.authentication,
+      case .header(let header) = existingAuthentication
+    {
       _headerName = State(initialValue: header)
     } else {
       _headerName = State(initialValue: "X-API-Key")
@@ -159,10 +162,11 @@ struct CustomProviderEditorView: View {
   }
 
   private static func authenticationChoice(_ value: ProviderAuthentication?) -> AuthenticationChoice {
+    guard let value else { return .bearer }
     switch value {
-    case .header: .header
-    case .none: .none
-    case .bearer, nil: .bearer
+    case .bearer: return .bearer
+    case .header: return .header
+    case .none: return .none
     }
   }
 }
