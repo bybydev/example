@@ -1,4 +1,3 @@
-import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
@@ -10,7 +9,7 @@ struct ConnectionFlowView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
-  @State private var page = 0
+  @State private var page: Int
   @State private var selectedProviderID: ProviderID?
   @State private var connectionName = "Personal"
   @State private var credential = ""
@@ -24,6 +23,7 @@ struct ConnectionFlowView: View {
   @State private var highestUnlockedPage: Int
   @State private var isAdvancing = false
   @State private var showCustomProvider = false
+  @State private var discoveryWarning: String?
 
   init(
     model: ProviderManagementModel,
@@ -42,8 +42,7 @@ struct ConnectionFlowView: View {
   }
 
   private var provider: ProviderDefinition? {
-    guard let selectedProviderID else { return nil }
-    return model.provider(for: selectedProviderID)
+    selectedProviderID.flatMap { model.provider(for: $0) }
   }
 
   private var models: [AccountModelRecord] {
@@ -59,7 +58,7 @@ struct ConnectionFlowView: View {
     ZStack {
       theme.backgroundColor.ignoresSafeArea()
       VStack(spacing: 0) {
-        ConnectionProgressView(current: page, count: 4)
+        ConnectionProgressView(current: page, count: 3)
           .padding(.top, 8)
           .padding(.bottom, 8)
 
@@ -67,7 +66,6 @@ struct ConnectionFlowView: View {
           providerStep.tag(0)
           credentialStep.tag(1)
           preferencesStep.tag(2)
-          completionStep.tag(3)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .onChange(of: page) { oldValue, newValue in
@@ -77,7 +75,7 @@ struct ConnectionFlowView: View {
         }
       }
     }
-    .interactiveDismissDisabled(isAdvancing || (createdAccountID != nil && page < 3))
+    .interactiveDismissDisabled(isAdvancing || createdAccountID != nil)
     .navigationTitle("Add Connection")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -92,7 +90,11 @@ struct ConnectionFlowView: View {
     }
     .sheet(isPresented: $showCustomProvider) {
       NavigationStack {
-        CustomProviderEditorView(model: model)
+        CustomProviderEditorView(model: model) { providerID in
+          selectedProviderID = providerID
+          highestUnlockedPage = max(highestUnlockedPage, 1)
+          withAnimation { page = 1 }
+        }
       }
     }
     .alert(
@@ -116,6 +118,7 @@ struct ConnectionFlowView: View {
           title: "Choose your AI",
           subtitle: "Pick the provider you want to connect. You can add more connections later."
         )
+
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
           ForEach(model.definitions) { definition in
             Button {
@@ -169,7 +172,8 @@ struct ConnectionFlowView: View {
         ConnectionStepHeader(
           definition: provider,
           title: provider.map { "Connect \($0.displayName)" } ?? "Connect provider",
-          subtitle: provider.map { credentialSubtitle($0) } ?? "Add the credentials for this connection."
+          subtitle: provider.map { credentialSubtitle($0) }
+            ?? "Add the credentials for this connection."
         )
         if let provider {
           ConnectionCredentialFields(
@@ -190,51 +194,38 @@ struct ConnectionFlowView: View {
 
   private var preferencesStep: some View {
     ScrollView {
-      VStack(spacing: 22) {
+      VStack(spacing: 18) {
         ConnectionStepHeader(
           definition: provider,
-          title: "Make it yours",
-          subtitle: "Give this connection a name and choose the model BYOKchat should use by default."
+          title: "Choose a model",
+          subtitle: "Name this connection and choose the model new chats should use by default."
         )
+
+        if let discoveryWarning {
+          Label(discoveryWarning, systemImage: "exclamationmark.triangle")
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 14))
+        }
+
         ConnectionPreferencesFields(
           connectionName: $connectionName,
           selectedModelID: $selectedModelID,
           manualModelID: $manualModelID,
           models: models
         )
+
+        Text("BYOKchat verifies the selected model before saving this connection.")
+          .font(.caption)
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.75))
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 12)
       }
       .padding(.horizontal, 20)
       .padding(.vertical, 20)
     }
-  }
-
-  private var completionStep: some View {
-    VStack(spacing: 20) {
-      Spacer()
-      Image(systemName: "checkmark.circle.fill")
-        .font(.system(size: 64, weight: .medium))
-        .foregroundStyle(theme.accentColor)
-      Text("You're connected")
-        .font(.system(size: 30, weight: .semibold))
-      if let provider {
-        Text(provider.displayName)
-          .font(.headline)
-      }
-      Text(connectionName)
-        .font(.system(size: 15))
-        .foregroundStyle(theme.secondaryForegroundColor)
-      if let selectedModelID {
-        Text(modelDisplayName(model: model, accountID: createdAccountID, modelID: selectedModelID))
-          .font(.caption)
-          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
-      }
-      Text("BYOKchat is ready to use this connection.")
-        .font(.system(size: 15))
-        .foregroundStyle(theme.secondaryForegroundColor)
-      Spacer()
-    }
-    .multilineTextAlignment(.center)
-    .padding(24)
   }
 
   private var bottomAction: some View {
@@ -245,9 +236,9 @@ struct ConnectionFlowView: View {
       } label: {
         HStack(spacing: 8) {
           if isAdvancing { ProgressView().controlSize(.small) }
-          Text(primaryActionTitle)
+          Text(page == 1 ? "Continue" : completionTitle)
             .font(.system(size: 16, weight: .semibold))
-          if page < 3 { Image(systemName: "arrow.right") }
+          if page == 1 { Image(systemName: "arrow.right") }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
@@ -261,25 +252,17 @@ struct ConnectionFlowView: View {
     }
   }
 
-  private var primaryActionTitle: String {
-    switch page {
-    case 1: "Connect"
-    case 2: "Continue"
-    case 3: completionTitle
-    default: "Continue"
-    }
-  }
-
   private var canPerformPrimaryAction: Bool {
     switch page {
     case 1:
       guard let provider else { return false }
-      return !connectionRequiresCredential(provider) || !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      return !connectionRequiresCredential(provider)
+        || !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     case 2:
       let nameReady = !connectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      return nameReady && (selectedModelID != nil || !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    case 3:
-      return true
+      let modelReady = selectedModelID != nil
+        || !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      return nameReady && modelReady
     default:
       return false
     }
@@ -287,24 +270,28 @@ struct ConnectionFlowView: View {
 
   private func primaryAction() {
     switch page {
-    case 1:
-      connectAndAdvance()
-    case 2:
-      savePreferencesAndAdvance()
-    case 3:
-      dismiss()
-      onFinished?()
-    default:
-      break
+    case 1: saveCredentialsAndDiscoverModels()
+    case 2: verifyAndFinish()
+    default: break
     }
   }
 
-  private func connectAndAdvance() {
+  private func saveCredentialsAndDiscoverModels() {
     guard let provider else { return }
     isAdvancing = true
+    discoveryWarning = nil
+
     Task { @MainActor in
       defer { isAdvancing = false }
       let metadata = connectionMetadata()
+      let headers: [String: String]
+      do {
+        headers = try parseSetupHeaders(headersText)
+      } catch {
+        model.errorMessage = error.localizedDescription
+        return
+      }
+
       let accountID: ProviderAccountID?
       if let existingID = createdAccountID,
         var account = model.accounts.first(where: { $0.id == existingID })
@@ -314,7 +301,7 @@ struct ConnectionFlowView: View {
           account,
           newCredential: credential.isEmpty ? nil : credential,
           baseURL: baseURL,
-          headers: parseHeaders(headersText),
+          headers: headers,
           metadata: metadata
         )
         accountID = success ? existingID : nil
@@ -325,7 +312,7 @@ struct ConnectionFlowView: View {
           credential: credential,
           baseURL: baseURL,
           defaultModel: "",
-          headers: parseHeaders(headersText),
+          headers: headers,
           metadata: metadata
         )
       }
@@ -333,7 +320,12 @@ struct ConnectionFlowView: View {
       createdAccountID = accountID
 
       if provider.modelsPath != nil {
-        guard await model.refreshModelsResult(accountID: accountID) else { return }
+        let refreshed = await model.refreshModelsResult(accountID: accountID)
+        if !refreshed {
+          discoveryWarning = model.errorMessage
+            ?? "Model discovery failed. Enter a model ID manually to continue."
+          model.errorMessage = nil
+        }
       }
 
       let available = model.models(for: accountID).filter(\.isAvailable)
@@ -342,19 +334,12 @@ struct ConnectionFlowView: View {
           ?? available.first?.model.id
       }
 
-      if let modelID = selectedModelID {
-        guard await model.testConnectionResult(accountID: accountID, modelID: modelID) else { return }
-      } else if provider.modelsPath != nil {
-        model.errorMessage = "No available models were returned for this connection."
-        return
-      }
-
-      highestUnlockedPage = max(highestUnlockedPage, 2)
+      highestUnlockedPage = 2
       withAnimation { page = 2 }
     }
   }
 
-  private func savePreferencesAndAdvance() {
+  private func verifyAndFinish() {
     guard let accountID = createdAccountID,
       var account = model.accounts.first(where: { $0.id == accountID })
     else { return }
@@ -380,21 +365,23 @@ struct ConnectionFlowView: View {
         metadata: account.metadata
       )
       guard success else { return }
+
       guard await model.testConnectionResult(accountID: accountID, modelID: selectedModelID) else {
         return
       }
-      highestUnlockedPage = 3
-      withAnimation { page = 3 }
+
+      dismiss()
+      onFinished?()
     }
   }
 
   private func cancel() {
-    if let createdAccountID, page < 3 {
-      Task { @MainActor in
-        await model.deleteAccount(createdAccountID)
-        dismiss()
-      }
-    } else {
+    guard let createdAccountID else {
+      dismiss()
+      return
+    }
+    Task { @MainActor in
+      await model.deleteAccount(createdAccountID)
       dismiss()
     }
   }
@@ -408,4 +395,28 @@ struct ConnectionFlowView: View {
     if !referer.isEmpty { metadata["httpReferer"] = referer }
     return metadata
   }
+}
+
+private struct SetupHeaderParseError: LocalizedError {
+  let line: Int
+  var errorDescription: String? { "Header line \(line) must use Name: Value." }
+}
+
+private func parseSetupHeaders(_ text: String) throws -> [String: String] {
+  var values: [String: String] = [:]
+  let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+  for (offset, rawLine) in lines.enumerated() {
+    let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !line.isEmpty else { continue }
+    guard let colon = line.firstIndex(of: ":") else {
+      throw SetupHeaderParseError(line: offset + 1)
+    }
+    let name = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+    let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty, !value.isEmpty else {
+      throw SetupHeaderParseError(line: offset + 1)
+    }
+    values[name] = value
+  }
+  return values
 }
