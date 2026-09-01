@@ -20,6 +20,7 @@ final class AppModel {
   /// Shared byte store behind chat attachments, library entries, and project
   /// reference files; `sweepOrphanFiles` garbage-collects it.
   let fileBlobStore: FileAttachmentBlobStore
+  private let coreServices: BYOKCoreServices
 
   private(set) var hasLoaded = false
   /// Mutation-hooked sweeping stays disabled until startup has loaded every
@@ -30,10 +31,13 @@ final class AppModel {
 
   init() {
     let storageEnvironment = AppStorageEnvironment.current
-    self.storageEnvironment = storageEnvironment
-    let layout = storageEnvironment.layout
-    let telemetryRecorder = storageEnvironment.makeTelemetryRecorder()
-    self.telemetryRecorder = telemetryRecorder
+    let coreServices = try! BYOKCoreServices.secure(environment: storageEnvironment)
+    self.coreServices = coreServices
+    self.storageEnvironment = coreServices.environment
+    telemetryRecorder = coreServices.telemetryRecorder
+    toolRuntime = coreServices.toolRuntime
+    fileBlobStore = coreServices.fileBlobStore
+
     let preferences = AppPreferencesModel(defaults: storageEnvironment.makeUserDefaults())
     self.preferences = preferences
     themeManager = ThemeManager(
@@ -42,104 +46,29 @@ final class AppModel {
       hasPro: false
     )
 
-    let registry = try! ProviderRegistry.builtIn()
-    let providerWorkspace = ProviderWorkspaceStore(
-      persistence: JSONFileProviderWorkspacePersistence(fileURL: layout.providersFile)
-    )
-    let vault = KeychainCredentialVault(service: storageEnvironment.credentialService)
-    let accountManager = ProviderAccountManager(
-      registry: registry,
-      workspace: providerWorkspace,
-      vault: vault
-    )
-    let providerRuntime = ProviderRuntime(
-      registry: registry,
-      workspace: providerWorkspace,
-      accounts: accountManager
-    )
-    // One shared file-byte store backs chat attachments, library entries, and
-    // project reference files; everything else stores metadata only.
-    fileBlobStore = FileAttachmentBlobStore(directory: layout.filesDirectory)
-    let conversationStore = ConversationStore(
-      persistence: JSONFileConversationWorkspacePersistence(directory: layout.conversationsDirectory),
-      blobs: fileBlobStore
-    )
-    let libraryStore = LibraryStore(
-      persistence: JSONFileLibraryWorkspacePersistence(fileURL: layout.libraryFile),
-      blobs: fileBlobStore
-    )
-    let projectWorkspace = ProjectWorkspaceStore(
-      persistence: JSONFileProjectWorkspacePersistence(fileURL: layout.projectsFile),
-      blobs: fileBlobStore
-    )
-
-    let mcpWorkspace = MCPWorkspaceStore(
-      persistence: JSONFileMCPWorkspacePersistence(fileURL: layout.mcpServersFile)
-    )
-    let mcpVault = KeychainMCPCredentialVault(service: storageEnvironment.mcpCredentialService)
-    let mcpRuntime = MCPRemoteRuntime(
-      workspace: mcpWorkspace,
-      vault: mcpVault,
-      transport: MCPHTTPTransport(telemetryRecorder: telemetryRecorder)
-    )
-    let approvalCenter = MCPToolApprovalCenter()
-    let elicitationCenter = MCPElicitationCenter()
-
-    let toolRuntime = ToolRuntime()
-    self.toolRuntime = toolRuntime
-    let conversationToolRuntime = MCPConversationToolRuntime(
-      localRuntime: toolRuntime,
-      mcpRuntime: mcpRuntime,
-      workspace: mcpWorkspace,
-      projectWorkspace: projectWorkspace,
-      approvals: approvalCenter,
-      elicitations: elicitationCenter,
-      telemetryRecorder: telemetryRecorder
-    )
-    let chatRuntime = ChatRuntime(
-      providerRuntime: providerRuntime,
-      providerWorkspace: providerWorkspace,
-      conversations: conversationStore,
-      toolRuntime: conversationToolRuntime,
-      telemetryRecorder: telemetryRecorder
-    )
-
     let providerModel = ProviderManagementModel(
-      registry: registry,
-      workspace: providerWorkspace,
-      vault: vault,
-      accountManager: accountManager,
-      runtime: providerRuntime
+      registry: coreServices.providerRegistry,
+      workspace: coreServices.providerWorkspace,
+      vault: coreServices.credentialVault,
+      accountManager: coreServices.accountManager,
+      runtime: coreServices.providerRuntime
     )
-    let projectModel = ProjectManagementModel(workspace: projectWorkspace)
+    let projectModel = ProjectManagementModel(workspace: coreServices.projectWorkspace)
     let chatModel = ChatManagementModel(
-      providerWorkspace: providerWorkspace,
-      conversations: conversationStore,
-      runtime: chatRuntime,
+      providerWorkspace: coreServices.providerWorkspace,
+      conversations: coreServices.conversationStore,
+      runtime: coreServices.chatRuntime,
       preferences: preferences,
-      mcpWorkspace: mcpWorkspace,
-      projectWorkspace: projectWorkspace
+      mcpWorkspace: coreServices.mcpWorkspace,
+      projectWorkspace: coreServices.projectWorkspace
     )
-    let libraryModel = LibraryManagementModel(store: libraryStore)
+    let libraryModel = LibraryManagementModel(store: coreServices.libraryStore)
     let mcpModel = MCPManagementModel(
-      runtime: mcpRuntime,
-      workspace: mcpWorkspace,
-      projectWorkspace: projectWorkspace,
-      approvals: approvalCenter,
-      elicitations: elicitationCenter
-    )
-    let baseDataPortability = DataPortabilityService(
-      providers: providerWorkspace,
-      conversations: conversationStore,
-      accounts: accountManager,
-      mcp: mcpWorkspace,
-      mcpCredentials: mcpVault
-    )
-    let projectAwareDataPortability = ProjectAwareDataPortabilityService(
-      base: baseDataPortability,
-      projects: projectWorkspace,
-      conversations: conversationStore,
-      library: libraryStore
+      runtime: coreServices.mcpRuntime,
+      workspace: coreServices.mcpWorkspace,
+      projectWorkspace: coreServices.projectWorkspace,
+      approvals: coreServices.approvalCenter,
+      elicitations: coreServices.elicitationCenter
     )
 
     providers = providerModel
@@ -152,10 +81,10 @@ final class AppModel {
     library = libraryModel
     mcp = mcpModel
     dataPortability = DataPortabilityModel(
-      service: projectAwareDataPortability,
-      providerWorkspace: providerWorkspace,
-      conversations: conversationStore,
-      accountManager: accountManager,
+      service: coreServices.dataPortability,
+      providerWorkspace: coreServices.providerWorkspace,
+      conversations: coreServices.conversationStore,
+      accountManager: coreServices.accountManager,
       preferences: preferences,
       providersModel: providerModel,
       chatsModel: chatModel,
