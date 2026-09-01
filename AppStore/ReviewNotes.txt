@@ -1,0 +1,36 @@
+APP REVIEW NOTES — BYOK 1.0
+
+IMPORTANT BEFORE SUBMISSION:
+Replace every <...> placeholder below. Do not commit real API credentials to this repository.
+
+BYOK does not have an app account, sign-in, or developer-hosted AI backend. It is a native client for AI provider APIs. Users connect provider accounts using their own API credentials; those credentials are stored in the device Keychain and requests are sent directly to the configured provider.
+
+For App Review, please use the temporary review credential below to test a live chat request:
+
+Provider: <REVIEW_PROVIDER>
+API credential: <TEMPORARY_REVIEW_API_KEY>
+
+Suggested test flow:
+1. Launch BYOK. On first launch, onboarding can be completed or skipped.
+2. Open the sidebar, then Settings > Connections.
+3. Add <REVIEW_PROVIDER> and enter the temporary API credential above.
+4. Refresh/select an available model for that connection.
+5. Start a new chat, choose that connection/model, and send a message.
+6. The response streams directly from the configured provider.
+
+No app login is required to review the rest of the product. Projects, Library, themes, provider management, local usage information, and MCP configuration are accessible from the sidebar/settings. Remote MCP features require a reviewer-configured MCP endpoint and are not required for basic chat operation.
+
+IN-APP PURCHASES
+BYOK Pro is optional. The Free plan remains functional and includes 2 themes, 1 provider connection, 1 project, 1 MCP server, 10 saved files, and basic usage analytics. Pro unlocks all themes, unlimited connections/projects/MCP servers/saved files, and advanced analytics.
+
+The paywall offers the App Store products configured for BYOK Pro (monthly, yearly, and lifetime where available). Restore Purchases is available both on the paywall and in Settings. Subscription management is available from Settings for an active recurring plan.
+
+PRIVACY / DATA FLOW
+- Provider and MCP credentials are stored in Keychain.
+- Chat/project/library data is stored locally on device.
+- BYOK does not operate a proxy for AI requests; requests go directly to the provider or MCP endpoint configured by the user.
+- Local telemetry is used only for on-device diagnostics/usage insights and is not sent to the developer.
+
+Terms of Use: https://byok.pro/terms
+Privacy Policy: https://byok.pro/privacy
+Support: https://byok.pro/support
