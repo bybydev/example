@@ -170,9 +170,11 @@ enum AppStorageBootstrap {
     try await BYOKStorageBootstrap.prepare(environment: environment)
   }
 
-  static func makeRecoveryDocument(failure: AppBootstrapFailure) async throws -> AppRecoveryPackageDocument {
+  static func makeRecoveryDocument(
+    failure: AppBootstrapFailure,
+    environment: BYOKStorageEnvironment = AppStorageEnvironment.current
+  ) async throws -> AppRecoveryPackageDocument {
     let diagnostics = failure.diagnosticText
-    let environment = AppStorageEnvironment.current
     let root = environment.rootDirectory
     let telemetryDatabaseURL = environment.telemetryDatabaseURL
     let files = try await Task.detached(priority: .userInitiated) {
@@ -185,8 +187,10 @@ enum AppStorageBootstrap {
     return AppRecoveryPackageDocument(files: files)
   }
 
-  static func resetLocalData() async throws {
-    let environment = AppStorageEnvironment.current
+  static func resetLocalData(
+    environment: BYOKStorageEnvironment = AppStorageEnvironment.current,
+    telemetryRecorder: TelemetryRecorder? = nil
+  ) async throws {
     let root = environment.rootDirectory
     try await Task.detached(priority: .userInitiated) {
       try createResetBackup(root: root)
@@ -198,7 +202,8 @@ enum AppStorageBootstrap {
       try await KeychainMCPCredentialVault(service: environment.mcpCredentialService).removeAllCredentials()
     #endif
 
-    await environment.makeTelemetryRecorder().clearAllTelemetry()
+    let recorder = telemetryRecorder ?? environment.makeTelemetryRecorder()
+    await recorder.clearAllTelemetry()
     environment.makeUserDefaults().set(false, forKey: "byokchat.onboarding.completed.v1")
   }
 
