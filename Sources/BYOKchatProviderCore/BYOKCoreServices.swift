@@ -34,6 +34,7 @@ public struct BYOKCoreServices {
   public let baseDataPortability: DataPortabilityService
   public let dataPortability: ProjectAwareDataPortabilityService
 
+  /// Standard composition validates and installs the built-in provider catalog.
   public init(
     environment: BYOKStorageEnvironment,
     credentialVault: any CredentialVault,
@@ -41,14 +42,35 @@ public struct BYOKCoreServices {
     toolRuntime: ToolRuntime = ToolRuntime(),
     telemetryRecorder: TelemetryRecorder? = nil
   ) throws {
+    let providerRegistry = try ProviderRegistry.builtIn()
+    self.init(
+      environment: environment,
+      providerRegistry: providerRegistry,
+      credentialVault: credentialVault,
+      mcpCredentialVault: mcpCredentialVault,
+      toolRuntime: toolRuntime,
+      telemetryRecorder: telemetryRecorder
+    )
+  }
+
+  /// Explicit-registry composition is nonthrowing. It exists so a host can
+  /// construct enough of the graph to present recovery UI after provider
+  /// catalog validation itself failed; normal app startup should use the
+  /// validating initializer above.
+  public init(
+    environment: BYOKStorageEnvironment,
+    providerRegistry: ProviderRegistry,
+    credentialVault: any CredentialVault,
+    mcpCredentialVault: any MCPCredentialVault,
+    toolRuntime: ToolRuntime = ToolRuntime(),
+    telemetryRecorder: TelemetryRecorder? = nil
+  ) {
     self.environment = environment
     let telemetryRecorder = telemetryRecorder ?? environment.makeTelemetryRecorder()
     self.telemetryRecorder = telemetryRecorder
-
-    let layout = environment.layout
-    let providerRegistry = try ProviderRegistry.builtIn()
     self.providerRegistry = providerRegistry
 
+    let layout = environment.layout
     let providerWorkspace = ProviderWorkspaceStore(
       persistence: JSONFileProviderWorkspacePersistence(fileURL: layout.providersFile)
     )
@@ -177,6 +199,22 @@ public struct BYOKCoreServices {
         ),
         toolRuntime: toolRuntime,
         telemetryRecorder: telemetryRecorder
+      )
+    }
+
+    /// Recovery-only graph used after validating production composition fails.
+    /// It deliberately has no provider definitions and must never be allowed to
+    /// proceed to the ready state.
+    public static func secureRecoveryFallback(
+      environment: BYOKStorageEnvironment
+    ) -> BYOKCoreServices {
+      BYOKCoreServices(
+        environment: environment,
+        providerRegistry: ProviderRegistry(),
+        credentialVault: KeychainCredentialVault(service: environment.credentialService),
+        mcpCredentialVault: KeychainMCPCredentialVault(
+          service: environment.mcpCredentialService
+        )
       )
     }
   }
