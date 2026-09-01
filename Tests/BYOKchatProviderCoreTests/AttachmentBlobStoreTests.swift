@@ -47,18 +47,33 @@ struct AttachmentBlobStoreTests {
     try? FileManager.default.removeItem(at: directory)
   }
 
-  @Test func deleteRemovesBlobAndDerivatives() async throws {
+  @Test func deleteRemovesEveryOwnedDerivativeWithoutPrefixCollisions() async throws {
     let (store, directory) = makeStore()
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let id = "abc-3"
     try await store.writeIfAbsent(id, data: Data([1, 2, 3]), metadata: metadata)
+
+    // Seed derivative filenames directly so the regression test does not need
+    // image fixture bytes. Real thumbnails use exactly `<id>-<pixel-size>`.
+    let derived = directory.appendingPathComponent("derived", isDirectory: true)
+    try FileManager.default.createDirectory(at: derived, withIntermediateDirectories: true)
+    for name in ["\(id)-64", "\(id)-256", id, "abc-30-64", "\(id)-not-size"] {
+      try Data([9]).write(to: derived.appendingPathComponent(name), options: .atomic)
+    }
+
     try await store.deleteIDs([id])
 
     #expect(try await store.metadata(for: id) == nil)
     #expect(try await store.loadData(id) == nil)
-    let derived = directory.appendingPathComponent("derived", isDirectory: true)
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("\(id)-64").path) == false)
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("\(id)-256").path) == false)
+    // Also clean the exact-name path left by the old buggy cleanup strategy.
     #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent(id).path) == false)
+    // A different ID sharing the same text prefix must survive.
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("abc-30-64").path))
+    // Only the numeric thumbnail naming contract is considered owned.
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("\(id)-not-size").path))
   }
 
   @Test func legacyBlobWithoutIndexRowStillReportsSize() async throws {
