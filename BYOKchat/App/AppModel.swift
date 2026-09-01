@@ -16,6 +16,7 @@ final class AppModel {
   let themeManager: ThemeManager
   let toolRuntime: ToolRuntime
   let storageEnvironment: BYOKStorageEnvironment
+  let telemetryRecorder: TelemetryRecorder
   /// Shared byte store behind chat attachments, library entries, and project
   /// reference files; `sweepOrphanFiles` garbage-collects it.
   let fileBlobStore: FileAttachmentBlobStore
@@ -31,6 +32,8 @@ final class AppModel {
     let storageEnvironment = AppStorageEnvironment.current
     self.storageEnvironment = storageEnvironment
     let layout = storageEnvironment.layout
+    let telemetryRecorder = storageEnvironment.makeTelemetryRecorder()
+    self.telemetryRecorder = telemetryRecorder
     let preferences = AppPreferencesModel(defaults: storageEnvironment.makeUserDefaults())
     self.preferences = preferences
     themeManager = ThemeManager(
@@ -77,7 +80,7 @@ final class AppModel {
     let mcpRuntime = MCPRemoteRuntime(
       workspace: mcpWorkspace,
       vault: mcpVault,
-      transport: MCPHTTPTransport()
+      transport: MCPHTTPTransport(telemetryRecorder: telemetryRecorder)
     )
     let approvalCenter = MCPToolApprovalCenter()
     let elicitationCenter = MCPElicitationCenter()
@@ -90,13 +93,15 @@ final class AppModel {
       workspace: mcpWorkspace,
       projectWorkspace: projectWorkspace,
       approvals: approvalCenter,
-      elicitations: elicitationCenter
+      elicitations: elicitationCenter,
+      telemetryRecorder: telemetryRecorder
     )
     let chatRuntime = ChatRuntime(
       providerRuntime: providerRuntime,
       providerWorkspace: providerWorkspace,
       conversations: conversationStore,
-      toolRuntime: conversationToolRuntime
+      toolRuntime: conversationToolRuntime,
+      telemetryRecorder: telemetryRecorder
     )
 
     let providerModel = ProviderManagementModel(
@@ -386,7 +391,7 @@ final class MCPManagementModel {
     await perform(nil) {
       try await runtime.setEnabled(enabled, serverID: serverID)
       if enabled {
-        _ = try await runtime.refreshServer(serverID, force: true)
+        _ = try await runtime.refreshServer(serverID)
       }
       try await reloadSnapshot()
     }
@@ -443,8 +448,8 @@ final class MCPManagementModel {
   func removeChatConfiguration(_ conversationID: ConversationID) async {
     await perform(nil) {
       try await workspace.removeChatConfiguration(conversationID: conversationID)
-      try await reloadSnapshot()
     }
+    await reloadSnapshot()
   }
 
   func refresh(_ serverID: MCPServerID) async {
