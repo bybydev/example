@@ -18,6 +18,24 @@ struct StorageEnvironmentTests {
     #expect(layout.filesDirectory.lastPathComponent == "files-v1")
   }
 
+  @Test("Telemetry database path comes from host environment")
+  func telemetryDatabasePath() {
+    let root = URL(fileURLWithPath: "/tmp/byok-storage", isDirectory: true)
+    let telemetry = URL(fileURLWithPath: "/tmp/byok-telemetry", isDirectory: true)
+    let environment = BYOKStorageEnvironment(
+      rootDirectory: root,
+      userDefaultsSuiteName: nil,
+      credentialService: "test.credentials",
+      mcpCredentialService: "test.mcp.credentials",
+      telemetryDirectory: telemetry
+    )
+
+    #expect(
+      environment.telemetryDatabaseURL
+        == telemetry.appendingPathComponent("telemetry.sqlite", isDirectory: false)
+    )
+  }
+
   @Test("Schema-less library workspace migrates to schema one")
   func migratesLegacyLibraryWorkspace() throws {
     let input = try JSONSerialization.data(withJSONObject: [:])
