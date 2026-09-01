@@ -27,8 +27,17 @@ struct BYOKmacApp: App {
   @MainActor
   private func prepareStorage() async {
     do {
-      try await BYOKStorageBootstrap.prepare(environment: Self.storageEnvironment)
-      status = "Shared storage ready"
+      let environment = Self.storageEnvironment
+      try await BYOKStorageBootstrap.prepare(environment: environment)
+
+      // Keep this target intentionally tiny, but exercise the same host-owned
+      // telemetry composition as iOS so Bundle.main never decides persistence.
+      let telemetry = environment.makeTelemetryRecorder()
+      await telemetry.performMaintenance()
+      let health = await telemetry.health()
+      status = health.isAvailable
+        ? "Shared storage + telemetry ready"
+        : "Shared storage ready; telemetry unavailable"
     } catch {
       status = "Storage failed: \(error.localizedDescription)"
     }
