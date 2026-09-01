@@ -38,6 +38,31 @@ struct ProviderManagementModelTests {
     #expect(await environment.workspace.defaultAccountID() == account.id)
   }
 
+  @Test("Hidden default model is cleared when no visible fallback exists")
+  func clearsHiddenDefaultWithoutFallback() async throws {
+    let environment = try await makeEnvironment()
+    let onlyModel = ProviderModel(
+      providerID: BuiltInProviders.openAIID,
+      id: "only-model",
+      displayName: "Only Model"
+    )
+    let account = try await environment.manager.createAccount(
+      providerID: BuiltInProviders.openAIID,
+      label: "Primary",
+      credential: "test-key",
+      defaultModelID: onlyModel.id
+    )
+    try await environment.workspace.mergeModels([onlyModel], for: account.id)
+    try await environment.workspace.setHidden(true, modelID: onlyModel.id, accountID: account.id)
+
+    await environment.model.load()
+
+    #expect(environment.model.errorMessage == nil)
+    #expect(environment.model.accounts.first?.id == account.id)
+    #expect(environment.model.accounts.first?.defaultModelID == nil)
+    #expect(try await environment.workspace.account(id: account.id).defaultModelID == nil)
+  }
+
   @Test("Unusable persisted default fails over to a ready connection")
   func failsOverUnusableDefault() async throws {
     let environment = try await makeEnvironment()
