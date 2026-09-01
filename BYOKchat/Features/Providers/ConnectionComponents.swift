@@ -126,6 +126,11 @@ struct ConnectionPreferencesFields: View {
 
   @Environment(\.appFoundationTheme) private var theme
 
+  private var selectedModel: AccountModelRecord? {
+    guard let selectedModelID else { return nil }
+    return models.first { $0.model.id == selectedModelID }
+  }
+
   var body: some View {
     VStack(spacing: 14) {
       ConnectionSurface {
@@ -151,19 +156,117 @@ struct ConnectionPreferencesFields: View {
               .font(.caption)
               .foregroundStyle(theme.secondaryForegroundColor)
           } else {
-            Picker("Default Model", selection: $selectedModelID) {
-              Text("Choose a model").tag(ModelID?.none)
-              ForEach(models) { record in
-                Text(record.model.displayName).tag(Optional(record.model.id))
+            NavigationLink {
+              ConnectionSetupModelPickerView(
+                models: models,
+                selection: $selectedModelID
+              )
+            } label: {
+              HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(selectedModel?.model.displayName ?? "Choose a model")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(theme.primaryForegroundColor)
+                    .lineLimit(2)
+                  if let selectedModel {
+                    Text(selectedModel.model.id.rawValue)
+                      .font(.caption.monospaced())
+                      .foregroundStyle(theme.secondaryForegroundColor)
+                      .lineLimit(1)
+                  } else {
+                    Text("\(models.count) models available")
+                      .font(.caption)
+                      .foregroundStyle(theme.secondaryForegroundColor)
+                  }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
               }
+              .contentShape(Rectangle())
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
           }
         }
       }
     }
+  }
+}
+
+private struct ConnectionSetupModelPickerView: View {
+  let models: [AccountModelRecord]
+  @Binding var selection: ModelID?
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var searchText = ""
+
+  private var records: [AccountModelRecord] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return models }
+    return models.filter { record in
+      record.model.displayName.localizedCaseInsensitiveContains(query)
+        || record.model.id.rawValue.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  var body: some View {
+    List {
+      if records.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .listRowBackground(Color.clear)
+      } else {
+        ForEach(records) { record in
+          Button {
+            selection = record.model.id
+            dismiss()
+          } label: {
+            HStack(alignment: .top, spacing: 10) {
+              VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                  Text(record.model.displayName)
+                    .font(.headline)
+                    .foregroundStyle(theme.primaryForegroundColor)
+                  if record.model.id == selection {
+                    Image(systemName: "checkmark")
+                      .foregroundStyle(.tint)
+                  }
+                }
+                Text(record.model.id.rawValue)
+                  .font(.caption.monospaced())
+                  .foregroundStyle(theme.secondaryForegroundColor)
+                  .lineLimit(2)
+
+                HStack(spacing: 8) {
+                  if let context = record.model.contextWindow {
+                    Text("\(context.formatted(.number.notation(.compactName))) ctx")
+                  }
+                  if record.model.inputModalities.contains("image") {
+                    Label("Vision", systemImage: "photo")
+                  }
+                  if record.model.inputModalities.contains("file") {
+                    Label("Files", systemImage: "doc")
+                  }
+                }
+                .font(.caption2)
+                .foregroundStyle(theme.secondaryForegroundColor)
+              }
+              Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Choose Model")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search models")
   }
 }
 
