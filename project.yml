@@ -12,7 +12,7 @@ packages:
     path: .
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation
-    exactVersion: 1.2.1
+    exactVersion: 1.4.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
