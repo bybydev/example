@@ -11,7 +11,10 @@ struct TelemetryLogsView: View {
   @State private var showExporter = false
   @State private var exportError: String?
   @State private var hasLoaded = false
+  @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
+
+  private var recorder: TelemetryRecorder { model.telemetryRecorder }
 
   private var filteredEvents: [TelemetryEvent] {
     TelemetryDiagnostics.filtered(events: events, filter: filter)
@@ -121,7 +124,7 @@ struct TelemetryLogsView: View {
 
   @MainActor
   private func loadEvents() async {
-    events = await TelemetryRecorder.shared.recentEvents(
+    events = await recorder.recentEvents(
       limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
     )
     hasLoaded = true
