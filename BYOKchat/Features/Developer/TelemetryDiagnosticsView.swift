@@ -14,9 +14,11 @@ struct TelemetryDiagnosticsView: View {
   @State private var isWorking = false
   @State private var confirmClearDiagnostics = false
   @State private var confirmClearAll = false
+  @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
 
   private let configuration = TelemetryStoreConfiguration.default
+  private var recorder: TelemetryRecorder { model.telemetryRecorder }
 
   var body: some View {
     List {
@@ -162,7 +164,6 @@ struct TelemetryDiagnosticsView: View {
 
   @MainActor
   private func reload() async {
-    let recorder = TelemetryRecorder.shared
     statistics = await recorder.statistics()
     health = await recorder.health()
   }
@@ -170,7 +171,6 @@ struct TelemetryDiagnosticsView: View {
   @MainActor
   private func retryTelemetry() async {
     isWorking = true
-    let recorder = TelemetryRecorder.shared
     await recorder.retryAfterFailure()
     await recorder.performMaintenance()
     isWorking = false
@@ -180,7 +180,7 @@ struct TelemetryDiagnosticsView: View {
   @MainActor
   private func runMaintenance() async {
     isWorking = true
-    await TelemetryRecorder.shared.performMaintenance()
+    await recorder.performMaintenance()
     isWorking = false
     await reload()
   }
@@ -188,7 +188,7 @@ struct TelemetryDiagnosticsView: View {
   @MainActor
   private func clearDiagnostics() async {
     isWorking = true
-    await TelemetryRecorder.shared.clearDiagnosticLogs()
+    await recorder.clearDiagnosticLogs()
     isWorking = false
     await reload()
   }
@@ -196,7 +196,7 @@ struct TelemetryDiagnosticsView: View {
   @MainActor
   private func clearAll() async {
     isWorking = true
-    await TelemetryRecorder.shared.clearAllTelemetry()
+    await recorder.clearAllTelemetry()
     isWorking = false
     await reload()
   }
