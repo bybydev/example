@@ -6,9 +6,12 @@ import Observation
 @Observable
 final class ProviderManagementModel {
   private(set) var definitions: [ProviderDefinition] = []
+  /// Accounts are ordered with the persisted global default first. This keeps
+  /// every UI fallback aligned with the account ChatManagementModel will use.
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
   private(set) var credentialAccountIDs: Set<ProviderAccountID> = []
+  private(set) var defaultAccountID: ProviderAccountID?
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
@@ -62,6 +65,10 @@ final class ProviderManagementModel {
   {
     let values = modelsByAccount[accountID] ?? []
     return includeHidden ? values : values.filter { !$0.isHidden }
+  }
+
+  func isDefaultAccount(_ id: ProviderAccountID) -> Bool {
+    defaultAccountID == id
   }
 
   func createConnection(
@@ -149,6 +156,31 @@ final class ProviderManagementModel {
       if let newCredential, !newCredential.isEmpty {
         try await accountManager.setCredential(newCredential, accountID: account.id)
       }
+      try await reloadSnapshot()
+    }
+  }
+
+  func setDefaultAccount(_ id: ProviderAccountID) async -> Bool {
+    await performResult("Default connection updated") {
+      let account = try await workspace.account(id: id)
+      guard account.isEnabled else {
+        throw ProviderError.invalidRequest("Enable this connection before making it the default.")
+      }
+      guard connectionIsReady(account) else {
+        throw ProviderError.invalidRequest(
+          "Add a credential and an available model before making this connection the default."
+        )
+      }
+      try await workspace.setDefaultAccount(id)
+      try await reloadSnapshot()
+    }
+  }
+
+  func setAccountEnabled(_ enabled: Bool, accountID: ProviderAccountID) async -> Bool {
+    await performResult(enabled ? "Connection enabled" : "Connection disabled") {
+      var account = try await workspace.account(id: accountID)
+      account.isEnabled = enabled
+      try await accountManager.updateAccount(account)
       try await reloadSnapshot()
     }
   }
@@ -288,19 +320,77 @@ final class ProviderManagementModel {
     }
   }
 
+  /// Builds one coherent snapshot and repairs only invalid defaults. The
+  /// persisted default account remains stable while usable; when it is deleted,
+  /// disabled, loses its credential, or has no model, the first usable account
+  /// becomes the new default. This keeps fresh-chat presentation and creation
+  /// on the same target without inventing a second UI-only default policy.
   private func reloadSnapshot() async throws {
     definitions = await registry.allDefinitions()
-    accounts = await workspace.allAccounts()
+    var loadedAccounts = await workspace.allAccounts()
+
     var modelValues: [ProviderAccountID: [AccountModelRecord]] = [:]
     var credentialValues: Set<ProviderAccountID> = []
-    for account in accounts {
+    for account in loadedAccounts {
       modelValues[account.id] = await workspace.modelRecords(for: account.id, includeHidden: true)
       if try await accountManager.hasCredential(accountID: account.id) {
         credentialValues.insert(account.id)
       }
     }
+
+    // If model discovery invalidated a stored default, repair it to the first
+    // visible available model. Chat creation otherwise could use a stale model
+    // while the composer displayed a different fallback.
+    for index in loadedAccounts.indices {
+      var account = loadedAccounts[index]
+      let available = (modelValues[account.id] ?? []).filter { $0.isAvailable && !$0.isHidden }
+      let currentIsAvailable = account.defaultModelID.map { current in
+        available.contains { $0.model.id == current }
+      } ?? false
+      if !currentIsAvailable, let fallback = available.first?.model.id {
+        account.defaultModelID = fallback
+        try await accountManager.updateAccount(account)
+        loadedAccounts[index] = account
+      }
+    }
+
     modelsByAccount = modelValues
     credentialAccountIDs = credentialValues
+
+    let storedDefault = await workspace.defaultAccountID()
+    let usableDefault = storedDefault.flatMap { id in
+      loadedAccounts.first { $0.id == id && connectionIsReady($0) }?.id
+    }
+    let resolvedDefault = usableDefault
+      ?? loadedAccounts.first(where: connectionIsReady)?.id
+      ?? loadedAccounts.first(where: \.isEnabled)?.id
+      ?? loadedAccounts.first?.id
+
+    if resolvedDefault != storedDefault {
+      try await workspace.setDefaultAccount(resolvedDefault)
+    }
+    defaultAccountID = resolvedDefault
+
+    accounts = loadedAccounts.sorted { lhs, rhs in
+      if lhs.id == resolvedDefault { return true }
+      if rhs.id == resolvedDefault { return false }
+      if lhs.providerID == rhs.providerID {
+        return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+      }
+      return lhs.providerID.rawValue < rhs.providerID.rawValue
+    }
+  }
+
+  private func connectionIsReady(_ account: ProviderAccount) -> Bool {
+    guard account.isEnabled, let definition = provider(for: account.providerID) else { return false }
+    switch definition.authentication {
+    case .none:
+      break
+    case .bearer, .header:
+      guard credentialAccountIDs.contains(account.id) else { return false }
+    }
+    let available = (modelsByAccount[account.id] ?? []).contains { $0.isAvailable && !$0.isHidden }
+    return available
   }
 
   private func optionalURL(_ value: String) throws -> URL? {
