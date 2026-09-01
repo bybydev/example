@@ -3,6 +3,13 @@ import Foundation
 public actor ProviderRegistry {
   private var definitions: [ProviderID: ProviderDefinition]
 
+  /// Empty registry used only for recovery/bootstrap fallback paths. Normal
+  /// production composition uses ``builtIn()`` so built-in definitions are
+  /// still validated before the app becomes ready.
+  public init() {
+    definitions = [:]
+  }
+
   public init(definitions: [ProviderDefinition]) throws {
     var values: [ProviderID: ProviderDefinition] = [:]
     for definition in definitions {
