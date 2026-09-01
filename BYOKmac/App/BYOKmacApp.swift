@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 struct BYOKmacApp: App {
-  @State private var status = "Preparing shared storage…"
+  @State private var status = "Preparing shared core…"
 
   var body: some Scene {
     WindowGroup {
@@ -19,27 +19,31 @@ struct BYOKmacApp: App {
       }
       .frame(minWidth: 520, minHeight: 320)
       .task {
-        await prepareStorage()
+        await prepareCore()
       }
     }
   }
 
   @MainActor
-  private func prepareStorage() async {
+  private func prepareCore() async {
     do {
       let environment = Self.storageEnvironment
       try await BYOKStorageBootstrap.prepare(environment: environment)
 
-      // Keep this target intentionally tiny, but exercise the same host-owned
-      // telemetry composition as iOS so Bundle.main never decides persistence.
-      let telemetry = environment.makeTelemetryRecorder()
-      await telemetry.performMaintenance()
-      let health = await telemetry.health()
+      // The placeholder intentionally stops at the shared layer. Loading this
+      // graph proves the same provider/chat/project/library/MCP composition
+      // used by iOS can initialize on macOS without building product UI yet.
+      let services = try BYOKCoreServices.secure(environment: environment)
+      try await services.loadStoredState()
+      await services.telemetryRecorder.performMaintenance()
+
+      let health = await services.telemetryRecorder.health()
+      let chatCount = await services.conversationStore.conversationSummaries().count
       status = health.isAvailable
-        ? "Shared storage + telemetry ready"
-        : "Shared storage ready; telemetry unavailable"
+        ? "Shared core ready · \(chatCount) chats"
+        : "Shared core ready · telemetry unavailable"
     } catch {
-      status = "Storage failed: \(error.localizedDescription)"
+      status = "Core failed: \(error.localizedDescription)"
     }
   }
 
