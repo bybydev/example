@@ -16,6 +16,7 @@ struct AppStartupFailureView: View {
   let failure: AppBootstrapFailure
   let restartApp: () -> Void
 
+  @Environment(AppModel.self) private var model
   @State private var recoveryDocument: AppRecoveryPackageDocument?
   @State private var showRecoveryExporter = false
   @State private var showResetConfirmation = false
@@ -180,7 +181,10 @@ struct AppStartupFailureView: View {
     Task { @MainActor in
       defer { isWorking = false }
       do {
-        recoveryDocument = try await AppStorageBootstrap.makeRecoveryDocument(failure: failure)
+        recoveryDocument = try await AppStorageBootstrap.makeRecoveryDocument(
+          failure: failure,
+          environment: model.storageEnvironment
+        )
         showRecoveryExporter = true
       } catch {
         recoveryError = error.localizedDescription
@@ -193,7 +197,10 @@ struct AppStartupFailureView: View {
     isWorking = true
     Task { @MainActor in
       do {
-        try await AppStorageBootstrap.resetLocalData()
+        try await AppStorageBootstrap.resetLocalData(
+          environment: model.storageEnvironment,
+          telemetryRecorder: model.telemetryRecorder
+        )
         isWorking = false
         restartApp()
       } catch {
