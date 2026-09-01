@@ -12,13 +12,15 @@ struct BYOKCoreServicesTests {
     let telemetry = root.appendingPathComponent("Telemetry", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
+    let suiteName = "byok-core-services-tests-\(UUID().uuidString)"
     let environment = BYOKStorageEnvironment(
       rootDirectory: root,
-      userDefaultsSuiteName: "byok-core-services-tests-\(UUID().uuidString)",
+      userDefaultsSuiteName: suiteName,
       credentialService: "tests.byok.credentials",
       mcpCredentialService: "tests.byok.mcp.credentials",
       telemetryDirectory: telemetry
     )
+    defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
 
     try await BYOKStorageBootstrap.prepare(environment: environment)
     let services = try BYOKCoreServices(
@@ -29,11 +31,17 @@ struct BYOKCoreServicesTests {
 
     try await services.loadStoredState()
 
-    #expect(await services.providerWorkspace.snapshot().accounts.isEmpty)
-    #expect(await services.projectWorkspace.allProjects().isEmpty)
-    #expect(await services.mcpRuntime.servers().isEmpty)
-    #expect(await services.conversationStore.conversationSummaries().isEmpty)
-    #expect(await services.libraryStore.entries().isEmpty)
+    let providers = await services.providerWorkspace.snapshot()
+    let projects = await services.projectWorkspace.allProjects()
+    let mcpServers = await services.mcpRuntime.servers()
+    let conversations = await services.conversationStore.conversationSummaries()
+    let libraryEntries = await services.libraryStore.entries()
+
+    #expect(providers.accounts.isEmpty)
+    #expect(projects.isEmpty)
+    #expect(mcpServers.isEmpty)
+    #expect(conversations.isEmpty)
+    #expect(libraryEntries.isEmpty)
   }
 
   @Test("Composition uses host telemetry policy")
