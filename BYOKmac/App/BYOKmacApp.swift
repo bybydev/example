@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 
 @main
