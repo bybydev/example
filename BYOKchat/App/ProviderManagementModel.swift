@@ -15,14 +15,14 @@ final class ProviderManagementModel {
 
   private let registry: ProviderRegistry
   private let workspace: ProviderWorkspaceStore
-  private let vault: KeychainCredentialVault
+  private let vault: any CredentialVault
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
 
   init(
     registry: ProviderRegistry,
     workspace: ProviderWorkspaceStore,
-    vault: KeychainCredentialVault,
+    vault: any CredentialVault,
     accountManager: ProviderAccountManager,
     runtime: ProviderRuntime
   ) {
