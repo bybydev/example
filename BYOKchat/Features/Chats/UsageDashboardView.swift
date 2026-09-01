@@ -9,6 +9,7 @@ struct UsageDashboardView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
@@ -499,7 +500,7 @@ struct UsageDashboardView: View {
   }
 
   private func loadTelemetry() async {
-    let recorder = TelemetryRecorder.shared
+    let recorder = model.telemetryRecorder
     let events = await recorder.recentEvents(
       limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
     )
