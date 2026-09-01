@@ -338,19 +338,22 @@ final class ProviderManagementModel {
       }
     }
 
-    // If model discovery invalidated a stored default, repair it to the first
-    // visible available model. Chat creation otherwise could use a stale model
-    // while the composer displayed a different fallback.
+    // Normalize every stored default to a visible available model. If none is
+    // usable, clear the default instead of leaving a stale/hidden ID that the
+    // composer refuses to present but chat creation could otherwise reuse.
     for index in loadedAccounts.indices {
       var account = loadedAccounts[index]
       let available = (modelValues[account.id] ?? []).filter { $0.isAvailable && !$0.isHidden }
       let currentIsAvailable = account.defaultModelID.map { current in
         available.contains { $0.model.id == current }
       } ?? false
-      if !currentIsAvailable, let fallback = available.first?.model.id {
-        account.defaultModelID = fallback
-        try await accountManager.updateAccount(account)
-        loadedAccounts[index] = account
+      if !currentIsAvailable {
+        let repairedDefault = available.first?.model.id
+        if account.defaultModelID != repairedDefault {
+          account.defaultModelID = repairedDefault
+          try await accountManager.updateAccount(account)
+          loadedAccounts[index] = account
+        }
       }
     }
 
