@@ -16,7 +16,7 @@ final class AppBootstrapController {
 
     do {
       state = .loading(.preparingStorage)
-      try await AppStorageBootstrap.prepare()
+      try await AppStorageBootstrap.prepare(environment: model.storageEnvironment)
 
       // Index first: stores read blob metadata (sizes) during their loads.
       // Both steps are best-effort self-healing; a failure just leaves the
@@ -161,83 +161,39 @@ struct AppRecoveryPackageDocument: FileDocument {
   }
 }
 
-enum AppStorageMigrationError: LocalizedError, Sendable, Equatable {
-  case invalidJSON(store: String)
-  case invalidRoot(store: String)
-  case invalidSchemaVersion(store: String)
-  case newerVersion(store: String, stored: Int, supported: Int)
-  case unavailableMigration(store: String, from: Int, to: Int)
-  case invalidMigrationOutput(store: String, message: String)
-
-  var errorDescription: String? {
-    switch self {
-    case .invalidJSON(let store):
-      "The \(store) data file is not valid JSON."
-    case .invalidRoot(let store):
-      "The \(store) data file has an invalid structure."
-    case .invalidSchemaVersion(let store):
-      "The \(store) data file has an invalid schema version."
-    case .newerVersion(let store, let stored, let supported):
-      "The \(store) data was created by a newer version of BYOKchat (schema \(stored); this app supports \(supported))."
-    case .unavailableMigration(let store, let from, let to):
-      "BYOKchat cannot migrate \(store) data from schema \(from) to \(to)."
-    case .invalidMigrationOutput(let store, let message):
-      "The migrated \(store) data could not be validated: \(message)"
-    }
-  }
-}
+typealias AppStorageMigrationError = BYOKStorageMigrationError
 
 enum AppStorageBootstrap {
-  enum StoreKind: String, Sendable, CaseIterable {
-    case providers
-    case conversations
-    case projects
-    case mcp
-  }
+  typealias StoreKind = BYOKStorageStoreKind
 
-  struct StoreDescriptor: Sendable {
-    let kind: StoreKind
-    let fileName: String
-    let currentSchemaVersion: Int
-  }
-
-  static let stores: [StoreDescriptor] = [
-    .init(kind: .providers, fileName: "providers-v1.json", currentSchemaVersion: ProviderWorkspaceState.currentSchemaVersion),
-    // Conversations are sharded under conversations-v1/ and carry no monolith
-    // migration; see ConversationShardPersistence.swift.
-    .init(kind: .projects, fileName: "projects-v1.json", currentSchemaVersion: ProjectWorkspaceState.currentSchemaVersion),
-    .init(kind: .mcp, fileName: "mcp-servers-v1.json", currentSchemaVersion: MCPWorkspaceState.currentSchemaVersion),
-  ]
-
-  static func prepare() async throws {
-    try await Task.detached(priority: .userInitiated) {
-      try prepareSynchronously(root: applicationSupportDirectory())
-    }.value
+  static func prepare(environment: BYOKStorageEnvironment = AppStorageEnvironment.current) async throws {
+    try await BYOKStorageBootstrap.prepare(environment: environment)
   }
 
   static func makeRecoveryDocument(failure: AppBootstrapFailure) async throws -> AppRecoveryPackageDocument {
     let diagnostics = failure.diagnosticText
+    let root = AppStorageEnvironment.current.rootDirectory
     let files = try await Task.detached(priority: .userInitiated) {
-      try recoveryFiles(root: applicationSupportDirectory(), diagnostics: diagnostics)
+      try recoveryFiles(root: root, diagnostics: diagnostics)
     }.value
     return AppRecoveryPackageDocument(files: files)
   }
 
   static func resetLocalData() async throws {
-    let root = applicationSupportDirectory()
+    let environment = AppStorageEnvironment.current
+    let root = environment.rootDirectory
     try await Task.detached(priority: .userInitiated) {
       try createResetBackup(root: root)
       try removeLocalFiles(root: root)
     }.value
 
     #if canImport(Security)
-      try await KeychainCredentialVault().removeAllSecrets()
-      try await KeychainMCPCredentialVault().removeAllCredentials()
+      try await KeychainCredentialVault(service: environment.credentialService).removeAllSecrets()
+      try await KeychainMCPCredentialVault(service: environment.mcpCredentialService).removeAllCredentials()
     #endif
 
     await TelemetryRecorder.shared.clearAllTelemetry()
-    let defaults = UserDefaults.standard
-    defaults.set(false, forKey: "byokchat.onboarding.completed.v1")
+    environment.makeUserDefaults().set(false, forKey: "byokchat.onboarding.completed.v1")
   }
 
   static func migrateDataForTesting(
@@ -245,155 +201,15 @@ enum AppStorageBootstrap {
     kind: StoreKind,
     currentSchemaVersion: Int
   ) throws -> Data {
-    try migratedDataIfNeeded(
+    try BYOKStorageBootstrap.migrateDataForTesting(
       data,
-      descriptor: .init(kind: kind, fileName: "test.json", currentSchemaVersion: currentSchemaVersion)
-    ) ?? data
-  }
-
-  private static func prepareSynchronously(root: URL) throws {
-    let fileManager = FileManager.default
-    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-
-    var migrationBackupDirectory: URL?
-    for descriptor in stores {
-      let fileURL = root.appendingPathComponent(descriptor.fileName)
-      guard fileManager.fileExists(atPath: fileURL.path) else { continue }
-      let original = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-      guard let migrated = try migratedDataIfNeeded(original, descriptor: descriptor) else { continue }
-
-      try validate(data: migrated, kind: descriptor.kind, expectedSchemaVersion: descriptor.currentSchemaVersion)
-      if migrationBackupDirectory == nil {
-        migrationBackupDirectory = try newBackupDirectory(root: root, group: "MigrationBackups")
-      }
-      try original.write(
-        to: migrationBackupDirectory!.appendingPathComponent(descriptor.fileName),
-        options: .atomic
-      )
-      try migrated.write(to: fileURL, options: .atomic)
-    }
-    try pruneBackups(root: root, directory: "MigrationBackups", keeping: 3)
-  }
-
-  private static func migratedDataIfNeeded(
-    _ data: Data,
-    descriptor: StoreDescriptor
-  ) throws -> Data? {
-    let object: Any
-    do {
-      object = try JSONSerialization.jsonObject(with: data)
-    } catch {
-      throw AppStorageMigrationError.invalidJSON(store: descriptor.kind.rawValue)
-    }
-    guard var root = object as? [String: Any] else {
-      throw AppStorageMigrationError.invalidRoot(store: descriptor.kind.rawValue)
-    }
-
-    let storedVersion: Int
-    if let raw = root["schemaVersion"] {
-      if let number = raw as? NSNumber {
-        storedVersion = number.intValue
-      } else {
-        throw AppStorageMigrationError.invalidSchemaVersion(store: descriptor.kind.rawValue)
-      }
-    } else {
-      storedVersion = 0
-    }
-
-    guard storedVersion <= descriptor.currentSchemaVersion else {
-      throw AppStorageMigrationError.newerVersion(
-        store: descriptor.kind.rawValue,
-        stored: storedVersion,
-        supported: descriptor.currentSchemaVersion
-      )
-    }
-    guard storedVersion < descriptor.currentSchemaVersion else { return nil }
-
-    var version = storedVersion
-    while version < descriptor.currentSchemaVersion {
-      root = try migrateOneStep(root, kind: descriptor.kind, from: version, to: version + 1)
-      version += 1
-    }
-
-    let migrated = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
-    do {
-      try validate(data: migrated, kind: descriptor.kind, expectedSchemaVersion: descriptor.currentSchemaVersion)
-    } catch {
-      throw AppStorageMigrationError.invalidMigrationOutput(
-        store: descriptor.kind.rawValue,
-        message: error.localizedDescription
-      )
-    }
-    return migrated
-  }
-
-  private static func migrateOneStep(
-    _ root: [String: Any],
-    kind: StoreKind,
-    from: Int,
-    to: Int
-  ) throws -> [String: Any] {
-    guard from == 0, to == 1 else {
-      throw AppStorageMigrationError.unavailableMigration(store: kind.rawValue, from: from, to: to)
-    }
-
-    var value = root
-    value["schemaVersion"] = 1
-    switch kind {
-    case .providers:
-      if value["customProviders"] == nil { value["customProviders"] = [] }
-      if value["accounts"] == nil { value["accounts"] = [] }
-      if value["modelRecords"] == nil { value["modelRecords"] = [] }
-      if value["providerDefaultAccountIDs"] == nil { value["providerDefaultAccountIDs"] = [:] }
-    case .conversations:
-      if value["conversations"] == nil { value["conversations"] = [] }
-    case .projects:
-      if value["projects"] == nil { value["projects"] = [] }
-      if value["conversationProjectIDs"] == nil { value["conversationProjectIDs"] = [:] }
-    case .mcp:
-      if value["servers"] == nil { value["servers"] = [] }
-      if value["snapshots"] == nil { value["snapshots"] = [] }
-    }
-    return value
-  }
-
-  private static func validate(data: Data, kind: StoreKind, expectedSchemaVersion: Int) throws {
-    switch kind {
-    case .providers:
-      let value = try JSONDecoder().decode(ProviderWorkspaceState.self, from: data)
-      guard value.schemaVersion == expectedSchemaVersion else {
-        throw AppStorageMigrationError.invalidSchemaVersion(store: kind.rawValue)
-      }
-      try WorkspaceImportValidator.validateProviderWorkspace(value)
-    case .conversations:
-      let value = try JSONDecoder().decode(ConversationWorkspaceState.self, from: data)
-      guard value.schemaVersion == expectedSchemaVersion else {
-        throw AppStorageMigrationError.invalidSchemaVersion(store: kind.rawValue)
-      }
-    case .projects:
-      let decoder = JSONDecoder()
-      decoder.dateDecodingStrategy = .iso8601
-      let value = try decoder.decode(ProjectWorkspaceState.self, from: data)
-      guard value.schemaVersion == expectedSchemaVersion else {
-        throw AppStorageMigrationError.invalidSchemaVersion(store: kind.rawValue)
-      }
-    case .mcp:
-      let value = try JSONDecoder().decode(MCPWorkspaceState.self, from: data)
-      guard value.schemaVersion == expectedSchemaVersion else {
-        throw AppStorageMigrationError.invalidSchemaVersion(store: kind.rawValue)
-      }
-      try MCPWorkspaceStore.validate(value)
-    }
-  }
-
-  private static func applicationSupportDirectory(fileManager: FileManager = .default) -> URL {
-    let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-      ?? fileManager.temporaryDirectory
-    return base.appendingPathComponent("BYOKchat", isDirectory: true)
+      kind: kind,
+      currentSchemaVersion: currentSchemaVersion
+    )
   }
 
   private static func recoveryDirectory(root: URL) -> URL {
-    root.appendingPathComponent("Recovery", isDirectory: true)
+    BYOKStorageLayout(rootDirectory: root).recoveryDirectory
   }
 
   private static func createResetBackup(root: URL) throws {
@@ -449,28 +265,31 @@ enum AppStorageBootstrap {
   }
 
   private static func localDataURLs(root: URL) -> [URL] {
-    stores.map { root.appendingPathComponent($0.fileName) }
-      + [
-        // Legacy iCloud project-sync state; kept so resets on installs that
-        // used sync still clean it up.
-        root.appendingPathComponent("project-sync-local-v1.json"),
-        root.appendingPathComponent("library-v1.json"),
-        // Pre-sharding conversations file; kept so resets on older installs
-        // still clean it up.
-        root.appendingPathComponent("conversations-v1.json"),
-      ]
+    let layout = BYOKStorageLayout(rootDirectory: root)
+    return [
+      layout.providersFile,
+      layout.projectsFile,
+      layout.mcpServersFile,
+      layout.libraryFile,
+      // Legacy iCloud project-sync state; kept so resets on installs that
+      // used sync still clean it up.
+      root.appendingPathComponent("project-sync-local-v1.json"),
+      // Pre-sharding conversations file; kept so resets on older installs
+      // still clean it up.
+      root.appendingPathComponent("conversations-v1.json"),
+    ]
   }
 
-  /// Byte payloads live in shared per-store directories next to the JSON
-  /// workspaces. `files-v1` holds all file bytes (chat attachments, library
-  /// entries, project reference files); the other two are pre-unification
-  /// locations kept so resets on older installs still clean them up.
+  /// Byte payloads and conversation shards live in directories next to the
+  /// JSON workspaces. The legacy directories remain here only for reset and
+  /// recovery compatibility with older installs.
   private static func blobDirectoryURLs(root: URL) -> [URL] {
-    [
-      root.appendingPathComponent("files-v1", isDirectory: true),
+    let layout = BYOKStorageLayout(rootDirectory: root)
+    return [
+      layout.filesDirectory,
       root.appendingPathComponent("attachments-v1", isDirectory: true),
       root.appendingPathComponent("library-v1", isDirectory: true),
-      root.appendingPathComponent("conversations-v1", isDirectory: true),
+      layout.conversationsDirectory,
     ]
   }
 
@@ -518,9 +337,11 @@ enum AppStorageBootstrap {
     }
 
     let telemetry = TelemetryRecorder.defaultDatabaseURL()
-    for url in [telemetry, URL(fileURLWithPath: telemetry.path + "-wal"), URL(fileURLWithPath: telemetry.path + "-shm")]
-      where fileManager.fileExists(atPath: url.path)
-    {
+    for url in [
+      telemetry,
+      URL(fileURLWithPath: telemetry.path + "-wal"),
+      URL(fileURLWithPath: telemetry.path + "-shm"),
+    ] where fileManager.fileExists(atPath: url.path) {
       result["telemetry--\(url.lastPathComponent)"] = try Data(contentsOf: url, options: .mappedIfSafe)
     }
 
