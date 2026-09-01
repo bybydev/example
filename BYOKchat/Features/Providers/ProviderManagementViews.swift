@@ -3,10 +3,9 @@ import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 
-/// Custom provider definition editor shared by connection setup and future
-/// custom-provider maintenance. The old parallel Providers/Accounts management
-/// hierarchy was intentionally removed; `ConnectionsView` is now the single
-/// user-facing provider-management surface.
+/// Custom provider definition editor shared by connection setup and custom
+/// provider maintenance. `ConnectionsView` is the single user-facing provider
+/// management surface.
 struct CustomProviderEditorView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
@@ -167,6 +166,104 @@ struct CustomProviderEditorView: View {
     case .bearer: return .bearer
     case .header: return .header
     case .none: return .none
+    }
+  }
+}
+
+struct CustomProviderManagementView: View {
+  @Bindable var model: ProviderManagementModel
+  let providerID: ProviderID
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var showEdit = false
+  @State private var showDelete = false
+
+  private var definition: ProviderDefinition? {
+    model.provider(for: providerID)
+  }
+
+  private var accounts: [ProviderAccount] {
+    model.accounts(for: providerID)
+  }
+
+  var body: some View {
+    Group {
+      if let definition {
+        List {
+          Section("Provider") {
+            LabeledContent("Name", value: definition.displayName)
+            LabeledContent("ID", value: definition.id.rawValue)
+            LabeledContent("Endpoint", value: definition.defaultBaseURL.absoluteString)
+            LabeledContent("Chat path", value: definition.chatCompletionsPath)
+            LabeledContent("Models", value: definition.modelsPath ?? "Manual / seed models")
+            LabeledContent("Authentication", value: authenticationName(definition.authentication))
+          }
+          .listRowBackground(theme.surfaceColor)
+
+          Section("Usage") {
+            LabeledContent("Connections", value: "\(accounts.count)")
+            if definition.allowsLocalHTTP {
+              Label("Private-network HTTP allowed", systemImage: "network")
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+
+          Section {
+            Button("Edit Provider", systemImage: "pencil") {
+              showEdit = true
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+
+          Section {
+            Button("Delete Custom Provider", systemImage: "trash", role: .destructive) {
+              showDelete = true
+            }
+            .disabled(!accounts.isEmpty)
+          } footer: {
+            Text(accounts.isEmpty
+              ? "Deleting the provider removes its definition from this device."
+              : "Delete the \(accounts.count) connection\(accounts.count == 1 ? "" : "s") using this provider first.")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+        .scrollContentBackground(.hidden)
+      } else {
+        ContentUnavailableView("Provider Missing", systemImage: "server.rack")
+      }
+    }
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle(definition?.displayName ?? "Custom Provider")
+    .navigationBarTitleDisplayMode(.inline)
+    .sheet(isPresented: $showEdit) {
+      if let definition {
+        NavigationStack {
+          CustomProviderEditorView(model: model, existing: definition)
+        }
+      }
+    }
+    .confirmationDialog("Delete this custom provider?", isPresented: $showDelete) {
+      Button("Delete Provider", role: .destructive) {
+        Task { @MainActor in
+          await model.deleteCustomProvider(providerID)
+          if model.provider(for: providerID) == nil {
+            dismiss()
+          }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
+  }
+
+  private func authenticationName(_ value: ProviderAuthentication) -> String {
+    switch value {
+    case .bearer: "Bearer token"
+    case .header(let name): name
+    case .none: "None"
     }
   }
 }
