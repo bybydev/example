@@ -8,7 +8,7 @@ final class BYOKPurchaseStore {
   static let lifetimeProductID = "com.hoangbkit.byokchat.pro.lifetime"
 
   #if DEBUG
-  private static let simulatedModeKey = "byokchat.developer.simulatedPurchases"
+  static let simulatedModeKey = "byokchat.developer.simulatedPurchases"
   #endif
 
   let manager: PurchaseManager
@@ -42,10 +42,6 @@ final class BYOKPurchaseStore {
   }
 
   #if DEBUG
-  var isUsingSimulatedPurchases: Bool {
-    manager.isUsingSimulatedPurchases
-  }
-
   static func makeScreenshotPreviewManager() -> PurchaseManager {
     PurchaseManager.screenshotPreview(
       configuration: PurchaseConfiguration(
@@ -58,11 +54,6 @@ final class BYOKPurchaseStore {
       ),
       products: simulatedProducts
     )
-  }
-
-  func setSimulatedPurchasesEnabled(_ enabled: Bool) async {
-    UserDefaults.standard.set(enabled, forKey: Self.simulatedModeKey)
-    await manager.setSimulatedPurchasesEnabled(enabled)
   }
   #endif
 
