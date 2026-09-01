@@ -15,6 +15,7 @@ final class AppModel {
   let dataPortability: DataPortabilityModel
   let themeManager: ThemeManager
   let toolRuntime: ToolRuntime
+  let storageEnvironment: BYOKStorageEnvironment
   /// Shared byte store behind chat attachments, library entries, and project
   /// reference files; `sweepOrphanFiles` garbage-collects it.
   let fileBlobStore: FileAttachmentBlobStore
@@ -27,7 +28,10 @@ final class AppModel {
   private var canSweepOrphans = false
 
   init() {
-    let preferences = AppPreferencesModel()
+    let storageEnvironment = AppStorageEnvironment.current
+    self.storageEnvironment = storageEnvironment
+    let layout = storageEnvironment.layout
+    let preferences = AppPreferencesModel(defaults: storageEnvironment.makeUserDefaults())
     self.preferences = preferences
     themeManager = ThemeManager(
       catalog: BYOKchatThemes.catalog,
@@ -36,18 +40,10 @@ final class AppModel {
     )
 
     let registry = try! ProviderRegistry.builtIn()
-    let supportDirectory = FileManager.default.urls(
-      for: .applicationSupportDirectory,
-      in: .userDomainMask
-    ).first!
-    .appendingPathComponent("BYOKchat", isDirectory: true)
-
     let providerWorkspace = ProviderWorkspaceStore(
-      persistence: JSONFileProviderWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("providers-v1.json")
-      )
+      persistence: JSONFileProviderWorkspacePersistence(fileURL: layout.providersFile)
     )
-    let vault = KeychainCredentialVault()
+    let vault = KeychainCredentialVault(service: storageEnvironment.credentialService)
     let accountManager = ProviderAccountManager(
       registry: registry,
       workspace: providerWorkspace,
@@ -60,34 +56,24 @@ final class AppModel {
     )
     // One shared file-byte store backs chat attachments, library entries, and
     // project reference files; everything else stores metadata only.
-    fileBlobStore = FileAttachmentBlobStore(
-      directory: supportDirectory.appendingPathComponent("files-v1", isDirectory: true)
-    )
+    fileBlobStore = FileAttachmentBlobStore(directory: layout.filesDirectory)
     let conversationStore = ConversationStore(
-      persistence: JSONFileConversationWorkspacePersistence(
-        directory: supportDirectory.appendingPathComponent("conversations-v1", isDirectory: true)
-      ),
+      persistence: JSONFileConversationWorkspacePersistence(directory: layout.conversationsDirectory),
       blobs: fileBlobStore
     )
     let libraryStore = LibraryStore(
-      persistence: JSONFileLibraryWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("library-v1.json")
-      ),
+      persistence: JSONFileLibraryWorkspacePersistence(fileURL: layout.libraryFile),
       blobs: fileBlobStore
     )
     let projectWorkspace = ProjectWorkspaceStore(
-      persistence: JSONFileProjectWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("projects-v1.json")
-      ),
+      persistence: JSONFileProjectWorkspacePersistence(fileURL: layout.projectsFile),
       blobs: fileBlobStore
     )
 
     let mcpWorkspace = MCPWorkspaceStore(
-      persistence: JSONFileMCPWorkspacePersistence(
-        fileURL: supportDirectory.appendingPathComponent("mcp-servers-v1.json")
-      )
+      persistence: JSONFileMCPWorkspacePersistence(fileURL: layout.mcpServersFile)
     )
-    let mcpVault = KeychainMCPCredentialVault()
+    let mcpVault = KeychainMCPCredentialVault(service: storageEnvironment.mcpCredentialService)
     let mcpRuntime = MCPRemoteRuntime(
       workspace: mcpWorkspace,
       vault: mcpVault,
