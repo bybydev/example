@@ -4,12 +4,18 @@ import SwiftUI
 
 struct ConnectionsView: View {
   @Bindable var model: ProviderManagementModel
+  /// Non-nil means this screen was opened to repair/setup a chat rather than
+  /// as the persistent Settings manager. The legacy callback is intentionally
+  /// retained for source compatibility; successful setup now returns directly
+  /// to the presenting chat instead of opening another surface.
   let onConnectionReady: (() -> Void)?
 
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.dismiss) private var dismiss
   @State private var showAddConnection = false
   @State private var showProUpsell = false
+  @State private var didAutoPresentSetup = false
 
   init(model: ProviderManagementModel, onConnectionReady: (() -> Void)? = nil) {
     self.model = model
@@ -38,13 +44,17 @@ struct ConnectionsView: View {
       if model.definitions.isEmpty {
         await model.load()
       }
+      autoPresentSetupIfNeeded()
+    }
+    .onChange(of: model.accounts.count) { _, _ in
+      autoPresentSetupIfNeeded()
     }
     .sheet(isPresented: $showAddConnection) {
       NavigationStack {
         ConnectionFlowView(
           model: model,
           completionTitle: onConnectionReady == nil ? "Done" : "Start Chatting",
-          onFinished: onConnectionReady
+          onFinished: finishConnectionSetup
         )
       }
       .presentationDragIndicator(.visible)
@@ -66,18 +76,37 @@ struct ConnectionsView: View {
   }
 
   private var accountList: some View {
-    List(model.accounts) { account in
-      NavigationLink {
-        ConnectionDetailView(model: model, accountID: account.id)
-      } label: {
-        ConnectionRow(model: model, account: account)
+    List {
+      if let defaultID = model.defaultAccountID,
+        let account = model.accounts.first(where: { $0.id == defaultID })
+      {
+        Section("Default") {
+          connectionLink(account)
+        }
       }
-      .buttonStyle(.plain)
-      .listRowBackground(Color.clear)
+
+      let remaining = model.accounts.filter { $0.id != model.defaultAccountID }
+      if !remaining.isEmpty {
+        Section(model.defaultAccountID == nil ? "Connections" : "Other Connections") {
+          ForEach(remaining) { account in
+            connectionLink(account)
+          }
+        }
+      }
     }
-    .listStyle(.plain)
-    .listRowSeparatorTint(theme.borderColor)
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
     .refreshable { await model.load() }
+  }
+
+  @ViewBuilder
+  private func connectionLink(_ account: ProviderAccount) -> some View {
+    NavigationLink {
+      ConnectionDetailView(model: model, accountID: account.id)
+    } label: {
+      ConnectionRow(model: model, account: account)
+    }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private var emptyState: some View {
@@ -88,6 +117,25 @@ struct ConnectionsView: View {
     } actions: {
       Button("Add Connection", action: addConnection)
         .buttonStyle(.borderedProminent)
+    }
+  }
+
+  private func autoPresentSetupIfNeeded() {
+    guard onConnectionReady != nil,
+      model.accounts.isEmpty,
+      !didAutoPresentSetup,
+      !showAddConnection
+    else { return }
+    didAutoPresentSetup = true
+    addConnection()
+  }
+
+  private func finishConnectionSetup() {
+    guard onConnectionReady != nil else { return }
+    showAddConnection = false
+    Task { @MainActor in
+      await Task.yield()
+      dismiss()
     }
   }
 
@@ -121,9 +169,19 @@ private struct ConnectionRow: View {
     HStack(spacing: 14) {
       ConnectionProviderMark(definition: provider, size: 44)
       VStack(alignment: .leading, spacing: 4) {
-        Text(account.label)
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(theme.primaryForegroundColor)
+        HStack(spacing: 6) {
+          Text(account.label)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
+          if model.isDefaultAccount(account.id) {
+            Text("Default")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(theme.accentColor)
+              .padding(.horizontal, 6)
+              .padding(.vertical, 2)
+              .background(theme.accentColor.opacity(0.12), in: Capsule())
+          }
+        }
         HStack(spacing: 5) {
           Text(provider?.displayName ?? account.providerID.rawValue)
           if let modelID = account.defaultModelID {
