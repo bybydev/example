@@ -30,12 +30,13 @@ struct ProviderManagementModelTests {
     try await environment.workspace.setDefaultAccount(account.id)
 
     await environment.model.load()
+    let storedDefault = await environment.workspace.defaultAccountID()
 
     #expect(environment.model.errorMessage == nil)
     #expect(environment.model.defaultAccountID == account.id)
     #expect(environment.model.accounts.first?.id == account.id)
     #expect(environment.model.accounts.first?.defaultModelID == newModel.id)
-    #expect(await environment.workspace.defaultAccountID() == account.id)
+    #expect(storedDefault == account.id)
   }
 
   @Test("Hidden default model is cleared when no visible fallback exists")
@@ -56,11 +57,12 @@ struct ProviderManagementModelTests {
     try await environment.workspace.setHidden(true, modelID: onlyModel.id, accountID: account.id)
 
     await environment.model.load()
+    let storedAccount = try await environment.workspace.account(id: account.id)
 
     #expect(environment.model.errorMessage == nil)
     #expect(environment.model.accounts.first?.id == account.id)
     #expect(environment.model.accounts.first?.defaultModelID == nil)
-    #expect(try await environment.workspace.account(id: account.id).defaultModelID == nil)
+    #expect(storedAccount.defaultModelID == nil)
   }
 
   @Test("Unusable persisted default fails over to a ready connection")
@@ -97,11 +99,12 @@ struct ProviderManagementModelTests {
     try await environment.manager.updateAccount(first)
 
     await environment.model.load()
+    let storedDefault = await environment.workspace.defaultAccountID()
 
     #expect(environment.model.errorMessage == nil)
     #expect(environment.model.defaultAccountID == second.id)
     #expect(environment.model.accounts.first?.id == second.id)
-    #expect(await environment.workspace.defaultAccountID() == second.id)
+    #expect(storedDefault == second.id)
   }
 
   private func makeEnvironment() async throws -> (
