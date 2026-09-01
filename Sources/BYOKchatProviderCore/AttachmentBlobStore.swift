@@ -174,14 +174,30 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
 
   public func deleteIDs(_ ids: Set<String>) async throws {
     guard !ids.isEmpty else { return }
-    for id in ids where Self.isValidID(id) {
+    let validIDs = Set(ids.filter(Self.isValidID))
+    guard !validIDs.isEmpty else { return }
+
+    for id in validIDs {
       try? fileManager.removeItem(at: url(for: id))
       knownIDs?.remove(id)
-      // Derived variants of a deleted original are garbage.
-      try? fileManager.removeItem(at: derivedDirectory.appendingPathComponent(id, isDirectory: false))
     }
+
+    // Thumbnail files are named `<blob-id>-<pixel-size>`. Enumerate once so a
+    // bulk orphan sweep remains O(files + deleted IDs), and parse the numeric
+    // size suffix instead of using a raw prefix match (which could collide
+    // with another imported ID that happens to start with the same text).
+    let derivedNames = (try? fileManager.contentsOfDirectory(atPath: derivedDirectory.path)) ?? []
+    for name in derivedNames {
+      let ownerID = Self.derivedBlobID(from: name)
+      let isLegacyExactName = validIDs.contains(name)
+      guard isLegacyExactName || ownerID.map(validIDs.contains) == true else { continue }
+      try? fileManager.removeItem(
+        at: derivedDirectory.appendingPathComponent(name, isDirectory: false)
+      )
+    }
+
     updateIndex { index in
-      for id in ids { index.entries.removeValue(forKey: id) }
+      for id in validIDs { index.entries.removeValue(forKey: id) }
     }
   }
 
@@ -292,6 +308,16 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     CGImageDestinationAddImage(output, cgImage, nil)
     guard CGImageDestinationFinalize(output) else { return nil }
     return outputData as Data
+  }
+
+  private static func derivedBlobID(from fileName: String) -> String? {
+    guard let separator = fileName.lastIndex(of: "-") else { return nil }
+    let id = String(fileName[..<separator])
+    let suffix = fileName[fileName.index(after: separator)...]
+    guard !id.isEmpty, !suffix.isEmpty, suffix.allSatisfy({ $0.isNumber }), isValidID(id) else {
+      return nil
+    }
+    return id
   }
 
   private func derivedURL(for id: String, maxPixelSize: Int) -> URL {
