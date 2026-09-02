@@ -66,7 +66,9 @@ struct BYOKDeveloperToolsView: View {
           systemImage: "rectangle.stack.fill",
           presentation: .fullScreen
         ) { close in
-          BYOKOnboardingView(onCompletion: close)
+          BYOKOnboardingView {
+            close()
+          }
         },
       ],
       resetOnboarding: FoundationDeveloperAction(

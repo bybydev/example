@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hoangbkit/AppFoundation",
       "state" : {
-        "revision" : "ed06fbdf3cc02021acbde47c909b2ffe7ffc811e",
-        "version" : "1.2.1"
+        "revision" : "71815e2127f2950e425c47f529df58fde9d3a8d5",
+        "version" : "1.4.0"
       }
     },
     {

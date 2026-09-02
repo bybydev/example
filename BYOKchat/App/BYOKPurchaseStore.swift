@@ -95,8 +95,8 @@ final class BYOKPurchaseStore {
     ],
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
-    privacyURL: URL(string: "https://byok.pro/privacy"),
-    termsURL: URL(string: "https://byok.pro/terms")
+    privacyURL: URL(string: "https://byok.pro/privacy")!,
+    termsURL: URL(string: "https://byok.pro/terms")!
   )
 
   private static let simulatedProducts: [PurchaseProduct] = [
