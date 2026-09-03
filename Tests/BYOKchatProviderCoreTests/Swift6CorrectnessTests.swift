@@ -33,6 +33,7 @@ private actor CorrectnessCaptureTransport: ProviderHTTPTransport {
 
 private func correctnessAccount(baseURLOverride: URL? = nil) -> ResolvedProviderAccount {
   ResolvedProviderAccount(
+    kind: ProviderKind(providerID: BuiltInProviders.deepSeekID),
     id: "correctness-account",
     providerID: BuiltInProviders.deepSeekID,
     label: "Correctness",

@@ -2,33 +2,44 @@ import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
-struct ConnectionsView: View {
+/// Flat provider list: one row per account, no sections. Built-ins and custom
+/// providers interleave alphabetically by provider then label.
+struct ProvidersView: View {
   @Bindable var model: ProviderManagementModel
   /// Non-nil means this screen was opened to repair/setup a chat rather than
-  /// as the persistent Settings manager. The legacy callback is intentionally
-  /// retained for source compatibility; successful setup now returns directly
-  /// to the presenting chat instead of opening another surface.
+  /// as the persistent Settings manager; completing setup returns to the chat.
   let onConnectionReady: (() -> Void)?
 
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
-  @State private var showAddConnection = false
+  @State private var editorMode: EditorMode?
   @State private var showProUpsell = false
   @State private var didAutoPresentSetup = false
+
+  /// Which editor presentation is active. Create mode is distinguished from a
+  /// repair deep-link (prefilled kind + focused field).
+  enum EditorMode: Identifiable {
+    case create(kind: ProviderKind?, focus: ConnectionEditorView.FocusRequest?)
+    case edit(accountID: ProviderAccountID)
+
+    var id: String {
+      switch self {
+      case .create(let kind, let focus):
+        "create-\(kind.map { $0.rawValue } ?? "any")-\(focus.map { "\($0)" } ?? "none")"
+      case .edit(let id): "edit-\(id.rawValue)"
+      }
+    }
+  }
 
   init(model: ProviderManagementModel, onConnectionReady: (() -> Void)? = nil) {
     self.model = model
     self.onConnectionReady = onConnectionReady
   }
 
-  private var customProviders: [ProviderDefinition] {
-    model.definitions.filter { !$0.isBuiltIn }
-  }
-
   var body: some View {
     Group {
-      if model.accounts.isEmpty && customProviders.isEmpty {
+      if model.accounts.isEmpty {
         emptyState
       } else {
         managerList
@@ -36,7 +47,7 @@ struct ConnectionsView: View {
     }
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
-    .navigationTitle("Connections")
+    .navigationTitle("Providers")
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button("Add Connection", systemImage: "plus") {
@@ -53,13 +64,26 @@ struct ConnectionsView: View {
     .onChange(of: model.accounts.count) { _, _ in
       autoPresentSetupIfNeeded()
     }
-    .sheet(isPresented: $showAddConnection) {
+    .sheet(item: $editorMode) { mode in
       NavigationStack {
-        ConnectionFlowView(
-          model: model,
-          completionTitle: onConnectionReady == nil ? "Done" : "Start Chatting",
-          onFinished: finishConnectionSetup
-        )
+        switch mode {
+        case .create(let kind, let focus):
+          ConnectionEditorView(
+            model: model,
+            existing: nil,
+            initialKind: kind,
+            focus: focus,
+            onFinished: finishConnectionSetup
+          )
+        case .edit(let accountID):
+          ConnectionEditorView(
+            model: model,
+            existing: model.accounts.first { $0.id == accountID },
+            initialKind: nil,
+            focus: nil,
+            onFinished: nil
+          )
+        }
       }
       .presentationDragIndicator(.visible)
     }
@@ -81,53 +105,10 @@ struct ConnectionsView: View {
 
   private var managerList: some View {
     List {
-      if let defaultID = model.defaultAccountID,
-        let account = model.accounts.first(where: { $0.id == defaultID })
-      {
-        Section("Default") {
-          connectionLink(account)
-        }
+      ForEach(model.accounts) { account in
+        connectionLink(account)
       }
-
-      let remaining = model.accounts.filter { $0.id != model.defaultAccountID }
-      if !remaining.isEmpty {
-        Section(model.defaultAccountID == nil ? "Connections" : "Other Connections") {
-          ForEach(remaining) { account in
-            connectionLink(account)
-          }
-        }
-      }
-
-      if !customProviders.isEmpty {
-        Section {
-          ForEach(customProviders) { definition in
-            NavigationLink {
-              CustomProviderManagementView(model: model, providerID: definition.id)
-            } label: {
-              HStack(spacing: 12) {
-                ConnectionProviderMark(definition: definition, size: 38)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(definition.displayName)
-                    .foregroundStyle(theme.primaryForegroundColor)
-                  Text(definition.defaultBaseURL.host ?? definition.defaultBaseURL.absoluteString)
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryForegroundColor)
-                    .lineLimit(1)
-                }
-                Spacer()
-                Text("\(model.accounts(for: definition.id).count)")
-                  .font(.caption.monospacedDigit())
-                  .foregroundStyle(theme.secondaryForegroundColor)
-              }
-            }
-          }
-        } header: {
-          Text("Custom Providers")
-        } footer: {
-          Text("Custom provider definitions are shared by every connection that uses them.")
-            .foregroundStyle(theme.secondaryForegroundColor)
-        }
-      }
+      .listRowBackground(theme.surfaceColor)
     }
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
@@ -136,12 +117,12 @@ struct ConnectionsView: View {
 
   @ViewBuilder
   private func connectionLink(_ account: ProviderAccount) -> some View {
-    NavigationLink {
-      ConnectionDetailView(model: model, accountID: account.id)
+    Button {
+      editorMode = .edit(accountID: account.id)
     } label: {
-      ConnectionRow(model: model, account: account)
+      ProviderRow(model: model, account: account)
     }
-    .listRowBackground(theme.surfaceColor)
+    .buttonStyle(.plain)
   }
 
   private var emptyState: some View {
@@ -159,7 +140,7 @@ struct ConnectionsView: View {
     guard onConnectionReady != nil,
       model.accounts.isEmpty,
       !didAutoPresentSetup,
-      !showAddConnection
+      editorMode == nil
     else { return }
     didAutoPresentSetup = true
     addConnection()
@@ -167,7 +148,7 @@ struct ConnectionsView: View {
 
   private func finishConnectionSetup() {
     guard onConnectionReady != nil else { return }
-    showAddConnection = false
+    editorMode = nil
     Task { @MainActor in
       await Task.yield()
       dismiss()
@@ -179,14 +160,17 @@ struct ConnectionsView: View {
       currentCount: model.accounts.count,
       hasPro: purchaseManager.hasPro
     ) {
-      showAddConnection = true
+      editorMode = .create(kind: nil, focus: nil)
     } else {
       showProUpsell = true
     }
   }
 }
 
-private struct ConnectionRow: View {
+/// One row per account: logo, provider-derived label, default model or the
+/// reason it is not ready, status dot. The label is the provider name unless
+/// the user renamed the account or a second account needs disambiguating.
+private struct ProviderRow: View {
   let model: ProviderManagementModel
   let account: ProviderAccount
 
@@ -200,43 +184,38 @@ private struct ConnectionRow: View {
     connectionStatus(model: model, account: account)
   }
 
+  private var rowTitle: String {
+    let providerName = provider?.displayName ?? account.providerID.rawValue
+    // A user label matching the provider name (or the legacy "Personal"
+    // default) presents as the provider itself.
+    if account.label == providerName || account.label == "Personal" {
+      return providerName
+    }
+    return account.label
+  }
+
   var body: some View {
     HStack(spacing: 14) {
       ConnectionProviderMark(definition: provider, size: 44)
       VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 6) {
-          Text(account.label)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(theme.primaryForegroundColor)
-          if model.isDefaultAccount(account.id) {
-            Text("Default")
-              .font(.caption2.weight(.semibold))
-              .foregroundStyle(theme.accentColor)
-              .padding(.horizontal, 6)
-              .padding(.vertical, 2)
-              .background(theme.accentColor.opacity(0.12), in: Capsule())
-          }
-        }
+        Text(rowTitle)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(theme.primaryForegroundColor)
         HStack(spacing: 5) {
-          Text(provider?.displayName ?? account.providerID.rawValue)
-          if let modelID = account.defaultModelID {
-            Text("·")
+          if status.isReady, let modelID = account.defaultModelID {
             Text(modelDisplayName(model: model, accountID: account.id, modelID: modelID))
               .lineLimit(1)
+          } else {
+            Text(status.label)
           }
         }
         .font(.caption)
         .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer(minLength: 8)
-      HStack(spacing: 6) {
-        Circle()
-          .fill(status.isReady ? theme.accentColor : Color.secondary)
-          .frame(width: 7, height: 7)
-        Text(status.isReady ? "Configured" : status.label)
-          .font(.caption.weight(.medium))
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
+      Circle()
+        .fill(status.isReady ? theme.accentColor : Color.secondary)
+        .frame(width: 7, height: 7)
     }
     .padding(.vertical, 2)
     .contentShape(Rectangle())

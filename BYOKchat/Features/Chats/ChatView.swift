@@ -288,10 +288,12 @@ struct ChatView: View {
     }
     .sheet(isPresented: $showTargetSettings) {
       if let conversation {
-        ConversationTargetView(
-          conversation: conversation,
-          chats: chats,
-          providers: providers
+        TargetPickerView(
+          providers: providers,
+          initialAccountID: conversation.accountID,
+          initialModelID: conversation.modelID,
+          initialReasoning: conversation.options.reasoning,
+          mode: .existingChat(conversation: conversation, chats: chats)
         )
       }
     }
@@ -438,8 +440,11 @@ struct ChatView: View {
     }
     .sheet(isPresented: $showConnections) {
       NavigationStack {
-        ConnectionsView(model: providers) {
-          openSettings()
+        // Repair/setup from the chat: finishing returns straight to the
+        // now-ready composer instead of opening Settings.
+        ProvidersView(model: providers) {
+          // Intentionally no further navigation; the sheet dismissal is the
+          // return path.
         }
       }
       .presentationDragIndicator(.visible)

@@ -196,39 +196,124 @@ public enum BYOKStorageBootstrap {
     from: Int,
     to: Int
   ) throws -> [String: Any] {
-    guard from == 0, to == 1 else {
-      throw BYOKStorageMigrationError.unavailableMigration(
-        store: kind.rawValue,
-        from: from,
-        to: to
-      )
-    }
-
     var value = root
-    value["schemaVersion"] = 1
+    value["schemaVersion"] = to
     switch kind {
     case .providers:
-      if value["customProviders"] == nil { value["customProviders"] = [] }
-      if value["accounts"] == nil { value["accounts"] = [] }
-      if value["modelRecords"] == nil { value["modelRecords"] = [] }
-      if value["providerDefaultAccountIDs"] == nil { value["providerDefaultAccountIDs"] = [:] }
-      if value["tombstones"] == nil { value["tombstones"] = [:] }
+      switch (from, to) {
+      case (0, 1):
+        if value["customProviders"] == nil { value["customProviders"] = [] }
+        if value["accounts"] == nil { value["accounts"] = [] }
+        if value["modelRecords"] == nil { value["modelRecords"] = [] }
+        if value["providerDefaultAccountIDs"] == nil { value["providerDefaultAccountIDs"] = [:] }
+      case (1, 2):
+        try migrateProvidersWorkspaceToKind(&value)
+      default:
+        throw BYOKStorageMigrationError.unavailableMigration(
+          store: kind.rawValue,
+          from: from,
+          to: to
+        )
+      }
     case .conversations:
+      guard from == 0, to == 1 else {
+        throw BYOKStorageMigrationError.unavailableMigration(
+          store: kind.rawValue, from: from, to: to)
+      }
       if value["conversations"] == nil { value["conversations"] = [] }
       if value["tombstones"] == nil { value["tombstones"] = [:] }
     case .projects:
+      guard from == 0, to == 1 else {
+        throw BYOKStorageMigrationError.unavailableMigration(
+          store: kind.rawValue, from: from, to: to)
+      }
       if value["projects"] == nil { value["projects"] = [] }
       if value["conversationProjectIDs"] == nil { value["conversationProjectIDs"] = [:] }
       if value["tombstones"] == nil { value["tombstones"] = [:] }
     case .mcp:
+      guard from == 0, to == 1 else {
+        throw BYOKStorageMigrationError.unavailableMigration(
+          store: kind.rawValue, from: from, to: to)
+      }
       if value["servers"] == nil { value["servers"] = [] }
       if value["snapshots"] == nil { value["snapshots"] = [] }
       if value["tombstones"] == nil { value["tombstones"] = [:] }
     case .library:
+      guard from == 0, to == 1 else {
+        throw BYOKStorageMigrationError.unavailableMigration(
+          store: kind.rawValue, from: from, to: to)
+      }
       if value["entries"] == nil { value["entries"] = [] }
       if value["tombstones"] == nil { value["tombstones"] = [:] }
     }
     return value
+  }
+
+  /// Schema 1 → 2: fold provider kinds into accounts. Each account gains
+  /// `kind` (mapped from its provider ID); accounts backed by a custom
+  /// definition receive that definition's endpoint/auth/paths/seeds directly
+  /// so they become self-contained. Definitions no longer referenced by any
+  /// account are dropped.
+  private static func migrateProvidersWorkspaceToKind(_ value: inout [String: Any]) throws {
+    guard let accounts = value["accounts"] as? [[String: Any]] else {
+      throw BYOKStorageMigrationError.invalidRoot(store: BYOKStorageStoreKind.providers.rawValue)
+    }
+    let customDefinitions = (value["customProviders"] as? [[String: Any]]) ?? []
+    var definitionsByID: [String: [String: Any]] = [:]
+    for definition in customDefinitions {
+      guard let id = definition["id"] as? String else { continue }
+      definitionsByID[id] = definition
+    }
+
+    var referencedDefinitionIDs: Set<String> = []
+    var migratedAccounts: [[String: Any]] = []
+    for var account in accounts {
+      guard let providerID = account["providerID"] as? String else {
+        throw BYOKStorageMigrationError.invalidRoot(store: BYOKStorageStoreKind.providers.rawValue)
+      }
+      guard account["kind"] == nil else {
+        // Already migrated (defensive); keep it and count its definition as referenced.
+        if definitionsByID[providerID] != nil { referencedDefinitionIDs.insert(providerID) }
+        migratedAccounts.append(account)
+        continue
+      }
+
+      if let definition = definitionsByID[providerID] {
+        // Custom provider account: fold definition configuration into the account.
+        referencedDefinitionIDs.insert(providerID)
+        account["kind"] = ProviderKind.openAICompatible.rawValue
+        if account["chatCompletionsPath"] == nil,
+          let chatPath = definition["chatCompletionsPath"] as? String
+        {
+          account["chatCompletionsPath"] = chatPath
+        }
+        if account["modelsPath"] == nil, let modelsPath = definition["modelsPath"] {
+          account["modelsPath"] = modelsPath
+        }
+        if account["authChoice"] == nil, let authentication = definition["authentication"] {
+          account["authChoice"] = authentication
+        }
+        if account["seedModelIDs"] == nil,
+          let seedModels = definition["seedModels"] as? [[String: Any]]
+        {
+          account["seedModelIDs"] = seedModels.compactMap { $0["id"] as? String }
+        }
+        // The definition's base URL is the account's endpoint when the account
+        // has no override of its own.
+        if account["baseURLOverride"] == nil, let baseURL = definition["defaultBaseURL"] as? String {
+          account["baseURLOverride"] = baseURL
+        }
+      } else {
+        account["kind"] = ProviderKind(providerID: ProviderID(rawValue: providerID)).rawValue
+      }
+      migratedAccounts.append(account)
+    }
+
+    value["accounts"] = migratedAccounts
+    value["customProviders"] = customDefinitions.filter { definition in
+      guard let id = definition["id"] as? String else { return false }
+      return referencedDefinitionIDs.contains(id)
+    }
   }
 
   private static func validate(

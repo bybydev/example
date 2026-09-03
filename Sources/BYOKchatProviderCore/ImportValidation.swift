@@ -79,6 +79,7 @@ public enum WorkspaceImportValidator {
           try ProviderHTTP.validateBaseURL(
             baseURL,
             allowsLocalHTTP: definition.allowsLocalHTTP
+              || account.kind == .openAICompatible && isPrivateNetworkURL(baseURL)
           )
         } catch {
           throw ProviderError.importConflict(
@@ -115,19 +116,13 @@ public enum WorkspaceImportValidator {
     }
 
     for (providerValue, accountValue) in workspace.providerDefaultAccountIDs {
-      let providerID = ProviderID(rawValue: providerValue)
       let accountID = ProviderAccountID(rawValue: accountValue)
-      guard definitions[providerID] != nil else {
-        throw ProviderError.importConflict(
-          "A provider-specific default references unknown provider \(providerValue)."
-        )
-      }
       guard let account = accountsByID[accountID] else {
         throw ProviderError.importConflict(
           "A provider-specific default references unknown account \(accountValue)."
         )
       }
-      guard account.providerID == providerID else {
+      guard account.providerID.rawValue == providerValue else {
         throw ProviderError.importConflict(
           "Default account \(accountValue) belongs to a different provider than \(providerValue)."
         )
@@ -291,6 +286,11 @@ public enum WorkspaceImportValidator {
         }
       }
     }
+  }
+
+  private static func isPrivateNetworkURL(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "http", let host = url.host else { return false }
+    return ProviderHTTP.isPrivateNetworkHost(host)
   }
 
   private static func requireUnique<Value, ID: Hashable>(

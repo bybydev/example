@@ -7,6 +7,7 @@ import Testing
   let providers = ProviderWorkspaceStore(persistence: InMemoryProviderWorkspacePersistence())
   try await providers.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "deepseek"),
     id: "portable-account",
     providerID: "deepseek",
     label: "DeepSeek",

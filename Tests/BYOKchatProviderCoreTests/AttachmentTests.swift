@@ -104,6 +104,7 @@ import Testing
     messages: [.init(role: .user, content: "Understand this", attachments: [image])]
   )
   let account = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: BuiltInProviders.deepSeekID),
     id: "account",
     providerID: BuiltInProviders.deepSeekID,
     label: "DeepSeek",
@@ -127,6 +128,7 @@ import Testing
     messages: [.init(role: .user, content: "Read this", attachments: [pdf])]
   )
   let account = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: BuiltInProviders.deepSeekID),
     id: "account",
     providerID: BuiltInProviders.deepSeekID,
     label: "DeepSeek",
@@ -150,6 +152,7 @@ import Testing
     messages: [.init(role: .user, content: "Summarize", attachments: [file])]
   )
   let account = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: BuiltInProviders.deepSeekID),
     id: "account",
     providerID: BuiltInProviders.deepSeekID,
     label: "DeepSeek",
@@ -289,6 +292,7 @@ import Testing
     ]
   )
   let account = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: "openrouter"),
     id: "account",
     providerID: "openrouter",
     label: "OpenRouter",

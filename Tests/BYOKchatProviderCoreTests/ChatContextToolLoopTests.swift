@@ -9,6 +9,7 @@ import Testing
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "openrouter"),
     id: "account",
     providerID: "openrouter",
     label: "OpenRouter",
@@ -136,6 +137,7 @@ import Testing
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "openrouter"),
     id: "account",
     providerID: "openrouter",
     label: "OpenRouter",

@@ -14,41 +14,35 @@ final class ProviderManagementModel {
   private(set) var defaultAccountID: ProviderAccountID?
   var isBusy = false
   var errorMessage: String?
-  var statusMessage: String?
 
   private let registry: ProviderRegistry
   private let workspace: ProviderWorkspaceStore
-  private let vault: any CredentialVault
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
 
   init(
     registry: ProviderRegistry,
     workspace: ProviderWorkspaceStore,
-    vault: any CredentialVault,
     accountManager: ProviderAccountManager,
     runtime: ProviderRuntime
   ) {
     self.registry = registry
     self.workspace = workspace
-    self.vault = vault
     self.accountManager = accountManager
     self.runtime = runtime
   }
 
   func load() async {
-    await perform("Provider workspace loaded") {
+    await perform() {
       try await workspace.load()
       try await accountManager.synchronizeCustomProviders()
-      try await ensureDefaultModelsExist()
       try await reloadSnapshot()
     }
   }
 
   func reloadFromStorage() async {
-    await perform("Provider workspace reloaded") {
+    await perform() {
       try await accountManager.synchronizeCustomProviders()
-      try await ensureDefaultModelsExist()
       try await reloadSnapshot()
     }
   }
@@ -72,13 +66,17 @@ final class ProviderManagementModel {
   }
 
   func createConnection(
-    providerID: ProviderID,
+    kind: ProviderKind,
     label: String,
     credential: String,
     baseURL: String,
     defaultModel: String,
     headers: [String: String],
-    metadata: [String: String]
+    metadata: [String: String],
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    authChoice: ProviderAuthentication? = nil,
+    seedModelIDs: [String]? = nil
   ) async -> ProviderAccountID? {
     isBusy = true
     errorMessage = nil
@@ -86,16 +84,20 @@ final class ProviderManagementModel {
     do {
       let override = try optionalURL(baseURL)
       let account = try await accountManager.createAccount(
-        providerID: providerID,
+        kind: kind,
         label: label,
         credential: credential.isEmpty ? nil : credential,
+        chatCompletionsPath: chatCompletionsPath,
+        modelsPath: modelsPath,
+        authChoice: authChoice,
+        seedModelIDs: seedModelIDs,
         baseURLOverride: override,
         additionalHeaders: headers,
         metadata: metadata,
         defaultModelID: defaultModel.isEmpty ? nil : ModelID(rawValue: defaultModel)
       )
-      if let definition = provider(for: providerID), !definition.seedModels.isEmpty {
-        try await workspace.mergeModels(definition.seedModels, for: account.id)
+      if !kind.seedModels.isEmpty {
+        try await workspace.mergeModels(kind.seedModels, for: account.id)
       }
       if let defaultModelID = account.defaultModelID,
         !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
@@ -112,7 +114,6 @@ final class ProviderManagementModel {
         )
       }
       try await reloadSnapshot()
-      statusMessage = "Connection saved"
       return account.id
     } catch {
       errorMessage = error.localizedDescription
@@ -121,22 +122,30 @@ final class ProviderManagementModel {
   }
 
   func createAccount(
-    providerID: ProviderID,
+    kind: ProviderKind,
     label: String,
     credential: String,
     baseURL: String,
     defaultModel: String,
     headers: [String: String],
-    metadata: [String: String]
+    metadata: [String: String],
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    authChoice: ProviderAuthentication? = nil,
+    seedModelIDs: [String]? = nil
   ) async -> Bool {
     await createConnection(
-      providerID: providerID,
+      kind: kind,
       label: label,
       credential: credential,
       baseURL: baseURL,
       defaultModel: defaultModel,
       headers: headers,
-      metadata: metadata
+      metadata: metadata,
+      chatCompletionsPath: chatCompletionsPath,
+      modelsPath: modelsPath,
+      authChoice: authChoice,
+      seedModelIDs: seedModelIDs
     ) != nil
   }
 
@@ -147,7 +156,7 @@ final class ProviderManagementModel {
     headers: [String: String],
     metadata: [String: String]
   ) async -> Bool {
-    await performResult("Connection updated") {
+    await performResult() {
       var updated = account
       updated.baseURLOverride = try optionalURL(baseURL)
       updated.additionalHeaders = headers
@@ -160,13 +169,60 @@ final class ProviderManagementModel {
     }
   }
 
+  /// Scoped account update: fetches the current account from the workspace by
+  /// ID and applies only the fields the caller passed. Callers never hand over
+  /// a captured account struct, so concurrent edits to other fields survive.
+  /// - `newCredential`: non-nil non-empty replaces the keychain secret.
+  /// - `baseURLString`: "" (or whitespace) clears the endpoint override.
+  func updateAccount(
+    accountID: ProviderAccountID,
+    label: String? = nil,
+    newCredential: String? = nil,
+    baseURLString: String? = nil,
+    headers: [String: String]? = nil,
+    metadata: [String: String]? = nil
+  ) async -> Bool {
+    await performResult() {
+      var updated = try await workspace.account(id: accountID)
+      if let label {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+          throw ProviderError.invalidRequest("Account label cannot be empty.")
+        }
+        updated.label = trimmed
+      }
+      if let baseURLString {
+        updated.baseURLOverride = try optionalURL(baseURLString)
+      }
+      if let headers { updated.additionalHeaders = headers }
+      if let metadata { updated.metadata = metadata }
+      try await accountManager.updateAccount(updated)
+      if let newCredential, !newCredential.isEmpty {
+        try await accountManager.setCredential(newCredential, accountID: accountID)
+      }
+      try await reloadSnapshot()
+    }
+  }
+
+  /// Next auto-name for a kind: the provider display name, numbered on
+  /// collision ("Anthropic", "Anthropic 2", …).
+  func autoName(for kind: ProviderKind) -> String {
+    let base = kind == .openAICompatible ? "" : kind.displayName
+    guard !base.isEmpty else { return "" }
+    let existing = Set(accounts.map(\.label))
+    guard existing.contains(base) else { return base }
+    var index = 2
+    while existing.contains("\(base) \(index)") { index += 1 }
+    return "\(base) \(index)"
+  }
+
   func setDefaultAccount(_ id: ProviderAccountID) async -> Bool {
-    await performResult("Default connection updated") {
+    await performResult() {
       let account = try await workspace.account(id: id)
       guard account.isEnabled else {
         throw ProviderError.invalidRequest("Enable this connection before making it the default.")
       }
-      guard connectionIsReady(account) else {
+      guard isReady(account) else {
         throw ProviderError.invalidRequest(
           "Add a credential and an available model before making this connection the default."
         )
@@ -177,7 +233,7 @@ final class ProviderManagementModel {
   }
 
   func setAccountEnabled(_ enabled: Bool, accountID: ProviderAccountID) async -> Bool {
-    await performResult(enabled ? "Connection enabled" : "Connection disabled") {
+    await performResult() {
       var account = try await workspace.account(id: accountID)
       account.isEnabled = enabled
       try await accountManager.updateAccount(account)
@@ -186,7 +242,7 @@ final class ProviderManagementModel {
   }
 
   func deleteAccount(_ id: ProviderAccountID) async {
-    await perform("Connection deleted") {
+    await perform() {
       let cleanupFailures = try await accountManager.deleteAccount(id)
       try await reloadSnapshot()
       guard cleanupFailures.isEmpty else {
@@ -196,7 +252,7 @@ final class ProviderManagementModel {
   }
 
   func setDefaultModel(_ modelID: ModelID, accountID: ProviderAccountID) async {
-    await perform("Default model updated") {
+    await perform() {
       var account = try await workspace.account(id: accountID)
       account.defaultModelID = modelID
       try await accountManager.updateAccount(account)
@@ -205,28 +261,26 @@ final class ProviderManagementModel {
   }
 
   func testConnectionResult(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
-    await performResult("Connection successful") {
+    await performResult() {
       try await runtime.testConnection(accountID: accountID, modelID: modelID)
     }
   }
 
-  func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async {
-    _ = await testConnectionResult(accountID: accountID, modelID: modelID)
+  /// Preview-only model discovery against an unsaved account (create mode).
+  /// Reads nothing from the workspace and persists nothing.
+  func previewModels(for account: ResolvedProviderAccount) async throws -> [ProviderModel] {
+    try await runtime.listModels(account: account)
   }
 
   func refreshModelsResult(accountID: ProviderAccountID) async -> Bool {
-    await performResult("Models refreshed") {
+    await performResult() {
       _ = try await runtime.refreshModels(accountID: accountID)
       try await reloadSnapshot()
     }
   }
 
-  func refreshModels(accountID: ProviderAccountID) async {
-    _ = await refreshModelsResult(accountID: accountID)
-  }
-
   func addManualModel(_ modelID: String, accountID: ProviderAccountID) async -> Bool {
-    await performResult("Model added") {
+    await performResult() {
       let account = try await workspace.account(id: accountID)
       let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { throw ProviderError.invalidModel }
@@ -240,49 +294,15 @@ final class ProviderManagementModel {
   }
 
   func setFavorite(_ favorite: Bool, modelID: ModelID, accountID: ProviderAccountID) async {
-    await perform(nil) {
+    await perform() {
       try await workspace.setFavorite(favorite, modelID: modelID, accountID: accountID)
       try await reloadSnapshot()
     }
   }
 
   func setHidden(_ hidden: Bool, modelID: ModelID, accountID: ProviderAccountID) async {
-    await perform(nil) {
+    await perform() {
       try await workspace.setHidden(hidden, modelID: modelID, accountID: accountID)
-      try await reloadSnapshot()
-    }
-  }
-
-  func createCustomProvider(
-    id: String,
-    name: String,
-    baseURL: String,
-    chatPath: String,
-    modelsPath: String,
-    authentication: ProviderAuthentication,
-    seedModels: [String],
-    allowsLocalHTTP: Bool
-  ) async -> Bool {
-    await performResult("Custom provider added") {
-      guard let url = URL(string: baseURL) else { throw ProviderError.invalidBaseURL }
-      let definition = try CustomProviderFactory.makeOpenAICompatible(
-        id: id,
-        displayName: name,
-        baseURL: url,
-        chatCompletionsPath: chatPath,
-        modelsPath: modelsPath.isEmpty ? nil : modelsPath,
-        authentication: authentication,
-        seedModelIDs: seedModels,
-        allowsLocalHTTP: allowsLocalHTTP
-      )
-      try await runtime.registerCustomProvider(definition)
-      try await reloadSnapshot()
-    }
-  }
-
-  func deleteCustomProvider(_ id: ProviderID) async {
-    await perform("Custom provider deleted") {
-      try await runtime.deleteCustomProvider(id)
       try await reloadSnapshot()
     }
   }
@@ -304,30 +324,12 @@ final class ProviderManagementModel {
     )
   }
 
-  private func ensureDefaultModelsExist() async throws {
-    for account in await workspace.allAccounts() {
-      guard let defaultModelID = account.defaultModelID else { continue }
-      let records = await workspace.modelRecords(for: account.id, includeHidden: true)
-      guard !records.contains(where: { $0.model.id == defaultModelID }) else { continue }
-      try await workspace.addManualModel(
-        ProviderModel(
-          providerID: account.providerID,
-          id: defaultModelID,
-          displayName: defaultModelID.rawValue
-        ),
-        for: account.id
-      )
-    }
-  }
-
-  /// Builds one coherent snapshot and repairs only invalid defaults. The
-  /// persisted default account remains stable while usable; when it is deleted,
-  /// disabled, loses its credential, or has no model, the first usable account
-  /// becomes the new default. This keeps fresh-chat presentation and creation
-  /// on the same target without inventing a second UI-only default policy.
+  /// Builds one coherent snapshot. This read never writes: the persisted
+  /// default is not rewritten here and stale defaults are not repaired.
+  /// Resolution falls back in memory via `workspace.resolvedDefaultAccountID`.
   private func reloadSnapshot() async throws {
     definitions = await registry.allDefinitions()
-    var loadedAccounts = await workspace.allAccounts()
+    let loadedAccounts = await workspace.allAccounts()
 
     var modelValues: [ProviderAccountID: [AccountModelRecord]] = [:]
     var credentialValues: Set<ProviderAccountID> = []
@@ -338,45 +340,30 @@ final class ProviderManagementModel {
       }
     }
 
-    // Normalize every stored default to a visible available model. If none is
-    // usable, clear the default instead of leaving a stale/hidden ID that the
-    // composer refuses to present but chat creation could otherwise reuse.
-    for index in loadedAccounts.indices {
-      var account = loadedAccounts[index]
-      let available = (modelValues[account.id] ?? []).filter { $0.isAvailable && !$0.isHidden }
-      let currentIsAvailable = account.defaultModelID.map { current in
-        available.contains { $0.model.id == current }
-      } ?? false
-      if !currentIsAvailable {
-        let repairedDefault = available.first?.model.id
-        if account.defaultModelID != repairedDefault {
-          account.defaultModelID = repairedDefault
-          try await accountManager.updateAccount(account)
-          loadedAccounts[index] = account
-        }
-      }
-    }
-
     modelsByAccount = modelValues
     credentialAccountIDs = credentialValues
 
-    let storedDefault = await workspace.defaultAccountID()
-    let usableDefault = storedDefault.flatMap { id in
-      loadedAccounts.first { $0.id == id && connectionIsReady($0) }?.id
+    // Plain-value inputs instead of closures: the resolver runs on the
+    // workspace actor, and closures capturing MainActor-isolated state would
+    // be non-Sendable across that hop.
+    var credentialRequiredByProvider: [ProviderID: Bool] = [:]
+    for definition in definitions {
+      let required: Bool
+      switch definition.authentication {
+      case .none: required = false
+      case .bearer, .header: required = true
+      }
+      credentialRequiredByProvider[definition.id] = required
     }
-    let resolvedDefault = usableDefault
-      ?? loadedAccounts.first(where: connectionIsReady)?.id
-      ?? loadedAccounts.first(where: \.isEnabled)?.id
-      ?? loadedAccounts.first?.id
 
-    if resolvedDefault != storedDefault {
-      try await workspace.setDefaultAccount(resolvedDefault)
-    }
-    defaultAccountID = resolvedDefault
+    defaultAccountID = await workspace.resolvedDefaultAccountID(
+      credentialRequiredByProvider: credentialRequiredByProvider,
+      credentialAccountIDs: credentialValues
+    )
 
     accounts = loadedAccounts.sorted { lhs, rhs in
-      if lhs.id == resolvedDefault { return true }
-      if rhs.id == resolvedDefault { return false }
+      if lhs.id == defaultAccountID { return true }
+      if rhs.id == defaultAccountID { return false }
       if lhs.providerID == rhs.providerID {
         return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
       }
@@ -384,7 +371,9 @@ final class ProviderManagementModel {
     }
   }
 
-  private func connectionIsReady(_ account: ProviderAccount) -> Bool {
+  /// The one readiness predicate, shared by every surface (list rows, chip,
+  /// picker, chat creation policy).
+  func isReady(_ account: ProviderAccount) -> Bool {
     guard account.isEnabled, let definition = provider(for: account.providerID) else { return false }
     switch definition.authentication {
     case .none:
@@ -396,6 +385,10 @@ final class ProviderManagementModel {
     return available
   }
 
+  var resolvedDefaultAccount: ProviderAccount? {
+    defaultAccountID.flatMap { id in accounts.first { $0.id == id } }
+  }
+
   private func optionalURL(_ value: String) throws -> URL? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
@@ -403,25 +396,23 @@ final class ProviderManagementModel {
     return url
   }
 
-  private func perform(_ success: String?, operation: () async throws -> Void) async {
+  private func perform(operation: () async throws -> Void) async {
     isBusy = true
     errorMessage = nil
     defer { isBusy = false }
     do {
       try await operation()
-      statusMessage = success
     } catch {
       errorMessage = error.localizedDescription
     }
   }
 
-  private func performResult(_ success: String?, operation: () async throws -> Void) async -> Bool {
+  private func performResult(operation: () async throws -> Void) async -> Bool {
     isBusy = true
     errorMessage = nil
     defer { isBusy = false }
     do {
       try await operation()
-      statusMessage = success
       return true
     } catch {
       errorMessage = error.localizedDescription

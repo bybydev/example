@@ -250,10 +250,15 @@ struct ChatComposer: View {
         let chats = targetPickerChats,
         let providers = targetPickerProviders
       {
-        ComposerTargetPickerView(
-          conversation: chats.conversation(conversation.id) ?? conversation,
-          chats: chats,
-          providers: providers
+        TargetPickerView(
+          providers: providers,
+          initialAccountID: conversation.accountID,
+          initialModelID: conversation.modelID,
+          initialReasoning: conversation.options.reasoning,
+          mode: .existingChat(
+            conversation: chats.conversation(conversation.id) ?? conversation,
+            chats: chats
+          )
         )
       }
     }
@@ -378,6 +383,7 @@ struct ChatComposer: View {
 
   private var targetButton: some View {
     Button {
+      isEditorFocused = false
       if targetPickerConversation != nil {
         showTargetPicker = true
       } else {

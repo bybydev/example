@@ -396,6 +396,7 @@ private extension ProviderManagementModel {
 
     for configuration in configurations {
       guard provider(for: configuration.providerID) != nil else { continue }
+      let kind = ProviderKind(providerID: configuration.providerID)
 
       let matches = simulatorAccounts.filter { $0.providerID == configuration.providerID }
       let succeeded: Bool
@@ -412,7 +413,7 @@ private extension ProviderManagementModel {
         )
       } else {
         succeeded = await createAccount(
-          providerID: configuration.providerID,
+          kind: kind,
           label: configuration.label,
           credential: credential,
           baseURL: configuration.baseURL.absoluteString,
@@ -432,7 +433,7 @@ private extension ProviderManagementModel {
       if let configured = simulatorAccounts.first(where: {
         $0.providerID == configuration.providerID
       }), provider(for: configuration.providerID)?.modelsPath != nil {
-        await refreshModels(accountID: configured.id)
+        _ = await refreshModelsResult(accountID: configured.id)
       }
     }
 

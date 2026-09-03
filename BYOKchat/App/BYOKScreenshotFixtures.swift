@@ -125,8 +125,7 @@ enum BYOKScreenshotFixtures {
       contextWindowKind: .inputOnly,
       maxOutputTokens: 128_000,
       supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
-      inputModalities: ["text", "image", "file"],
-      isSeed: true
+      inputModalities: ["text", "image", "file"]
     )
     let openRouter = ProviderModel(
       providerID: BuiltInProviders.openRouterID,
@@ -136,8 +135,7 @@ enum BYOKScreenshotFixtures {
       contextWindowKind: .combined,
       maxOutputTokens: 128_000,
       supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning", "tools"],
-      inputModalities: ["text", "image", "file"],
-      isSeed: false
+      inputModalities: ["text", "image", "file"]
     )
     let gemini = ProviderModel(
       providerID: BuiltInProviders.geminiID,
@@ -147,22 +145,21 @@ enum BYOKScreenshotFixtures {
       contextWindowKind: .inputOnly,
       maxOutputTokens: 65_536,
       supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
-      inputModalities: ["text", "image", "file"],
-      isSeed: true
+      inputModalities: ["text", "image", "file"]
     )
 
     let accounts = [
       ProviderAccount(
+        kind: .anthropic,
         id: anthropicAccountID,
-        providerID: BuiltInProviders.anthropicID,
         label: "Personal",
         defaultModelID: claude.id,
         createdAt: now.addingTimeInterval(-86_400 * 18),
         updatedAt: now.addingTimeInterval(-1_800)
       ),
       ProviderAccount(
+        kind: .openRouter,
         id: openRouterAccountID,
-        providerID: BuiltInProviders.openRouterID,
         label: "Research",
         metadata: ["appTitle": "BYOK"],
         defaultModelID: openRouter.id,
@@ -170,8 +167,8 @@ enum BYOKScreenshotFixtures {
         updatedAt: now.addingTimeInterval(-3_600)
       ),
       ProviderAccount(
+        kind: .gemini,
         id: geminiAccountID,
-        providerID: BuiltInProviders.geminiID,
         label: "Fast",
         defaultModelID: gemini.id,
         createdAt: now.addingTimeInterval(-86_400 * 8),
@@ -187,24 +184,21 @@ enum BYOKScreenshotFixtures {
           model: claude,
           isFavorite: true,
           isManual: false,
-          isAvailable: true,
-          lastSeenAt: now
+          isAvailable: true
         ),
         AccountModelRecord(
           accountID: openRouterAccountID,
           model: openRouter,
           isFavorite: true,
           isManual: true,
-          isAvailable: true,
-          lastSeenAt: now
+          isAvailable: true
         ),
         AccountModelRecord(
           accountID: geminiAccountID,
           model: gemini,
           isFavorite: true,
           isManual: false,
-          isAvailable: true,
-          lastSeenAt: now
+          isAvailable: true
         ),
       ],
       defaultAccountID: anthropicAccountID,

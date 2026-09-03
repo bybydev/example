@@ -15,7 +15,8 @@ public enum BuiltInProviders {
     defaultBaseURL: URL(string: "https://api.openai.com/v1")!,
     modelsPath: "/models",
     authentication: .bearer,
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .openai
   )
 
   public static let deepSeek = ProviderDefinition(
@@ -31,15 +32,16 @@ public enum BuiltInProviders {
         contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
           "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
-        ], isSeed: true),
+        ]),
       .init(
         providerID: deepSeekID, id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
         contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
           "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
-        ], isSeed: true),
+        ]),
     ],
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .deepSeek
   )
 
   public static let openRouter = ProviderDefinition(
@@ -52,9 +54,10 @@ public enum BuiltInProviders {
     seedModels: [
       .init(
         providerID: openRouterID, id: "openrouter/free", displayName: "OpenRouter Free",
-        supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning"], isSeed: true)
+        supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning"])
     ],
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .openRouter
   )
 
   public static let nvidia = ProviderDefinition(
@@ -67,19 +70,20 @@ public enum BuiltInProviders {
     seedModels: [
       .init(
         providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
-        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+        supportedParameters: ["temperature", "top_p", "max_tokens"]),
       .init(
         providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
-        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+        supportedParameters: ["temperature", "top_p", "max_tokens"]),
       .init(
         providerID: nvidiaID, id: "nvidia/nemotron-3-ultra-550b-a55b",
         displayName: "Nemotron 3 Ultra 550B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+        supportedParameters: ["temperature", "top_p", "max_tokens"]),
       .init(
         providerID: nvidiaID, id: "qwen/qwen3.5-122b-a10b", displayName: "Qwen 3.5 122B A10B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"], isSeed: true),
+        supportedParameters: ["temperature", "top_p", "max_tokens"]),
     ],
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .nvidia
   )
 
   public static let anthropic = ProviderDefinition(
@@ -100,8 +104,7 @@ public enum BuiltInProviders {
         contextWindowKind: .inputOnly,
         maxOutputTokens: 128_000,
         supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
-        inputModalities: ["text", "image", "file"],
-        isSeed: true
+        inputModalities: ["text", "image", "file"]
       ),
       .init(
         providerID: anthropicID,
@@ -111,11 +114,11 @@ public enum BuiltInProviders {
         contextWindowKind: .inputOnly,
         maxOutputTokens: 128_000,
         supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
-        inputModalities: ["text", "image", "file"],
-        isSeed: true
+        inputModalities: ["text", "image", "file"]
       ),
     ],
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .anthropic
   )
 
   public static let gemini = ProviderDefinition(
@@ -136,11 +139,11 @@ public enum BuiltInProviders {
         contextWindowKind: .inputOnly,
         maxOutputTokens: 65_536,
         supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
-        inputModalities: ["text", "image", "file"],
-        isSeed: true
+        inputModalities: ["text", "image", "file"]
       )
     ],
-    isBuiltIn: true
+    isBuiltIn: true,
+    kind: .gemini
   )
 
   public static let all = [openAI, deepSeek, openRouter, nvidia, anthropic, gemini]

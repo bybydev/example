@@ -74,6 +74,7 @@ import Testing
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "deepseek"),
     id: "account",
     providerID: "deepseek",
     label: "DeepSeek",

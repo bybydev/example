@@ -42,6 +42,7 @@ private actor MockTransport: ProviderHTTPTransport {
 
 private func account(providerID: ProviderID) -> ResolvedProviderAccount {
   ResolvedProviderAccount(
+    kind: ProviderKind(providerID: providerID),
     id: "test-account",
     providerID: providerID,
     label: "Test",
@@ -92,6 +93,7 @@ private func account(providerID: ProviderID) -> ResolvedProviderAccount {
   let adapter = OpenAICompatibleAdapter(
     definition: BuiltInProviders.openRouter, transport: transport)
   let configuredAccount = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: "openrouter"),
     id: "or",
     providerID: "openrouter",
     label: "OpenRouter",

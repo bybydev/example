@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import Testing
 
 @testable import BYOKchat
@@ -6,66 +7,7 @@ import Testing
 @MainActor
 @Suite("Provider management defaults")
 struct ProviderManagementModelTests {
-  @Test("Unavailable default model is repaired to an available model")
-  func repairsUnavailableDefaultModel() async throws {
-    let environment = try await makeEnvironment()
-    let oldModel = ProviderModel(
-      providerID: BuiltInProviders.openAIID,
-      id: "old-model",
-      displayName: "Old Model"
-    )
-    let newModel = ProviderModel(
-      providerID: BuiltInProviders.openAIID,
-      id: "new-model",
-      displayName: "New Model"
-    )
-    let account = try await environment.manager.createAccount(
-      providerID: BuiltInProviders.openAIID,
-      label: "Primary",
-      credential: "test-key",
-      defaultModelID: oldModel.id
-    )
-    try await environment.workspace.mergeModels([oldModel, newModel], for: account.id)
-    try await environment.workspace.mergeModels([newModel], for: account.id)
-    try await environment.workspace.setDefaultAccount(account.id)
-
-    await environment.model.load()
-    let storedDefault = await environment.workspace.defaultAccountID()
-
-    #expect(environment.model.errorMessage == nil)
-    #expect(environment.model.defaultAccountID == account.id)
-    #expect(environment.model.accounts.first?.id == account.id)
-    #expect(environment.model.accounts.first?.defaultModelID == newModel.id)
-    #expect(storedDefault == account.id)
-  }
-
-  @Test("Hidden default model is cleared when no visible fallback exists")
-  func clearsHiddenDefaultWithoutFallback() async throws {
-    let environment = try await makeEnvironment()
-    let onlyModel = ProviderModel(
-      providerID: BuiltInProviders.openAIID,
-      id: "only-model",
-      displayName: "Only Model"
-    )
-    let account = try await environment.manager.createAccount(
-      providerID: BuiltInProviders.openAIID,
-      label: "Primary",
-      credential: "test-key",
-      defaultModelID: onlyModel.id
-    )
-    try await environment.workspace.mergeModels([onlyModel], for: account.id)
-    try await environment.workspace.setHidden(true, modelID: onlyModel.id, accountID: account.id)
-
-    await environment.model.load()
-    let storedAccount = try await environment.workspace.account(id: account.id)
-
-    #expect(environment.model.errorMessage == nil)
-    #expect(environment.model.accounts.first?.id == account.id)
-    #expect(environment.model.accounts.first?.defaultModelID == nil)
-    #expect(storedAccount.defaultModelID == nil)
-  }
-
-  @Test("Unusable persisted default fails over to a ready connection")
+  @Test("Snapshot default fails over to a ready account without repairing state")
   func failsOverUnusableDefault() async throws {
     let environment = try await makeEnvironment()
     let firstModel = ProviderModel(
@@ -80,13 +22,13 @@ struct ProviderManagementModelTests {
     )
 
     var first = try await environment.manager.createAccount(
-      providerID: BuiltInProviders.openAIID,
+      kind: .openai,
       label: "First",
       credential: "first-key",
       defaultModelID: firstModel.id
     )
     let second = try await environment.manager.createAccount(
-      providerID: BuiltInProviders.anthropicID,
+      kind: .anthropic,
       label: "Second",
       credential: "second-key",
       defaultModelID: secondModel.id
@@ -105,6 +47,33 @@ struct ProviderManagementModelTests {
     #expect(environment.model.defaultAccountID == second.id)
     #expect(environment.model.accounts.first?.id == second.id)
     #expect(storedDefault == second.id)
+  }
+
+  @Test("Hidden default model leaves stored state untouched; chat falls back in memory")
+  func hiddenDefaultDoesNotRepairState() async throws {
+    let environment = try await makeEnvironment()
+    let onlyModel = ProviderModel(
+      providerID: BuiltInProviders.openAIID,
+      id: "only-model",
+      displayName: "Only Model"
+    )
+    let account = try await environment.manager.createAccount(
+      kind: .openai,
+      label: "Primary",
+      credential: "test-key",
+      defaultModelID: onlyModel.id
+    )
+    try await environment.workspace.mergeModels([onlyModel], for: account.id)
+    try await environment.workspace.setHidden(true, modelID: onlyModel.id, accountID: account.id)
+
+    await environment.model.load()
+    let storedAccount = try await environment.workspace.account(id: account.id)
+
+    #expect(environment.model.errorMessage == nil)
+    #expect(environment.model.accounts.first?.id == account.id)
+    // Snapshot resolves to no model (the only one is hidden) but the stored
+    // account's default is untouched — the read did not write.
+    #expect(storedAccount.defaultModelID == onlyModel.id)
   }
 
   private func makeEnvironment() async throws -> (
@@ -129,10 +98,49 @@ struct ProviderManagementModelTests {
     let model = ProviderManagementModel(
       registry: registry,
       workspace: workspace,
-      vault: vault,
       accountManager: manager,
       runtime: runtime
     )
     return (model, workspace, manager)
+  }
+}
+
+@Suite("Provider logo catalog")
+struct ProviderLogoCatalogTests {
+  @Test("Built-in providers use their canonical asset")
+  func builtInProvider() {
+    #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.anthropic)
+        == "provider.anthropic")
+  }
+
+  @Test("Custom provider name resolves a prepared brand")
+  func customProviderName() {
+    let definition = customDefinition(name: "My Together AI")
+    #expect(ProviderLogoCatalog.assetName(for: definition) == "provider.together")
+  }
+
+  @Test("Custom endpoint resolves a prepared brand")
+  func customProviderEndpoint() {
+    let definition = customDefinition(name: "Fast inference", url: "https://api.groq.com/openai/v1")
+    #expect(ProviderLogoCatalog.assetName(for: definition) == "provider.groq")
+  }
+
+  @Test("Unknown custom provider keeps the monogram fallback")
+  func unknownProvider() {
+    let definition = customDefinition(name: "Private Lab")
+    #expect(ProviderLogoCatalog.assetName(for: definition) == nil)
+  }
+
+  private func customDefinition(
+    name: String,
+    url: String = "https://inference.example.com/v1"
+  ) -> ProviderDefinition {
+    ProviderDefinition(
+      id: "custom-provider",
+      displayName: name,
+      behavior: .genericOpenAICompatible,
+      defaultBaseURL: URL(string: url)!
+    )
   }
 }

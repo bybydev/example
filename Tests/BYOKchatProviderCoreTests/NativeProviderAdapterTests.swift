@@ -44,6 +44,7 @@ private actor NativeMockTransport: ProviderHTTPTransport {
 
 private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount {
   ResolvedProviderAccount(
+    kind: ProviderKind(providerID: providerID),
     id: ProviderAccountID(rawValue: "native-account"),
     providerID: providerID,
     label: "Native",

@@ -62,8 +62,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         maxOutputTokens: wire.maxTokens.flatMap { $0 > 0 ? $0 : nil },
         supportedParameters: parameters,
         inputModalities: modalities,
-        outputModalities: ["text"],
-        isSeed: false
+        outputModalities: ["text"]
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)

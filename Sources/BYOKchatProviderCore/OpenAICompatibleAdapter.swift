@@ -67,8 +67,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         inputModalities: Set($0.architecture?.inputModalities ?? ["text"]),
         outputModalities: Set($0.architecture?.outputModalities ?? ["text"]),
         promptPricePerToken: $0.pricing?.prompt,
-        completionPricePerToken: $0.pricing?.completion,
-        isSeed: false
+        completionPricePerToken: $0.pricing?.completion
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)

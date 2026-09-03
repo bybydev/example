@@ -156,9 +156,9 @@ struct SettingsView: View {
 
       Section("AI") {
         NavigationLink {
-          ConnectionsView(model: model.providers)
+          ProvidersView(model: model.providers)
         } label: {
-          Label("Connections", systemImage: "link")
+          Label("Providers", systemImage: "link")
         }
       }
       .listRowBackground(theme.surfaceColor)

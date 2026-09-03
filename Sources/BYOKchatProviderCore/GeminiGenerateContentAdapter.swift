@@ -63,8 +63,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         maxOutputTokens: wire.outputTokenLimit,
         supportedParameters: parameters,
         inputModalities: ["text", "image", "file"],
-        outputModalities: ["text"],
-        isSeed: false
+        outputModalities: ["text"]
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)

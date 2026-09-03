@@ -337,6 +337,7 @@ import Testing
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "openrouter"),
     id: "account",
     providerID: "openrouter",
     label: "OpenRouter",
@@ -444,6 +445,7 @@ private func weatherCall() -> ChatToolCall {
 
 private func toolAccount(_ providerID: ProviderID) -> ResolvedProviderAccount {
   ResolvedProviderAccount(
+    kind: ProviderKind(providerID: providerID),
     id: "account",
     providerID: providerID,
     label: "Tool Test",

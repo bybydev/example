@@ -788,7 +788,8 @@ private extension JSONValue {
 
 extension ChatView {
   /// Provider/model resolution for fresh mode: target override, then project
-  /// pinning, then global defaults.
+  /// pinning, then the provider model's resolved default (the single rule —
+  /// stored-if-usable → ready → enabled → first, never rewritten).
   var defaultAccount: ProviderAccount? {
     let enabled = providers.accounts.filter(\.isEnabled)
 
@@ -798,8 +799,8 @@ extension ChatView {
     if let accountID = project?.accountID {
       return enabled.first { $0.id == accountID }
     }
-    if let ready = enabled.first(where: isConnectionReady) {
-      return ready
+    if let resolved = providers.resolvedDefaultAccount, resolved.isEnabled {
+      return resolved
     }
     return enabled.first
   }
@@ -1162,20 +1163,6 @@ extension ChatView {
     }
   }
 
-  func isConnectionReady(_ account: ProviderAccount) -> Bool {
-    if providerRequiresCredential(account.providerID),
-      !providers.credentialAccountIDs.contains(account.id)
-    {
-      return false
-    }
-    let models = providers.models(for: account.id).filter(\.isAvailable)
-    if let modelID = account.defaultModelID,
-      models.contains(where: { $0.model.id == modelID })
-    {
-      return true
-    }
-    return !models.isEmpty
-  }
 
   func providerRequiresCredential(_ providerID: ProviderID) -> Bool {
     guard let provider = providers.provider(for: providerID) else { return true }
@@ -1184,5 +1171,4 @@ extension ChatView {
     case .bearer, .header: return true
     }
   }
-
 }

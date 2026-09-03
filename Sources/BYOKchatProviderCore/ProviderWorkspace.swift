@@ -7,7 +7,6 @@ public struct AccountModelRecord: Codable, Sendable, Equatable, Identifiable {
   public var isHidden: Bool
   public var isManual: Bool
   public var isAvailable: Bool
-  public var lastSeenAt: Date?
   public var id: String { "\(accountID.rawValue)::\(model.id.rawValue)" }
 
   public init(
@@ -16,8 +15,7 @@ public struct AccountModelRecord: Codable, Sendable, Equatable, Identifiable {
     isFavorite: Bool = false,
     isHidden: Bool = false,
     isManual: Bool = false,
-    isAvailable: Bool = true,
-    lastSeenAt: Date? = .now
+    isAvailable: Bool = true
   ) {
     self.accountID = accountID
     self.model = model
@@ -25,21 +23,19 @@ public struct AccountModelRecord: Codable, Sendable, Equatable, Identifiable {
     self.isHidden = isHidden
     self.isManual = isManual
     self.isAvailable = isAvailable
-    self.lastSeenAt = lastSeenAt
   }
 }
 
 public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
-  /// Single pre-release schema; evolves in place, users fresh-install.
-  public static let currentSchemaVersion = 1
+  /// Version 2 folds provider kinds into accounts (v1 → v2 via
+  /// `BYOKStorageBootstrap`). Evolves in place; users fresh-install.
+  public static let currentSchemaVersion = 2
   public var schemaVersion: Int
   public var customProviders: [ProviderDefinition]
   public var accounts: [ProviderAccount]
   public var modelRecords: [AccountModelRecord]
   public var defaultAccountID: ProviderAccountID?
   public var providerDefaultAccountIDs: [String: String]
-  /// accountID → deletedAt. Pruned on load after the retention window.
-  public var tombstones: [String: Date]
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
@@ -47,8 +43,7 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     accounts: [ProviderAccount] = [],
     modelRecords: [AccountModelRecord] = [],
     defaultAccountID: ProviderAccountID? = nil,
-    providerDefaultAccountIDs: [String: String] = [:],
-    tombstones: [String: Date] = [:]
+    providerDefaultAccountIDs: [String: String] = [:]
   ) {
     self.schemaVersion = schemaVersion
     self.customProviders = customProviders
@@ -56,7 +51,6 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     self.modelRecords = modelRecords
     self.defaultAccountID = defaultAccountID
     self.providerDefaultAccountIDs = providerDefaultAccountIDs
-    self.tombstones = tombstones
   }
 }
 
@@ -112,7 +106,6 @@ public actor ProviderWorkspaceStore {
     }
     try WorkspaceImportValidator.validateProviderWorkspace(decoded)
     state = decoded
-    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
     hasLoaded = true
   }
 
@@ -165,7 +158,6 @@ public actor ProviderWorkspaceStore {
       candidate.providerDefaultAccountIDs[account.providerID.rawValue] =
         candidate.accounts.first(where: { $0.providerID == account.providerID })?.id.rawValue
     }
-    candidate.tombstones[id.rawValue] = .now
     try await commit(candidate)
   }
 
@@ -193,6 +185,40 @@ public actor ProviderWorkspaceStore {
       return ProviderAccountID(rawValue: value)
     }
     return state.defaultAccountID
+  }
+
+  /// Pure default resolution — the single rule every consumer shares.
+  /// Never writes: the stored default only changes via explicit
+  /// `setDefaultAccount` or `deleteAccount` reassignment.
+  ///
+  /// Fallback order: stored default if usable → first ready → first enabled
+  /// → first account → nil. Inputs are plain Sendable values so this can be
+  /// called from any isolation domain.
+  public func resolvedDefaultAccountID(
+    credentialRequiredByProvider: [ProviderID: Bool],
+    credentialAccountIDs: Set<ProviderAccountID>
+  ) -> ProviderAccountID? {
+    func isReady(_ account: ProviderAccount) -> Bool {
+      guard account.isEnabled else { return false }
+      let requiresCredential =
+        credentialRequiredByProvider[account.providerID]
+        ?? true  // Unknown provider: assume a credential is needed.
+      if requiresCredential, !credentialAccountIDs.contains(account.id) { return false }
+      return state.modelRecords.contains {
+        $0.accountID == account.id && $0.isAvailable && !$0.isHidden
+      }
+    }
+
+    let accounts = state.accounts
+    let storedDefault = state.defaultAccountID
+    if let storedDefault, let account = accounts.first(where: { $0.id == storedDefault }),
+      isReady(account)
+    {
+      return storedDefault
+    }
+    return accounts.first(where: isReady)?.id
+      ?? accounts.first(where: \.isEnabled)?.id
+      ?? accounts.first?.id
   }
 
   public func customProviderDefinitions() -> [ProviderDefinition] {
@@ -253,11 +279,10 @@ public actor ProviderWorkspaceStore {
       if var existing = records[model.id] {
         existing.model = mergeModel(existing.model, model)
         existing.isAvailable = true
-        existing.lastSeenAt = date
         records[model.id] = existing
       } else {
         records[model.id] = .init(
-          accountID: accountID, model: model, isManual: false, isAvailable: true, lastSeenAt: date)
+          accountID: accountID, model: model, isManual: false, isAvailable: true)
       }
     }
     for (id, var record) in records where !record.isManual && !discoveredIDs.contains(id) {

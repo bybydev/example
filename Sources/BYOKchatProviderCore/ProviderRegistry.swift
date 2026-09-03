@@ -110,7 +110,7 @@ public enum CustomProviderFactory {
       modelsPath: modelsPath?.isEmpty == true ? nil : modelsPath,
       authentication: authentication,
       seedModels: seedModelIDs.map {
-        .init(providerID: providerID, id: ModelID(rawValue: $0), displayName: $0, isSeed: true)
+        .init(providerID: providerID, id: ModelID(rawValue: $0), displayName: $0)
       },
       allowsLocalHTTP: allowsLocalHTTP,
       isBuiltIn: false

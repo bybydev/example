@@ -66,7 +66,6 @@ final class AppModel {
     let providerModel = ProviderManagementModel(
       registry: coreServices.providerRegistry,
       workspace: coreServices.providerWorkspace,
-      vault: coreServices.credentialVault,
       accountManager: coreServices.accountManager,
       runtime: coreServices.providerRuntime
     )
@@ -77,7 +76,8 @@ final class AppModel {
       runtime: coreServices.chatRuntime,
       preferences: preferences,
       mcpWorkspace: coreServices.mcpWorkspace,
-      projectWorkspace: coreServices.projectWorkspace
+      projectWorkspace: coreServices.projectWorkspace,
+      resolveDefaultAccountID: { [weak providerModel] in providerModel?.defaultAccountID }
     )
     let libraryModel = LibraryManagementModel(store: coreServices.libraryStore)
     let mcpModel = MCPManagementModel(

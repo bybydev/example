@@ -36,6 +36,9 @@ final class ChatManagementModel {
   private let preferences: AppPreferencesModel
   private let mcpWorkspace: MCPWorkspaceStore?
   private let projectWorkspace: ProjectWorkspaceStore?
+  /// Resolves the global default account through the provider model's single
+  /// rule. Wired from AppModel so chat creation and every UI surface agree.
+  var resolveDefaultAccountID: () -> ProviderAccountID?
   private var hydratedConversations: [ConversationID: ChatConversation] = [:]
   private var loadingConversationIDs: Set<ConversationID> = []
   private var conversationLoadFailures: Set<ConversationID> = []
@@ -55,7 +58,8 @@ final class ChatManagementModel {
     runtime: ChatRuntime,
     preferences: AppPreferencesModel,
     mcpWorkspace: MCPWorkspaceStore? = nil,
-    projectWorkspace: ProjectWorkspaceStore? = nil
+    projectWorkspace: ProjectWorkspaceStore? = nil,
+    resolveDefaultAccountID: @escaping () -> ProviderAccountID? = { nil }
   ) {
     self.providerWorkspace = providerWorkspace
     self.conversationStore = conversations
@@ -63,6 +67,7 @@ final class ChatManagementModel {
     self.preferences = preferences
     self.mcpWorkspace = mcpWorkspace
     self.projectWorkspace = projectWorkspace
+    self.resolveDefaultAccountID = resolveDefaultAccountID
   }
 
   func load() async {
@@ -214,7 +219,12 @@ final class ChatManagementModel {
         }
         account = configured
       } else {
-        let defaultID = await providerWorkspace.defaultAccountID()
+        // One default rule shared with the provider UI: the provider model's
+        // resolved default (stored-if-usable → ready → enabled → first),
+        // which already falls back in memory without rewriting the store.
+        guard let defaultID = resolveDefaultAccountID() else {
+          throw ProviderError.invalidRequest("Configure a provider account before creating a chat.")
+        }
         account = accounts.first(where: { $0.id == defaultID }) ?? accounts[0]
       }
 

@@ -266,7 +266,7 @@ import Testing
       "schemaVersion": 1,
       "exportedAt": 0,
       "providerWorkspace": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "customProviders": [],
         "accounts": [],
         "modelRecords": [],

@@ -154,6 +154,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     transport: transport
   )
   let account = ResolvedProviderAccount(
+    kind: ProviderKind(providerID: BuiltInProviders.openRouterID),
     id: "account",
     providerID: BuiltInProviders.openRouterID,
     label: "OpenRouter",
@@ -187,8 +188,8 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
   let duplicateID: ProviderAccountID = "duplicate"
   let data = try JSONEncoder.providerEncoder.encode(
     ProviderWorkspaceState(accounts: [
-      ProviderAccount(id: duplicateID, providerID: "deepseek", label: "First"),
-      ProviderAccount(id: duplicateID, providerID: "deepseek", label: "Second"),
+      ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: duplicateID, providerID: "deepseek", label: "First"),
+      ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: duplicateID, providerID: "deepseek", label: "Second"),
     ])
   )
 
@@ -231,7 +232,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
 }
 
 @Test func providerWorkspaceLoadCanRetryAfterTransientFailure() async throws {
-  let account = ProviderAccount(id: "account", providerID: "deepseek", label: "DeepSeek")
+  let account = ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "account", providerID: "deepseek", label: "DeepSeek")
   let data = try JSONEncoder.providerEncoder.encode(ProviderWorkspaceState(accounts: [account]))
   let persistence = RetryLoadProviderPersistence(data: data)
   let workspace = ProviderWorkspaceStore(persistence: persistence)
@@ -245,7 +246,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
 }
 
 @Test func failedWorkspaceDeleteKeepsCredentialAndAccount() async throws {
-  let account = ProviderAccount(id: "account", providerID: "deepseek", label: "DeepSeek")
+  let account = ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "account", providerID: "deepseek", label: "DeepSeek")
   let data = try JSONEncoder.providerEncoder.encode(ProviderWorkspaceState(accounts: [account]))
   let workspace = ProviderWorkspaceStore(
     persistence: FailingSaveProviderPersistence(data: data)
@@ -311,7 +312,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     persistence: InMemoryProviderWorkspacePersistence()
   )
   try await providerWorkspace.load()
-  let oldAccount = ProviderAccount(id: "old", providerID: "deepseek", label: "Old")
+  let oldAccount = ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "old", providerID: "deepseek", label: "Old")
   try await providerWorkspace.upsertAccount(oldAccount)
 
   let conversationStore = ConversationStore(
@@ -336,7 +337,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     accounts: manager
   )
   let replacement = ProviderWorkspaceState(accounts: [
-    ProviderAccount(id: "new", providerID: "deepseek", label: "New")
+    ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "new", providerID: "deepseek", label: "New")
   ])
   let data = try JSONEncoder.providerEncoder.encode(replacement)
 
@@ -354,7 +355,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     persistence: InMemoryProviderWorkspacePersistence()
   )
   try await providerWorkspace.load()
-  let oldAccount = ProviderAccount(id: "old", providerID: "deepseek", label: "Old")
+  let oldAccount = ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "old", providerID: "deepseek", label: "Old")
   try await providerWorkspace.upsertAccount(oldAccount)
 
   let conversationStore = ConversationStore(
@@ -377,7 +378,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
     conversations: conversationStore,
     accounts: manager
   )
-  let newAccount = ProviderAccount(id: "new", providerID: "deepseek", label: "New")
+  let newAccount = ProviderAccount(kind: ProviderKind(providerID: "deepseek"), id: "new", providerID: "deepseek", label: "New")
   let data = try JSONEncoder.providerEncoder.encode(
     ProviderWorkspaceState(accounts: [newAccount])
   )
@@ -439,6 +440,7 @@ private actor CountingProviderRuntime: ProviderStreamingRuntime {
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "deepseek"),
     id: "account",
     providerID: "deepseek",
     label: "DeepSeek",

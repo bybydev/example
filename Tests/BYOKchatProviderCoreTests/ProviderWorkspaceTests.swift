@@ -26,7 +26,7 @@ final class ProviderWorkspaceTests: XCTestCase {
 
     for definition in BuiltInProviders.all {
       let account = try await manager.createAccount(
-        providerID: definition.id,
+        kind: ProviderKind(providerID: definition.id),
         label: "\(definition.displayName) Simulator",
         credential: definition.authentication == .none ? nil : "test-key",
         baseURLOverride: initialSimulatorURL
@@ -56,7 +56,7 @@ final class ProviderWorkspaceTests: XCTestCase {
   func testCredentialIsSeparateFromExportedWorkspace() async throws {
     let (workspace, manager, vault) = try await makeEnvironment()
     let account = try await manager.createAccount(
-      providerID: BuiltInProviders.deepSeekID,
+      kind: .deepSeek,
       label: "Personal",
       credential: "super-secret-api-key",
       defaultModelID: "deepseek-v4-flash"
@@ -75,7 +75,7 @@ final class ProviderWorkspaceTests: XCTestCase {
   func testDeletingAccountRemovesCredentialAndModelState() async throws {
     let (workspace, manager, vault) = try await makeEnvironment()
     let account = try await manager.createAccount(
-      providerID: BuiltInProviders.openRouterID,
+      kind: .openRouter,
       label: "Main",
       credential: "secret"
     )
@@ -100,7 +100,7 @@ final class ProviderWorkspaceTests: XCTestCase {
   {
     let (workspace, manager, _) = try await makeEnvironment()
     let account = try await manager.createAccount(
-      providerID: BuiltInProviders.nvidiaID,
+      kind: .nvidia,
       label: "NVIDIA",
       credential: "secret"
     )
@@ -140,7 +140,8 @@ final class ProviderWorkspaceTests: XCTestCase {
     let runtime = ProviderRuntime(registry: registry, workspace: workspace, accounts: manager)
     try await runtime.registerCustomProvider(definition)
     let account = try await manager.createAccount(
-      providerID: definition.id, label: "Local", credential: nil, defaultModelID: "model")
+      kind: .openAICompatible, providerID: definition.id, label: "Local", credential: nil,
+      defaultModelID: "model")
 
     let resolved = try await manager.resolvedAccount(id: account.id)
     XCTAssertNil(resolved.apiKey)
@@ -151,12 +152,13 @@ final class ProviderWorkspaceTests: XCTestCase {
     let workspace = ProviderWorkspaceStore(persistence: persistence)
     try await workspace.load()
     let existing = ProviderAccount(
+      kind: ProviderKind(providerID: BuiltInProviders.deepSeekID),
       id: "same", providerID: BuiltInProviders.deepSeekID, label: "Existing")
     try await workspace.upsertAccount(existing)
 
     let importedState = ProviderWorkspaceState(accounts: [
-      ProviderAccount(id: "same", providerID: BuiltInProviders.deepSeekID, label: "Imported"),
-      ProviderAccount(id: "new", providerID: BuiltInProviders.openRouterID, label: "New"),
+      ProviderAccount(kind: ProviderKind(providerID: BuiltInProviders.deepSeekID), id: "same", providerID: BuiltInProviders.deepSeekID, label: "Imported"),
+      ProviderAccount(kind: ProviderKind(providerID: BuiltInProviders.openRouterID), id: "new", providerID: BuiltInProviders.openRouterID, label: "New"),
     ])
     let data = try JSONEncoder.providerEncoder.encode(importedState)
     try await workspace.importConfiguration(data, strategy: .keepExisting)

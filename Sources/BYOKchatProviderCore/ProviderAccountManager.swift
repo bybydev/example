@@ -26,18 +26,39 @@ public actor ProviderAccountManager {
     }
   }
 
+  /// Creates an account for a supported provider kind. `.openAICompatible`
+  /// accounts require an endpoint and carry their auth/path/seed configuration
+  /// directly; built-in kinds derive everything from the kind spec.
   @discardableResult
   public func createAccount(
-    providerID: ProviderID,
+    kind: ProviderKind,
     label: String,
     credential: String?,
+    providerID: ProviderID? = nil,
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    authChoice: ProviderAuthentication? = nil,
+    seedModelIDs: [String]? = nil,
     baseURLOverride: URL? = nil,
     additionalHeaders: [String: String] = [:],
     metadata: [String: String] = [:],
     defaultModelID: ModelID? = nil
   ) async throws -> ProviderAccount {
-    let definition = try await registry.definition(for: providerID)
-    if let baseURLOverride {
+    let resolvedProviderID =
+      providerID
+      ?? kind.defaultProviderID
+      ?? ProviderID(rawValue: UUID().uuidString.lowercased())
+    let definition = kind.definition(
+      providerID: resolvedProviderID,
+      displayName: label,
+      baseURLOverride: kind == .openAICompatible ? baseURLOverride : nil,
+      chatPath: chatCompletionsPath,
+      modelsPath: modelsPath,
+      authentication: authChoice,
+      seedModelIDs: seedModelIDs
+    )
+    try ProviderRegistry.validate(definition)
+    if let baseURLOverride, kind != .openAICompatible {
       _ = try ProviderHTTP.endpoint(
         baseURL: baseURLOverride,
         path: definition.chatCompletionsPath,
@@ -52,8 +73,13 @@ public actor ProviderAccountManager {
       throw ProviderError.invalidRequest("Account label cannot be empty.")
     }
     let account = ProviderAccount(
-      providerID: providerID,
+      kind: kind,
+      providerID: resolvedProviderID,
       label: trimmedLabel,
+      chatCompletionsPath: kind == .openAICompatible ? chatCompletionsPath : nil,
+      modelsPath: kind == .openAICompatible ? modelsPath : nil,
+      authChoice: kind == .openAICompatible ? authChoice : nil,
+      seedModelIDs: kind == .openAICompatible ? seedModelIDs : nil,
       baseURLOverride: baseURLOverride,
       additionalHeaders: additionalHeaders,
       metadata: metadata,
@@ -70,11 +96,14 @@ public actor ProviderAccountManager {
   }
 
   public func updateAccount(_ account: ProviderAccount) async throws {
-    _ = try await registry.definition(for: account.providerID)
+    let definition = account.definition
+    try ProviderRegistry.validate(definition)
     if let url = account.baseURLOverride {
-      let definition = try await registry.definition(for: account.providerID)
       _ = try ProviderHTTP.endpoint(
-        baseURL: url, path: "/", allowsLocalHTTP: definition.allowsLocalHTTP)
+        baseURL: url,
+        path: account.kind == .openAICompatible ? definition.chatCompletionsPath : "/",
+        allowsLocalHTTP: definition.allowsLocalHTTP
+      )
     }
     for name in account.additionalHeaders.keys where ProviderHTTP.isForbiddenCustomHeader(name) {
       throw ProviderError.unsafeHeader(name)
@@ -96,21 +125,26 @@ public actor ProviderAccountManager {
 
   public func resolvedAccount(id: ProviderAccountID) async throws -> ResolvedProviderAccount {
     let account = try await workspace.account(id: id)
-    let definition = try await registry.definition(for: account.providerID)
     let secret = try await vault.secret(accountID: id, field: Self.apiKeyField)
+    let definition = account.definition
     if definition.authentication != .none,
       secret?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     {
       throw ProviderError.missingCredential(account.providerID)
     }
     return .init(
+      kind: account.kind,
       id: account.id,
       providerID: account.providerID,
       label: account.label,
       apiKey: secret,
       baseURLOverride: account.baseURLOverride,
       additionalHeaders: account.additionalHeaders,
-      metadata: account.metadata
+      metadata: account.metadata,
+      chatCompletionsPath: account.chatCompletionsPath,
+      modelsPath: account.modelsPath,
+      authChoice: account.authChoice,
+      seedModelIDs: account.seedModelIDs
     )
   }
 
@@ -181,14 +215,14 @@ public actor ProviderRuntime {
     let selectedModel = modelID ?? stored.defaultModelID ?? cachedModels.first?.model.id
     guard let selectedModel else { throw ProviderError.invalidModel }
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    let adapter = try await adapter(providerID: resolved.providerID)
+    let adapter = makeAdapter(for: resolved)
     try await adapter.testConnection(account: resolved, model: selectedModel)
   }
 
   @discardableResult
   public func refreshModels(accountID: ProviderAccountID) async throws -> [AccountModelRecord] {
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    let adapter = try await adapter(providerID: resolved.providerID)
+    let adapter = makeAdapter(for: resolved)
     let models = try await adapter.listModels(account: resolved)
     try await workspace.mergeModels(models, for: accountID)
     return await workspace.modelRecords(for: accountID)
@@ -198,27 +232,38 @@ public actor ProviderRuntime {
     -> ProviderResponse
   {
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    let selectedAdapter = try await adapter(providerID: resolved.providerID)
-    return try await selectedAdapter.generate(request: request, account: resolved)
+    return try await makeAdapter(for: resolved).generate(request: request, account: resolved)
   }
 
   public func stream(request: ProviderRequest, accountID: ProviderAccountID) async throws
     -> AsyncThrowingStream<ProviderStreamEvent, Error>
   {
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    let selectedAdapter = try await adapter(providerID: resolved.providerID)
-    return selectedAdapter.stream(request: request, account: resolved)
+    return makeAdapter(for: resolved).stream(request: request, account: resolved)
   }
 
-  private func adapter(providerID: ProviderID) async throws -> any ProviderAdapter {
-    let definition = try await registry.definition(for: providerID)
-    switch definition.apiFamily {
+  /// Direct-resolution entry points: callers that already hold a
+  /// `ResolvedProviderAccount` (preview flows with nothing persisted) can run
+  /// against it without an account ID.
+  public func testConnection(account: ResolvedProviderAccount, modelID: ModelID) async throws {
+    try await makeAdapter(for: account).testConnection(account: account, model: modelID)
+  }
+
+  public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
+    try await makeAdapter(for: account).listModels(account: account)
+  }
+
+  /// Adapter selection switches on the account's kind. The registry remains
+  /// consulted only for the derived definitions it still hosts; the account's
+  /// own kind spec is authoritative.
+  private func makeAdapter(for account: ResolvedProviderAccount) -> any ProviderAdapter {
+    switch account.kind.apiFamily {
     case .openAIChatCompletions:
-      return OpenAICompatibleAdapter(definition: definition, transport: transport)
+      return OpenAICompatibleAdapter(definition: account.definition, transport: transport)
     case .anthropicMessages:
-      return AnthropicMessagesAdapter(definition: definition, transport: transport)
+      return AnthropicMessagesAdapter(definition: account.definition, transport: transport)
     case .geminiGenerateContent:
-      return GeminiGenerateContentAdapter(definition: definition, transport: transport)
+      return GeminiGenerateContentAdapter(definition: account.definition, transport: transport)
     }
   }
 }

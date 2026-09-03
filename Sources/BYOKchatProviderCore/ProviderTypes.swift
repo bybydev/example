@@ -230,7 +230,10 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   public var outputModalities: Set<String>
   public var promptPricePerToken: String?
   public var completionPricePerToken: String?
-  public var isSeed: Bool
+  /// Legacy field: no longer written, decoded-and-dropped so old persisted
+  /// workspaces and exports still decode.
+  private var isSeed: Bool?
+
   public init(
     providerID: ProviderID,
     id: ModelID,
@@ -242,8 +245,7 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     inputModalities: Set<String> = ["text"],
     outputModalities: Set<String> = ["text"],
     promptPricePerToken: String? = nil,
-    completionPricePerToken: String? = nil,
-    isSeed: Bool = false
+    completionPricePerToken: String? = nil
   ) {
     self.providerID = providerID
     self.id = id
@@ -256,14 +258,15 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     self.outputModalities = outputModalities
     self.promptPricePerToken = promptPricePerToken
     self.completionPricePerToken = completionPricePerToken
-    self.isSeed = isSeed
+    self.isSeed = nil
   }
 
   public var effectiveContextWindowKind: ProviderContextWindowKind {
     if let contextWindowKind { return contextWindowKind }
 
     // Older persisted records and native model-discovery responses do not yet carry this field.
-    // Preserve the known semantics of BYOKchat's native providers without breaking decoding.
+    // Provider kind semantics now live in the kind spec; the rawValue switch remains only as a
+    // decoding fallback for legacy records.
     switch providerID.rawValue {
     case "anthropic", "gemini": return .inputOnly
     default: return .combined
@@ -298,6 +301,10 @@ public struct ProviderDefinition: Codable, Sendable, Identifiable, Equatable {
   public var authentication: ProviderAuthentication
   public var seedModels: [ProviderModel]
   public var isBuiltIn: Bool
+  /// The supported-provider kind this definition was derived from. Not
+  /// persisted on custom definitions; derived views populate it for UI
+  /// conditioning.
+  public var kind: ProviderKind?
   public init(
     id: ProviderID,
     displayName: String,
@@ -308,7 +315,8 @@ public struct ProviderDefinition: Codable, Sendable, Identifiable, Equatable {
     modelsPath: String? = "/models",
     authentication: ProviderAuthentication = .bearer,
     seedModels: [ProviderModel] = [],
-    isBuiltIn: Bool = false
+    isBuiltIn: Bool = false,
+    kind: ProviderKind? = nil
   ) {
     self.id = id
     self.displayName = displayName
@@ -320,10 +328,20 @@ public struct ProviderDefinition: Codable, Sendable, Identifiable, Equatable {
     self.authentication = authentication
     self.seedModels = seedModels
     self.isBuiltIn = isBuiltIn
+    self.kind = kind
   }
 }
 
 public struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
+  /// Which supported provider this account talks to. Drives wire format, auth
+  /// scheme, editor conditioning, and behavior across the app.
+  public var kind: ProviderKind
+  /// OpenAI-compatible-only configuration (folded in from custom provider
+  /// definitions by migration, or set at creation). Nil for built-in kinds.
+  public var chatCompletionsPath: String?
+  public var modelsPath: String?
+  public var authChoice: ProviderAuthentication?
+  public var seedModelIDs: [String]?
   public var id: ProviderAccountID
   public var providerID: ProviderID
   public var label: String
@@ -335,9 +353,14 @@ public struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
   public var createdAt: Date
   public var updatedAt: Date
   public init(
+    kind: ProviderKind,
     id: ProviderAccountID = ProviderAccountID(rawValue: UUID().uuidString.lowercased()),
-    providerID: ProviderID,
+    providerID: ProviderID? = nil,
     label: String,
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    authChoice: ProviderAuthentication? = nil,
+    seedModelIDs: [String]? = nil,
     baseURLOverride: URL? = nil,
     additionalHeaders: [String: String] = [:],
     metadata: [String: String] = [:],
@@ -346,8 +369,13 @@ public struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
     createdAt: Date = .now,
     updatedAt: Date = .now
   ) {
+    self.kind = kind
     self.id = id
-    self.providerID = providerID
+    self.providerID = providerID ?? kind.defaultProviderID ?? ProviderID(rawValue: id.rawValue)
+    self.chatCompletionsPath = chatCompletionsPath
+    self.modelsPath = modelsPath
+    self.authChoice = authChoice
+    self.seedModelIDs = seedModelIDs
     self.label = label
     self.baseURLOverride = baseURLOverride
     self.additionalHeaders = additionalHeaders
@@ -360,6 +388,7 @@ public struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
 }
 
 public struct ResolvedProviderAccount: Sendable, Equatable {
+  public var kind: ProviderKind
   public var id: ProviderAccountID
   public var providerID: ProviderID
   public var label: String
@@ -367,15 +396,25 @@ public struct ResolvedProviderAccount: Sendable, Equatable {
   public var baseURLOverride: URL?
   public var additionalHeaders: [String: String]
   public var metadata: [String: String]
+  public var chatCompletionsPath: String?
+  public var modelsPath: String?
+  public var authChoice: ProviderAuthentication?
+  public var seedModelIDs: [String]?
   public init(
+    kind: ProviderKind,
     id: ProviderAccountID,
     providerID: ProviderID,
     label: String,
     apiKey: String?,
     baseURLOverride: URL? = nil,
     additionalHeaders: [String: String] = [:],
-    metadata: [String: String] = [:]
+    metadata: [String: String] = [:],
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    authChoice: ProviderAuthentication? = nil,
+    seedModelIDs: [String]? = nil
   ) {
+    self.kind = kind
     self.id = id
     self.providerID = providerID
     self.label = label
@@ -383,5 +422,9 @@ public struct ResolvedProviderAccount: Sendable, Equatable {
     self.baseURLOverride = baseURLOverride
     self.additionalHeaders = additionalHeaders
     self.metadata = metadata
+    self.chatCompletionsPath = chatCompletionsPath
+    self.modelsPath = modelsPath
+    self.authChoice = authChoice
+    self.seedModelIDs = seedModelIDs
   }
 }

@@ -40,6 +40,7 @@ import Testing
   )
   try await providerWorkspace.load()
   let account = ProviderAccount(
+    kind: ProviderKind(providerID: "gemini"),
     id: "account",
     providerID: "gemini",
     label: "Gemini",
