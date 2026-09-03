@@ -9,6 +9,10 @@ struct ProvidersView: View {
   /// Non-nil means this screen was opened to repair/setup a chat rather than
   /// as the persistent Settings manager; completing setup returns to the chat.
   let onConnectionReady: (() -> Void)?
+  /// Set when providers is a top-level sidebar destination. Other call sites
+  /// present this view inside a navigation stack and keep the system back or
+  /// sheet dismissal path instead.
+  let openSidebar: (() -> Void)?
 
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
@@ -32,8 +36,13 @@ struct ProvidersView: View {
     }
   }
 
-  init(model: ProviderManagementModel, onConnectionReady: (() -> Void)? = nil) {
+  init(
+    model: ProviderManagementModel,
+    openSidebar: (() -> Void)? = nil,
+    onConnectionReady: (() -> Void)? = nil
+  ) {
     self.model = model
+    self.openSidebar = openSidebar
     self.onConnectionReady = onConnectionReady
   }
 
@@ -47,8 +56,16 @@ struct ProvidersView: View {
     }
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
-    .navigationTitle("Providers")
+    .navigationTitle("AI Providers")
+    .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      if let openSidebar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
+      }
       ToolbarItem(placement: .topBarTrailing) {
         Button("Add Connection", systemImage: "plus") {
           addConnection()

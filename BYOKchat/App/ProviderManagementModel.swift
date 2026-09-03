@@ -204,11 +204,19 @@ final class ProviderManagementModel {
     }
   }
 
-  /// Next auto-name for a kind: the provider display name, numbered on
-  /// collision ("Anthropic", "Anthropic 2", …).
-  func autoName(for kind: ProviderKind) -> String {
-    let base = kind == .openAICompatible ? "" : kind.displayName
-    guard !base.isEmpty else { return "" }
+  /// Suggested connection name: the provider display name, numbered on
+  /// collision ("Anthropic", "Anthropic 2", …). For `.openAICompatible` the
+  /// user names the server at create time, so that typed name is the base.
+  func autoName(for kind: ProviderKind, customBase: String? = nil) -> String {
+    let base: String
+    if kind == .openAICompatible {
+      guard let customBase, !customBase.trimmingCharacters(in: .whitespaces).isEmpty else {
+        return ""
+      }
+      base = customBase.trimmingCharacters(in: .whitespaces)
+    } else {
+      base = kind.displayName
+    }
     let existing = Set(accounts.map(\.label))
     guard existing.contains(base) else { return base }
     var index = 2
@@ -270,6 +278,13 @@ final class ProviderManagementModel {
   /// Reads nothing from the workspace and persists nothing.
   func previewModels(for account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     try await runtime.listModels(account: account)
+  }
+
+  /// Reveal flow: returns the stored credential so the editor can show it on
+  /// explicit user request. Keychain is the source of truth; nothing is
+  /// logged or persisted by this call.
+  func revealCredential(accountID: ProviderAccountID) async -> String? {
+    (try? await accountManager.resolvedAccount(id: accountID))?.apiKey
   }
 
   func refreshModelsResult(accountID: ProviderAccountID) async -> Bool {

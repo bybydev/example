@@ -46,8 +46,8 @@ struct AppRootView: View {
   @State private var openedChatFromProject = false
   /// When set (and no chat is selected), the root shows that project's screen.
   @State private var activeProjectViewID: ProjectID?
-  /// Sidebar menu section currently replacing the main screen
-  /// (library/projects/plugins). Mutually exclusive with the states above.
+  /// Sidebar menu section currently replacing the main screen. Mutually
+  /// exclusive with the states above.
   @State private var activeScreen: ChatSidebarView.SidebarDestination?
 
   var body: some View {
@@ -254,6 +254,8 @@ struct AppRootView: View {
           )
         } else if let activeScreen {
           switch activeScreen {
+          case .providers:
+            ProvidersView(model: model.providers, openSidebar: openSidebar)
           case .library:
             LibraryView(
               library: model.library,
@@ -412,8 +414,8 @@ struct AppRootView: View {
     closeSidebar()
   }
 
-  /// Sidebar menu sections (library/projects/plugins) replace the main
-  /// screen; whatever was showing yields.
+  /// Sidebar menu sections replace the main screen; whatever was showing
+  /// yields.
   private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
     navigationPath = []
     discardIfEmpty(selectedConversationID)

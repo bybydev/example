@@ -5,9 +5,10 @@ import SwiftUI
 import UIKit
 
 struct ChatSidebarView: View {
-  /// Menu destinations. All four replace the app's main screen; usage shows
-  /// the analytics dashboard.
+  /// Menu destinations replace the app's main screen; usage shows the
+  /// analytics dashboard.
   enum SidebarDestination: String, Identifiable {
+    case providers
     case library
     case projects
     case plugins
@@ -191,6 +192,12 @@ struct ChatSidebarView: View {
 
   private var primaryNavigation: some View {
     VStack(spacing: 0) {
+      SidebarRichMenuRow(
+        systemImage: "sparkles",
+        title: "AI Providers",
+        action: { openDestination(.providers) }
+      )
+
       SidebarRichMenuRow(
         systemImage: "books.vertical",
         title: "Library",

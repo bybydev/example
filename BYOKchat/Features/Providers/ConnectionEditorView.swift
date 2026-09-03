@@ -51,6 +51,12 @@ struct ConnectionEditorView: View {
   @State private var isSaving = false
   @State private var replaceCredential = false
   @State private var isDirty = false
+  @State private var isRevealingCredential = false
+  @State private var revealedCredential: String?
+  @State private var showModelPicker = false
+  /// False until the user edits the name field; while false, the name
+  /// pre-fills/updates with the provider-named suggestion.
+  @State private var didEditName = false
 
   init(
     model: ProviderManagementModel,
@@ -133,7 +139,11 @@ struct ConnectionEditorView: View {
     if requiresCredential && isCreate, credential.trimmingCharacters(in: .whitespaces).isEmpty {
       return false
     }
-    if label.trimmingCharacters(in: .whitespaces).isEmpty, model.autoName(for: kind).isEmpty {
+    // Name: the field is pre-filled, so it is normally non-empty. Custom
+    // providers must have a typed server name to suggest from.
+    if label.trimmingCharacters(in: .whitespaces).isEmpty,
+      suggestedName.isEmpty
+    {
       return false
     }
     return selectedModelID != nil
@@ -144,6 +154,7 @@ struct ConnectionEditorView: View {
     Form {
       if isCreate {
         createProviderSection
+        nameSection
         credentialSection
         if isCustom {
           customWireSection
@@ -152,9 +163,11 @@ struct ConnectionEditorView: View {
         advancedSection
       } else {
         lockedProviderHeader
+        nameSection
         credentialSection
         modelSection
         advancedSection
+        infoSection
         enabledSection
         deleteSection
       }
@@ -194,10 +207,35 @@ struct ConnectionEditorView: View {
       }
       Button("Cancel", role: .cancel) {}
     }
+    .sheet(isPresented: $showModelPicker) {
+      ConnectionModelPickerView(
+        records: pickerRecords,
+        selection: $selectedModelID
+      )
+    }
     .onAppear {
       if !isDirty, baseURL.isEmpty, let existing {
         baseURL = existing.baseURLOverride?.absoluteString ?? ""
       }
+      // Pre-fill the name with the suggestion. The field holds the real
+      // value from here on; the onChange handlers re-track only if the user
+      // clears it back to empty.
+      if isCreate, !didEditName {
+        let suggestion = suggestedName
+        if !suggestion.isEmpty {
+          label = suggestion
+        }
+      }
+    }
+    .onChange(of: selectedKind) { _, _ in
+      // Provider changed while the name still tracks the suggestion.
+      guard isCreate, !didEditName else { return }
+      label = suggestedName
+    }
+    .onChange(of: customName) { _, _ in
+      // Custom server name typed while the name still tracks.
+      guard isCreate, !didEditName, kind == .openAICompatible else { return }
+      label = suggestedName
     }
   }
 
@@ -238,6 +276,9 @@ struct ConnectionEditorView: View {
         } else {
           baseURL = ""
         }
+        // Reset name tracking so the suggestion re-fills for the new
+        // provider (no user text to preserve — the field was tracking).
+        if !didEditName { label = "" }
         isDirty = true
       }
     } header: {
@@ -289,10 +330,7 @@ struct ConnectionEditorView: View {
     Section {
       if isCreate {
         if requiresCredential {
-          SecureField("Paste your API key", text: $credential)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onChange(of: credential) { _, _ in isDirty = true }
+          credentialField
         } else {
           Label("No API key required", systemImage: "checkmark.shield")
         }
@@ -303,19 +341,31 @@ struct ConnectionEditorView: View {
               .foregroundStyle(theme.secondaryForegroundColor)
             VStack(alignment: .leading, spacing: 3) {
               Text("API Key").font(.system(size: 15, weight: .medium))
-              Text("Saved securely in Keychain")
+              Text(revealedCredential == nil ? "Saved securely in Keychain" : maskedSummary)
                 .font(.caption)
                 .foregroundStyle(theme.secondaryForegroundColor)
+                .lineLimit(1)
             }
             Spacer()
-            Button("Replace") { replaceCredential = true }
-              .font(.system(size: 14, weight: .semibold))
+            // Eye: reveal/hide the stored key without replacing it.
+            Button {
+              toggleReveal()
+            } label: {
+              Image(systemName: revealedCredential == nil ? "eye" : "eye.slash")
+                .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .disabled(isRevealingCredential)
+            .accessibilityLabel(revealedCredential == nil ? "Reveal API key" : "Hide API key")
+
+            Button("Replace") {
+              replaceCredential = true
+              revealedCredential = nil
+            }
+            .font(.system(size: 14, weight: .semibold))
           }
         } else {
-          SecureField(hasStoredCredential ? "New API key" : "API key", text: $credential)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onChange(of: credential) { _, _ in isDirty = true }
+          credentialField
         }
       } else {
         Label("This provider does not require an API key.", systemImage: "checkmark.shield")
@@ -331,6 +381,46 @@ struct ConnectionEditorView: View {
       }
     }
     .listRowBackground(theme.surfaceColor)
+  }
+
+  @ViewBuilder
+  private var credentialField: some View {
+    // Reveal-while-typing: eye toggles between SecureField and TextField for
+    // the credential being entered (create or replace).
+    if isCredentialVisible {
+      TextField("API key", text: $credential)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .onChange(of: credential) { _, _ in isDirty = true }
+    } else {
+      SecureField(hasStoredCredential ? "New API key" : "Paste your API key", text: $credential)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .onChange(of: credential) { _, _ in isDirty = true }
+    }
+  }
+
+  private var isCredentialVisible: Bool {
+    if isCreate || replaceCredential { return revealedCredential != nil }
+    return false
+  }
+
+  private var maskedSummary: String {
+    guard let value = revealedCredential, value.count > 8 else { return "Key revealed" }
+    return "\(value.prefix(4))···\(value.suffix(4))  (\(value.count) chars)"
+  }
+
+  private func toggleReveal() {
+    if revealedCredential != nil {
+      revealedCredential = nil
+      return
+    }
+    guard let id = existing?.id else { return }
+    isRevealingCredential = true
+    Task { @MainActor in
+      defer { isRevealingCredential = false }
+      revealedCredential = await model.revealCredential(accountID: id)
+    }
   }
 
   private var modelSection: some View {
@@ -386,6 +476,23 @@ struct ConnectionEditorView: View {
       Text("Fetch models or enter a model ID manually.")
         .font(.caption)
         .foregroundStyle(theme.secondaryForegroundColor)
+    } else if isPushModelPicker {
+      // Large catalogs (OpenRouter): push to a searchable picker; tapping a
+      // model selects it and pops back.
+      NavigationLink {
+        ConnectionModelPickerView(records: pickerRecords, selection: $selectedModelID)
+      } label: {
+        LabeledContent("Default model") {
+          VStack(alignment: .trailing, spacing: 2) {
+            Text(selectedModelTitle)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(1)
+            Text("\(records.count) available")
+              .font(.caption2)
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+          }
+        }
+      }
     } else {
       Picker("Default model", selection: $selectedModelID) {
         ForEach(records) { record in
@@ -396,6 +503,27 @@ struct ConnectionEditorView: View {
         }
       }
     }
+  }
+
+  /// Push navigation for kinds whose catalogs are too large for a menu —
+  /// OpenRouter aggregates every upstream provider's models.
+  private var isPushModelPicker: Bool {
+    kind == .openRouter
+  }
+
+  private var selectedModelTitle: String {
+    let records = modelRecords
+    if let selectedModelID,
+      let match = records.first(where: { $0.model.id == selectedModelID })
+    {
+      return match.model.displayName
+    }
+    return "Choose model"
+  }
+
+  /// The records the picker page browses (discovered + stored + manual).
+  private var pickerRecords: [AccountModelRecord] {
+    modelRecords
   }
 
   private var modelRecords: [AccountModelRecord] {
@@ -469,12 +597,6 @@ struct ConnectionEditorView: View {
             .background(
               Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             .onChange(of: headersText) { _, _ in isDirty = true }
-
-          Text("Name")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(theme.secondaryForegroundColor)
-          TextField(autoNamePlaceholder, text: $label)
-            .onChange(of: label) { _, _ in isDirty = true }
         }
         .padding(.vertical, 6)
       }
@@ -482,13 +604,47 @@ struct ConnectionEditorView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
+  /// Connection name. The field is PRE-FILLED with the suggested name — the
+  /// provider display name, numbered on collision ("Anthropic", "Anthropic 2")
+  /// — so the user always sees the name that will be saved. Editing is free;
+  /// programmatic tracking continues until they do (flag set by the user's
+  /// own edits via the text-change binding below). What's in the field is
+  /// what's saved: no empty-means-resolve second path.
+  private var nameSection: some View {
+    Section {
+      TextField(suggestedName, text: $label)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .onChange(of: label) { oldValue, newValue in
+          isDirty = true
+          // Only a human keystroke marks the name as user-owned; the
+          // tracking writes below go through the same onChange, so compare
+          // against the current suggestion to distinguish them.
+          if newValue != suggestedName || (oldValue == suggestedName && newValue.isEmpty) {
+            didEditName = true
+          }
+        }
+    } header: {
+      Text("Name")
+    } footer: {
+      Text("Shown in chats and pickers. Defaults to the provider name.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  /// The provider-named suggestion with collision handling. For custom
+  /// providers the typed server name is the base.
+  private var suggestedName: String {
+    if isCreate {
+      return model.autoName(for: kind, customBase: customName)
+    }
+    return existing?.label ?? ""
+  }
+
   private var endpointPlaceholder: String {
     if isCustom { return "Endpoint (required)" }
     return kind.defaultEndpoint?.absoluteString ?? "Provider default"
-  }
-
-  private var autoNamePlaceholder: String {
-    isCreate ? model.autoName(for: kind) : existing?.label ?? ""
   }
 
   private var enabledSection: some View {
@@ -505,6 +661,25 @@ struct ConnectionEditorView: View {
           }
         )
       )
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  /// Audit metadata for an existing connection.
+  private var infoSection: some View {
+    Section {
+      if let created = existing?.createdAt {
+        LabeledContent("Created") {
+          Text(created.formatted(date: .abbreviated, time: .shortened))
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      }
+      if let updated = existing?.updatedAt {
+        LabeledContent("Updated") {
+          Text(updated.formatted(date: .abbreviated, time: .shortened))
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      }
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -531,6 +706,7 @@ struct ConnectionEditorView: View {
           model.errorMessage = nil
           return
         }
+        autoSelectFirstModelIfNeeded()
       } else {
         guard let endpoint = URL(string: baseURL.trimmingCharacters(in: .whitespaces)) else {
           discoveryWarning = "Enter a valid endpoint to fetch models."
@@ -541,7 +717,7 @@ struct ConnectionEditorView: View {
           kind: kind,
           id: "",
           providerID: definition.id,
-          label: label.isEmpty ? model.autoName(for: kind) : label,
+          label: label.isEmpty ? model.autoName(for: kind, customBase: customName) : label,
           apiKey: credential.isEmpty ? nil : credential,
           baseURLOverride: endpoint,
           additionalHeaders: (try? parseHeadersStrict(headersText)) ?? [:],
@@ -553,12 +729,22 @@ struct ConnectionEditorView: View {
         )
         do {
           discoveredModels = try await model.previewModels(for: resolved)
+          autoSelectFirstModelIfNeeded()
         } catch {
           discoveryWarning =
             "Model discovery failed. Enter a model ID manually to continue."
         }
       }
     }
+  }
+
+  /// After a successful fetch, preselect the first available model unless
+  /// the user already picked one (or typed a manual ID).
+  private func autoSelectFirstModelIfNeeded() {
+    guard selectedModelID == nil,
+      manualModelID.trimmingCharacters(in: .whitespaces).isEmpty
+    else { return }
+    selectedModelID = modelRecords.first?.model.id
   }
 
   private func cancel() {
@@ -597,9 +783,13 @@ struct ConnectionEditorView: View {
       return manual.isEmpty ? nil : ModelID(rawValue: manual)
     }()
 
-    let finalLabel =
-      label.trimmingCharacters(in: .whitespaces).isEmpty
-      ? model.autoName(for: kind) : label
+    // Single name path: the field is pre-filled with the suggestion, so
+    // whatever is here (or a fallback recompute if somehow cleared) saves.
+    let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
+    let finalLabel = trimmedLabel.isEmpty
+      ? model.autoName(for: kind, customBase: customName)
+      : trimmedLabel
+    guard !finalLabel.isEmpty else { return }
 
     isSaving = true
     Task { @MainActor in
@@ -653,5 +843,94 @@ struct ConnectionEditorView: View {
       case .none: "No authentication"
       }
     }
+  }
+}
+
+/// Full-page, searchable model picker used for large catalogs (OpenRouter)
+/// and reachable from the inline menu path via the same component. Tap a row
+/// to select and dismiss; favorites sort first.
+struct ConnectionModelPickerView: View {
+  let records: [AccountModelRecord]
+  @Binding var selection: ModelID?
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var searchText = ""
+
+  private var filtered: [AccountModelRecord] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let base = query.isEmpty
+      ? records
+      : records.filter {
+        $0.model.displayName.localizedCaseInsensitiveContains(query)
+          || $0.model.id.rawValue.localizedCaseInsensitiveContains(query)
+      }
+    return base.sorted { lhs, rhs in
+      if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
+      return lhs.model.displayName.localizedCaseInsensitiveCompare(rhs.model.displayName)
+        == .orderedAscending
+    }
+  }
+
+  var body: some View {
+    List {
+      if filtered.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .listRowBackground(Color.clear)
+      } else {
+        ForEach(filtered) { record in
+          Button {
+            selection = record.model.id
+            dismiss()
+          } label: {
+            HStack(alignment: .top, spacing: 10) {
+              VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                  if record.isFavorite {
+                    Image(systemName: "star.fill")
+                      .font(.caption)
+                      .foregroundStyle(.yellow)
+                  }
+                  Text(record.model.displayName)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(theme.primaryForegroundColor)
+                  if record.model.id == selection {
+                    Image(systemName: "checkmark")
+                      .foregroundStyle(.tint)
+                  }
+                }
+                Text(record.model.id.rawValue)
+                  .font(.caption.monospaced())
+                  .foregroundStyle(theme.secondaryForegroundColor)
+                  .lineLimit(2)
+                HStack(spacing: 8) {
+                  if let context = record.model.contextWindow {
+                    Text("\(context.formatted(.number.notation(.compactName))) ctx")
+                  }
+                  if record.model.inputModalities.contains("image") {
+                    Label("Vision", systemImage: "photo")
+                  }
+                  if record.model.inputModalities.contains("file") {
+                    Label("Files", systemImage: "doc")
+                  }
+                }
+                .font(.caption2)
+                .foregroundStyle(theme.secondaryForegroundColor)
+              }
+              Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .listRowBackground(theme.surfaceColor)
+        }
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Choose Model")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search models")
   }
 }

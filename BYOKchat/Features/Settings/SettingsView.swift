@@ -154,24 +154,6 @@ struct SettingsView: View {
       }
       .listRowBackground(theme.surfaceColor)
 
-      Section("AI") {
-        NavigationLink {
-          ProvidersView(model: model.providers)
-        } label: {
-          Label("Providers", systemImage: "link")
-        }
-      }
-      .listRowBackground(theme.surfaceColor)
-
-      Section("Tools & MCP") {
-        NavigationLink {
-          MCPServerListView(model: model.mcp)
-        } label: {
-          Label("MCP Servers", systemImage: "shippingbox.and.arrow.backward")
-        }
-      }
-      .listRowBackground(theme.surfaceColor)
-
       Section("New Chats") {
         NavigationLink {
           DefaultSystemPromptView(preferences: model.preferences)
