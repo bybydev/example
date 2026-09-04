@@ -326,7 +326,7 @@ private enum BYOKScreenshotAppIconResource {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appendingPathComponent("Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png")
+      .appendingPathComponent("Resources/AppIcon.icon/Assets/AppIcon-1024.png")
     return UIImage(contentsOfFile: sourceIconURL.path)
   }()
 }
