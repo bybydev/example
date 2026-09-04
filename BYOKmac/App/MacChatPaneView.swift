@@ -1,3 +1,4 @@
+import AppKit
 import BYOKchatProviderCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -168,7 +169,7 @@ private struct MacTranscriptView: View {
   var body: some View {
     ZStack(alignment: .bottomTrailing) {
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: MacDesignTokens.Spacing.large) {
+        LazyVStack(alignment: .leading, spacing: 38) {
           if conversationID == nil {
             newConversationEmptyState
           } else if conversation != nil {
@@ -178,12 +179,22 @@ private struct MacTranscriptView: View {
                 .foregroundStyle(.secondary)
             } else {
               ForEach(messages) { message in
-                MacRichMessageView(
-                  chats: chats,
-                  mcp: mcp,
-                  conversationID: conversationID,
-                  message: message
-                )
+                VStack(alignment: .leading, spacing: 8) {
+                  MacRichMessageView(
+                    chats: chats,
+                    mcp: mcp,
+                    conversationID: conversationID,
+                    message: message
+                  )
+
+                  if message.role == .assistant, message.status == .complete {
+                    MacAssistantMessageActions(
+                      chats: chats,
+                      conversationID: conversationID,
+                      message: message
+                    )
+                  }
+                }
                 .id(message.id)
               }
             }
@@ -347,7 +358,7 @@ private struct MacTranscriptView: View {
         .font(.title2.weight(.semibold))
         .accessibilityAddTraits(.isHeader)
 
-      Text("Choose a provider and model, then ask anything.")
+      Text("Choose a model, then ask anything.")
         .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
@@ -451,18 +462,18 @@ private struct MacComposerView: View {
           remove: removeAttachment
         )
         .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 4)
+        .padding(.top, 9)
+        .padding(.bottom, 3)
       }
 
       messageField
         .padding(.horizontal, 14)
-        .padding(.top, attachments.isEmpty ? 10 : 2)
-        .padding(.bottom, 6)
+        .padding(.top, attachments.isEmpty ? 8 : 2)
+        .padding(.bottom, 3)
 
       bottomControls
         .padding(.horizontal, 10)
-        .padding(.bottom, 9)
+        .padding(.bottom, 8)
     }
     .background(
       fileDropTargeted ? MacDesignTokens.Colors.accentSoft : MacDesignTokens.Colors.surface,
@@ -516,59 +527,49 @@ private struct MacComposerView: View {
   }
 
   private var composerShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 24, style: .continuous)
+    RoundedRectangle(cornerRadius: 18, style: .continuous)
   }
 
   private var messageField: some View {
-    ZStack(alignment: .topLeading) {
-      if draftBinding.wrappedValue.isEmpty {
-        Text(target == nil ? "Set up a provider to chat…" : "Message…")
-          .font(.system(size: 16))
-          .foregroundStyle(.tertiary)
-          .padding(.horizontal, 5)
-          .padding(.vertical, 8)
-          .allowsHitTesting(false)
-          .accessibilityHidden(true)
-      }
-
-      TextEditor(text: draftBinding)
-        .font(.system(size: 16))
-        .scrollContentBackground(.hidden)
-        .focused($editorFocused)
-        .frame(minHeight: 68, idealHeight: 76, maxHeight: attachments.isEmpty ? 150 : 118)
-        .disabled(target == nil || isStreaming)
-        .accessibilityLabel("Message")
-        .accessibilityHint(
-          target == nil
-            ? "Set up a provider before composing a message"
-            : "Return sends. Shift Return inserts a new line"
-        )
-        .onKeyPress(keys: [.return], phases: .down) { press in
-          if press.modifiers.contains(.shift) { return .ignored }
-          guard canSend else { return .ignored }
-          submit()
-          return .handled
-        }
+    TextField(
+      target == nil ? "Set up a provider to chat…" : "Message…",
+      text: draftBinding,
+      axis: .vertical
+    )
+    .textFieldStyle(.plain)
+    .font(.system(size: 15))
+    .lineLimit(1...5)
+    .focused($editorFocused)
+    .padding(.horizontal, 3)
+    .padding(.vertical, 6)
+    .disabled(target == nil || isStreaming)
+    .accessibilityLabel("Message")
+    .accessibilityHint(
+      target == nil
+        ? "Set up a provider before composing a message"
+        : "Return sends. Shift Return inserts a new line"
+    )
+    .onKeyPress(keys: [.return], phases: .down) { press in
+      if press.modifiers.contains(.shift) { return .ignored }
+      guard canSend else { return .ignored }
+      submit()
+      return .handled
     }
   }
 
   private var bottomControls: some View {
-    HStack(spacing: 7) {
+    HStack(spacing: 6) {
       attachmentMenu
       targetButton
-
-      if let conversationID {
-        toolsButton(conversationID)
-      }
 
       if supportsReasoning {
         reasoningMenu
       }
 
-      Spacer(minLength: 12)
+      Spacer(minLength: 10)
       sendButton
     }
-    .frame(minHeight: 42)
+    .frame(minHeight: 34)
   }
 
   private var attachmentMenu: some View {
@@ -598,16 +599,26 @@ private struct MacComposerView: View {
           }
         }
       }
+
+      if conversationID != nil {
+        Divider()
+        Button(
+          enabledToolCount == 0 ? "Tools…" : "Tools · \(enabledToolCount)…",
+          systemImage: "wrench.and.screwdriver",
+          action: configureTools
+        )
+      }
     } label: {
       Image(systemName: "plus")
-        .font(.system(size: 17, weight: .regular))
-        .frame(width: 36, height: 36)
+        .font(.system(size: 16, weight: .regular))
+        .frame(width: 34, height: 34)
         .contentShape(Circle())
     }
     .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
     .disabled(isStreaming || target == nil)
-    .accessibilityLabel("Add attachment")
-    .help("Attach files, project references, Library items, or paste from the clipboard")
+    .accessibilityLabel("Add or configure")
+    .help("Add attachments or configure chat tools")
   }
 
   private var targetButton: some View {
@@ -619,67 +630,31 @@ private struct MacComposerView: View {
         chooseTarget()
       }
     } label: {
-      HStack(spacing: 7) {
-        Image(systemName: "sparkles")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-
-        if target == nil {
-          Text("Set Up Provider")
-            .font(.system(size: 12.5, weight: .medium))
-        } else {
-          VStack(alignment: .leading, spacing: 1) {
-            Text(modelLabel)
-              .font(.system(size: 12.5, weight: .medium))
-              .foregroundStyle(.primary)
-              .lineLimit(1)
-            Text(accountLabel)
-              .font(.system(size: 10.5))
-              .foregroundStyle(.tertiary)
-              .lineLimit(1)
-          }
-        }
+      HStack(spacing: 5) {
+        Text(target == nil ? "Set Up Provider" : modelLabel)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+          .frame(maxWidth: 220)
 
         Image(systemName: "chevron.down")
-          .font(.system(size: 8, weight: .semibold))
-          .foregroundStyle(.tertiary)
+          .font(.system(size: 7.5, weight: .semibold))
+          .foregroundStyle(.secondary)
       }
-      .padding(.horizontal, 9)
-      .frame(minWidth: target == nil ? 150 : 190, maxWidth: 320, minHeight: 36, alignment: .leading)
-      .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .disabled(isStreaming)
-    .help(target == nil ? "Set up a provider" : "Change provider and model")
-    .accessibilityLabel("Provider and model")
-    .accessibilityValue(targetDetails)
-  }
-
-  private func toolsButton(_ conversationID: ConversationID) -> some View {
-    Button(action: configureTools) {
-      HStack(spacing: 5) {
-        Image(systemName: "wrench.and.screwdriver")
-        Text(enabledToolCount == 0 ? "Tools" : "Tools · \(enabledToolCount)")
-          .lineLimit(1)
-      }
-      .font(.system(size: 11.5, weight: .medium))
-      .padding(.horizontal, 9)
+      .padding(.horizontal, 10)
       .frame(height: 34)
-      .background(
-        enabledToolCount > 0 ? MacDesignTokens.Colors.accentSoft : Color.primary.opacity(0.045),
-        in: RoundedRectangle(cornerRadius: 9)
-      )
+      .background(Color.primary.opacity(0.025), in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
+      }
+      .contentShape(Capsule())
     }
     .buttonStyle(.plain)
     .disabled(isStreaming)
-    .help(
-      mcp.inheritsProjectTools(conversationID)
-        ? "Configure tools · currently inheriting project defaults"
-        : "Configure tools for this chat"
-    )
-    .accessibilityLabel("Chat tools")
-    .accessibilityValue(enabledToolCount == 0 ? "No enabled tools" : "\(enabledToolCount) enabled tools")
+    .help(target == nil ? "Set up a provider" : "Change model")
+    .accessibilityLabel("Model")
+    .accessibilityValue(targetDetails)
   }
 
   private var reasoningMenu: some View {
@@ -708,13 +683,24 @@ private struct MacComposerView: View {
         }
       }
     } label: {
-      Text(reasoningLabel)
-        .font(.system(size: 11.5, weight: .medium))
-        .padding(.horizontal, 9)
-        .frame(height: 34)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
+      HStack(spacing: 5) {
+        Text(reasoningLabel)
+          .font(.system(size: 12, weight: .semibold))
+        Image(systemName: "chevron.down")
+          .font(.system(size: 7.5, weight: .semibold))
+          .foregroundStyle(.secondary)
+      }
+      .padding(.horizontal, 10)
+      .frame(height: 34)
+      .background(Color.primary.opacity(0.025), in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
+      }
+      .contentShape(Capsule())
     }
     .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
     .disabled(isStreaming)
     .accessibilityLabel("Reasoning")
     .accessibilityValue(reasoningLabel)
@@ -730,9 +716,9 @@ private struct MacComposerView: View {
       }
     } label: {
       Image(systemName: isStreaming ? "stop.fill" : "arrow.up")
-        .font(.system(size: 14, weight: .bold))
+        .font(.system(size: 13, weight: .bold))
         .foregroundStyle(.white)
-        .frame(width: 38, height: 38)
+        .frame(width: 34, height: 34)
         .background(
           MacDesignTokens.Colors.accent.opacity(isStreaming || canSend ? 0.95 : 0.34),
           in: Circle()
@@ -761,8 +747,8 @@ private struct MacComposerView: View {
   }
 
   private var reasoningLabel: String {
-    guard target?.reasoning?.enabled == true else { return "Reasoning Off" }
-    return "Reasoning · \(reasoningTitle(target?.reasoning?.effort ?? .high))"
+    guard target?.reasoning?.enabled == true else { return "Off" }
+    return reasoningTitle(target?.reasoning?.effort ?? .high)
   }
 
   private func submit() {
@@ -829,5 +815,111 @@ private struct MacComposerView: View {
     case .high: "High"
     case .max: "Max"
     }
+  }
+}
+
+private struct MacAssistantMessageActions: View {
+  @Bindable var chats: MacChatSessionModel
+  let conversationID: ConversationID?
+  let message: ChatMessage
+
+  @State private var copied = false
+  @State private var showingRegenerateConfirmation = false
+
+  private var canRetry: Bool {
+    guard let conversationID else { return false }
+    return chats.isLatestAssistant(message.id, conversationID: conversationID)
+      && !chats.isGenerating(conversationID)
+  }
+
+  var body: some View {
+    HStack(spacing: 2) {
+      Button {
+        copyToPasteboard(message.content)
+        copied = true
+        Task { @MainActor in
+          try? await Task.sleep(for: .seconds(1.2))
+          copied = false
+        }
+      } label: {
+        actionIcon(copied ? "checkmark" : "doc.on.doc")
+      }
+      .buttonStyle(.plain)
+      .disabled(message.content.isEmpty)
+      .help(copied ? "Copied" : "Copy response")
+      .accessibilityLabel(copied ? "Response copied" : "Copy response")
+
+      Button(action: requestRegeneration) {
+        actionIcon("arrow.clockwise")
+      }
+      .buttonStyle(.plain)
+      .disabled(!canRetry)
+      .help(canRetry ? "Retry response" : "Retry is available on the latest response")
+      .accessibilityLabel("Retry response")
+
+      Menu {
+        if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Button("Copy Reasoning", systemImage: "brain") {
+            copyToPasteboard(message.reasoning)
+          }
+        }
+
+        if !message.content.isEmpty {
+          ShareLink(item: message.content) {
+            Label("Share", systemImage: "square.and.arrow.up")
+          }
+        }
+      } label: {
+        actionIcon("ellipsis")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .help("More actions")
+      .accessibilityLabel("More actions")
+    }
+    .confirmationDialog(
+      "Regenerate this response?",
+      isPresented: $showingRegenerateConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Regenerate") {
+        regenerate(confirmingUncertainCompletion: true)
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
+    }
+  }
+
+  private func actionIcon(_ symbol: String) -> some View {
+    Image(systemName: symbol)
+      .font(.system(size: 13, weight: .medium))
+      .foregroundStyle(.secondary)
+      .frame(width: 30, height: 30)
+      .contentShape(RoundedRectangle(cornerRadius: 7))
+  }
+
+  private func requestRegeneration() {
+    guard let conversationID, canRetry else { return }
+    if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
+      showingRegenerateConfirmation = true
+    } else {
+      regenerate(confirmingUncertainCompletion: false)
+    }
+  }
+
+  private func regenerate(confirmingUncertainCompletion: Bool) {
+    guard let conversationID else { return }
+    Task {
+      _ = await chats.regenerate(
+        conversationID: conversationID,
+        confirmingUncertainCompletion: confirmingUncertainCompletion
+      )
+    }
+  }
+
+  private func copyToPasteboard(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
   }
 }

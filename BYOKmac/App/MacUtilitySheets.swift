@@ -195,19 +195,22 @@ struct MacSidebarUtilityGrid: View {
   }
 
   private func tile(title: String, symbol: String) -> some View {
-    VStack(spacing: 5) {
+    HStack(spacing: 7) {
       Image(systemName: symbol)
-        .font(.system(size: 15, weight: .medium))
+        .font(.system(size: 14, weight: .medium))
         .foregroundStyle(.secondary)
-        .frame(height: 18)
+        .frame(width: 18)
 
       Text(title)
         .font(.system(size: 11.5, weight: .medium))
         .foregroundStyle(.primary)
         .lineLimit(1)
         .minimumScaleFactor(0.78)
+
+      Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, minHeight: 54)
+    .padding(.horizontal, 9)
+    .frame(maxWidth: .infinity, minHeight: 40)
     .background(
       Color.primary.opacity(0.045),
       in: RoundedRectangle(cornerRadius: 9, style: .continuous)

@@ -40,6 +40,10 @@ struct MacRichMessageView: View {
     message.status == .pending || message.status == .streaming
   }
 
+  private var expectsReasoning: Bool {
+    chats.target(for: conversationID)?.reasoning?.enabled == true
+  }
+
   private var canMutateConversation: Bool {
     guard let conversationID else { return false }
     return !chats.isGenerating(conversationID)
@@ -65,7 +69,7 @@ struct MacRichMessageView: View {
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
     .overlay(alignment: message.role == .user ? .topLeading : .topTrailing) {
-      if hovering && !isStreaming {
+      if hovering && !isStreaming && message.role == .user {
         actionMenu
           .padding(.top, -2)
       }
@@ -177,7 +181,7 @@ struct MacRichMessageView: View {
         HStack(spacing: 7) {
           ProgressView()
             .controlSize(.mini)
-          Text("Thinking…")
+          Text(expectsReasoning ? "Thinking…" : "Generating…")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -377,6 +381,8 @@ private struct MacReasoningDisclosure: View {
   let streamingSnapshot: MacStreamingAnswerSnapshot?
 
   @State private var expanded: Bool
+  @State private var reasoningStartedAt: Date?
+  @State private var reasoningFinishedAt: Date?
 
   init(
     text: String,
@@ -387,6 +393,8 @@ private struct MacReasoningDisclosure: View {
     self.isStreaming = isStreaming
     self.streamingSnapshot = streamingSnapshot
     _expanded = State(initialValue: isStreaming)
+    _reasoningStartedAt = State(initialValue: isStreaming ? .now : nil)
+    _reasoningFinishedAt = State(initialValue: nil)
   }
 
   var body: some View {
@@ -408,16 +416,51 @@ private struct MacReasoningDisclosure: View {
       .foregroundStyle(.secondary)
       .padding(.top, 7)
     } label: {
-      HStack(spacing: 7) {
-        Image(systemName: "brain")
-        Text(isStreaming ? "Reasoning…" : "Reasoning")
-      }
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(.secondary)
+      reasoningLabel
     }
     .onChange(of: isStreaming) { _, value in
-      if value { expanded = true }
+      if value {
+        if reasoningStartedAt == nil {
+          reasoningStartedAt = .now
+        }
+        reasoningFinishedAt = nil
+        expanded = true
+      } else if reasoningFinishedAt == nil, reasoningStartedAt != nil {
+        reasoningFinishedAt = .now
+      }
     }
+  }
+
+  @ViewBuilder
+  private var reasoningLabel: some View {
+    HStack(spacing: 7) {
+      if isStreaming {
+        ProgressView()
+          .controlSize(.mini)
+
+        if let reasoningStartedAt {
+          TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text("Thinking… \(elapsedSeconds(from: reasoningStartedAt, to: context.date))s")
+          }
+        } else {
+          Text("Thinking…")
+        }
+      } else {
+        Image(systemName: "brain")
+
+        if let reasoningStartedAt, let reasoningFinishedAt {
+          Text("Thought for \(elapsedSeconds(from: reasoningStartedAt, to: reasoningFinishedAt))s")
+        } else {
+          Text("Thought")
+        }
+      }
+    }
+    .font(.caption.weight(.semibold))
+    .foregroundStyle(.secondary)
+  }
+
+  private func elapsedSeconds(from start: Date, to end: Date) -> Int {
+    max(1, Int(end.timeIntervalSince(start).rounded(.down)))
   }
 }
 
