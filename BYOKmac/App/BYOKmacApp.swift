@@ -7,6 +7,7 @@ struct BYOKmacApp: App {
   @Environment(\.openWindow) private var openWindow
   @State private var model = MacAppModel()
   @State private var proGateCenter = MacProGateCenter.shared
+  @State private var settingsRouter = MacSettingsRouter.shared
 
   private let purchases = MacPurchaseStore.manager
 
@@ -19,6 +20,7 @@ struct BYOKmacApp: App {
         .environment(\.macThemeRevision, model.theme.revision)
         .environment(purchases)
         .environment(proGateCenter)
+        .environment(settingsRouter)
         .managesPurchases(purchases)
         .onChange(of: proGateCenter.requestID) { _, _ in
           openWindow(id: MacWindowID.proPaywall)
@@ -93,6 +95,7 @@ struct BYOKmacApp: App {
     Settings {
       MacSettingsView(model: model, purchaseManager: purchases)
         .environment(purchases)
+        .environment(settingsRouter)
     }
   }
 }

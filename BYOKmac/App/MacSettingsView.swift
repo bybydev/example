@@ -6,11 +6,14 @@ struct MacSettingsView: View {
   let purchaseManager: PurchaseManager
 
   @Environment(\.openWindow) private var openWindow
+  @Environment(MacSettingsRouter.self) private var settingsRouter
+  @State private var selection: MacSettingsTab = .general
 
   var body: some View {
-    TabView {
+    TabView(selection: $selection) {
       MacGeneralSettingsView(preferences: model.preferences)
         .tabItem { Label("General", systemImage: "gearshape") }
+        .tag(MacSettingsTab.general)
 
       ProPlanPane(
         purchaseManager: purchaseManager,
@@ -18,26 +21,42 @@ struct MacSettingsView: View {
         onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
       )
       .tabItem { Label("Plan", systemImage: "creditcard") }
+      .tag(MacSettingsTab.plan)
 
       MacAppearanceSettingsView(theme: model.theme, purchaseManager: purchaseManager)
         .tabItem { Label("Appearance", systemImage: "paintpalette") }
+        .tag(MacSettingsTab.appearance)
 
       MacConnectionSettingsView(model: model)
         .tabItem { Label("Connections", systemImage: "bolt.horizontal.circle") }
+        .tag(MacSettingsTab.connections)
 
       MacToolsSettingsView(model: model)
         .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+        .tag(MacSettingsTab.tools)
 
       MacDataSettingsView(model: model)
         .tabItem { Label("Data", systemImage: "externaldrive") }
+        .tag(MacSettingsTab.data)
 
       MacDiagnosticsSettingsView(model: model)
         .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
+        .tag(MacSettingsTab.diagnostics)
     }
     .frame(width: 760, height: 620)
     .preferredColorScheme(model.theme.preferredColorScheme)
     .tint(MacDesignTokens.Colors.accent)
     .environment(\.macThemeRevision, model.theme.revision)
+    .onAppear(perform: consumeRouterRequest)
+    .onChange(of: settingsRouter.requestID) { _, _ in
+      consumeRouterRequest()
+    }
+  }
+
+  private func consumeRouterRequest() {
+    if let tab = settingsRouter.requestedTab {
+      selection = tab
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import BYOKchatProviderCore
+import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -9,134 +10,123 @@ struct MacChatPane: View {
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
   let summary: ChatConversation?
-  @Binding var columnVisibility: NavigationSplitViewVisibility
   let composerFocusRequestID: Int
   let attachments: [ChatAttachment]
   let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let configureTools: () -> Void
-  let renameConversation: () -> Void
-  let deleteConversation: () -> Void
   let appendAttachments: ([ChatAttachment]) -> Void
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
 
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
   private var title: String {
-    chats.conversation(conversationID)?.title ?? summary?.title ?? "New Chat"
+    let value = chats.conversation(conversationID)?.title ?? summary?.title ?? ""
+    return value.isEmpty ? "New Chat" : value
   }
 
   private var messageCount: Int? {
     chats.conversation(conversationID)?.messages.count ?? summary?.messageCount
   }
 
+  private var subtitle: Text? {
+    guard let messageCount, messageCount > 0 else { return nil }
+    return Text("\(messageCount) messages")
+  }
+
   var body: some View {
-    VStack(spacing: 0) {
-      MacTopBar(
-        title: title,
-        messageCount: messageCount,
-        hasConversation: conversationID != nil,
-        toggleSidebar: toggleSidebar,
-        renameConversation: renameConversation,
-        deleteConversation: deleteConversation
+    ZStack(alignment: .bottom) {
+      MacTranscriptView(
+        chats: chats,
+        mcp: mcp,
+        conversationID: conversationID,
+        summary: summary
       )
 
-      Divider()
-
-      ZStack(alignment: .bottom) {
-        MacTranscriptView(
-          chats: chats,
-          mcp: mcp,
-          conversationID: conversationID,
-          summary: summary
-        )
-
-        MacComposerView(
-          providers: providers,
-          chats: chats,
-          mcp: mcp,
-          conversationID: conversationID,
-          focusRequestID: composerFocusRequestID,
-          attachments: attachments,
-          chooseTarget: chooseTarget,
-          manageProviders: manageProviders,
-          configureTools: configureTools,
-          appendAttachments: appendAttachments,
-          removeAttachment: removeAttachment,
-          send: send
-        )
-        .id(conversationID?.rawValue ?? "new-chat")
-        .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
-        .padding(.horizontal, MacDesignTokens.Spacing.large)
-        .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
+      MacComposerView(
+        providers: providers,
+        chats: chats,
+        mcp: mcp,
+        conversationID: conversationID,
+        focusRequestID: composerFocusRequestID,
+        attachments: attachments,
+        chooseTarget: chooseTarget,
+        manageProviders: manageProviders,
+        configureTools: configureTools,
+        appendAttachments: appendAttachments,
+        removeAttachment: removeAttachment,
+        send: send
+      )
+      .id(conversationID?.rawValue ?? "new-chat")
+      .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
+      .padding(.horizontal, MacDesignTokens.Spacing.large)
+      .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
+    }
+    .navigationTitle(title)
+    .navigationSubtitle(subtitle ?? Text(""))
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        MacProNavButton()
       }
     }
     .background(MacDesignTokens.Colors.canvas)
-  }
-
-  private func toggleSidebar() {
-    let update = {
-      columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-    }
-    if reduceMotion {
-      update()
-    } else {
-      withAnimation(.easeInOut(duration: 0.16), update)
-    }
   }
 }
 
-private struct MacTopBar: View {
-  let title: String
-  let messageCount: Int?
-  let hasConversation: Bool
-  let toggleSidebar: () -> Void
-  let renameConversation: () -> Void
-  let deleteConversation: () -> Void
+/// Navbar trailing action: opens the paywall for free users, or the Settings
+/// Plan tab for Pro users, labeled with their active plan duration.
+private struct MacProNavButton: View {
+  @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(\.openWindow) private var openWindow
+  @Environment(\.openSettings) private var openSettings
+  @Environment(MacSettingsRouter.self) private var settingsRouter
+
+  private var hasPro: Bool { purchaseManager.hasPro }
+
+  private var planLabel: String? {
+    guard let product = purchaseManager.activeProduct else { return nil }
+    if product.type == .nonConsumable { return "Pro Lifetime" }
+    switch product.subscriptionPeriod?.unit {
+    case .month: return "Pro Monthly"
+    case .year: return "Pro Yearly"
+    default: return "Pro"
+    }
+  }
 
   var body: some View {
-    HStack(spacing: MacDesignTokens.Spacing.compact) {
-      Button(action: toggleSidebar) {
-        Image(systemName: "sidebar.left")
-          .frame(width: 28, height: 28)
+    Button {
+      if hasPro {
+        settingsRouter.request(.plan)
+        openSettings()
+      } else {
+        openWindow(id: MacWindowID.proPaywall)
       }
-      .buttonStyle(.plain)
-      .help("Toggle Sidebar")
-      .accessibilityLabel("Toggle Sidebar")
-      .accessibilityHint("Shows or hides the conversation list")
-
-      Text(title.isEmpty ? "New Chat" : title)
-        .font(.system(size: 14, weight: .semibold))
-        .lineLimit(1)
-        .accessibilityAddTraits(.isHeader)
-
-      Spacer()
-
-      if let messageCount, messageCount > 0 {
-        Text("\(messageCount) messages")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .accessibilityLabel("\(messageCount) messages in this conversation")
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: hasPro ? "checkmark.seal.fill" : "crown.fill")
+          .font(.system(size: 11, weight: .semibold))
+        Text(hasPro ? (planLabel ?? "Pro") : "Unlock Pro")
+          .font(.system(size: 12, weight: .semibold))
       }
-
-      if hasConversation {
-        Menu {
-          Button("Rename", systemImage: "pencil", action: renameConversation)
-          Divider()
-          Button("Delete", systemImage: "trash", role: .destructive, action: deleteConversation)
-        } label: {
-          Image(systemName: "ellipsis")
-            .frame(width: 28, height: 28)
-        }
-        .menuStyle(.borderlessButton)
-        .help("Conversation Actions")
-        .accessibilityLabel("Conversation actions")
+      .lineLimit(1)
+      .padding(.horizontal, 10)
+      .frame(height: 24)
+      .background(
+        hasPro ? Color.primary.opacity(0.05) : MacDesignTokens.Colors.accent.opacity(0.16),
+        in: Capsule()
+      )
+      .overlay {
+        Capsule().stroke(
+          hasPro ? Color.primary.opacity(0.12) : MacDesignTokens.Colors.accent.opacity(0.45),
+          lineWidth: 0.75
+        )
       }
+      .foregroundStyle(hasPro ? Color.secondary : MacDesignTokens.Colors.accent)
+      .contentShape(Capsule())
     }
-    .padding(.horizontal, MacDesignTokens.Spacing.standard)
-    .frame(height: MacDesignTokens.Layout.topBarHeight)
-    .background(MacDesignTokens.Colors.canvas)
+    .buttonStyle(.plain)
+    .help(hasPro ? "Manage your plan in Settings" : "Unlock BYOK Pro")
+    .accessibilityLabel(hasPro ? "Manage plan" : "Unlock BYOK Pro")
+    .accessibilityValue(hasPro ? (planLabel ?? "Pro") : "")
   }
 }
 

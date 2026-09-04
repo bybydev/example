@@ -58,23 +58,12 @@ struct MacShellView: View {
         mcp: mcp,
         conversationID: selectedConversationID,
         summary: chats.summary(selectedConversationID),
-        columnVisibility: $columnVisibility,
         composerFocusRequestID: composerFocusRequestID,
         attachments: pendingAttachments(for: selectedConversationID),
         chooseTarget: { showingTargetPicker = true },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
           if selectedConversationID != nil { showingChatTools = true }
-        },
-        renameConversation: {
-          if let conversation = chats.conversation(selectedConversationID) ?? chats.summary(selectedConversationID) {
-            renameTarget = conversation
-          }
-        },
-        deleteConversation: {
-          if let conversation = chats.conversation(selectedConversationID) ?? chats.summary(selectedConversationID) {
-            deleteTarget = conversation
-          }
         },
         appendAttachments: { additions in
           appendAttachments(additions, conversationID: selectedConversationID, chats: chats)

@@ -9,6 +9,35 @@ enum MacWindowID {
   static let proPaywall = "byokchat.pro-paywall"
 }
 
+enum MacSettingsTab: String, CaseIterable, Sendable {
+  case general
+  case plan
+  case appearance
+  case connections
+  case tools
+  case data
+  case diagnostics
+}
+
+/// Routes requests from anywhere in the app to a specific Settings tab, using
+/// the same request-ID pattern as `MacProGateCenter` so an already-open
+/// Settings window still reacts.
+@MainActor
+@Observable
+final class MacSettingsRouter {
+  static let shared = MacSettingsRouter()
+
+  private(set) var requestID = 0
+  private(set) var requestedTab: MacSettingsTab?
+
+  private init() {}
+
+  func request(_ tab: MacSettingsTab) {
+    requestedTab = tab
+    requestID &+= 1
+  }
+}
+
 @MainActor
 enum MacPurchaseStore {
   static let monthlyProductID = BYOKProCatalog.monthlyProductID
