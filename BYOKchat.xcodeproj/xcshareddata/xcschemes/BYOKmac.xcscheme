@@ -21,6 +21,20 @@
                ReferencedContainer = "container:BYOKchat.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4940946BD185ED4AA7734E1B"
+               BuildableName = "BYOKmacTests.xctest"
+               BlueprintName = "BYOKmacTests"
+               ReferencedContainer = "container:BYOKchat.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -39,7 +53,20 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4940946BD185ED4AA7734E1B"
+               BuildableName = "BYOKmacTests.xctest"
+               BlueprintName = "BYOKmacTests"
+               ReferencedContainer = "container:BYOKchat.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

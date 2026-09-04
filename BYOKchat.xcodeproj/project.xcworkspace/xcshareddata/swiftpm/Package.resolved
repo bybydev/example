@@ -1,5 +1,5 @@
 {
-  "originHash" : "8b3b5aa4ece16689ffef23ca3d143551376605bc794ac8eb4a9d5c91116e81da",
+  "originHash" : "fb258d206c1b102769a57f220b94a994f78df443e578ac42c53cb81371215218",
   "pins" : [
     {
       "identity" : "appfoundation",
@@ -44,6 +44,15 @@
       "state" : {
         "revision" : "cc677f66b9cc1751e09207621d62d1cda0200675",
         "version" : "2.0.0"
+      }
+    },
+    {
+      "identity" : "macappfoundation",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hoangbkit/MacAppFoundation",
+      "state" : {
+        "revision" : "c52d5b1ae8fbae15a167b0cde729a549211775c9",
+        "version" : "0.1.0"
       }
     },
     {
