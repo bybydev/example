@@ -1,4 +1,5 @@
 import AppFoundation
+import BYOKchatProviderCore
 import SwiftUI
 
 enum BYOKProFeature: String, Sendable {
@@ -71,11 +72,11 @@ enum BYOKProFeature: String, Sendable {
 }
 
 enum BYOKProAccess {
-  static let freeThemeCount = 2
-  static let freeProviderAccountLimit = 1
-  static let freeProjectLimit = 1
-  static let freeMCPServerLimit = 1
-  static let freeLibraryItemLimit = 10
+  static let freeThemeCount = BYOKProPolicy.freeThemeCount
+  static let freeProviderAccountLimit = BYOKProPolicy.freeProviderAccountLimit
+  static let freeProjectLimit = BYOKProPolicy.freeProjectLimit
+  static let freeMCPServerLimit = BYOKProPolicy.freeMCPServerLimit
+  static let freeLibraryItemLimit = BYOKProPolicy.freeLibraryItemLimit
 
   static let comparisonRows: [LimitReachedComparisonRow] = [
     LimitReachedComparisonRow(feature: "Themes", freeValue: "2", proValue: "All themes"),
@@ -87,19 +88,19 @@ enum BYOKProAccess {
   ]
 
   static func canCreateProviderAccount(currentCount: Int, hasPro: Bool) -> Bool {
-    hasPro || currentCount < freeProviderAccountLimit
+    BYOKProPolicy.canCreateProviderAccount(currentCount: currentCount, hasPro: hasPro)
   }
 
   static func canCreateProject(currentCount: Int, hasPro: Bool) -> Bool {
-    hasPro || currentCount < freeProjectLimit
+    BYOKProPolicy.canCreateProject(currentCount: currentCount, hasPro: hasPro)
   }
 
   static func canCreateMCPServer(currentCount: Int, hasPro: Bool) -> Bool {
-    hasPro || currentCount < freeMCPServerLimit
+    BYOKProPolicy.canCreateMCPServer(currentCount: currentCount, hasPro: hasPro)
   }
 
   static func canCreateLibraryItem(currentCount: Int, hasPro: Bool) -> Bool {
-    hasPro || currentCount < freeLibraryItemLimit
+    BYOKProPolicy.canCreateLibraryItem(currentCount: currentCount, hasPro: hasPro)
   }
 }
 

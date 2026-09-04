@@ -7,7 +7,7 @@ struct MacRichMessageView: View {
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
-  let message: ChatMessage
+  let storedMessage: ChatMessage
 
   @Environment(MacWorkspaceModel.self) private var workspace
   @State private var hovering = false
@@ -15,6 +15,26 @@ struct MacRichMessageView: View {
   @State private var showingEdit = false
   @State private var showingRegenerateConfirmation = false
   @State private var copied = false
+
+  init(
+    chats: MacChatSessionModel,
+    mcp: MacMCPModel,
+    conversationID: ConversationID?,
+    message: ChatMessage
+  ) {
+    _chats = Bindable(wrappedValue: chats)
+    _mcp = Bindable(wrappedValue: mcp)
+    self.conversationID = conversationID
+    storedMessage = message
+  }
+
+  private var livePresentation: MacLiveMessagePresentation? {
+    chats.livePresentations[storedMessage.id]
+  }
+
+  private var message: ChatMessage {
+    chats.displayMessage(storedMessage)
+  }
 
   private var isStreaming: Bool {
     message.status == .pending || message.status == .streaming
@@ -120,7 +140,8 @@ struct MacRichMessageView: View {
       if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         MacReasoningDisclosure(
           text: message.reasoning,
-          isStreaming: isStreaming && message.content.isEmpty
+          isStreaming: isStreaming && message.content.isEmpty,
+          streamingSnapshot: livePresentation?.reasoningSnapshot
         )
       }
 
@@ -140,7 +161,18 @@ struct MacRichMessageView: View {
       }
 
       if !message.content.isEmpty {
-        MacMarkdownMessageContent(text: message.content, isStreaming: isStreaming)
+        if let livePresentation {
+          if livePresentation.answerSnapshot.revision > 0 {
+            MacStreamingRenderedContentView(snapshot: livePresentation.answerSnapshot)
+          } else {
+            Text(message.content)
+              .font(.system(size: 15))
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        } else {
+          MacMarkdownMessageContent(text: message.content)
+        }
       } else if isStreaming && message.reasoning.isEmpty && attachments.isEmpty && toolRounds.isEmpty {
         HStack(spacing: 7) {
           ProgressView()
@@ -342,21 +374,39 @@ struct MacRichMessageView: View {
 private struct MacReasoningDisclosure: View {
   let text: String
   let isStreaming: Bool
+  let streamingSnapshot: MacStreamingAnswerSnapshot?
 
   @State private var expanded: Bool
 
-  init(text: String, isStreaming: Bool) {
+  init(
+    text: String,
+    isStreaming: Bool,
+    streamingSnapshot: MacStreamingAnswerSnapshot? = nil
+  ) {
     self.text = text
     self.isStreaming = isStreaming
+    self.streamingSnapshot = streamingSnapshot
     _expanded = State(initialValue: isStreaming)
   }
 
   var body: some View {
     DisclosureGroup(isExpanded: $expanded) {
-      MacMarkdownMessageContent(text: text, isStreaming: isStreaming)
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(.top, 7)
+      Group {
+        if let streamingSnapshot {
+          if streamingSnapshot.revision > 0 {
+            MacStreamingRenderedContentView(snapshot: streamingSnapshot)
+          } else {
+            Text(text)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        } else {
+          MacMarkdownMessageContent(text: text)
+        }
+      }
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .padding(.top, 7)
     } label: {
       HStack(spacing: 7) {
         Image(systemName: "brain")

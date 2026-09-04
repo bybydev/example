@@ -7,6 +7,40 @@ enum MacAnswerContentBlock: Equatable, Sendable {
 }
 
 enum MacAnswerContentParser {
+  private struct FenceOpening {
+    let markerCharacter: Character
+    let markerLength: Int
+    let language: String?
+  }
+
+  private enum StreamingMode {
+    case markdown
+    case fence(startUTF8: Int, opening: FenceOpening)
+    case math(startUTF8: Int, terminator: String)
+  }
+
+  private enum MarkdownContinuationKind: Equatable {
+    case ordinary
+    case list
+    case blockquote
+    case table
+    case indented
+    case html
+
+    var canContinueAcrossBlankLine: Bool {
+      switch self {
+      case .list, .blockquote, .indented, .html: true
+      case .ordinary, .table: false
+      }
+    }
+  }
+
+  private struct StreamingLine {
+    let text: String
+    let startUTF8: Int
+    let endUTF8: Int
+  }
+
   static func parse(_ text: String) -> [MacAnswerContentBlock] {
     let lines = text.components(separatedBy: .newlines)
     var blocks: [MacAnswerContentBlock] = []
@@ -31,7 +65,7 @@ enum MacAnswerContentParser {
         var isComplete = false
         while index < lines.count {
           let candidate = lines[index]
-          if candidate.trimmingCharacters(in: .whitespaces).hasPrefix(fence.marker) {
+          if isFenceClosing(candidate.trimmingCharacters(in: .whitespaces), opening: fence) {
             isComplete = true
             index += 1
             break
@@ -98,6 +132,99 @@ enum MacAnswerContentParser {
     return blocks
   }
 
+  /// Returns the source that can no longer change Markdown interpretation and
+  /// one mutable suffix. This intentionally stays conservative: unfinished
+  /// lists, quotes, indented blocks, HTML-ish blocks, fences and display math
+  /// remain in the tail until a structurally distinct block begins.
+  static func splitStreamingSource(_ source: String) -> (stable: String, tail: String) {
+    guard !source.isEmpty else { return ("", "") }
+
+    let lines = streamingLines(source)
+    var mode: StreamingMode = .markdown
+    var stableEndUTF8 = 0
+    var markdownKind: MarkdownContinuationKind?
+    var blankSeenInContinuation = false
+
+    for line in lines {
+      let trimmed = line.text.trimmingCharacters(in: .whitespaces)
+
+      switch mode {
+      case .fence(_, let opening):
+        if isFenceClosing(trimmed, opening: opening) {
+          stableEndUTF8 = line.endUTF8
+          mode = .markdown
+          markdownKind = nil
+          blankSeenInContinuation = false
+        }
+        continue
+
+      case .math(_, let terminator):
+        if trimmed == terminator {
+          stableEndUTF8 = line.endUTF8
+          mode = .markdown
+          markdownKind = nil
+          blankSeenInContinuation = false
+        }
+        continue
+
+      case .markdown:
+        break
+      }
+
+      if let opening = fenceOpening(trimmed) {
+        stableEndUTF8 = max(stableEndUTF8, line.startUTF8)
+        mode = .fence(startUTF8: line.startUTF8, opening: opening)
+        markdownKind = nil
+        blankSeenInContinuation = false
+        continue
+      }
+
+      if trimmed == "$$" || trimmed == "\\[" {
+        stableEndUTF8 = max(stableEndUTF8, line.startUTF8)
+        mode = .math(
+          startUTF8: line.startUTF8,
+          terminator: trimmed == "$$" ? "$$" : "\\]"
+        )
+        markdownKind = nil
+        blankSeenInContinuation = false
+        continue
+      }
+
+      if trimmed.isEmpty {
+        guard let kind = markdownKind else {
+          stableEndUTF8 = max(stableEndUTF8, line.endUTF8)
+          continue
+        }
+
+        if kind.canContinueAcrossBlankLine {
+          blankSeenInContinuation = true
+        } else {
+          stableEndUTF8 = line.endUTF8
+          markdownKind = nil
+          blankSeenInContinuation = false
+        }
+        continue
+      }
+
+      let nextKind = markdownContinuationKind(for: line.text)
+      if let currentKind = markdownKind, blankSeenInContinuation {
+        if currentKind != nextKind {
+          stableEndUTF8 = max(stableEndUTF8, line.startUTF8)
+          markdownKind = nextKind
+        }
+        blankSeenInContinuation = false
+      } else if markdownKind == nil {
+        markdownKind = nextKind
+      }
+    }
+
+    let bytes = source.utf8
+    let safeStableCount = min(stableEndUTF8, bytes.count)
+    let stable = String(decoding: bytes.prefix(safeStableCount), as: UTF8.self)
+    let tail = String(decoding: bytes.dropFirst(safeStableCount), as: UTF8.self)
+    return (stable, tail)
+  }
+
   static func containsInlineMath(_ text: String) -> Bool {
     let pattern = #"(?<!\\)\$(?!\s)(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$|\\\((?:\\.|[^\\\n])+\\\)"#
     return text.range(of: pattern, options: .regularExpression) != nil
@@ -141,20 +268,57 @@ enum MacAnswerContentParser {
     return dollarCount.isMultiple(of: 2) && openParens == 0
   }
 
-  private static func fenceOpening(_ trimmedLine: String) -> (marker: String, language: String?)? {
-    let marker: String
-    if trimmedLine.hasPrefix("```") {
-      marker = "```"
-    } else if trimmedLine.hasPrefix("~~~") {
-      marker = "~~~"
-    } else {
-      return nil
-    }
+  private static func fenceOpening(_ trimmedLine: String) -> FenceOpening? {
+    guard let first = trimmedLine.first, first == "`" || first == "~" else { return nil }
+    let markerLength = trimmedLine.prefix { $0 == first }.count
+    guard markerLength >= 3 else { return nil }
 
-    let rawLanguage = String(trimmedLine.dropFirst(marker.count))
+    let rawLanguage = String(trimmedLine.dropFirst(markerLength))
       .trimmingCharacters(in: .whitespacesAndNewlines)
     let language = rawLanguage.split(whereSeparator: \.isWhitespace).first.map(String.init)
-    return (marker, language)
+    return FenceOpening(
+      markerCharacter: first,
+      markerLength: markerLength,
+      language: language
+    )
+  }
+
+  private static func isFenceClosing(_ trimmedLine: String, opening: FenceOpening) -> Bool {
+    guard trimmedLine.first == opening.markerCharacter else { return false }
+    let markerLength = trimmedLine.prefix { $0 == opening.markerCharacter }.count
+    guard markerLength >= opening.markerLength else { return false }
+    return trimmedLine.dropFirst(markerLength).trimmingCharacters(in: .whitespaces).isEmpty
+  }
+
+  private static func streamingLines(_ source: String) -> [StreamingLine] {
+    let values = source.split(separator: "\n", omittingEmptySubsequences: false)
+    var result: [StreamingLine] = []
+    result.reserveCapacity(values.count)
+    var offset = 0
+
+    for (index, value) in values.enumerated() {
+      let text = String(value)
+      let hasNewline = index < values.count - 1
+      let end = offset + text.utf8.count + (hasNewline ? 1 : 0)
+      result.append(StreamingLine(text: text, startUTF8: offset, endUTF8: end))
+      offset = end
+    }
+    return result
+  }
+
+  private static func markdownContinuationKind(for line: String) -> MarkdownContinuationKind {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix(">") { return .blockquote }
+    if line.hasPrefix("    ") || line.hasPrefix("\t") { return .indented }
+    if trimmed.hasPrefix("|") { return .table }
+    if trimmed.hasPrefix("<") { return .html }
+    if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
+      return .list
+    }
+    if trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil {
+      return .list
+    }
+    return .ordinary
   }
 
   private static func trimBlankLines(_ value: String) -> String {

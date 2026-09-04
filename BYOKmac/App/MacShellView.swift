@@ -4,12 +4,12 @@ import SwiftUI
 struct MacShellView: View {
   let model: MacAppModel
 
+  @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @State private var columnVisibility: NavigationSplitViewVisibility = .all
   @State private var selectedConversationID: ConversationID?
   @State private var searchText = ""
   @State private var composerFocusRequestID = 0
   @State private var showingTargetPicker = false
-  @State private var showingProviders = false
   @State private var showingChatTools = false
   @State private var renameTarget: ChatConversation?
   @State private var deleteTarget: ChatConversation?
@@ -62,7 +62,7 @@ struct MacShellView: View {
         composerFocusRequestID: composerFocusRequestID,
         attachments: pendingAttachments(for: selectedConversationID),
         chooseTarget: { showingTargetPicker = true },
-        manageProviders: { showingProviders = true },
+        manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
           if selectedConversationID != nil { showingChatTools = true }
         },
@@ -137,11 +137,6 @@ struct MacShellView: View {
       ) { target in
         await chats.applyTarget(target, conversationID: selectedConversationID)
       }
-    }
-    .sheet(isPresented: $showingProviders, onDismiss: {
-      chats.refreshNewChatTargetAfterProviderChanges()
-    }) {
-      MacProviderManagementView(model: providers)
     }
     .sheet(isPresented: $showingChatTools) {
       if let selectedConversationID {
@@ -349,11 +344,17 @@ private struct MacSidebarView: View {
 
       Divider()
 
-      if isSearching {
-        searchResults
-      } else {
-        conversationList
+      Group {
+        if isSearching {
+          searchResults
+        } else {
+          conversationList
+        }
       }
+      .frame(maxHeight: .infinity)
+
+      Divider()
+      MacSidebarUtilityGrid()
     }
     .background(MacDesignTokens.Colors.surface.opacity(0.52))
     .onAppear {

@@ -126,6 +126,11 @@ final class MacProviderModel {
     authChoice: ProviderAuthentication? = nil,
     seedModelIDs: [String]? = nil
   ) async -> ProviderAccountID? {
+    guard MacProAccess.requireProviderAccountCapacity(currentCount: accounts.count) else {
+      errorMessage = "Free includes 1 provider connection. Upgrade to BYOK Pro to add more."
+      return nil
+    }
+
     isBusy = true
     errorMessage = nil
     defer { isBusy = false }

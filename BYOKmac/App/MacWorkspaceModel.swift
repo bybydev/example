@@ -107,7 +107,12 @@ final class MacWorkspaceModel {
     promptPresets: [ProjectPromptPreset],
     toolPresets: [ProjectToolPreset]
   ) async -> ProjectID? {
-    await performReturning("Project created", referencesChanged: !files.isEmpty) {
+    guard MacProAccess.requireProjectCapacity(currentCount: projects.count) else {
+      errorMessage = "Free includes 1 project. Upgrade to BYOK Pro to create more."
+      return nil
+    }
+
+    return await performReturning("Project created", referencesChanged: !files.isEmpty) {
       let value = try await projectsStore.createProject(
         name: name,
         symbolName: symbolName,
@@ -172,6 +177,15 @@ final class MacWorkspaceModel {
 
   func addLibraryAttachments(_ attachments: [ChatAttachment]) async -> Bool {
     guard !attachments.isEmpty else { return true }
+    let allowed = MacProAccess.requireLibraryCapacity(
+      currentCount: libraryEntries.count,
+      additions: attachments.count
+    )
+    guard allowed == attachments.count else {
+      errorMessage = "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
+      return false
+    }
+
     return await performResult("Added to Library", referencesChanged: true) {
       for attachment in attachments {
         _ = try await libraryStore.add(
@@ -189,7 +203,15 @@ final class MacWorkspaceModel {
     conversationID: ConversationID,
     messageID: ChatMessageID
   ) async -> Bool {
-    await performResult("Saved to Library", referencesChanged: true) {
+    let isAlreadyListed = libraryEntries.contains { $0.id.rawValue == attachment.id }
+    if !isAlreadyListed,
+      MacProAccess.requireLibraryCapacity(currentCount: libraryEntries.count) != 1
+    {
+      errorMessage = "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
+      return false
+    }
+
+    return await performResult("Saved to Library", referencesChanged: true) {
       _ = try await libraryStore.ensureListed(
         fileID: attachment.id,
         filename: attachment.filename,
@@ -208,6 +230,11 @@ final class MacWorkspaceModel {
   ) async -> Bool {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return false }
+    guard MacProAccess.requireLibraryCapacity(currentCount: libraryEntries.count) == 1 else {
+      errorMessage = "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
+      return false
+    }
+
     let parts = Calendar.current.dateComponents([.year, .month, .day], from: createdAt)
     let date = String(
       format: "%04d-%02d-%02d",

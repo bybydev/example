@@ -26,9 +26,9 @@ enum MacDesignTokens {
     static let sidebarMaximum: CGFloat = 300
     static let topBarHeight: CGFloat = 52
     static let transcriptMaximumWidth: CGFloat = 820
-    static let composerMaximumWidth: CGFloat = 820
+    static let composerMaximumWidth: CGFloat = 960
     static let composerBottomMargin: CGFloat = 18
-    static let composerReservedScrollSpace: CGFloat = 190
+    static let composerReservedScrollSpace: CGFloat = 210
   }
 
   enum Colors {

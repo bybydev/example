@@ -3,16 +3,14 @@ import SwiftUI
 struct MacSecondarySurfacesView: View {
   let model: MacAppModel
 
-  @State private var showingProjects = false
-  @State private var showingLibrary = false
-  @State private var showingAnalytics = false
-  @State private var showingMCPServers = false
+  @State private var utilitySheets = MacUtilitySheetCoordinator()
 
   var body: some View {
     if let workspace = model.workspace, let mcp = model.mcp {
       content(workspace: workspace, mcp: mcp)
         .environment(workspace)
         .environment(mcp)
+        .environment(utilitySheets)
     } else {
       ContentUnavailableView(
         "Workspace Unavailable",
@@ -27,62 +25,76 @@ struct MacSecondarySurfacesView: View {
       .preferredColorScheme(model.theme.preferredColorScheme)
       .tint(MacDesignTokens.Colors.accent)
       .environment(\.macThemeRevision, model.theme.revision)
-      .toolbar {
-        ToolbarItem(placement: .automatic) {
-          Menu {
-            Button("Projects", systemImage: "folder") { showingProjects = true }
-            Button("Library", systemImage: "books.vertical") { showingLibrary = true }
-            Button("Analytics", systemImage: "chart.xyaxis.line") { showingAnalytics = true }
-            Button("MCP Servers", systemImage: "wrench.and.screwdriver") { showingMCPServers = true }
-            Divider()
-            SettingsLink {
-              Label("Settings…", systemImage: "gearshape")
-            }
-          } label: {
-            Image(systemName: "square.grid.2x2")
-          }
-          .help("Projects, Library, Analytics, Tools, and Settings")
+      .sheet(
+        item: Binding(
+          get: { utilitySheets.destination },
+          set: { utilitySheets.destination = $0 }
+        ),
+        onDismiss: {
+          model.chats?.refreshNewChatTargetAfterProviderChanges()
         }
-      }
-      .sheet(isPresented: $showingProjects) {
-        if let providers = model.providers, let chats = model.chats {
-          MacProjectsView(
-            workspace: workspace,
-            providers: providers,
-            chats: chats,
-            mcp: mcp
-          ) { projectID, prompt in
-            model.requestNewChat(projectID: projectID, initialDraft: prompt)
-            showingProjects = false
-          }
-          .preferredColorScheme(model.theme.preferredColorScheme)
-          .tint(MacDesignTokens.Colors.accent)
-          .environment(\.macThemeRevision, model.theme.revision)
-          .environment(workspace)
-          .environment(mcp)
+      ) { destination in
+        MacUtilitySheetContainer(destination: destination) {
+          utilityContent(destination, workspace: workspace, mcp: mcp)
         }
+        .preferredColorScheme(model.theme.preferredColorScheme)
+        .tint(MacDesignTokens.Colors.accent)
+        .environment(\.macThemeRevision, model.theme.revision)
+        .environment(workspace)
+        .environment(mcp)
+        .environment(utilitySheets)
       }
-      .sheet(isPresented: $showingLibrary) {
-        MacLibraryView(workspace: workspace)
-          .preferredColorScheme(model.theme.preferredColorScheme)
-          .tint(MacDesignTokens.Colors.accent)
-          .environment(\.macThemeRevision, model.theme.revision)
-          .environment(workspace)
-          .environment(mcp)
+  }
+
+  @ViewBuilder
+  private func utilityContent(
+    _ destination: MacUtilitySheetDestination,
+    workspace: MacWorkspaceModel,
+    mcp: MacMCPModel
+  ) -> some View {
+    switch destination {
+    case .providers:
+      if let providers = model.providers {
+        MacProviderManagementView(model: providers)
+      } else {
+        unavailable("AI Providers", systemImage: "sparkles")
       }
-      .sheet(isPresented: $showingAnalytics) {
-        if let services = model.coreServices {
-          MacAnalyticsView(services: services)
-            .preferredColorScheme(model.theme.preferredColorScheme)
-            .tint(MacDesignTokens.Colors.accent)
-            .environment(\.macThemeRevision, model.theme.revision)
+
+    case .library:
+      MacLibraryView(workspace: workspace)
+
+    case .projects:
+      if let providers = model.providers, let chats = model.chats {
+        MacProjectsView(
+          workspace: workspace,
+          providers: providers,
+          chats: chats,
+          mcp: mcp
+        ) { projectID, prompt in
+          model.requestNewChat(projectID: projectID, initialDraft: prompt)
+          utilitySheets.dismiss()
         }
+      } else {
+        unavailable("Projects", systemImage: "folder")
       }
-      .sheet(isPresented: $showingMCPServers) {
-        MacMCPServerListView(mcp: mcp)
-          .preferredColorScheme(model.theme.preferredColorScheme)
-          .tint(MacDesignTokens.Colors.accent)
-          .environment(\.macThemeRevision, model.theme.revision)
+
+    case .mcpServers:
+      MacMCPServerListView(mcp: mcp)
+
+    case .analytics:
+      if let services = model.coreServices {
+        MacAnalyticsGateView(services: services)
+      } else {
+        unavailable("Analytics", systemImage: "chart.bar.xaxis")
       }
+    }
+  }
+
+  private func unavailable(_ title: String, systemImage: String) -> some View {
+    ContentUnavailableView(
+      "\(title) Unavailable",
+      systemImage: systemImage,
+      description: Text("Restart BYOKchat to reload this workspace surface.")
+    )
   }
 }

@@ -147,6 +147,11 @@ private struct MacTranscriptView: View {
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isNearBottom = true
+  @State private var followsLatest = true
+  @State private var isUserDraggingTimeline = false
+  @State private var showJumpToLatest = false
+  @State private var hasCompletedInitialScroll = false
+  @State private var transcriptScrollPosition = ScrollPosition(idType: String.self)
 
   private enum ScrollTarget {
     static let bottom = "mac-transcript-bottom"
@@ -160,101 +165,158 @@ private struct MacTranscriptView: View {
     chats.messages(for: conversationID)
   }
 
-  private var streamRevision: Int {
-    chats.streamRevision(for: conversationID)
-  }
-
   var body: some View {
-    ScrollViewReader { proxy in
-      ZStack(alignment: .bottomTrailing) {
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: MacDesignTokens.Spacing.large) {
-            if conversationID == nil {
-              newConversationEmptyState
-            } else if conversation != nil {
-              if messages.isEmpty {
-                Text("This conversation has no messages yet.")
-                  .font(.system(size: 15))
-                  .foregroundStyle(.secondary)
-              } else {
-                ForEach(messages) { message in
-                  MacRichMessageView(
-                    chats: chats,
-                    mcp: mcp,
-                    conversationID: conversationID,
-                    message: message
-                  )
-                  .id(message.id)
-                }
-              }
-
-              if let conversationID {
-                MacMCPInteractionStack(
-                  mcp: mcp,
-                  chats: chats,
-                  conversationID: conversationID
-                )
-              }
+    ZStack(alignment: .bottomTrailing) {
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: MacDesignTokens.Spacing.large) {
+          if conversationID == nil {
+            newConversationEmptyState
+          } else if conversation != nil {
+            if messages.isEmpty {
+              Text("This conversation has no messages yet.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
             } else {
-              loadingState
+              ForEach(messages) { message in
+                MacRichMessageView(
+                  chats: chats,
+                  mcp: mcp,
+                  conversationID: conversationID,
+                  message: message
+                )
+                .id(message.id)
+              }
             }
 
-            Color.clear
-              .frame(height: 1)
-              .id(ScrollTarget.bottom)
+            if let conversationID {
+              MacMCPInteractionStack(
+                mcp: mcp,
+                chats: chats,
+                conversationID: conversationID
+              )
+            }
+          } else {
+            loadingState
           }
-          .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth)
-          .frame(maxWidth: .infinity, alignment: .top)
-          .padding(.horizontal, MacDesignTokens.Spacing.large)
-          .padding(.top, MacDesignTokens.Spacing.transcriptTop)
-          .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace)
-        }
-        .scrollIndicators(.automatic)
-        .defaultScrollAnchor(.bottom)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-          let distance = geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-          return distance < 180
-        } action: { _, nearBottom in
-          isNearBottom = nearBottom
-        }
-        .onChange(of: conversationID?.rawValue) { _, _ in
-          isNearBottom = true
-          scrollToBottom(proxy, animated: false)
-        }
-        .onChange(of: messages.count) { _, _ in
-          guard isNearBottom else { return }
-          scrollToBottom(proxy, animated: true)
-        }
-        .onChange(of: streamRevision) { _, _ in
-          guard isNearBottom else { return }
-          scrollToBottom(proxy, animated: false)
-        }
-        .onChange(of: mcp.pendingApprovals.count) { _, _ in
-          guard isNearBottom else { return }
-          scrollToBottom(proxy, animated: true)
-        }
-        .onChange(of: mcp.pendingElicitations.count) { _, _ in
-          guard isNearBottom else { return }
-          scrollToBottom(proxy, animated: true)
-        }
 
-        if conversationID != nil, !messages.isEmpty, !isNearBottom {
-          Button {
-            isNearBottom = true
-            scrollToBottom(proxy, animated: true)
-          } label: {
-            Label("Latest", systemImage: "arrow.down")
-              .font(.caption.weight(.medium))
-              .padding(.horizontal, 10)
-              .frame(height: 30)
-          }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-          .padding(.trailing, MacDesignTokens.Spacing.large)
-          .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace - 20)
-          .help("Jump to latest message")
-          .accessibilityHint("Scrolls to the newest response")
+          Color.clear
+            .frame(height: 1)
+            .id(ScrollTarget.bottom)
+            .onScrollVisibilityChange(threshold: 0.01) { isVisible in
+              isNearBottom = isVisible
+              if isVisible {
+                followsLatest = true
+                showJumpToLatest = false
+              } else if hasCompletedInitialScroll && isUserDraggingTimeline {
+                followsLatest = false
+                showJumpToLatest = true
+              }
+            }
         }
+        .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .padding(.horizontal, MacDesignTokens.Spacing.large)
+        .padding(.top, MacDesignTokens.Spacing.transcriptTop)
+        .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace)
+      }
+      .scrollIndicators(.automatic)
+      .defaultScrollAnchor(.bottom)
+      .scrollPosition($transcriptScrollPosition)
+      .onScrollPhaseChange { _, newPhase in
+        switch newPhase {
+        case .tracking, .interacting, .decelerating:
+          isUserDraggingTimeline = true
+          if !isNearBottom {
+            followsLatest = false
+            showJumpToLatest = true
+          }
+        case .idle:
+          let wasUserDriven = isUserDraggingTimeline
+          isUserDraggingTimeline = false
+          if isNearBottom {
+            followsLatest = true
+            showJumpToLatest = false
+          } else if wasUserDriven {
+            followsLatest = false
+            showJumpToLatest = true
+          }
+        case .animating:
+          isUserDraggingTimeline = false
+        @unknown default:
+          break
+        }
+      }
+      .onScrollGeometryChange(for: CGFloat.self) { geometry in
+        geometry.contentSize.height
+      } action: { oldHeight, newHeight in
+        guard oldHeight != newHeight,
+          hasCompletedInitialScroll,
+          followsLatest,
+          !isUserDraggingTimeline,
+          chats.isGenerating(conversationID)
+        else { return }
+
+        scrollToBottom(animated: false)
+      }
+      .onChange(of: messages.count) { _, _ in
+        guard followsLatest, !isUserDraggingTimeline else {
+          showJumpToLatest = !isNearBottom
+          return
+        }
+        scrollToBottom(animated: true)
+      }
+      .onChange(of: mcp.pendingApprovals.count) { _, _ in
+        guard followsLatest, !isUserDraggingTimeline else { return }
+        scrollToBottom(animated: true)
+      }
+      .onChange(of: mcp.pendingElicitations.count) { _, _ in
+        guard followsLatest, !isUserDraggingTimeline else { return }
+        scrollToBottom(animated: true)
+      }
+      .onChange(of: chats.isGenerating(conversationID)) { _, generating in
+        if generating {
+          followsLatest = true
+          isUserDraggingTimeline = false
+          showJumpToLatest = false
+        } else if !isNearBottom {
+          showJumpToLatest = true
+        }
+      }
+      .task(id: conversationID?.rawValue ?? "new-chat") {
+        hasCompletedInitialScroll = false
+        isNearBottom = true
+        followsLatest = true
+        isUserDraggingTimeline = false
+        showJumpToLatest = false
+
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        scrollToBottom(animated: false)
+        hasCompletedInitialScroll = true
+      }
+
+      if conversationID != nil, !messages.isEmpty, showJumpToLatest {
+        Button {
+          followsLatest = true
+          isUserDraggingTimeline = false
+          showJumpToLatest = false
+          scrollToBottom(animated: true)
+        } label: {
+          Image(systemName: "arrow.down")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, height: 32)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, MacDesignTokens.Spacing.large)
+        .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace - 20)
+        .help("Scroll to bottom of chat")
+        .accessibilityLabel("Scroll to bottom of chat")
       }
     }
   }
@@ -294,16 +356,13 @@ private struct MacTranscriptView: View {
     .padding(.top, 84)
   }
 
-  private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-    Task { @MainActor in
-      await Task.yield()
-      if animated && !reduceMotion {
-        withAnimation(.easeOut(duration: 0.16)) {
-          proxy.scrollTo(ScrollTarget.bottom, anchor: .bottom)
-        }
-      } else {
-        proxy.scrollTo(ScrollTarget.bottom, anchor: .bottom)
+  private func scrollToBottom(animated: Bool) {
+    if animated && !reduceMotion {
+      withAnimation(.easeOut(duration: 0.18)) {
+        transcriptScrollPosition.scrollTo(edge: .bottom)
       }
+    } else {
+      transcriptScrollPosition.scrollTo(edge: .bottom)
     }
   }
 }
@@ -384,212 +443,40 @@ private struct MacComposerView: View {
   }
 
   var body: some View {
-    VStack(spacing: MacDesignTokens.Spacing.small) {
+    VStack(alignment: .leading, spacing: 0) {
       if !attachments.isEmpty {
         MacAttachmentStrip(
           attachments: attachments,
           presentation: .composer,
           remove: removeAttachment
         )
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
       }
 
-      ZStack(alignment: .topLeading) {
-        if draftBinding.wrappedValue.isEmpty {
-          Text(target == nil ? "Set up a provider to chat…" : "Ask anything or send attachments…")
-            .font(.system(size: 15))
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 8)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
+      messageField
+        .padding(.horizontal, 14)
+        .padding(.top, attachments.isEmpty ? 10 : 2)
+        .padding(.bottom, 6)
 
-        TextEditor(text: draftBinding)
-          .font(.system(size: 15))
-          .scrollContentBackground(.hidden)
-          .focused($editorFocused)
-          .frame(minHeight: attachments.isEmpty ? 48 : 38, maxHeight: attachments.isEmpty ? 112 : 88)
-          .disabled(target == nil || isStreaming)
-          .accessibilityLabel("Message")
-          .accessibilityHint(target == nil ? "Set up a provider before composing a message" : "Return sends. Shift Return inserts a new line")
-          .onKeyPress(keys: [.return], phases: .down) { press in
-            if press.modifiers.contains(.shift) { return .ignored }
-            guard canSend else { return .ignored }
-            submit()
-            return .handled
-          }
-      }
-
-      HStack(spacing: MacDesignTokens.Spacing.small) {
-        Menu {
-          Button("Choose Files…", systemImage: "doc.badge.plus") {
-            showingFileImporter = true
-          }
-          Button("Paste Image or File", systemImage: "doc.on.clipboard") {
-            importPasteboard()
-          }
-
-          if !workspace.libraryEntries.isEmpty {
-            Divider()
-            Button("From Library…", systemImage: "books.vertical") {
-              showingLibraryPicker = true
-            }
-          }
-
-          if !projectFiles.isEmpty {
-            Divider()
-            Menu("Project Files", systemImage: "folder.badge.plus") {
-              ForEach(projectFiles) { file in
-                Button(file.filename) {
-                  attachProjectFile(file)
-                }
-                .disabled(attachments.contains(where: { $0.id == file.id }))
-              }
-            }
-          }
-        } label: {
-          Image(systemName: "plus")
-            .frame(width: 28, height: 28)
-        }
-        .menuStyle(.borderlessButton)
-        .disabled(isStreaming || target == nil)
-        .accessibilityLabel("Add attachment")
-        .help("Attach files, project references, Library items, or paste from the clipboard")
-
-        Button {
-          if target == nil {
-            manageProviders()
-          } else {
-            chooseTarget()
-          }
-        } label: {
-          HStack(spacing: 5) {
-            Image(systemName: "sparkles")
-            Text(targetLabel)
-              .lineLimit(1)
-          }
-          .font(.caption)
-          .padding(.horizontal, 8)
-          .frame(height: 28)
-          .background(
-            Color.primary.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small)
-          )
-        }
-        .buttonStyle(.plain)
-        .disabled(isStreaming)
-        .help(target == nil ? "Set up a provider" : "Change provider and model")
-        .accessibilityLabel("Provider and model")
-        .accessibilityValue(targetLabel)
-
-        if let conversationID {
-          Button(action: configureTools) {
-            HStack(spacing: 5) {
-              Image(systemName: "wrench.and.screwdriver")
-              Text(enabledToolCount == 0 ? "Tools" : "Tools · \(enabledToolCount)")
-                .lineLimit(1)
-            }
-            .font(.caption)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(
-              enabledToolCount > 0 ? MacDesignTokens.Colors.accentSoft : Color.primary.opacity(0.045),
-              in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small)
-            )
-          }
-          .buttonStyle(.plain)
-          .disabled(isStreaming)
-          .help(mcp.inheritsProjectTools(conversationID) ? "Configure tools · currently inheriting project defaults" : "Configure tools for this chat")
-          .accessibilityLabel("Chat tools")
-          .accessibilityValue(enabledToolCount == 0 ? "No enabled tools" : "\(enabledToolCount) enabled tools")
-        }
-
-        if supportsReasoning {
-          Menu {
-            Button {
-              setReasoning(nil)
-            } label: {
-              if target?.reasoning?.enabled != true {
-                Label("Off", systemImage: "checkmark")
-              } else {
-                Text("Off")
-              }
-            }
-
-            Divider()
-
-            ForEach(ReasoningEffort.allCases, id: \.rawValue) { effort in
-              Button {
-                setReasoning(ReasoningOptions(enabled: true, effort: effort))
-              } label: {
-                if target?.reasoning?.enabled == true && target?.reasoning?.effort == effort {
-                  Label(reasoningTitle(effort), systemImage: "checkmark")
-                } else {
-                  Text(reasoningTitle(effort))
-                }
-              }
-            }
-          } label: {
-            Text(reasoningLabel)
-              .font(.caption)
-              .padding(.horizontal, 8)
-              .frame(height: 28)
-              .background(
-                Color.primary.opacity(0.045),
-                in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.small)
-              )
-          }
-          .menuStyle(.borderlessButton)
-          .disabled(isStreaming)
-          .accessibilityLabel("Reasoning")
-          .accessibilityValue(reasoningLabel)
-        }
-
-        Spacer(minLength: MacDesignTokens.Spacing.small)
-
-        Text("↩ Send  ⇧↩ New line")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .accessibilityHidden(true)
-
-        Button {
-          if isStreaming {
-            Task { await chats.stop(conversationID) }
-          } else {
-            submit()
-          }
-        } label: {
-          Image(systemName: isStreaming ? "stop.fill" : "arrow.up")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(
-              MacDesignTokens.Colors.accent.opacity(isStreaming || canSend ? 0.9 : 0.38),
-              in: Circle()
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!isStreaming && !canSend)
-        .accessibilityLabel(isStreaming ? "Stop response" : "Send message")
-        .accessibilityHint(isStreaming ? "Stops the current model response" : "Sends the current message and attachments")
-      }
+      bottomControls
+        .padding(.horizontal, 10)
+        .padding(.bottom, 9)
     }
-    .padding(.horizontal, MacDesignTokens.Spacing.compact)
-    .padding(.top, MacDesignTokens.Spacing.small)
-    .padding(.bottom, MacDesignTokens.Spacing.small)
     .background(
       fileDropTargeted ? MacDesignTokens.Colors.accentSoft : MacDesignTokens.Colors.surface,
-      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
+      in: composerShape
     )
+    .clipShape(composerShape)
     .overlay {
-      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
+      composerShape
         .stroke(
           fileDropTargeted ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.separator.opacity(0.8),
-          lineWidth: 1
+          lineWidth: 0.75
         )
     }
-    .shadow(radius: 10, y: 3)
+    .shadow(color: .black.opacity(0.10), radius: 14, y: 5)
     .fileImporter(
       isPresented: $showingFileImporter,
       allowedContentTypes: [.item],
@@ -628,10 +515,249 @@ private struct MacComposerView: View {
     }
   }
 
-  private var targetLabel: String {
-    guard let target, let selectedAccount else { return "Set Up Provider" }
-    let modelName = selectedModel?.displayName ?? target.modelID.rawValue
-    return "\(selectedAccount.label) · \(modelName)"
+  private var composerShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: 24, style: .continuous)
+  }
+
+  private var messageField: some View {
+    ZStack(alignment: .topLeading) {
+      if draftBinding.wrappedValue.isEmpty {
+        Text(target == nil ? "Set up a provider to chat…" : "Message…")
+          .font(.system(size: 16))
+          .foregroundStyle(.tertiary)
+          .padding(.horizontal, 5)
+          .padding(.vertical, 8)
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
+      }
+
+      TextEditor(text: draftBinding)
+        .font(.system(size: 16))
+        .scrollContentBackground(.hidden)
+        .focused($editorFocused)
+        .frame(minHeight: 68, idealHeight: 76, maxHeight: attachments.isEmpty ? 150 : 118)
+        .disabled(target == nil || isStreaming)
+        .accessibilityLabel("Message")
+        .accessibilityHint(
+          target == nil
+            ? "Set up a provider before composing a message"
+            : "Return sends. Shift Return inserts a new line"
+        )
+        .onKeyPress(keys: [.return], phases: .down) { press in
+          if press.modifiers.contains(.shift) { return .ignored }
+          guard canSend else { return .ignored }
+          submit()
+          return .handled
+        }
+    }
+  }
+
+  private var bottomControls: some View {
+    HStack(spacing: 7) {
+      attachmentMenu
+      targetButton
+
+      if let conversationID {
+        toolsButton(conversationID)
+      }
+
+      if supportsReasoning {
+        reasoningMenu
+      }
+
+      Spacer(minLength: 12)
+      sendButton
+    }
+    .frame(minHeight: 42)
+  }
+
+  private var attachmentMenu: some View {
+    Menu {
+      Button("Choose Files…", systemImage: "doc.badge.plus") {
+        showingFileImporter = true
+      }
+      Button("Paste Image or File", systemImage: "doc.on.clipboard") {
+        importPasteboard()
+      }
+
+      if !workspace.libraryEntries.isEmpty {
+        Divider()
+        Button("From Library…", systemImage: "books.vertical") {
+          showingLibraryPicker = true
+        }
+      }
+
+      if !projectFiles.isEmpty {
+        Divider()
+        Menu("Project Files", systemImage: "folder.badge.plus") {
+          ForEach(projectFiles) { file in
+            Button(file.filename) {
+              attachProjectFile(file)
+            }
+            .disabled(attachments.contains(where: { $0.id == file.id }))
+          }
+        }
+      }
+    } label: {
+      Image(systemName: "plus")
+        .font(.system(size: 17, weight: .regular))
+        .frame(width: 36, height: 36)
+        .contentShape(Circle())
+    }
+    .menuStyle(.borderlessButton)
+    .disabled(isStreaming || target == nil)
+    .accessibilityLabel("Add attachment")
+    .help("Attach files, project references, Library items, or paste from the clipboard")
+  }
+
+  private var targetButton: some View {
+    Button {
+      editorFocused = false
+      if target == nil {
+        manageProviders()
+      } else {
+        chooseTarget()
+      }
+    } label: {
+      HStack(spacing: 7) {
+        Image(systemName: "sparkles")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+
+        if target == nil {
+          Text("Set Up Provider")
+            .font(.system(size: 12.5, weight: .medium))
+        } else {
+          VStack(alignment: .leading, spacing: 1) {
+            Text(modelLabel)
+              .font(.system(size: 12.5, weight: .medium))
+              .foregroundStyle(.primary)
+              .lineLimit(1)
+            Text(accountLabel)
+              .font(.system(size: 10.5))
+              .foregroundStyle(.tertiary)
+              .lineLimit(1)
+          }
+        }
+
+        Image(systemName: "chevron.down")
+          .font(.system(size: 8, weight: .semibold))
+          .foregroundStyle(.tertiary)
+      }
+      .padding(.horizontal, 9)
+      .frame(minWidth: target == nil ? 150 : 190, maxWidth: 320, minHeight: 36, alignment: .leading)
+      .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(isStreaming)
+    .help(target == nil ? "Set up a provider" : "Change provider and model")
+    .accessibilityLabel("Provider and model")
+    .accessibilityValue(targetDetails)
+  }
+
+  private func toolsButton(_ conversationID: ConversationID) -> some View {
+    Button(action: configureTools) {
+      HStack(spacing: 5) {
+        Image(systemName: "wrench.and.screwdriver")
+        Text(enabledToolCount == 0 ? "Tools" : "Tools · \(enabledToolCount)")
+          .lineLimit(1)
+      }
+      .font(.system(size: 11.5, weight: .medium))
+      .padding(.horizontal, 9)
+      .frame(height: 34)
+      .background(
+        enabledToolCount > 0 ? MacDesignTokens.Colors.accentSoft : Color.primary.opacity(0.045),
+        in: RoundedRectangle(cornerRadius: 9)
+      )
+    }
+    .buttonStyle(.plain)
+    .disabled(isStreaming)
+    .help(
+      mcp.inheritsProjectTools(conversationID)
+        ? "Configure tools · currently inheriting project defaults"
+        : "Configure tools for this chat"
+    )
+    .accessibilityLabel("Chat tools")
+    .accessibilityValue(enabledToolCount == 0 ? "No enabled tools" : "\(enabledToolCount) enabled tools")
+  }
+
+  private var reasoningMenu: some View {
+    Menu {
+      Button {
+        setReasoning(nil)
+      } label: {
+        if target?.reasoning?.enabled != true {
+          Label("Off", systemImage: "checkmark")
+        } else {
+          Text("Off")
+        }
+      }
+
+      Divider()
+
+      ForEach(ReasoningEffort.allCases, id: \.rawValue) { effort in
+        Button {
+          setReasoning(ReasoningOptions(enabled: true, effort: effort))
+        } label: {
+          if target?.reasoning?.enabled == true && target?.reasoning?.effort == effort {
+            Label(reasoningTitle(effort), systemImage: "checkmark")
+          } else {
+            Text(reasoningTitle(effort))
+          }
+        }
+      }
+    } label: {
+      Text(reasoningLabel)
+        .font(.system(size: 11.5, weight: .medium))
+        .padding(.horizontal, 9)
+        .frame(height: 34)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
+    }
+    .menuStyle(.borderlessButton)
+    .disabled(isStreaming)
+    .accessibilityLabel("Reasoning")
+    .accessibilityValue(reasoningLabel)
+  }
+
+  private var sendButton: some View {
+    Button {
+      if isStreaming {
+        Task { await chats.stop(conversationID) }
+      } else {
+        submit()
+        editorFocused = false
+      }
+    } label: {
+      Image(systemName: isStreaming ? "stop.fill" : "arrow.up")
+        .font(.system(size: 14, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(width: 38, height: 38)
+        .background(
+          MacDesignTokens.Colors.accent.opacity(isStreaming || canSend ? 0.95 : 0.34),
+          in: Circle()
+        )
+    }
+    .buttonStyle(.plain)
+    .disabled(!isStreaming && !canSend)
+    .accessibilityLabel(isStreaming ? "Stop response" : "Send message")
+    .accessibilityHint(
+      isStreaming ? "Stops the current model response" : "Sends the current message and attachments"
+    )
+  }
+
+  private var modelLabel: String {
+    guard let target else { return "No model" }
+    return selectedModel?.displayName ?? target.modelID.rawValue
+  }
+
+  private var accountLabel: String {
+    selectedAccount?.label ?? "Provider"
+  }
+
+  private var targetDetails: String {
+    guard target != nil else { return "No provider configured" }
+    return "\(accountLabel) · \(modelLabel)"
   }
 
   private var reasoningLabel: String {

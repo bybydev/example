@@ -37,7 +37,7 @@ final class MacChatSessionModel {
 
   private(set) var conversationSummaries: [ChatConversation]
   private(set) var hydratedConversations: [ConversationID: ChatConversation] = [:]
-  private(set) var liveMessages: [ChatMessageID: LiveMessage] = [:]
+  private(set) var livePresentations: [ChatMessageID: MacLiveMessagePresentation] = [:]
   private(set) var activeConversationIDs: Set<ConversationID> = []
   private(set) var activeToolCallsByConversation: [ConversationID: [ChatToolCall]] = [:]
   private(set) var streamRevisions: [ConversationID: Int] = [:]
@@ -111,18 +111,13 @@ final class MacChatSessionModel {
   }
 
   func displayMessage(_ message: ChatMessage) -> ChatMessage {
-    guard let live = liveMessages[message.id] else { return message }
-    var result = message
-    result.content = live.content
-    result.reasoning = live.reasoning
-    result.usage = live.usage ?? message.usage
-    result.status = .streaming
-    return result
+    guard let presentation = livePresentations[message.id] else { return message }
+    return presentation.resolve(message)
   }
 
   func messages(for conversationID: ConversationID?) -> [ChatMessage] {
     guard let conversation = conversation(conversationID) else { return [] }
-    return conversation.messages.map(displayMessage)
+    return conversation.messages
   }
 
   func streamRevision(for conversationID: ConversationID?) -> Int {
@@ -222,7 +217,7 @@ final class MacChatSessionModel {
       for messageID in messageIDs {
         streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
         streamTargets.removeValue(forKey: messageID)
-        liveMessages.removeValue(forKey: messageID)
+        livePresentations.removeValue(forKey: messageID)
       }
     }
 
@@ -545,7 +540,9 @@ final class MacChatSessionModel {
       try? await reloadConversation(conversationID)
       let live = LiveMessage()
       streamTargets[turn.assistantMessage.id] = live
-      liveMessages[turn.assistantMessage.id] = live
+      livePresentations[turn.assistantMessage.id] = MacLiveMessagePresentation(
+        messageID: turn.assistantMessage.id
+      )
       try? await reloadSummaries()
       advanceStreamRevision(for: conversationID)
 
@@ -575,14 +572,14 @@ final class MacChatSessionModel {
       try? await reloadSummaries()
       let live = LiveMessage()
       streamTargets[messageID] = live
-      liveMessages[messageID] = live
+      livePresentations[messageID] = MacLiveMessagePresentation(messageID: messageID)
       advanceStreamRevision(for: conversationID)
 
     case .completed(let message), .cancelled(let message), .failed(let message):
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       await flushStreamPresentation(message.id, conversationID: conversationID)
       streamTargets.removeValue(forKey: message.id)
-      liveMessages.removeValue(forKey: message.id)
+      livePresentations.removeValue(forKey: message.id)
       if message.status == .failed {
         errorMessage = message.errorDescription ?? "The response failed."
       }
@@ -597,7 +594,12 @@ final class MacChatSessionModel {
     conversationID: ConversationID,
     update: (inout LiveMessage) -> Void
   ) {
-    var target = streamTargets[messageID] ?? liveMessages[messageID] ?? LiveMessage()
+    let presented = livePresentations[messageID]
+    var target = streamTargets[messageID] ?? LiveMessage(
+      content: presented?.content ?? "",
+      reasoning: presented?.reasoning ?? "",
+      usage: presented?.usage
+    )
     update(&target)
     streamTargets[messageID] = target
     scheduleStreamPresentation(messageID, conversationID: conversationID)
@@ -624,8 +626,20 @@ final class MacChatSessionModel {
     _ messageID: ChatMessageID,
     conversationID: ConversationID
   ) {
-    guard let target = streamTargets[messageID], liveMessages[messageID] != target else { return }
-    liveMessages[messageID] = target
+    guard let target = streamTargets[messageID] else { return }
+    let presentation: MacLiveMessagePresentation
+    if let existing = livePresentations[messageID] {
+      presentation = existing
+    } else {
+      let created = MacLiveMessagePresentation(messageID: messageID)
+      livePresentations[messageID] = created
+      presentation = created
+    }
+    guard presentation.apply(
+      content: target.content,
+      reasoning: target.reasoning,
+      usage: target.usage
+    ) else { return }
     advanceStreamRevision(for: conversationID)
   }
 

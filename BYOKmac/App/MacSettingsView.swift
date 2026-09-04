@@ -1,14 +1,25 @@
+import MacAppFoundation
 import SwiftUI
 
 struct MacSettingsView: View {
   let model: MacAppModel
+  let purchaseManager: PurchaseManager
+
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     TabView {
       MacGeneralSettingsView(preferences: model.preferences)
         .tabItem { Label("General", systemImage: "gearshape") }
 
-      MacAppearanceSettingsView(theme: model.theme)
+      ProPlanPane(
+        purchaseManager: purchaseManager,
+        configuration: MacPurchaseStore.planConfiguration,
+        onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
+      )
+      .tabItem { Label("Plan", systemImage: "creditcard") }
+
+      MacAppearanceSettingsView(theme: model.theme, purchaseManager: purchaseManager)
         .tabItem { Label("Appearance", systemImage: "paintpalette") }
 
       MacConnectionSettingsView(model: model)
@@ -68,6 +79,9 @@ private struct MacGeneralSettingsView: View {
 
 private struct MacAppearanceSettingsView: View {
   @Bindable var theme: MacThemeModel
+  let purchaseManager: PurchaseManager
+
+  @Environment(\.openWindow) private var openWindow
 
   private let columns = [
     GridItem(.adaptive(minimum: 145, maximum: 190), spacing: 12)
@@ -87,8 +101,14 @@ private struct MacAppearanceSettingsView: View {
 
   private func themeCard(_ item: MacThemeID) -> some View {
     let palette = item.palette
+    let unlocked = MacProAccess.canUseTheme(item, hasPro: purchaseManager.hasPro)
+
     return Button {
-      theme.selectedID = item
+      if unlocked {
+        theme.selectedID = item
+      } else {
+        openWindow(id: MacWindowID.proPaywall)
+      }
     } label: {
       VStack(alignment: .leading, spacing: 10) {
         VStack(spacing: 0) {
@@ -125,6 +145,10 @@ private struct MacAppearanceSettingsView: View {
           if theme.selectedID == item {
             Image(systemName: "checkmark.circle.fill")
               .foregroundStyle(MacDesignTokens.Colors.accent)
+          } else if !unlocked {
+            Image(systemName: "crown.fill")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }
         }
       }
@@ -140,10 +164,11 @@ private struct MacAppearanceSettingsView: View {
             lineWidth: 1
           )
       }
+      .opacity(unlocked || theme.selectedID == item ? 1 : 0.72)
     }
     .buttonStyle(.plain)
     .accessibilityLabel(item.title)
-    .accessibilityValue(theme.selectedID == item ? "Selected" : "")
+    .accessibilityValue(theme.selectedID == item ? "Selected" : unlocked ? "Available" : "Requires BYOK Pro")
   }
 }
 

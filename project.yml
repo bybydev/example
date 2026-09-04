@@ -13,6 +13,9 @@ packages:
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation
     exactVersion: 1.4.0
+  MacAppFoundation:
+    url: https://github.com/hoangbkit/MacAppFoundation
+    exactVersion: 0.1.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1
@@ -84,6 +87,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat
         PRODUCT_NAME: BYOKchat
+        PRODUCT_MODULE_NAME: BYOKmac
         DEVELOPMENT_TEAM: J458WW3452
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -110,6 +114,8 @@ targets:
     dependencies:
       - package: BYOKchatProviderCore
         product: BYOKchatProviderCore
+      - package: MacAppFoundation
+        product: MacAppFoundation
       - package: MarkdownUI
         product: MarkdownUI
       - package: Highlighter
@@ -135,6 +141,24 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: BYOKchat
+      - package: BYOKchatProviderCore
+        product: BYOKchatProviderCore
+
+  BYOKmacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Tests/BYOKmacTests
+    settings:
+      base:
+        DEVELOPMENT_TEAM: J458WW3452
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: BYOKmac
       - package: BYOKchatProviderCore
         product: BYOKchatProviderCore
 
@@ -181,8 +205,14 @@ schemes:
     build:
       targets:
         BYOKmac: all
+        BYOKmacTests:
+          - test
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: BYOKmacTests
     profile:
       config: Release
     analyze:

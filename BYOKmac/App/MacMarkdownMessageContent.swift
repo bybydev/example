@@ -4,14 +4,20 @@ import Foundation
 import Highlighter
 import LaTeXSwiftUI
 import MarkdownUI
+import os
 import SwiftUI
 
 struct MacMarkdownMessageContent: View {
   let text: String
   var isStreaming = false
 
+  private static let renderSignpostLog = OSLog(
+    subsystem: "pro.byok.BYOKchat",
+    category: "MacStreamingRenderer"
+  )
+
   var body: some View {
-    let blocks = MacAnswerContentParser.parse(text)
+    let blocks = parsedBlocks()
 
     VStack(alignment: .leading, spacing: 12) {
       ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
@@ -29,6 +35,17 @@ struct MacMarkdownMessageContent: View {
         return .handled
       }
     )
+  }
+
+  private func parsedBlocks() -> [MacAnswerContentBlock] {
+    guard isStreaming else { return MacAnswerContentParser.parse(text) }
+
+    os_signpost(.event, log: Self.renderSignpostLog, name: "Stream Presentation")
+    os_signpost(.begin, log: Self.renderSignpostLog, name: "Stream Parse")
+    defer {
+      os_signpost(.end, log: Self.renderSignpostLog, name: "Stream Parse")
+    }
+    return MacAnswerContentParser.parse(text)
   }
 
   @ViewBuilder
@@ -50,7 +67,11 @@ struct MacMarkdownMessageContent: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         Markdown(markdown)
-          .markdownTheme(Self.chatTheme)
+          .markdownTheme(
+            Self.chatTheme(
+              columnAlignments: MacMarkdownTableAlignment.columnAlignments(in: markdown) ?? []
+            )
+          )
           .textSelection(.enabled)
           .tint(.accentColor)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -134,115 +155,145 @@ struct MacMarkdownMessageContent: View {
     return source
   }
 
-  private static let chatTheme = MarkdownUI.Theme.basic
-    .text {
-      ForegroundColor(.primary)
-      FontSize(15)
+  private static func horizontalTextAlignment(_ alignment: MacTableColumnAlignment) -> TextAlignment {
+    switch alignment {
+    case .leading: .leading
+    case .center: .center
+    case .trailing: .trailing
     }
-    .code {
-      FontFamilyVariant(.monospaced)
-      FontSize(.em(0.9))
-      ForegroundColor(.primary)
-      BackgroundColor(Color.primary.opacity(0.06))
+  }
+
+  private static func frameAlignment(_ alignment: MacTableColumnAlignment) -> Alignment {
+    switch alignment {
+    case .leading: .topLeading
+    case .center: .top
+    case .trailing: .topTrailing
     }
-    .strong {
-      FontWeight(.semibold)
-    }
-    .link {
-      ForegroundColor(.accentColor)
-    }
-    .heading1 { configuration in
-      configuration.label
-        .fixedSize(horizontal: false, vertical: true)
-        .markdownMargin(top: .em(0.8), bottom: .em(0.4))
-        .markdownTextStyle {
-          FontWeight(.bold)
-          FontSize(.em(1.5))
-        }
-    }
-    .heading2 { configuration in
-      configuration.label
-        .fixedSize(horizontal: false, vertical: true)
-        .markdownMargin(top: .em(0.72), bottom: .em(0.36))
-        .markdownTextStyle {
-          FontWeight(.bold)
-          FontSize(.em(1.3))
-        }
-    }
-    .heading3 { configuration in
-      configuration.label
-        .fixedSize(horizontal: false, vertical: true)
-        .markdownMargin(top: .em(0.6), bottom: .em(0.3))
-        .markdownTextStyle {
-          FontWeight(.semibold)
-          FontSize(.em(1.14))
-        }
-    }
-    .paragraph { configuration in
-      configuration.label
-        .fixedSize(horizontal: false, vertical: true)
-        .relativeLineSpacing(.em(0.18))
-        .markdownMargin(top: .zero, bottom: .em(0.72))
-    }
-    .blockquote { configuration in
-      HStack(spacing: 0) {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-          .fill(Color.accentColor.opacity(0.68))
-          .relativeFrame(width: .em(0.18))
-        configuration.label
-          .markdownTextStyle { ForegroundColor(.secondary) }
-          .relativePadding(.horizontal, length: .em(0.85))
-          .relativePadding(.vertical, length: .em(0.55))
+  }
+
+  private static func chatTheme(
+    columnAlignments: [MacTableColumnAlignment]
+  ) -> MarkdownUI.Theme {
+    MarkdownUI.Theme.basic
+      .text {
+        ForegroundColor(.primary)
+        FontSize(15)
       }
-      .fixedSize(horizontal: false, vertical: true)
-      .background(
-        Color.primary.opacity(0.035),
-        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-      )
-      .markdownMargin(top: .em(0.08), bottom: .em(0.78))
-    }
-    .listItem { configuration in
-      configuration.label
-        .fixedSize(horizontal: false, vertical: true)
-        .relativeLineSpacing(.em(0.14))
-        .markdownMargin(top: .em(0.12), bottom: .em(0.12))
-    }
-    .taskListMarker { configuration in
-      Image(systemName: configuration.isCompleted ? "checkmark.circle.fill" : "circle")
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(configuration.isCompleted ? Color.accentColor : Color.secondary)
-        .relativeFrame(minWidth: .em(1.4), alignment: .trailing)
-    }
-    .table { configuration in
-      ScrollView(.horizontal) {
+      .code {
+        FontFamilyVariant(.monospaced)
+        FontSize(.em(0.9))
+        ForegroundColor(.primary)
+        BackgroundColor(Color.primary.opacity(0.06))
+      }
+      .strong {
+        FontWeight(.semibold)
+      }
+      .link {
+        ForegroundColor(.accentColor)
+      }
+      .heading1 { configuration in
         configuration.label
-          .markdownTableBorderStyle(.init(color: Color.primary.opacity(0.14)))
-          .markdownTableBackgroundStyle(
-            .alternatingRows(Color.primary.opacity(0.025), Color.primary.opacity(0.045))
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.8), bottom: .em(0.4))
+          .markdownTextStyle {
+            FontWeight(.bold)
+            FontSize(.em(1.5))
+          }
+      }
+      .heading2 { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.72), bottom: .em(0.36))
+          .markdownTextStyle {
+            FontWeight(.bold)
+            FontSize(.em(1.3))
+          }
+      }
+      .heading3 { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.6), bottom: .em(0.3))
+          .markdownTextStyle {
+            FontWeight(.semibold)
+            FontSize(.em(1.14))
+          }
+      }
+      .paragraph { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .relativeLineSpacing(.em(0.18))
+          .markdownMargin(top: .zero, bottom: .em(0.72))
+      }
+      .blockquote { configuration in
+        HStack(spacing: 0) {
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.accentColor.opacity(0.68))
+            .relativeFrame(width: .em(0.18))
+          configuration.label
+            .markdownTextStyle { ForegroundColor(.secondary) }
+            .relativePadding(.horizontal, length: .em(0.85))
+            .relativePadding(.vertical, length: .em(0.55))
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+          Color.primary.opacity(0.035),
+          in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .markdownMargin(top: .em(0.08), bottom: .em(0.78))
+      }
+      .listItem { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .relativeLineSpacing(.em(0.14))
+          .markdownMargin(top: .em(0.12), bottom: .em(0.12))
+      }
+      .taskListMarker { configuration in
+        Image(systemName: configuration.isCompleted ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(configuration.isCompleted ? Color.accentColor : Color.secondary)
+          .relativeFrame(minWidth: .em(1.4), alignment: .trailing)
+      }
+      .table { configuration in
+        ScrollView(.horizontal) {
+          configuration.label
+            .markdownTableBorderStyle(.init(color: Color.primary.opacity(0.14)))
+            .markdownTableBackgroundStyle(
+              .alternatingRows(Color.primary.opacity(0.025), Color.primary.opacity(0.045))
+            )
+        }
+        .scrollIndicators(.visible)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .markdownMargin(top: .em(0.15), bottom: .em(0.85))
+      }
+      .tableCell { configuration in
+        let columnAlignment = configuration.column < columnAlignments.count
+          ? columnAlignments[configuration.column]
+          : .leading
+        let textAlignment = horizontalTextAlignment(columnAlignment)
+
+        configuration.label
+          .markdownTextStyle {
+            FontSize(.em(0.9))
+            if configuration.row == 0 { FontWeight(.semibold) }
+            BackgroundColor(nil)
+          }
+          .multilineTextAlignment(textAlignment)
+          .frame(
+            minWidth: 110,
+            maxWidth: 220,
+            alignment: frameAlignment(columnAlignment)
           )
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
       }
-      .scrollIndicators(.visible)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .markdownMargin(top: .em(0.15), bottom: .em(0.85))
-    }
-    .tableCell { configuration in
-      configuration.label
-        .markdownTextStyle {
-          FontSize(.em(0.9))
-          if configuration.row == 0 { FontWeight(.semibold) }
-          BackgroundColor(nil)
-        }
-        .frame(minWidth: 110, maxWidth: 220, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-    }
-    .thematicBreak {
-      Rectangle()
-        .fill(Color.primary.opacity(0.14))
-        .frame(height: 1)
-        .markdownMargin(top: .em(1), bottom: .em(1))
-    }
+      .thematicBreak {
+        Rectangle()
+          .fill(Color.primary.opacity(0.14))
+          .frame(height: 1)
+          .markdownMargin(top: .em(1), bottom: .em(1))
+      }
+  }
 }
 
 struct MacHighlightedCodeBlock: View {
@@ -311,12 +362,20 @@ struct MacHighlightedCodeBlock: View {
       Divider()
 
       ScrollView(.horizontal) {
-        MacHighlightedCodeText(
-          code: displayedContent,
-          language: language,
-          colorScheme: colorScheme
-        )
-        .padding(13)
+        if isStreaming {
+          Text(displayedContent)
+            .font(.system(size: 13, design: .monospaced))
+            .fixedSize(horizontal: true, vertical: true)
+            .textSelection(.enabled)
+            .padding(13)
+        } else {
+          MacHighlightedCodeText(
+            code: displayedContent,
+            language: language,
+            colorScheme: colorScheme
+          )
+          .padding(13)
+        }
       }
       .scrollIndicators(.visible)
 

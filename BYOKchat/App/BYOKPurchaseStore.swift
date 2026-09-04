@@ -1,11 +1,12 @@
 import AppFoundation
+import BYOKchatProviderCore
 import Foundation
 
 @MainActor
 final class BYOKPurchaseStore {
-  static let monthlyProductID = "com.hoangbkit.byokchat.pro.monthly"
-  static let yearlyProductID = "com.hoangbkit.byokchat.pro.yearly"
-  static let lifetimeProductID = "com.hoangbkit.byokchat.pro.lifetime"
+  static let monthlyProductID = BYOKProCatalog.monthlyProductID
+  static let yearlyProductID = BYOKProCatalog.yearlyProductID
+  static let lifetimeProductID = BYOKProCatalog.lifetimeProductID
 
   #if DEBUG
   static let simulatedModeKey = "byokchat.developer.simulatedPurchases"
@@ -22,12 +23,8 @@ final class BYOKPurchaseStore {
 
     manager = PurchaseManager(
       configuration: PurchaseConfiguration(
-        productIDs: [
-          Self.monthlyProductID,
-          Self.yearlyProductID,
-          Self.lifetimeProductID,
-        ],
-        preferredProductID: Self.yearlyProductID
+        productIDs: BYOKProCatalog.productIDs,
+        preferredProductID: BYOKProCatalog.preferredProductID
       ),
       simulated: startsSimulated,
       simulatedProducts: Self.simulatedProducts,
@@ -45,12 +42,8 @@ final class BYOKPurchaseStore {
   static func makeScreenshotPreviewManager() -> PurchaseManager {
     PurchaseManager.screenshotPreview(
       configuration: PurchaseConfiguration(
-        productIDs: [
-          Self.monthlyProductID,
-          Self.yearlyProductID,
-          Self.lifetimeProductID,
-        ],
-        preferredProductID: Self.yearlyProductID
+        productIDs: BYOKProCatalog.productIDs,
+        preferredProductID: BYOKProCatalog.preferredProductID
       ),
       products: simulatedProducts
     )

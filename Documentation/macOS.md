@@ -4,15 +4,16 @@
 
 The native macOS app is implemented on top of the shared `BYOKchatProviderCore` runtime.
 
-Purchases, paywalls, and Pro entitlement are intentionally deferred until **MacAppFoundation** provides the macOS purchase/paywall layer. Do not add a temporary Mac-only StoreKit entitlement stack in the meantime.
+Phase 10 purchases and Pro entitlement are now implemented with **MacAppFoundation 0.1.0**, pinned exactly in `project.yml`. The Mac app reuses the same BYOK Pro product identifiers and free/Pro business rules as iOS; StoreKit entitlement state is owned by MacAppFoundation rather than duplicated in BYOKchat.
 
 ## Architecture boundary
 
 The platform boundary is intentional:
 
-- `BYOKmac/**` owns the native macOS app lifecycle, orchestration, navigation, views, Settings, menus, and desktop interaction behavior.
+- `BYOKmac/**` owns the native macOS app lifecycle, orchestration, navigation, views, Settings, menus, desktop interaction behavior, and app-specific Pro policy composition.
 - `BYOKchat/**` remains the iOS app layer.
 - `Sources/BYOKchatProviderCore/**` owns platform-neutral providers, conversations, persistence, projects, Library, MCP/tools, usage analytics, telemetry, portability, and file storage.
+- `MacAppFoundation` owns reusable macOS StoreKit 2 commerce, entitlement evaluation, paywall/Plan primitives, purchase simulation, and developer purchase tooling.
 - `project.yml` is the source of truth for target/package configuration.
 
 Mac UI must not depend on the iOS app layer, and shared core should not accumulate Mac-only conditionals for view concerns.
@@ -25,10 +26,11 @@ The primary window is conversation-first:
 - centered transcript with a maximum readable width;
 - document-style assistant responses;
 - compact right-aligned user messages;
-- floating composer near the bottom;
+- wide, permanently expanded composer near the bottom;
 - provider/model/reasoning/tool controls kept close to the composer;
 - contextual message actions rather than permanent action rows;
-- Projects, Library, Analytics, provider management, MCP management, data management, and diagnostics presented as focused secondary surfaces.
+- Projects, Library, Analytics, provider management, and MCP management presented as focused sheets from the sidebar utility grid;
+- native Settings remains a separate Settings scene.
 
 The current `chat.byok.pro` desktop implementation remains the visual reference when evolving the main chat experience, with native Mac conventions taking precedence where browser interaction does not translate directly.
 
@@ -47,7 +49,7 @@ Startup prepares and loads, in order:
 7. project/conversation reconciliation and orphan-file cleanup;
 8. telemetry maintenance and diagnostics surfaces.
 
-Full conversation shards remain lazy until selected. Analytics intentionally uses the shared `ConversationStore.allConversations()` full-corpus path only when the Analytics surface opens, so normal startup and sidebar browsing stay index-backed.
+Full conversation shards remain lazy until selected. Pro Analytics intentionally uses the shared `ConversationStore.allConversations()` full-corpus path only when the Analytics surface opens, while free Analytics loads persisted conversation history without loading the advanced telemetry surface.
 
 Startup recovery can move a damaged workspace aside and start fresh while keeping the previous workspace discoverable in Finder. Full reset uses the stronger data-management path that also handles credentials and telemetry cleanup.
 
@@ -90,7 +92,9 @@ The transcript supports:
 - persisted tool rounds/results;
 - selectable text and native links.
 
-Streaming deltas are presentation-coalesced and the transcript uses lazy message construction so completed rich messages are not rebuilt eagerly for long histories.
+Streaming deltas are presentation-coalesced. A non-main incremental renderer freezes stable blocks and leaves one bounded mutable tail, so normal token updates do not reparse the growing response on the main actor. Syntax highlighting, Mermaid, math, and other rich enhancement are deferred until a block becomes stable. Transcript construction uses lazy message construction so completed rich messages are not rebuilt eagerly for long histories.
+
+The transcript follows the latest response only while the reader has follow intent. User scrolling disables follow, and the jump-to-bottom control restores it without reintroducing per-token scroll commands.
 
 ## Attachments
 
@@ -120,6 +124,8 @@ Project instructions become the new chat system prompt, falling back to the app 
 
 Library uses the shared blob store and supports browsing, previewing, importing, exporting, sharing, renaming, deleting, attaching items to chat, and saving chat responses/attachments back to Library without unnecessary blob duplication.
 
+BYOK Pro policy matches iOS: free users can create one project and save up to ten Library files. Existing projects and saved files remain accessible/editable if Pro expires; only creation beyond the free limits is blocked.
+
 ## MCP and tools
 
 The Mac app uses the shared MCP runtime, workspace, approval center, and elicitation center.
@@ -136,7 +142,38 @@ Supported desktop workflows include:
 - live tool-call state;
 - persisted tool call/result/error inspection.
 
-Tool UI remains contextual to chat and management surfaces rather than becoming permanent diagnostics chrome.
+Tool UI remains contextual to chat and management surfaces rather than becoming permanent diagnostics chrome. Free users can create one MCP server; existing servers remain usable/editable after entitlement loss.
+
+## Purchases and BYOK Pro
+
+The Mac purchase layer is deliberately thin and app-owned only where product policy belongs.
+
+`MacPurchaseStore` defines the same universal BYOK Pro catalog used by iOS:
+
+- `com.hoangbkit.byokchat.pro.monthly`;
+- `com.hoangbkit.byokchat.pro.yearly`;
+- `com.hoangbkit.byokchat.pro.lifetime`.
+
+MacAppFoundation `PurchaseManager` is the entitlement source of truth. The main scene applies `managesPurchases`, which prepares StoreKit, observes transactions, and refreshes entitlements when the app becomes active. BYOKchat does not persist its own production `hasPro` flag.
+
+The app provides:
+
+- a native BYOK Pro paywall window using `ProPaywallView`;
+- purchase and restore through MacAppFoundation;
+- a `Plan` tab in native Settings using `ProPlanPane`;
+- privacy/terms/redeem-code presentation;
+- Debug-only MacAppFoundation Developer Tools and simulated purchase controls.
+
+Free/Pro rules mirror iOS:
+
+- 2 themes free, all themes with Pro;
+- 1 provider connection free, unlimited with Pro;
+- 1 project free, unlimited with Pro;
+- 1 MCP server free, unlimited with Pro;
+- 10 saved Library files free, unlimited with Pro;
+- basic monthly Analytics free, advanced Analytics with Pro.
+
+Creation is gated at the model boundary so every entry point observes the same rule. Existing user-created data remains accessible by default after entitlement loss.
 
 ## Analytics
 
@@ -154,9 +191,7 @@ Usage and performance analytics are shared runtime capabilities rather than a Ma
 - provider and model breakdowns;
 - per-conversation usage/performance snapshots.
 
-The native Mac Analytics surface adds a desktop overview, conversation sidebar, local telemetry statistics, refresh, and monthly budget/warning preferences. Usage/spend come from persisted message history, while performance/reliability come from bounded local telemetry.
-
-Purchase-based analytics gating is intentionally not duplicated in the Mac app while MacAppFoundation is pending. When that layer arrives, apply the same iOS free/Pro policy to this existing Analytics surface rather than changing the analytics runtime.
+Free users receive the same basic iOS policy: current-month spend, model requests, input tokens, and output tokens reconstructed from persisted chat history. BYOK Pro unlocks selectable ranges, cached/reasoning/tool totals, performance/reliability, failures, provider/model and per-conversation breakdowns, local telemetry statistics, and monthly budget controls.
 
 ## Data and diagnostics
 
@@ -210,8 +245,8 @@ Current release identity remains:
 - deployment target: macOS 15.0;
 - marketing version: 0.1 until intentionally promoted.
 
-The approved BYOKchat artwork in the iOS asset catalog remains the source artwork for the eventual Mac AppIcon/Icon Composer asset.
+The approved BYOKchat artwork in the iOS asset catalog remains the source artwork for the Mac AppIcon/Icon Composer asset.
 
-## Deferred purchase layer
+## Phase 10 dependency lock
 
-When MacAppFoundation is ready, add purchases as one cross-platform entitlement/business-rule layer using the existing product IDs and universal-purchase model. At that point add Mac purchase, restore, paywall, and Pro gating without changing the native Mac architecture above.
+Phase 10 is implemented against the exact public `MacAppFoundation` tag **0.1.0**. Do not silently move this dependency to `master` or a later tag as part of unrelated work. Upgrade it explicitly when BYOKchat intentionally adopts a newer MacAppFoundation release.

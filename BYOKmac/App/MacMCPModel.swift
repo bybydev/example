@@ -128,7 +128,14 @@ final class MacMCPModel {
     additionalHeaders: [String: String],
     isEnabled: Bool
   ) async -> Bool {
-    await performResult("MCP server saved and tools discovered") {
+    if existing == nil,
+      !MacProAccess.requireMCPServerCapacity(currentCount: servers.count)
+    {
+      errorMessage = "Free includes 1 MCP server. Upgrade to BYOK Pro to add more."
+      return false
+    }
+
+    return await performResult("MCP server saved and tools discovered") {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
       guard let url = URL(string: normalizedEndpoint) else {
