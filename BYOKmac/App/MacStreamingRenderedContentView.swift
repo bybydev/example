@@ -2,16 +2,17 @@ import SwiftUI
 
 struct MacStreamingRenderedContentView: View {
   let snapshot: MacStreamingAnswerSnapshot
+  var textSize: CGFloat = 15
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       ForEach(snapshot.stableBlocks) { rendered in
-        MacStableRenderedAnswerBlockView(rendered: rendered)
+        MacStableRenderedAnswerBlockView(rendered: rendered, textSize: textSize)
           .equatable()
       }
 
       ForEach(Array(snapshot.tailBlocks.enumerated()), id: \.offset) { _, block in
-        MacStreamingTailBlockView(block: block)
+        MacStreamingTailBlockView(block: block, textSize: textSize)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -20,6 +21,7 @@ struct MacStreamingRenderedContentView: View {
 
 private struct MacStableRenderedAnswerBlockView: View, Equatable {
   let rendered: MacRenderedAnswerBlock
+  let textSize: CGFloat
 
   @ViewBuilder
   var body: some View {
@@ -27,7 +29,7 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
     case .markdown(let source):
       // MarkdownUI and inline LaTeX are allowed only after this top-level
       // block has crossed the stable boundary. Its input never changes again.
-      MacMarkdownMessageContent(text: source)
+      MacMarkdownMessageContent(text: source, textSize: textSize)
 
     case .code(let language, let content, let isComplete):
       if MacAnswerContentParser.isMermaidLanguage(language), isComplete {
@@ -56,13 +58,14 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
 /// becomes stable; until then readable source is preferred over rich output.
 private struct MacStreamingTailBlockView: View {
   let block: MacAnswerContentBlock
+  let textSize: CGFloat
 
   @ViewBuilder
   var body: some View {
     switch block {
     case .markdown(let source):
       Text(stabilizedTailText(source))
-        .font(.system(size: 15))
+        .font(.system(size: textSize))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)

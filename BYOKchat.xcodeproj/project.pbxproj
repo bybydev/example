@@ -166,6 +166,7 @@
 		F0FFE072D7337C9A3A158526 /* LibraryQuickLook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35583DBFFCA46CA7599FBC14 /* LibraryQuickLook.swift */; };
 		F234162144D1B5148FC5CB83 /* ToolCallingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E60BA3294AC623AC13D5163 /* ToolCallingTests.swift */; };
 		F33C56AE07EA124C78863249 /* MacStorageEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76B37502188CC0B05F303BD8 /* MacStorageEnvironment.swift */; };
+		F3B3A6DBFAC78AB8E8618185 /* MacTargetLabelFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0D59BDC790C8113084B94F /* MacTargetLabelFormatter.swift */; };
 		F3B9564E142B42989CE10DA0 /* MacAnalyticsGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4BDCD9AFD3A74A4937B1CC0 /* MacAnalyticsGateView.swift */; };
 		F5A5390112D3CDEFC3A91A52 /* AppStartupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ED7B38BCC93227198286EEF /* AppStartupView.swift */; };
 		F64C0D648233A35BDC0923C0 /* MCPInputRequiredTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 961033A42E62C4FBA93AF12C /* MCPInputRequiredTests.swift */; };
@@ -233,6 +234,7 @@
 		27A06A78A0567FD6BB9FC806 /* ChatContextOutputReserveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContextOutputReserveTests.swift; sourceTree = "<group>"; };
 		28CBAA189A3EC196B6D5CC14 /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
 		2925788434A51E9708D31261 /* BYOKchatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKchatApp.swift; sourceTree = "<group>"; };
+		2B0D59BDC790C8113084B94F /* MacTargetLabelFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTargetLabelFormatter.swift; sourceTree = "<group>"; };
 		2B4C64553323AFCDB546F147 /* MacProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProjectsView.swift; sourceTree = "<group>"; };
 		2C727B8EE2D25572A66D8DF0 /* BYOKProPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKProPolicyTests.swift; sourceTree = "<group>"; };
 		2CC738A6837BA431A41AD841 /* MacProviderViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProviderViews.swift; sourceTree = "<group>"; };
@@ -656,6 +658,7 @@
 				E3C8D7B65CF2B8F0627A191F /* MacStreamingAnswerRenderer.swift */,
 				3EBB438751B19E42D805560A /* MacStreamingRenderedContentView.swift */,
 				10205360D9BE7C875FF8981B /* MacSwiftUITypeAliases.swift */,
+				2B0D59BDC790C8113084B94F /* MacTargetLabelFormatter.swift */,
 				B5A4228231A8A4F12E407CF0 /* MacThemeModel.swift */,
 				52803B47EFC83ADB6D1CD504 /* MacUtilitySheets.swift */,
 				BFD278A599509229392F2A4C /* MacUTType+Markdown.swift */,
@@ -1105,6 +1108,7 @@
 				3B926DFD4F98D76A190D0AAD /* MacStreamingAnswerRenderer.swift in Sources */,
 				4851A8D326CCCCADA7E4560B /* MacStreamingRenderedContentView.swift in Sources */,
 				245AE66B22D3D9D40DA98595 /* MacSwiftUITypeAliases.swift in Sources */,
+				F3B3A6DBFAC78AB8E8618185 /* MacTargetLabelFormatter.swift in Sources */,
 				C576FAC0FF1403079CE0DB08 /* MacThemeModel.swift in Sources */,
 				E4574FB111527253FBC645CA /* MacUTType+Markdown.swift in Sources */,
 				ACAF6C63F8BF39B0BEF6AB39 /* MacUtilitySheets.swift in Sources */,

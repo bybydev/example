@@ -10,6 +10,9 @@ import SwiftUI
 struct MacMarkdownMessageContent: View {
   let text: String
   var isStreaming = false
+  /// Base body font size. Code/theme styles derive from it; defaults to the
+  /// standard answer size.
+  var textSize: CGFloat = 15
 
   private static let renderSignpostLog = OSLog(
     subsystem: "pro.byok.BYOKchat",
@@ -62,13 +65,14 @@ struct MacMarkdownMessageContent: View {
           .errorMode(.rendered)
           .imageRenderingMode(.template)
           .imageAccessibility(.sre)
-          .font(.body)
+          .font(.system(size: textSize))
           .foregroundStyle(.primary)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         Markdown(markdown)
           .markdownTheme(
             Self.chatTheme(
+              textSize: textSize,
               columnAlignments: MacMarkdownTableAlignment.columnAlignments(in: markdown) ?? []
             )
           )
@@ -172,12 +176,13 @@ struct MacMarkdownMessageContent: View {
   }
 
   private static func chatTheme(
+    textSize: CGFloat,
     columnAlignments: [MacTableColumnAlignment]
   ) -> MarkdownUI.Theme {
     MarkdownUI.Theme.basic
       .text {
         ForegroundColor(.primary)
-        FontSize(15)
+        FontSize(textSize)
       }
       .code {
         FontFamilyVariant(.monospaced)

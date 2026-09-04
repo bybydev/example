@@ -167,9 +167,12 @@ private struct MacTranscriptView: View {
   }
 
   var body: some View {
-    ZStack(alignment: .bottomTrailing) {
+    ZStack(alignment: .bottom) {
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 38) {
+        // Eager stack on purpose: a LazyVStack here goes blank when the
+        // viewport resizes or the content height collapses at stream end —
+        // the scroll position restore lands in an unmaterialized region.
+        VStack(alignment: .leading, spacing: 48) {
           if conversationID == nil {
             newConversationEmptyState
           } else if conversation != nil {
@@ -324,7 +327,6 @@ private struct MacTranscriptView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.trailing, MacDesignTokens.Spacing.large)
         .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace - 20)
         .help("Scroll to bottom of chat")
         .accessibilityLabel("Scroll to bottom of chat")
@@ -428,11 +430,6 @@ private struct MacComposerView: View {
       || !attachments.isEmpty)
       && target != nil
       && !isStreaming
-  }
-
-  private var supportsReasoning: Bool {
-    guard let target else { return false }
-    return providers.supportsReasoning(accountID: target.accountID, modelID: target.modelID)
   }
 
   private var projectFiles: [ProjectFile] {
@@ -558,13 +555,9 @@ private struct MacComposerView: View {
   }
 
   private var bottomControls: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 8) {
       attachmentMenu
       targetButton
-
-      if supportsReasoning {
-        reasoningMenu
-      }
 
       Spacer(minLength: 10)
       sendButton
@@ -616,6 +609,9 @@ private struct MacComposerView: View {
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
+    // Menu is width-greedy on macOS; without this it absorbs the flexible
+    // space in bottomControls and pushes the model pill toward the send button.
+    .fixedSize()
     .disabled(isStreaming || target == nil)
     .accessibilityLabel("Add or configure")
     .help("Add attachments or configure chat tools")
@@ -630,80 +626,25 @@ private struct MacComposerView: View {
         chooseTarget()
       }
     } label: {
-      HStack(spacing: 5) {
-        Text(target == nil ? "Set Up Provider" : modelLabel)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.primary)
-          .lineLimit(1)
-          .frame(maxWidth: 220)
-
-        Image(systemName: "chevron.down")
-          .font(.system(size: 7.5, weight: .semibold))
-          .foregroundStyle(.secondary)
-      }
-      .padding(.horizontal, 10)
-      .frame(height: 34)
-      .background(Color.primary.opacity(0.025), in: Capsule())
-      .overlay {
-        Capsule()
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
-      }
-      .contentShape(Capsule())
+      Text(target == nil ? "Set Up Provider" : targetLabel)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
+        .padding(.horizontal, 9)
+        .frame(height: 26)
+        .background(Color.primary.opacity(0.025), in: Capsule())
+        .overlay {
+          Capsule()
+            .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
+        }
+        .contentShape(Capsule())
     }
     .buttonStyle(.plain)
     .disabled(isStreaming)
     .help(target == nil ? "Set up a provider" : "Change model")
-    .accessibilityLabel("Model")
+    .accessibilityLabel("Change provider, model, and reasoning")
     .accessibilityValue(targetDetails)
-  }
-
-  private var reasoningMenu: some View {
-    Menu {
-      Button {
-        setReasoning(nil)
-      } label: {
-        if target?.reasoning?.enabled != true {
-          Label("Off", systemImage: "checkmark")
-        } else {
-          Text("Off")
-        }
-      }
-
-      Divider()
-
-      ForEach(ReasoningEffort.allCases, id: \.rawValue) { effort in
-        Button {
-          setReasoning(ReasoningOptions(enabled: true, effort: effort))
-        } label: {
-          if target?.reasoning?.enabled == true && target?.reasoning?.effort == effort {
-            Label(reasoningTitle(effort), systemImage: "checkmark")
-          } else {
-            Text(reasoningTitle(effort))
-          }
-        }
-      }
-    } label: {
-      HStack(spacing: 5) {
-        Text(reasoningLabel)
-          .font(.system(size: 12, weight: .semibold))
-        Image(systemName: "chevron.down")
-          .font(.system(size: 7.5, weight: .semibold))
-          .foregroundStyle(.secondary)
-      }
-      .padding(.horizontal, 10)
-      .frame(height: 34)
-      .background(Color.primary.opacity(0.025), in: Capsule())
-      .overlay {
-        Capsule()
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.95), lineWidth: 0.75)
-      }
-      .contentShape(Capsule())
-    }
-    .menuStyle(.borderlessButton)
-    .menuIndicator(.hidden)
-    .disabled(isStreaming)
-    .accessibilityLabel("Reasoning")
-    .accessibilityValue(reasoningLabel)
   }
 
   private var sendButton: some View {
@@ -746,9 +687,18 @@ private struct MacComposerView: View {
     return "\(accountLabel) · \(modelLabel)"
   }
 
-  private var reasoningLabel: String {
-    guard target?.reasoning?.enabled == true else { return "Off" }
-    return reasoningTitle(target?.reasoning?.effort ?? .high)
+  private var targetLabel: String {
+    guard let target else { return "No model" }
+    let providerID = selectedAccount?.providerID ?? selectedAccount?.kind.defaultProviderID
+      ?? ProviderID(rawValue: target.modelID.rawValue)
+    return MacTargetLabelFormatter.make(
+      providerID: providerID,
+      providerName: accountLabel,
+      modelName: selectedModel?.displayName ?? target.modelID.rawValue,
+      modelID: target.modelID.rawValue,
+      supportedParameters: selectedModel?.supportedParameters ?? [],
+      reasoning: target.reasoning
+    )
   }
 
   private func submit() {
@@ -798,22 +748,6 @@ private struct MacComposerView: View {
       } else if let error = workspace.errorMessage {
         chats.errorMessage = error
       }
-    }
-  }
-
-  private func setReasoning(_ reasoning: ReasoningOptions?) {
-    guard var target else { return }
-    target.reasoning = reasoning
-    Task { _ = await chats.applyTarget(target, conversationID: conversationID) }
-  }
-
-  private func reasoningTitle(_ effort: ReasoningEffort) -> String {
-    switch effort {
-    case .minimal: "Minimal"
-    case .low: "Low"
-    case .medium: "Medium"
-    case .high: "High"
-    case .max: "Max"
     }
   }
 }
@@ -877,6 +811,9 @@ private struct MacAssistantMessageActions: View {
       .help("More actions")
       .accessibilityLabel("More actions")
     }
+    // Pulls the leading glyph back over its centered frame's inset so the
+    // first icon's visual edge lines up with the message text above.
+    .padding(.leading, -7)
     .confirmationDialog(
       "Regenerate this response?",
       isPresented: $showingRegenerateConfirmation,
@@ -896,7 +833,7 @@ private struct MacAssistantMessageActions: View {
       .font(.system(size: 13, weight: .medium))
       .foregroundStyle(.secondary)
       .frame(width: 30, height: 30)
-      .contentShape(RoundedRectangle(cornerRadius: 7))
+      .contentShape(Rectangle())
   }
 
   private func requestRegeneration() {

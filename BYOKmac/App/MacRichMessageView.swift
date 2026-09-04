@@ -10,7 +10,6 @@ struct MacRichMessageView: View {
   let storedMessage: ChatMessage
 
   @Environment(MacWorkspaceModel.self) private var workspace
-  @State private var hovering = false
   @State private var showingDetails = false
   @State private var showingEdit = false
   @State private var showingRegenerateConfirmation = false
@@ -67,13 +66,6 @@ struct MacRichMessageView: View {
       }
     }
     .contentShape(Rectangle())
-    .onHover { hovering = $0 }
-    .overlay(alignment: message.role == .user ? .topLeading : .topTrailing) {
-      if hovering && !isStreaming && message.role == .user {
-        actionMenu
-          .padding(.top, -2)
-      }
-    }
     .contextMenu { contextActions }
     .sheet(isPresented: $showingDetails) {
       MacMessageDetailsView(message: message)
@@ -140,7 +132,7 @@ struct MacRichMessageView: View {
   }
 
   private var assistantMessage: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 14) {
       if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         MacReasoningDisclosure(
           text: message.reasoning,
@@ -203,23 +195,6 @@ struct MacRichMessageView: View {
     { id, maxPixelSize in
       await chats.attachmentThumbnail(id, maxPixelSize: maxPixelSize)
     }
-  }
-
-  private var actionMenu: some View {
-    Menu {
-      contextActions
-    } label: {
-      Image(systemName: "ellipsis")
-        .font(.system(size: 11, weight: .semibold))
-        .frame(width: 24, height: 22)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .overlay {
-          RoundedRectangle(cornerRadius: 6)
-            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-        }
-    }
-    .menuStyle(.borderlessButton)
-    .help("Message actions")
   }
 
   @ViewBuilder
@@ -380,7 +355,10 @@ private struct MacReasoningDisclosure: View {
   let isStreaming: Bool
   let streamingSnapshot: MacStreamingAnswerSnapshot?
 
-  @State private var expanded: Bool
+  /// Reasoning body renders one step smaller than the answer text.
+  private static let contentFontSize: CGFloat = 13
+
+  @State private var expanded = false
   @State private var reasoningStartedAt: Date?
   @State private var reasoningFinishedAt: Date?
 
@@ -392,43 +370,59 @@ private struct MacReasoningDisclosure: View {
     self.text = text
     self.isStreaming = isStreaming
     self.streamingSnapshot = streamingSnapshot
-    _expanded = State(initialValue: isStreaming)
     _reasoningStartedAt = State(initialValue: isStreaming ? .now : nil)
     _reasoningFinishedAt = State(initialValue: nil)
   }
 
   var body: some View {
-    DisclosureGroup(isExpanded: $expanded) {
-      Group {
-        if let streamingSnapshot {
-          if streamingSnapshot.revision > 0 {
-            MacStreamingRenderedContentView(snapshot: streamingSnapshot)
-          } else {
-            Text(text)
-              .textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        } else {
-          MacMarkdownMessageContent(text: text)
-        }
+    VStack(alignment: .leading, spacing: 0) {
+      Button {
+        expanded.toggle()
+      } label: {
+        reasoningLabel
       }
-      .font(.callout)
-      .foregroundStyle(.secondary)
-      .padding(.top, 7)
-    } label: {
-      reasoningLabel
+      .buttonStyle(.plain)
+      .accessibilityLabel(isStreaming ? "Thinking" : "Reasoning")
+      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+      if expanded {
+        reasoningContent
+          .padding(.top, 7)
+      }
     }
+    .animation(.easeOut(duration: 0.15), value: expanded)
     .onChange(of: isStreaming) { _, value in
       if value {
         if reasoningStartedAt == nil {
           reasoningStartedAt = .now
         }
         reasoningFinishedAt = nil
-        expanded = true
       } else if reasoningFinishedAt == nil, reasoningStartedAt != nil {
         reasoningFinishedAt = .now
       }
     }
+  }
+
+  private var reasoningContent: some View {
+    Group {
+      if let streamingSnapshot {
+        if streamingSnapshot.revision > 0 {
+          MacStreamingRenderedContentView(
+            snapshot: streamingSnapshot,
+            textSize: Self.contentFontSize
+          )
+        } else {
+          Text(text)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      } else {
+        MacMarkdownMessageContent(text: text, textSize: Self.contentFontSize)
+      }
+    }
+    .font(.system(size: Self.contentFontSize))
+    .foregroundStyle(.secondary)
+    .padding(.leading, 14)
   }
 
   @ViewBuilder
@@ -454,9 +448,14 @@ private struct MacReasoningDisclosure: View {
           Text("Thought")
         }
       }
+
+      Image(systemName: "chevron.right")
+        .font(.system(size: 10, weight: .semibold))
+        .rotationEffect(.degrees(expanded ? 90 : 0))
     }
     .font(.caption.weight(.semibold))
     .foregroundStyle(.secondary)
+    .contentShape(Rectangle())
   }
 
   private func elapsedSeconds(from start: Date, to end: Date) -> Int {

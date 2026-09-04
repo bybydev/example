@@ -26,7 +26,9 @@ enum MacDesignTokens {
     static let sidebarMaximum: CGFloat = 300
     static let topBarHeight: CGFloat = 52
     static let transcriptMaximumWidth: CGFloat = 820
-    static let composerMaximumWidth: CGFloat = 760
+    /// Same column as the transcript so the composer's edges align with the
+    /// message text above it.
+    static let composerMaximumWidth: CGFloat = transcriptMaximumWidth
     static let composerBottomMargin: CGFloat = 18
     static let composerReservedScrollSpace: CGFloat = 120
   }
