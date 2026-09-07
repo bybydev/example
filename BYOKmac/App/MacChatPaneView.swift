@@ -422,11 +422,19 @@ private struct MacComposerView: View {
       && !isStreaming
   }
 
-  private var projectFiles: [ProjectFile] {
+  private var project: ChatProject? {
     if let conversationID {
-      return workspace.projectFiles(conversationID: conversationID)
+      return workspace.project(for: conversationID)
     }
-    return workspace.projectFiles(projectID: chats.newChatProjectID)
+    return workspace.project(chats.newChatProjectID)
+  }
+
+  private var projectFiles: [ProjectFile] {
+    project?.projectFiles ?? []
+  }
+
+  private var promptPresets: [ProjectPromptPreset] {
+    project?.projectPromptPresets ?? []
   }
 
   private var enabledToolCount: Int {
@@ -583,6 +591,15 @@ private struct MacComposerView: View {
         }
       }
 
+      if !promptPresets.isEmpty {
+        Divider()
+        Menu("Prompts", systemImage: "text.bubble") {
+          ForEach(promptPresets) { preset in
+            Button(preset.name) { applyPromptPreset(preset) }
+          }
+        }
+      }
+
       if conversationID != nil {
         Divider()
         Button(
@@ -604,7 +621,7 @@ private struct MacComposerView: View {
     .fixedSize()
     .disabled(isStreaming || target == nil)
     .accessibilityLabel("Add or configure")
-    .help("Add attachments or configure chat tools")
+    .help("Add attachments, project prompts, or configure chat tools")
   }
 
   private var targetButton: some View {
@@ -695,6 +712,18 @@ private struct MacComposerView: View {
     let text = draftBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard (!text.isEmpty || !attachments.isEmpty), target != nil, !isStreaming else { return }
     send(text, attachments)
+  }
+
+  private func applyPromptPreset(_ preset: ProjectPromptPreset) {
+    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    let current = draftBinding.wrappedValue
+    if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      draftBinding.wrappedValue = value
+    } else {
+      draftBinding.wrappedValue = current + "\n\n" + value
+    }
+    editorFocused = true
   }
 
   private func importURLs(_ urls: [URL]) {

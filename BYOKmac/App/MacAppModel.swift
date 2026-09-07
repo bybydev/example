@@ -202,11 +202,22 @@ final class MacAppModel {
 
   func requestNewChat(projectID: ProjectID? = nil, initialDraft: String? = nil) {
     guard isReady else { return }
-    chats?.queueNewChat(
-      projectID: projectID,
-      initialDraft: initialDraft,
-      target: projectTarget(projectID)
-    )
+
+    if let projectID, let project = workspace?.project(projectID), project.accountID != nil {
+      guard let target = projectTarget(projectID) else {
+        chats?.errorMessage = project.modelID == nil
+          ? "This project's provider account is unavailable. Edit the project defaults first."
+          : "This project's provider account or default model is unavailable. Edit the project defaults first."
+        return
+      }
+      chats?.queueNewChat(projectID: projectID, initialDraft: initialDraft, target: target)
+    } else {
+      chats?.queueNewChat(
+        projectID: projectID,
+        initialDraft: initialDraft,
+        target: projectTarget(projectID)
+      )
+    }
     newChatRequestID &+= 1
   }
 

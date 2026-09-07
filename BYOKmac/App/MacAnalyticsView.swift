@@ -63,48 +63,88 @@ final class MacAnalyticsModel {
   }
 }
 
-private enum MacAnalyticsSelection: Hashable {
-  case overview
-  case conversation(String)
+enum MacAnalyticsWorkspaceSection: String, CaseIterable, Identifiable {
+  case overview = "Overview"
+  case conversations = "Conversations"
+
+  var id: String { rawValue }
 }
 
 struct MacAnalyticsView: View {
   @State private var analytics: MacAnalyticsModel
   @State private var range: UsageAnalyticsRange = .month
-  @State private var selection: MacAnalyticsSelection = .overview
+  @State private var section: MacAnalyticsWorkspaceSection = .overview
+  @State private var selectedConversationID: String?
+  @State private var conversationSearchText = ""
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
-
-  @Environment(\.dismiss) private var dismiss
 
   init(services: BYOKCoreServices) {
     _analytics = State(initialValue: MacAnalyticsModel(services: services))
   }
 
-  var body: some View {
-    VStack(spacing: 0) {
-      header
-      Divider()
-
-      NavigationSplitView {
-        sidebar
-      } detail: {
-        detail
-      }
-    }
-    .frame(minWidth: 940, minHeight: 660)
-    .background(MacDesignTokens.Colors.canvas)
-    .task { await analytics.load() }
+  private var selectedConversation: ChatConversation? {
+    guard let selectedConversationID else { return nil }
+    return analytics.conversations.first { $0.id.rawValue == selectedConversationID }
   }
 
-  private var header: some View {
+  private var filteredConversations: [ChatConversation] {
+    let query = conversationSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return analytics.conversations }
+    return analytics.conversations.filter { conversation in
+      let title = conversation.title.isEmpty ? "New Chat" : conversation.title
+      return title.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      workspaceControls
+      Divider()
+
+      if analytics.isLoading && !analytics.hasLoaded {
+        loadingView
+      } else if let conversation = selectedConversation {
+        conversationDetail(conversation)
+      } else {
+        switch section {
+        case .overview:
+          overview
+        case .conversations:
+          conversations
+        }
+      }
+    }
+    .frame(minWidth: 920, minHeight: 620)
+    .background(MacDesignTokens.Colors.canvas)
+    .task { await analytics.load() }
+    .onChange(of: analytics.conversations.map(\.id.rawValue)) { _, ids in
+      if let selectedConversationID, !ids.contains(selectedConversationID) {
+        self.selectedConversationID = nil
+      }
+    }
+  }
+
+  private var workspaceControls: some View {
     HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Analytics")
-          .font(.headline)
-        Text("Local usage, cost, performance, and reliability")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      if selectedConversation != nil {
+        Button {
+          selectedConversationID = nil
+          section = .conversations
+        } label: {
+          Label("Conversations", systemImage: "chevron.left")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+      } else {
+        Picker("Section", selection: $section) {
+          ForEach(MacAnalyticsWorkspaceSection.allCases) { value in
+            Text(value.rawValue).tag(value)
+          }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 260)
       }
 
       Spacer()
@@ -119,62 +159,26 @@ struct MacAnalyticsView: View {
       .frame(width: 320)
       .accessibilityLabel("Analytics range")
 
-      Button("Refresh", systemImage: "arrow.clockwise") {
+      Button {
         Task { await analytics.load() }
+      } label: {
+        Label(analytics.isLoading ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
       }
       .disabled(analytics.isLoading)
-
-      Button("Done") { dismiss() }
-        .keyboardShortcut(.cancelAction)
     }
-    .padding(16)
+    .padding(.horizontal, 16)
+    .frame(height: 54)
+    .background(MacDesignTokens.Colors.surface.opacity(0.45))
   }
 
-  private var sidebar: some View {
-    List(selection: $selection) {
-      Section {
-        Label("Overview", systemImage: "chart.xyaxis.line")
-          .tag(MacAnalyticsSelection.overview)
-      }
-
-      Section("Conversations") {
-        ForEach(analytics.conversations) { conversation in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
-              .lineLimit(1)
-            Text(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
-          }
-          .tag(MacAnalyticsSelection.conversation(conversation.id.rawValue))
-        }
-      }
+  private var loadingView: some View {
+    VStack(spacing: 12) {
+      ProgressView()
+      Text("Loading local analytics…")
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
     }
-    .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
-  }
-
-  @ViewBuilder
-  private var detail: some View {
-    if analytics.isLoading && !analytics.hasLoaded {
-      VStack(spacing: 12) {
-        ProgressView()
-        Text("Loading local analytics…")
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(MacDesignTokens.Colors.canvas)
-    } else {
-      switch selection {
-      case .overview:
-        overview
-      case .conversation(let rawID):
-        if let conversation = analytics.conversations.first(where: { $0.id.rawValue == rawID }) {
-          conversationDetail(conversation)
-        } else {
-          ContentUnavailableView("Conversation Unavailable", systemImage: "bubble.left")
-        }
-      }
-    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(MacDesignTokens.Colors.canvas)
   }
 
   private var overview: some View {
@@ -182,7 +186,12 @@ struct MacAnalyticsView: View {
     let month = analytics.snapshot(range: .month)
 
     return ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
+      VStack(alignment: .leading, spacing: 16) {
+        analyticsHeading(
+          title: "Usage",
+          subtitle: "Local usage and spend for \(range.label.lowercased())."
+        )
+
         MacAnalyticsMetricGrid(
           metrics: [
             .init(title: "Spend", value: macUsageAggregateCost(snapshot.aggregate), symbol: "dollarsign.circle"),
@@ -204,167 +213,159 @@ struct MacAnalyticsView: View {
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
 
-        if hasPerformance(snapshot.performance) {
-          MacAnalyticsSection(title: "Performance", symbol: "gauge.with.dots.needle.67percent") {
-            MacAnalyticsMetricGrid(
-              metrics: [
-                .init(title: "Median TTFT", value: macUsageDuration(snapshot.performance.medianTTFTMilliseconds), symbol: "timer"),
-                .init(title: "P95 TTFT", value: macUsageDuration(snapshot.performance.p95TTFTMilliseconds), symbol: "timer.circle"),
-                .init(title: "Median Duration", value: macUsageDuration(snapshot.performance.medianDurationMilliseconds), symbol: "clock"),
-                .init(title: "P95 Duration", value: macUsageDuration(snapshot.performance.p95DurationMilliseconds), symbol: "clock.badge.exclamationmark"),
-                .init(title: "Median Speed", value: macUsageRate(snapshot.performance.medianOutputTokensPerSecond), symbol: "speedometer")
-              ]
-            )
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 320, maximum: 520), spacing: 12, alignment: .top)],
+          alignment: .leading,
+          spacing: 12
+        ) {
+          performanceCard(snapshot.performance)
+          reliabilityCard(snapshot.performance)
+
+          if !snapshot.failureBreakdown.isEmpty {
+            errorsCard(snapshot)
           }
 
-          MacAnalyticsSection(title: "Reliability", symbol: "checkmark.shield") {
-            VStack(spacing: 9) {
-              MacAnalyticsLabeledRow("Success Rate", value: macUsagePercent(snapshot.performance.providerSuccessRate))
-              MacAnalyticsLabeledRow("Succeeded", value: snapshot.performance.providerSuccessCount.formatted())
-              MacAnalyticsLabeledRow("Failed", value: snapshot.performance.providerFailureCount.formatted())
-              if snapshot.performance.providerCancelledCount > 0 {
-                MacAnalyticsLabeledRow("Cancelled", value: snapshot.performance.providerCancelledCount.formatted())
-              }
-              if snapshot.performance.toolCallCount > 0 {
-                Divider()
-                MacAnalyticsLabeledRow("Tool Success", value: macUsagePercent(snapshot.performance.toolSuccessRate))
-                MacAnalyticsLabeledRow("Tool Calls", value: snapshot.performance.toolCallCount.formatted())
-              }
-              if snapshot.performance.mcpRequestCount > 0 {
-                MacAnalyticsLabeledRow("MCP Requests", value: snapshot.performance.mcpRequestCount.formatted())
-                MacAnalyticsLabeledRow("MCP Failures", value: snapshot.performance.mcpFailureCount.formatted())
-              }
-            }
-          }
-        } else if analytics.hasLoaded {
-          MacAnalyticsSection(title: "Performance", symbol: "waveform.path.ecg") {
-            Text("Send a few messages to start collecting local performance metrics.")
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-        }
-
-        if !snapshot.failureBreakdown.isEmpty {
-          MacAnalyticsSection(title: "Errors", symbol: "exclamationmark.triangle") {
-            VStack(spacing: 0) {
-              let failures = Array(snapshot.failureBreakdown.prefix(8))
-              ForEach(failures) { failure in
-                HStack(alignment: .firstTextBaseline) {
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text(macAnalyticsErrorTitle(failure.errorCode))
-                    Text("\(failure.category.rawValue.capitalized) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
-                      .font(.caption)
-                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                  }
-                  Spacer()
-                  Text(failure.count.formatted())
-                    .monospacedDigit()
-                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
-                }
-                .padding(.vertical, 7)
-
-                if failure.id != failures.last?.id {
-                  Divider()
-                }
-              }
-            }
-          }
-        }
-
-        if !snapshot.providerBreakdown.isEmpty {
-          MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
-            MacAnalyticsBreakdownList(
-              rows: snapshot.providerBreakdown,
-              displayName: macUsageDisplayName
-            )
-          }
-        }
-
-        if !snapshot.modelBreakdown.isEmpty {
-          MacAnalyticsSection(title: "Models", symbol: "cpu") {
-            MacAnalyticsBreakdownList(
-              rows: snapshot.modelBreakdown,
-              displayName: { $0 }
-            )
-          }
-        }
-
-        MacAnalyticsSection(title: "Monthly Budget", symbol: "gauge.with.needle") {
-          VStack(spacing: 10) {
-            HStack {
-              Text("Budget")
-              Spacer()
-              Text("$")
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              TextField(
-                "0",
-                value: $monthlyBudgetUSD,
-                format: .number.precision(.fractionLength(0...2))
-              )
-              .multilineTextAlignment(.trailing)
-              .frame(width: 100)
-            }
-
-            Picker("Warn at", selection: $budgetWarningFraction) {
-              Text("50%").tag(0.5)
-              Text("75%").tag(0.75)
-              Text("80%").tag(0.8)
-              Text("90%").tag(0.9)
-            }
-
-            if monthlyBudgetUSD > 0 {
-              ProgressView(value: budgetProgress(month.aggregate))
-              MacAnalyticsLabeledRow("This Month", value: macUsageAggregateCost(month.aggregate))
-              if budgetWarningReached(month.aggregate) {
-                Label("Budget warning threshold reached", systemImage: "exclamationmark.triangle.fill")
-                  .foregroundStyle(.orange)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-              }
-            }
-
-            Text("This is a local BYOKchat warning. It does not change provider-side spending limits or include API-key usage from other apps.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
-
-        MacAnalyticsSection(title: "Local Analytics", symbol: "internaldrive") {
-          VStack(spacing: 9) {
-            MacAnalyticsLabeledRow("Telemetry Events", value: analytics.statistics.analyticsEventCount.formatted())
-            if analytics.statistics.databaseBytes > 0 {
-              MacAnalyticsLabeledRow(
-                "Local Database",
-                value: ByteCountFormatter.string(
-                  fromByteCount: analytics.statistics.databaseBytes,
-                  countStyle: .file
-                )
+          if !snapshot.providerBreakdown.isEmpty {
+            MacAnalyticsSection(title: "Providers", symbol: "server.rack") {
+              MacAnalyticsBreakdownList(
+                rows: snapshot.providerBreakdown,
+                displayName: macUsageDisplayName
               )
             }
-            Text(telemetryFootnote)
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              .frame(maxWidth: .infinity, alignment: .leading)
           }
+
+          if !snapshot.modelBreakdown.isEmpty {
+            MacAnalyticsSection(title: "Models", symbol: "cpu") {
+              MacAnalyticsBreakdownList(
+                rows: snapshot.modelBreakdown,
+                displayName: { $0 }
+              )
+            }
+          }
+
+          budgetCard(month.aggregate)
+          localAnalyticsCard
         }
       }
-      .frame(maxWidth: 860, alignment: .leading)
-      .padding(24)
+      .frame(maxWidth: 980, alignment: .leading)
+      .padding(18)
       .frame(maxWidth: .infinity, alignment: .top)
     }
     .background(MacDesignTokens.Colors.canvas)
   }
 
-  private func conversationDetail(_ conversation: ChatConversation) -> some View {
-    let snapshot = analytics.conversationSnapshot(conversation, range: range)
+  private var conversations: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        analyticsHeading(
+          title: "Conversations",
+          subtitle: "Inspect usage and reliability for individual chats."
+        )
 
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
-            .font(.title2.weight(.semibold))
-          Text("Conversation analytics · \(range.label)")
+        MacAnalyticsSearchField(
+          placeholder: "Search conversations",
+          text: $conversationSearchText
+        )
+        .frame(maxWidth: 420)
+
+        Text("\(filteredConversations.count) conversation\(filteredConversations.count == 1 ? "" : "s")")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+        if filteredConversations.isEmpty {
+          if conversationSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView(
+              "No Conversations",
+              systemImage: "bubble.left.and.bubble.right",
+              description: Text("Start chatting to see per-conversation analytics here.")
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 70)
+          } else {
+            ContentUnavailableView.search(text: conversationSearchText)
+              .frame(maxWidth: .infinity)
+              .padding(.top, 70)
+          }
+        } else {
+          LazyVStack(spacing: 9) {
+            ForEach(filteredConversations) { conversation in
+              conversationCard(conversation)
+            }
+          }
+        }
+      }
+      .frame(maxWidth: 860, alignment: .leading)
+      .padding(18)
+      .frame(maxWidth: .infinity, alignment: .top)
+    }
+    .background(MacDesignTokens.Colors.canvas)
+  }
+
+  private func conversationCard(_ conversation: ChatConversation) -> some View {
+    let snapshot = analytics.conversationSnapshot(conversation, range: range)
+    let totalTokens = snapshot.aggregate.inputTokens + snapshot.aggregate.outputTokens
+    let title = conversation.title.isEmpty ? "New Chat" : conversation.title
+
+    return Button {
+      selectedConversationID = conversation.id.rawValue
+    } label: {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .lineLimit(1)
+            Text(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+          Spacer()
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
+
+        HStack(spacing: 16) {
+          conversationStat(snapshot.aggregate.modelRequestCount.formatted(), label: "requests")
+          conversationStat(macUsageCompactTokens(totalTokens), label: "tokens")
+          conversationStat(macUsageAggregateCost(snapshot.aggregate), label: "spend")
+          Spacer()
+        }
+      }
+      .padding(14)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func conversationStat(_ value: String, label: String) -> some View {
+    HStack(spacing: 4) {
+      Text(value)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Text(label)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
+  }
+
+  private func conversationDetail(_ conversation: ChatConversation) -> some View {
+    let snapshot = analytics.conversationSnapshot(conversation, range: range)
+    let title = conversation.title.isEmpty ? "New Chat" : conversation.title
+
+    return ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        analyticsHeading(
+          title: title,
+          subtitle: "Conversation analytics · \(range.label) · updated \(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))"
+        )
 
         MacAnalyticsMetricGrid(
           metrics: [
@@ -378,36 +379,13 @@ struct MacAnalyticsView: View {
           ]
         )
 
-        if hasPerformance(snapshot.performance) {
-          MacAnalyticsSection(title: "Performance", symbol: "gauge.with.dots.needle.67percent") {
-            VStack(spacing: 9) {
-              MacAnalyticsLabeledRow("Median TTFT", value: macUsageDuration(snapshot.performance.medianTTFTMilliseconds))
-              MacAnalyticsLabeledRow("P95 TTFT", value: macUsageDuration(snapshot.performance.p95TTFTMilliseconds))
-              MacAnalyticsLabeledRow("Median Duration", value: macUsageDuration(snapshot.performance.medianDurationMilliseconds))
-              MacAnalyticsLabeledRow("P95 Duration", value: macUsageDuration(snapshot.performance.p95DurationMilliseconds))
-              MacAnalyticsLabeledRow("Median Speed", value: macUsageRate(snapshot.performance.medianOutputTokensPerSecond))
-            }
-          }
-
-          MacAnalyticsSection(title: "Reliability", symbol: "checkmark.shield") {
-            VStack(spacing: 9) {
-              MacAnalyticsLabeledRow("Success Rate", value: macUsagePercent(snapshot.performance.providerSuccessRate))
-              MacAnalyticsLabeledRow("Succeeded", value: snapshot.performance.providerSuccessCount.formatted())
-              MacAnalyticsLabeledRow("Failed", value: snapshot.performance.providerFailureCount.formatted())
-              if snapshot.performance.providerCancelledCount > 0 {
-                MacAnalyticsLabeledRow("Cancelled", value: snapshot.performance.providerCancelledCount.formatted())
-              }
-              if snapshot.performance.toolCallCount > 0 {
-                Divider()
-                MacAnalyticsLabeledRow("Tool Success", value: macUsagePercent(snapshot.performance.toolSuccessRate))
-                MacAnalyticsLabeledRow("Tool Calls", value: snapshot.performance.toolCallCount.formatted())
-              }
-              if snapshot.performance.mcpRequestCount > 0 {
-                MacAnalyticsLabeledRow("MCP Requests", value: snapshot.performance.mcpRequestCount.formatted())
-                MacAnalyticsLabeledRow("MCP Failures", value: snapshot.performance.mcpFailureCount.formatted())
-              }
-            }
-          }
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 320, maximum: 520), spacing: 12, alignment: .top)],
+          alignment: .leading,
+          spacing: 12
+        ) {
+          performanceCard(snapshot.performance)
+          reliabilityCard(snapshot.performance)
         }
 
         if snapshot.aggregate.hasPartialCost {
@@ -419,11 +397,158 @@ struct MacAnalyticsView: View {
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
       }
-      .frame(maxWidth: 760, alignment: .leading)
-      .padding(24)
+      .frame(maxWidth: 900, alignment: .leading)
+      .padding(18)
       .frame(maxWidth: .infinity, alignment: .top)
     }
     .background(MacDesignTokens.Colors.canvas)
+  }
+
+  @ViewBuilder
+  private func performanceCard(_ performance: TelemetryPerformanceAggregate) -> some View {
+    MacAnalyticsSection(title: "Performance", symbol: hasPerformance(performance) ? "gauge.with.dots.needle.67percent" : "waveform.path.ecg") {
+      if hasPerformance(performance) {
+        VStack(spacing: 9) {
+          MacAnalyticsLabeledRow("Median TTFT", value: macUsageDuration(performance.medianTTFTMilliseconds))
+          MacAnalyticsLabeledRow("P95 TTFT", value: macUsageDuration(performance.p95TTFTMilliseconds))
+          MacAnalyticsLabeledRow("Median Duration", value: macUsageDuration(performance.medianDurationMilliseconds))
+          MacAnalyticsLabeledRow("P95 Duration", value: macUsageDuration(performance.p95DurationMilliseconds))
+          MacAnalyticsLabeledRow("Median Speed", value: macUsageRate(performance.medianOutputTokensPerSecond))
+        }
+      } else {
+        Text("Send a few messages to start collecting local performance metrics.")
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+    }
+  }
+
+  private func reliabilityCard(_ performance: TelemetryPerformanceAggregate) -> some View {
+    MacAnalyticsSection(title: "Reliability", symbol: "checkmark.shield") {
+      VStack(spacing: 9) {
+        if hasPerformance(performance) {
+          MacAnalyticsLabeledRow("Success Rate", value: macUsagePercent(performance.providerSuccessRate))
+          MacAnalyticsLabeledRow("Succeeded", value: performance.providerSuccessCount.formatted())
+          MacAnalyticsLabeledRow("Failed", value: performance.providerFailureCount.formatted())
+          if performance.providerCancelledCount > 0 {
+            MacAnalyticsLabeledRow("Cancelled", value: performance.providerCancelledCount.formatted())
+          }
+          if performance.toolCallCount > 0 {
+            Divider()
+            MacAnalyticsLabeledRow("Tool Success", value: macUsagePercent(performance.toolSuccessRate))
+            MacAnalyticsLabeledRow("Tool Calls", value: performance.toolCallCount.formatted())
+          }
+          if performance.mcpRequestCount > 0 {
+            MacAnalyticsLabeledRow("MCP Requests", value: performance.mcpRequestCount.formatted())
+            MacAnalyticsLabeledRow("MCP Failures", value: performance.mcpFailureCount.formatted())
+          }
+        } else {
+          Text("Reliability metrics appear after provider, tool, or MCP requests are recorded.")
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+      }
+    }
+  }
+
+  private func errorsCard(_ snapshot: UsageAnalyticsSnapshot) -> some View {
+    MacAnalyticsSection(title: "Errors", symbol: "exclamationmark.triangle") {
+      VStack(spacing: 0) {
+        let failures = Array(snapshot.failureBreakdown.prefix(8))
+        ForEach(failures) { failure in
+          HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(macAnalyticsErrorTitle(failure.errorCode))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              Text("\(failure.category.rawValue.capitalized) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+            Spacer()
+            Text(failure.count.formatted())
+              .monospacedDigit()
+              .foregroundStyle(Color.orange)
+          }
+          .padding(.vertical, 7)
+
+          if failure.id != failures.last?.id {
+            Divider()
+          }
+        }
+      }
+    }
+  }
+
+  private func budgetCard(_ aggregate: ChatUsageAggregate) -> some View {
+    MacAnalyticsSection(title: "Monthly Budget", symbol: "gauge.with.needle") {
+      VStack(spacing: 10) {
+        HStack {
+          Text("Budget")
+          Spacer()
+          Text("$")
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          TextField(
+            "0",
+            value: $monthlyBudgetUSD,
+            format: .number.precision(.fractionLength(0...2))
+          )
+          .multilineTextAlignment(.trailing)
+          .frame(width: 100)
+        }
+
+        Picker("Warn at", selection: $budgetWarningFraction) {
+          Text("50%").tag(0.5)
+          Text("75%").tag(0.75)
+          Text("80%").tag(0.8)
+          Text("90%").tag(0.9)
+        }
+
+        if monthlyBudgetUSD > 0 {
+          ProgressView(value: budgetProgress(aggregate))
+          MacAnalyticsLabeledRow("This Month", value: macUsageAggregateCost(aggregate))
+          if budgetWarningReached(aggregate) {
+            Label("Budget warning threshold reached", systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+
+        Text("This local warning does not change provider-side spending limits or include API-key usage from other apps.")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private var localAnalyticsCard: some View {
+    MacAnalyticsSection(title: "Local Analytics", symbol: "internaldrive") {
+      VStack(spacing: 9) {
+        MacAnalyticsLabeledRow("Telemetry Events", value: analytics.statistics.analyticsEventCount.formatted())
+        if analytics.statistics.databaseBytes > 0 {
+          MacAnalyticsLabeledRow(
+            "Local Database",
+            value: ByteCountFormatter.string(
+              fromByteCount: analytics.statistics.databaseBytes,
+              countStyle: .file
+            )
+          )
+        }
+        Text(telemetryFootnote)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private func analyticsHeading(title: String, subtitle: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.title3.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Text(subtitle)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
   }
 
   private var telemetryFootnote: String {
@@ -451,7 +576,7 @@ struct MacAnalyticsView: View {
   }
 }
 
-private struct MacAnalyticsMetric: Identifiable {
+struct MacAnalyticsMetric: Identifiable {
   let title: String
   let value: String
   let symbol: String
@@ -459,38 +584,39 @@ private struct MacAnalyticsMetric: Identifiable {
   var id: String { title }
 }
 
-private struct MacAnalyticsMetricGrid: View {
+struct MacAnalyticsMetricGrid: View {
   let metrics: [MacAnalyticsMetric]
 
   private let columns = [
-    GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12, alignment: .top)
+    GridItem(.adaptive(minimum: 135, maximum: 220), spacing: 10, alignment: .top)
   ]
 
   var body: some View {
-    LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+    LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
       ForEach(metrics) { metric in
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
           HStack(spacing: 6) {
             Image(systemName: metric.symbol)
-            Text(metric.title)
+            Text(metric.title.uppercased())
           }
-          .font(.caption.weight(.medium))
+          .font(.caption2.weight(.semibold))
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
           Text(metric.value)
             .font(.system(size: 20, weight: .semibold, design: .rounded))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             .monospacedDigit()
             .textSelection(.enabled)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+        .padding(13)
         .background(
           MacDesignTokens.Colors.surface,
-          in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
+          in: RoundedRectangle(cornerRadius: 10)
         )
         .overlay {
-          RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-            .stroke(MacDesignTokens.Colors.separator, lineWidth: 1)
+          RoundedRectangle(cornerRadius: 10)
+            .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(metric.title)
@@ -500,7 +626,7 @@ private struct MacAnalyticsMetricGrid: View {
   }
 }
 
-private struct MacAnalyticsSection<Content: View>: View {
+struct MacAnalyticsSection<Content: View>: View {
   let title: String
   let symbol: String
   let content: Content
@@ -515,24 +641,26 @@ private struct MacAnalyticsSection<Content: View>: View {
     VStack(alignment: .leading, spacing: 12) {
       Label(title, systemImage: symbol)
         .font(.headline)
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
         .accessibilityAddTraits(.isHeader)
 
       content
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(16)
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       MacDesignTokens.Colors.surface,
-      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
+      in: RoundedRectangle(cornerRadius: 10)
     )
     .overlay {
-      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-        .stroke(MacDesignTokens.Colors.separator, lineWidth: 1)
+      RoundedRectangle(cornerRadius: 10)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
     }
   }
 }
 
-private struct MacAnalyticsLabeledRow: View {
+struct MacAnalyticsLabeledRow: View {
   let title: String
   let value: String
 
@@ -544,12 +672,14 @@ private struct MacAnalyticsLabeledRow: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       Text(title)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
       Spacer(minLength: 20)
       Text(value)
-        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
         .monospacedDigit()
         .textSelection(.enabled)
     }
+    .font(.system(size: 13))
   }
 }
 
@@ -575,6 +705,7 @@ private struct MacAnalyticsBreakdownList: View {
           VStack(alignment: .trailing, spacing: 3) {
             Text(macUsageAggregateCost(row.aggregate))
               .monospacedDigit()
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
             if row.performance.providerSuccessRate != nil {
               Text("\(macUsagePercent(row.performance.providerSuccessRate)) success")
                 .font(.caption)
@@ -592,7 +723,35 @@ private struct MacAnalyticsBreakdownList: View {
   }
 }
 
-private func macUsageDisplayName(_ raw: String) -> String {
+struct MacAnalyticsSearchField: View {
+  let placeholder: String
+  @Binding var text: String
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Image(systemName: "magnifyingglass")
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      TextField(placeholder, text: $text)
+        .textFieldStyle(.plain)
+      if !text.isEmpty {
+        Button { text = "" } label: {
+          Image(systemName: "xmark.circle.fill")
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(.horizontal, 10)
+    .frame(height: 32)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+    }
+  }
+}
+
+func macUsageDisplayName(_ raw: String) -> String {
   switch raw.lowercased() {
   case "openrouter": "OpenRouter"
   case "deepseek": "DeepSeek"
@@ -603,19 +762,19 @@ private func macUsageDisplayName(_ raw: String) -> String {
   }
 }
 
-private func macUsageCompactTokens(_ value: Int) -> String {
+func macUsageCompactTokens(_ value: Int) -> String {
   let number = Double(value)
   if value >= 1_000_000 { return String(format: "%.2fM", number / 1_000_000) }
   if value >= 1_000 { return String(format: "%.1fK", number / 1_000) }
   return value.formatted()
 }
 
-private func macUsageAggregateCost(_ aggregate: ChatUsageAggregate) -> String {
+func macUsageAggregateCost(_ aggregate: ChatUsageAggregate) -> String {
   guard aggregate.hasKnownCost else { return "Unavailable" }
   return (aggregate.hasPartialCost ? "≥" : "~") + macUsageFormatUSD(aggregate.costUSD)
 }
 
-private func macUsageFormatUSD(_ cost: Decimal) -> String {
+func macUsageFormatUSD(_ cost: Decimal) -> String {
   let value = NSDecimalNumber(decimal: cost).doubleValue
   if abs(value) < 0.001 { return String(format: "$%.6f", value) }
   if abs(value) < 1 { return String(format: "$%.4f", value) }

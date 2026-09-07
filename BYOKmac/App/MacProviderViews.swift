@@ -230,7 +230,7 @@ struct MacTargetPickerView: View {
   }
 }
 
-private enum MacConnectionEditorRoute: Identifiable {
+enum MacConnectionEditorRoute: Identifiable {
   case create(ProviderKind)
   case edit(ProviderAccountID)
 
@@ -242,289 +242,7 @@ private enum MacConnectionEditorRoute: Identifiable {
   }
 }
 
-struct MacProviderManagementView: View {
-  @Bindable var model: MacProviderModel
-
-  @Environment(\.dismiss) private var dismiss
-  @State private var selection: ProviderAccountID?
-  @State private var editorRoute: MacConnectionEditorRoute?
-
-  var body: some View {
-    NavigationSplitView {
-      VStack(spacing: 0) {
-        List(selection: $selection) {
-          ForEach(model.accounts) { account in
-            HStack(spacing: 10) {
-              Image(systemName: providerSymbol(account.kind))
-                .frame(width: 20)
-                .foregroundStyle(model.isReady(account) ? Color.accentColor : .secondary)
-              VStack(alignment: .leading, spacing: 2) {
-                Text(account.label)
-                  .lineLimit(1)
-                Text(connectionSubtitle(account))
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-                  .lineLimit(1)
-              }
-            }
-            .tag(account.id)
-          }
-        }
-
-        Divider()
-
-        HStack {
-          Menu {
-            Section("Providers") {
-              ForEach(ProviderKind.catalog, id: \.rawValue) { kind in
-                Button(kind.displayName) {
-                  editorRoute = .create(kind)
-                }
-              }
-            }
-            Divider()
-            Button("OpenAI-compatible Server…") {
-              editorRoute = .create(.openAICompatible)
-            }
-          } label: {
-            Label("Add", systemImage: "plus")
-          }
-          .menuStyle(.borderlessButton)
-
-          Spacer()
-          Button("Done") { dismiss() }
-        }
-        .padding(10)
-      }
-      .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 280)
-    } detail: {
-      if let selection, let account = model.account(selection) {
-        MacProviderDetailView(
-          model: model,
-          account: account,
-          edit: { editorRoute = .edit(account.id) },
-          deleted: { self.selection = model.accounts.first?.id }
-        )
-        .id(account.id.rawValue)
-      } else {
-        ContentUnavailableView(
-          "Providers",
-          systemImage: "network",
-          description: Text("Add a provider connection to start chatting.")
-        )
-      }
-    }
-    .frame(minWidth: 820, minHeight: 560)
-    .onAppear {
-      if selection == nil { selection = model.accounts.first?.id }
-    }
-    .onChange(of: model.accounts.map(\.id.rawValue)) { _, _ in
-      if let selection, model.account(selection) == nil {
-        self.selection = model.accounts.first?.id
-      }
-    }
-    .sheet(item: $editorRoute) { route in
-      MacConnectionEditorView(model: model, route: route) { accountID in
-        selection = accountID ?? model.accounts.first?.id
-      }
-    }
-    .alert(
-      "Provider Error",
-      isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
-      )
-    ) {
-      Button("OK") { model.errorMessage = nil }
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
-  }
-
-  private func connectionSubtitle(_ account: ProviderAccount) -> String {
-    if model.isReady(account) {
-      return account.defaultModelID?.rawValue ?? "Ready"
-    }
-    if !account.isEnabled { return "Disabled" }
-    if account.definition.authentication != .none && !model.hasCredential(account.id) {
-      return "Credential required"
-    }
-    return "Model required"
-  }
-}
-
-private struct MacProviderDetailView: View {
-  @Bindable var model: MacProviderModel
-  let account: ProviderAccount
-  let edit: () -> Void
-  let deleted: () -> Void
-
-  @State private var manualModel = ""
-  @State private var isTesting = false
-  @State private var testResult: String?
-  @State private var showDelete = false
-
-  private var records: [AccountModelRecord] {
-    model.models(for: account.id, includeHidden: true)
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 12) {
-        Image(systemName: providerSymbol(account.kind))
-          .font(.system(size: 24))
-          .frame(width: 42, height: 42)
-          .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-
-        VStack(alignment: .leading, spacing: 3) {
-          Text(account.label)
-            .font(.title2.weight(.semibold))
-          Text(account.kind == .openAICompatible ? "OpenAI-compatible" : account.kind.displayName)
-            .foregroundStyle(.secondary)
-        }
-        Spacer()
-        Button("Edit…", action: edit)
-      }
-      .padding(18)
-
-      Divider()
-
-      Form {
-        Section("Connection") {
-          Toggle("Enabled", isOn: Binding(
-            get: { account.isEnabled },
-            set: { value in
-              Task { _ = await model.setAccountEnabled(value, accountID: account.id) }
-            }
-          ))
-
-          LabeledContent("Endpoint") {
-            Text(account.baseURLOverride?.absoluteString ?? account.kind.defaultEndpoint?.absoluteString ?? "—")
-              .textSelection(.enabled)
-          }
-
-          LabeledContent("Credential") {
-            Text(account.definition.authentication == .none ? "Not required" : model.hasCredential(account.id) ? "Stored in Keychain" : "Missing")
-          }
-
-          HStack {
-            Button(model.defaultAccountID == account.id ? "Default Connection" : "Make Default") {
-              Task { _ = await model.setDefaultAccount(account.id) }
-            }
-            .disabled(model.defaultAccountID == account.id || !model.isReady(account))
-
-            Button(isTesting ? "Testing…" : "Test Connection") {
-              testConnection()
-            }
-            .disabled(isTesting || !model.isReady(account))
-
-            if account.definition.modelsPath != nil {
-              Button("Refresh Models") {
-                Task { _ = await model.refreshModels(accountID: account.id) }
-              }
-            }
-          }
-
-          if let testResult {
-            Text(testResult)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-
-        Section("Models") {
-          HStack {
-            TextField("Add model ID", text: $manualModel)
-            Button("Add") {
-              let value = manualModel
-              Task { @MainActor in
-                if await model.addManualModel(value, accountID: account.id) {
-                  manualModel = ""
-                }
-              }
-            }
-            .disabled(manualModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          }
-
-          if records.isEmpty {
-            Text("No models yet. Refresh discovery or add a model ID manually.")
-              .foregroundStyle(.secondary)
-          } else {
-            ForEach(records) { record in
-              HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(record.model.displayName)
-                    .fontWeight(.medium)
-                  Text(record.model.id.rawValue)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                }
-                .opacity(record.isAvailable ? 1 : 0.5)
-
-                Spacer()
-
-                if account.defaultModelID == record.model.id {
-                  Text("Default")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else if record.isAvailable && !record.isHidden {
-                  Button("Use Default") {
-                    Task { _ = await model.setDefaultModel(record.model.id, accountID: account.id) }
-                  }
-                  .buttonStyle(.borderless)
-                }
-
-                Button {
-                  Task { await model.setFavorite(!record.isFavorite, modelID: record.model.id, accountID: account.id) }
-                } label: {
-                  Image(systemName: record.isFavorite ? "star.fill" : "star")
-                }
-                .buttonStyle(.borderless)
-                .help(record.isFavorite ? "Remove Favorite" : "Favorite")
-
-                Button {
-                  Task { await model.setHidden(!record.isHidden, modelID: record.model.id, accountID: account.id) }
-                } label: {
-                  Image(systemName: record.isHidden ? "eye.slash.fill" : "eye")
-                }
-                .buttonStyle(.borderless)
-                .help(record.isHidden ? "Show Model" : "Hide Model")
-              }
-            }
-          }
-        }
-
-        Section {
-          Button("Delete Connection…", role: .destructive) { showDelete = true }
-        }
-      }
-      .formStyle(.grouped)
-    }
-    .confirmationDialog("Delete \(account.label)?", isPresented: $showDelete) {
-      Button("Delete Connection", role: .destructive) {
-        Task { @MainActor in
-          await model.deleteConnection(account.id)
-          deleted()
-        }
-      }
-      Button("Cancel", role: .cancel) {}
-    }
-  }
-
-  private func testConnection() {
-    isTesting = true
-    testResult = nil
-    let modelID = account.defaultModelID
-      ?? model.models(for: account.id).first(where: { $0.isAvailable })?.model.id
-    Task { @MainActor in
-      let succeeded = await model.testConnection(accountID: account.id, modelID: modelID)
-      testResult = succeeded ? "Connection succeeded." : "Connection failed."
-      isTesting = false
-    }
-  }
-}
-
-private struct MacConnectionEditorView: View {
+struct MacConnectionEditorView: View {
   @Bindable var model: MacProviderModel
   let route: MacConnectionEditorRoute
   let onFinished: (ProviderAccountID?) -> Void
@@ -545,6 +263,7 @@ private struct MacConnectionEditorView: View {
   @State private var httpReferer: String
   @State private var isSaving = false
   @State private var isRevealing = false
+  @State private var showingAdvanced = false
 
   private var existing: ProviderAccount? {
     switch route {
@@ -603,6 +322,7 @@ private struct MacConnectionEditorView: View {
     _seedModelsText = State(initialValue: (account?.seedModelIDs ?? []).joined(separator: "\n"))
     _appTitle = State(initialValue: account?.metadata["appTitle"] ?? "")
     _httpReferer = State(initialValue: account?.metadata["httpReferer"] ?? "")
+    _showingAdvanced = State(initialValue: kind == .openAICompatible || account != nil)
   }
 
   private var isCreate: Bool {
@@ -627,12 +347,23 @@ private struct MacConnectionEditorView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        Text(isCreate ? "Add Connection" : "Edit Connection")
-          .font(.title3.weight(.semibold))
+      HStack(spacing: 12) {
+        Image(systemName: providerSymbol(kind))
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+          .frame(width: 34, height: 34)
+          .background(MacDesignTokens.Colors.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+        VStack(alignment: .leading, spacing: 2) {
+          Text(isCreate ? "Connect \(providerDisplayName(kind))" : "Edit Connection")
+            .font(.title3.weight(.semibold))
+          Text(isCreate ? "Configure the connection BYOKchat will use." : providerDisplayName(kind))
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
         Spacer()
         Button("Cancel") { dismiss() }
-        Button("Save") { save() }
+          .keyboardShortcut(.cancelAction)
+        Button(isCreate ? "Connect" : "Save") { save() }
           .keyboardShortcut(.defaultAction)
           .disabled(!canSave || isSaving)
       }
@@ -640,90 +371,127 @@ private struct MacConnectionEditorView: View {
 
       Divider()
 
-      Form {
-        Section("Provider") {
-          LabeledContent("Type") {
-            Text(kind == .openAICompatible ? "OpenAI-compatible" : kind.displayName)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          editorCard("Connection", systemImage: "link") {
+            VStack(alignment: .leading, spacing: 10) {
+              LabeledContent("Provider", value: providerDisplayName(kind))
+              TextField("Connection Name", text: $label)
+            }
           }
-          TextField("Connection Name", text: $label)
-        }
 
-        Section("Authentication") {
+          editorCard("Authentication", systemImage: "key") {
+            VStack(alignment: .leading, spacing: 10) {
+              if kind == .openAICompatible {
+                Picker("Authentication", selection: $authMode) {
+                  Text("Bearer Token").tag("bearer")
+                  Text("Custom Header").tag("header")
+                  Text("None").tag("none")
+                }
+                if authMode == "header" {
+                  TextField("Header Name", text: $customHeaderName)
+                }
+              }
+
+              if requiresCredential {
+                SecureField(
+                  isCreate ? "API Key / Token" : "New API Key / Token (leave blank to keep current)",
+                  text: $credential
+                )
+                if !isCreate, let accountID = existing?.id, model.hasCredential(accountID) {
+                  HStack {
+                    Label("Credential stored in Keychain", systemImage: "lock.fill")
+                      .font(.caption)
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                    Spacer()
+                    Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                      .disabled(isRevealing)
+                  }
+                } else {
+                  Text("Credentials are stored in Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                }
+              } else {
+                Text("This connection does not require a credential.")
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
+            }
+          }
+
           if kind == .openAICompatible {
-            Picker("Authentication", selection: $authMode) {
-              Text("Bearer Token").tag("bearer")
-              Text("Custom Header").tag("header")
-              Text("None").tag("none")
-            }
-            if authMode == "header" {
-              TextField("Header Name", text: $customHeaderName)
-            }
-          }
-
-          if requiresCredential {
-            SecureField(isCreate ? "API Key / Token" : "New API Key / Token (leave blank to keep current)", text: $credential)
-            if !isCreate, let accountID = existing?.id, model.hasCredential(accountID) {
-              HStack {
-                Text("A credential is stored in Keychain.")
+            editorCard("Endpoint", systemImage: "network") {
+              VStack(alignment: .leading, spacing: 10) {
+                TextField("Base URL", text: $baseURL)
+                TextField("Chat Completions Path", text: $chatPath)
+                TextField("Models Path (blank disables discovery)", text: $modelsPath)
+                if isCreate {
+                  TextField("Default Model ID (optional)", text: $defaultModel)
+                }
+                Text("HTTP and HTTPS endpoints are accepted, including private LAN and self-hosted servers.")
                   .font(.caption)
-                  .foregroundStyle(.secondary)
-                Spacer()
-                Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
-                  .disabled(isRevealing)
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
+            }
+
+            editorCard("Seed Models", systemImage: "cube") {
+              VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: $seedModelsText)
+                  .font(.body.monospaced())
+                  .frame(minHeight: 80)
+                Text("Optional model IDs, one per line. Discovery can also be refreshed after saving.")
+                  .font(.caption)
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
               }
             }
           } else {
-            Text("This connection does not require a credential.")
-              .foregroundStyle(.secondary)
+            DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
+              VStack(spacing: 12) {
+                editorCard("Endpoint Override", systemImage: "network") {
+                  VStack(alignment: .leading, spacing: 8) {
+                    TextField("Base URL Override", text: $baseURL)
+                    Text("Leave unchanged to use the provider default endpoint.")
+                      .font(.caption)
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  }
+                }
+
+                if isCreate {
+                  editorCard("Default Model", systemImage: "cube") {
+                    TextField("Default Model ID (optional)", text: $defaultModel)
+                  }
+                }
+              }
+              .padding(.top, 10)
+            }
+            .font(.headline)
+          }
+
+          editorCard("Custom Headers", systemImage: "list.bullet.rectangle") {
+            VStack(alignment: .leading, spacing: 8) {
+              TextEditor(text: $headersText)
+                .font(.body.monospaced())
+                .frame(minHeight: 80)
+              Text("One header per line: Name: Value")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+
+          if kind == .openRouter {
+            editorCard("OpenRouter", systemImage: "arrow.triangle.branch") {
+              VStack(alignment: .leading, spacing: 10) {
+                TextField("App Title", text: $appTitle)
+                TextField("HTTP Referer", text: $httpReferer)
+              }
+            }
           }
         }
-
-        Section("Endpoint") {
-          TextField(kind == .openAICompatible ? "Base URL (required)" : "Base URL Override", text: $baseURL)
-          if kind == .openAICompatible {
-            TextField("Chat Completions Path", text: $chatPath)
-            TextField("Models Path (blank disables discovery)", text: $modelsPath)
-            Text("HTTP and HTTPS endpoints are accepted, including private LAN/self-hosted servers.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          } else {
-            Text("Leave the endpoint unchanged to use the provider default.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-
-        Section("Models") {
-          TextField("Default Model ID (optional)", text: $defaultModel)
-          if kind == .openAICompatible {
-            TextEditor(text: $seedModelsText)
-              .font(.body.monospaced())
-              .frame(minHeight: 70)
-            Text("Optional seed model IDs, one per line. Discovery can also be refreshed after saving.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-
-        Section("Headers") {
-          TextEditor(text: $headersText)
-            .font(.body.monospaced())
-            .frame(minHeight: 80)
-          Text("One header per line: Name: Value")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-
-        if kind == .openRouter {
-          Section("OpenRouter") {
-            TextField("App Title", text: $appTitle)
-            TextField("HTTP Referer", text: $httpReferer)
-          }
-        }
+        .padding(16)
       }
-      .formStyle(.grouped)
     }
-    .frame(width: 620, height: 650)
+    .frame(width: 620, height: kind == .openAICompatible ? 720 : 620)
+    .background(MacDesignTokens.Colors.canvas)
   }
 
   private var canSave: Bool {
@@ -827,6 +595,25 @@ private struct MacConnectionEditorView: View {
       isRevealing = false
     }
   }
+
+  private func editorCard<Content: View>(
+    _ title: String,
+    systemImage: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 11) {
+      Label(title, systemImage: systemImage)
+        .font(.headline)
+      content()
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+    }
+  }
 }
 
 private enum MacProviderEditorError: LocalizedError {
@@ -872,7 +659,7 @@ private func parseSeedModels(_ text: String) -> [String] {
   return values
 }
 
-private func providerSymbol(_ kind: ProviderKind) -> String {
+func providerSymbol(_ kind: ProviderKind) -> String {
   switch kind {
   case .anthropic: "a.circle.fill"
   case .openai: "circle.hexagongrid.fill"
@@ -882,4 +669,8 @@ private func providerSymbol(_ kind: ProviderKind) -> String {
   case .nvidia: "memorychip.fill"
   case .openAICompatible: "server.rack"
   }
+}
+
+private func providerDisplayName(_ kind: ProviderKind) -> String {
+  kind == .openAICompatible ? "OpenAI-compatible" : kind.displayName
 }

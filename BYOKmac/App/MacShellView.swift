@@ -1,4 +1,5 @@
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
 
 struct MacShellView: View {
@@ -118,6 +119,15 @@ struct MacShellView: View {
     }
     .onChange(of: model.newChatRequestID) { _, _ in
       startNewChat(chats: chats)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
+      guard let rawValue = notification.object as? String else { return }
+      let conversationID = ConversationID(rawValue: rawValue)
+      guard chats.summary(conversationID) != nil else { return }
+      searchText = ""
+      chats.updateSearch("")
+      selectedConversationID = conversationID
+      columnVisibility = .all
     }
     .sheet(isPresented: $showingTargetPicker) {
       MacTargetPickerView(
@@ -275,6 +285,8 @@ private struct MacSidebarView: View {
   let rename: (ChatConversation) -> Void
   let delete: (ChatConversation) -> Void
 
+  @Environment(MacWorkspaceModel.self) private var workspace
+  @Environment(MacMCPModel.self) private var mcp
   @AppStorage("byokchat.sidebar.pinnedConversationIDs") private var pinnedConversationIDs = ""
   @FocusState private var searchFocused: Bool
 
@@ -402,11 +414,21 @@ private struct MacSidebarView: View {
 
   private func conversationRow(_ conversation: ChatConversation) -> some View {
     let pinned = pinnedIDSet.contains(conversation.id.rawValue)
+    let currentProject = workspace.project(for: conversation.id)
     return MacConversationRow(
       conversation: conversation,
       selected: selection == conversation.id,
       pinned: pinned,
+      currentProject: currentProject,
+      projects: workspace.projects,
       action: { selection = conversation.id },
+      assignProject: { projectID in
+        Task { @MainActor in
+          if await workspace.assignConversation(conversation.id, to: projectID) {
+            await mcp.reloadFromStorage()
+          }
+        }
+      },
       togglePinned: { togglePinned(conversation.id) },
       rename: { rename(conversation) },
       delete: {
@@ -531,10 +553,17 @@ private struct MacConversationRow: View {
   let conversation: ChatConversation
   let selected: Bool
   let pinned: Bool
+  let currentProject: ChatProject?
+  let projects: [ChatProject]
   let action: () -> Void
+  let assignProject: (ProjectID?) -> Void
   let togglePinned: () -> Void
   let rename: () -> Void
   let delete: () -> Void
+
+  private var otherProjects: [ChatProject] {
+    projects.filter { $0.id != currentProject?.id }
+  }
 
   var body: some View {
     Button(action: action) {
@@ -576,6 +605,10 @@ private struct MacConversationRow: View {
     }
     .buttonStyle(.plain)
     .contextMenu {
+      projectActions
+      if currentProject != nil || !projects.isEmpty {
+        Divider()
+      }
       Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin", action: togglePinned)
       Button("Rename", systemImage: "pencil", action: rename)
       Divider()
@@ -583,6 +616,28 @@ private struct MacConversationRow: View {
     }
     .accessibilityLabel(conversation.title.isEmpty ? "New Chat" : conversation.title)
     .accessibilityValue(pinned ? "Pinned" : "")
+  }
+
+  @ViewBuilder
+  private var projectActions: some View {
+    if let currentProject {
+      Button("Remove from \(currentProject.name)", systemImage: "folder.badge.minus") {
+        assignProject(nil)
+      }
+      if !otherProjects.isEmpty {
+        Menu("Move to Project…", systemImage: "folder.badge.plus") {
+          ForEach(otherProjects) { project in
+            Button(project.name) { assignProject(project.id) }
+          }
+        }
+      }
+    } else if !projects.isEmpty {
+      Menu("Add to Project…", systemImage: "folder.badge.plus") {
+        ForEach(projects) { project in
+          Button(project.name) { assignProject(project.id) }
+        }
+      }
+    }
   }
 }
 

@@ -1,4 +1,60 @@
+import BYOKchatProviderCore
+import Foundation
 import SwiftUI
+
+extension Notification.Name {
+  static let macOpenConversationFromLibrary = Notification.Name(
+    "com.hoangbkit.byokchat.mac.openConversationFromLibrary"
+  )
+}
+
+enum MacLibraryNavigation {
+  static func openConversation(_ conversationID: ConversationID) {
+    NotificationCenter.default.post(
+      name: .macOpenConversationFromLibrary,
+      object: conversationID.rawValue
+    )
+  }
+}
+
+/// Compatibility entry point used by Settings. Server management itself lives in
+/// `MacMCPServerManagementView` so every route presents the same hierarchy.
+struct MacMCPServerListView: View {
+  @Bindable var mcp: MacMCPModel
+
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        Image(systemName: "shippingbox")
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+        Text("MCP Servers")
+          .font(.headline)
+        Spacer()
+        Button {
+          dismiss()
+        } label: {
+          Image(systemName: "xmark")
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .help("Close")
+        .accessibilityLabel("Close MCP Servers")
+      }
+      .padding(.horizontal, 16)
+      .frame(height: 52)
+      .background(MacDesignTokens.Colors.surface)
+
+      Divider()
+
+      MacMCPServerManagementView(mcp: mcp)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .frame(minWidth: 920, idealWidth: 980, minHeight: 620, idealHeight: 680)
+    .background(MacDesignTokens.Colors.canvas)
+  }
+}
 
 struct MacSecondarySurfacesView: View {
   let model: MacAppModel
@@ -6,10 +62,11 @@ struct MacSecondarySurfacesView: View {
   @State private var utilitySheets = MacUtilitySheetCoordinator()
 
   var body: some View {
-    if let workspace = model.workspace, let mcp = model.mcp {
-      content(workspace: workspace, mcp: mcp)
+    if let workspace = model.workspace, let mcp = model.mcp, let chats = model.chats {
+      content(workspace: workspace, mcp: mcp, chats: chats)
         .environment(workspace)
         .environment(mcp)
+        .environment(chats)
         .environment(utilitySheets)
     } else {
       ContentUnavailableView(
@@ -20,7 +77,11 @@ struct MacSecondarySurfacesView: View {
     }
   }
 
-  private func content(workspace: MacWorkspaceModel, mcp: MacMCPModel) -> some View {
+  private func content(
+    workspace: MacWorkspaceModel,
+    mcp: MacMCPModel,
+    chats: MacChatSessionModel
+  ) -> some View {
     MacShellView(model: model)
       .preferredColorScheme(model.theme.preferredColorScheme)
       .tint(MacDesignTokens.Colors.accent)
@@ -35,13 +96,14 @@ struct MacSecondarySurfacesView: View {
         }
       ) { destination in
         MacUtilitySheetContainer(destination: destination) {
-          utilityContent(destination, workspace: workspace, mcp: mcp)
+          utilityContent(destination, workspace: workspace, mcp: mcp, chats: chats)
         }
         .preferredColorScheme(model.theme.preferredColorScheme)
         .tint(MacDesignTokens.Colors.accent)
         .environment(\.macThemeRevision, model.theme.revision)
         .environment(workspace)
         .environment(mcp)
+        .environment(chats)
         .environment(utilitySheets)
       }
   }
@@ -50,36 +112,49 @@ struct MacSecondarySurfacesView: View {
   private func utilityContent(
     _ destination: MacUtilitySheetDestination,
     workspace: MacWorkspaceModel,
-    mcp: MacMCPModel
+    mcp: MacMCPModel,
+    chats: MacChatSessionModel
   ) -> some View {
     switch destination {
     case .providers:
       if let providers = model.providers {
-        MacProviderManagementView(model: providers)
+        MacProviderManagementView(model: providers, showsCloseButton: false)
       } else {
         unavailable("AI Providers", systemImage: "sparkles")
       }
 
     case .library:
-      MacLibraryView(workspace: workspace)
+      MacLibraryView(
+        workspace: workspace,
+        chats: chats,
+        openSourceChat: { conversationID in
+          MacLibraryNavigation.openConversation(conversationID)
+          utilitySheets.dismiss()
+        }
+      )
 
     case .projects:
-      if let providers = model.providers, let chats = model.chats {
-        MacProjectsView(
+      if let providers = model.providers {
+        MacProjectsWorkspaceView(
           workspace: workspace,
           providers: providers,
           chats: chats,
-          mcp: mcp
-        ) { projectID, prompt in
-          model.requestNewChat(projectID: projectID, initialDraft: prompt)
-          utilitySheets.dismiss()
-        }
+          mcp: mcp,
+          openChat: { conversationID in
+            MacLibraryNavigation.openConversation(conversationID)
+            utilitySheets.dismiss()
+          },
+          startNewChat: { projectID, prompt in
+            model.requestNewChat(projectID: projectID, initialDraft: prompt)
+            utilitySheets.dismiss()
+          }
+        )
       } else {
         unavailable("Projects", systemImage: "folder")
       }
 
     case .mcpServers:
-      MacMCPServerListView(mcp: mcp)
+      MacMCPServerManagementView(mcp: mcp)
 
     case .analytics:
       if let services = model.coreServices {

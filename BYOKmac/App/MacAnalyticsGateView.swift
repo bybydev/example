@@ -26,123 +26,119 @@ private struct MacBasicAnalyticsView: View {
   @State private var errorMessage: String?
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Basic Usage · This Month")
-            .font(.title2.weight(.semibold))
-          Text("Free analytics includes monthly spend, requests, input tokens, and output tokens.")
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        }
-
-        if isLoading, snapshot == nil {
-          HStack(spacing: 10) {
-            ProgressView()
-            Text("Loading local usage…")
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    VStack(spacing: 0) {
+      HStack(spacing: 12) {
+        Text("Overview")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .padding(.horizontal, 12)
+          .frame(height: 30)
+          .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 7))
+          .overlay {
+            RoundedRectangle(cornerRadius: 7)
+              .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
           }
-          .frame(maxWidth: .infinity, minHeight: 160)
-        } else if let snapshot {
-          metricGrid(snapshot.aggregate)
 
-          if snapshot.aggregate.hasPartialCost {
-            Label(
-              "Spend is partial because some models did not expose known pricing.",
-              systemImage: "info.circle"
-            )
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-        } else if let errorMessage {
-          ContentUnavailableView(
-            "Analytics Unavailable",
-            systemImage: "chart.bar.xaxis",
-            description: Text(errorMessage)
-          )
-        }
+        Spacer()
 
-        VStack(alignment: .leading, spacing: 12) {
-          Label("Advanced Analytics", systemImage: "crown.fill")
-            .font(.headline)
-
-          Text("BYOK Pro adds selectable time ranges, cached and reasoning tokens, tool usage, performance, reliability, errors, provider/model breakdowns, per-conversation analytics, and monthly budgets.")
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            .fixedSize(horizontal: false, vertical: true)
-
-          Button("Unlock BYOK Pro") {
-            openWindow(id: MacWindowID.proPaywall)
-          }
-          .buttonStyle(.borderedProminent)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-          MacDesignTokens.Colors.surface,
-          in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-        )
-        .overlay {
-          RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-            .stroke(MacDesignTokens.Colors.separator, lineWidth: 1)
-        }
-
-        HStack {
-          Text("Usage and spend are reconstructed from chat history stored on this Mac.")
-            .font(.caption)
-            .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          Spacer()
-          Button("Refresh", systemImage: "arrow.clockwise") {
-            Task { await load() }
-          }
-          .disabled(isLoading)
-        }
-      }
-      .frame(maxWidth: 760, alignment: .leading)
-      .padding(24)
-      .frame(maxWidth: .infinity, alignment: .top)
-    }
-    .background(MacDesignTokens.Colors.canvas)
-    .task { await load() }
-  }
-
-  private func metricGrid(_ aggregate: ChatUsageAggregate) -> some View {
-    let metrics = [
-      BasicMetric(title: "Spend", value: basicUsageCost(aggregate), symbol: "dollarsign.circle"),
-      BasicMetric(title: "Model Requests", value: aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
-      BasicMetric(title: "Input", value: basicCompactTokens(aggregate.inputTokens), symbol: "arrow.down.left"),
-      BasicMetric(title: "Output", value: basicCompactTokens(aggregate.outputTokens), symbol: "arrow.up.right"),
-    ]
-
-    return LazyVGrid(
-      columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12, alignment: .top)],
-      alignment: .leading,
-      spacing: 12
-    ) {
-      ForEach(metrics) { metric in
-        VStack(alignment: .leading, spacing: 10) {
-          HStack(spacing: 6) {
-            Image(systemName: metric.symbol)
-            Text(metric.title)
-          }
+        Text("This Month")
           .font(.caption.weight(.medium))
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
-          Text(metric.value)
-            .font(.system(size: 20, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .textSelection(.enabled)
+        Button {
+          Task { await load() }
+        } label: {
+          Label(isLoading ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-          MacDesignTokens.Colors.surface,
-          in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-        )
-        .overlay {
-          RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
-            .stroke(MacDesignTokens.Colors.separator, lineWidth: 1)
+        .disabled(isLoading)
+      }
+      .padding(.horizontal, 16)
+      .frame(height: 54)
+      .background(MacDesignTokens.Colors.surface.opacity(0.45))
+
+      Divider()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Usage")
+              .font(.title3.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            Text("Monthly usage reconstructed from conversations stored on this Mac.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+
+          if isLoading, snapshot == nil {
+            HStack(spacing: 10) {
+              ProgressView()
+              Text("Loading local usage…")
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+            .frame(maxWidth: .infinity, minHeight: 160)
+          } else if let snapshot {
+            MacAnalyticsMetricGrid(
+              metrics: [
+                .init(title: "Spend", value: macUsageAggregateCost(snapshot.aggregate), symbol: "dollarsign.circle"),
+                .init(title: "Model Requests", value: snapshot.aggregate.modelRequestCount.formatted(), symbol: "arrow.up.arrow.down"),
+                .init(title: "Input", value: macUsageCompactTokens(snapshot.aggregate.inputTokens), symbol: "arrow.down.left"),
+                .init(title: "Output", value: macUsageCompactTokens(snapshot.aggregate.outputTokens), symbol: "arrow.up.right")
+              ]
+            )
+
+            if snapshot.aggregate.hasPartialCost {
+              Label(
+                "Spend is partial because some models did not expose known pricing.",
+                systemImage: "info.circle"
+              )
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          } else if let errorMessage {
+            ContentUnavailableView(
+              "Analytics Unavailable",
+              systemImage: "chart.bar.xaxis",
+              description: Text(errorMessage)
+            )
+          }
+
+          MacAnalyticsSection(title: "Advanced Analytics", symbol: "crown.fill") {
+            VStack(alignment: .leading, spacing: 12) {
+              HStack {
+                Text("BYOK Pro")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(MacDesignTokens.Colors.accent)
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 3)
+                  .background(MacDesignTokens.Colors.accent.opacity(0.10), in: Capsule())
+                Spacer()
+              }
+
+              Text("Unlock selectable time ranges, cached and reasoning tokens, tool usage, performance, reliability, errors, provider/model breakdowns, per-conversation analytics, and monthly budgets.")
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+              HStack {
+                Spacer()
+                Button("Unlock BYOK Pro") {
+                  openWindow(id: MacWindowID.proPaywall)
+                }
+                .buttonStyle(.borderedProminent)
+              }
+            }
+          }
+
+          Text("Usage and spend are reconstructed from chat history stored on this Mac.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
+        .frame(maxWidth: 860, alignment: .leading)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .top)
       }
     }
+    .background(MacDesignTokens.Colors.canvas)
+    .task { await load() }
   }
 
   @MainActor
@@ -160,31 +156,4 @@ private struct MacBasicAnalyticsView: View {
       reference: .now
     )
   }
-}
-
-private struct BasicMetric: Identifiable {
-  let title: String
-  let value: String
-  let symbol: String
-
-  var id: String { title }
-}
-
-private func basicCompactTokens(_ value: Int) -> String {
-  let number = Double(value)
-  if value >= 1_000_000 { return String(format: "%.2fM", number / 1_000_000) }
-  if value >= 1_000 { return String(format: "%.1fK", number / 1_000) }
-  return value.formatted()
-}
-
-private func basicUsageCost(_ aggregate: ChatUsageAggregate) -> String {
-  guard aggregate.hasKnownCost else { return "Unavailable" }
-  return (aggregate.hasPartialCost ? "≥" : "~") + basicUSD(aggregate.costUSD)
-}
-
-private func basicUSD(_ cost: Decimal) -> String {
-  let value = NSDecimalNumber(decimal: cost).doubleValue
-  if abs(value) < 0.001 { return String(format: "$%.6f", value) }
-  if abs(value) < 1 { return String(format: "$%.4f", value) }
-  return String(format: "$%.2f", value)
 }
