@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MacCommands: Commands {
@@ -10,6 +11,19 @@ struct MacCommands: Commands {
       }
       .keyboardShortcut("n", modifiers: .command)
       .disabled(!model.isReady)
+    }
+
+    CommandGroup(replacing: .sidebar) {
+      Button("Toggle Sidebar") {
+        model.requestSidebarToggle()
+      }
+      .keyboardShortcut("s", modifiers: [.command, .control])
+      .disabled(!model.isReady)
+
+      Button("Toggle Full Screen") {
+        NSApp.keyWindow?.toggleFullScreen(nil)
+      }
+      .keyboardShortcut("f", modifiers: [.command, .control])
     }
 
     CommandMenu("Conversation") {

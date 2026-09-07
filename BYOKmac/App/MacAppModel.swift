@@ -81,6 +81,7 @@ final class MacAppModel {
 
   private(set) var newChatRequestID = 0
   private(set) var conversationSearchRequestID = 0
+  private(set) var sidebarToggleRequestID = 0
 
   init(storageEnvironment: BYOKStorageEnvironment = MacStorageEnvironment.current) {
     self.storageEnvironment = storageEnvironment
@@ -224,6 +225,11 @@ final class MacAppModel {
   func requestConversationSearch() {
     guard isReady else { return }
     conversationSearchRequestID &+= 1
+  }
+
+  func requestSidebarToggle() {
+    guard isReady else { return }
+    sidebarToggleRequestID &+= 1
   }
 
   private func projectTarget(_ projectID: ProjectID?) -> MacChatTarget? {

@@ -6,7 +6,7 @@ struct MacShellView: View {
   let model: MacAppModel
 
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
-  @State private var columnVisibility: NavigationSplitViewVisibility = .all
+  @State private var sidebarVisible = true
   @State private var selectedConversationID: ConversationID?
   @State private var searchText = ""
   @State private var composerFocusRequestID = 0
@@ -37,7 +37,10 @@ struct MacShellView: View {
     chats: MacChatSessionModel,
     mcp: MacMCPModel
   ) -> some View {
-    NavigationSplitView(columnVisibility: $columnVisibility) {
+    MacAppShell(
+      sidebarVisible: $sidebarVisible,
+      sidebarWidth: MacDesignTokens.Layout.sidebarIdeal
+    ) {
       MacSidebarView(
         chats: chats,
         selection: $selectedConversationID,
@@ -47,12 +50,7 @@ struct MacShellView: View {
         rename: { renameTarget = $0 },
         delete: { deleteTarget = $0 }
       )
-      .navigationSplitViewColumnWidth(
-        min: MacDesignTokens.Layout.sidebarMinimum,
-        ideal: MacDesignTokens.Layout.sidebarIdeal,
-        max: MacDesignTokens.Layout.sidebarMaximum
-      )
-    } detail: {
+    } content: {
       MacChatPane(
         providers: providers,
         chats: chats,
@@ -61,6 +59,8 @@ struct MacShellView: View {
         summary: chats.summary(selectedConversationID),
         composerFocusRequestID: composerFocusRequestID,
         attachments: pendingAttachments(for: selectedConversationID),
+        sidebarVisible: sidebarVisible,
+        toggleSidebar: { sidebarVisible.toggle() },
         chooseTarget: { showingTargetPicker = true },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
@@ -120,6 +120,9 @@ struct MacShellView: View {
     .onChange(of: model.newChatRequestID) { _, _ in
       startNewChat(chats: chats)
     }
+    .onChange(of: model.sidebarToggleRequestID) { _, _ in
+      sidebarVisible.toggle()
+    }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
       let conversationID = ConversationID(rawValue: rawValue)
@@ -127,7 +130,7 @@ struct MacShellView: View {
       searchText = ""
       chats.updateSearch("")
       selectedConversationID = conversationID
-      columnVisibility = .all
+      sidebarVisible = true
     }
     .sheet(isPresented: $showingTargetPicker) {
       MacTargetPickerView(
@@ -276,6 +279,39 @@ struct MacShellView: View {
   }
 }
 
+private struct MacAppShell<Sidebar: View, Content: View>: View {
+  @Binding var sidebarVisible: Bool
+  let sidebarWidth: CGFloat
+  private let sidebar: Sidebar
+  private let content: Content
+
+  init(
+    sidebarVisible: Binding<Bool>,
+    sidebarWidth: CGFloat,
+    @ViewBuilder sidebar: () -> Sidebar,
+    @ViewBuilder content: () -> Content
+  ) {
+    _sidebarVisible = sidebarVisible
+    self.sidebarWidth = sidebarWidth
+    self.sidebar = sidebar()
+    self.content = content()
+  }
+
+  var body: some View {
+    HStack(spacing: 0) {
+      if sidebarVisible {
+        sidebar
+          .frame(width: sidebarWidth)
+          .transition(.move(edge: .leading).combined(with: .opacity))
+      }
+
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .animation(.easeInOut(duration: 0.18), value: sidebarVisible)
+  }
+}
+
 private struct MacSidebarView: View {
   @Bindable var chats: MacChatSessionModel
   @Binding var selection: ConversationID?
@@ -316,6 +352,18 @@ private struct MacSidebarView: View {
 
   var body: some View {
     VStack(spacing: 0) {
+      HStack(spacing: 0) {
+        Color.clear
+          .frame(width: MacDesignTokens.Layout.titlebarTrafficLightReserve)
+          .allowsHitTesting(false)
+
+        Color.clear
+          .contentShape(Rectangle())
+          .gesture(WindowDragGesture())
+          .allowsWindowActivationEvents(true)
+      }
+      .frame(height: MacDesignTokens.Layout.titlebarHeight)
+
       VStack(alignment: .leading, spacing: MacDesignTokens.Spacing.compact) {
         HStack(spacing: MacDesignTokens.Spacing.small) {
           Image(systemName: "bubble.left.and.bubble.right.fill")
@@ -354,7 +402,6 @@ private struct MacSidebarView: View {
       }
       .frame(maxHeight: .infinity)
 
-      Divider()
       MacSidebarUtilityGrid()
     }
     .background(MacDesignTokens.Colors.surface.opacity(0.52))

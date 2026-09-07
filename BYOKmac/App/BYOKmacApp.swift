@@ -1,3 +1,4 @@
+import AppKit
 import MacAppFoundation
 import SwiftUI
 
@@ -24,6 +25,8 @@ struct BYOKmacApp: App {
     WindowGroup("BYOKchat", id: BYOKmacWindowID.main) {
       MacStartupView(model: model)
         .frame(minWidth: 760, minHeight: 520)
+        .ignoresSafeArea(edges: .top)
+        .background(MacMainWindowConfigurator())
         .preferredColorScheme(model.theme.preferredColorScheme)
         .tint(MacDesignTokens.Colors.accent)
         .environment(\.macThemeRevision, model.theme.revision)
@@ -38,11 +41,11 @@ struct BYOKmacApp: App {
           await model.start()
         }
     }
+    .windowStyle(.hiddenTitleBar)
     .defaultSize(width: 1_180, height: 760)
     .windowResizability(.contentMinSize)
     .defaultLaunchBehavior(onboarding.mainWindowLaunchBehavior)
     .commands {
-      SidebarCommands()
       MacCommands(model: model)
 
       #if DEBUG
@@ -94,6 +97,7 @@ struct BYOKmacApp: App {
         .tint(MacDesignTokens.Colors.accent)
         .environment(\.macThemeRevision, model.theme.revision)
     }
+    .windowStyle(.hiddenTitleBar)
 
     Window("BYOK Pro", id: MacWindowID.proPaywall) {
       MacProPaywallWindow(purchaseManager: purchases)
@@ -102,6 +106,7 @@ struct BYOKmacApp: App {
         .environment(\.macThemeRevision, model.theme.revision)
         .environment(purchases)
     }
+    .windowStyle(.hiddenTitleBar)
     .defaultSize(width: 860, height: 600)
     .windowResizability(.contentSize)
 
@@ -127,6 +132,29 @@ struct BYOKmacApp: App {
         .environment(purchases)
         .environment(settingsRouter)
     }
+    .windowStyle(.hiddenTitleBar)
+  }
+}
+
+@MainActor
+private struct MacMainWindowConfigurator: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSView {
+    MacMainWindowConfigurationView()
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+@MainActor
+private final class MacMainWindowConfigurationView: NSView {
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    guard let window else { return }
+
+    window.styleMask.insert(.fullSizeContentView)
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    window.titlebarSeparatorStyle = .none
   }
 }
 

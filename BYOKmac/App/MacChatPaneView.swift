@@ -12,6 +12,8 @@ struct MacChatPane: View {
   let summary: ChatConversation?
   let composerFocusRequestID: Int
   let attachments: [ChatAttachment]
+  let sidebarVisible: Bool
+  let toggleSidebar: () -> Void
   let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let configureTools: () -> Void
@@ -28,53 +30,105 @@ struct MacChatPane: View {
     chats.conversation(conversationID)?.messages.count ?? summary?.messageCount
   }
 
-  private var subtitle: Text? {
-    guard let messageCount, messageCount > 0 else { return nil }
-    return Text("\(messageCount) messages")
-  }
-
   var body: some View {
-    ZStack(alignment: .bottom) {
-      MacTranscriptView(
-        chats: chats,
-        mcp: mcp,
-        conversationID: conversationID,
-        summary: summary
+    VStack(spacing: 0) {
+      MacChatHeader(
+        title: title,
+        messageCount: messageCount,
+        sidebarVisible: sidebarVisible,
+        toggleSidebar: toggleSidebar
       )
 
-      MacComposerView(
-        providers: providers,
-        chats: chats,
-        mcp: mcp,
-        conversationID: conversationID,
-        focusRequestID: composerFocusRequestID,
-        attachments: attachments,
-        chooseTarget: chooseTarget,
-        manageProviders: manageProviders,
-        configureTools: configureTools,
-        appendAttachments: appendAttachments,
-        removeAttachment: removeAttachment,
-        send: send
-      )
-      .id(conversationID?.rawValue ?? "new-chat")
-      .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
-      .padding(.horizontal, MacDesignTokens.Spacing.large)
-      .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
-    }
-    .navigationTitle(title)
-    .navigationSubtitle(subtitle ?? Text(""))
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        MacProNavButton()
+      ZStack(alignment: .bottom) {
+        MacTranscriptView(
+          chats: chats,
+          mcp: mcp,
+          conversationID: conversationID,
+          summary: summary
+        )
+
+        MacComposerView(
+          providers: providers,
+          chats: chats,
+          mcp: mcp,
+          conversationID: conversationID,
+          focusRequestID: composerFocusRequestID,
+          attachments: attachments,
+          chooseTarget: chooseTarget,
+          manageProviders: manageProviders,
+          configureTools: configureTools,
+          appendAttachments: appendAttachments,
+          removeAttachment: removeAttachment,
+          send: send
+        )
+        .id(conversationID?.rawValue ?? "new-chat")
+        .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
+        .padding(.horizontal, MacDesignTokens.Spacing.large)
+        .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(MacDesignTokens.Colors.canvas)
   }
 }
 
-/// Navbar trailing action: opens the paywall for free users, or the Settings
+private struct MacChatHeader: View {
+  let title: String
+  let messageCount: Int?
+  let sidebarVisible: Bool
+  let toggleSidebar: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      if !sidebarVisible {
+        Color.clear
+          .frame(width: MacDesignTokens.Layout.titlebarTrafficLightReserve)
+          .allowsHitTesting(false)
+      }
+
+      Button(action: toggleSidebar) {
+        Image(systemName: "sidebar.left")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(MacIconButtonStyle())
+      .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+      .accessibilityLabel(sidebarVisible ? "Hide sidebar" : "Show sidebar")
+
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+
+        if let messageCount, messageCount > 0 {
+          Text("\(messageCount) messages")
+            .font(.system(size: 10.5, weight: .regular))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
+        }
+      }
+      .frame(maxWidth: 360, alignment: .leading)
+
+      Color.clear
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
+        .allowsWindowActivationEvents(true)
+
+      MacProHeaderButton()
+        .fixedSize()
+    }
+    .padding(.horizontal, MacDesignTokens.Spacing.compact)
+    .frame(height: MacDesignTokens.Layout.titlebarHeight)
+    .background(MacDesignTokens.Colors.canvas)
+  }
+}
+
+/// Header trailing action: opens the paywall for free users, or the Settings
 /// Plan tab for Pro users, labeled with their active plan duration.
-private struct MacProNavButton: View {
+private struct MacProHeaderButton: View {
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.openWindow) private var openWindow
   @Environment(\.openSettings) private var openSettings
@@ -92,7 +146,18 @@ private struct MacProNavButton: View {
     }
   }
 
+  @ViewBuilder
   var body: some View {
+    if hasPro {
+      planButton
+        .buttonStyle(MacSecondaryButtonStyle())
+    } else {
+      planButton
+        .buttonStyle(MacPrimaryButtonStyle())
+    }
+  }
+
+  private var planButton: some View {
     Button {
       if hasPro {
         settingsRouter.request(.plan)
@@ -108,22 +173,7 @@ private struct MacProNavButton: View {
           .font(.system(size: 12, weight: .semibold))
       }
       .lineLimit(1)
-      .padding(.horizontal, 10)
-      .frame(height: 24)
-      .background(
-        hasPro ? Color.primary.opacity(0.05) : MacDesignTokens.Colors.accent.opacity(0.16),
-        in: Capsule()
-      )
-      .overlay {
-        Capsule().stroke(
-          hasPro ? Color.primary.opacity(0.12) : MacDesignTokens.Colors.accent.opacity(0.45),
-          lineWidth: 0.75
-        )
-      }
-      .foregroundStyle(hasPro ? Color.secondary : MacDesignTokens.Colors.accent)
-      .contentShape(Capsule())
     }
-    .buttonStyle(.plain)
     .help(hasPro ? "Manage your plan in Settings" : "Unlock BYOK Pro")
     .accessibilityLabel(hasPro ? "Manage plan" : "Unlock BYOK Pro")
     .accessibilityValue(hasPro ? (planLabel ?? "Pro") : "")

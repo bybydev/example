@@ -121,6 +121,7 @@ struct MacUtilitySheetContainer<Content: View>: View {
 
 struct MacSidebarUtilityGrid: View {
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
+  @Environment(\.openSettings) private var openSettings
 
   var body: some View {
     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
@@ -129,6 +130,7 @@ struct MacSidebarUtilityGrid: View {
       utilityTile(.projects)
       utilityTile(.mcpServers)
       utilityTile(.analytics)
+      settingsTile
     }
   }
 
@@ -136,22 +138,35 @@ struct MacSidebarUtilityGrid: View {
     Button {
       utilitySheets.present(destination)
     } label: {
-      VStack(alignment: .leading, spacing: 6) {
-        Image(systemName: destination.systemImage)
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-        Text(destination.title)
-          .font(.caption.weight(.medium))
-          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-      }
-      .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-      .padding(.horizontal, 10)
-      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
-      .overlay {
-        RoundedRectangle(cornerRadius: 8)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
-      }
+      tileLabel(title: destination.title, systemImage: destination.systemImage)
     }
     .buttonStyle(.plain)
+  }
+
+  private var settingsTile: some View {
+    Button {
+      openSettings()
+    } label: {
+      tileLabel(title: "Settings", systemImage: "gearshape")
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func tileLabel(title: String, systemImage: String) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Image(systemName: systemImage)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+      Text(title)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+    }
+    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+    .padding(.horizontal, 10)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 0.5)
+    }
   }
 }
