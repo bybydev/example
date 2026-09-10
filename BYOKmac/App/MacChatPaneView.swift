@@ -3,6 +3,7 @@ import BYOKchatProviderCore
 import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
+import os
 
 struct MacChatPane: View {
   @Bindable var providers: MacProviderModel
@@ -10,6 +11,9 @@ struct MacChatPane: View {
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
   let summary: ChatConversation?
+  let retainedConversations: [MacPreparedConversation]
+  let navigationTarget: MacTranscriptNavigationTarget?
+  let isPreparingConversation: Bool
   let composerFocusRequestID: Int
   let attachments: [ChatAttachment]
   let sidebarVisible: Bool
@@ -20,6 +24,15 @@ struct MacChatPane: View {
   let appendAttachments: ([ChatAttachment]) -> Void
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
+
+  @State private var composerHeight: CGFloat = 0
+
+  private var transcriptBottomSpace: CGFloat {
+    max(
+      MacDesignTokens.Layout.composerReservedScrollSpace,
+      composerHeight + MacDesignTokens.Layout.composerBottomMargin + 12
+    )
+  }
 
   private var title: String {
     let value = chats.conversation(conversationID)?.title ?? summary?.title ?? ""
@@ -40,12 +53,35 @@ struct MacChatPane: View {
       )
 
       ZStack(alignment: .bottom) {
-        MacTranscriptView(
-          chats: chats,
-          mcp: mcp,
-          conversationID: conversationID,
-          summary: summary
-        )
+        ZStack {
+          ForEach(retainedConversations) { retained in
+            MacTranscriptView(
+              chats: chats,
+              mcp: mcp,
+              conversationID: retained.id,
+              initialConversation: retained.conversation,
+              bottomSpace: transcriptBottomSpace,
+              isActive: retained.id == conversationID,
+              navigationTarget: navigationTarget
+            )
+            .environment(\.macPreparedAnswers, retained.answers)
+            .environment(\.macTranscriptIsActive, retained.id == conversationID)
+            .opacity(retained.id == conversationID ? 1 : 0)
+            .allowsHitTesting(retained.id == conversationID)
+            .accessibilityHidden(retained.id != conversationID)
+            .disabled(retained.id != conversationID)
+          }
+        }
+        .overlay(alignment: .topTrailing) {
+          if isPreparingConversation {
+            ProgressView("Opening chat…")
+              .controlSize(.small)
+              .padding(10)
+              .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+              .padding(12)
+              .allowsHitTesting(false)
+          }
+        }
 
         MacComposerView(
           providers: providers,
@@ -63,6 +99,11 @@ struct MacChatPane: View {
         )
         .id(conversationID?.rawValue ?? "new-chat")
         .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
+        .onGeometryChange(for: CGFloat.self) { geometry in
+          geometry.size.height
+        } action: { height in
+          composerHeight = height
+        }
         .padding(.horizontal, MacDesignTokens.Spacing.large)
         .padding(.bottom, MacDesignTokens.Layout.composerBottomMargin)
       }
@@ -184,7 +225,13 @@ private struct MacTranscriptView: View {
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
-  let summary: ChatConversation?
+  let bottomSpace: CGFloat
+  let isActive: Bool
+  let navigationTarget: MacTranscriptNavigationTarget?
+  @State private var retainedConversation: ChatConversation?
+  @State private var retainedBottomSpace: CGFloat
+  @State private var lastNavigationToken: UUID?
+  @State private var scrollConnection = MacTranscriptScrollConnection()
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isNearBottom = true
@@ -192,193 +239,265 @@ private struct MacTranscriptView: View {
   @State private var isUserDraggingTimeline = false
   @State private var showJumpToLatest = false
   @State private var hasCompletedInitialScroll = false
-  @State private var transcriptScrollPosition = ScrollPosition(idType: String.self)
+  @State private var pendingSourceMessageID: ChatMessageID?
+
+  private struct GenerationState: Equatable {
+    let isActive: Bool
+    let isGenerating: Bool
+  }
 
   private enum ScrollTarget {
     static let bottom = "mac-transcript-bottom"
   }
 
+  init(
+    chats: MacChatSessionModel,
+    mcp: MacMCPModel,
+    conversationID: ConversationID?,
+    initialConversation: ChatConversation?,
+    bottomSpace: CGFloat,
+    isActive: Bool,
+    navigationTarget: MacTranscriptNavigationTarget?
+  ) {
+    _chats = Bindable(wrappedValue: chats)
+    _mcp = Bindable(wrappedValue: mcp)
+    self.conversationID = conversationID
+    self.bottomSpace = bottomSpace
+    self.isActive = isActive
+    self.navigationTarget = navigationTarget
+    _retainedConversation = State(initialValue: initialConversation)
+    _retainedBottomSpace = State(initialValue: bottomSpace)
+  }
+
+  private var effectiveBottomSpace: CGFloat {
+    isActive ? bottomSpace : retainedBottomSpace
+  }
+
   private var conversation: ChatConversation? {
-    chats.conversation(conversationID)
+    isActive ? chats.conversation(conversationID) : retainedConversation
   }
 
   private var messages: [ChatMessage] {
-    chats.messages(for: conversationID)
+    conversation?.messages ?? []
   }
 
   var body: some View {
-    ZStack(alignment: .bottom) {
-      ScrollView {
-        // Eager stack on purpose: a LazyVStack here goes blank when the
-        // viewport resizes or the content height collapses at stream end —
-        // the scroll position restore lands in an unmaterialized region.
-        VStack(alignment: .leading, spacing: 48) {
+    ScrollViewReader { proxy in
+      ZStack(alignment: .bottom) {
+        List {
           if conversationID == nil {
-            newConversationEmptyState
+            transcriptRow {
+              newConversationEmptyState
+            }
           } else if conversation != nil {
             if messages.isEmpty {
-              Text("This conversation has no messages yet.")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
+              transcriptRow {
+                Text("This conversation has no messages yet.")
+                  .font(.system(size: 15))
+                  .foregroundStyle(.secondary)
+              }
             } else {
               ForEach(messages) { message in
-                VStack(alignment: .leading, spacing: 8) {
-                  MacRichMessageView(
-                    chats: chats,
-                    mcp: mcp,
-                    conversationID: conversationID,
-                    message: message
-                  )
-
-                  if message.role == .assistant, message.status == .complete {
-                    MacAssistantMessageActions(
+                transcriptRow(bottomSpacing: 48) {
+                  VStack(alignment: .leading, spacing: 8) {
+                    MacRichMessageView(
                       chats: chats,
+                      mcp: mcp,
                       conversationID: conversationID,
                       message: message
                     )
+
+                    if message.role == .assistant, message.status == .complete {
+                      MacAssistantMessageActions(
+                        chats: chats,
+                        conversationID: conversationID,
+                        message: message
+                      )
+                    }
                   }
                 }
-                .id(message.id)
+                .id(message.id.rawValue)
               }
             }
 
             if let conversationID {
-              MacMCPInteractionStack(
-                mcp: mcp,
-                chats: chats,
-                conversationID: conversationID
-              )
-            }
-          } else {
-            loadingState
-          }
-
-          Color.clear
-            .frame(height: 1)
-            .id(ScrollTarget.bottom)
-            .onScrollVisibilityChange(threshold: 0.01) { isVisible in
-              isNearBottom = isVisible
-              if isVisible {
-                followsLatest = true
-                showJumpToLatest = false
-              } else if hasCompletedInitialScroll && isUserDraggingTimeline {
-                followsLatest = false
-                showJumpToLatest = true
+              transcriptRow(bottomSpacing: 48) {
+                MacMCPInteractionStack(
+                  mcp: mcp,
+                  chats: chats,
+                  conversationID: conversationID
+                )
               }
             }
-        }
-        .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth)
-        .frame(maxWidth: .infinity, alignment: .top)
-        .padding(.horizontal, MacDesignTokens.Spacing.large)
-        .padding(.top, MacDesignTokens.Spacing.transcriptTop)
-        .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace)
-      }
-      .scrollIndicators(.automatic)
-      .defaultScrollAnchor(.bottom)
-      .scrollPosition($transcriptScrollPosition)
-      .onScrollPhaseChange { _, newPhase in
-        switch newPhase {
-        case .tracking, .interacting, .decelerating:
-          isUserDraggingTimeline = true
-          if !isNearBottom {
-            followsLatest = false
-            showJumpToLatest = true
+          } else {
+            transcriptRow {
+              loadingState
+            }
           }
-        case .idle:
-          let wasUserDriven = isUserDraggingTimeline
-          isUserDraggingTimeline = false
-          if isNearBottom {
+
+          transcriptRow {
+            Color.clear
+              .frame(height: 1)
+          }
+          .id(ScrollTarget.bottom)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.horizontal, MacDesignTokens.Spacing.large, for: .scrollContent)
+        .contentMargins(.top, MacDesignTokens.Spacing.transcriptTop, for: .scrollContent)
+        .contentMargins(.bottom, effectiveBottomSpace, for: .scrollContent)
+        .scrollIndicators(.automatic)
+        .defaultScrollAnchor(.bottom)
+        .background {
+          MacTranscriptScrollObserver(isEnabled: isActive, connection: scrollConnection) { previous, current in
+            guard isActive else { return }
+            if previous == nil {
+              let log = OSLog(subsystem: "pro.byok.BYOKchat", category: "ChatSwitch")
+              os_signpost(.event, log: log, name: "Transcript Geometry Ready")
+            }
+            isNearBottom = current.isNearBottom
+            isUserDraggingTimeline = current.isUserScrolling
+            showJumpToLatest = MacTranscriptScrollPolicy.shouldShowJumpToLatest(
+              isNearBottom: current.isNearBottom,
+              hasCompletedInitialScroll: hasCompletedInitialScroll
+            )
+
+            if current.isNearBottom {
+              followsLatest = true
+            } else if current.userDidScroll {
+              followsLatest = false
+            }
+
+            if let previous,
+              previous.contentHeight != current.contentHeight,
+              !current.userDidScroll,
+              MacTranscriptScrollPolicy.shouldFollowContentGrowth(
+                hasCompletedInitialScroll: hasCompletedInitialScroll,
+                followsLatest: followsLatest,
+                isUserDraggingTimeline: current.isUserScrolling,
+                isGenerating: chats.isGenerating(conversationID)
+              )
+            {
+              scrollToBottom(proxy, animated: false)
+            }
+          }
+          .allowsHitTesting(false)
+        }
+        .onChange(of: effectiveBottomSpace, initial: true) { _, value in
+          guard isActive else { return }
+          retainedBottomSpace = value
+        }
+        .onChange(of: conversation, initial: true) { _, value in
+          guard isActive else { return }
+          retainedConversation = value
+        }
+        .onChange(of: messages.count) { _, _ in
+          guard isActive else { return }
+          if scrollToPendingSourceMessageIfAvailable(proxy) { return }
+          guard followsLatest, !isUserDraggingTimeline else {
+            showJumpToLatest = !isNearBottom
+            return
+          }
+          scrollToBottom(proxy, animated: true)
+        }
+        .onChange(of: isActive ? mcp.pendingApprovals.count : 0) { _, _ in
+          guard isActive, followsLatest, !isUserDraggingTimeline else { return }
+          scrollToBottom(proxy, animated: true)
+        }
+        .onChange(of: isActive ? mcp.pendingElicitations.count : 0) { _, _ in
+          guard isActive, followsLatest, !isUserDraggingTimeline else { return }
+          scrollToBottom(proxy, animated: true)
+        }
+        .onChange(of: GenerationState(
+          isActive: isActive,
+          isGenerating: isActive && chats.isGenerating(conversationID)
+        )) { previous, current in
+          // Reactivating a streaming chat must preserve its previous reading
+          // position, rather than treating activation as a new generation.
+          guard previous.isActive, current.isActive else { return }
+          if current.isGenerating {
             followsLatest = true
+            isUserDraggingTimeline = false
             showJumpToLatest = false
-          } else if wasUserDriven {
-            followsLatest = false
+          } else if followsLatest {
+            // The live row can change height when its completed representation
+            // replaces it. Re-anchor explicitly rather than restoring a
+            // persistent scroll position into List's recycled rows.
+            scrollToBottom(proxy, animated: false)
+          } else if !isNearBottom {
             showJumpToLatest = true
           }
-        case .animating:
-          isUserDraggingTimeline = false
-        @unknown default:
-          break
         }
-      }
-      .onScrollGeometryChange(for: CGFloat.self) { geometry in
-        geometry.contentSize.height
-      } action: { oldHeight, newHeight in
-        guard oldHeight != newHeight,
-          hasCompletedInitialScroll,
-          followsLatest,
-          !isUserDraggingTimeline,
-          chats.isGenerating(conversationID)
-        else { return }
-
-        scrollToBottom(animated: false)
-      }
-      .onChange(of: messages.count) { _, _ in
-        guard followsLatest, !isUserDraggingTimeline else {
+        .onChange(of: navigationTarget, initial: true) { _, target in
+          guard let target, target.request.conversationID == conversationID,
+            target.token != lastNavigationToken
+          else { return }
+          lastNavigationToken = target.token
+          pendingSourceMessageID = target.request.messageID
+          if isActive, hasCompletedInitialScroll {
+            _ = scrollToPendingSourceMessageIfAvailable(proxy)
+          }
+        }
+        .task(id: isActive) {
+          guard isActive else { return }
+          isUserDraggingTimeline = false
+          await Task.yield()
+          guard !Task.isCancelled else { return }
+          if !scrollToPendingSourceMessageIfAvailable(proxy), followsLatest {
+            scrollToBottom(proxy, animated: false)
+          }
+          await Task.yield()
+          guard !Task.isCancelled else { return }
+          hasCompletedInitialScroll = true
           showJumpToLatest = !isNearBottom
-          return
         }
-        scrollToBottom(animated: true)
-      }
-      .onChange(of: mcp.pendingApprovals.count) { _, _ in
-        guard followsLatest, !isUserDraggingTimeline else { return }
-        scrollToBottom(animated: true)
-      }
-      .onChange(of: mcp.pendingElicitations.count) { _, _ in
-        guard followsLatest, !isUserDraggingTimeline else { return }
-        scrollToBottom(animated: true)
-      }
-      .onChange(of: chats.isGenerating(conversationID)) { _, generating in
-        if generating {
-          followsLatest = true
-          isUserDraggingTimeline = false
-          showJumpToLatest = false
-        } else if !isNearBottom {
-          showJumpToLatest = true
-        }
-      }
-      .task(id: conversationID?.rawValue ?? "new-chat") {
-        hasCompletedInitialScroll = false
-        isNearBottom = true
-        followsLatest = true
-        isUserDraggingTimeline = false
-        showJumpToLatest = false
 
-        await Task.yield()
-        guard !Task.isCancelled else { return }
-        scrollToBottom(animated: false)
-        hasCompletedInitialScroll = true
-      }
-
-      if conversationID != nil, !messages.isEmpty, showJumpToLatest {
-        Button {
-          followsLatest = true
-          isUserDraggingTimeline = false
-          showJumpToLatest = false
-          scrollToBottom(animated: true)
-        } label: {
-          Image(systemName: "arrow.down")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 32, height: 32)
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
+        if isActive, conversationID != nil, !messages.isEmpty, showJumpToLatest {
+          Button {
+            followsLatest = true
+            isUserDraggingTimeline = false
+            showJumpToLatest = false
+            pendingSourceMessageID = nil
+            scrollToBottom(proxy, animated: true)
+          } label: {
+            Image(systemName: "arrow.down")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.secondary)
+              .frame(width: 32, height: 32)
+              .background(.ultraThinMaterial, in: Circle())
+              .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+              .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+              .frame(width: 44, height: 44)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .padding(.bottom, bottomSpace)
+          .help("Scroll to bottom of chat")
+          .accessibilityLabel("Scroll to bottom of chat")
         }
-        .buttonStyle(.plain)
-        .padding(.bottom, MacDesignTokens.Layout.composerReservedScrollSpace - 20)
-        .help("Scroll to bottom of chat")
-        .accessibilityLabel("Scroll to bottom of chat")
       }
     }
+  }
+
+  private func transcriptRow<Content: View>(
+    bottomSpacing: CGFloat = 0,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    content()
+      .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .center)
+      .padding(.bottom, bottomSpacing)
+      .background(MacTranscriptScrollAnchor(connection: scrollConnection).allowsHitTesting(false))
+      .listRowInsets(EdgeInsets())
+      .listRowSeparator(.hidden)
+      .listRowBackground(Color.clear)
   }
 
   private var loadingState: some View {
     VStack(spacing: 12) {
       ProgressView()
         .accessibilityLabel("Loading conversation")
-      if let preview = summary?.lastMessagePreview, !preview.isEmpty {
+      if let preview = retainedConversation?.lastMessagePreview, !preview.isEmpty {
         Text(preview)
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -409,13 +528,37 @@ private struct MacTranscriptView: View {
     .padding(.top, 84)
   }
 
-  private func scrollToBottom(animated: Bool) {
-    if animated && !reduceMotion {
-      withAnimation(.easeOut(duration: 0.18)) {
-        transcriptScrollPosition.scrollTo(edge: .bottom)
-      }
+  @discardableResult
+  private func scrollToPendingSourceMessageIfAvailable(_ proxy: ScrollViewProxy) -> Bool {
+    guard isActive, let messageID = pendingSourceMessageID,
+      messages.contains(where: { $0.id == messageID })
+    else { return false }
+
+    pendingSourceMessageID = nil
+    followsLatest = false
+    isUserDraggingTimeline = false
+    showJumpToLatest = true
+
+    let scroll = {
+      proxy.scrollTo(messageID.rawValue, anchor: .center)
+    }
+    if reduceMotion {
+      scroll()
     } else {
-      transcriptScrollPosition.scrollTo(edge: .bottom)
+      withAnimation(.easeOut(duration: 0.18), scroll)
+    }
+    return true
+  }
+
+  private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+    guard isActive else { return }
+    let scroll = {
+      proxy.scrollTo(ScrollTarget.bottom, anchor: .bottom)
+    }
+    if animated && !reduceMotion {
+      withAnimation(.easeOut(duration: 0.18), scroll)
+    } else {
+      scroll()
     }
   }
 }
@@ -822,6 +965,7 @@ private struct MacComposerView: View {
 }
 
 private struct MacAssistantMessageActions: View {
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
@@ -830,7 +974,7 @@ private struct MacAssistantMessageActions: View {
   @State private var showingRegenerateConfirmation = false
 
   private var canRetry: Bool {
-    guard let conversationID else { return false }
+    guard isTranscriptActive, let conversationID else { return false }
     return chats.isLatestAssistant(message.id, conversationID: conversationID)
       && !chats.isGenerating(conversationID)
   }
@@ -877,6 +1021,7 @@ private struct MacAssistantMessageActions: View {
       }
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
+      .fixedSize()
       .help("More actions")
       .accessibilityLabel("More actions")
     }
@@ -927,5 +1072,25 @@ private struct MacAssistantMessageActions: View {
   private func copyToPasteboard(_ value: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(value, forType: .string)
+  }
+}
+
+private struct MacTranscriptActivityKey: EnvironmentKey {
+  static let defaultValue = true
+}
+
+private struct MacPreparedAnswersKey: EnvironmentKey {
+  static let defaultValue: [String: MacPreparedAnswer] = [:]
+}
+
+extension EnvironmentValues {
+  var macTranscriptIsActive: Bool {
+    get { self[MacTranscriptActivityKey.self] }
+    set { self[MacTranscriptActivityKey.self] = newValue }
+  }
+
+  var macPreparedAnswers: [String: MacPreparedAnswer] {
+    get { self[MacPreparedAnswersKey.self] }
+    set { self[MacPreparedAnswersKey.self] = newValue }
   }
 }

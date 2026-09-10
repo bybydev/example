@@ -65,6 +65,23 @@ final class MacLiveMessagePresentation {
     return result
   }
 
+  /// A live presentation owns asynchronous rich-render work in addition to the
+  /// session model's presentation-coalescing task. Cancel both render lanes
+  /// before this presentation is replaced or removed so completed/tool-round
+  /// messages cannot leave stale Markdown/reasoning work running.
+  func cancelPendingRenders() {
+    answerRenderTask?.cancel()
+    reasoningRenderTask?.cancel()
+    answerRenderTask = nil
+    reasoningRenderTask = nil
+    answerCompleteRequested = false
+    reasoningCompleteRequested = false
+  }
+
+  var hasPendingRenderWork: Bool {
+    answerRenderTask != nil || reasoningRenderTask != nil
+  }
+
   private func scheduleAnswerRender() {
     guard answerRenderTask == nil else { return }
     answerRenderTask = Task { @MainActor [weak self] in

@@ -12,19 +12,29 @@ final class MacDataManagementModel {
   private unowned let app: MacAppModel
   private let service: ProjectAwareDataPortabilityService
   private let providerWorkspace: ProviderWorkspaceStore
+  private let projectWorkspace: ProjectWorkspaceStore
+  private let libraryStore: LibraryStore
   private let conversations: ConversationStore
   private let accountManager: ProviderAccountManager
   private let mcpRuntime: MCPRemoteRuntime
   private let mcpWorkspace: MCPWorkspaceStore
+  private let restrictions: MacProResourceRestrictions
 
-  init(app: MacAppModel, services: BYOKCoreServices) {
+  init(
+    app: MacAppModel,
+    services: BYOKCoreServices,
+    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions
+  ) {
     self.app = app
     service = services.dataPortability
     providerWorkspace = services.providerWorkspace
+    projectWorkspace = services.projectWorkspace
+    libraryStore = services.libraryStore
     conversations = services.conversationStore
     accountManager = services.accountManager
     mcpRuntime = services.mcpRuntime
     mcpWorkspace = services.mcpWorkspace
+    self.restrictions = restrictions
   }
 
   func makeBackupData() async -> Data? {
@@ -43,18 +53,26 @@ final class MacDataManagementModel {
     await perform("Backup imported. Re-enter credentials for imported connections and MCP servers.") {
       let data = try await Self.readSecurityScopedData(from: url)
       let existingDefaultPrompt = app.preferences.defaultSystemPrompt
+      let resourcesBefore = await resourceSnapshot()
       await app.stopAllGenerations()
 
       let summary: BYOKchatImportSummary
       do {
         summary = try await service.importBackup(data, strategy: strategy)
       } catch {
-        // Library restoration can fail after the transactional provider/chat
-        // restore has already committed. Reflect the effective stored state
-        // before reporting that partial-restoration error.
+        // A failed full-backup import now rolls persistent workspaces back as one logical
+        // transaction. Reload best-effort so the presentation reflects that restored state.
         try? await app.reloadAfterDataMutation()
         throw error
       }
+
+      let resourcesAfter = await resourceSnapshot()
+      restrictions.recordFullBackupImport(
+        before: resourcesBefore,
+        after: resourcesAfter,
+        strategy: strategy,
+        entitlement: MacProAccess.entitlementAccess
+      )
 
       switch strategy {
       case .replaceExisting:
@@ -65,7 +83,14 @@ final class MacDataManagementModel {
         }
       }
 
-      try await app.reloadAfterDataMutation()
+      do {
+        try await app.reloadAfterDataMutation()
+      } catch {
+        // Persistent restore is authoritative. A presentation refresh failure must not tell
+        // the user the backup failed and invite a dangerous retry of an already-committed import.
+        statusMessage =
+          "Backup imported, but the app could not refresh its views: \(error.localizedDescription)"
+      }
 
       var cleanupMessages: [String] = []
       if !summary.credentialCleanupFailures.isEmpty {
@@ -88,10 +113,37 @@ final class MacDataManagementModel {
   func importProviderConfiguration(from url: URL, strategy: ProviderImportStrategy) async {
     await perform("Connection configuration imported. Credentials were not included.") {
       let data = try await Self.readSecurityScopedData(from: url)
+      let imported = try JSONDecoder().decode(ProviderWorkspaceState.self, from: data)
+      let existingState = await providerWorkspace.snapshot()
+      let existing = existingState.accounts.map(\.id)
+
+      switch MacProAccess.providerConfigurationImportDecision(
+        existingIDs: existing,
+        importedIDs: imported.accounts.map(\.id),
+        strategy: strategy
+      ) {
+      case .allowed:
+        break
+      case .checking:
+        throw ProviderError.invalidRequest(
+          "Checking your BYOK Pro status before importing additional connections. Try again in a moment."
+        )
+      case .requiresPro:
+        MacProAccess.requestUpgrade(.providerAccounts)
+        throw ProviderError.invalidRequest(
+          "This connection import would exceed the Free 1-connection limit. Upgrade to BYOK Pro to import it."
+        )
+      }
+
       await app.stopAllGenerations()
       do {
         let cleanupFailures = try await service.importProviderConfiguration(data, strategy: strategy)
-        try await app.reloadAfterDataMutation()
+        do {
+          try await app.reloadAfterDataMutation()
+        } catch {
+          statusMessage =
+            "Connection configuration imported, but the app could not refresh its views: \(error.localizedDescription)"
+        }
         if !cleanupFailures.isEmpty {
           errorMessage = ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
         }
@@ -171,6 +223,7 @@ final class MacDataManagementModel {
         environment: app.storageEnvironment,
         telemetryRecorder: app.coreServices?.telemetryRecorder
       )
+      restrictions.clear()
       app.preferences.defaultSystemPrompt = ""
       app.recordRecoveryBackup(result.backupURL)
       await app.restartAfterReset()
@@ -187,6 +240,20 @@ final class MacDataManagementModel {
     } catch {
       errorMessage = error.localizedDescription
     }
+  }
+
+  private func resourceSnapshot() async -> MacProResourceSnapshot {
+    let providers = await providerWorkspace.snapshot()
+    let projects = await projectWorkspace.snapshot()
+    let mcp = await mcpWorkspace.snapshot()
+    let library = await libraryStore.entries()
+
+    return MacProResourceSnapshot(
+      providerAccountIDs: providers.accounts.map { $0.id.rawValue },
+      projectIDs: projects.projects.map { $0.id.rawValue },
+      mcpServerIDs: mcp.servers.map { $0.id.rawValue },
+      libraryEntryIDs: library.map { $0.id.rawValue }
+    )
   }
 
   private nonisolated static func readSecurityScopedData(from url: URL) async throws -> Data {
@@ -207,7 +274,7 @@ final class MacDataManagementModel {
     defer { isBusy = false }
     do {
       try await operation()
-      if errorMessage == nil { statusMessage = success }
+      if errorMessage == nil, statusMessage == nil { statusMessage = success }
     } catch {
       errorMessage = error.localizedDescription
     }

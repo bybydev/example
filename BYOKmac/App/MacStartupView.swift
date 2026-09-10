@@ -1,9 +1,11 @@
 import AppKit
+import MacAppFoundation
 import SwiftUI
 
 struct MacStartupView: View {
   let model: MacAppModel
 
+  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var confirmStartFresh = false
 
   var body: some View {
@@ -14,7 +16,11 @@ struct MacStartupView: View {
       case .loading(let stage):
         loadingView(stage: stage)
       case .ready:
-        MacSecondarySurfacesView(model: model)
+        if purchaseManager.entitlementState == .checking {
+          entitlementLoadingView
+        } else {
+          MacSecondarySurfacesView(model: model)
+        }
       case .failed(let failure):
         failureView(failure: failure)
       }
@@ -29,6 +35,18 @@ struct MacStartupView: View {
       Text("BYOKchat")
         .font(.title2.weight(.semibold))
       Text(stage.rawValue)
+        .foregroundStyle(.secondary)
+    }
+    .padding(40)
+  }
+
+  private var entitlementLoadingView: some View {
+    VStack(spacing: 14) {
+      ProgressView()
+        .controlSize(.large)
+      Text("BYOKchat")
+        .font(.title2.weight(.semibold))
+      Text("Checking BYOK Pro status…")
         .foregroundStyle(.secondary)
     }
     .padding(40)

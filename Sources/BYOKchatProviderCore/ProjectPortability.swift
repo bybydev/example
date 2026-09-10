@@ -32,9 +32,7 @@ public actor ProjectPortabilityService {
   ) async throws -> ProjectImportResult {
     guard let imported else {
       if case .replaceExisting = strategy {
-        for project in await workspace.allProjects() {
-          try await workspace.deleteProject(project.id)
-        }
+        try await workspace.replaceStateForImport(ProjectWorkspaceState())
       }
       return ProjectImportResult()
     }
@@ -96,24 +94,19 @@ public actor ProjectPortabilityService {
     with imported: ProjectWorkspaceState,
     conversationIDMapping: [ConversationID: ConversationID]
   ) async throws -> ProjectImportResult {
-    for project in await workspace.allProjects() {
-      try await workspace.deleteProject(project.id)
-    }
-
-    var projectMapping: [ProjectID: ProjectID] = [:]
-    for source in imported.projects.sorted(by: Self.projectSort) {
-      let created = try await create(source, name: source.name)
-      projectMapping[source.id] = created.id
-    }
-
-    try await restoreMemberships(
-      imported,
-      projectIDMapping: projectMapping,
+    var candidate = imported
+    candidate.conversationProjectIDs = try Self.remappedMemberships(
+      imported.conversationProjectIDs,
+      projectIDMapping: Dictionary(uniqueKeysWithValues: imported.projects.map { ($0.id, $0.id) }),
       conversationIDMapping: conversationIDMapping,
-      preserveExistingAssignments: false
+      preservingExisting: nil
     )
+
+    // Preserve imported Project IDs and file payloads exactly. One store commit publishes
+    // Projects plus memberships together; a persistence failure leaves live state untouched.
+    try await workspace.replaceStateForImport(candidate)
     return ProjectImportResult(
-      projectIDMapping: projectMapping,
+      projectIDMapping: Dictionary(uniqueKeysWithValues: imported.projects.map { ($0.id, $0.id) }),
       importedProjectCount: imported.projects.count
     )
   }
@@ -122,87 +115,56 @@ public actor ProjectPortabilityService {
     _ imported: ProjectWorkspaceState,
     conversationIDMapping: [ConversationID: ConversationID]
   ) async throws -> ProjectImportResult {
-    var localProjects = await workspace.allProjects()
+    var candidate = await workspace.snapshot()
     var projectMapping: [ProjectID: ProjectID] = [:]
 
     for source in imported.projects.sorted(by: Self.projectSort) {
-      if let local = localProjects.first(where: { $0.id == source.id })
-        ?? localProjects.first(where: {
+      if let localIndex = candidate.projects.firstIndex(where: { $0.id == source.id })
+        ?? candidate.projects.firstIndex(where: {
           $0.name.caseInsensitiveCompare(source.name) == .orderedSame
         })
       {
+        let local = candidate.projects[localIndex]
         if source.updatedAt > local.updatedAt {
-          let updated = try await update(local.id, from: source, name: local.name)
-          if let index = localProjects.firstIndex(where: { $0.id == local.id }) {
-            localProjects[index] = updated
-          }
+          var updated = source
+          // ID/name identity belong to the existing local Project when merging by name.
+          updated.id = local.id
+          updated.name = local.name
+          candidate.projects[localIndex] = updated
         }
         projectMapping[source.id] = local.id
         continue
       }
 
-      let name = Self.uniqueName(source.name, existing: localProjects.map(\.name))
-      let created = try await create(source, name: name)
-      localProjects.append(created)
+      var created = source
+      created.name = Self.uniqueName(source.name, existing: candidate.projects.map(\.name))
+      candidate.projects.append(created)
       projectMapping[source.id] = created.id
     }
 
-    try await restoreMemberships(
-      imported,
+    candidate.conversationProjectIDs = try Self.remappedMemberships(
+      imported.conversationProjectIDs,
       projectIDMapping: projectMapping,
       conversationIDMapping: conversationIDMapping,
-      preserveExistingAssignments: true
+      preservingExisting: candidate.conversationProjectIDs
     )
+
+    // Imported Project payloads and memberships publish in one candidate-state commit.
+    try await workspace.replaceStateForImport(candidate)
     return ProjectImportResult(
       projectIDMapping: projectMapping,
       importedProjectCount: imported.projects.count
     )
   }
 
-  private func create(_ source: ChatProject, name: String) async throws -> ChatProject {
-    try await workspace.createProject(
-      name: name,
-      symbolName: source.symbolName,
-      accentID: source.accentID,
-      accountID: source.accountID,
-      modelID: source.modelID,
-      instructions: source.instructions,
-      files: source.projectFiles,
-      mcpConfiguration: source.mcpConfiguration,
-      promptPresets: source.projectPromptPresets,
-      toolPresets: source.projectToolPresets,
-      at: source.updatedAt
-    )
-  }
-
-  private func update(
-    _ localID: ProjectID,
-    from source: ChatProject,
-    name: String
-  ) async throws -> ChatProject {
-    try await workspace.updateProject(
-      id: localID,
-      name: name,
-      symbolName: source.symbolName,
-      accentID: source.accentID,
-      accountID: source.accountID,
-      modelID: source.modelID,
-      instructions: source.instructions,
-      files: source.projectFiles,
-      mcpConfiguration: source.mcpConfiguration ?? MCPChatToolConfiguration(),
-      promptPresets: source.projectPromptPresets,
-      toolPresets: source.projectToolPresets,
-      at: source.updatedAt
-    )
-  }
-
-  private func restoreMemberships(
-    _ imported: ProjectWorkspaceState,
+  private static func remappedMemberships(
+    _ sourceMemberships: [String: String],
     projectIDMapping: [ProjectID: ProjectID],
     conversationIDMapping: [ConversationID: ConversationID],
-    preserveExistingAssignments: Bool
-  ) async throws {
-    for (sourceConversationValue, sourceProjectValue) in imported.conversationProjectIDs {
+    preservingExisting existingMemberships: [String: String]?
+  ) throws -> [String: String] {
+    var result = existingMemberships ?? [:]
+    for (sourceConversationValue, sourceProjectValue) in sourceMemberships {
       let sourceConversationID = ConversationID(rawValue: sourceConversationValue)
       let sourceProjectID = ProjectID(rawValue: sourceProjectValue)
       guard let destinationConversationID = conversationIDMapping[sourceConversationID],
@@ -213,13 +175,12 @@ public actor ProjectPortabilityService {
         )
       }
 
-      if preserveExistingAssignments,
-        await workspace.projectID(for: destinationConversationID) != nil
-      {
+      if existingMemberships != nil, result[destinationConversationID.rawValue] != nil {
         continue
       }
-      try await workspace.assignConversation(destinationConversationID, to: destinationProjectID)
+      result[destinationConversationID.rawValue] = destinationProjectID.rawValue
     }
+    return result
   }
 
   private static func validateConversationReferences(

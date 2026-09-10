@@ -23,23 +23,33 @@ final class MacProviderModel {
   private let workspace: ProviderWorkspaceStore
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
+  private let restrictions: MacProResourceRestrictions
+  private let entitlementAccessOverride: MacProEntitlementAccess?
 
-  init(services: BYOKCoreServices) {
+  init(
+    services: BYOKCoreServices,
+    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
+    entitlementAccessOverride: MacProEntitlementAccess? = nil
+  ) {
     registry = services.providerRegistry
     workspace = services.providerWorkspace
     accountManager = services.accountManager
     runtime = services.providerRuntime
+    self.restrictions = restrictions
+    self.entitlementAccessOverride = entitlementAccessOverride
   }
 
   func load() async throws {
     try await workspace.load()
     try await accountManager.synchronizeCustomProviders()
+    try await synchronizeConfiguredSeedModelsForStoredAccounts()
     try await reloadSnapshot()
   }
 
   func reload() async {
     await perform {
       try await accountManager.synchronizeCustomProviders()
+      try await synchronizeConfiguredSeedModelsForStoredAccounts()
       try await reloadSnapshot()
     }
   }
@@ -63,6 +73,11 @@ final class MacProviderModel {
     }
   }
 
+  func usableModelID(for accountID: ProviderAccountID) -> ModelID? {
+    guard let account = account(accountID) else { return nil }
+    return usableModelID(for: account)
+  }
+
   func reasoningDefault(for accountID: ProviderAccountID?) -> ReasoningOptions? {
     account(accountID)?.kind.reasoningDefault
   }
@@ -80,14 +95,23 @@ final class MacProviderModel {
     defaultAccountID.flatMap { id in accounts.first { $0.id == id } }
   }
 
+  func isProviderRestricted(_ accountID: ProviderAccountID) -> Bool {
+    restrictions.isProviderRestricted(
+      accountID,
+      currentIDs: accounts.map(\.id),
+      entitlement: effectiveEntitlementAccess
+    )
+  }
+
   func preferredTarget() -> MacChatTarget? {
-    let candidates = accounts.filter { isReady($0) }
-    guard let account = resolvedDefaultAccount.flatMap({ isReady($0) ? $0 : nil }) ?? candidates.first else {
+    let candidates = accounts.filter { isReady($0) && !isProviderRestricted($0.id) }
+    guard let account = resolvedDefaultAccount.flatMap({ resolved in
+      candidates.first { $0.id == resolved.id }
+    }) ?? candidates.first,
+      let modelID = usableModelID(for: account)
+    else {
       return nil
     }
-    guard let modelID = account.defaultModelID
-      ?? models(for: account.id).first(where: { $0.isAvailable })?.model.id
-    else { return nil }
     return MacChatTarget(
       accountID: account.id,
       modelID: modelID,
@@ -135,17 +159,19 @@ final class MacProviderModel {
     errorMessage = nil
     defer { isBusy = false }
 
+    let account: ProviderAccount
     do {
-      let account = try await accountManager.createAccount(
+      let trimmedCredential = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+      account = try await accountManager.createAccount(
         kind: kind,
         label: normalizedLabel(label, kind: kind),
-        credential: credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : credential,
+        credential: trimmedCredential.isEmpty ? nil : trimmedCredential,
         chatCompletionsPath: kind == .openAICompatible
           ? normalizedPath(chatCompletionsPath, fallback: "/chat/completions")
           : nil,
         modelsPath: kind == .openAICompatible ? normalizedOptionalPath(modelsPath) : nil,
         authChoice: kind == .openAICompatible ? authChoice : nil,
-        seedModelIDs: kind == .openAICompatible ? seedModelIDs : nil,
+        seedModelIDs: kind == .openAICompatible ? normalizedSeedModelIDs(seedModelIDs) : nil,
         baseURLOverride: try optionalURL(baseURL),
         additionalHeaders: headers,
         metadata: metadata,
@@ -153,32 +179,30 @@ final class MacProviderModel {
           ? nil
           : ModelID(rawValue: defaultModel.trimmingCharacters(in: .whitespacesAndNewlines))
       )
-
-      if !kind.seedModels.isEmpty {
-        try await workspace.mergeModels(kind.seedModels, for: account.id)
-      }
-
-      if let defaultModelID = account.defaultModelID,
-        !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
-          $0.model.id == defaultModelID
-        })
-      {
-        try await workspace.addManualModel(
-          ProviderModel(
-            providerID: account.providerID,
-            id: defaultModelID,
-            displayName: defaultModelID.rawValue
-          ),
-          for: account.id
-        )
-      }
-
-      try await reloadSnapshot()
-      return account.id
     } catch {
       errorMessage = error.localizedDescription
       return nil
     }
+
+    do {
+      try await installConfiguredModels(for: account)
+    } catch {
+      let setupError = error
+      let rollbackWarning = await rollbackCreatedAccount(account.id)
+      try? await reloadSnapshot()
+      errorMessage = joinedError(
+        primary: setupError.localizedDescription,
+        warning: rollbackWarning
+      )
+      return nil
+    }
+
+    do {
+      try await reloadSnapshot()
+    } catch {
+      errorMessage = "Connection was saved, but the provider list could not refresh: \(error.localizedDescription)"
+    }
+    return account.id
   }
 
   func updateConnection(
@@ -193,70 +217,134 @@ final class MacProviderModel {
     authChoice: ProviderAuthentication?,
     seedModelIDs: [String]?
   ) async -> Bool {
-    await performResult {
-      var account = try await workspace.account(id: accountID)
-      let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmedLabel.isEmpty else {
-        throw ProviderError.invalidRequest("Connection name cannot be empty.")
-      }
+    guard requireProviderAccess(accountID) else { return false }
 
-      account.label = trimmedLabel
-      account.baseURLOverride = try optionalURL(baseURL)
-      account.additionalHeaders = headers
-      account.metadata = metadata
-      if account.kind == .openAICompatible {
-        account.chatCompletionsPath = normalizedPath(chatCompletionsPath, fallback: "/chat/completions")
-        account.modelsPath = normalizedOptionalPath(modelsPath)
-        account.authChoice = authChoice ?? .bearer
-        account.seedModelIDs = seedModelIDs
-      }
-      try await accountManager.updateAccount(account)
-      if let newCredential, !newCredential.isEmpty {
-        try await accountManager.setCredential(newCredential, accountID: accountID)
-      }
-      try await accountManager.synchronizeCustomProviders()
-      try await reloadSnapshot()
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+
+    let original: ProviderAccount
+    do {
+      original = try await workspace.account(id: accountID)
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
     }
+
+    var updated = original
+    let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedLabel.isEmpty else {
+      errorMessage = ProviderError.invalidRequest("Connection name cannot be empty.").localizedDescription
+      return false
+    }
+
+    do {
+      updated.label = trimmedLabel
+      updated.baseURLOverride = try optionalURL(baseURL)
+      updated.additionalHeaders = headers
+      updated.metadata = metadata
+      if updated.kind == .openAICompatible {
+        updated.chatCompletionsPath = normalizedPath(chatCompletionsPath, fallback: "/chat/completions")
+        updated.modelsPath = normalizedOptionalPath(modelsPath)
+        updated.authChoice = authChoice ?? .bearer
+        updated.seedModelIDs = normalizedSeedModelIDs(seedModelIDs)
+      }
+      try await accountManager.updateAccount(updated)
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+
+    if let newCredential {
+      let trimmedCredential = newCredential.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmedCredential.isEmpty {
+        do {
+          try await accountManager.setCredential(trimmedCredential, accountID: accountID)
+        } catch {
+          let credentialError = error
+          let rollbackWarning = await rollbackUpdatedAccount(original)
+          try? await reloadSnapshot()
+          errorMessage = joinedError(
+            primary: credentialError.localizedDescription,
+            warning: rollbackWarning
+          )
+          return false
+        }
+      }
+    }
+
+    var warnings: [String] = []
+    do {
+      try await installConfiguredSeedModels(for: updated)
+    } catch {
+      warnings.append("Connection changes were saved, but seed models could not be synchronized: \(error.localizedDescription)")
+    }
+    do {
+      try await accountManager.synchronizeCustomProviders()
+    } catch {
+      warnings.append("Connection changes were saved, but provider registration could not refresh: \(error.localizedDescription)")
+    }
+    do {
+      try await reloadSnapshot()
+    } catch {
+      warnings.append("Connection changes were saved, but the provider list could not refresh: \(error.localizedDescription)")
+    }
+
+    errorMessage = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
+    return true
   }
 
   func setAccountEnabled(_ enabled: Bool, accountID: ProviderAccountID) async -> Bool {
-    await performResult {
+    if enabled, !requireProviderAccess(accountID) { return false }
+    return await performCommittedResult(
+      warningPrefix: "Connection state was saved, but the provider list could not refresh:"
+    ) {
       var account = try await workspace.account(id: accountID)
       account.isEnabled = enabled
       try await accountManager.updateAccount(account)
-      try await reloadSnapshot()
     }
   }
 
   func setDefaultAccount(_ accountID: ProviderAccountID) async -> Bool {
-    await performResult {
-      let account = try await workspace.account(id: accountID)
-      guard isReady(account) else {
+    guard requireProviderAccess(accountID) else { return false }
+    return await performCommittedResult(
+      warningPrefix: "Default connection was saved, but the provider list could not refresh:"
+    ) {
+      guard let account = account(accountID), isReady(account) else {
         throw ProviderError.invalidRequest("This connection needs an available model and credential first.")
       }
       try await workspace.setDefaultAccount(accountID)
-      try await reloadSnapshot()
     }
   }
 
   func setDefaultModel(_ modelID: ModelID, accountID: ProviderAccountID) async -> Bool {
-    await performResult {
+    guard requireProviderAccess(accountID) else { return false }
+    return await performCommittedResult(
+      warningPrefix: "Default model was saved, but the provider list could not refresh:"
+    ) {
+      guard models(for: accountID).contains(where: { $0.model.id == modelID && $0.isAvailable }) else {
+        throw ProviderError.modelUnavailable
+      }
       var account = try await workspace.account(id: accountID)
       account.defaultModelID = modelID
       try await accountManager.updateAccount(account)
-      try await reloadSnapshot()
     }
   }
 
   func refreshModels(accountID: ProviderAccountID) async -> Bool {
-    await performResult {
+    guard requireProviderAccess(accountID) else { return false }
+    return await performCommittedResult(
+      warningPrefix: "Models were refreshed, but the provider list could not refresh:"
+    ) {
       _ = try await runtime.refreshModels(accountID: accountID)
-      try await reloadSnapshot()
     }
   }
 
   func addManualModel(_ value: String, accountID: ProviderAccountID) async -> Bool {
-    await performResult {
+    guard requireProviderAccess(accountID) else { return false }
+    return await performCommittedResult(
+      warningPrefix: "The model was added, but the provider list could not refresh:"
+    ) {
       let account = try await workspace.account(id: accountID)
       let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { throw ProviderError.invalidModel }
@@ -264,41 +352,67 @@ final class MacProviderModel {
         ProviderModel(providerID: account.providerID, id: ModelID(rawValue: trimmed), displayName: trimmed),
         for: accountID
       )
-      try await reloadSnapshot()
     }
   }
 
   func setFavorite(_ favorite: Bool, modelID: ModelID, accountID: ProviderAccountID) async {
-    await perform {
+    await performCommitted(
+      warningPrefix: "Favorite state was saved, but the provider list could not refresh:"
+    ) {
       try await workspace.setFavorite(favorite, modelID: modelID, accountID: accountID)
-      try await reloadSnapshot()
     }
   }
 
   func setHidden(_ hidden: Bool, modelID: ModelID, accountID: ProviderAccountID) async {
-    await perform {
+    await performCommitted(
+      warningPrefix: "Model visibility was saved, but the provider list could not refresh:"
+    ) {
       try await workspace.setHidden(hidden, modelID: modelID, accountID: accountID)
-      try await reloadSnapshot()
     }
   }
 
   func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
-    await performResult {
-      try await runtime.testConnection(accountID: accountID, modelID: modelID)
+    guard requireProviderAccess(accountID) else { return false }
+    return await performResult {
+      let selectedModelID: ModelID
+      if let modelID {
+        guard models(for: accountID).contains(where: { $0.model.id == modelID && $0.isAvailable }) else {
+          throw ProviderError.modelUnavailable
+        }
+        selectedModelID = modelID
+      } else if let fallback = usableModelID(for: accountID) {
+        selectedModelID = fallback
+      } else {
+        throw ProviderError.invalidModel
+      }
+      try await runtime.testConnection(accountID: accountID, modelID: selectedModelID)
     }
   }
 
   func revealCredential(accountID: ProviderAccountID) async -> String? {
-    (try? await accountManager.resolvedAccount(id: accountID))?.apiKey
+    guard requireProviderAccess(accountID) else { return nil }
+    return (try? await accountManager.resolvedAccount(id: accountID))?.apiKey
   }
 
   func deleteConnection(_ accountID: ProviderAccountID) async {
-    await perform {
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+
+    do {
       let cleanupFailures = try await accountManager.deleteAccount(accountID)
-      try await reloadSnapshot()
-      guard cleanupFailures.isEmpty else {
-        throw ProviderError.credentialCleanupFailed(cleanupFailures)
+      var warnings: [String] = []
+      if !cleanupFailures.isEmpty {
+        warnings.append(ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription)
       }
+      do {
+        try await reloadSnapshot()
+      } catch {
+        warnings.append("Connection was deleted, but the provider list could not refresh: \(error.localizedDescription)")
+      }
+      errorMessage = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
+    } catch {
+      errorMessage = error.localizedDescription
     }
   }
 
@@ -319,6 +433,22 @@ final class MacProviderModel {
     return "\(base) \(index)"
   }
 
+  private var effectiveEntitlementAccess: MacProEntitlementAccess {
+    entitlementAccessOverride ?? MacProAccess.entitlementAccess
+  }
+
+  @discardableResult
+  private func requireProviderAccess(_ accountID: ProviderAccountID) -> Bool {
+    guard !isProviderRestricted(accountID) else {
+      errorMessage = MacProAccess.restoredResourceBlockedMessage("provider connection")
+      if effectiveEntitlementAccess == .free {
+        MacProGateCenter.shared.request(.providerAccounts)
+      }
+      return false
+    }
+    return true
+  }
+
   private func reloadSnapshot() async throws {
     definitions = await registry.allDefinitions()
     let loadedAccounts = await workspace.allAccounts()
@@ -327,33 +457,135 @@ final class MacProviderModel {
     var credentials: Set<ProviderAccountID> = []
     for account in loadedAccounts {
       records[account.id] = await workspace.modelRecords(for: account.id, includeHidden: true)
-      if try await accountManager.hasCredential(accountID: account.id) {
-        credentials.insert(account.id)
+      switch account.definition.authentication {
+      case .none:
+        break
+      case .bearer, .header:
+        if try await accountManager.hasCredential(accountID: account.id) {
+          credentials.insert(account.id)
+        }
       }
     }
 
     modelsByAccount = records
     credentialAccountIDs = credentials
 
-    var credentialRequiredByProvider: [ProviderID: Bool] = [:]
-    for definition in definitions {
-      switch definition.authentication {
+    func ready(_ account: ProviderAccount) -> Bool {
+      guard account.isEnabled else { return false }
+      switch account.definition.authentication {
       case .none:
-        credentialRequiredByProvider[definition.id] = false
+        break
       case .bearer, .header:
-        credentialRequiredByProvider[definition.id] = true
+        guard credentials.contains(account.id) else { return false }
       }
+      return (records[account.id] ?? []).contains { $0.isAvailable && !$0.isHidden }
     }
 
-    defaultAccountID = await workspace.resolvedDefaultAccountID(
-      credentialRequiredByProvider: credentialRequiredByProvider,
-      credentialAccountIDs: credentials
-    )
+    let storedDefaultID = await workspace.defaultAccountID()
+    if let storedDefaultID,
+      let storedDefault = loadedAccounts.first(where: { $0.id == storedDefaultID }),
+      ready(storedDefault)
+    {
+      defaultAccountID = storedDefaultID
+    } else {
+      defaultAccountID = loadedAccounts.first(where: ready)?.id
+        ?? loadedAccounts.first(where: \.isEnabled)?.id
+        ?? loadedAccounts.first?.id
+    }
 
-    accounts = loadedAccounts.sorted { lhs, rhs in
+    let presentedAccounts = loadedAccounts.map { account -> ProviderAccount in
+      var presented = account
+      let visibleAvailable = (records[account.id] ?? [])
+        .filter { $0.isAvailable && !$0.isHidden }
+        .sorted { lhs, rhs in
+          if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
+          return lhs.model.displayName.localizedCaseInsensitiveCompare(rhs.model.displayName) == .orderedAscending
+        }
+      if let defaultModelID = account.defaultModelID,
+        visibleAvailable.contains(where: { $0.model.id == defaultModelID })
+      {
+        presented.defaultModelID = defaultModelID
+      } else {
+        presented.defaultModelID = visibleAvailable.first?.model.id
+      }
+      return presented
+    }
+
+    accounts = presentedAccounts.sorted { lhs, rhs in
       if lhs.id == defaultAccountID { return true }
       if rhs.id == defaultAccountID { return false }
       return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+    }
+  }
+
+  private func usableModelID(for account: ProviderAccount) -> ModelID? {
+    let records = models(for: account.id)
+    if let defaultModelID = account.defaultModelID,
+      records.contains(where: { $0.model.id == defaultModelID && $0.isAvailable })
+    {
+      return defaultModelID
+    }
+    return records.first(where: { $0.isAvailable })?.model.id
+  }
+
+  private func installConfiguredModels(for account: ProviderAccount) async throws {
+    if !account.kind.seedModels.isEmpty {
+      try await workspace.mergeModels(account.kind.seedModels, for: account.id)
+    }
+    try await installConfiguredSeedModels(for: account)
+
+    if let defaultModelID = account.defaultModelID,
+      !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
+        $0.model.id == defaultModelID
+      })
+    {
+      try await workspace.addManualModel(
+        ProviderModel(
+          providerID: account.providerID,
+          id: defaultModelID,
+          displayName: defaultModelID.rawValue
+        ),
+        for: account.id
+      )
+    }
+  }
+
+  private func installConfiguredSeedModels(for account: ProviderAccount) async throws {
+    guard account.kind == .openAICompatible else { return }
+    let existing = await workspace.modelRecords(for: account.id, includeHidden: true)
+    for model in account.definition.seedModels {
+      if let record = existing.first(where: { $0.model.id == model.id }),
+        record.isManual,
+        record.isAvailable
+      {
+        continue
+      }
+      try await workspace.addManualModel(model, for: account.id)
+    }
+  }
+
+  private func synchronizeConfiguredSeedModelsForStoredAccounts() async throws {
+    for account in await workspace.allAccounts() where account.kind == .openAICompatible {
+      try await installConfiguredSeedModels(for: account)
+    }
+  }
+
+  private func rollbackCreatedAccount(_ accountID: ProviderAccountID) async -> String? {
+    do {
+      let cleanupFailures = try await accountManager.deleteAccount(accountID)
+      guard !cleanupFailures.isEmpty else { return nil }
+      return ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
+    } catch {
+      return "The incomplete connection could not be rolled back: \(error.localizedDescription)"
+    }
+  }
+
+  private func rollbackUpdatedAccount(_ original: ProviderAccount) async -> String? {
+    do {
+      try await accountManager.updateAccount(original)
+      return nil
+    } catch {
+      return "The previous connection settings could not be restored: \(error.localizedDescription)"
     }
   }
 
@@ -384,6 +616,22 @@ final class MacProviderModel {
     return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
   }
 
+  private func normalizedSeedModelIDs(_ values: [String]?) -> [String]? {
+    guard let values else { return nil }
+    var seen: Set<String> = []
+    let normalized = values.compactMap { value -> String? in
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+      return trimmed
+    }
+    return normalized.isEmpty ? nil : normalized
+  }
+
+  private func joinedError(primary: String, warning: String?) -> String {
+    guard let warning, !warning.isEmpty else { return primary }
+    return "\(primary)\n\(warning)"
+  }
+
   private func perform(_ operation: () async throws -> Void) async {
     isBusy = true
     errorMessage = nil
@@ -406,5 +654,46 @@ final class MacProviderModel {
       errorMessage = error.localizedDescription
       return false
     }
+  }
+
+  private func performCommitted(
+    warningPrefix: String,
+    _ mutation: () async throws -> Void
+  ) async {
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+    do {
+      try await mutation()
+    } catch {
+      errorMessage = error.localizedDescription
+      return
+    }
+    do {
+      try await reloadSnapshot()
+    } catch {
+      errorMessage = "\(warningPrefix) \(error.localizedDescription)"
+    }
+  }
+
+  private func performCommittedResult(
+    warningPrefix: String,
+    _ mutation: () async throws -> Void
+  ) async -> Bool {
+    isBusy = true
+    errorMessage = nil
+    defer { isBusy = false }
+    do {
+      try await mutation()
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+    do {
+      try await reloadSnapshot()
+    } catch {
+      errorMessage = "\(warningPrefix) \(error.localizedDescription)"
+    }
+    return true
   }
 }

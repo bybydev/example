@@ -5,14 +5,15 @@ import Testing
 
 @MainActor
 struct MacProAccessTests {
-  @Test("Free theme access is limited to two themes")
+  @Test("Free theme access is limited to two themes after entitlement resolves")
   func themeLimit() {
     let themes = MacThemeID.allCases
     #expect(themes.count > MacProAccess.freeThemeCount)
-    #expect(MacProAccess.canUseTheme(themes[0], hasPro: false))
-    #expect(MacProAccess.canUseTheme(themes[1], hasPro: false))
-    #expect(!MacProAccess.canUseTheme(themes[2], hasPro: false))
-    #expect(MacProAccess.canUseTheme(themes[2], hasPro: true))
+    #expect(MacProAccess.canUseTheme(themes[0], hasPro: false, entitlement: .free))
+    #expect(MacProAccess.canUseTheme(themes[1], hasPro: false, entitlement: .free))
+    #expect(!MacProAccess.canUseTheme(themes[2], hasPro: false, entitlement: .free))
+    #expect(MacProAccess.canUseTheme(themes[2], hasPro: false, entitlement: .checking))
+    #expect(MacProAccess.canUseTheme(themes[2], hasPro: true, entitlement: .pro))
   }
 
   @Test("Free provider accounts stop at one")
@@ -43,6 +44,143 @@ struct MacProAccessTests {
     #expect(MacProAccess.remainingLibraryCapacity(currentCount: 7, hasPro: false) == 3)
     #expect(MacProAccess.remainingLibraryCapacity(currentCount: 10, hasPro: false) == 0)
     #expect(MacProAccess.remainingLibraryCapacity(currentCount: 100, hasPro: true) == nil)
+  }
+
+  @Test("Entitlement checking blocks gated creation without treating the user as Free")
+  func checkingDecision() {
+    #expect(
+      MacProAccess.providerAccountCapacityDecision(currentCount: 1, entitlement: .checking)
+        == .checking
+    )
+    #expect(
+      MacProAccess.providerAccountCapacityDecision(currentCount: 1, entitlement: .free)
+        == .requiresPro
+    )
+    #expect(
+      MacProAccess.providerAccountCapacityDecision(currentCount: 50, entitlement: .pro)
+        == .allowed
+    )
+  }
+
+  @Test("Provider configuration import cannot exceed Free capacity")
+  func providerConfigurationImportLimit() {
+    let existing = ProviderAccountID(rawValue: "existing")
+    let imported = ProviderAccountID(rawValue: "imported")
+
+    #expect(
+      MacProAccess.providerConfigurationImportDecision(
+        existingIDs: [existing],
+        importedIDs: [imported],
+        strategy: .keepExisting,
+        entitlement: .free
+      ) == .requiresPro
+    )
+    #expect(
+      MacProAccess.providerConfigurationImportDecision(
+        existingIDs: [existing],
+        importedIDs: [imported],
+        strategy: .keepExisting,
+        entitlement: .checking
+      ) == .checking
+    )
+    #expect(
+      MacProAccess.providerConfigurationImportDecision(
+        existingIDs: [existing],
+        importedIDs: [imported],
+        strategy: .keepExisting,
+        entitlement: .pro
+      ) == .allowed
+    )
+    #expect(
+      MacProAccess.providerConfigurationImportDecision(
+        existingIDs: [existing],
+        importedIDs: [imported],
+        strategy: .replaceExisting,
+        entitlement: .free
+      ) == .allowed
+    )
+  }
+
+  @Test("Free backup restore restricts only restored overflow and frees slots dynamically")
+  func restoredOverflowPolicy() {
+    let suite = "MacProAccessTests.restoredOverflow.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
+
+    let p1 = ProviderAccountID(rawValue: "p1")
+    let p2 = ProviderAccountID(rawValue: "p2")
+    let project1 = ProjectID(rawValue: "project-1")
+    let project2 = ProjectID(rawValue: "project-2")
+    let server1 = MCPServerID(rawValue: "server-1")
+    let server2 = MCPServerID(rawValue: "server-2")
+    let libraryIDs = (1...11).map { "library-\($0)" }
+
+    restrictions.recordFullBackupImport(
+      before: MacProResourceSnapshot(),
+      after: MacProResourceSnapshot(
+        providerAccountIDs: [p1.rawValue, p2.rawValue],
+        projectIDs: [project1.rawValue, project2.rawValue],
+        mcpServerIDs: [server1.rawValue, server2.rawValue],
+        libraryEntryIDs: libraryIDs
+      ),
+      strategy: .replaceExisting,
+      entitlement: .free
+    )
+
+    #expect(!restrictions.isProviderRestricted(p1, currentIDs: [p1, p2], entitlement: .free))
+    #expect(restrictions.isProviderRestricted(p2, currentIDs: [p1, p2], entitlement: .free))
+    #expect(!restrictions.isProjectRestricted(project1, currentIDs: [project1, project2], entitlement: .free))
+    #expect(restrictions.isProjectRestricted(project2, currentIDs: [project1, project2], entitlement: .free))
+    #expect(!restrictions.isMCPServerRestricted(server1, currentIDs: [server1, server2], entitlement: .free))
+    #expect(restrictions.isMCPServerRestricted(server2, currentIDs: [server1, server2], entitlement: .free))
+
+    let typedLibraryIDs = libraryIDs.map { LibraryEntryID(rawValue: $0) }
+    #expect(!restrictions.isLibraryEntryRestricted(typedLibraryIDs[9], currentIDs: typedLibraryIDs, entitlement: .free))
+    #expect(restrictions.isLibraryEntryRestricted(typedLibraryIDs[10], currentIDs: typedLibraryIDs, entitlement: .free))
+
+    // Deleting the first restored provider frees the one Free slot for the next
+    // restored candidate without deleting or rewriting the backup-restored data.
+    #expect(!restrictions.isProviderRestricted(p2, currentIDs: [p2], entitlement: .free))
+    #expect(!restrictions.isProjectRestricted(project2, currentIDs: [project2], entitlement: .pro))
+  }
+
+  @Test("Merge restore never locks resources that existed before import")
+  func mergeRestorePreservesExistingResources() {
+    let suite = "MacProAccessTests.mergeRestore.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
+
+    let existing = ProviderAccountID(rawValue: "existing")
+    let imported = ProviderAccountID(rawValue: "imported")
+    restrictions.recordFullBackupImport(
+      before: MacProResourceSnapshot(providerAccountIDs: [existing.rawValue]),
+      after: MacProResourceSnapshot(providerAccountIDs: [existing.rawValue, imported.rawValue]),
+      strategy: .keepExisting,
+      entitlement: .free
+    )
+
+    #expect(!restrictions.isProviderRestricted(existing, currentIDs: [existing, imported], entitlement: .free))
+    #expect(restrictions.isProviderRestricted(imported, currentIDs: [existing, imported], entitlement: .free))
+  }
+
+  @Test("Paid theme survives checking but falls back after entitlement resolves Free")
+  func themeReconciliation() {
+    let suite = "MacProAccessTests.theme.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer {
+      defaults.removePersistentDomain(forName: suite)
+      MacThemeRegistry.selectedID = .system
+    }
+
+    defaults.set(MacThemeID.midnight.rawValue, forKey: "mac.theme")
+    let theme = MacThemeModel(defaults: defaults)
+    theme.reconcileProAccess(hasPro: false, isChecking: true)
+    #expect(theme.selectedID == .midnight)
+
+    theme.reconcileProAccess(hasPro: false, isChecking: false)
+    #expect(theme.selectedID == .system)
   }
 }
 

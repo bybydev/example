@@ -62,6 +62,38 @@ enum MacStartupState: Sendable, Equatable {
   case failed(MacStartupFailure)
 }
 
+typealias MacCoreServicesFactory = @MainActor (BYOKStorageEnvironment) throws -> BYOKCoreServices
+
+@MainActor
+func resolveMacProjectTarget(
+  project: ChatProject,
+  providers: MacProviderModel
+) -> MacChatTarget? {
+  guard let accountID = project.accountID,
+    let account = providers.account(accountID),
+    providers.isReady(account)
+  else { return nil }
+
+  let modelID: ModelID?
+  if let explicitModelID = project.modelID {
+    guard providers.models(for: accountID).contains(where: {
+      $0.model.id == explicitModelID && $0.isAvailable
+    }) else { return nil }
+    modelID = explicitModelID
+  } else {
+    modelID = providers.usableModelID(for: accountID)
+  }
+
+  guard let modelID else { return nil }
+  return MacChatTarget(
+    accountID: accountID,
+    modelID: modelID,
+    reasoning: providers.supportsReasoning(accountID: accountID, modelID: modelID)
+      ? providers.reasoningDefault(for: accountID)
+      : nil
+  )
+}
+
 @MainActor
 @Observable
 final class MacAppModel {
@@ -77,14 +109,23 @@ final class MacAppModel {
   private(set) var mcp: MacMCPModel?
   private(set) var dataManagement: MacDataManagementModel?
   private(set) var diagnostics: MacDiagnosticsModel?
+  private(set) var pendingAttachmentStore: MacPendingAttachmentStore?
   private(set) var lastRecoveryBackupURL: URL?
 
   private(set) var newChatRequestID = 0
   private(set) var conversationSearchRequestID = 0
   private(set) var sidebarToggleRequestID = 0
 
-  init(storageEnvironment: BYOKStorageEnvironment = MacStorageEnvironment.current) {
+  private let coreServicesFactory: MacCoreServicesFactory
+
+  init(
+    storageEnvironment: BYOKStorageEnvironment = MacStorageEnvironment.current,
+    coreServicesFactory: @escaping MacCoreServicesFactory = {
+      try BYOKCoreServices.secure(environment: $0)
+    }
+  ) {
     self.storageEnvironment = storageEnvironment
+    self.coreServicesFactory = coreServicesFactory
     preferences = MacPreferencesModel()
     theme = MacThemeModel()
   }
@@ -100,7 +141,7 @@ final class MacAppModel {
   }
 
   func start() async {
-    guard !isLoading else { return }
+    guard case .idle = startupState else { return }
     await performStart()
   }
 
@@ -117,6 +158,7 @@ final class MacAppModel {
       lastRecoveryBackupURL = try await MacStorageRecovery.moveWorkspaceAside(
         environment: storageEnvironment
       )
+      MacPurchaseStore.restrictions.clear()
       clearRuntimeModels()
       await performStart()
     } catch {
@@ -139,6 +181,13 @@ final class MacAppModel {
       await performStart()
       return
     }
+
+    let pendingStore = MacPendingAttachmentStore(
+      environment: storageEnvironment,
+      blobs: services.fileBlobStore
+    )
+    await pendingStore.load()
+    pendingAttachmentStore = pendingStore
 
     let providerModel = MacProviderModel(services: services)
     try await providerModel.load()
@@ -204,6 +253,12 @@ final class MacAppModel {
   func requestNewChat(projectID: ProjectID? = nil, initialDraft: String? = nil) {
     guard isReady else { return }
 
+    if let projectID, workspace?.isProjectRestricted(projectID) == true {
+      chats?.errorMessage = MacProAccess.restoredResourceBlockedMessage("project")
+      MacProAccess.requestUpgrade(.projects)
+      return
+    }
+
     if let projectID, let project = workspace?.project(projectID), project.accountID != nil {
       guard let target = projectTarget(projectID) else {
         chats?.errorMessage = project.modelID == nil
@@ -233,28 +288,8 @@ final class MacAppModel {
   }
 
   private func projectTarget(_ projectID: ProjectID?) -> MacChatTarget? {
-    guard
-      let project = workspace?.project(projectID),
-      let accountID = project.accountID,
-      let providers,
-      let account = providers.account(accountID),
-      providers.isReady(account)
-    else { return nil }
-
-    let modelID = project.modelID
-      ?? account.defaultModelID
-      ?? providers.models(for: accountID).first(where: { $0.isAvailable })?.model.id
-    guard let modelID,
-      providers.models(for: accountID).contains(where: { $0.model.id == modelID && $0.isAvailable })
-    else { return nil }
-
-    return MacChatTarget(
-      accountID: accountID,
-      modelID: modelID,
-      reasoning: providers.supportsReasoning(accountID: accountID, modelID: modelID)
-        ? providers.reasoningDefault(for: accountID)
-        : nil
-    )
+    guard let project = workspace?.project(projectID), let providers else { return nil }
+    return resolveMacProjectTarget(project: project, providers: providers)
   }
 
   private func performStart() async {
@@ -270,13 +305,19 @@ final class MacAppModel {
 
       currentStage = .composingServices
       startupState = .loading(currentStage)
-      let services = try BYOKCoreServices.secure(environment: storageEnvironment)
+      let services = try coreServicesFactory(storageEnvironment)
       coreServices = services
 
       currentStage = .preparingFiles
       startupState = .loading(currentStage)
       try await services.fileBlobStore.rebuildIndexIfMissing()
       try await services.fileBlobStore.fillUnknownMetadata()
+      let pendingStore = MacPendingAttachmentStore(
+        environment: storageEnvironment,
+        blobs: services.fileBlobStore
+      )
+      await pendingStore.load()
+      pendingAttachmentStore = pendingStore
 
       currentStage = .loadingProviders
       startupState = .loading(currentStage)
@@ -350,12 +391,16 @@ final class MacAppModel {
     mcp = nil
     dataManagement = nil
     diagnostics = nil
+    pendingAttachmentStore = nil
   }
 
   private func sweepOrphanFiles(services: BYOKCoreServices) async throws {
     var referenced = await services.conversationStore.referencedAttachmentIDs()
     referenced.formUnion(await services.projectWorkspace.referencedFileIDs())
     referenced.formUnion(await services.libraryStore.referencedEntryIDs())
+    if let pendingAttachmentStore {
+      referenced.formUnion(await pendingAttachmentStore.referencedIDs())
+    }
 
     let stored = try await services.fileBlobStore.storedIDs()
     let orphans = stored.subtracting(referenced)

@@ -87,7 +87,9 @@ struct MacUtilitySheetContainer<Content: View>: View {
             .frame(width: 28, height: 28)
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(.cancelAction)
         .help("Close")
+        .accessibilityLabel("Close \(destination.title)")
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
@@ -123,8 +125,14 @@ struct MacSidebarUtilityGrid: View {
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @Environment(\.openSettings) private var openSettings
 
+  private static let spacing: CGFloat = 6
+  private static let columns = [
+    GridItem(.flexible(), spacing: spacing),
+    GridItem(.flexible(), spacing: spacing),
+  ]
+
   var body: some View {
-    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+    LazyVGrid(columns: Self.columns, spacing: Self.spacing) {
       utilityTile(.providers)
       utilityTile(.library)
       utilityTile(.projects)
@@ -132,6 +140,7 @@ struct MacSidebarUtilityGrid: View {
       utilityTile(.analytics)
       settingsTile
     }
+    .padding(Self.spacing)
   }
 
   private func utilityTile(_ destination: MacUtilitySheetDestination) -> some View {
@@ -153,16 +162,22 @@ struct MacSidebarUtilityGrid: View {
   }
 
   private func tileLabel(title: String, systemImage: String) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
+    HStack(spacing: 6) {
       Image(systemName: systemImage)
-        .font(.system(size: 14, weight: .semibold))
+        .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(MacDesignTokens.Colors.accent)
+        .frame(width: 14)
+
       Text(title)
         .font(.caption.weight(.medium))
         .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.9)
+
+      Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-    .padding(.horizontal, 10)
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
     .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 8))
     .overlay {
       RoundedRectangle(cornerRadius: 8)

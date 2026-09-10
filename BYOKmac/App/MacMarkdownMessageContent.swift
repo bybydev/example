@@ -14,17 +14,40 @@ struct MacMarkdownMessageContent: View {
   /// standard answer size.
   var textSize: CGFloat = 15
 
+  @State private var completedAnswer: MacPreparedAnswer?
+  @Environment(\.macPreparedAnswers) private var preparedAnswers
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+
+  private var preparedAnswer: MacPreparedAnswer? {
+    if let completedAnswer, completedAnswer.source == text { return completedAnswer }
+    return preparedAnswers[text] ?? MacAnswerContentParseCache.shared.cachedAnswer(for: text)
+  }
+
+  private struct RenderRequest: Equatable {
+    let text: String
+    let isStreaming: Bool
+    let isActive: Bool
+  }
+
   private static let renderSignpostLog = OSLog(
     subsystem: "pro.byok.BYOKchat",
     category: "MacStreamingRenderer"
   )
 
   var body: some View {
-    let blocks = parsedBlocks()
-
-    VStack(alignment: .leading, spacing: 12) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-        blockView(block)
+    Group {
+      if isStreaming {
+        renderedBlocks(parsedStreamingBlocks())
+      } else if let preparedAnswer {
+        renderedBlocks(preparedAnswer.blocks)
+      } else {
+        // Keep initial row materialization cheap. Completed structural parsing
+        // happens asynchronously on MacAnswerContentParseCache, never here.
+        Text(text)
+          .font(.system(size: textSize))
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -38,11 +61,33 @@ struct MacMarkdownMessageContent: View {
         return .handled
       }
     )
+    .task(id: RenderRequest(text: text, isStreaming: isStreaming, isActive: isTranscriptActive)) {
+      guard !isStreaming, isTranscriptActive else { return }
+      if let preparedAnswer {
+        completedAnswer = preparedAnswer
+        return
+      }
+      let source = text
+      do {
+        let prepared = try await MacAnswerContentParseCache.shared.answer(for: source)
+        guard !Task.isCancelled, source == text else { return }
+        completedAnswer = prepared
+      } catch {
+        // A recycled or inactive row no longer needs this preparation.
+      }
+    }
   }
 
-  private func parsedBlocks() -> [MacAnswerContentBlock] {
-    guard isStreaming else { return MacAnswerContentParser.parse(text) }
+  @ViewBuilder
+  private func renderedBlocks(_ blocks: [MacAnswerContentBlock]) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        blockView(block)
+      }
+    }
+  }
 
+  private func parsedStreamingBlocks() -> [MacAnswerContentBlock] {
     os_signpost(.event, log: Self.renderSignpostLog, name: "Stream Presentation")
     os_signpost(.begin, log: Self.renderSignpostLog, name: "Stream Parse")
     defer {
@@ -56,7 +101,9 @@ struct MacMarkdownMessageContent: View {
     switch block {
     case .markdown(let source):
       let markdown = isStreaming ? stabilizedStreamingMarkdown(source) : source
-      if shouldUseInlineMathRenderer(markdown) {
+      if preparedAnswer?.inlineMathSources.contains(markdown)
+        ?? MacPreparedAnswer.shouldUseInlineMathRenderer(markdown)
+      {
         LaTeX(markdown)
           .parsingMode(.onlyEquations)
           .blockMode(.blockViews)
@@ -69,13 +116,8 @@ struct MacMarkdownMessageContent: View {
           .foregroundStyle(.primary)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
-        Markdown(markdown)
-          .markdownTheme(
-            Self.chatTheme(
-              textSize: textSize,
-              columnAlignments: MacMarkdownTableAlignment.columnAlignments(in: markdown) ?? []
-            )
-          )
+        Markdown(preparedAnswer?.markdown[markdown] ?? MarkdownContent(markdown))
+          .markdownTheme(Self.chatTheme(textSize: textSize))
           .textSelection(.enabled)
           .tint(.accentColor)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -102,27 +144,6 @@ struct MacMarkdownMessageContent: View {
         .padding(.vertical, 8)
       }
     }
-  }
-
-  private func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
-    guard MacAnswerContentParser.containsInlineMath(markdown),
-      MacAnswerContentParser.isLikelyBalancedInlineMath(markdown)
-    else { return false }
-
-    for line in markdown.components(separatedBy: .newlines) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      if trimmed.hasPrefix("#")
-        || trimmed.hasPrefix(">")
-        || trimmed.hasPrefix("- ")
-        || trimmed.hasPrefix("* ")
-        || trimmed.hasPrefix("+ ")
-        || trimmed.hasPrefix("|")
-        || trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil
-      {
-        return false
-      }
-    }
-    return true
   }
 
   /// Keep an unfinished inline math tail from appearing as raw `$...` or
@@ -159,26 +180,7 @@ struct MacMarkdownMessageContent: View {
     return source
   }
 
-  private static func horizontalTextAlignment(_ alignment: MacTableColumnAlignment) -> TextAlignment {
-    switch alignment {
-    case .leading: .leading
-    case .center: .center
-    case .trailing: .trailing
-    }
-  }
-
-  private static func frameAlignment(_ alignment: MacTableColumnAlignment) -> Alignment {
-    switch alignment {
-    case .leading: .topLeading
-    case .center: .top
-    case .trailing: .topTrailing
-    }
-  }
-
-  private static func chatTheme(
-    textSize: CGFloat,
-    columnAlignments: [MacTableColumnAlignment]
-  ) -> MarkdownUI.Theme {
+  private static func chatTheme(textSize: CGFloat) -> MarkdownUI.Theme {
     MarkdownUI.Theme.basic
       .text {
         ForegroundColor(.primary)
@@ -259,38 +261,29 @@ struct MacMarkdownMessageContent: View {
           .relativeFrame(minWidth: .em(1.4), alignment: .trailing)
       }
       .table { configuration in
-        ScrollView(.horizontal) {
+        MacHorizontalPassthroughScrollView {
           configuration.label
+            .fixedSize(horizontal: false, vertical: true)
             .markdownTableBorderStyle(.init(color: Color.primary.opacity(0.14)))
             .markdownTableBackgroundStyle(
               .alternatingRows(Color.primary.opacity(0.025), Color.primary.opacity(0.045))
             )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(.visible)
         .frame(maxWidth: .infinity, alignment: .leading)
         .markdownMargin(top: .em(0.15), bottom: .em(0.85))
       }
       .tableCell { configuration in
-        let columnAlignment = configuration.column < columnAlignments.count
-          ? columnAlignments[configuration.column]
-          : .leading
-        let textAlignment = horizontalTextAlignment(columnAlignment)
-
         configuration.label
           .markdownTextStyle {
             FontSize(.em(0.9))
             if configuration.row == 0 { FontWeight(.semibold) }
             BackgroundColor(nil)
           }
-          .multilineTextAlignment(textAlignment)
-          .frame(
-            minWidth: 110,
-            maxWidth: 220,
-            alignment: frameAlignment(columnAlignment)
-          )
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 10)
           .padding(.vertical, 7)
+          .relativeLineSpacing(.em(0.18))
       }
       .thematicBreak {
         Rectangle()
@@ -563,7 +556,7 @@ struct MacMathAnswerView: View {
       .padding(.vertical, 14)
       .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
       .overlay {
-        RoundedRectangle(cornerRadius: 10)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
           .stroke(Color.primary.opacity(0.12), lineWidth: 1)
       }
   }

@@ -82,13 +82,7 @@ public actor ProjectAwareDataPortabilityService {
 
     var portableEntries: [PortableLibraryEntry]?
     if let library {
-      var collected: [PortableLibraryEntry] = []
-      for entry in await library.entries() {
-        if let data = await library.data(for: entry), !data.isEmpty {
-          collected.append(PortableLibraryEntry(entry: entry, data: data))
-        }
-      }
-      portableEntries = collected
+      portableEntries = await Self.portableLibraryEntries(from: library)
     }
 
     let extended = ProjectAwareBYOKchatBackup(
@@ -97,7 +91,9 @@ public actor ProjectAwareDataPortabilityService {
       providerWorkspace: backup.providerWorkspace,
       conversationWorkspace: backup.conversationWorkspace,
       mcpWorkspace: backup.mcpWorkspace,
-      projectWorkspace: await projects.snapshot(),
+      // Project runtime state is metadata-only. Use its dedicated export boundary so
+      // reference-file bytes are hydrated into the portable document.
+      projectWorkspace: await projectPortability.exportWorkspace(),
       libraryEntries: portableEntries,
       preferences: backup.preferences
     )
@@ -121,30 +117,69 @@ public actor ProjectAwareDataPortabilityService {
       )
     }
 
-    // The base importer remains the authority for providers, chats, MCP, credentials,
-    // validation, and rollback. The project layer consumes its effective restored chats.
-    let summary = try await base.importBackup(data, strategy: strategy)
-    let mapping = try await conversationMapping(
-      sources: extended.conversationWorkspace.conversations
-    )
+    // Keep a self-contained Project snapshot for exact rollback. Project IDs matter and
+    // Project reference files live in blobs, so a normal metadata snapshot is insufficient.
+    let previousProjects = await projectPortability.exportWorkspace()
 
-    _ = try await projectPortability.importWorkspace(
-      extended.projectWorkspace,
-      strategy: strategy,
-      conversationIDMapping: mapping
-    )
-    if let library {
+    // The core importer commits provider/chat/MCP workspace data but deliberately leaves
+    // Keychain credentials untouched until Projects and Library have also committed.
+    let transaction: DataPortabilityImportTransaction
+    do {
+      transaction = try await base.beginImportBackup(data, strategy: strategy)
+    } catch let rolledBack as DataPortabilityRolledBackImportError {
+      // Core rollback can recreate conversations with fresh local IDs. Even though Projects
+      // were not part of the failed core import, their old conversation keys must therefore
+      // be remapped through the exact rollback mapping before returning the failure.
       do {
-        try await library.restorePortableEntries(extended.libraryEntries ?? [], strategy: strategy)
-      } catch {
-        // Library restore failures must not roll back the chats/providers that
-        // already imported; surface the error with context instead.
+        _ = try await projectPortability.importWorkspace(
+          previousProjects,
+          strategy: .replaceExisting,
+          conversationIDMapping: rolledBack.conversationIDMapping
+        )
+      } catch let projectRollbackError {
         throw ProviderError.importConflict(
-          "Chats and providers were restored, but the library could not be: \(error.localizedDescription)"
+          "Full backup import failed: \(rolledBack.localizedDescription) Project rollback also failed: \(projectRollbackError.localizedDescription)"
         )
       }
+      throw rolledBack
     }
-    return summary
+
+    do {
+      // Reuse the exact source -> effective local chat mapping produced by ConversationStore.
+      // MCP and Projects must never independently guess which equivalent local chat won a merge.
+      _ = try await projectPortability.importWorkspace(
+        extended.projectWorkspace,
+        strategy: strategy,
+        conversationIDMapping: transaction.conversationIDMapping
+      )
+
+      if let library {
+        // LibraryStore.restorePortableEntries is already a candidate-state transaction:
+        // blobs land first and live metadata changes only after its one persistence commit.
+        try await library.restorePortableEntries(
+          extended.libraryEntries ?? [],
+          strategy: strategy
+        )
+      }
+    } catch let importError {
+      do {
+        let rollbackMapping = try await base.rollbackImport(transaction)
+        _ = try await projectPortability.importWorkspace(
+          previousProjects,
+          strategy: .replaceExisting,
+          conversationIDMapping: rollbackMapping
+        )
+      } catch let rollbackError {
+        throw ProviderError.importConflict(
+          "Full backup import failed: \(importError.localizedDescription) Rollback also failed: \(rollbackError.localizedDescription)"
+        )
+      }
+      throw importError
+    }
+
+    // Only after every persistent workspace has committed do replace imports remove old/new
+    // provider and MCP credentials. Cleanup failures are warnings, never data rollback triggers.
+    return await base.commitImport(transaction)
   }
 
   public func importProviderConfiguration(
@@ -164,34 +199,16 @@ public actor ProjectAwareDataPortabilityService {
     )
   }
 
-  private func conversationMapping(
-    sources: [ChatConversation]
-  ) async throws -> [ConversationID: ConversationID] {
-    let local = await conversations.snapshot().conversations
-    var mapping: [ConversationID: ConversationID] = [:]
-    var usedLocalIDs: Set<ConversationID> = []
-
-    for source in sources {
-      if let sameID = local.first(where: { $0.id == source.id }) {
-        mapping[source.id] = sameID.id
-        usedLocalIDs.insert(sameID.id)
-        continue
+  private static func portableLibraryEntries(from library: LibraryStore) async
+    -> [PortableLibraryEntry]
+  {
+    var collected: [PortableLibraryEntry] = []
+    for entry in await library.entries() {
+      if let data = await library.data(for: entry), !data.isEmpty {
+        collected.append(PortableLibraryEntry(entry: entry, data: data))
       }
-
-      let sourceFingerprint = try Self.portableFingerprint(source)
-      let match = try local.first { candidate in
-        guard !usedLocalIDs.contains(candidate.id) else { return false }
-        return try Self.portableFingerprint(candidate) == sourceFingerprint
-      }
-      guard let match else {
-        throw ProviderError.importConflict(
-          "Restored conversation \(source.id.rawValue) could not be mapped back to its project."
-        )
-      }
-      mapping[source.id] = match.id
-      usedLocalIDs.insert(match.id)
     }
-    return mapping
+    return collected
   }
 
   private static func validateProjectConversationReferences(
@@ -206,73 +223,5 @@ public actor ProjectAwareDataPortabilityService {
         )
       }
     }
-  }
-
-  private static func portableFingerprint(_ conversation: ChatConversation) throws -> Data {
-    try JSONEncoder.providerEncoder.encode(
-      ProjectPortableConversationFingerprint(
-        title: conversation.title,
-        providerID: conversation.providerID,
-        accountID: conversation.accountID,
-        modelID: conversation.modelID,
-        systemPrompt: conversation.systemPrompt,
-        options: conversation.options,
-        messages: conversation.messages.map(ProjectPortableMessageFingerprint.init),
-        lastContextOmittedMessageCount: conversation.lastContextOmittedMessageCount,
-        draftText: conversation.draftText
-      )
-    )
-  }
-}
-
-private struct ProjectPortableConversationFingerprint: Encodable {
-  var title: String
-  var providerID: ProviderID
-  var accountID: ProviderAccountID
-  var modelID: ModelID
-  var systemPrompt: String
-  var options: ProviderRequestOptions
-  var messages: [ProjectPortableMessageFingerprint]
-  var lastContextOmittedMessageCount: Int
-  var draftText: String?
-}
-
-private struct ProjectPortableMessageFingerprint: Encodable {
-  var role: ChatMessageRole
-  var content: String
-  var reasoning: String
-  var attachments: [ChatAttachment]?
-  var toolRounds: [ChatToolRound]?
-  var status: ChatMessageStatus
-  var providerID: ProviderID?
-  var accountID: ProviderAccountID?
-  var modelID: ModelID?
-  var finishReason: String?
-  var usage: ProviderUsage?
-  var metadata: [String: String]
-  var errorCode: String?
-  var errorDescription: String?
-  var completionUncertain: Bool?
-
-  init(_ message: ChatMessage) {
-    role = message.role
-    content = message.content
-    reasoning = message.reasoning
-    attachments = message.attachments
-    toolRounds = message.toolRounds
-    status = switch message.status {
-    case .complete: .complete
-    case .cancelled: .cancelled
-    case .failed, .interrupted, .pending, .streaming: .failed
-    }
-    providerID = message.providerID
-    accountID = message.accountID
-    modelID = message.modelID
-    finishReason = message.finishReason
-    usage = message.usage
-    metadata = message.metadata
-    errorCode = message.errorCode
-    errorDescription = message.errorDescription
-    completionUncertain = message.completionUncertain
   }
 }

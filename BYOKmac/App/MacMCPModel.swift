@@ -19,18 +19,50 @@ final class MacMCPModel {
 
   private let runtime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
+  private let credentialVault: any MCPCredentialVault
   private let projectWorkspace: ProjectWorkspaceStore
   private let approvals: MCPToolApprovalCenter
   private let elicitations: MCPElicitationCenter
+  private let restrictions: MacProResourceRestrictions
+  private let entitlementAccessOverride: MacProEntitlementAccess?
   private var approvalObservationTask: Task<Void, Never>?
   private var elicitationObservationTask: Task<Void, Never>?
 
-  init(services: BYOKCoreServices) {
-    runtime = services.mcpRuntime
-    workspace = services.mcpWorkspace
-    projectWorkspace = services.projectWorkspace
-    approvals = services.approvalCenter
-    elicitations = services.elicitationCenter
+  convenience init(
+    services: BYOKCoreServices,
+    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
+    entitlementAccessOverride: MacProEntitlementAccess? = nil
+  ) {
+    self.init(
+      runtime: services.mcpRuntime,
+      workspace: services.mcpWorkspace,
+      credentialVault: services.mcpCredentialVault,
+      projectWorkspace: services.projectWorkspace,
+      approvals: services.approvalCenter,
+      elicitations: services.elicitationCenter,
+      restrictions: restrictions,
+      entitlementAccessOverride: entitlementAccessOverride
+    )
+  }
+
+  init(
+    runtime: MCPRemoteRuntime,
+    workspace: MCPWorkspaceStore,
+    credentialVault: any MCPCredentialVault,
+    projectWorkspace: ProjectWorkspaceStore,
+    approvals: MCPToolApprovalCenter,
+    elicitations: MCPElicitationCenter,
+    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
+    entitlementAccessOverride: MacProEntitlementAccess? = nil
+  ) {
+    self.runtime = runtime
+    self.workspace = workspace
+    self.credentialVault = credentialVault
+    self.projectWorkspace = projectWorkspace
+    self.approvals = approvals
+    self.elicitations = elicitations
+    self.restrictions = restrictions
+    self.entitlementAccessOverride = entitlementAccessOverride
   }
 
   func load() async throws {
@@ -60,6 +92,14 @@ final class MacMCPModel {
 
   func hasCredential(_ serverID: MCPServerID) -> Bool {
     credentialServerIDs.contains(serverID)
+  }
+
+  func isServerRestricted(_ serverID: MCPServerID) -> Bool {
+    restrictions.isMCPServerRestricted(
+      serverID,
+      currentIDs: servers.map(\.id),
+      entitlement: effectiveEntitlementAccess
+    )
   }
 
   func chatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration {
@@ -128,6 +168,9 @@ final class MacMCPModel {
     additionalHeaders: [String: String],
     isEnabled: Bool
   ) async -> Bool {
+    if let existing, !requireServerAccess(existing.id) {
+      return false
+    }
     if existing == nil,
       !MacProAccess.requireMCPServerCapacity(currentCount: servers.count)
     {
@@ -135,7 +178,12 @@ final class MacMCPModel {
       return false
     }
 
-    return await performResult("MCP server saved and tools discovered") {
+    isBusy = true
+    errorMessage = nil
+    statusMessage = nil
+    defer { isBusy = false }
+
+    do {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
       guard let url = URL(string: normalizedEndpoint) else {
@@ -155,6 +203,7 @@ final class MacMCPModel {
       server.authentication = authentication
       server.additionalHeaders = additionalHeaders
       server.isEnabled = isEnabled
+      try MCPWorkspaceStore.validateServer(server)
 
       let existingCredential = existing.map { credentialServerIDs.contains($0.id) } ?? false
       if authenticationKind != .none,
@@ -164,33 +213,87 @@ final class MacMCPModel {
         throw MCPError.missingCredential
       }
 
-      try await runtime.saveServer(server, credential: credential)
+      try await commitServerConfiguration(server, credential: credential)
+
+      var warnings: [String] = []
       if server.isEnabled {
-        _ = try await runtime.refreshServer(server.id, force: true)
+        do {
+          _ = try await runtime.refreshServer(server.id, force: true)
+        } catch {
+          warnings.append("Tool discovery failed: \(error.localizedDescription)")
+        }
       }
       try await reloadSnapshot()
+
+      if warnings.isEmpty {
+        statusMessage = server.isEnabled
+          ? "MCP server saved and tools discovered"
+          : "MCP server saved"
+      } else {
+        statusMessage = "MCP server saved. \(warnings.joined(separator: " "))"
+      }
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
     }
   }
 
   func deleteServer(_ serverID: MCPServerID) async -> Bool {
-    await performResult("MCP server deleted") {
-      try await runtime.deleteServer(serverID)
+    isBusy = true
+    errorMessage = nil
+    statusMessage = nil
+    defer { isBusy = false }
+
+    do {
+      try await workspace.deleteServer(serverID)
+
+      var cleanupWarning: String?
+      do {
+        try await credentialVault.removeCredential(serverID: serverID)
+      } catch {
+        cleanupWarning = "Keychain cleanup failed: \(error.localizedDescription)"
+      }
+
       try await reloadSnapshot()
+      statusMessage = cleanupWarning.map { "MCP server deleted. \($0)" } ?? "MCP server deleted"
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
     }
   }
 
   func setEnabled(_ enabled: Bool, serverID: MCPServerID) async -> Bool {
-    await performResult(nil) {
+    if enabled, !requireServerAccess(serverID) { return false }
+
+    isBusy = true
+    errorMessage = nil
+    statusMessage = nil
+    defer { isBusy = false }
+
+    do {
       try await runtime.setEnabled(enabled, serverID: serverID)
+      var discoveryWarning: String?
       if enabled {
-        _ = try await runtime.refreshServer(serverID, force: true)
+        do {
+          _ = try await runtime.refreshServer(serverID, force: true)
+        } catch {
+          discoveryWarning = "Tool discovery failed: \(error.localizedDescription)"
+        }
       }
       try await reloadSnapshot()
+      statusMessage = discoveryWarning
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
     }
   }
 
   func refresh(_ serverID: MCPServerID) async -> Bool {
-    await performResult("MCP tools refreshed") {
+    guard requireServerAccess(serverID) else { return false }
+    return await performResult("MCP tools refreshed") {
       _ = try await runtime.refreshServer(serverID, force: true)
       try await reloadSnapshot()
     }
@@ -201,15 +304,15 @@ final class MacMCPModel {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async -> Bool {
-    await performResult(nil) {
+    if enabled, !requireServerAccess(serverID) { return false }
+    return await performResult(nil) {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
           throw MCPError.invalidServer("Enable this MCP server in Settings first.")
         }
         _ = try await runtime.refreshServer(serverID)
       }
-      try await materializeInheritedConfigurationIfNeeded(conversationID)
-      try await workspace.setChatServerEnabled(
+      try await persistChatServerEnabled(
         enabled,
         serverID: serverID,
         conversationID: conversationID
@@ -223,9 +326,14 @@ final class MacMCPModel {
     exposedToolName: String,
     conversationID: ConversationID
   ) async -> Bool {
-    await performResult(nil) {
-      try await materializeInheritedConfigurationIfNeeded(conversationID)
-      try await workspace.setChatToolPolicy(
+    if policy != .disabled,
+      let serverID = serverID(forExposedToolName: exposedToolName),
+      !requireServerAccess(serverID)
+    {
+      return false
+    }
+    return await performResult(nil) {
+      try await persistChatToolPolicy(
         policy,
         exposedToolName: exposedToolName,
         conversationID: conversationID
@@ -238,7 +346,8 @@ final class MacMCPModel {
     _ configuration: MCPChatToolConfiguration,
     conversationID: ConversationID
   ) async -> Bool {
-    await performResult("Tool configuration applied") {
+    guard requireConfigurationAccess(configuration) else { return false }
+    return await performResult("Tool configuration applied") {
       try await workspace.replaceChatConfiguration(configuration, conversationID: conversationID)
       try await reloadSnapshot()
     }
@@ -255,9 +364,12 @@ final class MacMCPModel {
     if decision == .alwaysAllow,
       let request = pendingApprovals.first(where: { $0.id == requestID })
     {
+      guard requireServerAccess(request.serverID) else {
+        await approvals.resolve(requestID, decision: .deny)
+        return
+      }
       do {
-        try await materializeInheritedConfigurationIfNeeded(request.conversationID)
-        try await workspace.setChatToolPolicy(
+        try await persistChatToolPolicy(
           .alwaysAllow,
           exposedToolName: request.exposedToolName,
           conversationID: request.conversationID
@@ -277,11 +389,139 @@ final class MacMCPModel {
     await elicitations.resolve(requestID, decision: decision)
   }
 
-  private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
-    guard chatConfigurations[conversationID] == nil,
-      let inherited = inheritedChatConfigurations[conversationID]
-    else { return }
-    try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
+  private var effectiveEntitlementAccess: MacProEntitlementAccess {
+    entitlementAccessOverride ?? MacProAccess.entitlementAccess
+  }
+
+  @discardableResult
+  private func requireServerAccess(_ serverID: MCPServerID) -> Bool {
+    guard !isServerRestricted(serverID) else {
+      errorMessage = MacProAccess.restoredResourceBlockedMessage("MCP server")
+      if effectiveEntitlementAccess == .free {
+        MacProGateCenter.shared.request(.mcpServers)
+      }
+      return false
+    }
+    return true
+  }
+
+  private func requireConfigurationAccess(_ configuration: MCPChatToolConfiguration) -> Bool {
+    for serverID in configuration.enabledServerIDs where isServerRestricted(serverID) {
+      return requireServerAccess(serverID)
+    }
+    return true
+  }
+
+  private func serverID(forExposedToolName exposedToolName: String) -> MCPServerID? {
+    for server in servers {
+      if tools(for: server.id).contains(where: { $0.exposedName == exposedToolName }) {
+        return server.id
+      }
+    }
+    return nil
+  }
+
+  private func commitServerConfiguration(
+    _ server: MCPRemoteServer,
+    credential: String?
+  ) async throws {
+    let previousCredential: String?
+    if credential != nil {
+      previousCredential = try await credentialVault.credential(serverID: server.id)
+    } else {
+      previousCredential = nil
+    }
+
+    if let credential {
+      let normalized = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+      try await credentialVault.setCredential(
+        normalized.isEmpty ? nil : credential,
+        serverID: server.id
+      )
+    }
+
+    do {
+      try await workspace.upsertServer(
+        server,
+        invalidateSnapshot: credential != nil
+      )
+    } catch {
+      let configurationError = error
+      if credential != nil {
+        do {
+          try await credentialVault.setCredential(previousCredential, serverID: server.id)
+        } catch {
+          throw MCPError.transport(
+            "MCP configuration was not saved and the previous Keychain credential could not be restored: \(error.localizedDescription)"
+          )
+        }
+      }
+      throw configurationError
+    }
+  }
+
+  private func persistChatServerEnabled(
+    _ enabled: Bool,
+    serverID: MCPServerID,
+    conversationID: ConversationID
+  ) async throws {
+    if await workspace.explicitChatConfiguration(for: conversationID) != nil {
+      try await workspace.setChatServerEnabled(
+        enabled,
+        serverID: serverID,
+        conversationID: conversationID
+      )
+      return
+    }
+
+    if var inherited = await projectWorkspace.mcpConfiguration(for: conversationID) {
+      inherited.enabledServerIDs.removeAll { $0 == serverID }
+      if enabled { inherited.enabledServerIDs.append(serverID) }
+      inherited.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
+      try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
+      return
+    }
+
+    try await workspace.setChatServerEnabled(
+      enabled,
+      serverID: serverID,
+      conversationID: conversationID
+    )
+  }
+
+  private func persistChatToolPolicy(
+    _ policy: ChatToolPermissionPolicy,
+    exposedToolName: String,
+    conversationID: ConversationID
+  ) async throws {
+    if await workspace.explicitChatConfiguration(for: conversationID) != nil {
+      try await workspace.setChatToolPolicy(
+        policy,
+        exposedToolName: exposedToolName,
+        conversationID: conversationID
+      )
+      return
+    }
+
+    if var inherited = await projectWorkspace.mcpConfiguration(for: conversationID) {
+      let normalized = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !normalized.isEmpty, normalized.count <= MCPToolNamespace.maximumExposedNameLength else {
+        throw MCPError.invalidToolDefinition("Invalid MCP tool permission name.")
+      }
+      if policy == .ask {
+        inherited.toolPolicies.removeValue(forKey: normalized)
+      } else {
+        inherited.toolPolicies[normalized] = policy
+      }
+      try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
+      return
+    }
+
+    try await workspace.setChatToolPolicy(
+      policy,
+      exposedToolName: exposedToolName,
+      conversationID: conversationID
+    )
   }
 
   private func reloadSnapshot() async throws {
@@ -307,7 +547,7 @@ final class MacMCPModel {
 
     var credentials: Set<MCPServerID> = []
     for server in servers {
-      if try await runtime.hasCredential(serverID: server.id) {
+      if (try? await runtime.hasCredential(serverID: server.id)) == true {
         credentials.insert(server.id)
       }
     }

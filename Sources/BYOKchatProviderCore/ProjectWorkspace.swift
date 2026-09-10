@@ -290,6 +290,12 @@ public actor ProjectWorkspaceStore {
   private var hasLoaded = false
   private var blocksWritesAfterFailedLoad = false
 
+  /// Actor methods are reentrant while persistence is awaiting I/O. Keep all
+  /// mutations in a FIFO transaction so two overlapping saves cannot commit
+  /// candidates derived from the same old state and lose one another.
+  private var mutationInProgress = false
+  private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
+
   public init(
     persistence: any ProjectWorkspacePersistence,
     blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore()
@@ -378,7 +384,15 @@ public actor ProjectWorkspaceStore {
     toolPresets: [ProjectToolPreset] = [],
     at date: Date = .now
   ) async throws -> ChatProject {
-    let normalizedName = try validatedName(name, excluding: nil)
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    let normalizedName = try Self.validatedName(
+      name,
+      excluding: nil,
+      projects: candidate.projects
+    )
     try Self.validateFiles(files)
     let normalizedPrompts = try Self.validatedPromptPresets(promptPresets)
     let normalizedTools = try Self.validatedToolPresets(toolPresets)
@@ -396,8 +410,10 @@ public actor ProjectWorkspaceStore {
       promptPresets: normalizedPrompts.isEmpty ? nil : normalizedPrompts,
       toolPresets: normalizedTools.isEmpty ? nil : normalizedTools
     )
-    state.projects.append(project)
-    try await persistMutatingProject(project.id)
+    candidate.projects.append(project)
+
+    let committed = try await committedState(candidate, mutatingProject: project.id)
+    state = committed
     return project
   }
 
@@ -416,76 +432,251 @@ public actor ProjectWorkspaceStore {
     toolPresets: [ProjectToolPreset]? = nil,
     at date: Date = .now
   ) async throws -> ChatProject {
-    guard let index = state.projects.firstIndex(where: { $0.id == id }) else {
-      throw ProjectWorkspaceError.projectNotFound(id)
-    }
-    state.projects[index].name = try validatedName(name, excluding: id)
-    state.projects[index].symbolName = symbolName.isEmpty ? "folder.fill" : symbolName
-    state.projects[index].accentID = accentID.isEmpty ? "blue" : accentID
-    state.projects[index].accountID = accountID
-    state.projects[index].modelID = accountID == nil ? nil : modelID
-    state.projects[index].instructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+    try await mutateProject(id: id, at: date, offloadFiles: files != nil) { project, projects in
+      project.name = try Self.validatedName(name, excluding: id, projects: projects)
+      project.symbolName = symbolName.isEmpty ? "folder.fill" : symbolName
+      project.accentID = accentID.isEmpty ? "blue" : accentID
+      project.accountID = accountID
+      project.modelID = accountID == nil ? nil : modelID
+      project.instructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    if let files {
+      if let files {
+        try Self.validateFiles(files)
+        project.files = files.isEmpty ? nil : files
+      }
+      if let mcpConfiguration {
+        project.mcpConfiguration = mcpConfiguration
+      }
+      if let promptPresets {
+        let normalized = try Self.validatedPromptPresets(promptPresets)
+        project.promptPresets = normalized.isEmpty ? nil : normalized
+      }
+      if let toolPresets {
+        let normalized = try Self.validatedToolPresets(toolPresets)
+        project.toolPresets = normalized.isEmpty ? nil : normalized
+      }
+    }
+  }
+
+  @discardableResult
+  public func updateProjectIdentity(
+    id: ProjectID,
+    name: String,
+    symbolName: String,
+    accentID: String,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date) { project, projects in
+      project.name = try Self.validatedName(name, excluding: id, projects: projects)
+      project.symbolName = symbolName.isEmpty ? "folder.fill" : symbolName
+      project.accentID = accentID.isEmpty ? "blue" : accentID
+    }
+  }
+
+  @discardableResult
+  public func updateProjectDefaults(
+    id: ProjectID,
+    accountID: ProviderAccountID?,
+    modelID: ModelID?,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date) { project, _ in
+      project.accountID = accountID
+      project.modelID = accountID == nil ? nil : modelID
+    }
+  }
+
+  @discardableResult
+  public func updateProjectInstructions(
+    id: ProjectID,
+    instructions: String,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date) { project, _ in
+      project.instructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+  }
+
+  @discardableResult
+  public func addProjectFiles(
+    _ additions: [ProjectFile],
+    to id: ProjectID,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date, offloadFiles: true) { project, _ in
+      let files = project.projectFiles + additions
       try Self.validateFiles(files)
-      state.projects[index].files = files.isEmpty ? nil : files
+      project.files = files.isEmpty ? nil : files
     }
-    if let mcpConfiguration {
-      state.projects[index].mcpConfiguration = mcpConfiguration
-    }
-    if let promptPresets {
-      let normalized = try Self.validatedPromptPresets(promptPresets)
-      state.projects[index].promptPresets = normalized.isEmpty ? nil : normalized
-    }
-    if let toolPresets {
-      let normalized = try Self.validatedToolPresets(toolPresets)
-      state.projects[index].toolPresets = normalized.isEmpty ? nil : normalized
-    }
+  }
 
-    state.projects[index].updatedAt = date
-    let result = state.projects[index]
-    try await persistMutatingProject(id)
-    return result
+  @discardableResult
+  public func removeProjectFile(
+    _ fileID: String,
+    from id: ProjectID,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date) { project, _ in
+      let files = project.projectFiles.filter { $0.id != fileID }
+      project.files = files.isEmpty ? nil : files
+    }
+  }
+
+  @discardableResult
+  public func upsertProjectPromptPreset(
+    _ preset: ProjectPromptPreset,
+    projectID: ProjectID,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: projectID, at: date) { project, _ in
+      var presets = project.projectPromptPresets
+      if let index = presets.firstIndex(where: { $0.id == preset.id }) {
+        presets[index] = preset
+      } else {
+        presets.append(preset)
+      }
+      let normalized = try Self.validatedPromptPresets(presets)
+      project.promptPresets = normalized.isEmpty ? nil : normalized
+    }
+  }
+
+  @discardableResult
+  public func deleteProjectPromptPreset(
+    _ presetID: String,
+    projectID: ProjectID,
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: projectID, at: date) { project, _ in
+      let presets = project.projectPromptPresets.filter { $0.id != presetID }
+      project.promptPresets = presets.isEmpty ? nil : presets
+    }
+  }
+
+  @discardableResult
+  public func replaceProjectToolSettings(
+    id: ProjectID,
+    mcpConfiguration: MCPChatToolConfiguration?,
+    toolPresets: [ProjectToolPreset],
+    at date: Date = .now
+  ) async throws -> ChatProject {
+    try await mutateProject(id: id, at: date) { project, _ in
+      let normalized = try Self.validatedToolPresets(toolPresets)
+      project.mcpConfiguration = mcpConfiguration
+      project.toolPresets = normalized.isEmpty ? nil : normalized
+    }
   }
 
   public func deleteProject(_ id: ProjectID) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
     guard state.projects.contains(where: { $0.id == id }) else { return }
-    state.projects.removeAll { $0.id == id }
-    state.conversationProjectIDs = state.conversationProjectIDs.filter { $0.value != id.rawValue }
-    state.tombstones[id.rawValue] = .now
+    var candidate = state
+    candidate.projects.removeAll { $0.id == id }
+    candidate.conversationProjectIDs = candidate.conversationProjectIDs.filter {
+      $0.value != id.rawValue
+    }
+    candidate.tombstones[id.rawValue] = .now
+
+    state = try await committedState(candidate)
     // Orphaned file blobs are swept by the app-level sweepOrphanFiles.
-    try await persistJSON()
   }
 
   public func assignConversation(_ conversationID: ConversationID, to projectID: ProjectID?) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
     if let projectID {
-      _ = try project(id: projectID)
-      state.conversationProjectIDs[conversationID.rawValue] = projectID.rawValue
+      guard candidate.projects.contains(where: { $0.id == projectID }) else {
+        throw ProjectWorkspaceError.projectNotFound(projectID)
+      }
+      candidate.conversationProjectIDs[conversationID.rawValue] = projectID.rawValue
     } else {
-      state.conversationProjectIDs.removeValue(forKey: conversationID.rawValue)
+      candidate.conversationProjectIDs.removeValue(forKey: conversationID.rawValue)
     }
-    try await persistJSON()
+    state = try await committedState(candidate)
   }
 
   public func removeConversation(_ conversationID: ConversationID) async throws {
-    guard state.conversationProjectIDs.removeValue(forKey: conversationID.rawValue) != nil else { return }
-    try await persistJSON()
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard candidate.conversationProjectIDs.removeValue(forKey: conversationID.rawValue) != nil else {
+      return
+    }
+    state = try await committedState(candidate)
   }
 
   public func reconcileConversationIDs(_ validIDs: Set<ConversationID>) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
     let validRawIDs = Set(validIDs.map(\.rawValue))
-    let before = state.conversationProjectIDs.count
-    state.conversationProjectIDs = state.conversationProjectIDs.filter { validRawIDs.contains($0.key) }
-    if state.conversationProjectIDs.count != before {
-      try await persistJSON()
+    var candidate = state
+    let before = candidate.conversationProjectIDs.count
+    candidate.conversationProjectIDs = candidate.conversationProjectIDs.filter {
+      validRawIDs.contains($0.key)
+    }
+    guard candidate.conversationProjectIDs.count != before else { return }
+    state = try await committedState(candidate)
+  }
+
+  private func mutateProject(
+    id: ProjectID,
+    at date: Date,
+    offloadFiles: Bool = false,
+    _ mutation: (inout ChatProject, [ChatProject]) throws -> Void
+  ) async throws -> ChatProject {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard let index = candidate.projects.firstIndex(where: { $0.id == id }) else {
+      throw ProjectWorkspaceError.projectNotFound(id)
+    }
+
+    let projectsBeforeMutation = candidate.projects
+    try mutation(&candidate.projects[index], projectsBeforeMutation)
+    candidate.projects[index].updatedAt = date
+
+    let committed = try await committedState(
+      candidate,
+      mutatingProject: offloadFiles ? id : nil
+    )
+    state = committed
+    return committed.projects[index]
+  }
+
+  private func beginMutation() async {
+    if !mutationInProgress {
+      mutationInProgress = true
+      return
+    }
+
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      mutationWaiters.append(continuation)
     }
   }
 
-  private func validatedName(_ name: String, excluding id: ProjectID?) throws -> String {
+  private func endMutation() {
+    guard !mutationWaiters.isEmpty else {
+      mutationInProgress = false
+      return
+    }
+    mutationWaiters.removeFirst().resume()
+  }
+
+  private static func validatedName(
+    _ name: String,
+    excluding id: ProjectID?,
+    projects: [ChatProject]
+  ) throws -> String {
     let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalized.isEmpty else { throw ProjectWorkspaceError.invalidName }
     guard normalized.count <= 80 else { throw ProjectWorkspaceError.invalidName }
-    guard !state.projects.contains(where: {
+    guard !projects.contains(where: {
       $0.id != id && $0.name.caseInsensitiveCompare(normalized) == .orderedSame
     }) else {
       throw ProjectWorkspaceError.duplicateName
@@ -538,7 +729,7 @@ public actor ProjectWorkspaceStore {
     }
     if changed {
       // Repairs must reach disk or every launch repeats the backfill.
-      try? await persistJSON()
+      try? await persistCurrentJSON()
     }
   }
 
@@ -574,15 +765,54 @@ public actor ProjectWorkspaceStore {
     return exported
   }
 
-  /// Writes any not-yet-stored payloads of the project's files to blobs, then
-  /// drops the in-memory bytes — metadata-only is the live row shape; previews
-  /// and composer attach re-fetch on demand. Rows keep their persisted
-  /// `declaredByteCount` so size surfaces and validation stay correct.
-  private func offloadFileBlobs(projectID: ProjectID) async throws {
-    guard let projectIndex = state.projects.firstIndex(where: { $0.id == projectID }) else { return }
-    let project = state.projects[projectIndex]
-    for fileIndex in project.projectFiles.indices {
-      let file = project.projectFiles[fileIndex]
+  /// Portability-only atomic state replacement. The caller validates and builds the
+  /// complete candidate first; every imported reference-file payload is offloaded before
+  /// one JSON commit, and live state changes only after that commit succeeds.
+  func replaceStateForImport(_ imported: ProjectWorkspaceState) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    guard imported.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
+      throw ProjectWorkspaceError.unsupportedVersion(imported.schemaVersion)
+    }
+    var candidate = try Self.sanitized(imported)
+    candidate.tombstones = SyncTombstonePolicy.pruned(candidate.tombstones)
+    for projectID in candidate.projects.map(\.id) {
+      candidate = try await stateByOffloadingFileBlobs(projectID: projectID, in: candidate)
+    }
+    state = try await committedState(candidate)
+  }
+
+  private func committedState(
+    _ candidate: ProjectWorkspaceState,
+    mutatingProject projectID: ProjectID? = nil
+  ) async throws -> ProjectWorkspaceState {
+    guard !blocksWritesAfterFailedLoad else {
+      throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
+    }
+
+    var prepared = candidate
+    if let projectID {
+      prepared = try await stateByOffloadingFileBlobs(projectID: projectID, in: prepared)
+    }
+    try await persistence.saveData(Self.metadataEncoder().encode(prepared))
+    return prepared
+  }
+
+  /// Writes any not-yet-stored payloads of one candidate project's files to
+  /// blobs and returns a metadata-only candidate. The actor's committed state
+  /// is untouched until the JSON save succeeds.
+  private func stateByOffloadingFileBlobs(
+    projectID: ProjectID,
+    in candidate: ProjectWorkspaceState
+  ) async throws -> ProjectWorkspaceState {
+    var result = candidate
+    guard let projectIndex = result.projects.firstIndex(where: { $0.id == projectID }),
+      var files = result.projects[projectIndex].files
+    else { return result }
+
+    for fileIndex in files.indices {
+      let file = files[fileIndex]
       guard !file.data.isEmpty else { continue }
       try await blobs.writeIfAbsent(
         file.id,
@@ -594,27 +824,20 @@ public actor ProjectWorkspaceStore {
           createdAt: file.createdAt
         )
       )
-      state.projects[projectIndex].files?[fileIndex].data = Data()
-      if state.projects[projectIndex].files?[fileIndex].declaredByteCount == nil {
-        state.projects[projectIndex].files?[fileIndex].declaredByteCount = file.data.count
+      files[fileIndex].data = Data()
+      if files[fileIndex].declaredByteCount == nil {
+        files[fileIndex].declaredByteCount = file.data.count
       }
     }
+    result.projects[projectIndex].files = files.isEmpty ? nil : files
+    return result
   }
 
-  private func persistJSON() async throws {
+  private func persistCurrentJSON() async throws {
     guard !blocksWritesAfterFailedLoad else {
       throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
     }
     try await persistence.saveData(Self.metadataEncoder().encode(state))
-  }
-
-  /// Persists one project's file bytes to blobs, then the metadata JSON.
-  private func persistMutatingProject(_ id: ProjectID) async throws {
-    guard !blocksWritesAfterFailedLoad else {
-      throw ProjectWorkspaceError.writesBlockedAfterLoadFailure
-    }
-    try await offloadFileBlobs(projectID: id)
-    try await persistJSON()
   }
 
   private static func metadataEncoder() -> JSONEncoder {

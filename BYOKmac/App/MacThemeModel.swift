@@ -153,6 +153,20 @@ final class MacThemeModel {
   }
 
   var preferredColorScheme: ColorScheme? { selectedID.preferredColorScheme }
+
+  /// Do not downgrade the visual state while StoreKit is still checking. Once
+  /// entitlement resolution is authoritative, a Free user cannot keep an
+  /// actively selected Pro-only theme after expiration or revocation.
+  func reconcileProAccess(hasPro: Bool, isChecking: Bool) {
+    guard !isChecking else { return }
+    let resolvedAccess: MacProEntitlementAccess = hasPro ? .pro : .free
+    guard !MacProAccess.canUseTheme(
+      selectedID,
+      hasPro: hasPro,
+      entitlement: resolvedAccess
+    ) else { return }
+    selectedID = .system
+  }
 }
 
 private extension Color {

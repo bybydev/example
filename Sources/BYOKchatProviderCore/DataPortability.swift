@@ -63,6 +63,30 @@ public struct BYOKchatImportSummary: Sendable, Equatable {
   }
 }
 
+/// Internal two-phase import state. The core provider/chat/MCP workspaces are committed
+/// first, but credential cleanup is intentionally delayed until the Project/Library layer
+/// confirms the whole full-backup restore succeeded.
+struct DataPortabilityImportTransaction: Sendable {
+  var summary: BYOKchatImportSummary
+  var conversationIDMapping: [ConversationID: ConversationID]
+  var previousProviders: Data
+  var previousConversations: Data
+  var previousMCP: Data?
+  var previousAccountIDs: [ProviderAccountID]
+  var previousMCPServerIDs: [MCPServerID]
+  var strategy: ProviderImportStrategy
+}
+
+/// A core import can fail after its conversation store was already mutated. Core rollback
+/// reconstructs those conversations and may assign new local IDs; the Project layer must be
+/// given that exact rollback mapping so its pre-import memberships do not become stale.
+struct DataPortabilityRolledBackImportError: LocalizedError, Sendable {
+  var importDescription: String
+  var conversationIDMapping: [ConversationID: ConversationID]
+
+  var errorDescription: String? { importDescription }
+}
+
 public actor DataPortabilityService {
   private let providers: ProviderWorkspaceStore
   private let conversations: ConversationStore
@@ -85,9 +109,17 @@ public actor DataPortabilityService {
   }
 
   public func exportBackup(defaultSystemPrompt: String) async throws -> Data {
+    // ConversationStore keeps attachment rows metadata-only in normal runtime state.
+    // Its portability export is the authoritative self-contained form because it
+    // hydrates attachment payloads from the blob store and drops only confirmed-missing blobs.
+    let conversationData = try await conversations.exportWorkspace()
+    let conversationWorkspace = try JSONDecoder.provider.decode(
+      ConversationWorkspaceState.self,
+      from: conversationData
+    )
     let backup = BYOKchatBackup(
       providerWorkspace: await providers.snapshot(),
-      conversationWorkspace: await conversations.snapshot(),
+      conversationWorkspace: conversationWorkspace,
       mcpWorkspace: await mcp?.snapshot(),
       preferences: .init(defaultSystemPrompt: defaultSystemPrompt)
     )
@@ -98,6 +130,17 @@ public actor DataPortabilityService {
     _ data: Data,
     strategy: ProviderImportStrategy
   ) async throws -> BYOKchatImportSummary {
+    let transaction = try await beginImportBackup(data, strategy: strategy)
+    return await commitImport(transaction)
+  }
+
+  /// Commits provider/chat/MCP workspace data and returns a rollback-capable transaction.
+  /// No provider or MCP credential is deleted here; destructive Keychain cleanup is delayed
+  /// until `commitImport` after every higher-level workspace has committed.
+  func beginImportBackup(
+    _ data: Data,
+    strategy: ProviderImportStrategy
+  ) async throws -> DataPortabilityImportTransaction {
     let backup = try JSONDecoder.provider.decode(BYOKchatBackup.self, from: data)
     guard backup.schemaVersion == BYOKchatBackup.currentSchemaVersion else {
       throw ProviderError.backupVersionUnsupported(backup.schemaVersion)
@@ -128,11 +171,13 @@ public actor DataPortabilityService {
     let previousAccountIDs = await providers.allAccounts().map(\.id)
     let previousMCPServerIDs = await mcp?.allServers().map(\.id) ?? []
 
+    let providerData = try JSONEncoder.providerEncoder.encode(backup.providerWorkspace)
+    let conversationData = try JSONEncoder.providerEncoder.encode(backup.conversationWorkspace)
+    let conversationIDMapping: [ConversationID: ConversationID]
+
     do {
-      let providerData = try JSONEncoder.providerEncoder.encode(backup.providerWorkspace)
-      let conversationData = try JSONEncoder.providerEncoder.encode(backup.conversationWorkspace)
       try await providers.importConfiguration(providerData, strategy: strategy)
-      let conversationIDMapping = try await conversations.importWorkspace(
+      conversationIDMapping = try await conversations.importWorkspace(
         conversationData,
         strategy: strategy
       )
@@ -147,50 +192,71 @@ public actor DataPortabilityService {
         let empty = try JSONEncoder.providerEncoder.encode(MCPWorkspaceState())
         try await mcp.importConfiguration(empty, strategy: .replaceExisting)
       }
-    } catch {
-      try? await providers.importConfiguration(previousProviders, strategy: .replaceExisting)
-      let rollbackMapping = try? await conversations.importWorkspace(
-        previousConversations,
-        strategy: .replaceExisting
-      )
-      if let mcp, let previousMCP,
-        let rollbackMapping,
-        let previousMCPState = try? JSONDecoder.provider.decode(MCPWorkspaceState.self, from: previousMCP),
-        let remappedPreviousMCP = try? remapMCPWorkspace(
-          previousMCPState,
-          conversationIDMapping: rollbackMapping
-        ),
-        let remappedPreviousMCPData = try? JSONEncoder.providerEncoder.encode(remappedPreviousMCP)
-      {
-        try? await mcp.importConfiguration(remappedPreviousMCPData, strategy: .replaceExisting)
+    } catch let importError {
+      let rollbackMapping: [ConversationID: ConversationID]
+      do {
+        rollbackMapping = try await restoreCore(
+          providers: previousProviders,
+          conversations: previousConversations,
+          mcp: previousMCP
+        )
+      } catch let rollbackError {
+        throw ProviderError.importConflict(
+          "Import failed: \(importError.localizedDescription) Rollback also failed: \(rollbackError.localizedDescription)"
+        )
       }
-      throw error
+      throw DataPortabilityRolledBackImportError(
+        importDescription: importError.localizedDescription,
+        conversationIDMapping: rollbackMapping
+      )
     }
 
-    let cleanupFailures: [ProviderAccountID]
-    let mcpCleanupFailures: [MCPServerID]
-    if case .replaceExisting = strategy {
-      let importedAccountIDs = await providers.allAccounts().map(\.id)
-      cleanupFailures = await accounts.removeCredentialsBestEffort(
-        accountIDs: previousAccountIDs + importedAccountIDs
-      )
-      let importedMCPServerIDs = await mcp?.allServers().map(\.id) ?? []
-      mcpCleanupFailures = await removeMCPCredentialsBestEffort(
-        serverIDs: previousMCPServerIDs + importedMCPServerIDs
-      )
-    } else {
-      cleanupFailures = []
-      mcpCleanupFailures = []
-    }
+    return DataPortabilityImportTransaction(
+      summary: BYOKchatImportSummary(
+        providerCount: backup.providerWorkspace.customProviders.count,
+        accountCount: backup.providerWorkspace.accounts.count,
+        conversationCount: backup.conversationWorkspace.conversations.count,
+        mcpServerCount: backup.mcpWorkspace?.servers.count ?? 0,
+        defaultSystemPrompt: backup.preferences.defaultSystemPrompt
+      ),
+      conversationIDMapping: conversationIDMapping,
+      previousProviders: previousProviders,
+      previousConversations: previousConversations,
+      previousMCP: previousMCP,
+      previousAccountIDs: previousAccountIDs,
+      previousMCPServerIDs: previousMCPServerIDs,
+      strategy: strategy
+    )
+  }
 
-    return BYOKchatImportSummary(
-      providerCount: backup.providerWorkspace.customProviders.count,
-      accountCount: backup.providerWorkspace.accounts.count,
-      conversationCount: backup.conversationWorkspace.conversations.count,
-      mcpServerCount: backup.mcpWorkspace?.servers.count ?? 0,
-      defaultSystemPrompt: backup.preferences.defaultSystemPrompt,
-      credentialCleanupFailures: cleanupFailures,
-      mcpCredentialCleanupFailures: mcpCleanupFailures
+  /// Finalizes a previously committed core import. This cannot invalidate workspace data;
+  /// credential removal is best-effort and is reported as cleanup warnings in the summary.
+  func commitImport(_ transaction: DataPortabilityImportTransaction) async -> BYOKchatImportSummary {
+    var summary = transaction.summary
+    guard case .replaceExisting = transaction.strategy else { return summary }
+
+    let importedAccountIDs = await providers.allAccounts().map(\.id)
+    summary.credentialCleanupFailures = await accounts.removeCredentialsBestEffort(
+      accountIDs: transaction.previousAccountIDs + importedAccountIDs
+    )
+    let importedMCPServerIDs = await mcp?.allServers().map(\.id) ?? []
+    summary.mcpCredentialCleanupFailures = await removeMCPCredentialsBestEffort(
+      serverIDs: transaction.previousMCPServerIDs + importedMCPServerIDs
+    )
+    return summary
+  }
+
+  /// Restores the exact core workspace snapshots captured before `beginImportBackup`.
+  /// Conversation restore can regenerate local IDs, so the returned mapping is the only
+  /// authoritative bridge higher-level workspaces should use when restoring memberships.
+  @discardableResult
+  func rollbackImport(
+    _ transaction: DataPortabilityImportTransaction
+  ) async throws -> [ConversationID: ConversationID] {
+    try await restoreCore(
+      providers: transaction.previousProviders,
+      conversations: transaction.previousConversations,
+      mcp: transaction.previousMCP
     )
   }
 
@@ -227,6 +293,28 @@ public actor DataPortabilityService {
   ) async throws -> Data {
     let conversation = try await conversations.conversation(id: conversationID)
     return Data(ConversationMarkdownFormatter.render(conversation, accountLabel: accountLabel).utf8)
+  }
+
+  private func restoreCore(
+    providers previousProviders: Data,
+    conversations previousConversations: Data,
+    mcp previousMCP: Data?
+  ) async throws -> [ConversationID: ConversationID] {
+    try await providers.importConfiguration(previousProviders, strategy: .replaceExisting)
+    let rollbackMapping = try await conversations.importWorkspace(
+      previousConversations,
+      strategy: .replaceExisting
+    )
+    if let mcp, let previousMCP {
+      let previousMCPState = try JSONDecoder.provider.decode(MCPWorkspaceState.self, from: previousMCP)
+      let remappedPreviousMCP = try remapMCPWorkspace(
+        previousMCPState,
+        conversationIDMapping: rollbackMapping
+      )
+      let remappedPreviousMCPData = try JSONEncoder.providerEncoder.encode(remappedPreviousMCP)
+      try await mcp.importConfiguration(remappedPreviousMCPData, strategy: .replaceExisting)
+    }
+    return rollbackMapping
   }
 
   private func validateConversationTargets(

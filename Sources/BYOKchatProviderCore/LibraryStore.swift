@@ -44,6 +44,12 @@ public actor LibraryStore {
   private var state = LibraryWorkspaceState()
   private var hasLoaded = false
 
+  /// Actor methods are reentrant while persistence is awaiting I/O. Serialize
+  /// mutations so overlapping saves cannot commit candidates derived from the
+  /// same old state or publish a failed mutation into the live runtime.
+  private var mutationInProgress = false
+  private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
+
   public init(
     persistence: any LibraryWorkspacePersistence,
     blobs: any AttachmentBlobStoring
@@ -54,15 +60,19 @@ public actor LibraryStore {
 
   public func load() async throws {
     guard !hasLoaded else { return }
+
+    var candidate = LibraryWorkspaceState()
     if let data = try await persistence.loadData() {
       let decoded = try JSONDecoder.provider.decode(LibraryWorkspaceState.self, from: data)
       guard decoded.schemaVersion == LibraryWorkspaceState.currentSchemaVersion else {
         throw ProviderError.libraryVersionUnsupported(decoded.schemaVersion)
       }
-      state = decoded
+      candidate = decoded
     }
-    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
-    try await dropEntriesWithoutBlobs()
+    candidate.tombstones = SyncTombstonePolicy.pruned(candidate.tombstones)
+    candidate = try await stateByDroppingEntriesWithoutBlobs(candidate)
+
+    state = candidate
     hasLoaded = true
     // Orphaned blobs are swept by the app-level sweepOrphanFiles.
   }
@@ -92,40 +102,39 @@ public actor LibraryStore {
     source: LibraryEntrySource = .manual,
     at date: Date = .now
   ) async throws -> LibraryEntry {
-    let trimmedName = filename.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmedName.isEmpty else {
-      throw ProviderError.invalidRequest("A library entry needs a filename.")
-    }
-    guard !data.isEmpty else {
-      throw ProviderError.invalidRequest("Library entries cannot be empty.")
-    }
-    guard data.count <= Self.maxByteCount else {
-      throw ProviderError.invalidRequest("Library entries cannot exceed 20 MB.")
-    }
-
-    let entry = LibraryEntry(
-      filename: trimmedName,
-      kind: mimeType.lowercased().hasPrefix("image/") ? .image : .file,
-      mimeType: mimeType,
-      byteCount: data.count,
-      createdAt: date,
-      source: source
-    )
-    // Blobs land before metadata for the same crash-ordering reason as
-    // ConversationStore.persist.
-    try await blobs.writeIfAbsent(
-      entry.id.rawValue,
-      data: data,
-      metadata: AttachmentBlobMetadata(
-        filename: trimmedName,
+    let entries = try await addItems([
+      LibraryPendingItem(
+        filename: filename,
         mimeType: mimeType,
-        byteCount: data.count,
-        createdAt: date
+        data: data,
+        source: source,
+        date: date
       )
+    ])
+    return entries[0]
+  }
+
+  /// Adds a picker/import batch as one metadata transaction. Payload blobs are
+  /// written first; if the JSON save fails they are harmless orphans and the
+  /// live Library state remains at the last committed snapshot.
+  @discardableResult
+  public func addAttachments(
+    _ attachments: [ChatAttachment],
+    source: LibraryEntrySource = .manual,
+    at date: Date = .now
+  ) async throws -> [LibraryEntry] {
+    guard !attachments.isEmpty else { return [] }
+    return try await addItems(
+      attachments.map {
+        LibraryPendingItem(
+          filename: $0.filename,
+          mimeType: $0.mimeType,
+          data: $0.data,
+          source: source,
+          date: date
+        )
+      }
     )
-    state.entries.append(entry)
-    try await persist()
-    return entry
   }
 
   @discardableResult
@@ -156,21 +165,27 @@ public actor LibraryStore {
     source: LibraryEntrySource,
     at date: Date = .now
   ) async throws -> LibraryEntry {
+    await beginMutation()
+    defer { endMutation() }
+
     if let existing = state.entries.first(where: { $0.id.rawValue == fileID }) {
       return existing
     }
-    // A metadata-only attachment row can report zero bytes until its shard
-    // was backfilled; the blob store's index knows the real size, so trust
-    // it over the caller's count before rejecting the save.
-    var effectiveByteCount = byteCount
-    if effectiveByteCount <= 0,
-      let blobMetadata = try? await blobs.metadata(for: fileID)
-    {
-      effectiveByteCount = blobMetadata.byteCount
+
+    // A positive byteCount in chat metadata does not prove the shared blob is
+    // still present. Verify the authoritative blob store before publishing a
+    // Library row so stale historical attachments cannot become ghost items.
+    let storedIDs = try await blobs.storedIDs()
+    guard storedIDs.contains(fileID) else {
+      throw ProviderError.invalidRequest("The saved attachment bytes are unavailable.")
     }
+
+    let blobMetadata = try? await blobs.metadata(for: fileID)
+    let effectiveByteCount = max(blobMetadata?.byteCount ?? 0, byteCount)
     guard effectiveByteCount > 0 else {
       throw ProviderError.invalidRequest("A library entry cannot reference empty bytes.")
     }
+
     let entry = LibraryEntry(
       id: LibraryEntryID(rawValue: fileID),
       filename: filename,
@@ -180,8 +195,9 @@ public actor LibraryStore {
       createdAt: date,
       source: source
     )
-    state.entries.append(entry)
-    try await persist()
+    var candidate = state
+    candidate.entries.append(entry)
+    try await commit(candidate)
     return entry
   }
 
@@ -190,19 +206,29 @@ public actor LibraryStore {
     guard !trimmed.isEmpty else {
       throw ProviderError.invalidRequest("A library entry needs a filename.")
     }
-    guard let index = state.entries.firstIndex(where: { $0.id == id }) else { return }
-    state.entries[index].filename = trimmed
-    state.entries[index].updatedAt = .now
-    try await persist()
+
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard let index = candidate.entries.firstIndex(where: { $0.id == id }) else { return }
+    candidate.entries[index].filename = trimmed
+    candidate.entries[index].updatedAt = .now
+    try await commit(candidate)
   }
 
   public func deleteEntries(_ ids: Set<LibraryEntryID>) async throws {
     guard !ids.isEmpty else { return }
-    state.entries.removeAll { ids.contains($0.id) }
+
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    candidate.entries.removeAll { ids.contains($0.id) }
     for id in ids {
-      state.tombstones[id.rawValue] = .now
+      candidate.tombstones[id.rawValue] = .now
     }
-    try await persist()
+    try await commit(candidate)
     // Bytes are NOT removed here: chats/projects may still reference the file.
     // AppModel.sweepOrphanFiles() deletes them once no reference remains.
   }
@@ -226,13 +252,17 @@ public actor LibraryStore {
     _ values: [PortableLibraryEntry],
     strategy: ProviderImportStrategy
   ) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
     if case .replaceExisting = strategy {
-      for entry in state.entries {
-        state.tombstones[entry.id.rawValue] = .now
+      for entry in candidate.entries {
+        candidate.tombstones[entry.id.rawValue] = .now
       }
-      state.entries.removeAll()
+      candidate.entries.removeAll()
     }
-    let existing = Set(state.entries.map(\.id))
+    var existing = Set(candidate.entries.map(\.id))
 
     for value in values where !existing.contains(value.id) {
       guard !value.data.isEmpty, value.data.count <= Self.maxByteCount else { continue }
@@ -246,7 +276,7 @@ public actor LibraryStore {
           createdAt: value.createdAt
         )
       )
-      state.entries.append(
+      candidate.entries.append(
         LibraryEntry(
           id: value.id,
           filename: value.filename,
@@ -257,8 +287,90 @@ public actor LibraryStore {
           source: value.source
         )
       )
+      existing.insert(value.id)
     }
-    try await persist()
+    try await commit(candidate)
+  }
+
+  private struct LibraryPendingItem {
+    let filename: String
+    let mimeType: String
+    let data: Data
+    let source: LibraryEntrySource
+    let date: Date
+  }
+
+  private func addItems(_ items: [LibraryPendingItem]) async throws -> [LibraryEntry] {
+    guard !items.isEmpty else { return [] }
+
+    let entries = try items.map { item -> LibraryEntry in
+      let trimmedName = item.filename.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedName.isEmpty else {
+        throw ProviderError.invalidRequest("A library entry needs a filename.")
+      }
+      guard !item.data.isEmpty else {
+        throw ProviderError.invalidRequest("Library entries cannot be empty.")
+      }
+      guard item.data.count <= Self.maxByteCount else {
+        throw ProviderError.invalidRequest("Library entries cannot exceed 20 MB.")
+      }
+      return LibraryEntry(
+        filename: trimmedName,
+        kind: item.mimeType.lowercased().hasPrefix("image/") ? .image : .file,
+        mimeType: item.mimeType,
+        byteCount: item.data.count,
+        createdAt: item.date,
+        source: item.source
+      )
+    }
+
+    await beginMutation()
+    defer { endMutation() }
+
+    // Blobs land before metadata for the same crash-ordering reason as
+    // ConversationStore.persist. Failed metadata persistence leaves only
+    // sweepable orphan blobs, never an uncommitted live Library row.
+    for (entry, item) in zip(entries, items) {
+      try await blobs.writeIfAbsent(
+        entry.id.rawValue,
+        data: item.data,
+        metadata: AttachmentBlobMetadata(
+          filename: entry.filename,
+          mimeType: entry.mimeType,
+          byteCount: entry.byteCount,
+          createdAt: entry.createdAt
+        )
+      )
+    }
+
+    var candidate = state
+    candidate.entries.append(contentsOf: entries)
+    try await commit(candidate)
+    return entries
+  }
+
+  private func beginMutation() async {
+    if !mutationInProgress {
+      mutationInProgress = true
+      return
+    }
+
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      mutationWaiters.append(continuation)
+    }
+  }
+
+  private func endMutation() {
+    guard !mutationWaiters.isEmpty else {
+      mutationInProgress = false
+      return
+    }
+    mutationWaiters.removeFirst().resume()
+  }
+
+  private func commit(_ candidate: LibraryWorkspaceState) async throws {
+    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
+    state = candidate
   }
 
   /// Drops entries whose blob file is gone (bytes lost to a crash or an
@@ -266,20 +378,21 @@ public actor LibraryStore {
   /// nothing to open, preview, or share, so it would only render as a row
   /// that never loads. Enumerating the blob store failing is treated as
   /// "don't know" — cleanup is skipped rather than dropping every entry.
-  private func dropEntriesWithoutBlobs() async throws {
-    guard let stored = try? await blobs.storedIDs() else { return }
+  private func stateByDroppingEntriesWithoutBlobs(
+    _ input: LibraryWorkspaceState
+  ) async throws -> LibraryWorkspaceState {
+    guard let stored = try? await blobs.storedIDs() else { return input }
     let deadIDs = Set(
-      state.entries.filter { !stored.contains($0.id.rawValue) }.map(\.id)
+      input.entries.filter { !stored.contains($0.id.rawValue) }.map(\.id)
     )
-    guard !deadIDs.isEmpty else { return }
-    state.entries.removeAll { deadIDs.contains($0.id) }
-    for id in deadIDs {
-      state.tombstones[id.rawValue] = .now
-    }
-    try await persist()
-  }
+    guard !deadIDs.isEmpty else { return input }
 
-  private func persist() async throws {
-    try await persistence.saveData(JSONEncoder.providerEncoder.encode(state))
+    var candidate = input
+    candidate.entries.removeAll { deadIDs.contains($0.id) }
+    for id in deadIDs {
+      candidate.tombstones[id.rawValue] = .now
+    }
+    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
+    return candidate
   }
 }

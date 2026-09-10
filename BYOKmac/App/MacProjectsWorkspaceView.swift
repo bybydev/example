@@ -678,34 +678,16 @@ private struct MacProjectOverviewView: View {
   }
 
   private func savePromptPreset(_ value: ProjectPromptPreset) {
-    var presets = project.projectPromptPresets
-    if let index = presets.firstIndex(where: { $0.id == value.id }) {
-      presets[index] = value
-    } else {
-      presets.append(value)
+    Task { @MainActor in
+      if await workspace.upsertProjectPromptPreset(value, projectID: project.id) {
+        await mcp.reloadFromStorage()
+      }
     }
-    updateProject(promptPresets: presets)
   }
 
   private func deletePromptPreset(_ preset: ProjectPromptPreset) {
-    updateProject(promptPresets: project.projectPromptPresets.filter { $0.id != preset.id })
-  }
-
-  private func updateProject(promptPresets: [ProjectPromptPreset]) {
     Task { @MainActor in
-      if await workspace.updateProject(
-        id: project.id,
-        name: project.name,
-        symbolName: project.symbolName,
-        accentID: project.accentID,
-        accountID: project.accountID,
-        modelID: project.modelID,
-        instructions: project.instructions,
-        files: project.projectFiles,
-        mcpConfiguration: project.mcpConfiguration ?? MCPChatToolConfiguration(),
-        promptPresets: promptPresets,
-        toolPresets: project.projectToolPresets
-      ) {
+      if await workspace.deleteProjectPromptPreset(preset.id, projectID: project.id) {
         await mcp.reloadFromStorage()
       }
     }
@@ -1034,7 +1016,11 @@ private struct MacProjectSourcesWorkspaceView: View {
   }
 
   private func remove(_ file: ProjectFile) {
-    save(files: project.projectFiles.filter { $0.id != file.id })
+    Task { @MainActor in
+      if await workspace.removeProjectFile(file.id, from: project.id) {
+        await mcp.reloadFromStorage()
+      }
+    }
   }
 
   private func importFiles(_ result: Result<[URL], Error>) {
@@ -1071,40 +1057,13 @@ private struct MacProjectSourcesWorkspaceView: View {
             )
           }
 
-          let combined = project.projectFiles + additions
-          guard combined.count <= 8 else {
-            throw ProviderError.invalidRequest("A project can contain at most 8 reference files.")
+          if await workspace.addProjectFiles(additions, to: project.id) {
+            await mcp.reloadFromStorage()
           }
-          guard combined.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
-            throw ProviderError.invalidRequest("Project reference files cannot exceed 40 MB total.")
-          }
-          await saveAsync(files: combined)
         } catch {
           workspace.errorMessage = error.localizedDescription
         }
       }
-    }
-  }
-
-  private func save(files: [ProjectFile]) {
-    Task { @MainActor in await saveAsync(files: files) }
-  }
-
-  private func saveAsync(files: [ProjectFile]) async {
-    if await workspace.updateProject(
-      id: project.id,
-      name: project.name,
-      symbolName: project.symbolName,
-      accentID: project.accentID,
-      accountID: project.accountID,
-      modelID: project.modelID,
-      instructions: project.instructions,
-      files: files,
-      mcpConfiguration: project.mcpConfiguration ?? MCPChatToolConfiguration(),
-      promptPresets: project.projectPromptPresets,
-      toolPresets: project.projectToolPresets
-    ) {
-      await mcp.reloadFromStorage()
     }
   }
 }
@@ -1256,17 +1215,9 @@ private struct MacProjectToolsWorkspaceView: View {
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
-      if await workspace.updateProject(
+      if await workspace.replaceProjectToolSettings(
         id: project.id,
-        name: project.name,
-        symbolName: project.symbolName,
-        accentID: project.accentID,
-        accountID: project.accountID,
-        modelID: project.modelID,
-        instructions: project.instructions,
-        files: project.projectFiles,
         mcpConfiguration: configuration,
-        promptPresets: project.projectPromptPresets,
         toolPresets: presets
       ) {
         await mcp.reloadFromStorage()
@@ -1511,18 +1462,11 @@ private struct MacProjectIdentityEditor: View {
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
-      if await workspace.updateProject(
+      if await workspace.updateProjectIdentity(
         id: project.id,
         name: name,
         symbolName: symbolName,
-        accentID: accentID,
-        accountID: project.accountID,
-        modelID: project.modelID,
-        instructions: project.instructions,
-        files: project.projectFiles,
-        mcpConfiguration: project.mcpConfiguration ?? MCPChatToolConfiguration(),
-        promptPresets: project.projectPromptPresets,
-        toolPresets: project.projectToolPresets
+        accentID: accentID
       ) {
         await mcp.reloadFromStorage()
         dismiss()
@@ -1617,18 +1561,10 @@ private struct MacProjectDefaultsEditor: View {
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
-      if await workspace.updateProject(
+      if await workspace.updateProjectDefaults(
         id: project.id,
-        name: project.name,
-        symbolName: project.symbolName,
-        accentID: project.accentID,
         accountID: accountID,
-        modelID: modelID,
-        instructions: project.instructions,
-        files: project.projectFiles,
-        mcpConfiguration: project.mcpConfiguration ?? MCPChatToolConfiguration(),
-        promptPresets: project.projectPromptPresets,
-        toolPresets: project.projectToolPresets
+        modelID: modelID
       ) {
         await mcp.reloadFromStorage()
         dismiss()
@@ -1685,19 +1621,7 @@ private struct MacProjectInstructionsEditor: View {
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
-      if await workspace.updateProject(
-        id: project.id,
-        name: project.name,
-        symbolName: project.symbolName,
-        accentID: project.accentID,
-        accountID: project.accountID,
-        modelID: project.modelID,
-        instructions: instructions,
-        files: project.projectFiles,
-        mcpConfiguration: project.mcpConfiguration ?? MCPChatToolConfiguration(),
-        promptPresets: project.projectPromptPresets,
-        toolPresets: project.projectToolPresets
-      ) {
+      if await workspace.updateProjectInstructions(id: project.id, instructions: instructions) {
         await mcp.reloadFromStorage()
         dismiss()
       }

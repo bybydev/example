@@ -1,11 +1,36 @@
 import BYOKchatProviderCore
 import Foundation
 import Observation
+import os
+
+@MainActor
+func performMacConversationDeletion(
+  deleteConversation: () async throws -> Void,
+  removeMCPConfiguration: () async throws -> Void,
+  removeProjectReference: () async throws -> Void
+) async throws -> [String] {
+  try await deleteConversation()
+
+  var warnings: [String] = []
+  do {
+    try await removeMCPConfiguration()
+  } catch {
+    warnings.append("Tool configuration cleanup failed: \(error.localizedDescription)")
+  }
+
+  do {
+    try await removeProjectReference()
+  } catch {
+    warnings.append("Project reference cleanup failed: \(error.localizedDescription)")
+  }
+
+  return warnings
+}
 
 @MainActor
 @Observable
 final class MacChatSessionModel {
-  struct LiveMessage: Equatable {
+  struct LiveMessage: Equatable, Sendable {
     var content = ""
     var reasoning = ""
     var usage: ProviderUsage?
@@ -21,7 +46,7 @@ final class MacChatSessionModel {
     var id: ConversationID { conversationID }
   }
 
-  private enum GenerationAction {
+  private enum GenerationAction: Sendable {
     case send(String, [ChatAttachment])
     case edit(ChatMessageID, String)
     case regenerate(confirmingUncertainCompletion: Bool)
@@ -32,7 +57,7 @@ final class MacChatSessionModel {
     }
   }
 
-  private static let streamPresentationInterval: Duration = .milliseconds(33)
+  private static let streamPresentationInterval: Duration = .milliseconds(50)
   private static let searchDebounce: Duration = .milliseconds(160)
 
   private(set) var conversationSummaries: [ChatConversation]
@@ -54,11 +79,15 @@ final class MacChatSessionModel {
   private let preferences: MacPreferencesModel
   private let projectWorkspace: ProjectWorkspaceStore
   private let mcpWorkspace: MCPWorkspaceStore
+  private let restrictions: MacProResourceRestrictions
+  private let streamAccumulator = MacStreamAccumulator()
+
+  @ObservationIgnored private var conversationLoadTasks: [ConversationID: Task<ChatConversation, Error>] = [:]
 
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
+  private var draftRevisions: [ConversationID: Int] = [:]
   private var draftValues: [ConversationID: String] = [:]
-  private var streamTargets: [ChatMessageID: LiveMessage] = [:]
   private var streamPresentationTasks: [ChatMessageID: Task<Void, Never>] = [:]
   private var searchTask: Task<Void, Never>?
   private var searchQuery = ""
@@ -72,7 +101,8 @@ final class MacChatSessionModel {
     services: BYOKCoreServices,
     providers: MacProviderModel,
     preferences: MacPreferencesModel,
-    initialSummaries: [ChatConversation]
+    initialSummaries: [ChatConversation],
+    restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions
   ) {
     store = services.conversationStore
     runtime = services.chatRuntime
@@ -80,8 +110,12 @@ final class MacChatSessionModel {
     mcpWorkspace = services.mcpWorkspace
     self.providers = providers
     self.preferences = preferences
+    self.restrictions = restrictions
     conversationSummaries = Self.sorted(initialSummaries)
-    newChatTarget = providers.preferredTarget()
+    newChatTarget = Self.accessiblePreferredTarget(
+      providers: providers,
+      restrictions: restrictions
+    )
   }
 
   var sendsOnReturn: Bool { preferences.sendOnReturn }
@@ -97,17 +131,59 @@ final class MacChatSessionModel {
   }
 
   func loadConversation(_ id: ConversationID?) async {
-    guard let id, hydratedConversations[id] == nil else { return }
+    guard let id else { return }
     do {
+      _ = try await hydrateConversation(id)
+    } catch is CancellationError {
+      // Deletion cancels in-flight hydration.
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func hydrateConversation(_ id: ConversationID) async throws -> ChatConversation {
+    if let cached = hydratedConversations[id] { return cached }
+    if let pending = conversationLoadTasks[id] { return try await pending.value }
+    let task = Task { @MainActor [self] in
       let conversation = try await store.conversation(id: id)
+      try Task.checkCancellation()
+      // A concurrent generation/target change may already have published newer data.
+      if let current = hydratedConversations[id] { return current }
       hydratedConversations[id] = conversation
       if draftValues[id] == nil {
         draftValues[id] = conversation.draftText ?? ""
       }
       try await reloadSummaries()
-    } catch {
-      errorMessage = error.localizedDescription
+      return conversation
     }
+    conversationLoadTasks[id] = task
+    defer { conversationLoadTasks.removeValue(forKey: id) }
+    return try await task.value
+  }
+
+  func prepareConversation(_ id: ConversationID) async throws -> MacPreparedConversation {
+    try Task.checkCancellation()
+    let log = OSLog(subsystem: "pro.byok.BYOKchat", category: "ChatSwitch")
+    let signpostID = OSSignpostID(log: log)
+    os_signpost(.begin, log: log, name: "Prepare Conversation", signpostID: signpostID)
+    defer { os_signpost(.end, log: log, name: "Prepare Conversation", signpostID: signpostID) }
+    let conversation = try await hydrateConversation(id)
+    try Task.checkCancellation()
+    var answers: [String: MacPreparedAnswer] = [:]
+    // Prepare the recent viewport first. Older rows prepare on demand instead
+    // of making a long history a prerequisite for displaying the conversation.
+    for message in conversation.messages.suffix(8)
+    where message.role == .assistant && !message.content.isEmpty {
+      try Task.checkCancellation()
+      answers[message.content] = try await MacAnswerContentParseCache.shared.answer(for: message.content)
+    }
+    try Task.checkCancellation()
+    guard summary(id) != nil else { throw ProviderError.conversationNotFound(id) }
+    return MacPreparedConversation(
+      id: id,
+      conversation: hydratedConversations[id] ?? conversation,
+      answers: answers
+    )
   }
 
   func displayMessage(_ message: ChatMessage) -> ChatMessage {
@@ -143,24 +219,31 @@ final class MacChatSessionModel {
       return
     }
 
+    // Draft editing is composer-local state. Do not rewrite the hydrated
+    // conversation value on every keystroke: that invalidates transcript
+    // readers even though no message content changed.
     draftValues[conversationID] = value
-    if var conversation = hydratedConversations[conversationID] {
-      conversation.draftText = value.isEmpty ? nil : value
-      hydratedConversations[conversationID] = conversation
-    }
 
     draftTasks[conversationID]?.cancel()
+    let revision = (draftRevisions[conversationID] ?? 0) &+ 1
+    draftRevisions[conversationID] = revision
     draftTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
       do {
         try await Task.sleep(for: .milliseconds(250))
         try Task.checkCancellation()
+        guard draftRevisions[conversationID] == revision else { return }
         try await store.setDraft(value, conversationID: conversationID)
+        try Task.checkCancellation()
       } catch is CancellationError {
       } catch {
-        errorMessage = error.localizedDescription
+        if draftRevisions[conversationID] == revision {
+          errorMessage = error.localizedDescription
+        }
       }
-      draftTasks.removeValue(forKey: conversationID)
+      if draftRevisions[conversationID] == revision {
+        draftTasks.removeValue(forKey: conversationID)
+      }
     }
   }
 
@@ -209,30 +292,36 @@ final class MacChatSessionModel {
 
   func deleteConversation(_ id: ConversationID) async -> Bool {
     await stop(id)
-    draftTasks[id]?.cancel()
-    draftTasks.removeValue(forKey: id)
+    errorMessage = nil
 
-    if let conversation = hydratedConversations[id] {
-      let messageIDs = Set(conversation.messages.map(\.id))
-      for messageID in messageIDs {
-        streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
-        streamTargets.removeValue(forKey: messageID)
-        livePresentations.removeValue(forKey: messageID)
-      }
-    }
-
-    hydratedConversations.removeValue(forKey: id)
-    draftValues.removeValue(forKey: id)
-    activeToolCallsByConversation.removeValue(forKey: id)
-    streamRevisions.removeValue(forKey: id)
+    let draftBeforeDelete = draft(for: id)
+    cancelDraftPersistence(for: id)
 
     do {
-      try await store.deleteConversation(id)
-      try await mcpWorkspace.removeChatConfiguration(conversationID: id)
-      try await projectWorkspace.removeConversation(id)
-      try await reloadSummaries()
+      var warnings = try await performMacConversationDeletion(
+        deleteConversation: { try await store.deleteConversation(id) },
+        removeMCPConfiguration: {
+          try await mcpWorkspace.removeChatConfiguration(conversationID: id)
+        },
+        removeProjectReference: { try await projectWorkspace.removeConversation(id) }
+      )
+
+      clearPresentationState(for: id)
+
+      do {
+        try await reloadSummaries()
+      } catch {
+        warnings.append("Conversation list refresh failed: \(error.localizedDescription)")
+      }
+
+      if !warnings.isEmpty {
+        errorMessage = "Conversation deleted, but some related cleanup needs attention. "
+          + warnings.joined(separator: " ")
+      }
       return true
     } catch {
+      setDraft(draftBeforeDelete, conversationID: id)
+      try? await reloadSummaries()
       errorMessage = error.localizedDescription
       return false
     }
@@ -240,11 +329,11 @@ final class MacChatSessionModel {
 
   func target(for conversationID: ConversationID?) -> MacChatTarget? {
     guard let conversationID else {
-      return newChatTarget ?? providers.preferredTarget()
+      return newChatTarget ?? accessiblePreferredTarget()
     }
 
     let conversation = hydratedConversations[conversationID] ?? summary(conversationID)
-    guard let conversation else { return providers.preferredTarget() }
+    guard let conversation else { return accessiblePreferredTarget() }
     let reasoning: ReasoningOptions?
     if hydratedConversations[conversationID] != nil {
       reasoning = conversation.options.reasoning
@@ -261,6 +350,10 @@ final class MacChatSessionModel {
   }
 
   func applyTarget(_ target: MacChatTarget, conversationID: ConversationID?) async -> Bool {
+    guard !isProviderRestricted(target.accountID) else {
+      blockRestoredResource("provider connection", feature: .providerAccounts)
+      return false
+    }
     guard let account = providers.account(target.accountID), providers.isReady(account) else {
       errorMessage = "Choose a ready provider connection."
       return false
@@ -328,7 +421,11 @@ final class MacChatSessionModel {
     if hasQueuedNewChat {
       newChatProjectID = queuedNewChatProjectID
       newChatDraft = queuedNewChatDraft ?? ""
-      newChatTarget = queuedNewChatTarget ?? providers.preferredTarget()
+      if let queuedNewChatTarget, !isProviderRestricted(queuedNewChatTarget.accountID) {
+        newChatTarget = queuedNewChatTarget
+      } else {
+        newChatTarget = accessiblePreferredTarget()
+      }
       hasQueuedNewChat = false
       queuedNewChatProjectID = nil
       queuedNewChatDraft = nil
@@ -336,7 +433,7 @@ final class MacChatSessionModel {
     } else {
       newChatProjectID = nil
       newChatDraft = ""
-      newChatTarget = providers.preferredTarget()
+      newChatTarget = accessiblePreferredTarget()
     }
   }
 
@@ -358,6 +455,11 @@ final class MacChatSessionModel {
     text: String,
     attachments: [ChatAttachment] = []
   ) async -> ConversationID? {
+    if let conversationID, generationTasks[conversationID] != nil {
+      errorMessage = "Wait for the current response to finish, or stop it before sending again."
+      return nil
+    }
+
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty || !attachments.isEmpty else { return conversationID }
 
@@ -365,14 +467,23 @@ final class MacChatSessionModel {
     if let conversationID {
       await loadConversation(conversationID)
       guard hydratedConversations[conversationID] != nil else { return nil }
+      guard await validateGenerationAccess(conversationID: conversationID) else { return nil }
     } else {
       guard let target = validatedNewChatTarget(),
-        let account = providers.account(target.accountID),
-        providers.isReady(account)
+        let account = providers.account(target.accountID), providers.isReady(account)
       else {
-        errorMessage = "Set up a provider connection before starting a chat."
+        errorMessage = MacProAccess.isCheckingEntitlement
+          ? "Checking your BYOK Pro status before choosing an available connection. Try again in a moment."
+          : "Set up a provider connection before starting a chat."
         newChatDraft = trimmed
         return nil
+      }
+
+      if let projectID = newChatProjectID {
+        guard await validateNewChatProjectAccess(projectID) else {
+          newChatDraft = trimmed
+          return nil
+        }
       }
 
       do {
@@ -393,9 +504,24 @@ final class MacChatSessionModel {
           systemPrompt: systemPrompt,
           options: ProviderRequestOptions(reasoning: target.reasoning)
         )
+
         if let projectID = newChatProjectID {
-          try await projectWorkspace.assignConversation(conversation.id, to: projectID)
+          do {
+            try await projectWorkspace.assignConversation(conversation.id, to: projectID)
+          } catch let assignmentError {
+            try? await projectWorkspace.removeConversation(conversation.id)
+            do {
+              try await store.deleteConversation(conversation.id)
+            } catch let rollbackError {
+              try? await reloadSummaries()
+              errorMessage = "Couldn't add the new chat to its project (\(assignmentError.localizedDescription)), and cleanup of the empty chat also failed: \(rollbackError.localizedDescription)"
+              newChatDraft = trimmed
+              return nil
+            }
+            throw assignmentError
+          }
         }
+
         hydratedConversations[conversation.id] = conversation
         draftValues[conversation.id] = trimmed
         newChatDraft = ""
@@ -426,6 +552,7 @@ final class MacChatSessionModel {
     guard let conversation = hydratedConversations[conversationID],
       conversation.messages.contains(where: { $0.id == messageID && $0.role == .user })
     else { return false }
+    guard await validateGenerationAccess(conversationID: conversationID) else { return false }
     startGeneration(conversationID: conversationID, action: .edit(messageID, trimmed))
     return true
   }
@@ -437,6 +564,7 @@ final class MacChatSessionModel {
     guard generationTasks[conversationID] == nil else { return false }
     await loadConversation(conversationID)
     guard hydratedConversations[conversationID] != nil else { return false }
+    guard await validateGenerationAccess(conversationID: conversationID) else { return false }
     startGeneration(
       conversationID: conversationID,
       action: .regenerate(confirmingUncertainCompletion: confirmingUncertainCompletion)
@@ -479,13 +607,11 @@ final class MacChatSessionModel {
     activeConversationIDs.insert(conversationID)
     activeToolCallsByConversation.removeValue(forKey: conversationID)
 
-    generationTasks[conversationID] = Task { @MainActor [weak self] in
+    let runtime = self.runtime
+    let accumulator = streamAccumulator
+    generationTasks[conversationID] = Task.detached(priority: .userInitiated) { [weak self] in
       guard let self else { return }
       var didStartTurn = false
-      defer {
-        activeConversationIDs.remove(conversationID)
-        generationTasks.removeValue(forKey: conversationID)
-      }
 
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
@@ -511,55 +637,92 @@ final class MacChatSessionModel {
 
         for try await event in stream {
           if case .turnStarted = event { didStartTurn = true }
-          await handle(event, conversationID: conversationID)
+
+          switch event {
+          case .textDelta(let messageID, let value):
+            if await accumulator.appendText(value, to: messageID) {
+              await self.scheduleStreamPresentation(messageID, conversationID: conversationID)
+            }
+          case .reasoningDelta(let messageID, let value):
+            if await accumulator.appendReasoning(value, to: messageID) {
+              await self.scheduleStreamPresentation(messageID, conversationID: conversationID)
+            }
+          case .usage(let messageID, let value):
+            if await accumulator.setUsage(value, for: messageID) {
+              await self.scheduleStreamPresentation(messageID, conversationID: conversationID)
+            }
+          default:
+            await self.handle(event, conversationID: conversationID)
+          }
         }
       } catch is CancellationError {
-        activeToolCallsByConversation.removeValue(forKey: conversationID)
-        if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
-          setDraft(draft, conversationID: conversationID)
-        }
-        try? await reloadConversation(conversationID)
-        try? await reloadSummaries()
-        advanceStreamRevision(for: conversationID)
+        await self.handleGenerationCancellation(
+          conversationID: conversationID,
+          action: action,
+          didStartTurn: didStartTurn
+        )
       } catch {
-        activeToolCallsByConversation.removeValue(forKey: conversationID)
-        if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
-          setDraft(draft, conversationID: conversationID)
-        }
-        errorMessage = error.localizedDescription
-        try? await reloadConversation(conversationID)
-        try? await reloadSummaries()
-        advanceStreamRevision(for: conversationID)
+        await self.handleGenerationFailure(
+          error,
+          conversationID: conversationID,
+          action: action,
+          didStartTurn: didStartTurn
+        )
       }
+
+      await self.finishGeneration(conversationID)
     }
+  }
+
+  private func handleGenerationCancellation(
+    conversationID: ConversationID,
+    action: GenerationAction,
+    didStartTurn: Bool
+  ) async {
+    activeToolCallsByConversation.removeValue(forKey: conversationID)
+    if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
+      setDraft(draft, conversationID: conversationID)
+    }
+    try? await reloadConversation(conversationID)
+    try? await reloadSummaries()
+    advanceStreamRevision(for: conversationID)
+  }
+
+  private func handleGenerationFailure(
+    _ error: Error,
+    conversationID: ConversationID,
+    action: GenerationAction,
+    didStartTurn: Bool
+  ) async {
+    activeToolCallsByConversation.removeValue(forKey: conversationID)
+    if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
+      setDraft(draft, conversationID: conversationID)
+    }
+    errorMessage = error.localizedDescription
+    try? await reloadConversation(conversationID)
+    try? await reloadSummaries()
+    advanceStreamRevision(for: conversationID)
+  }
+
+  private func finishGeneration(_ conversationID: ConversationID) {
+    activeConversationIDs.remove(conversationID)
+    generationTasks.removeValue(forKey: conversationID)
   }
 
   private func handle(_ event: ChatRuntimeEvent, conversationID: ConversationID) async {
     switch event {
     case .turnStarted(let turn):
       try? await reloadConversation(conversationID)
-      let live = LiveMessage()
-      streamTargets[turn.assistantMessage.id] = live
+      await streamAccumulator.reset(turn.assistantMessage.id)
       livePresentations[turn.assistantMessage.id] = MacLiveMessagePresentation(
         messageID: turn.assistantMessage.id
       )
       try? await reloadSummaries()
       advanceStreamRevision(for: conversationID)
 
-    case .textDelta(let messageID, let value):
-      updateStreamTarget(messageID, conversationID: conversationID) { live in
-        live.content += value
-      }
-
-    case .reasoningDelta(let messageID, let value):
-      updateStreamTarget(messageID, conversationID: conversationID) { live in
-        live.reasoning += value
-      }
-
-    case .usage(let messageID, let value):
-      updateStreamTarget(messageID, conversationID: conversationID) { live in
-        live.usage = value
-      }
+    case .textDelta, .reasoningDelta, .usage:
+      // Raw deltas are consumed by the detached stream task and accumulator.
+      break
 
     case .toolCallsStarted(_, let calls):
       activeToolCallsByConversation[conversationID] = calls
@@ -568,18 +731,18 @@ final class MacChatSessionModel {
     case .toolRound(let messageID, _):
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       await flushStreamPresentation(messageID, conversationID: conversationID)
+      livePresentations.removeValue(forKey: messageID)?.cancelPendingRenders()
       try? await reloadConversation(conversationID)
       try? await reloadSummaries()
-      let live = LiveMessage()
-      streamTargets[messageID] = live
+      await streamAccumulator.reset(messageID)
       livePresentations[messageID] = MacLiveMessagePresentation(messageID: messageID)
       advanceStreamRevision(for: conversationID)
 
     case .completed(let message), .cancelled(let message), .failed(let message):
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       await flushStreamPresentation(message.id, conversationID: conversationID)
-      streamTargets.removeValue(forKey: message.id)
-      livePresentations.removeValue(forKey: message.id)
+      await streamAccumulator.remove(message.id)
+      livePresentations.removeValue(forKey: message.id)?.cancelPendingRenders()
       if message.status == .failed {
         errorMessage = message.errorDescription ?? "The response failed."
       }
@@ -587,22 +750,6 @@ final class MacChatSessionModel {
       try? await reloadSummaries()
       advanceStreamRevision(for: conversationID)
     }
-  }
-
-  private func updateStreamTarget(
-    _ messageID: ChatMessageID,
-    conversationID: ConversationID,
-    update: (inout LiveMessage) -> Void
-  ) {
-    let presented = livePresentations[messageID]
-    var target = streamTargets[messageID] ?? LiveMessage(
-      content: presented?.content ?? "",
-      reasoning: presented?.reasoning ?? "",
-      usage: presented?.usage
-    )
-    update(&target)
-    streamTargets[messageID] = target
-    scheduleStreamPresentation(messageID, conversationID: conversationID)
   }
 
   private func scheduleStreamPresentation(
@@ -618,15 +765,15 @@ final class MacChatSessionModel {
       } catch {
         return
       }
-      presentStreamTarget(messageID, conversationID: conversationID)
+      await presentStreamTarget(messageID, conversationID: conversationID)
     }
   }
 
   private func presentStreamTarget(
     _ messageID: ChatMessageID,
     conversationID: ConversationID
-  ) {
-    guard let target = streamTargets[messageID] else { return }
+  ) async {
+    guard let target = await streamAccumulator.takeSnapshot(for: messageID) else { return }
     let presentation: MacLiveMessagePresentation
     if let existing = livePresentations[messageID] {
       presentation = existing
@@ -651,7 +798,7 @@ final class MacChatSessionModel {
       task.cancel()
       await task.value
     }
-    presentStreamTarget(messageID, conversationID: conversationID)
+    await presentStreamTarget(messageID, conversationID: conversationID)
   }
 
   private func advanceStreamRevision(for conversationID: ConversationID) {
@@ -674,6 +821,7 @@ final class MacChatSessionModel {
 
   private func validatedNewChatTarget() -> MacChatTarget? {
     if let current = newChatTarget,
+      !isProviderRestricted(current.accountID),
       let account = providers.account(current.accountID),
       providers.isReady(account),
       providers.models(for: current.accountID).contains(where: {
@@ -682,18 +830,164 @@ final class MacChatSessionModel {
     {
       return current
     }
-    let replacement = providers.preferredTarget()
+    let replacement = accessiblePreferredTarget()
     newChatTarget = replacement
     return replacement
   }
 
+  private func accessiblePreferredTarget() -> MacChatTarget? {
+    Self.accessiblePreferredTarget(providers: providers, restrictions: restrictions)
+  }
+
+  private static func accessiblePreferredTarget(
+    providers: MacProviderModel,
+    restrictions: MacProResourceRestrictions
+  ) -> MacChatTarget? {
+    let entitlement = MacProAccess.entitlementAccess
+    let currentIDs = providers.accounts.map(\.id)
+    let candidates = providers.accounts.filter { account in
+      providers.isReady(account)
+        && !restrictions.isProviderRestricted(
+          account.id,
+          currentIDs: currentIDs,
+          entitlement: entitlement
+        )
+    }
+    let account = providers.resolvedDefaultAccount.flatMap { resolved in
+      candidates.first { $0.id == resolved.id }
+    } ?? candidates.first
+
+    guard let account, let modelID = providers.usableModelID(for: account.id) else { return nil }
+    return MacChatTarget(
+      accountID: account.id,
+      modelID: modelID,
+      reasoning: providers.supportsReasoning(accountID: account.id, modelID: modelID)
+        ? providers.reasoningDefault(for: account.id)
+        : nil
+    )
+  }
+
+  private func isProviderRestricted(_ id: ProviderAccountID) -> Bool {
+    restrictions.isProviderRestricted(
+      id,
+      currentIDs: providers.accounts.map(\.id),
+      entitlement: MacProAccess.entitlementAccess
+    )
+  }
+
+  private func validateNewChatProjectAccess(_ projectID: ProjectID) async -> Bool {
+    let projectSnapshot = await projectWorkspace.snapshot()
+    let projectIDs = projectSnapshot.projects.map(\.id)
+    if restrictions.isProjectRestricted(
+      projectID,
+      currentIDs: projectIDs,
+      entitlement: MacProAccess.entitlementAccess
+    ) {
+      blockRestoredResource("project", feature: .projects)
+      return false
+    }
+
+    guard let project = try? await projectWorkspace.project(id: projectID) else { return true }
+    return await validateMCPAccess(configuration: project.mcpConfiguration)
+  }
+
+  private func validateGenerationAccess(conversationID: ConversationID) async -> Bool {
+    let conversation: ChatConversation
+    if let hydrated = hydratedConversations[conversationID] {
+      conversation = hydrated
+    } else if let loaded = try? await store.conversation(id: conversationID) {
+      conversation = loaded
+    } else {
+      return false
+    }
+
+    if isProviderRestricted(conversation.accountID) {
+      blockRestoredResource("provider connection", feature: .providerAccounts)
+      return false
+    }
+
+    if let projectID = await projectWorkspace.projectID(for: conversationID) {
+      let projectSnapshot = await projectWorkspace.snapshot()
+      if restrictions.isProjectRestricted(
+        projectID,
+        currentIDs: projectSnapshot.projects.map(\.id),
+        entitlement: MacProAccess.entitlementAccess
+      ) {
+        blockRestoredResource("project", feature: .projects)
+        return false
+      }
+    }
+
+    let configuration: MCPChatToolConfiguration?
+    if let explicit = await mcpWorkspace.explicitChatConfiguration(for: conversationID) {
+      configuration = explicit
+    } else {
+      configuration = await projectWorkspace.mcpConfiguration(for: conversationID)
+    }
+    return await validateMCPAccess(configuration: configuration)
+  }
+
+  private func validateMCPAccess(configuration: MCPChatToolConfiguration?) async -> Bool {
+    guard let configuration else { return true }
+    let snapshot = await mcpWorkspace.snapshot()
+    let currentServerIDs = snapshot.servers.map(\.id)
+    for serverID in configuration.enabledServerIDs {
+      if restrictions.isMCPServerRestricted(
+        serverID,
+        currentIDs: currentServerIDs,
+        entitlement: MacProAccess.entitlementAccess
+      ) {
+        blockRestoredResource("MCP server", feature: .mcpServers)
+        return false
+      }
+    }
+    return true
+  }
+
+  private func blockRestoredResource(_ resource: String, feature: MacProFeature) {
+    errorMessage = MacProAccess.restoredResourceBlockedMessage(resource)
+    MacProAccess.requestUpgrade(feature)
+  }
+
+  private func cancelDraftPersistence(for conversationID: ConversationID) {
+    draftRevisions[conversationID, default: 0] &+= 1
+    draftTasks.removeValue(forKey: conversationID)?.cancel()
+  }
+
+  private func clearPresentationState(for id: ConversationID) {
+    conversationLoadTasks.removeValue(forKey: id)?.cancel()
+    if let conversation = hydratedConversations[id] {
+      let messageIDs = Set(conversation.messages.map(\.id))
+      for messageID in messageIDs {
+        streamPresentationTasks.removeValue(forKey: messageID)?.cancel()
+        livePresentations.removeValue(forKey: messageID)?.cancelPendingRenders()
+      }
+      Task { [streamAccumulator] in
+        await streamAccumulator.remove(messageIDs)
+      }
+    }
+
+    hydratedConversations.removeValue(forKey: id)
+    draftTasks.removeValue(forKey: id)?.cancel()
+    draftRevisions.removeValue(forKey: id)
+    draftValues.removeValue(forKey: id)
+    activeToolCallsByConversation.removeValue(forKey: id)
+    streamRevisions.removeValue(forKey: id)
+  }
+
   private func reloadConversation(_ id: ConversationID) async throws {
-    hydratedConversations[id] = try await store.conversation(id: id)
-    draftValues[id] = hydratedConversations[id]?.draftText ?? ""
+    var conversation = try await store.conversation(id: id)
+    if draftTasks[id] != nil, let pendingDraft = draftValues[id] {
+      conversation.draftText = pendingDraft.isEmpty ? nil : pendingDraft
+    } else {
+      draftValues[id] = conversation.draftText ?? ""
+    }
+    hydratedConversations[id] = conversation
   }
 
   private func reloadSummaries() async throws {
     let summaries = Self.sorted(await store.conversationSummaries())
+    guard summaries != conversationSummaries else { return }
     conversationSummaries = summaries
     onSummariesChanged?(summaries)
     if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -707,4 +1001,12 @@ final class MacChatSessionModel {
       return lhs.updatedAt > rhs.updatedAt
     }
   }
+}
+
+struct MacPreparedConversation: Identifiable, Sendable {
+  let id: ConversationID?
+  let conversation: ChatConversation?
+  let answers: [String: MacPreparedAnswer]
+
+  static var newChat: Self { Self(id: nil, conversation: nil, answers: [:]) }
 }

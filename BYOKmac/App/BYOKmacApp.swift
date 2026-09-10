@@ -22,7 +22,7 @@ struct BYOKmacApp: App {
   private let purchases = MacPurchaseStore.manager
 
   var body: some Scene {
-    WindowGroup("BYOKchat", id: BYOKmacWindowID.main) {
+    Window("BYOKchat", id: BYOKmacWindowID.main) {
       MacStartupView(model: model)
         .frame(minWidth: 760, minHeight: 520)
         .ignoresSafeArea(edges: .top)
@@ -34,9 +34,11 @@ struct BYOKmacApp: App {
         .environment(proGateCenter)
         .environment(settingsRouter)
         .managesPurchases(purchases)
-        .onChange(of: proGateCenter.requestID) { _, _ in
-          openWindow(id: MacWindowID.proPaywall)
-        }
+        .managesMacProAccess(
+          model: model,
+          purchases: purchases,
+          proGateCenter: proGateCenter
+        )
         .task {
           await model.start()
         }
@@ -130,9 +132,69 @@ struct BYOKmacApp: App {
     Settings {
       MacSettingsView(model: model, purchaseManager: purchases)
         .environment(purchases)
+        .environment(proGateCenter)
         .environment(settingsRouter)
+        .managesMacProAccess(
+          model: model,
+          purchases: purchases,
+          proGateCenter: proGateCenter
+        )
     }
     .windowStyle(.hiddenTitleBar)
+  }
+}
+
+@MainActor
+private struct MacProSceneLifecycleModifier: ViewModifier {
+  let model: MacAppModel
+  let purchases: PurchaseManager
+  let proGateCenter: MacProGateCenter
+
+  @Environment(\.openWindow) private var openWindow
+
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: proGateCenter.requestID) { _, _ in
+        openWindow(id: MacWindowID.proPaywall)
+      }
+      .onChange(of: purchases.entitlementState) { _, _ in
+        reconcileEntitlement()
+      }
+      .task {
+        reconcileEntitlement()
+      }
+  }
+
+  private func reconcileEntitlement() {
+    let access = MacProAccess.entitlementAccess
+    if access == .pro {
+      // Once the user legitimately unlocks Pro, restored resources become
+      // normal existing resources and remain usable under downgrade semantics.
+      MacPurchaseStore.restrictions.clear()
+    }
+
+    model.theme.reconcileProAccess(
+      hasPro: access == .pro,
+      isChecking: access == .checking
+    )
+    model.chats?.refreshNewChatTargetAfterProviderChanges()
+  }
+}
+
+@MainActor
+private extension View {
+  func managesMacProAccess(
+    model: MacAppModel,
+    purchases: PurchaseManager,
+    proGateCenter: MacProGateCenter
+  ) -> some View {
+    modifier(
+      MacProSceneLifecycleModifier(
+        model: model,
+        purchases: purchases,
+        proGateCenter: proGateCenter
+      )
+    )
   }
 }
 

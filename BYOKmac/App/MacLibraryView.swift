@@ -117,7 +117,7 @@ enum MacLibraryDateGrouper {
 struct MacLibraryView: View {
   @Bindable var workspace: MacWorkspaceModel
   @Bindable var chats: MacChatSessionModel
-  let openSourceChat: (ConversationID) -> Void
+  let openSourceChat: (ConversationID, ChatMessageID?) -> Void
 
   @State private var selection: Set<LibraryEntryID> = []
   @State private var searchText = ""
@@ -722,12 +722,18 @@ struct MacLibraryView: View {
             value: entry.createdAt.formatted(date: .abbreviated, time: .shortened)
           )
 
-          if let conversationID = sourceConversationID(for: entry) {
+          if let source = sourceChat(for: entry) {
             Divider()
-            Button("Open Source Chat", systemImage: "bubble.left") {
-              openSourceChat(conversationID)
+            if chats.summary(source.conversationID) != nil {
+              Button("Open Source Message", systemImage: "bubble.left") {
+                openSourceChat(source.conversationID, source.messageID)
+              }
+              .buttonStyle(.bordered)
+            } else {
+              Label("Source Chat Deleted", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
             }
-            .buttonStyle(.bordered)
           }
 
           Divider()
@@ -834,10 +840,15 @@ struct MacLibraryView: View {
       share([entry])
     }
 
-    if let conversationID = sourceConversationID(for: entry) {
+    if let source = sourceChat(for: entry) {
       Divider()
-      Button("Open Source Chat", systemImage: "bubble.left") {
-        openSourceChat(conversationID)
+      if chats.summary(source.conversationID) != nil {
+        Button("Open Source Message", systemImage: "bubble.left") {
+          openSourceChat(source.conversationID, source.messageID)
+        }
+      } else {
+        Button("Source Chat Deleted", systemImage: "bubble.left.and.exclamationmark.bubble.right") {}
+          .disabled(true)
       }
     }
 
@@ -864,18 +875,19 @@ struct MacLibraryView: View {
     case .manual:
       return "Saved"
     case .chat(let conversationID, _):
-      let title = chats.summary(conversationID)?.title.trimmingCharacters(
-        in: .whitespacesAndNewlines
-      ) ?? ""
+      guard let summary = chats.summary(conversationID) else { return "Deleted Chat" }
+      let title = summary.title.trimmingCharacters(in: .whitespacesAndNewlines)
       return title.isEmpty ? "Chat" : title
     case .project(let projectID):
       return workspace.project(projectID)?.name ?? "Project File"
     }
   }
 
-  private func sourceConversationID(for entry: LibraryEntry) -> ConversationID? {
-    if case .chat(let conversationID, _) = entry.source {
-      return conversationID
+  private func sourceChat(
+    for entry: LibraryEntry
+  ) -> (conversationID: ConversationID, messageID: ChatMessageID)? {
+    if case .chat(let conversationID, let messageID) = entry.source {
+      return (conversationID, messageID)
     }
     return nil
   }
@@ -916,28 +928,33 @@ struct MacLibraryView: View {
     isWorking = true
     Task { @MainActor in
       defer { isWorking = false }
-      var firstAddedID: LibraryEntryID?
-      for url in urls {
-        do {
-          guard let attachment = try await MacAttachmentImporter.importURLs([url]).first else {
-            continue
-          }
-          let before = Set(workspace.libraryEntries.map(\.id))
-          guard await workspace.addLibraryAttachments([attachment]) else { break }
-          if firstAddedID == nil {
-            firstAddedID = workspace.libraryEntries.first {
-              !before.contains($0.id)
-            }?.id
-          }
-        } catch {
-          workspace.errorMessage = error.localizedDescription
-          break
-        }
-      }
 
-      if let firstAddedID {
-        selection = [firstAddedID]
-      } else {
+      do {
+        var attachments: [ChatAttachment] = []
+        attachments.reserveCapacity(urls.count)
+        for url in urls {
+          if let attachment = try await MacAttachmentImporter.importURLs([url]).first {
+            attachments.append(attachment)
+          }
+        }
+        guard !attachments.isEmpty else {
+          normalizeSelection()
+          return
+        }
+
+        let before = Set(workspace.libraryEntries.map(\.id))
+        guard await workspace.addLibraryAttachments(attachments) else {
+          normalizeSelection()
+          return
+        }
+
+        if let firstAddedID = workspace.libraryEntries.first(where: { !before.contains($0.id) })?.id {
+          selection = [firstAddedID]
+        } else {
+          normalizeSelection()
+        }
+      } catch {
+        workspace.errorMessage = error.localizedDescription
         normalizeSelection()
       }
     }

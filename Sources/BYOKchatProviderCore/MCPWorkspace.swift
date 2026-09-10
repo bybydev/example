@@ -62,6 +62,11 @@ public actor MCPWorkspaceStore {
   private let persistence: any MCPWorkspacePersistence
   private var hasLoaded = false
 
+  /// Actor methods are reentrant while persistence awaits I/O. Serialize all
+  /// mutations so every candidate starts from the latest committed state.
+  private var mutationInProgress = false
+  private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
+
   public init(persistence: any MCPWorkspacePersistence) {
     self.persistence = persistence
   }
@@ -105,25 +110,51 @@ public actor MCPWorkspaceStore {
     state.chatConfigurations?[conversationID.rawValue] ?? MCPChatToolConfiguration()
   }
 
-  public func upsertServer(_ server: MCPRemoteServer) async throws {
+  public func explicitChatConfiguration(for conversationID: ConversationID) -> MCPChatToolConfiguration? {
+    state.chatConfigurations?[conversationID.rawValue]
+  }
+
+  public func upsertServer(
+    _ server: MCPRemoteServer,
+    invalidateSnapshot: Bool = false
+  ) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
     var value = server
     try Self.validateServer(value)
     value.updatedAt = .now
-    if let index = state.servers.firstIndex(where: { $0.id == value.id }) {
-      state.servers[index] = value
+
+    var candidate = state
+    let previous = candidate.servers.first(where: { $0.id == value.id })
+    if let index = candidate.servers.firstIndex(where: { $0.id == value.id }) {
+      candidate.servers[index] = value
     } else {
-      state.servers.append(value)
+      candidate.servers.append(value)
     }
-    try await persist()
+
+    if invalidateSnapshot
+      || previous?.endpoint != value.endpoint
+      || previous?.authentication != value.authentication
+      || previous?.additionalHeaders != value.additionalHeaders
+    {
+      candidate.snapshots.removeAll { $0.serverID == value.id }
+    }
+
+    try await commit(candidate)
   }
 
   public func setEnabled(_ enabled: Bool, serverID: MCPServerID) async throws {
-    guard let index = state.servers.firstIndex(where: { $0.id == serverID }) else {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard let index = candidate.servers.firstIndex(where: { $0.id == serverID }) else {
       throw MCPError.serverNotFound(serverID)
     }
-    state.servers[index].isEnabled = enabled
-    state.servers[index].updatedAt = .now
-    try await persist()
+    candidate.servers[index].isEnabled = enabled
+    candidate.servers[index].updatedAt = .now
+    try await commit(candidate)
   }
 
   public func setChatServerEnabled(
@@ -131,15 +162,19 @@ public actor MCPWorkspaceStore {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async throws {
-    guard state.servers.contains(where: { $0.id == serverID }) else {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard candidate.servers.contains(where: { $0.id == serverID }) else {
       throw MCPError.serverNotFound(serverID)
     }
-    var configuration = chatConfiguration(for: conversationID)
+    var configuration = chatConfiguration(in: candidate, conversationID: conversationID)
     configuration.enabledServerIDs.removeAll { $0 == serverID }
     if enabled { configuration.enabledServerIDs.append(serverID) }
     configuration.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
-    storeChatConfiguration(configuration, conversationID: conversationID)
-    try await persist()
+    storeChatConfiguration(configuration, conversationID: conversationID, in: &candidate)
+    try await commit(candidate)
   }
 
   public func setChatToolPolicy(
@@ -147,38 +182,81 @@ public actor MCPWorkspaceStore {
     exposedToolName: String,
     conversationID: ConversationID
   ) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
     let normalized = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalized.isEmpty, normalized.count <= MCPToolNamespace.maximumExposedNameLength else {
       throw MCPError.invalidToolDefinition("Invalid MCP tool permission name.")
     }
-    var configuration = chatConfiguration(for: conversationID)
+
+    var candidate = state
+    var configuration = chatConfiguration(in: candidate, conversationID: conversationID)
     if policy == .ask {
       configuration.toolPolicies.removeValue(forKey: normalized)
     } else {
       configuration.toolPolicies[normalized] = policy
     }
-    storeChatConfiguration(configuration, conversationID: conversationID)
-    try await persist()
+    storeChatConfiguration(configuration, conversationID: conversationID, in: &candidate)
+    try await commit(candidate)
+  }
+
+  /// Replaces an explicit chat configuration as one persistence transaction.
+  /// Unknown/deleted server IDs are dropped, matching the old materialization
+  /// behavior, while Ask policies are normalized away.
+  public func replaceChatConfiguration(
+    _ configuration: MCPChatToolConfiguration,
+    conversationID: ConversationID
+  ) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    let knownServerIDs = Set(state.servers.map(\.id))
+    var normalized = MCPChatToolConfiguration(
+      enabledServerIDs: Array(Set(configuration.enabledServerIDs.filter(knownServerIDs.contains)))
+        .sorted { $0.rawValue < $1.rawValue },
+      toolPolicies: [:]
+    )
+
+    for (rawName, policy) in configuration.toolPolicies {
+      let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !name.isEmpty, name.count <= MCPToolNamespace.maximumExposedNameLength else {
+        throw MCPError.invalidToolDefinition("Invalid MCP tool permission name.")
+      }
+      if policy != .ask { normalized.toolPolicies[name] = policy }
+    }
+
+    var candidate = state
+    storeChatConfiguration(normalized, conversationID: conversationID, in: &candidate)
+    try await commit(candidate)
   }
 
   public func removeChatConfiguration(conversationID: ConversationID) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
     guard state.chatConfigurations?[conversationID.rawValue] != nil else { return }
-    state.chatConfigurations?[conversationID.rawValue] = nil
-    normalizeChatConfigurationStorage()
-    try await persist()
+    var candidate = state
+    candidate.chatConfigurations?[conversationID.rawValue] = nil
+    normalizeChatConfigurationStorage(in: &candidate)
+    try await commit(candidate)
   }
 
   public func deleteServer(_ id: MCPServerID) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
     let exposedNames = Set(
-      state.snapshots.first(where: { $0.serverID == id })?.tools.map {
+      candidate.snapshots.first(where: { $0.serverID == id })?.tools.map {
         MCPToolNamespace.exposedName(serverID: id, remoteName: $0.remoteName)
       } ?? []
     )
-    state.servers.removeAll { $0.id == id }
-    state.snapshots.removeAll { $0.serverID == id }
-    state.tombstones[id.rawValue] = .now
+    candidate.servers.removeAll { $0.id == id }
+    candidate.snapshots.removeAll { $0.serverID == id }
+    candidate.tombstones[id.rawValue] = .now
 
-    if var configurations = state.chatConfigurations {
+    if var configurations = candidate.chatConfigurations {
       for key in Array(configurations.keys) {
         guard var configuration = configurations[key] else { continue }
         configuration.enabledServerIDs.removeAll { $0 == id }
@@ -189,26 +267,35 @@ public actor MCPWorkspaceStore {
           configurations[key] = configuration
         }
       }
-      state.chatConfigurations = configurations.isEmpty ? nil : configurations
+      candidate.chatConfigurations = configurations.isEmpty ? nil : configurations
     }
-    try await persist()
+    try await commit(candidate)
   }
 
   public func storeSnapshot(_ snapshot: MCPServerSnapshot) async throws {
-    guard state.servers.contains(where: { $0.id == snapshot.serverID }) else {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    guard candidate.servers.contains(where: { $0.id == snapshot.serverID }) else {
       throw MCPError.serverNotFound(snapshot.serverID)
     }
-    if let index = state.snapshots.firstIndex(where: { $0.serverID == snapshot.serverID }) {
-      state.snapshots[index] = snapshot
+    if let index = candidate.snapshots.firstIndex(where: { $0.serverID == snapshot.serverID }) {
+      candidate.snapshots[index] = snapshot
     } else {
-      state.snapshots.append(snapshot)
+      candidate.snapshots.append(snapshot)
     }
-    try await persist()
+    try await commit(candidate)
   }
 
   public func invalidateSnapshot(serverID: MCPServerID) async throws {
-    state.snapshots.removeAll { $0.serverID == serverID }
-    try await persist()
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    candidate.snapshots.removeAll { $0.serverID == serverID }
+    guard candidate != state else { return }
+    try await commit(candidate)
   }
 
   public func exportConfiguration() throws -> Data {
@@ -224,6 +311,9 @@ public actor MCPWorkspaceStore {
       throw ProviderError.workspaceVersionUnsupported(imported.schemaVersion)
     }
     try Self.validate(imported)
+
+    await beginMutation()
+    defer { endMutation() }
 
     var candidate = state
     switch strategy {
@@ -251,29 +341,56 @@ public actor MCPWorkspaceStore {
       candidate.chatConfigurations = chatConfigurations.isEmpty ? nil : chatConfigurations
     }
     try Self.validate(candidate)
-    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
-    state = candidate
+    try await commit(candidate)
+  }
+
+  private func chatConfiguration(
+    in candidate: MCPWorkspaceState,
+    conversationID: ConversationID
+  ) -> MCPChatToolConfiguration {
+    candidate.chatConfigurations?[conversationID.rawValue] ?? MCPChatToolConfiguration()
   }
 
   private func storeChatConfiguration(
     _ configuration: MCPChatToolConfiguration,
-    conversationID: ConversationID
+    conversationID: ConversationID,
+    in candidate: inout MCPWorkspaceState
   ) {
-    var values = state.chatConfigurations ?? [:]
+    var values = candidate.chatConfigurations ?? [:]
     if configuration.enabledServerIDs.isEmpty && configuration.toolPolicies.isEmpty {
       values.removeValue(forKey: conversationID.rawValue)
     } else {
       values[conversationID.rawValue] = configuration
     }
-    state.chatConfigurations = values.isEmpty ? nil : values
+    candidate.chatConfigurations = values.isEmpty ? nil : values
   }
 
-  private func normalizeChatConfigurationStorage() {
-    if state.chatConfigurations?.isEmpty == true { state.chatConfigurations = nil }
+  private func normalizeChatConfigurationStorage(in candidate: inout MCPWorkspaceState) {
+    if candidate.chatConfigurations?.isEmpty == true { candidate.chatConfigurations = nil }
   }
 
-  private func persist() async throws {
-    try await persistence.saveData(JSONEncoder.providerEncoder.encode(state))
+  private func commit(_ candidate: MCPWorkspaceState) async throws {
+    try Self.validate(candidate)
+    try await persistence.saveData(JSONEncoder.providerEncoder.encode(candidate))
+    state = candidate
+  }
+
+  private func beginMutation() async {
+    if !mutationInProgress {
+      mutationInProgress = true
+      return
+    }
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      mutationWaiters.append(continuation)
+    }
+  }
+
+  private func endMutation() {
+    guard !mutationWaiters.isEmpty else {
+      mutationInProgress = false
+      return
+    }
+    mutationWaiters.removeFirst().resume()
   }
 
   public static func validate(_ workspace: MCPWorkspaceState) throws {

@@ -28,4 +28,22 @@ struct MacLiveMessagePresentationTests {
     #expect(presentation.answerSnapshot.stableBlocks.isEmpty)
     #expect(presentation.answerSnapshot.tailBlocks == [.markdown("Newest answer")])
   }
+
+  @Test("Cancelling a live presentation clears owned render work")
+  @MainActor
+  func cancellationClearsOwnedRenderWork() {
+    let presentation = MacLiveMessagePresentation(messageID: "cancel-message")
+
+    _ = presentation.apply(
+      content: "Streaming answer",
+      reasoning: "Streaming reasoning",
+      usage: nil
+    )
+
+    #expect(presentation.hasPendingRenderWork)
+
+    presentation.cancelPendingRenders()
+
+    #expect(!presentation.hasPendingRenderWork)
+  }
 }

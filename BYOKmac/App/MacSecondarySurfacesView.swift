@@ -6,14 +6,44 @@ extension Notification.Name {
   static let macOpenConversationFromLibrary = Notification.Name(
     "com.hoangbkit.byokchat.mac.openConversationFromLibrary"
   )
+  static let macScrollToConversationMessage = Notification.Name(
+    "com.hoangbkit.byokchat.mac.scrollToConversationMessage"
+  )
+}
+
+struct MacConversationNavigationRequest: Equatable, Sendable {
+  let conversationID: ConversationID
+  let messageID: ChatMessageID
 }
 
 enum MacLibraryNavigation {
-  static func openConversation(_ conversationID: ConversationID) {
+  static func openConversation(
+    _ conversationID: ConversationID,
+    messageID: ChatMessageID? = nil
+  ) {
+    // Keep the original String payload so the existing shell and Project
+    // navigation path remain unchanged.
     NotificationCenter.default.post(
       name: .macOpenConversationFromLibrary,
       object: conversationID.rawValue
     )
+
+    guard let messageID else { return }
+    let request = MacConversationNavigationRequest(
+      conversationID: conversationID,
+      messageID: messageID
+    )
+    Task { @MainActor in
+      // Let the shell receive the conversation selection first. It retains
+      // this precise destination across background preparation, even before
+      // the target transcript exists.
+      await Task.yield()
+      await Task.yield()
+      NotificationCenter.default.post(
+        name: .macScrollToConversationMessage,
+        object: request
+      )
+    }
   }
 }
 
@@ -127,8 +157,11 @@ struct MacSecondarySurfacesView: View {
       MacLibraryView(
         workspace: workspace,
         chats: chats,
-        openSourceChat: { conversationID in
-          MacLibraryNavigation.openConversation(conversationID)
+        openSourceChat: { conversationID, messageID in
+          MacLibraryNavigation.openConversation(
+            conversationID,
+            messageID: messageID
+          )
           utilitySheets.dismiss()
         }
       )

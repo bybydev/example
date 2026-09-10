@@ -9,6 +9,49 @@ public protocol ProviderStreamingRuntime: Sendable {
 
 extension ProviderRuntime: ProviderStreamingRuntime {}
 
+func hydrateChatRuntimeAttachments(
+  into messages: inout [ProviderMessage],
+  loader: @Sendable (String) async -> Data?
+) async throws {
+  guard messages.contains(where: { !($0.attachments ?? []).isEmpty }) else { return }
+  let latestUserIndex = messages.lastIndex(where: { $0.role == .user })
+
+  for messageIndex in messages.indices {
+    guard let attachments = messages[messageIndex].attachments, !attachments.isEmpty else {
+      continue
+    }
+
+    var hydrated: [ChatAttachment] = []
+    hydrated.reserveCapacity(attachments.count)
+    var missingCurrent: [String] = []
+
+    for var attachment in attachments {
+      if !attachment.data.isEmpty {
+        hydrated.append(attachment)
+        continue
+      }
+
+      if let data = await loader(attachment.id), !data.isEmpty {
+        attachment.data = data
+        hydrated.append(attachment)
+      } else if messageIndex == latestUserIndex {
+        missingCurrent.append(attachment.filename)
+      }
+      // Missing historical blobs are omitted from the wire request. Their
+      // persisted metadata remains untouched so UI can still show unavailable.
+    }
+
+    if !missingCurrent.isEmpty {
+      let names = missingCurrent.joined(separator: ", ")
+      throw ProviderError.invalidRequest(
+        "One or more attachments for the current message are no longer available: \(names)."
+      )
+    }
+
+    messages[messageIndex].attachments = hydrated.isEmpty ? nil : hydrated
+  }
+}
+
 public actor ChatRuntime {
   private enum GenerationOperation: Sendable {
     case send(text: String, attachments: [ChatAttachment])
@@ -540,28 +583,12 @@ public actor ChatRuntime {
   }
 
   /// Fills attachment bytes for the request messages through the blob store
-  /// (just-in-time, scoped to this request). A missing blob drops the
-  /// attachment — adapters reject empty payloads — while a read error keeps
-  /// the row for a later retry.
+  /// (just-in-time, scoped to this request). Missing historical blobs are
+  /// omitted from the request; a missing attachment on the latest user turn
+  /// fails that turn clearly instead of silently changing its meaning.
   private func hydrateAttachments(into messages: inout [ProviderMessage]) async throws {
     guard let attachmentByteLoader else { return }
-    guard messages.contains(where: { !($0.attachments ?? []).isEmpty }) else { return }
-    for messageIndex in messages.indices {
-      guard let attachments = messages[messageIndex].attachments, !attachments.isEmpty else {
-        continue
-      }
-      var hydrated: [ChatAttachment] = []
-      hydrated.reserveCapacity(attachments.count)
-      for var attachment in attachments {
-        if attachment.data.isEmpty, let data = await attachmentByteLoader(attachment.id),
-          !data.isEmpty
-        {
-          attachment.data = data
-        }
-        hydrated.append(attachment)
-      }
-      messages[messageIndex].attachments = hydrated
-    }
+    try await hydrateChatRuntimeAttachments(into: &messages, loader: attachmentByteLoader)
   }
 
   private func prepareTurn(

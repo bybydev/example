@@ -1,5 +1,7 @@
 import BYOKchatProviderCore
 import Foundation
+import Observation
+import os
 import SwiftUI
 
 struct MacShellView: View {
@@ -7,7 +9,10 @@ struct MacShellView: View {
 
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
   @State private var sidebarVisible = true
-  @State private var selectedConversationID: ConversationID?
+  @State private var navigation = MacChatNavigation()
+  @State private var didSelectInitialChat = false
+  @State private var targetPickerConversationID: ConversationID?
+  @State private var toolsConversationID: ConversationID?
   @State private var searchText = ""
   @State private var composerFocusRequestID = 0
   @State private var showingTargetPicker = false
@@ -15,8 +20,7 @@ struct MacShellView: View {
   @State private var renameTarget: ChatConversation?
   @State private var deleteTarget: ChatConversation?
   @State private var pendingAttachmentsByKey: [String: [ChatAttachment]] = [:]
-
-  private static let newChatAttachmentKey = "__new_chat__"
+  @State private var didRestorePendingAttachments = false
 
   var body: some View {
     Group {
@@ -37,13 +41,15 @@ struct MacShellView: View {
     chats: MacChatSessionModel,
     mcp: MacMCPModel
   ) -> some View {
-    MacAppShell(
+    let paneConversationID = navigation.displayedID
+
+    return MacAppShell(
       sidebarVisible: $sidebarVisible,
       sidebarWidth: MacDesignTokens.Layout.sidebarIdeal
     ) {
       MacSidebarView(
         chats: chats,
-        selection: $selectedConversationID,
+        selection: $navigation.requestedID,
         searchText: $searchText,
         searchFocusRequestID: model.conversationSearchRequestID,
         newChat: { startNewChat(chats: chats) },
@@ -55,40 +61,65 @@ struct MacShellView: View {
         providers: providers,
         chats: chats,
         mcp: mcp,
-        conversationID: selectedConversationID,
-        summary: chats.summary(selectedConversationID),
+        conversationID: paneConversationID,
+        summary: chats.summary(paneConversationID),
+        retainedConversations: navigation.retainedConversations,
+        navigationTarget: navigation.messageTarget,
+        isPreparingConversation: navigation.isPreparing,
         composerFocusRequestID: composerFocusRequestID,
-        attachments: pendingAttachments(for: selectedConversationID),
+        attachments: pendingAttachments(for: paneConversationID),
         sidebarVisible: sidebarVisible,
         toggleSidebar: { sidebarVisible.toggle() },
-        chooseTarget: { showingTargetPicker = true },
+        chooseTarget: {
+          targetPickerConversationID = paneConversationID
+          showingTargetPicker = true
+        },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
-          if selectedConversationID != nil { showingChatTools = true }
+          if let paneConversationID {
+            toolsConversationID = paneConversationID
+            showingChatTools = true
+          }
         },
         appendAttachments: { additions in
-          appendAttachments(additions, conversationID: selectedConversationID, chats: chats)
+          appendAttachments(
+            additions,
+            conversationID: paneConversationID,
+            chats: chats,
+            providers: providers
+          )
         },
         removeAttachment: { id in
-          removePendingAttachment(id, conversationID: selectedConversationID)
+          removePendingAttachment(id, conversationID: paneConversationID, chats: chats)
         },
         send: { text, attachments in
-          let sourceConversationID = selectedConversationID
+          let sourceConversationID = paneConversationID
           Task { @MainActor in
+            if let target = chats.target(for: sourceConversationID) {
+              do {
+                try providers.validateAttachments(attachments, for: target)
+              } catch {
+                chats.errorMessage = error.localizedDescription
+                return
+              }
+            }
+
             if let id = await chats.send(
               conversationID: sourceConversationID,
               text: text,
               attachments: attachments
             ) {
               if sourceConversationID == nil {
-                transferFreshAttachments(to: id)
+                await transferFreshAttachments(to: id, chats: chats)
               }
-              selectedConversationID = id
+              if navigation.canFollowSend(from: sourceConversationID) {
+                navigation.requestedID = id
+              }
               await chats.loadConversation(id)
               await mcp.reloadFromStorage()
-              clearPersistedPendingAttachments(
-                persistedAttachmentIDs(for: id, chats: chats),
-                conversationID: id
+              await clearPersistedPendingAttachments(
+                conversationID: id,
+                chats: chats
               )
             }
           }
@@ -97,28 +128,34 @@ struct MacShellView: View {
     }
     .background(MacDesignTokens.Colors.canvas)
     .onAppear {
-      if selectedConversationID == nil, let first = chats.conversationSummaries.first?.id {
-        selectedConversationID = first
-        Task { await chats.loadConversation(first) }
+      if !didSelectInitialChat {
+        didSelectInitialChat = true
+        navigation.requestedID = chats.conversationSummaries.first?.id
       }
       chats.updateSearch(searchText)
     }
-    .onChange(of: selectedConversationID) { _, newValue in
-      Task { await chats.loadConversation(newValue) }
+    .task {
+      await restorePendingAttachmentsIfNeeded()
     }
-    .onChange(of: chats.streamRevisions) { _, _ in
-      guard let selectedConversationID else { return }
-      clearPersistedPendingAttachments(
-        persistedAttachmentIDs(for: selectedConversationID, chats: chats),
-        conversationID: selectedConversationID
-      )
+    .task(id: navigation.requestedID) {
+      await navigation.prepareSelection { id in
+        try await chats.prepareConversation(id)
+      }
+    }
+    .onChange(of: persistedMessageCount(for: navigation.displayedID, chats: chats)) { _, _ in
+      guard let displayedID = navigation.displayedID else { return }
+      Task { @MainActor in
+        await clearPersistedPendingAttachments(
+          conversationID: displayedID,
+          chats: chats
+        )
+      }
     }
     .onChange(of: chats.conversationSummaries.map(\.id)) { _, ids in
-      guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
-      self.selectedConversationID = ids.first
+      navigation.removeDeletedConversations(validIDs: ids)
     }
     .onChange(of: model.newChatRequestID) { _, _ in
-      startNewChat(chats: chats)
+      startNewChat(chats: chats, forceReset: true)
     }
     .onChange(of: model.sidebarToggleRequestID) { _, _ in
       sidebarVisible.toggle()
@@ -129,23 +166,29 @@ struct MacShellView: View {
       guard chats.summary(conversationID) != nil else { return }
       searchText = ""
       chats.updateSearch("")
-      selectedConversationID = conversationID
+      navigation.requestedID = conversationID
       sidebarVisible = true
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .macScrollToConversationMessage)) { notification in
+      guard let request = notification.object as? MacConversationNavigationRequest,
+        request.conversationID == navigation.requestedID
+      else { return }
+      navigation.navigateToMessage(request)
     }
     .sheet(isPresented: $showingTargetPicker) {
       MacTargetPickerView(
         providers: providers,
-        initialTarget: chats.target(for: selectedConversationID)
+        initialTarget: chats.target(for: targetPickerConversationID)
       ) { target in
-        await chats.applyTarget(target, conversationID: selectedConversationID)
+        await chats.applyTarget(target, conversationID: targetPickerConversationID)
       }
     }
     .sheet(isPresented: $showingChatTools) {
-      if let selectedConversationID {
+      if let toolsConversationID {
         MacChatToolsView(
           mcp: mcp,
-          conversationID: selectedConversationID,
-          presets: model.workspace?.project(for: selectedConversationID)?.projectToolPresets ?? []
+          conversationID: toolsConversationID,
+          presets: model.workspace?.project(for: toolsConversationID)?.projectToolPresets ?? []
         )
       }
     }
@@ -166,13 +209,13 @@ struct MacShellView: View {
         guard let target = deleteTarget else { return }
         deleteTarget = nil
         Task { @MainActor in
-          let wasSelected = selectedConversationID == target.id
           if await chats.deleteConversation(target.id) {
             await mcp.reloadFromStorage()
-            pendingAttachmentsByKey.removeValue(forKey: attachmentKey(target.id))
-            if wasSelected {
-              selectedConversationID = chats.conversationSummaries.first?.id
-            }
+            await clearPendingAttachments(
+              conversationID: target.id,
+              chats: chats
+            )
+            navigation.removeDeletedConversations(validIDs: chats.conversationSummaries.map(\.id))
           }
         }
       }
@@ -185,9 +228,10 @@ struct MacShellView: View {
     .alert(
       "Chat Error",
       isPresented: Binding(
-        get: { chats.errorMessage != nil || mcp.errorMessage != nil },
+        get: { navigation.errorMessage != nil || chats.errorMessage != nil || mcp.errorMessage != nil },
         set: {
           if !$0 {
+            navigation.errorMessage = nil
             chats.errorMessage = nil
             mcp.errorMessage = nil
           }
@@ -195,26 +239,46 @@ struct MacShellView: View {
       )
     ) {
       Button("OK") {
+        navigation.errorMessage = nil
         chats.errorMessage = nil
         mcp.errorMessage = nil
       }
     } message: {
-      Text(chats.errorMessage ?? mcp.errorMessage ?? "Unknown error")
+      Text(navigation.errorMessage ?? chats.errorMessage ?? mcp.errorMessage ?? "Unknown error")
     }
   }
 
-  private func startNewChat(chats: MacChatSessionModel) {
-    selectedConversationID = nil
+  private func startNewChat(chats: MacChatSessionModel, forceReset: Bool = false) {
+    let freshKey = attachmentKey(nil)
+    let hasFreshAttachments = !(pendingAttachmentsByKey[freshKey] ?? []).isEmpty
+    let hasFreshDraft = !chats.draft(for: nil)
+      .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let shouldResumeFreshWork =
+      !forceReset && navigation.requestedID != nil && (hasFreshAttachments || hasFreshDraft)
+
+    navigation.requestedID = nil
     searchText = ""
-    pendingAttachmentsByKey.removeValue(forKey: Self.newChatAttachmentKey)
     chats.updateSearch("")
-    chats.resetNewChat()
+
+    if !shouldResumeFreshWork {
+      pendingAttachmentsByKey.removeValue(forKey: freshKey)
+      if let store = model.pendingAttachmentStore {
+        Task { @MainActor in
+          do {
+            try await store.clear(freshKey)
+          } catch {
+            chats.errorMessage = "New chat was reset, but pending attachment cleanup failed: \(error.localizedDescription)"
+          }
+        }
+      }
+      chats.resetNewChat()
+    }
+
     composerFocusRequestID &+= 1
   }
 
   private func attachmentKey(_ conversationID: ConversationID?) -> String {
-    guard let conversationID else { return Self.newChatAttachmentKey }
-    return "conversation::\(conversationID.rawValue)"
+    MacPendingAttachmentStore.key(for: conversationID)
   }
 
   private func pendingAttachments(for conversationID: ConversationID?) -> [ChatAttachment] {
@@ -224,58 +288,139 @@ struct MacShellView: View {
   private func appendAttachments(
     _ additions: [ChatAttachment],
     conversationID: ConversationID?,
-    chats: MacChatSessionModel
+    chats: MacChatSessionModel,
+    providers: MacProviderModel
   ) {
     guard !additions.isEmpty else { return }
     let key = attachmentKey(conversationID)
-    do {
-      pendingAttachmentsByKey[key] = try MacAttachmentImporter.validateCombined(
-        existing: pendingAttachmentsByKey[key] ?? [],
-        additions: additions
-      )
-    } catch {
-      chats.errorMessage = error.localizedDescription
+
+    Task { @MainActor in
+      do {
+        if let target = chats.target(for: conversationID) {
+          try providers.validateAttachments(additions, for: target)
+        }
+
+        if let store = model.pendingAttachmentStore {
+          pendingAttachmentsByKey[key] = try await store.append(additions, to: key)
+        } else {
+          pendingAttachmentsByKey[key] = try MacAttachmentImporter.validateCombined(
+            existing: pendingAttachmentsByKey[key] ?? [],
+            additions: additions
+          )
+        }
+      } catch {
+        chats.errorMessage = error.localizedDescription
+      }
     }
   }
 
-  private func removePendingAttachment(_ id: String, conversationID: ConversationID?) {
-    let key = attachmentKey(conversationID)
-    guard var values = pendingAttachmentsByKey[key] else { return }
-    values.removeAll { $0.id == id }
-    if values.isEmpty {
-      pendingAttachmentsByKey.removeValue(forKey: key)
-    } else {
-      pendingAttachmentsByKey[key] = values
-    }
-  }
-
-  private func transferFreshAttachments(to conversationID: ConversationID) {
-    guard let values = pendingAttachmentsByKey.removeValue(forKey: Self.newChatAttachmentKey),
-      !values.isEmpty
-    else { return }
-    pendingAttachmentsByKey[attachmentKey(conversationID)] = values
-  }
-
-  private func persistedAttachmentIDs(
-    for conversationID: ConversationID,
+  private func removePendingAttachment(
+    _ id: String,
+    conversationID: ConversationID?,
     chats: MacChatSessionModel
-  ) -> Set<String> {
-    Set(
+  ) {
+    let key = attachmentKey(conversationID)
+    Task { @MainActor in
+      do {
+        if let store = model.pendingAttachmentStore {
+          let values = try await store.remove(id, from: key)
+          if values.isEmpty {
+            pendingAttachmentsByKey.removeValue(forKey: key)
+          } else {
+            pendingAttachmentsByKey[key] = values
+          }
+        } else {
+          guard var values = pendingAttachmentsByKey[key] else { return }
+          values.removeAll { $0.id == id }
+          if values.isEmpty {
+            pendingAttachmentsByKey.removeValue(forKey: key)
+          } else {
+            pendingAttachmentsByKey[key] = values
+          }
+        }
+      } catch {
+        chats.errorMessage = "Attachment could not be removed: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  private func transferFreshAttachments(
+    to conversationID: ConversationID,
+    chats: MacChatSessionModel
+  ) async {
+    let sourceKey = attachmentKey(nil)
+    let destinationKey = attachmentKey(conversationID)
+
+    do {
+      if let store = model.pendingAttachmentStore {
+        let values = try await store.transfer(from: sourceKey, to: destinationKey)
+        pendingAttachmentsByKey.removeValue(forKey: sourceKey)
+        if values.isEmpty {
+          pendingAttachmentsByKey.removeValue(forKey: destinationKey)
+        } else {
+          pendingAttachmentsByKey[destinationKey] = values
+        }
+      } else if let values = pendingAttachmentsByKey.removeValue(forKey: sourceKey), !values.isEmpty {
+        pendingAttachmentsByKey[destinationKey] = values
+      }
+    } catch {
+      chats.errorMessage = "The chat started, but pending attachments could not be transferred: \(error.localizedDescription)"
+    }
+  }
+
+  private func persistedMessageCount(
+    for conversationID: ConversationID?,
+    chats: MacChatSessionModel
+  ) -> Int {
+    chats.summary(conversationID)?.messageCount ?? 0
+  }
+
+  private func clearPersistedPendingAttachments(
+    conversationID: ConversationID,
+    chats: MacChatSessionModel
+  ) async {
+    let key = attachmentKey(conversationID)
+    guard let pending = pendingAttachmentsByKey[key], !pending.isEmpty else { return }
+
+    let pendingIDs = Set(pending.map(\.id))
+    let persistedIDs = Set(
       chats.messages(for: conversationID)
         .flatMap { $0.attachments ?? [] }
         .map(\.id)
     )
+    guard pendingIDs.isSubset(of: persistedIDs) else { return }
+
+    do {
+      if let store = model.pendingAttachmentStore {
+        try await store.clear(key)
+      }
+      pendingAttachmentsByKey.removeValue(forKey: key)
+    } catch {
+      chats.errorMessage = "Attachments were sent, but pending-state cleanup failed: \(error.localizedDescription)"
+    }
   }
 
-  private func clearPersistedPendingAttachments(
-    _ persistedIDs: Set<String>,
-    conversationID: ConversationID
-  ) {
+  private func clearPendingAttachments(
+    conversationID: ConversationID,
+    chats: MacChatSessionModel
+  ) async {
     let key = attachmentKey(conversationID)
-    guard let pending = pendingAttachmentsByKey[key], !pending.isEmpty else { return }
-    let pendingIDs = Set(pending.map(\.id))
-    guard pendingIDs.isSubset(of: persistedIDs) else { return }
-    pendingAttachmentsByKey.removeValue(forKey: key)
+    do {
+      if let store = model.pendingAttachmentStore {
+        try await store.clear(key)
+      }
+      pendingAttachmentsByKey.removeValue(forKey: key)
+    } catch {
+      chats.errorMessage = "Conversation was deleted, but pending attachment cleanup failed: \(error.localizedDescription)"
+    }
+  }
+
+  @MainActor
+  private func restorePendingAttachmentsIfNeeded() async {
+    guard !didRestorePendingAttachments else { return }
+    didRestorePendingAttachments = true
+    guard let store = model.pendingAttachmentStore else { return }
+    pendingAttachmentsByKey = await store.snapshot()
   }
 }
 
@@ -782,6 +927,96 @@ private struct MacRenameConversationSheet: View {
       } else {
         isSaving = false
       }
+    }
+  }
+}
+
+struct MacTranscriptNavigationTarget: Equatable, Sendable {
+  let token = UUID()
+  let request: MacConversationNavigationRequest
+}
+
+/// Owns navigation independently of the currently displayed transcript. A late
+/// load can warm the data cache, but only the current selection may replace UI.
+@MainActor
+@Observable
+final class MacChatNavigation {
+  var requestedID: ConversationID? {
+    didSet {
+      guard requestedID != oldValue else { return }
+      selectionRevision &+= 1
+      messageTarget = nil
+    }
+  }
+  private(set) var displayedID: ConversationID?
+  private(set) var retainedConversations: [MacPreparedConversation] = [.newChat]
+  private(set) var isPreparing = false
+  private(set) var messageTarget: MacTranscriptNavigationTarget?
+  var errorMessage: String?
+  @ObservationIgnored private var selectionRevision = 0
+  private let limit = 3
+
+  func prepareSelection(
+    using prepare: @MainActor (ConversationID) async throws -> MacPreparedConversation
+  ) async {
+    guard !Task.isCancelled else { return }
+    let requested = requestedID
+    let revision = selectionRevision
+    let log = OSLog(subsystem: "pro.byok.BYOKchat", category: "ChatSwitch")
+    let signpostID = OSSignpostID(log: log)
+    os_signpost(.begin, log: log, name: "Chat Selection", signpostID: signpostID)
+    defer { os_signpost(.end, log: log, name: "Chat Selection", signpostID: signpostID) }
+    isPreparing = true
+    defer {
+      if revision == selectionRevision { isPreparing = false }
+    }
+
+    do {
+      let prepared: MacPreparedConversation
+      if let retained = retainedConversations.first(where: { $0.id == requested }) {
+        prepared = retained
+      } else if let requested {
+        prepared = try await prepare(requested)
+      } else {
+        prepared = .newChat
+      }
+      guard !Task.isCancelled, revision == selectionRevision, requestedID == requested else { return }
+      retainedConversations.removeAll { $0.id == requested }
+      retainedConversations.append(prepared)
+      while retainedConversations.count > limit { retainedConversations.removeFirst() }
+      displayedID = requested
+      os_signpost(.event, log: log, name: "Display Prepared Chat")
+    } catch {
+      guard !Task.isCancelled, revision == selectionRevision else { return }
+      isPreparing = false
+      errorMessage = error.localizedDescription
+      requestedID = displayedID
+    }
+  }
+
+  func canFollowSend(from source: ConversationID?) -> Bool {
+    displayedID == source && requestedID == source
+  }
+
+  func navigateToMessage(_ request: MacConversationNavigationRequest) {
+    guard requestedID == request.conversationID else { return }
+    messageTarget = MacTranscriptNavigationTarget(request: request)
+  }
+
+  func removeDeletedConversations(validIDs: [ConversationID]) {
+    let valid = Set(validIDs)
+    let retained = retainedConversations.filter { item in
+      item.id.map { valid.contains($0) } ?? true
+    }
+    if retained.count != retainedConversations.count { retainedConversations = retained }
+    if let displayedID, !valid.contains(displayedID) {
+      self.displayedID = nil
+      if !retainedConversations.contains(where: { $0.id == nil }) {
+        retainedConversations.append(.newChat)
+      }
+    }
+    if let requestedID, !valid.contains(requestedID) {
+      self.requestedID = validIDs.first
     }
   }
 }

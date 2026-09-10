@@ -8,10 +8,23 @@ struct MacAnalyticsGateView: View {
 
   @Environment(PurchaseManager.self) private var purchaseManager
 
+  @ViewBuilder
   var body: some View {
-    if purchaseManager.hasPro {
+    switch purchaseManager.entitlementState {
+    case .checking:
+      VStack(spacing: 12) {
+        ProgressView()
+        Text("Checking BYOK Pro status…")
+          .font(.callout)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(MacDesignTokens.Colors.canvas)
+
+    case .active:
       MacAnalyticsView(services: services)
-    } else {
+
+    case .inactive:
       MacBasicAnalyticsView(services: services)
     }
   }

@@ -9,7 +9,9 @@ struct MacRichMessageView: View {
   let conversationID: ConversationID?
   let storedMessage: ChatMessage
 
+  @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(MacWorkspaceModel.self) private var workspace
+  @State private var retainedLiveRendering: LiveRendering?
   @State private var showingDetails = false
   @State private var showingEdit = false
   @State private var showingRegenerateConfirmation = false
@@ -27,12 +29,24 @@ struct MacRichMessageView: View {
     storedMessage = message
   }
 
-  private var livePresentation: MacLiveMessagePresentation? {
-    chats.livePresentations[storedMessage.id]
+  private struct LiveRendering: Equatable {
+    let message: ChatMessage
+    let answerSnapshot: MacStreamingAnswerSnapshot
+    let reasoningSnapshot: MacStreamingAnswerSnapshot
+  }
+
+  private var livePresentation: LiveRendering? {
+    guard isTranscriptActive else { return retainedLiveRendering }
+    guard let presentation = chats.livePresentations[storedMessage.id] else { return nil }
+    return LiveRendering(
+      message: presentation.resolve(storedMessage),
+      answerSnapshot: presentation.answerSnapshot,
+      reasoningSnapshot: presentation.reasoningSnapshot
+    )
   }
 
   private var message: ChatMessage {
-    chats.displayMessage(storedMessage)
+    livePresentation?.message ?? storedMessage
   }
 
   private var isStreaming: Bool {
@@ -40,11 +54,11 @@ struct MacRichMessageView: View {
   }
 
   private var expectsReasoning: Bool {
-    chats.target(for: conversationID)?.reasoning?.enabled == true
+    isTranscriptActive && chats.target(for: conversationID)?.reasoning?.enabled == true
   }
 
   private var canMutateConversation: Bool {
-    guard let conversationID else { return false }
+    guard isTranscriptActive, let conversationID else { return false }
     return !chats.isGenerating(conversationID)
   }
 
@@ -64,6 +78,12 @@ struct MacRichMessageView: View {
       case .assistant:
         assistantMessage
       }
+    }
+    .onChange(of: isTranscriptActive ? livePresentation : nil, initial: true) { _, rendering in
+      guard isTranscriptActive else { return }
+      // Preserve the last rendered height while hidden. Falling back to the
+      // persisted partial text would shrink the row and clamp its scroll position.
+      retainedLiveRendering = rendering
     }
     .contentShape(Rectangle())
     .contextMenu { contextActions }
@@ -267,9 +287,9 @@ struct MacRichMessageView: View {
     }
 
     if message.role == .assistant,
+      canMutateConversation,
       let conversationID,
-      chats.isLatestAssistant(message.id, conversationID: conversationID),
-      canMutateConversation
+      chats.isLatestAssistant(message.id, conversationID: conversationID)
     {
       Divider()
       Button(regenerateLabel, systemImage: "arrow.clockwise") {
