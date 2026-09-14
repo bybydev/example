@@ -43,6 +43,9 @@ public actor ProviderRegistry {
 
   public func replace(_ definition: ProviderDefinition) throws {
     try Self.validate(definition)
+    if definitions[definition.id]?.isBuiltIn == true, !definition.isBuiltIn {
+      throw ProviderError.invalidDefinition("Built-in providers cannot be replaced by custom providers.")
+    }
     definitions[definition.id] = definition
   }
 

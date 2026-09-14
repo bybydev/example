@@ -277,6 +277,8 @@ public actor ChatRuntime {
       try await hydrateAttachments(into: &requestMessages)
       var continuationMessages: [ProviderMessage] = []
       var accumulatedUsage: ProviderUsage?
+      var accumulatedProviderCostUSD = Decimal.zero
+      var providerCostReportCount = 0
       var toolRoundCount = 0
       var totalToolCallCount = 0
 
@@ -397,6 +399,10 @@ public actor ChatRuntime {
         if response.text.isEmpty { response.text = visibleText }
         if response.reasoning.isEmpty { response.reasoning = reasoningText }
         let completedStepUsage = response.usage ?? stepUsage
+        if let providerCost = ChatBilling.providerReportedCost(from: response.metadata) {
+          accumulatedProviderCostUSD += providerCost
+          providerCostReportCount += 1
+        }
         telemetry.providerRequestCompleted(
           conversation: conversation,
           messageID: turn.assistantMessage.id,
@@ -506,11 +512,16 @@ public actor ChatRuntime {
         }
 
         response.usage = addingUsage(accumulatedUsage, completedStepUsage)
+        let modelRequestCount = toolRoundCount + 1
+        response.metadata = ChatBilling.replacingProviderReportedCost(
+          in: response.metadata,
+          with: providerCostReportCount == modelRequestCount ? accumulatedProviderCostUSD : nil
+        )
         response.metadata = ChatBilling.metadata(
           existing: response.metadata,
           usage: response.usage,
           model: model,
-          modelRequestCount: toolRoundCount + 1,
+          modelRequestCount: modelRequestCount,
           toolCallCount: totalToolCallCount
         )
         let completed = try await conversations.completeMessage(

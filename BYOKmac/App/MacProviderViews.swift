@@ -663,6 +663,7 @@ func providerSymbol(_ kind: ProviderKind) -> String {
   switch kind {
   case .anthropic: "a.circle.fill"
   case .openai: "circle.hexagongrid.fill"
+  case .xAI: "bolt.horizontal.circle.fill"
   case .gemini: "sparkles"
   case .deepSeek: "wave.3.right.circle.fill"
   case .openRouter: "arrow.triangle.branch"

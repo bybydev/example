@@ -10,6 +10,7 @@ final class ProviderWorkspaceTests: XCTestCase {
       ids,
       [
         BuiltInProviders.openAIID,
+        BuiltInProviders.xAIID,
         BuiltInProviders.anthropicID,
         BuiltInProviders.geminiID,
         BuiltInProviders.nvidiaID,
@@ -41,6 +42,59 @@ final class ProviderWorkspaceTests: XCTestCase {
       let editedResolved = try await manager.resolvedAccount(id: account.id)
       XCTAssertEqual(editedResolved.baseURLOverride, editedSimulatorURL)
     }
+  }
+
+  func testLegacyCustomXAIAccountDoesNotReplaceBuiltInXAI() async throws {
+    let legacyEndpoint = URL(string: "https://legacy-xai.example.test/v1")!
+    let legacyDefinition = try CustomProviderFactory.makeOpenAICompatible(
+      id: "xai",
+      displayName: "Legacy xAI Compatible",
+      baseURL: legacyEndpoint,
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: "/models",
+      authentication: .bearer,
+      seedModelIDs: ["legacy-grok"]
+    )
+    let legacyAccount = ProviderAccount(
+      kind: .openAICompatible,
+      id: "legacy-xai-account",
+      providerID: "xai",
+      label: "Legacy xAI",
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: "/models",
+      authChoice: .bearer,
+      seedModelIDs: ["legacy-grok"],
+      baseURLOverride: legacyEndpoint,
+      defaultModelID: "legacy-grok"
+    )
+    let legacyState = ProviderWorkspaceState(
+      customProviders: [legacyDefinition],
+      accounts: [legacyAccount]
+    )
+    let persistence = InMemoryProviderWorkspacePersistence(
+      data: try JSONEncoder.providerEncoder.encode(legacyState)
+    )
+    let workspace = ProviderWorkspaceStore(persistence: persistence)
+    try await workspace.load()
+
+    let registry = try ProviderRegistry.builtIn()
+    let manager = ProviderAccountManager(
+      registry: registry,
+      workspace: workspace,
+      vault: InMemoryCredentialVault()
+    )
+    try await manager.synchronizeCustomProviders()
+
+    let registeredXAI = try await registry.definition(for: BuiltInProviders.xAIID)
+    XCTAssertTrue(registeredXAI.isBuiltIn)
+    XCTAssertEqual(registeredXAI.defaultBaseURL, BuiltInProviders.xAI.defaultBaseURL)
+    XCTAssertEqual(registeredXAI.chatCompletionsPath, "/responses")
+
+    let storedLegacy = try await workspace.account(id: legacyAccount.id)
+    XCTAssertEqual(storedLegacy.kind, .openAICompatible)
+    XCTAssertEqual(storedLegacy.providerID, BuiltInProviders.xAIID)
+    XCTAssertEqual(storedLegacy.definition.defaultBaseURL, legacyEndpoint)
+    XCTAssertEqual(storedLegacy.definition.chatCompletionsPath, "/chat/completions")
   }
 
   func testCustomProviderFactoryRejectsInsecureURL() throws {

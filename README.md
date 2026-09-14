@@ -6,6 +6,8 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 
 ## First-class providers
 
+- OpenAI
+- xAI
 - DeepSeek
 - OpenRouter
 - NVIDIA
@@ -16,7 +18,7 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 
 ## Provider platform
 
-- Native OpenAI-compatible Chat Completions, Anthropic Messages, and Gemini GenerateContent API families
+- Native OpenAI/xAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, and Gemini GenerateContent API families
 - Multiple accounts per provider
 - Keychain-isolated credentials
 - Custom HTTPS endpoints and protected headers
@@ -26,9 +28,9 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 - Manual, favorite, hidden, and unavailable model states
 - Searchable, favorites-first model selection
 - Provider-native streaming with separate answer and reasoning/thought summaries where supported
-- Provider-neutral function/tool calling across OpenAI-compatible, Anthropic, and Gemini wire formats
+- Provider-neutral function/tool calling across OpenAI/xAI Responses, OpenAI-compatible, Anthropic, and Gemini wire formats
 - Persisted multi-step model → tool → model execution rounds
-- Anthropic thinking-signature and Gemini thought-signature continuity for tool turns
+- OpenAI/xAI encrypted-reasoning/output continuation, Anthropic thinking-signature, and Gemini thought-signature continuity
 - Non-secret provider configuration import/export
 - Connection testing and streaming console
 
@@ -39,7 +41,7 @@ BYOKchat owns its provider, conversation, tool, and MCP runtime. It does not use
 - Global default system prompt for new chats
 - Multi-turn streaming with separate answer and reasoning content
 - Image and file attachments from Photos and the system document picker
-- Provider-native multimodal image/file payloads for OpenAI-compatible, Anthropic, and Gemini APIs
+- Provider-native multimodal image/file payloads for OpenAI/xAI Responses, OpenAI-compatible, Anthropic, and Gemini APIs
 - Text-file context and binary file content for supporting providers
 - Persisted attachment previews in conversation history
 - Attachment-only messages and attachment filename search

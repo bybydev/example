@@ -9,6 +9,7 @@ import Foundation
 public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case anthropic
   case openai
+  case xAI = "xai"
   case gemini
   case deepSeek
   case openRouter
@@ -18,7 +19,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   /// The catalog order used for provider pickers and lists. `.openAICompatible`
   /// is excluded: user-defined servers are configured, not catalogued.
   public static var catalog: [ProviderKind] {
-    [.anthropic, .openai, .gemini, .deepSeek, .openRouter, .nvidia]
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .openRouter, .nvidia]
   }
 
   /// The canonical provider ID for built-in kinds; `.openAICompatible` has no
@@ -27,6 +28,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     switch self {
     case .anthropic: "anthropic"
     case .openai: "openai"
+    case .xAI: "xai"
     case .gemini: "gemini"
     case .deepSeek: "deepseek"
     case .openRouter: "openrouter"
@@ -92,6 +94,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: "Anthropic"
     case .openai: "OpenAI"
+    case .xAI: "xAI"
     case .gemini: "Gemini"
     case .deepSeek: "DeepSeek"
     case .openRouter: "OpenRouter"
@@ -103,8 +106,9 @@ public extension ProviderKind {
   var apiFamily: ProviderAPIFamily {
     switch self {
     case .anthropic: .anthropicMessages
+    case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .openai, .deepSeek, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -112,7 +116,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .deepSeek, .openRouter, .nvidia: .bearer
+    case .openai, .xAI, .deepSeek, .openRouter, .nvidia: .bearer
     case .openAICompatible: .userChoice
     }
   }
@@ -120,7 +124,7 @@ public extension ProviderKind {
   var pathSpec: ProviderPathSpec {
     switch self {
     case .anthropic: .fixed(chat: "/v1/messages", models: "/v1/models")
-    case .openai: .fixed(chat: "/chat/completions", models: "/models")
+    case .openai, .xAI: .fixed(chat: "/responses", models: "/models")
     case .gemini: .fixed(chat: "/models", models: "/models")
     case .deepSeek: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
@@ -143,6 +147,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .brand(assetName: "provider.anthropic")
     case .openai: .brand(assetName: "provider.openai")
+    case .xAI: .brand(assetName: "provider.xai")
     case .gemini: .brand(assetName: "provider.gemini")
     case .deepSeek: .brand(assetName: "provider.deepseek")
     case .openRouter: .brand(assetName: "provider.openrouter")
@@ -155,7 +160,7 @@ public extension ProviderKind {
   /// concrete effort (the "Auto" segment of the target picker).
   var reasoningDefault: ReasoningOptions? {
     switch self {
-    case .deepSeek, .anthropic: .init(enabled: true, effort: .high)
+    case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
     case .openai, .openRouter, .nvidia, .openAICompatible: nil
     }
@@ -164,7 +169,7 @@ public extension ProviderKind {
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .deepSeek, .openRouter, .nvidia, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .openRouter, .nvidia, .openAICompatible: .combined
     }
   }
 
@@ -179,6 +184,57 @@ public extension ProviderKind {
   /// is usable before (or without) discovery.
   var seedModels: [ProviderModel] {
     switch self {
+    case .openai:
+      [
+        .init(
+          providerID: "openai", id: "gpt-6-astra", displayName: "GPT-6 Astra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+      ]
+    case .xAI:
+      [
+        .init(
+          providerID: "xai", id: "grok-4.6", displayName: "Grok 4.6",
+          contextWindow: 500_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "xai", id: "grok-4.20-0309-reasoning",
+          displayName: "Grok 4.20 Reasoning", contextWindow: 1_000_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "xai", id: "grok-4.20-non-reasoning",
+          displayName: "Grok 4.20 Non-Reasoning", contextWindow: 1_000_000,
+          supportedParameters: ["temperature", "top_p", "max_output_tokens", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "xai", id: "grok-4.20-multi-agent",
+          displayName: "Grok 4.20 Multi-Agent", contextWindow: 1_000_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "xai", id: "grok-4.3", displayName: "Grok 4.3",
+          contextWindow: 1_000_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+      ]
     case .deepSeek:
       [
         .init(
@@ -238,7 +294,7 @@ public extension ProviderKind {
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
           inputModalities: ["text", "image", "file"]),
       ]
-    case .openai, .openAICompatible:
+    case .openAICompatible:
       []
     }
   }
@@ -364,6 +420,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: URL(string: "https://api.anthropic.com")
     case .openai: URL(string: "https://api.openai.com/v1")
+    case .xAI: URL(string: "https://api.x.ai/v1")
     case .gemini: URL(string: "https://generativelanguage.googleapis.com/v1beta")
     case .deepSeek: URL(string: "https://api.deepseek.com")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
@@ -375,7 +432,7 @@ public extension ProviderKind {
   var behaviorID: ProviderBehaviorID {
     switch self {
     case .anthropic: .anthropic
-    case .openai: .genericOpenAICompatible
+    case .openai, .xAI: .genericOpenAICompatible
     case .gemini: .gemini
     case .deepSeek: .deepSeek
     case .openRouter: .openRouter

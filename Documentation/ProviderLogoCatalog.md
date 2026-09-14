@@ -4,8 +4,8 @@ BYOKchat bundles monochrome vector marks independently from its supported-provid
 
 ## Included brands
 
-- Built in: Anthropic, OpenAI, Gemini, DeepSeek, OpenRouter, NVIDIA
-- Model labs: xAI, Mistral AI, Cohere, AI21 Labs, Meta, Alibaba, Qwen, Moonshot AI/Kimi, MiniMax, Z.ai/Zhipu
+- Built in: Anthropic, OpenAI, xAI, Gemini, DeepSeek, OpenRouter, NVIDIA
+- Model labs: Mistral AI, Cohere, AI21 Labs, Meta, Alibaba, Qwen, Moonshot AI/Kimi, MiniMax, Z.ai/Zhipu
 - Hosted inference: Groq, Together AI, Fireworks AI, Cerebras, Perplexity, DeepInfra, Baseten, Replicate, SambaNova, Hyperbolic, Nebius, fal.ai, SiliconFlow
 - Cloud platforms: Amazon Bedrock, Azure AI, Vertex AI, Cloudflare Workers AI, Hugging Face, IBM watsonx, Snowflake Cortex, Vercel AI Gateway
 - Local runtimes: Ollama, LM Studio

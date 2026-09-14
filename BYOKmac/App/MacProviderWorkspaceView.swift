@@ -896,6 +896,7 @@ private struct MacProviderKindPickerSheet: View {
   private func providerDescription(_ kind: ProviderKind) -> String {
     switch kind {
     case .openai: "GPT models"
+    case .xAI: "Grok models"
     case .anthropic: "Claude models"
     case .gemini: "Gemini models"
     case .deepSeek: "DeepSeek models"

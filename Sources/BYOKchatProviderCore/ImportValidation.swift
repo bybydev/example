@@ -26,8 +26,7 @@ public enum WorkspaceImportValidator {
     )
 
     let builtInDefinitions = BuiltInProviders.all
-    let builtInIDs = Set(builtInDefinitions.map(\.id))
-    var definitions = Dictionary(uniqueKeysWithValues: builtInDefinitions.map { ($0.id, $0) })
+    let builtInByID = Dictionary(uniqueKeysWithValues: builtInDefinitions.map { ($0.id, $0) })
 
     for definition in workspace.customProviders {
       guard !definition.isBuiltIn else {
@@ -35,11 +34,11 @@ public enum WorkspaceImportValidator {
           "Imported custom provider \(definition.id.rawValue) is incorrectly marked as built in."
         )
       }
-      guard !builtInIDs.contains(definition.id) else {
-        throw ProviderError.importConflict(
-          "Custom provider ID \(definition.id.rawValue) conflicts with a built-in provider."
-        )
-      }
+      // A workspace created before a provider became first-class can still
+      // contain a custom definition with the same stable ID (for example
+      // `xai`). Account.kind is authoritative in schema v2, so retaining that
+      // legacy definition is safe as long as it never replaces the built-in
+      // registry entry. New collisions remain blocked by upsertCustomProvider.
       do {
         try ProviderRegistry.validate(definition)
       } catch {
@@ -59,21 +58,36 @@ public enum WorkspaceImportValidator {
           "Seed model \(model.id.rawValue) does not belong to provider \(definition.id.rawValue)."
         )
       }
-      definitions[definition.id] = definition
     }
 
     let accountsByID = Dictionary(uniqueKeysWithValues: workspace.accounts.map { ($0.id, $0) })
     for account in workspace.accounts {
-      guard let definition = definitions[account.providerID] else {
-        throw ProviderError.importConflict(
-          "Account \(account.label) references unknown provider \(account.providerID.rawValue)."
-        )
-      }
       guard !account.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw ProviderError.importConflict(
           "Provider account \(account.id.rawValue) has an empty label."
         )
       }
+
+      let definition: ProviderDefinition
+      if account.kind == .openAICompatible {
+        guard account.baseURLOverride != nil else {
+          throw ProviderError.importConflict(
+            "Custom provider account \(account.label) is missing its endpoint."
+          )
+        }
+        definition = account.definition
+      } else {
+        guard let expectedProviderID = account.kind.defaultProviderID,
+          expectedProviderID == account.providerID,
+          let builtIn = builtInByID[expectedProviderID]
+        else {
+          throw ProviderError.importConflict(
+            "Account \(account.label) does not match its built-in provider kind."
+          )
+        }
+        definition = builtIn
+      }
+
       if let baseURL = account.baseURLOverride {
         do {
           try ProviderHTTP.validateBaseURL(
@@ -90,6 +104,16 @@ public enum WorkspaceImportValidator {
       if let unsafe = account.additionalHeaders.keys.first(where: ProviderHTTP.isForbiddenCustomHeader) {
         throw ProviderError.importConflict(
           "Account \(account.label) contains forbidden header \(unsafe)."
+        )
+      }
+
+      if account.kind == .openAICompatible,
+        let auth = account.authChoice,
+        case .header(let name) = auth,
+        ProviderHTTP.isForbiddenCustomHeader(name)
+      {
+        throw ProviderError.importConflict(
+          "Account \(account.label) uses a forbidden authentication header \(name)."
         )
       }
     }
@@ -146,6 +170,7 @@ public enum WorkspaceImportValidator {
           )
         }
         try validateAttachments(message.attachments ?? [], messageID: message.id)
+        try validateProviderContinuation(message.providerContinuation, messageID: message.id)
         let toolRounds = message.toolRounds ?? []
         if message.role == .user, !toolRounds.isEmpty {
           throw ProviderError.importConflict(
@@ -277,14 +302,20 @@ public enum WorkspaceImportValidator {
         }
       }
 
-      if let continuation = round.providerContinuation {
-        let byteCount = continuation.payload.compactJSONString().utf8.count
-        guard byteCount <= 1_024 * 1_024 else {
-          throw ProviderError.importConflict(
-            "Message \(messageID.rawValue) contains oversized provider continuation metadata."
-          )
-        }
-      }
+      try validateProviderContinuation(round.providerContinuation, messageID: messageID)
+    }
+  }
+
+  private static func validateProviderContinuation(
+    _ continuation: ProviderToolContinuation?,
+    messageID: ChatMessageID
+  ) throws {
+    guard let continuation else { return }
+    let byteCount = continuation.payload.compactJSONString().utf8.count
+    guard byteCount <= 1_024 * 1_024 else {
+      throw ProviderError.importConflict(
+        "Message \(messageID.rawValue) contains oversized provider continuation metadata."
+      )
     }
   }
 

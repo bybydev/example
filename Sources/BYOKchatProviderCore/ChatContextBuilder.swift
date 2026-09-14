@@ -140,7 +140,12 @@ public enum ChatContextBuilder {
       }
     }
 
-    let turns = makeTurns(from: eligible)
+    let turns = makeTurns(
+      from: eligible,
+      activeProviderID: conversation.providerID,
+      activeAccountID: conversation.accountID,
+      activeModelID: conversation.modelID
+    )
     let toolCost = estimate(toolDefinitions: tools)
     let fixedCost = estimate(messages: fixedMessages)
       + toolCost
@@ -222,7 +227,12 @@ public enum ChatContextBuilder {
     var sourceMessageCount: Int
   }
 
-  private static func makeTurns(from messages: [ChatMessage]) -> [Turn] {
+  private static func makeTurns(
+    from messages: [ChatMessage],
+    activeProviderID: ProviderID,
+    activeAccountID: ProviderAccountID,
+    activeModelID: ModelID
+  ) -> [Turn] {
     var turns: [Turn] = []
     var current: Turn?
 
@@ -241,6 +251,10 @@ public enum ChatContextBuilder {
           sourceMessageCount: 1
         )
       case .assistant:
+        let canReplayProviderContinuation =
+          message.providerID == activeProviderID
+          && message.accountID == activeAccountID
+          && message.modelID == activeModelID
         var providerMessages: [ProviderMessage] = []
         for round in message.toolRounds ?? [] {
           providerMessages.append(
@@ -249,7 +263,7 @@ public enum ChatContextBuilder {
               content: round.assistantText,
               reasoning: round.assistantReasoning.isEmpty ? nil : round.assistantReasoning,
               toolCalls: round.calls,
-              toolContinuation: round.providerContinuation
+              toolContinuation: canReplayProviderContinuation ? round.providerContinuation : nil
             )
           )
           providerMessages.append(
@@ -268,7 +282,8 @@ public enum ChatContextBuilder {
             ProviderMessage(
               role: .assistant,
               content: message.content,
-              reasoning: message.reasoning.isEmpty ? nil : message.reasoning
+              reasoning: message.reasoning.isEmpty ? nil : message.reasoning,
+              toolContinuation: canReplayProviderContinuation ? message.providerContinuation : nil
             )
           )
         }

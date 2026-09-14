@@ -8,17 +8,39 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["openai", "deepseek", "openrouter", "nvidia", "anthropic", "gemini"]
+      == ["openai", "xai", "deepseek", "openrouter", "nvidia", "anthropic", "gemini"]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
 
   let openAI = try #require(definitions.first { $0.id == "openai" })
   #expect(openAI.defaultBaseURL.absoluteString == "https://api.openai.com/v1")
-  #expect(openAI.apiFamily == .openAIChatCompletions)
+  #expect(openAI.apiFamily == .openAIResponses)
   #expect(openAI.authentication == .bearer)
   #expect(openAI.modelsPath == "/models")
-  #expect(openAI.chatCompletionsPath == "/chat/completions")
+  #expect(openAI.chatCompletionsPath == "/responses")
+  #expect(openAI.seedModels.contains { $0.id == "gpt-6-astra" })
+  #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-sol" })
+  #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-terra" })
+  #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-luna" })
+
+  let xAI = try #require(definitions.first { $0.id == "xai" })
+  #expect(xAI.defaultBaseURL.absoluteString == "https://api.x.ai/v1")
+  #expect(xAI.apiFamily == .openAIResponses)
+  #expect(xAI.authentication == .bearer)
+  #expect(xAI.modelsPath == "/models")
+  #expect(xAI.chatCompletionsPath == "/responses")
+  #expect(xAI.kind == .xAI)
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.6" })
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.20-0309-reasoning" })
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.20-non-reasoning" })
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.20-multi-agent" })
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.3" })
+
+  #expect(ProviderKind.catalog.contains(.xAI))
+  #expect(ProviderKind.xAI.defaultProviderID == "xai")
+  #expect(ProviderKind.xAI.logo == .brand(assetName: "provider.xai"))
+  #expect(ProviderKind.xAI.reasoningDefault == .init(enabled: true, effort: .high))
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5" })
@@ -37,6 +59,23 @@ import Testing
   #expect(throws: ProviderError.self) {
     _ = try ProviderRegistry(definitions: [BuiltInProviders.deepSeek, BuiltInProviders.deepSeek])
   }
+}
+
+@Test func customProviderCannotReplaceBuiltInRegistryEntry() async throws {
+  let registry = try ProviderRegistry.builtIn()
+  let customXAI = try CustomProviderFactory.makeOpenAICompatible(
+    id: "xai",
+    displayName: "Custom xAI",
+    baseURL: URL(string: "https://legacy-xai.example.test/v1")!
+  )
+
+  await #expect(throws: ProviderError.self) {
+    try await registry.replace(customXAI)
+  }
+
+  let xAI = try await registry.definition(for: BuiltInProviders.xAIID)
+  #expect(xAI.isBuiltIn)
+  #expect(xAI.defaultBaseURL == BuiltInProviders.xAI.defaultBaseURL)
 }
 
 @Test func nonHTTPSProviderIsRejected() throws {

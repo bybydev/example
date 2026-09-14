@@ -134,6 +134,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
   public var modelID: ModelID?
   public var finishReason: String?
   public var usage: ProviderUsage?
+  public var providerContinuation: ProviderToolContinuation?
   public var metadata: [String: String]
   public var errorCode: String?
   public var errorDescription: String?
@@ -154,6 +155,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     modelID: ModelID? = nil,
     finishReason: String? = nil,
     usage: ProviderUsage? = nil,
+    providerContinuation: ProviderToolContinuation? = nil,
     metadata: [String: String] = [:],
     errorCode: String? = nil,
     errorDescription: String? = nil,
@@ -173,6 +175,7 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     self.modelID = modelID
     self.finishReason = finishReason
     self.usage = usage
+    self.providerContinuation = providerContinuation
     self.metadata = metadata
     self.errorCode = errorCode
     self.errorDescription = errorDescription

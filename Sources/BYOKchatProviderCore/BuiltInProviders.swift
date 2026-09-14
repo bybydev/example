@@ -2,6 +2,7 @@ import Foundation
 
 public enum BuiltInProviders {
   public static let openAIID: ProviderID = "openai"
+  public static let xAIID: ProviderID = "xai"
   public static let deepSeekID: ProviderID = "deepseek"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
@@ -11,12 +12,29 @@ public enum BuiltInProviders {
   public static let openAI = ProviderDefinition(
     id: openAIID,
     displayName: "OpenAI",
+    apiFamily: .openAIResponses,
     behavior: .genericOpenAICompatible,
     defaultBaseURL: URL(string: "https://api.openai.com/v1")!,
+    chatCompletionsPath: "/responses",
     modelsPath: "/models",
     authentication: .bearer,
+    seedModels: ProviderKind.openai.seedModels,
     isBuiltIn: true,
     kind: .openai
+  )
+
+  public static let xAI = ProviderDefinition(
+    id: xAIID,
+    displayName: "xAI",
+    apiFamily: .openAIResponses,
+    behavior: .genericOpenAICompatible,
+    defaultBaseURL: URL(string: "https://api.x.ai/v1")!,
+    chatCompletionsPath: "/responses",
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: ProviderKind.xAI.seedModels,
+    isBuiltIn: true,
+    kind: .xAI
   )
 
   public static let deepSeek = ProviderDefinition(
@@ -146,5 +164,5 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, deepSeek, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, xAI, deepSeek, openRouter, nvidia, anthropic, gemini]
 }

@@ -276,6 +276,7 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
 
 public enum ProviderAPIFamily: String, Codable, Sendable {
   case openAIChatCompletions
+  case openAIResponses
   case anthropicMessages
   case geminiGenerateContent
 }

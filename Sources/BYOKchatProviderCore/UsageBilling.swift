@@ -84,6 +84,20 @@ public enum ChatBilling {
     "openrouter.cost",
   ]
 
+  public static func providerReportedCost(from metadata: [String: String]) -> Decimal? {
+    providerCostKeys.compactMap { decimal(metadata[$0]) }.first
+  }
+
+  public static func replacingProviderReportedCost(
+    in metadata: [String: String],
+    with cost: Decimal?
+  ) -> [String: String] {
+    var result = metadata
+    for key in providerCostKeys { result.removeValue(forKey: key) }
+    if let cost { result["costUSD"] = decimalString(cost) }
+    return result
+  }
+
   public static func metadata(
     existing: [String: String],
     usage: ProviderUsage?,
@@ -95,7 +109,7 @@ public enum ChatBilling {
     result[modelRequestCountKey] = String(max(1, modelRequestCount))
     result[toolCallCountKey] = String(max(0, toolCallCount))
 
-    if let providerCost = providerCostKeys.compactMap({ decimal(existing[$0]) }).first {
+    if let providerCost = providerReportedCost(from: existing) {
       result[costKey] = decimalString(providerCost)
       result[accuracyKey] = ChatCostAccuracy.providerReported.rawValue
       return result

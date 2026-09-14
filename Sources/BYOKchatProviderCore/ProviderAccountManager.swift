@@ -15,7 +15,14 @@ public actor ProviderAccountManager {
   }
 
   public func synchronizeCustomProviders() async throws {
-    let custom = await workspace.customProviderDefinitions()
+    let builtInIDs = Set(BuiltInProviders.all.map(\.id))
+    // Legacy workspaces can contain a custom provider whose ID later became a
+    // first-class built-in (for example `xai`). Custom accounts are already
+    // self-contained by kind, so keep the stored definition for portability but
+    // never let it replace the built-in registry entry.
+    let custom = await workspace.customProviderDefinitions().filter {
+      !builtInIDs.contains($0.id)
+    }
     let customIDs = Set(custom.map(\.id))
     for definition in await registry.allDefinitions()
     where !definition.isBuiltIn && !customIDs.contains(definition.id) {
@@ -257,9 +264,15 @@ public actor ProviderRuntime {
   /// consulted only for the derived definitions it still hosts; the account's
   /// own kind spec is authoritative.
   private func makeAdapter(for account: ResolvedProviderAccount) -> any ProviderAdapter {
+    if account.kind == .xAI {
+      return XAIResponsesAdapter(definition: account.definition, transport: transport)
+    }
+
     switch account.kind.apiFamily {
     case .openAIChatCompletions:
       return OpenAICompatibleAdapter(definition: account.definition, transport: transport)
+    case .openAIResponses:
+      return OpenAIResponsesAdapter(definition: account.definition, transport: transport)
     case .anthropicMessages:
       return AnthropicMessagesAdapter(definition: account.definition, transport: transport)
     case .geminiGenerateContent:

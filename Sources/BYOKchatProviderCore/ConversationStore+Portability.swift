@@ -101,7 +101,8 @@ extension ConversationStore {
               modelID: assistant.modelID ?? source.modelID,
               finishReason: assistant.finishReason,
               usage: assistant.usage,
-              metadata: assistant.metadata
+              metadata: assistant.metadata,
+              toolContinuation: assistant.providerContinuation
             )
           )
         case .cancelled:
@@ -181,6 +182,7 @@ private struct PortableMessageFingerprint: Encodable {
   var modelID: ModelID?
   var finishReason: String?
   var usage: ProviderUsage?
+  var providerContinuation: ProviderToolContinuation?
   var metadata: [String: String]
   var errorCode: String?
   var errorDescription: String?
@@ -202,6 +204,7 @@ private struct PortableMessageFingerprint: Encodable {
     modelID = message.modelID
     finishReason = message.finishReason
     usage = message.usage
+    providerContinuation = message.providerContinuation
     metadata = message.metadata
     errorCode = message.errorCode
     errorDescription = message.errorDescription

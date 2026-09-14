@@ -488,6 +488,7 @@ public actor ConversationStore {
       message.modelID = response.modelID
       message.finishReason = response.finishReason
       message.usage = response.usage
+      message.providerContinuation = response.toolContinuation
       message.metadata = response.metadata
       message.status = .complete
       message.errorCode = nil
@@ -557,7 +558,7 @@ public actor ConversationStore {
   }
 
   public func hydrateRequestAttachments(in messages: inout [ProviderMessage]) async throws {
-    guard messages.contains(where: { !( $0.attachments ?? []).isEmpty }) else { return }
+    guard messages.contains(where: { !($0.attachments ?? []).isEmpty }) else { return }
     for messageIndex in messages.indices {
       guard let attachments = messages[messageIndex].attachments, !attachments.isEmpty else {
         continue
