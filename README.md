@@ -8,7 +8,7 @@ The v1 product flow is:
 Record or Import → Transcribe → Review/Edit → Clean/Polish/Summarize → Export
 ```
 
-Core transcription uses bundled local models. The architecture keeps reusable domain, persistence, transcription, AI, export, and runtime logic in shared packages so a future iOS target can reuse the same product core without a repo-wide extraction.
+Core transcription uses bundled local models. The architecture keeps reusable domain, persistence, transcription, AI, export, runtime, and model-asset logic in shared packages so a future iOS target can reuse the same product core without a repo-wide extraction.
 
 ## Repository structure
 
@@ -21,8 +21,11 @@ Packages/
   InkribeAI/                 Local AI action/domain layer
   InkribePersistence/        Transcript repository contracts
   InkribeExport/             Export-domain contracts
+  InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
   WhisperRuntime/            whisper.cpp runtime boundary
   LLMRuntime/                llama.cpp runtime boundary
+scripts/                     Model asset developer commands
+testfixtures/                Tiny path-compatible model fixtures
 docs/                        Product, architecture, shell, and phase documentation
 ```
 
@@ -35,6 +38,19 @@ Shared packages target macOS 15+ and iOS 26+ and must not depend on AppKit or Ma
 - `apple/swift-log` exact `1.11.0`
 
 JobQueue belongs to `InkribeTranscription`, not the app UI layer. MacAppFoundation belongs to the Mac application layer for themes, commerce, onboarding, settings, window chrome, and developer surfaces.
+
+## Bundled model assets
+
+Production model metadata is centralized in `Packages/InkribeModelAssets/Sources/InkribeModelAssets/Resources/ModelAssets.json`.
+
+Current v1 assets:
+
+- Whisper Small multilingual → `Models/whisper/ggml-small.bin`
+- Qwen3 1.7B Q4_K_M → `Models/qwen/Qwen3-1.7B-Q4_K_M.gguf`
+
+Use `make download-models` to restore production weights, `make verify-models` to check their pinned size and SHA-256, and `make install-model-fixtures` to populate the same paths with tiny development fixtures.
+
+See `docs/MODEL_ASSETS.md` for the authoritative asset contract.
 
 ## Product identity
 
@@ -53,10 +69,11 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - Reusable product logic stays in shared packages.
 - Mac-only presentation and integration stay in `InkribeMac`.
 - The main Mac window uses one permanent two-column shell; feature phases fill its content rather than recreating navigation/window geometry.
+- Production model identities, paths, revisions, byte counts, and digests come from one manifest.
 - User transcript/audio contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, and `docs/SHELL.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, and `docs/MODEL_ASSETS.md` for the detailed contracts.
 
 ## Development workflow
 

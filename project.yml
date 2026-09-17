@@ -32,6 +32,8 @@ packages:
     path: Packages/InkribePersistence
   InkribeExport:
     path: Packages/InkribeExport
+  InkribeModelAssets:
+    path: Packages/InkribeModelAssets
   WhisperRuntime:
     path: Packages/WhisperRuntime
   LLMRuntime:
@@ -42,6 +44,8 @@ fileGroups:
   - Makefile
   - project.yml
   - docs
+  - scripts
+  - testfixtures
 
 settings:
   base:

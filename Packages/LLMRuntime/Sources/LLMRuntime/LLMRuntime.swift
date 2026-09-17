@@ -1,4 +1,11 @@
 import Foundation
+import InkribeModelAssets
+
+public enum LLMModelAsset {
+    public static func descriptor() throws -> ModelAssetDescriptor {
+        try ModelAssetCatalog.bundledManifest().asset(runtime: .llm)
+    }
+}
 
 public struct LLMGenerationRequest: Equatable, Sendable {
     public let prompt: String

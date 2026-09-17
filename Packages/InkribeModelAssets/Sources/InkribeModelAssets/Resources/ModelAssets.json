@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "whisper-small-multilingual",
+      "runtime": "whisper",
+      "displayName": "Whisper Small Multilingual",
+      "relativePath": "whisper/ggml-small.bin",
+      "sourceRepository": "ggerganov/whisper.cpp",
+      "revision": "90a64d80ea254cf67575b41a5971f972c79f7b45",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/90a64d80ea254cf67575b41a5971f972c79f7b45/ggml-small.bin?download=true",
+      "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "byteCount": 487601967,
+      "license": "MIT"
+    },
+    {
+      "id": "qwen3-1.7b-q4-k-m",
+      "runtime": "llm",
+      "displayName": "Qwen3 1.7B Q4_K_M",
+      "relativePath": "qwen/Qwen3-1.7B-Q4_K_M.gguf",
+      "sourceRepository": "ggml-org/Qwen3-1.7B-GGUF",
+      "revision": "daeb8e2d528a760970442092f6bf1e55c3b659eb",
+      "downloadURL": "https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf?download=true",
+      "sha256": "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
+      "byteCount": 1282439264,
+      "license": "Apache-2.0"
+    }
+  ]
+}

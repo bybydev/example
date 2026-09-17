@@ -6,6 +6,16 @@ let package = Package(
     name: "LLMRuntime",
     platforms: [.macOS(.v15), .iOS(.v26)],
     products: [.library(name: "LLMRuntime", targets: ["LLMRuntime"])],
-    targets: [.target(name: "LLMRuntime")],
+    dependencies: [
+        .package(path: "../InkribeModelAssets")
+    ],
+    targets: [
+        .target(
+            name: "LLMRuntime",
+            dependencies: [
+                .product(name: "InkribeModelAssets", package: "InkribeModelAssets")
+            ]
+        )
+    ],
     swiftLanguageModes: [.v6]
 )
