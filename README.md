@@ -22,8 +22,8 @@ Packages/
   InkribePersistence/        Transcript repository contracts
   InkribeExport/             Export-domain contracts
   InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
-  WhisperRuntime/            whisper.cpp runtime boundary
-  LLMRuntime/                llama.cpp runtime boundary
+  WhisperRuntime/            actor-isolated whisper.cpp inference boundary
+  LLMRuntime/                actor-isolated llama.cpp generation boundary
 scripts/                     Model asset developer commands
 testfixtures/                Tiny path-compatible model fixtures
 docs/                        Product, architecture, shell, and phase documentation
@@ -52,6 +52,17 @@ Use `make download-models` to restore production weights, `make verify-models` t
 
 See `docs/MODEL_ASSETS.md` for the authoritative asset contract.
 
+## Native inference
+
+The reusable native runtime packages pin upstream Apple inference artifacts and keep direct C APIs internal:
+
+- `WhisperRuntime` → whisper.cpp `1.9.4` / binary `b5130`
+- `LLMRuntime` → llama.cpp `0.4.1` / binary `b10964`
+
+Both runtimes own model/context lifetime explicitly and serialize mutable native state through actors. Recommended policy uses Metal on Apple Silicon and CPU inference on Intel. Runtime diagnostics record operational metadata only, never transcript, audio, prompt, or generated content.
+
+See `docs/NATIVE_RUNTIMES.md` for native dependency pins, lifecycle, cancellation, sampling, audio, and prompt-layer boundaries.
+
 ## Product identity
 
 - Bundle identifier: `com.hoangbkit.inkribe`
@@ -70,10 +81,11 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - Mac-only presentation and integration stay in `InkribeMac`.
 - The main Mac window uses one permanent two-column shell; feature phases fill its content rather than recreating navigation/window geometry.
 - Production model identities, paths, revisions, byte counts, and digests come from one manifest.
-- User transcript/audio contents are not written to diagnostic logs by default.
+- Native model/context state stays inside actor-isolated runtime packages.
+- User transcript/audio/prompt/generated contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, and `docs/MODEL_ASSETS.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, and `docs/NATIVE_RUNTIMES.md` for the detailed contracts.
 
 ## Development workflow
 
