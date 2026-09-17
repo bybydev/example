@@ -1,3 +1,4 @@
+import InkribeExport
 import Logging
 import MacAppFoundation
 import SwiftUI
@@ -77,6 +78,56 @@ struct InkribeApp: App {
                     .keyboardShortcut("3", modifiers: [.command])
             }
 
+            CommandMenu("Transcript") {
+                Button("Copy Edited Transcript") {
+                    copyActiveTranscript(source: .edited)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(shellState.activeTranscriptID == nil)
+
+                Button("Copy Raw Transcript") {
+                    copyActiveTranscript(source: .raw)
+                }
+                .disabled(shellState.activeTranscriptID == nil)
+
+                Divider()
+
+                Menu("Export Plain Text") {
+                    Button("Edited…") {
+                        exportActiveTranscript(.plainText, source: .edited)
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(shellState.activeTranscriptID == nil)
+
+                    Button("Raw…") {
+                        exportActiveTranscript(.plainText, source: .raw)
+                    }
+                    .disabled(shellState.activeTranscriptID == nil)
+                }
+
+                Menu("Export Markdown") {
+                    Button("Edited…") {
+                        exportActiveTranscript(.markdown, source: .edited)
+                    }
+                    .disabled(shellState.activeTranscriptID == nil)
+
+                    Button("Raw…") {
+                        exportActiveTranscript(.markdown, source: .raw)
+                    }
+                    .disabled(shellState.activeTranscriptID == nil)
+                }
+
+                Button("Export SRT…") {
+                    exportActiveTranscript(.srt)
+                }
+                .disabled(shellState.activeTranscriptID == nil)
+
+                Button("Export VTT…") {
+                    exportActiveTranscript(.vtt)
+                }
+                .disabled(shellState.activeTranscriptID == nil)
+            }
+
             #if DEBUG
             CommandMenu("Developer") {
                 Button("Developer Tools…") {
@@ -124,5 +175,63 @@ struct InkribeApp: App {
         }
         .defaultSize(width: 700, height: 600)
         #endif
+    }
+
+    private func copyActiveTranscript(source: TranscriptTextSource) {
+        guard let id = shellState.activeTranscriptID else { return }
+        Task { @MainActor in
+            do {
+                try await TranscriptExportCoordinator.copyTranscript(
+                    id: id,
+                    source: source,
+                    appState: appState
+                )
+                logger.info(
+                    "Transcript copied to clipboard",
+                    metadata: ["source": "\(source.rawValue)"]
+                )
+            } catch {
+                logger.error(
+                    "Transcript copy failed",
+                    metadata: ["error_type": "\(String(reflecting: type(of: error)))"]
+                )
+                TranscriptExportCoordinator.presentFailure(error, operation: "Copy Failed")
+            }
+        }
+    }
+
+    private func exportActiveTranscript(
+        _ format: TranscriptExportFormat,
+        source: TranscriptTextSource = .edited
+    ) {
+        guard let id = shellState.activeTranscriptID else { return }
+        Task { @MainActor in
+            do {
+                let didExport = try await TranscriptExportCoordinator.exportTranscript(
+                    id: id,
+                    format: format,
+                    textSource: source,
+                    appState: appState
+                )
+                if didExport {
+                    logger.info(
+                        "Transcript exported",
+                        metadata: [
+                            "format": "\(format.rawValue)",
+                            "source": "\(format.supportsTextSourceSelection ? source.rawValue : "segments")"
+                        ]
+                    )
+                }
+            } catch {
+                logger.error(
+                    "Transcript export failed",
+                    metadata: [
+                        "format": "\(format.rawValue)",
+                        "error_type": "\(String(reflecting: type(of: error)))"
+                    ]
+                )
+                TranscriptExportCoordinator.presentFailure(error, operation: "Export Failed")
+            }
+        }
     }
 }

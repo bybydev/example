@@ -1,3 +1,5 @@
+import InkribeCore
+import InkribeExport
 import MacAppFoundation
 import SwiftUI
 
@@ -35,6 +37,10 @@ struct InkribeMainColumn: View {
 
             Spacer(minLength: 12)
 
+            if let transcriptID = state.activeTranscriptID {
+                transcriptExportMenu(transcriptID)
+            }
+
             ProPlanButton(
                 purchaseManager: purchaseManager,
                 onUpgrade: onOpenPlan,
@@ -56,6 +62,68 @@ struct InkribeMainColumn: View {
                 .frame(height: 1)
         }
         .accessibilityIdentifier("Inkribe.MainTitlebar")
+    }
+
+    private func transcriptExportMenu(_ transcriptID: TranscriptID) -> some View {
+        Menu {
+            Button("Copy Edited Transcript") {
+                copyTranscript(transcriptID, source: .edited)
+            }
+
+            Button("Copy Raw Transcript") {
+                copyTranscript(transcriptID, source: .raw)
+            }
+
+            Divider()
+
+            Menu("Export Plain Text") {
+                Button("Edited…") {
+                    exportTranscript(
+                        transcriptID,
+                        format: .plainText,
+                        source: .edited
+                    )
+                }
+                Button("Raw…") {
+                    exportTranscript(
+                        transcriptID,
+                        format: .plainText,
+                        source: .raw
+                    )
+                }
+            }
+
+            Menu("Export Markdown") {
+                Button("Edited…") {
+                    exportTranscript(
+                        transcriptID,
+                        format: .markdown,
+                        source: .edited
+                    )
+                }
+                Button("Raw…") {
+                    exportTranscript(
+                        transcriptID,
+                        format: .markdown,
+                        source: .raw
+                    )
+                }
+            }
+
+            Button("Export SRT Subtitles…") {
+                exportTranscript(transcriptID, format: .srt)
+            }
+
+            Button("Export WebVTT Subtitles…") {
+                exportTranscript(transcriptID, format: .vtt)
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .frame(width: 20, height: 20)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Copy or export transcript")
+        .accessibilityLabel("Transcript export actions")
     }
 
     private var statusBar: some View {
@@ -93,5 +161,41 @@ struct InkribeMainColumn: View {
                 : "Transcribing \(queue.activeCount)"
         }
         return "Ready"
+    }
+
+    private func copyTranscript(
+        _ transcriptID: TranscriptID,
+        source: TranscriptTextSource
+    ) {
+        Task { @MainActor in
+            do {
+                try await TranscriptExportCoordinator.copyTranscript(
+                    id: transcriptID,
+                    source: source,
+                    appState: appState
+                )
+            } catch {
+                TranscriptExportCoordinator.presentFailure(error, operation: "Copy Failed")
+            }
+        }
+    }
+
+    private func exportTranscript(
+        _ transcriptID: TranscriptID,
+        format: TranscriptExportFormat,
+        source: TranscriptTextSource = .edited
+    ) {
+        Task { @MainActor in
+            do {
+                _ = try await TranscriptExportCoordinator.exportTranscript(
+                    id: transcriptID,
+                    format: format,
+                    textSource: source,
+                    appState: appState
+                )
+            } catch {
+                TranscriptExportCoordinator.presentFailure(error, operation: "Export Failed")
+            }
+        }
     }
 }

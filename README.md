@@ -20,7 +20,7 @@ Packages/
   InkribeTranscription/      JobQueue-backed transcription orchestration
   InkribeAI/                 Local AI prompts, chunking, merge, result contracts
   InkribePersistence/        Durable transcript repository
-  InkribeExport/             Export-domain contracts
+  InkribeExport/             Transcript text/subtitle formatting contracts
   InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
   WhisperRuntime/            actor-isolated whisper.cpp inference boundary
   LLMRuntime/                actor-isolated llama.cpp generation boundary
@@ -107,6 +107,23 @@ Generation is cancellable and fully local: no account, API key, cloud service, r
 
 See `docs/LOCAL_AI.md` for prompt, chunking, merge, progress, revision, persistence, privacy, and entitlement-boundary contracts.
 
+## Export and finishing
+
+The active transcript can be copied or exported without leaving the local document workflow:
+
+- Copy Edited transcript
+- Copy Raw transcript
+- TXT from Edited or Raw text
+- Markdown from Edited or Raw text
+- SRT from timestamped transcript segments
+- WebVTT from timestamped transcript segments
+
+Text export preserves the selected source exactly; there is no hidden Raw/Edited fallback. Subtitle export stays segment-based because Edited prose does not have timestamp alignment. Valid overlapping cue timestamps are preserved, malformed durations are minimally repaired, and filenames are generated safely from the transcript title and creation date.
+
+Formatting lives in the cross-platform `InkribeExport` package. Clipboard and save-panel presentation remain Mac-only, and export never mutates the durable transcript.
+
+See `docs/EXPORT.md` for source-selection, filename, subtitle, privacy, and Mac finishing-workflow contracts.
+
 ## Product identity
 
 - Bundle identifier: `com.hoangbkit.inkribe`
@@ -129,10 +146,12 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - Raw Whisper transcript text remains separate from user/AI edited text.
 - AI generation never mutates transcript content until the user explicitly applies or saves a previewed result.
 - Generated AI results are revision-aware so stale work cannot overwrite newer transcript edits.
-- User transcript/audio/prompt/generated contents are not written to diagnostic logs by default.
+- Text export uses explicit Edited/Raw source selection; subtitle export uses timestamped segments.
+- Export never mutates transcript persistence or routes work through JobQueue/model runtimes.
+- User transcript/audio/prompt/generated/exported contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, `docs/TRANSCRIPT_WORKSPACE.md`, and `docs/LOCAL_AI.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, `docs/TRANSCRIPT_WORKSPACE.md`, `docs/LOCAL_AI.md`, and `docs/EXPORT.md` for the detailed contracts.
 
 ## Development workflow
 

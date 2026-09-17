@@ -7,6 +7,12 @@ let package = Package(
     platforms: [.macOS(.v15), .iOS(.v26)],
     products: [.library(name: "InkribeExport", targets: ["InkribeExport"])],
     dependencies: [.package(path: "../InkribeCore")],
-    targets: [.target(name: "InkribeExport", dependencies: ["InkribeCore"])],
+    targets: [
+        .target(name: "InkribeExport", dependencies: ["InkribeCore"]),
+        .testTarget(
+            name: "InkribeExportTests",
+            dependencies: ["InkribeExport", "InkribeCore"]
+        )
+    ],
     swiftLanguageModes: [.v6]
 )

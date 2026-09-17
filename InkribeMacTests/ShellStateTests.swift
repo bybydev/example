@@ -37,10 +37,15 @@ struct ShellStateTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let state = InkribeShellState(defaults: defaults)
-        state.openTranscript(.init())
+        let id = TranscriptID()
+        state.openTranscript(id)
 
         #expect(state.route.sidebarDestination == nil)
         #expect(state.route.title == "Transcript")
+        #expect(state.activeTranscriptID == id)
+
+        state.select(.library)
+        #expect(state.activeTranscriptID == nil)
     }
 
     private func makeDefaults() throws -> (UserDefaults, String) {
