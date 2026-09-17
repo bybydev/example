@@ -180,6 +180,16 @@ public final class TranscriptionQueueController {
         try queue.retryAll()
     }
 
+    @discardableResult
+    public func releaseIdleRuntimeResources() async -> Bool {
+        guard activeCount == 0,
+              let runtimeManager = executor as? any TranscriptionRuntimeManaging else {
+            return false
+        }
+        await runtimeManager.unloadTranscriptionModel()
+        return true
+    }
+
     private func registerPersistentJobTypes() throws {
         try registry.register(TranscriptionJob.self)
     }
@@ -207,6 +217,9 @@ public final class TranscriptionQueueController {
             mapped = .statusChanged(mapQueueState(status))
         case .queueDrained:
             mapped = .drained
+            Task { [weak self] in
+                _ = await self?.releaseIdleRuntimeResources()
+            }
         case .persistenceFailed:
             mapped = .persistenceFailed
         case .jobProgressUpdated:

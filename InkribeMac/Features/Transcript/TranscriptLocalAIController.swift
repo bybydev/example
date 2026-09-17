@@ -8,6 +8,7 @@ import Observation
 @Observable
 final class TranscriptLocalAIController {
     typealias ServiceFactory = () throws -> any TranscriptAIProcessing
+    typealias KeepModelLoadedProvider = @MainActor () -> Bool
 
     static let shared = TranscriptLocalAIController()
 
@@ -17,14 +18,19 @@ final class TranscriptLocalAIController {
 
     @ObservationIgnored private var service: (any TranscriptAIProcessing)?
     @ObservationIgnored private let serviceFactory: ServiceFactory
+    @ObservationIgnored private let keepModelLoadedProvider: KeepModelLoadedProvider
     @ObservationIgnored private let logger = Logger(label: "Inkribe.LocalAI")
 
     init(
         serviceFactory: @escaping ServiceFactory = {
             try TranscriptAIService.bundled()
+        },
+        keepModelLoadedProvider: @escaping KeepModelLoadedProvider = {
+            InkribePreferences.shared.keepAIModelLoaded
         }
     ) {
         self.serviceFactory = serviceFactory
+        self.keepModelLoadedProvider = keepModelLoadedProvider
     }
 
     func generate(
@@ -72,6 +78,7 @@ final class TranscriptLocalAIController {
                     "duration_ms": "\(Int(Date().timeIntervalSince(startedAt) * 1_000))"
                 ]
             )
+            await releaseServiceIfConfigured(service)
             return result
         } catch is CancellationError {
             progress = nil
@@ -82,6 +89,7 @@ final class TranscriptLocalAIController {
                     "transcript_id": "\(transcript.id.rawValue.uuidString)"
                 ]
             )
+            await releaseServiceIfConfigured(service)
             throw CancellationError()
         } catch {
             progress = nil
@@ -94,6 +102,7 @@ final class TranscriptLocalAIController {
                     "error_type": "\(String(reflecting: type(of: error)))"
                 ]
             )
+            await releaseServiceIfConfigured(service)
             throw error
         }
     }
@@ -103,7 +112,7 @@ final class TranscriptLocalAIController {
     }
 
     func unloadModel() async {
-        guard let service else { return }
+        guard !isGenerating, let service else { return }
         await service.unloadModel()
         self.service = nil
         progress = nil
@@ -114,6 +123,15 @@ final class TranscriptLocalAIController {
         let created = try serviceFactory()
         service = created
         return created
+    }
+
+    private func releaseServiceIfConfigured(
+        _ activeService: any TranscriptAIProcessing
+    ) async {
+        guard !keepModelLoadedProvider() else { return }
+        await activeService.unloadModel()
+        service = nil
+        logger.debug("Local AI model released after action")
     }
 
     enum ControllerError: LocalizedError {

@@ -8,8 +8,10 @@ struct RecordView: View {
     let appState: InkribeAppState
     let onOpenTranscript: (TranscriptID) -> Void
 
+    @State private var preferences = InkribePreferences.shared
     @State private var selectedDeviceID: String?
-    @State private var language = "auto"
+    @State private var language = TranscriptionLanguageCatalog.automaticCode
+    @State private var hasLoadedDefaults = false
     @State private var pendingTranscriptID: TranscriptID?
     @State private var errorDescription: String?
     @State private var isFinishing = false
@@ -82,10 +84,19 @@ struct RecordView: View {
         }
         .task {
             recorder.refreshInputDevices()
-            selectDefaultDeviceIfNeeded()
+            loadWorkflowDefaultsIfNeeded()
+            resolveSelectedDevice()
         }
         .onChange(of: recorder.availableDevices) { _, _ in
-            selectDefaultDeviceIfNeeded()
+            resolveSelectedDevice()
+        }
+        .onChange(of: preferences.defaultTranscriptionLanguage) { _, newValue in
+            guard recorder.state == .idle else { return }
+            language = TranscriptionLanguageCatalog.normalizedSelection(newValue)
+        }
+        .onChange(of: preferences.defaultMicrophoneDeviceID) { _, _ in
+            guard recorder.state == .idle else { return }
+            resolveSelectedDevice(forcePreference: true)
         }
         .onChange(of: pendingState) { _, newState in
             guard newState == .complete, let pendingTranscriptID else { return }
@@ -118,9 +129,21 @@ struct RecordView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            Picker("Microphone", selection: $selectedDeviceID) {
+            Picker(
+                "Microphone",
+                selection: Binding(
+                    get: { selectedDeviceID },
+                    set: { newValue in
+                        selectedDeviceID = newValue
+                        preferences.defaultMicrophoneDeviceID = newValue
+                    }
+                )
+            ) {
+                Text("System Default")
+                    .tag(Optional<String>.none)
+
                 ForEach(recorder.availableDevices) { device in
-                    Text(device.isDefault ? "\(device.name) — Default" : device.name)
+                    Text(device.isDefault ? "\(device.name) — Current System Default" : device.name)
                         .tag(Optional(device.id))
                 }
             }
@@ -191,13 +214,28 @@ struct RecordView: View {
         }
     }
 
-    private func selectDefaultDeviceIfNeeded() {
-        if let selectedDeviceID,
+    private func loadWorkflowDefaultsIfNeeded() {
+        guard !hasLoadedDefaults else { return }
+        language = TranscriptionLanguageCatalog.normalizedSelection(
+            preferences.defaultTranscriptionLanguage
+        )
+        hasLoadedDefaults = true
+    }
+
+    private func resolveSelectedDevice(forcePreference: Bool = false) {
+        if !forcePreference,
+           let selectedDeviceID,
            recorder.availableDevices.contains(where: { $0.id == selectedDeviceID }) {
             return
         }
-        selectedDeviceID = recorder.availableDevices.first(where: \.isDefault)?.id
-            ?? recorder.availableDevices.first?.id
+
+        if let preferred = preferences.defaultMicrophoneDeviceID,
+           recorder.availableDevices.contains(where: { $0.id == preferred }) {
+            selectedDeviceID = preferred
+        } else {
+            // nil intentionally means AVAudioEngine follows the current system input.
+            selectedDeviceID = nil
+        }
     }
 
     private func startRecording() async {

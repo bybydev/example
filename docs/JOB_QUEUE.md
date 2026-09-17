@@ -35,6 +35,7 @@ Inkribe owns:
 - transcript document persistence
 - presentation mapping and navigation
 - privacy-safe lifecycle diagnostics
+- transcription-runtime resource lifetime around queue drain
 
 Queue metadata is processing truth. `JSONTranscriptRepository` is transcript-content truth.
 
@@ -111,6 +112,19 @@ Whisper progress is mapped into queue progress. Cancellation is checked before t
 
 The transcript write is the commit point: after it succeeds the job returns success rather than turning already-saved content into a cancelled queue record.
 
+## Runtime resource lifetime
+
+Phase 8 keeps inference resource ownership inside the transcription layer rather than teaching feature UI how to manage Whisper.
+
+`DefaultTranscriptionJobExecutor` conforms to `TranscriptionRuntimeManaging` and exposes only an async model-release capability. `TranscriptionQueueController` keeps the executor/runtime warm while JobQueue is processing a batch. When JobQueue emits `queueDrained`, the controller asks a managed executor to release idle transcription resources.
+
+This has two consequences:
+
+- multiple files in the same queue batch can reuse the loaded Whisper model;
+- once the queue is drained, Whisper does not remain resident indefinitely while the user switches to editing/export/local-AI work.
+
+The release hook never changes JobQueue scheduling, progress, restoration, retry, or cancellation semantics. Executors that do not implement `TranscriptionRuntimeManaging` continue to work unchanged.
+
 ## Retry and idempotence
 
 Retries always update the same `TranscriptID`; they never create a second transcript.
@@ -148,7 +162,7 @@ Queue records likewise do not contain transcript text or audio contents. Generat
 
 ## Tests
 
-Phase 4 covers:
+The queue/transcription contract is covered for:
 
 - durable queue restoration with registered `TranscriptionJob`
 - exact stable job payload shape
@@ -163,7 +177,8 @@ Phase 4 covers:
 - durable transcript save/reload/delete/sort
 - corrupt duplicate transcript IDs failing safely
 - app startup remaining idempotent with an injected executor
+- idle managed-runtime release without introducing a second scheduler
 
-## Future phases
+## Later-phase rule
 
-Phase 5 builds the library/editor on top of the transcript repository produced here. It should observe transcript documents and queue records; it must not introduce another transcription scheduler.
+Library/editor, local AI, export, Settings, and release hardening all consume the queue contract defined here. They may present or diagnose queue state, but they must not introduce another transcription scheduler or take ownership of native Whisper context lifetime away from the transcription layer.

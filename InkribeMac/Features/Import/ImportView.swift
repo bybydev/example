@@ -8,9 +8,11 @@ struct ImportView: View {
     let appState: InkribeAppState
     let onOpenTranscript: (TranscriptID) -> Void
 
+    @State private var preferences = InkribePreferences.shared
     @State private var isImporterPresented = false
     @State private var isImporting = false
-    @State private var language = "auto"
+    @State private var language = TranscriptionLanguageCatalog.automaticCode
+    @State private var hasLoadedDefaults = false
     @State private var errorDescription: String?
 
     private var queueItems: [TranscriptionQueueItem] {
@@ -36,6 +38,7 @@ struct ImportView: View {
                 }
 
                 TranscriptionLanguagePicker(selection: $language)
+                    .disabled(isImporting)
 
                 Button {
                     isImporterPresented = true
@@ -78,6 +81,13 @@ struct ImportView: View {
             .frame(width: 340)
             .padding(20)
         }
+        .task {
+            loadWorkflowDefaultsIfNeeded()
+        }
+        .onChange(of: preferences.defaultTranscriptionLanguage) { _, newValue in
+            guard !isImporting else { return }
+            language = TranscriptionLanguageCatalog.normalizedSelection(newValue)
+        }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.audio, .movie],
@@ -90,6 +100,14 @@ struct ImportView: View {
                 errorDescription = String(describing: error)
             }
         }
+    }
+
+    private func loadWorkflowDefaultsIfNeeded() {
+        guard !hasLoadedDefaults else { return }
+        language = TranscriptionLanguageCatalog.normalizedSelection(
+            preferences.defaultTranscriptionLanguage
+        )
+        hasLoadedDefaults = true
     }
 
     private func importURLs(_ urls: [URL]) async {

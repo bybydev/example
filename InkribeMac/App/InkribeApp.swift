@@ -146,7 +146,8 @@ struct InkribeApp: App {
             InkribeSettingsView(
                 purchaseManager: purchases,
                 themeStore: themeStore,
-                settingsRouter: settingsRouter
+                settingsRouter: settingsRouter,
+                appState: appState
             )
             .macAppTheme(themeStore)
         }

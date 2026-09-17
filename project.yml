@@ -127,6 +127,12 @@ targets:
         product: InkribePersistence
       - package: InkribeExport
         product: InkribeExport
+      - package: InkribeModelAssets
+        product: InkribeModelAssets
+      - package: WhisperRuntime
+        product: WhisperRuntime
+      - package: LLMRuntime
+        product: LLMRuntime
 
   InkribeTests:
     type: bundle.unit-test

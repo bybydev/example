@@ -77,7 +77,9 @@ app-owned media
 
 Record supports input-device selection, pause/resume, metering, and durable capture. Import supports multi-file selection and drag/drop for audio and video sources. JobQueue remains the single processing-state owner, while `InkribePersistence` remains transcript-content truth. Retries update the same transcript and preserve user-edited text once it has diverged from raw transcription.
 
-See `docs/TRANSCRIPTION_PIPELINE.md` and `docs/JOB_QUEUE.md` for the durable storage, retry, cancellation, and ownership contracts.
+Whisper stays warm across an active queue batch and is released when JobQueue drains, so batch throughput does not require one model load per file while idle transcription memory is reclaimed afterward.
+
+See `docs/TRANSCRIPTION_PIPELINE.md` and `docs/JOB_QUEUE.md` for the durable storage, retry, cancellation, ownership, and runtime-lifetime contracts.
 
 ## Local transcript workspace
 
@@ -103,7 +105,7 @@ AI generation uses the current Edited text when available, otherwise Raw text. P
 
 Results are always previewed before mutation. Clean and Polish may replace Edited text or be saved as a copy. Summary, Notes, and Action Items are stored as revision-tagged derived documents. Raw Whisper text is never overwritten, and stale AI results are rejected if the transcript changes while generation is running.
 
-Generation is cancellable and fully local: no account, API key, cloud service, remote provider, or network fallback is part of the AI path.
+Generation is cancellable and fully local: no account, API key, cloud service, remote provider, or network fallback is part of the AI path. Qwen is released after each AI action by default; Settings can keep it loaded for faster repeated actions at the cost of higher idle memory use.
 
 See `docs/LOCAL_AI.md` for prompt, chunking, merge, progress, revision, persistence, privacy, and entitlement-boundary contracts.
 
@@ -123,6 +125,18 @@ Text export preserves the selected source exactly; there is no hidden Raw/Edited
 Formatting lives in the cross-platform `InkribeExport` package. Clipboard and save-panel presentation remain Mac-only, and export never mutates the durable transcript.
 
 See `docs/EXPORT.md` for source-selection, filename, subtitle, privacy, and Mac finishing-workflow contracts.
+
+## Settings, storage, and diagnostics
+
+The native Mac Settings scene uses MacAppFoundation and combines Inkribe panes for General, Transcription, AI Cleanup, Storage, Diagnostics, and About with the built-in Appearance and Plan panes.
+
+`InkribePreferences` persists only durable workflow choices: default transcription language, default microphone (or the current macOS System Default), and optional Qwen retention between AI actions. Record and Import share one language catalog and can still override language per job.
+
+Storage shows app-owned mutable data and can remove source media from finished transcripts without deleting transcript text, timestamps, edits, or saved AI results. Media needed by unfinished or retryable queue records is preserved.
+
+Diagnostics stays local and content-minimal while reporting architecture, Metal device, runtime policy, bundled-model identity/presence, and queue/startup health. Low-level native GPU/thread controls are intentionally not exposed as user settings; architecture-aware runtime defaults remain owned by the native runtime packages.
+
+See `docs/SETTINGS_PERFORMANCE.md` for the authoritative preference, runtime-lifetime, storage, diagnostics, and compatibility contract.
 
 ## Product identity
 
@@ -148,10 +162,14 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - Generated AI results are revision-aware so stale work cannot overwrite newer transcript edits.
 - Text export uses explicit Edited/Raw source selection; subtitle export uses timestamped segments.
 - Export never mutates transcript persistence or routes work through JobQueue/model runtimes.
+- Workflow defaults have one persisted preferences owner.
+- Whisper resource lifetime is queue/transcription-owned; Qwen resource lifetime is local-AI-controller-owned.
+- Native backend/thread policy stays in runtime packages rather than user-facing Settings knobs.
+- Storage cleanup never removes media needed by unfinished/retryable queue work.
 - User transcript/audio/prompt/generated/exported contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, `docs/TRANSCRIPT_WORKSPACE.md`, `docs/LOCAL_AI.md`, and `docs/EXPORT.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, `docs/TRANSCRIPT_WORKSPACE.md`, `docs/LOCAL_AI.md`, `docs/EXPORT.md`, and `docs/SETTINGS_PERFORMANCE.md` for the detailed contracts.
 
 ## Development workflow
 

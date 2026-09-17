@@ -4,7 +4,11 @@ import InkribeCore
 import InkribePersistence
 import WhisperRuntime
 
-public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Sendable {
+public protocol TranscriptionRuntimeManaging: Sendable {
+    func unloadTranscriptionModel() async
+}
+
+public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, TranscriptionRuntimeManaging, Sendable {
     private let mediaStore: DurableMediaStore
     private let decoder: AudioMediaDecoder
     private let whisperRuntime: any WhisperRuntimeProtocol
@@ -115,6 +119,10 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Sendab
         // queue must complete rather than report a cancellation for already-saved content.
         try await transcriptRepository.save(transcript)
         await progress(1, "Complete")
+    }
+
+    public func unloadTranscriptionModel() async {
+        await whisperRuntime.unloadModel()
     }
 
     private func normalizedLanguage(_ language: String?) -> String? {
