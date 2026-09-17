@@ -189,6 +189,80 @@ final class InkribeAppState {
         return try await transcriptRepository.transcripts()
     }
 
+    func renameTranscript(id: TranscriptID, title: String) async throws -> Transcript {
+        guard let transcriptRepository else { throw AppStateError.pipelineUnavailable }
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { throw AppStateError.emptyTranscriptTitle }
+        guard var transcript = try await transcriptRepository.transcript(id: id) else {
+            throw AppStateError.transcriptNotFound
+        }
+        guard transcript.title != normalized else { return transcript }
+
+        transcript.title = normalized
+        transcript.updatedAt = .now
+        try await transcriptRepository.save(transcript)
+        logger.info("Transcript renamed: \(id.rawValue.uuidString)")
+        return transcript
+    }
+
+    func saveEditedText(id: TranscriptID, text: String) async throws -> Transcript {
+        guard let transcriptRepository else { throw AppStateError.pipelineUnavailable }
+        guard var transcript = try await transcriptRepository.transcript(id: id) else {
+            throw AppStateError.transcriptNotFound
+        }
+        guard transcript.editedText != text else { return transcript }
+
+        transcript.editedText = text
+        transcript.revision += 1
+        transcript.updatedAt = .now
+        try await transcriptRepository.save(transcript)
+        return transcript
+    }
+
+    func mediaURL(for transcript: Transcript) async throws -> URL? {
+        guard let mediaStore else { throw AppStateError.pipelineUnavailable }
+        guard let relativePath = transcript.sourceMediaRelativePath else { return nil }
+        return try await mediaStore.url(for: DurableMediaReference(relativePath: relativePath))
+    }
+
+    func deleteTranscript(id: TranscriptID) async throws {
+        guard let transcriptRepository,
+              let mediaStore,
+              let transcriptionQueue else {
+            throw AppStateError.pipelineUnavailable
+        }
+        guard let transcript = try await transcriptRepository.transcript(id: id) else {
+            throw AppStateError.transcriptNotFound
+        }
+
+        let relatedItems = transcriptionQueue.items.filter { $0.transcriptID == id }
+        let hasActiveJob = relatedItems.contains {
+            switch $0.state {
+            case .waiting, .transcribing, .pausing, .cancelling:
+                true
+            case .complete, .failed, .cancelled, .needsAttention:
+                false
+            }
+        }
+        guard !hasActiveJob else { throw AppStateError.transcriptBusy }
+
+        for item in relatedItems {
+            try transcriptionQueue.remove(id: item.id)
+        }
+
+        try await transcriptRepository.delete(id: id)
+
+        if let relativePath = transcript.sourceMediaRelativePath {
+            do {
+                try await mediaStore.remove(DurableMediaReference(relativePath: relativePath))
+            } catch {
+                logger.warning("Transcript deleted but associated media cleanup failed: \(id.rawValue.uuidString)")
+            }
+        }
+
+        logger.info("Transcript deleted: \(id.rawValue.uuidString)")
+    }
+
     private func createTranscriptAndEnqueue(
         mediaReference: DurableMediaReference,
         title: String,
@@ -259,6 +333,9 @@ final class InkribeAppState {
         case noActiveRecording
         case microphonePermissionDenied
         case recordingFailed(String)
+        case transcriptNotFound
+        case emptyTranscriptTitle
+        case transcriptBusy
 
         var errorDescription: String? {
             switch self {
@@ -272,6 +349,12 @@ final class InkribeAppState {
                 "Microphone access is required to record audio."
             case .recordingFailed(let description):
                 "Recording failed: \(description)"
+            case .transcriptNotFound:
+                "The transcript no longer exists."
+            case .emptyTranscriptTitle:
+                "Transcript titles cannot be empty."
+            case .transcriptBusy:
+                "Wait for transcription to finish or cancel it before deleting this transcript."
             }
         }
     }

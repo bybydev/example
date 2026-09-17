@@ -65,7 +65,7 @@ See `docs/NATIVE_RUNTIMES.md` for native dependency pins, lifecycle, cancellatio
 
 ## Local transcription pipeline
 
-Record and Import now feed the same durable pipeline:
+Record and Import feed the same durable pipeline:
 
 ```text
 app-owned media
@@ -78,6 +78,16 @@ app-owned media
 Record supports input-device selection, pause/resume, metering, and durable capture. Import supports multi-file selection and drag/drop for audio and video sources. JobQueue remains the single processing-state owner, while `InkribePersistence` remains transcript-content truth. Retries update the same transcript and preserve user-edited text once it has diverged from raw transcription.
 
 See `docs/TRANSCRIPTION_PIPELINE.md` and `docs/JOB_QUEUE.md` for the durable storage, retry, cancellation, and ownership contracts.
+
+## Local transcript workspace
+
+The Library and transcript editor operate directly on durable transcript documents produced by the transcription pipeline.
+
+Library capabilities include local title/content search, newest/oldest/title sorting, rename, delete with active-job protection, source-media cleanup, and direct navigation to transcript documents.
+
+The transcript editor keeps Raw Whisper output separate from user/AI Edited text, persists edits with revision tracking, retains timestamped segments, supports transcript search, and plays the original app-owned audio/video source with seek, scrub, ±10 second skip, segment seeking, and current-segment highlighting. Missing media disables playback without making transcript content unavailable.
+
+See `docs/TRANSCRIPT_WORKSPACE.md` for the Library/editor ownership, persistence, deletion, playback, and Phase 6 integration contracts.
 
 ## Product identity
 
@@ -98,10 +108,11 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - The main Mac window uses one permanent two-column shell; feature phases fill its content rather than recreating navigation/window geometry.
 - Production model identities, paths, revisions, byte counts, and digests come from one manifest.
 - Native model/context state stays inside actor-isolated runtime packages.
+- Raw Whisper transcript text remains separate from user/AI edited text.
 - User transcript/audio/prompt/generated contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, and `docs/TRANSCRIPTION_PIPELINE.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, and `docs/TRANSCRIPT_WORKSPACE.md` for the detailed contracts.
 
 ## Development workflow
 
