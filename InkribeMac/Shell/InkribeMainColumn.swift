@@ -65,7 +65,7 @@ struct InkribeMainColumn: View {
 
             Spacer(minLength: 12)
 
-            Text(appState.startupIssue == nil ? "Ready" : "Needs attention")
+            Text(queueStatusText)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(theme.textMuted)
@@ -78,5 +78,20 @@ struct InkribeMainColumn: View {
                 .frame(height: 1)
         }
         .accessibilityIdentifier("Inkribe.MainStatusBar")
+    }
+
+    private var queueStatusText: String {
+        if appState.startupIssue != nil
+            || appState.transcriptionQueue?.persistenceIssueDescription != nil {
+            return "Needs attention"
+        }
+        guard let queue = appState.transcriptionQueue else { return "Ready" }
+        if queue.isPaused { return "Queue paused" }
+        if queue.activeCount > 0 {
+            return queue.activeCount == 1
+                ? "Transcribing"
+                : "Transcribing \(queue.activeCount)"
+        }
+        return "Ready"
     }
 }

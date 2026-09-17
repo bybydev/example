@@ -1,96 +1,46 @@
-# Inkribe v1 — JobQueue Integration
+# Inkribe — Transcription Queue Contract
 
-## Decision
+## Dependency
 
-Inkribe v1 uses `hoangbkit/JobQueue` **exact version `1.0.0`** for persistent background job orchestration.
-
-Do not build a second queue/scheduler/persistence layer inside Inkribe. Inkribe owns its job payloads and execution logic; `JobQueue` owns queue state, persistence, scheduling, retry/cancel/pause behavior, progress state, restoration, and queue events.
-
-Dependency source:
+Inkribe uses `hoangbkit/JobQueue` at exact version `1.0.0` for durable transcription orchestration.
 
 ```text
-https://github.com/hoangbkit/JobQueue.git
+source: https://github.com/hoangbkit/JobQueue.git
 version: 1.0.0
+commit: e9046c09675b460f19fbc2bada5f8494b8def046
 product: JobQueue
 ```
 
-Tag `1.0.0` resolves to commit `e9046c09675b460f19fbc2bada5f8494b8def046`.
+Do not replace this with a moving branch and do not create a second feature-level scheduler or queue state machine.
 
-At planning time, `JobQueue` declares macOS 15+ and iOS 17+, so it is compatible with Inkribe shared packages targeting macOS 15+ and iOS 26+.
+## Ownership
 
-Use the stable tag rather than a moving branch. `Package.resolved` may still be committed for Xcode/Xcode Cloud reproducibility, but correctness must not depend on tracking `master`.
+JobQueue owns:
 
-## Ownership boundary
+- durable job records and restoration
+- scheduling and single-concurrency enforcement
+- pending / processing / pausing / cancelling / completed / failed / cancelled / unrecoverable states
+- progress
+- retry and cancellation
+- queue pause/resume
+- persistence issue state
+- record retention/cleanup
 
-### JobQueue owns
+Inkribe owns:
 
-- persisted `Codable` job records
-- pending / processing / cancelling / pausing / completed / failed / cancelled / unrecoverable states
-- progress reporting
-- queue and per-job-type concurrency limits
-- priority
-- pause/resume
-- retry
-- cancellation
-- queue restoration after relaunch
-- persistence failure reporting/recovery
-- queue events
-- record cleanup
-
-### Inkribe owns
-
-- `TranscriptionJob` payload schema
-- media preparation before enqueue
+- the `TranscriptionJob` payload schema
+- durable media paths
+- media decoding/normalization
 - Whisper execution
-- transcript persistence
-- mapping queue records to Inkribe UI
-- user-facing error copy
-- transcript/library navigation after completion
-- privacy-safe diagnostic logging
+- transcript document persistence
+- presentation mapping and navigation
+- privacy-safe lifecycle diagnostics
 
-## Package placement
+Queue metadata is processing truth. `JSONTranscriptRepository` is transcript-content truth.
 
-`InkribeTranscription` is the shared local package that integrates with `JobQueue`.
+## Persistent job
 
-```text
-InkribeMac
-    ↓
-InkribeTranscription
-    ├── JobQueue
-    └── WhisperRuntime
-```
-
-`InkribeTranscription` still targets:
-
-```swift
-.macOS(.v15)
-.iOS(.v26)
-```
-
-It must not import AppKit or MacAppFoundation.
-
-Suggested package dependency:
-
-```swift
-.package(
-    url: "https://github.com/hoangbkit/JobQueue.git",
-    exact: "1.0.0"
-)
-```
-
-and target dependency:
-
-```swift
-.product(name: "JobQueue", package: "JobQueue")
-```
-
-For XcodeGen, use the equivalent exact-version package declaration rather than a branch dependency.
-
-## Transcription job
-
-Define one persistent v1 job type for the complete media-to-transcript operation.
-
-Conceptually:
+Phase 4 implements one complete media-to-transcript job:
 
 ```swift
 struct TranscriptionJob: Job {
@@ -101,202 +51,119 @@ struct TranscriptionJob: Job {
     }
 
     static let maxConcurrentExecutions = 1
-
-    let id: UUID
-    let payload: Payload
-
-    var title: String? { /* source/transcript title */ }
-    var detail: String? { /* language / media detail */ }
-    var priority: JobPriority { .userInitiated }
-
-    func execute(progress: JobProgressReporter) async throws {
-        // resolve app-owned media
-        // normalize/decode if necessary
-        // load/use WhisperRuntime
-        // report progress
-        // persist transcript result
-    }
 }
 ```
 
-The concrete implementation may split media normalization into shared services, but v1 should avoid creating several tiny dependent queue jobs unless a real need appears.
+The payload intentionally contains no transcript body, audio bytes, runtime object, security-scoped access, model instance, view state, or closure.
 
-### Concurrency
+`sourceMediaRelativePath` points into Inkribe-owned media storage, so a restored job never depends on the original picker/drop URL remaining accessible.
 
-Start with:
+## Startup and restoration
 
-```swift
-TranscriptionJob.maxConcurrentExecutions = 1
-```
+`TranscriptionQueueController` creates an app-scoped registry and queue. Startup order is fixed:
 
-Whisper is CPU/GPU/memory intensive, and parallel transcription would usually make the Mac less responsive rather than improve throughput. Revisit only after profiling.
+1. install the app-scoped transcription executor;
+2. register `TranscriptionJob`;
+3. start JobQueue and restore persisted records.
 
-The queue-wide policy may allow other job types in the future, but transcription remains single-concurrency by default.
+Unknown/unrestorable records remain queue-owned unrecoverable records and map to **Needs attention**.
 
-## Durable payload rule
-
-A queued job must remain executable after app relaunch.
-
-Therefore the payload must contain only durable, `Codable`, portable identifiers/values. It must not capture:
-
-- runtime objects
-- `NSFileHandle`
-- security-scoped access sessions
-- model instances
-- SwiftUI/AppKit state
-- closures
-
-For imported files, copy/normalize the source into Inkribe-controlled app storage before enqueueing, then store a stable relative path or asset identifier in the job payload. This avoids relying on a temporary drag/drop or file-picker security scope after relaunch.
-
-## Registry and startup
-
-Register all persistent job types before starting the queue:
-
-```swift
-try JobRegistry.shared.register(TranscriptionJob.self)
-try queue.start()
-```
-
-Registration must occur early enough that persisted jobs can be restored correctly.
-
-If a stored record references a job type that cannot be restored, surface the resulting unrecoverable state in developer diagnostics and an appropriate user-facing recovery path.
-
-## Queue construction
-
-Create one app-scoped queue with an app-owned persistence URL.
-
-Conceptually:
-
-```swift
-let queue = JobQueue(
-    fileURL: jobStoreURL,
-    policy: JobQueuePolicy(maxConcurrentExecutions: 1),
-    registry: .shared,
-    maxRecords: 100,
-    autoCleanupEnabled: true
-)
-```
-
-The exact record limit can be adjusted after real usage testing.
-
-## UI mapping
-
-Use JobQueue state directly instead of duplicating queue state in a second model.
-
-Suggested presentation mapping:
+The queue persistence file and transcript store are separate:
 
 ```text
-JobStatus.pending        → Waiting
-JobStatus.processing     → Transcribing
-JobStatus.pausing        → Pausing
-JobStatus.cancelling     → Cancelling
-JobStatus.completed      → Complete
-JobStatus.failed         → Failed
-JobStatus.cancelled      → Cancelled
-JobStatus.unrecoverable  → Needs attention
+Application Support/Inkribe/jobs.json
+Application Support/Inkribe/transcripts.json
+Application Support/Inkribe/Media/...
 ```
 
-`JobProgress` drives the visible per-file progress bar/message.
+This separation prevents queue metadata from becoming a shadow transcript database.
 
-The Import/Queue screen observes queue records and progress, then adds only Inkribe-specific display data/navigation.
+## Enqueue transaction
 
-## User actions
+Record and Import both follow the same durable boundary:
 
-Use JobQueue's supported actions for:
+1. create/copy source media under `Media/`;
+2. create the target `Transcript` with its final `TranscriptID`;
+3. persist that transcript target;
+4. enqueue `TranscriptionJob` using the same ID and durable media path.
 
-- cancel job
-- retry failed/cancelled job
-- remove record where appropriate
-- pause/resume queue if exposed in v1
-- clear completed records where appropriate
+If enqueue fails, the newly-created transcript target and media file are removed so the operation does not leave orphaned content.
 
-Do not reimplement retry/cancel state transitions in feature view models.
+Imported files are resolved to their filesystem target before copying so a symlink cannot leave the queue dependent on an external target. Recording writes directly to its durable destination, so Stop never has to move a temporary capture into place.
 
-## Completion behavior
+## Execution
 
-On successful transcription:
+`DefaultTranscriptionJobExecutor` executes the job as one durable unit:
 
-1. persist the transcript and timestamped segments before the job returns success;
-2. leave the queue record as completed according to JobQueue policy;
-3. refresh/open the corresponding transcript from Inkribe's persistence layer;
-4. never store the full transcript body inside queue metadata merely for UI convenience.
+```text
+resolve media
+  → decode audio track to 16 kHz mono Float32
+  → Whisper transcription
+  → map language + timestamped segments
+  → update transcript by transcriptID
+  → durable transcript save
+  → job success
+```
 
-The transcript database/library remains the source of truth for completed transcript content. JobQueue is the source of truth for processing state.
+Audio and video containers use one decoder path; video files contribute their audio track only.
 
-## Logging
+Whisper progress is mapped into queue progress. Cancellation is checked before the durable content commit.
 
-Attach a queue event handler and route lifecycle events to Inkribe's Debug logging pipeline.
+The transcript write is the commit point: after it succeeds the job returns success rather than turning already-saved content into a cancelled queue record.
 
-Log:
+## Retry and idempotence
 
-- enqueue/start/completion/failure/cancellation
-- progress milestones where useful
-- persistence failures
-- queue restoration issues
+Retries always update the same `TranscriptID`; they never create a second transcript.
 
-Do not log transcript text, audio contents, or prompts.
+If `editedText` still mirrors the previous raw transcript, a successful re-transcription updates both raw and edited text and advances the transcript revision. If the user has manually changed `editedText`, retry replaces only raw transcription data and preserves the user edit/revision.
 
-## Failure and recovery
+A failed or cancelled JobQueue record is retried through JobQueue itself; Inkribe does not synthesize a second processing state machine.
 
-- Failed and cancelled jobs remain retryable according to JobQueue state.
-- Queue persistence failures must be visible in Debug diagnostics.
-- A transcription job must be idempotent enough that retrying cannot silently create duplicate transcript records.
-- Use `transcriptID`/job identity to update the intended transcript record rather than creating a new unrelated record on every retry.
-- A partially written output must never be mistaken for a completed transcript.
+## UI state mapping
 
-## Testing
+The Mac feature surfaces derive presentation directly from JobQueue records:
 
-Add tests for:
+```text
+pending        → Waiting
+processing     → Transcribing
+pausing        → Pausing
+cancelling     → Cancelling
+completed      → Complete
+failed         → Failed
+cancelled      → Cancelled
+unrecoverable  → Needs attention
+```
 
-- `TranscriptionJob` Codable round trip
-- registry registration/restoration
-- queue persistence across relaunch
-- pending processing after restart
-- progress propagation
-- cancellation
+Per-job progress comes from JobQueue live progress. Cancel/retry and queue pause/resume delegate directly to JobQueue. Pause/resume is shown only while active work exists.
+
+Record and Import share the same queue surface. The main status bar reflects queue pause/activity/persistence issues rather than tracking its own processing state.
+
+## Diagnostics and privacy
+
+`TranscriptionQueueController` maps JobQueue lifecycle events into an Inkribe-owned event enum. The bridge includes job IDs and queue status only; it intentionally drops JobQueue's raw failure/persistence strings and progress-message stream.
+
+The app logs enqueue/start/pause/cancel/completion/failure/removal/status/drained/persistence-failure lifecycle events without transcript text, audio contents, source paths, prompts, or generated content.
+
+Queue records likewise do not contain transcript text or audio contents. Generated media paths use UUID filenames rather than source filenames. User-visible import errors may identify the file the user selected, but durable queue metadata and diagnostics remain content-minimal.
+
+## Tests
+
+Phase 4 covers:
+
+- durable queue restoration with registered `TranscriptionJob`
+- exact stable job payload shape
+- single-concurrency declaration
+- successful media decode → Whisper result → transcript persistence
+- preservation of manual edits on re-transcription
+- queue cancellation propagation
 - failure → retry → completion
-- duplicate transcript prevention on retry
-- multi-file ordering
-- single-concurrency transcription behavior
-- missing source media recovery
-- JobQueue persistence failure handling
-- macOS 15 build
-- iOS 26 shared-package build
+- privacy-safe lifecycle event forwarding
+- durable media copy/path containment
+- 16 kHz mono decode contract
+- durable transcript save/reload/delete/sort
+- corrupt duplicate transcript IDs failing safely
+- app startup remaining idempotent with an injected executor
 
-## Phase mapping
+## Future phases
 
-### Phase 0
-
-- add `JobQueue` dependency pinned to exact `1.0.0`
-- make `InkribeTranscription` depend on the `JobQueue` product
-- create app-scoped queue storage/configuration
-- establish startup registration pattern
-- keep `Package.resolved` consistent with the exact tag for Xcode/Xcode Cloud reproducibility
-
-### Phase 4
-
-- implement `TranscriptionJob`
-- copy imported media into durable app-owned storage before enqueue
-- use JobQueue for multi-file processing, persistence, progress, cancellation, retry, pause/resume state, and restoration
-- wire queue events into Debug logs
-- build Queue UI from JobQueue records/progress instead of a duplicate state machine
-
-### Phase 9
-
-- test queue restoration and retry behavior in integration tests
-- verify Xcode Cloud resolves JobQueue `1.0.0`
-- verify a release can resume/recover persisted jobs without networking
-
-## Acceptance criteria
-
-JobQueue integration is complete when:
-
-- no separate Inkribe queue scheduler/state machine exists
-- multiple imports enqueue as persistent `TranscriptionJob` records
-- queued/running/failed/completed state survives relaunch correctly
-- progress is visible in UI
-- cancel and retry work
-- transcription concurrency defaults to one
-- completed transcript content lives in Inkribe persistence, not queue metadata
-- the shared transcription package builds for macOS 15 and iOS 26
-- dependency is pinned to `hoangbkit/JobQueue` exact version `1.0.0`
+Phase 5 builds the library/editor on top of the transcript repository produced here. It should observe transcript documents and queue records; it must not introduce another transcription scheduler.

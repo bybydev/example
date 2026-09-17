@@ -1,4 +1,5 @@
 import Foundation
+import InkribeTranscription
 import Testing
 @testable import Inkribe
 
@@ -17,12 +18,16 @@ import Testing
 
 @MainActor
 @Test func appStateStartupIsIdempotent() throws {
-    let fileURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString)
-        .appendingPathExtension("json")
-    defer { try? FileManager.default.removeItem(at: fileURL) }
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
 
-    let appState = InkribeAppState(queueStoreURLProvider: { fileURL })
+    let appState = InkribeAppState(
+        queueStoreURLProvider: { directory.appendingPathComponent("jobs.json") },
+        transcriptStoreURLProvider: { directory.appendingPathComponent("transcripts.json") },
+        mediaDirectoryURLProvider: { directory.appendingPathComponent("Media", isDirectory: true) },
+        executorFactory: { _, _ in StartupTestExecutor() }
+    )
     try appState.start()
 
     let firstQueue = try #require(appState.transcriptionQueue)
@@ -31,6 +36,15 @@ import Testing
 
     #expect(firstQueue === secondQueue)
     #expect(appState.startupIssue == nil)
+}
+
+private struct StartupTestExecutor: TranscriptionJobExecuting {
+    func execute(
+        payload: TranscriptionJob.Payload,
+        progress: @escaping TranscriptionProgressHandler
+    ) async throws {
+        await progress(1, "Complete")
+    }
 }
 
 #if DEBUG

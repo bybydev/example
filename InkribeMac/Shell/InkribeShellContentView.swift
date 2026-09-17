@@ -37,17 +37,15 @@ struct InkribeShellContentView: View {
             }
 
         case .record:
-            ContentUnavailableView(
-                "Record Audio",
-                systemImage: "waveform.circle",
-                description: Text("Capture speech locally and turn it into an editable transcript.")
+            RecordView(
+                appState: appState,
+                onOpenTranscript: state.openTranscript
             )
 
         case .import:
-            ContentUnavailableView(
-                "Import Audio or Video",
-                systemImage: "square.and.arrow.down",
-                description: Text("Bring in audio or video files for private local transcription.")
+            ImportView(
+                appState: appState,
+                onOpenTranscript: state.openTranscript
             )
 
         case .transcript(let transcriptID):

@@ -24,6 +24,21 @@ enum InkribeAppDirectories {
             .appendingPathComponent("jobs.json", isDirectory: false)
     }
 
+    static func transcriptStoreURL(fileManager: FileManager = .default) throws -> URL {
+        try applicationSupportDirectory(fileManager: fileManager)
+            .appendingPathComponent("transcripts.json", isDirectory: false)
+    }
+
+    static func mediaDirectoryURL(fileManager: FileManager = .default) throws -> URL {
+        let directory = try applicationSupportDirectory(fileManager: fileManager)
+            .appendingPathComponent("Media", isDirectory: true)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
+    }
+
     enum DirectoryError: LocalizedError {
         case applicationSupportUnavailable
 

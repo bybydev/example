@@ -16,10 +16,10 @@ Core transcription uses bundled local models. The architecture keeps reusable do
 InkribeMac/                  Mac app lifecycle, shell, UI, commerce, diagnostics
 Packages/
   InkribeCore/               Transcript and domain types
-  InkribeAudio/              Portable audio contracts
+  InkribeAudio/              Durable media, decoding, and recording services
   InkribeTranscription/      JobQueue-backed transcription orchestration
   InkribeAI/                 Local AI action/domain layer
-  InkribePersistence/        Transcript repository contracts
+  InkribePersistence/        Durable transcript repository
   InkribeExport/             Export-domain contracts
   InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
   WhisperRuntime/            actor-isolated whisper.cpp inference boundary
@@ -63,6 +63,22 @@ Both runtimes own model/context lifetime explicitly and serialize mutable native
 
 See `docs/NATIVE_RUNTIMES.md` for native dependency pins, lifecycle, cancellation, sampling, audio, and prompt-layer boundaries.
 
+## Local transcription pipeline
+
+Record and Import now feed the same durable pipeline:
+
+```text
+app-owned media
+  → persistent TranscriptionJob
+  → 16 kHz mono decode
+  → WhisperRuntime
+  → durable Transcript
+```
+
+Record supports input-device selection, pause/resume, metering, and durable capture. Import supports multi-file selection and drag/drop for audio and video sources. JobQueue remains the single processing-state owner, while `InkribePersistence` remains transcript-content truth. Retries update the same transcript and preserve user-edited text once it has diverged from raw transcription.
+
+See `docs/TRANSCRIPTION_PIPELINE.md` and `docs/JOB_QUEUE.md` for the durable storage, retry, cancellation, and ownership contracts.
+
 ## Product identity
 
 - Bundle identifier: `com.hoangbkit.inkribe`
@@ -85,7 +101,7 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - User transcript/audio/prompt/generated contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, and `docs/NATIVE_RUNTIMES.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, and `docs/TRANSCRIPTION_PIPELINE.md` for the detailed contracts.
 
 ## Development workflow
 
