@@ -1,25 +1,31 @@
 import MacAppFoundation
 import SwiftUI
 
+@MainActor
 struct InkribeRootView: View {
     let appState: InkribeAppState
+    @Bindable var shellState: InkribeShellState
+    let purchaseManager: PurchaseManager
+    let settingsRouter: MacAppSettingsRouter
+
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("Inkribe")
-                .font(.title2.weight(.semibold))
+        InkribeShellView(
+            appState: appState,
+            state: shellState,
+            purchaseManager: purchaseManager,
+            onOpenSettings: openSettingsWindow,
+            onOpenPlan: openPlan
+        )
+    }
 
-            if let startupIssue = appState.startupIssue {
-                ContentUnavailableView(
-                    "Inkribe couldn't start",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text(startupIssue)
-                )
-            } else {
-                Text("Private offline transcription")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(minWidth: 720, minHeight: 480)
+    private func openSettingsWindow() {
+        openSettings()
+    }
+
+    private func openPlan() {
+        settingsRouter.request(.plan)
+        openSettings()
     }
 }

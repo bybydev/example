@@ -13,7 +13,7 @@ Core transcription uses bundled local models. The architecture keeps reusable do
 ## Repository structure
 
 ```text
-InkribeMac/                  Mac app lifecycle, UI, commerce, diagnostics
+InkribeMac/                  Mac app lifecycle, shell, UI, commerce, diagnostics
 Packages/
   InkribeCore/               Transcript and domain types
   InkribeAudio/              Portable audio contracts
@@ -23,7 +23,7 @@ Packages/
   InkribeExport/             Export-domain contracts
   WhisperRuntime/            whisper.cpp runtime boundary
   LLMRuntime/                llama.cpp runtime boundary
-docs/                        Product, architecture, and phase documentation
+docs/                        Product, architecture, shell, and phase documentation
 ```
 
 Shared packages target macOS 15+ and iOS 26+ and must not depend on AppKit or MacAppFoundation.
@@ -34,7 +34,7 @@ Shared packages target macOS 15+ and iOS 26+ and must not depend on AppKit or Ma
 - `hoangbkit/MacAppFoundation` exact `1.0.0`
 - `apple/swift-log` exact `1.11.0`
 
-JobQueue belongs to `InkribeTranscription`, not the app UI layer. MacAppFoundation belongs to the Mac application layer for themes, commerce, onboarding, settings, and developer surfaces.
+JobQueue belongs to `InkribeTranscription`, not the app UI layer. MacAppFoundation belongs to the Mac application layer for themes, commerce, onboarding, settings, window chrome, and developer surfaces.
 
 ## Product identity
 
@@ -52,10 +52,11 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - JobQueue owns persisted processing state; Inkribe persistence owns transcript/library content.
 - Reusable product logic stays in shared packages.
 - Mac-only presentation and integration stay in `InkribeMac`.
+- The main Mac window uses one permanent two-column shell; feature phases fill its content rather than recreating navigation/window geometry.
 - User transcript/audio contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, and `docs/JOB_QUEUE.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, and `docs/SHELL.md` for the detailed contracts.
 
 ## Development workflow
 

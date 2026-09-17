@@ -11,6 +11,7 @@ struct InkribeApp: App {
     @State private var settingsRouter: MacAppSettingsRouter
     @State private var onboarding: OnboardingState
     @State private var appState: InkribeAppState
+    @State private var shellState: InkribeShellState
 
     private let purchases: PurchaseManager
     private let logger: Logger
@@ -29,6 +30,7 @@ struct InkribeApp: App {
                 stepCount: 4
             )
         )
+        _shellState = State(initialValue: InkribeShellState())
 
         let appState = InkribeAppState()
         _appState = State(initialValue: appState)
@@ -44,12 +46,37 @@ struct InkribeApp: App {
 
     var body: some Scene {
         Window("Inkribe", id: InkribeWindowID.main) {
-            InkribeRootView(appState: appState)
-                .macAppTheme(themeStore)
-                .managesPurchases(purchases)
+            InkribeRootView(
+                appState: appState,
+                shellState: shellState,
+                purchaseManager: purchases,
+                settingsRouter: settingsRouter
+            )
+            .macAppTheme(themeStore)
+            .managesPurchases(purchases)
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
+        .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .sidebar) {
+                Button(shellState.isSidebarExpanded ? "Hide Sidebar" : "Show Sidebar") {
+                    shellState.toggleSidebar()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+            }
+
+            CommandMenu("Navigate") {
+                Button("Library") { shellState.select(.library) }
+                    .keyboardShortcut("1", modifiers: [.command])
+
+                Button("Record") { shellState.select(.record) }
+                    .keyboardShortcut("2", modifiers: [.command])
+
+                Button("Import") { shellState.select(.import) }
+                    .keyboardShortcut("3", modifiers: [.command])
+            }
+
             #if DEBUG
             CommandMenu("Developer") {
                 Button("Developer Tools…") {
@@ -63,6 +90,16 @@ struct InkribeApp: App {
             }
             #endif
         }
+
+        Settings {
+            InkribeSettingsView(
+                purchaseManager: purchases,
+                themeStore: themeStore,
+                settingsRouter: settingsRouter
+            )
+            .macAppTheme(themeStore)
+        }
+        .windowStyle(.hiddenTitleBar)
 
         #if DEBUG
         Window(
