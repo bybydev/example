@@ -8,7 +8,7 @@ The v1 product flow is:
 Record or Import → Transcribe → Review/Edit → Clean/Polish/Summarize → Export
 ```
 
-Core transcription uses bundled local models. The architecture keeps reusable domain, persistence, transcription, AI, export, runtime, and model-asset logic in shared packages so a future iOS target can reuse the same product core without a repo-wide extraction.
+Core transcription and transcript AI use bundled local models. The architecture keeps reusable domain, persistence, transcription, AI, export, runtime, and model-asset logic in shared packages so a future iOS target can reuse the same product core without a repo-wide extraction.
 
 ## Repository structure
 
@@ -18,7 +18,7 @@ Packages/
   InkribeCore/               Transcript and domain types
   InkribeAudio/              Durable media, decoding, and recording services
   InkribeTranscription/      JobQueue-backed transcription orchestration
-  InkribeAI/                 Local AI action/domain layer
+  InkribeAI/                 Local AI prompts, chunking, merge, result contracts
   InkribePersistence/        Durable transcript repository
   InkribeExport/             Export-domain contracts
   InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
@@ -87,7 +87,25 @@ Library capabilities include local title/content search, newest/oldest/title sor
 
 The transcript editor keeps Raw Whisper output separate from user/AI Edited text, persists edits with revision tracking, retains timestamped segments, supports transcript search, and plays the original app-owned audio/video source with seek, scrub, ±10 second skip, segment seeking, and current-segment highlighting. Missing media disables playback without making transcript content unavailable.
 
-See `docs/TRANSCRIPT_WORKSPACE.md` for the Library/editor ownership, persistence, deletion, playback, and Phase 6 integration contracts.
+See `docs/TRANSCRIPT_WORKSPACE.md` for the Library/editor ownership, persistence, deletion, playback, and local-AI integration contracts.
+
+## Offline local AI
+
+The transcript editor includes five constrained local AI actions using the bundled Qwen model through `LLMRuntime`:
+
+- Clean
+- Polish
+- Summarize
+- Notes
+- Action Items
+
+AI generation uses the current Edited text when available, otherwise Raw text. Prompts are versioned and treat transcript content as untrusted data. Long transcripts are chunked in source order, with adaptive re-splitting when the runtime reports that a token-dense prompt exceeds context capacity.
+
+Results are always previewed before mutation. Clean and Polish may replace Edited text or be saved as a copy. Summary, Notes, and Action Items are stored as revision-tagged derived documents. Raw Whisper text is never overwritten, and stale AI results are rejected if the transcript changes while generation is running.
+
+Generation is cancellable and fully local: no account, API key, cloud service, remote provider, or network fallback is part of the AI path.
+
+See `docs/LOCAL_AI.md` for prompt, chunking, merge, progress, revision, persistence, privacy, and entitlement-boundary contracts.
 
 ## Product identity
 
@@ -109,10 +127,12 @@ See `docs/PRODUCT_CONFIGURATION.md` for the authoritative catalog configuration.
 - Production model identities, paths, revisions, byte counts, and digests come from one manifest.
 - Native model/context state stays inside actor-isolated runtime packages.
 - Raw Whisper transcript text remains separate from user/AI edited text.
+- AI generation never mutates transcript content until the user explicitly applies or saves a previewed result.
+- Generated AI results are revision-aware so stale work cannot overwrite newer transcript edits.
 - User transcript/audio/prompt/generated contents are not written to diagnostic logs by default.
 - Debug diagnostics are isolated from release behavior.
 
-See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, and `docs/TRANSCRIPT_WORKSPACE.md` for the detailed contracts.
+See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `docs/SHELL.md`, `docs/MODEL_ASSETS.md`, `docs/NATIVE_RUNTIMES.md`, `docs/TRANSCRIPTION_PIPELINE.md`, `docs/TRANSCRIPT_WORKSPACE.md`, and `docs/LOCAL_AI.md` for the detailed contracts.
 
 ## Development workflow
 

@@ -145,6 +145,8 @@ targets:
         product: InkribeCore
       - package: InkribeTranscription
         product: InkribeTranscription
+      - package: InkribeAI
+        product: InkribeAI
 
 schemes:
   Inkribe:

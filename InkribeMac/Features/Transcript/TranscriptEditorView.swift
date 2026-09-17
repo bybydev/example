@@ -1,3 +1,4 @@
+import InkribeAI
 import InkribeCore
 import SwiftUI
 
@@ -16,6 +17,10 @@ struct TranscriptEditorView: View {
     @State private var errorDescription: String?
     @State private var playbackIssueDescription: String?
     @State private var playback = TranscriptPlaybackController()
+    @State private var aiController = TranscriptLocalAIController.shared
+    @State private var aiTask: Task<Void, Never>?
+    @State private var aiResult: TranscriptAIResult?
+    @State private var showsDerivedDocuments = false
 
     private enum TextMode: String, CaseIterable, Hashable {
         case edited = "Edited"
@@ -74,7 +79,20 @@ struct TranscriptEditorView: View {
                 errorDescription = error.localizedDescription
             }
         }
+        .sheet(item: $aiResult) { result in
+            TranscriptAIResultSheet(result: result) { applyMode in
+                try await applyAIResult(result, mode: applyMode)
+            }
+        }
+        .sheet(isPresented: $showsDerivedDocuments) {
+            TranscriptDerivedDocumentsSheet(
+                documents: transcript?.derivedDocuments ?? [],
+                currentRevision: transcript?.revision ?? 0
+            )
+        }
         .onDisappear {
+            aiTask?.cancel()
+            aiTask = nil
             playback.unload()
             guard editedText != lastSavedText else { return }
             let text = editedText
@@ -87,6 +105,12 @@ struct TranscriptEditorView: View {
     private func editor(_ transcript: Transcript) -> some View {
         VStack(spacing: 0) {
             editorToolbar(transcript)
+
+            if aiController.isGenerating {
+                Divider()
+                aiProgressBar
+            }
+
             Divider()
 
             HStack(spacing: 0) {
@@ -158,6 +182,8 @@ struct TranscriptEditorView: View {
                     .foregroundStyle(.secondary)
             }
 
+            aiMenu(transcript)
+
             Picker("Text", selection: $mode) {
                 ForEach(TextMode.allCases, id: \.self) { option in
                     Text(option.rawValue).tag(option)
@@ -183,6 +209,60 @@ struct TranscriptEditorView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 54)
+    }
+
+    private func aiMenu(_ transcript: Transcript) -> some View {
+        Menu {
+            ForEach(TranscriptAIAction.allCases, id: \.self) { action in
+                Button {
+                    startAI(action)
+                } label: {
+                    Label(action.displayName, systemImage: action.systemImage)
+                }
+            }
+
+            Divider()
+
+            Button {
+                showsDerivedDocuments = true
+            } label: {
+                Label(
+                    transcript.derivedDocuments.isEmpty
+                        ? "Saved AI Results"
+                        : "Saved AI Results (\(transcript.derivedDocuments.count))",
+                    systemImage: "tray.full"
+                )
+            }
+            .disabled(transcript.derivedDocuments.isEmpty)
+        } label: {
+            Image(systemName: "sparkles")
+                .frame(width: 20, height: 20)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Local AI")
+        .disabled(aiController.isGenerating)
+        .accessibilityLabel("Local AI actions")
+    }
+
+    private var aiProgressBar: some View {
+        HStack(spacing: 10) {
+            ProgressView(value: aiController.progress?.fraction ?? 0)
+                .frame(width: 120)
+
+            Text(transcriptAIProgressLabel(aiController.progress))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            Button("Cancel") {
+                aiTask?.cancel()
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 34)
+        .background(.quaternary.opacity(0.15))
     }
 
     @ViewBuilder
@@ -388,6 +468,56 @@ struct TranscriptEditorView: View {
         } catch {
             errorDescription = error.localizedDescription
         }
+    }
+
+    private func startAI(_ action: TranscriptAIAction) {
+        guard aiTask == nil, !aiController.isGenerating else { return }
+
+        aiTask = Task { @MainActor in
+            defer { aiTask = nil }
+
+            if editedText != lastSavedText {
+                await saveEditedText()
+                guard editedText == lastSavedText else { return }
+            }
+
+            guard let currentTranscript = transcript else { return }
+
+            do {
+                let result = try await aiController.generate(
+                    action: action,
+                    transcript: currentTranscript
+                )
+                try Task.checkCancellation()
+                aiResult = result
+                errorDescription = nil
+            } catch is CancellationError {
+                // User cancelled or navigated away.
+            } catch {
+                errorDescription = error.localizedDescription
+            }
+        }
+    }
+
+    private func applyAIResult(
+        _ result: TranscriptAIResult,
+        mode applyMode: TranscriptAIApplyMode
+    ) async throws {
+        let updated = try await appState.applyTranscriptAIResult(
+            transcriptID: transcriptID,
+            result: result,
+            mode: applyMode
+        )
+        transcript = updated
+
+        if applyMode == .replaceEditedText {
+            editedText = updated.editedText
+            lastSavedText = updated.editedText
+            mode = .edited
+        }
+
+        aiResult = nil
+        errorDescription = nil
     }
 
     private func matchCount(in text: String) -> Int {

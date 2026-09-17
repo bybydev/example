@@ -11,7 +11,11 @@ let package = Package(
         .package(path: "../LLMRuntime")
     ],
     targets: [
-        .target(name: "InkribeAI", dependencies: ["InkribeCore", "LLMRuntime"])
+        .target(name: "InkribeAI", dependencies: ["InkribeCore", "LLMRuntime"]),
+        .testTarget(
+            name: "InkribeAITests",
+            dependencies: ["InkribeAI", "InkribeCore", "LLMRuntime"]
+        )
     ],
     swiftLanguageModes: [.v6]
 )
