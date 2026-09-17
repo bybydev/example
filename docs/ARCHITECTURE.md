@@ -10,7 +10,7 @@ Key constraints:
 - bundled production models
 - `whisper.cpp` for speech recognition
 - `llama.cpp` for local text processing
-- `hoangbkit/JobQueue` `master` for persisted job orchestration
+- `hoangbkit/JobQueue` exact version `1.0.0` for persisted job orchestration
 - XcodeGen-driven project
 - Xcode Cloud test/archive workflows
 - MacAppFoundation for shared Mac commerce/theme/settings/onboarding surfaces
@@ -110,7 +110,7 @@ Shared packages must not import:
 
 The future iOS app consumes the same shared packages and supplies new UI/platform adapters rather than duplicating or extracting domain logic.
 
-At planning time `hoangbkit/JobQueue` itself supports macOS 15+ and iOS 17+, so using it from `InkribeTranscription` is compatible with Inkribe's iOS 26 baseline.
+JobQueue `1.0.0` supports macOS 15+ and iOS 17+, so using it from `InkribeTranscription` is compatible with Inkribe's iOS 26 baseline.
 
 ## Dependency direction
 
@@ -143,13 +143,13 @@ Use:
 
 ```text
 https://github.com/hoangbkit/JobQueue.git
-branch: master
+exact version: 1.0.0
 product: JobQueue
 ```
 
-`InkribeTranscription` declares the dependency and exposes Inkribe-specific job/service APIs to the app.
+Tag `1.0.0` resolves to commit `e9046c09675b460f19fbc2bada5f8494b8def046`.
 
-Because the dependency intentionally follows `master`, each implementation state must commit the resolved package revision in `Package.resolved` so Xcode Cloud and local builds use the same commit for that revision of Inkribe.
+`InkribeTranscription` declares the dependency and exposes Inkribe-specific job/service APIs to the app. The stable tag is intentional: Inkribe does not follow a moving JobQueue branch.
 
 See `docs/JOB_QUEUE.md` for the complete integration contract.
 
@@ -361,7 +361,7 @@ Do not rely on generating the project in `ci_post_clone.sh`; Xcode Cloud may res
 
 `ci_post_clone.sh` prepares model assets, not project structure.
 
-JobQueue intentionally follows `master`; the committed `Package.resolved` pins the concrete JobQueue commit used by a given Inkribe revision.
+JobQueue is pinned to exact version `1.0.0`; correctness does not depend on a moving branch.
 
 ## MacAppFoundation boundary
 
@@ -435,6 +435,8 @@ Debug builds multiplex logs to:
 1. normal development console output
 2. bounded in-memory `LogStore`
 3. standalone Logs window
+
+Release builds do not retain the Debug in-memory log buffer or expose the Logs window.
 
 JobQueue events should feed privacy-safe diagnostics for enqueue, start, progress milestones, completion, failure, cancellation, persistence failure, and restoration issues.
 

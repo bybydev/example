@@ -99,14 +99,14 @@ Dependencies:
 
 ```text
 InkribeTranscription
-├── JobQueue          # hoangbkit/JobQueue master
+├── JobQueue          # hoangbkit/JobQueue exact 1.0.0
 ├── WhisperRuntime
 └── InkribeCore
 ```
 
-Use `hoangbkit/JobQueue` from `master` for persistent scheduling, queue state, progress, pause/resume, cancellation, retry, restoration, and queue events. Do not implement a second queue scheduler/state machine inside Inkribe.
+Use `hoangbkit/JobQueue` exact version `1.0.0` for persistent scheduling, queue state, progress, pause/resume, cancellation, retry, restoration, and queue events. Do not implement a second queue scheduler/state machine inside Inkribe.
 
-At planning time JobQueue supports macOS 15+ and iOS 17+, so it is compatible with Inkribe's macOS 15+ / iOS 26+ package baseline.
+JobQueue `1.0.0` resolves to commit `e9046c09675b460f19fbc2bada5f8494b8def046`. It supports macOS 15+ and iOS 17+, so it is compatible with Inkribe's macOS 15+ / iOS 26+ package baseline.
 
 The package must not import AppKit/SwiftUI presentation code.
 
@@ -175,13 +175,11 @@ Use:
 
 ```text
 https://github.com/hoangbkit/JobQueue.git
-branch: master
+exact version: 1.0.0
 product: JobQueue
 ```
 
 The dependency belongs in `InkribeTranscription`, not in the Mac UI layer merely for convenience.
-
-Because `master` is intentionally moving, commit the concrete resolved revision in `Package.resolved` so each Inkribe commit/Xcode Cloud build has reproducible dependency resolution.
 
 The shared public abstraction should remain Inkribe-centric (`TranscriptionJob`, transcription services/state). UI code may observe queue-backed state, but should not scatter raw JobQueue details throughout unrelated features.
 
@@ -250,12 +248,11 @@ Phase 0 must:
 - declare `.macOS(.v15)` and `.iOS(.v26)` on shared package manifests
 - establish package dependency direction
 - move portable domain types out of the app target from the beginning
-- configure XcodeGen to consume local packages
-- add `hoangbkit/JobQueue` `master` through `InkribeTranscription`
-- commit the resolved JobQueue revision
+- configure the project source to consume local packages
+- add `hoangbkit/JobQueue` exact `1.0.0` through `InkribeTranscription`
 - establish the app-scoped queue persistence/startup/registration wiring
 - add package-level unit-test targets where useful
-- verify the shared packages compile for both supported platforms even though only the Mac app ships in v1
+- keep all Mac-specific presentation and commerce dependencies out of shared packages
 
 ## Phase 3 requirements
 
@@ -289,18 +286,16 @@ During every later phase, before adding code directly to the macOS app target, a
 
 Reusable logic goes into the appropriate local package. Only category 2 remains in `InkribeMac`.
 
-## CI acceptance
+## Phase 0 architecture acceptance
 
-Phase 0 is not complete until:
+Phase 0 is complete only when:
 
-- all shared packages compile for macOS 15+
-- all shared packages compile for iOS 26+
+- shared package manifests use the macOS 15+ / iOS 26+ baseline
 - no shared package imports AppKit
 - no shared package imports MacAppFoundation
-- `InkribeTranscription` resolves JobQueue successfully
-- `Package.resolved` records the concrete JobQueue master revision used by the project
-- Mac-specific shell/commerce/developer UI remains in the Mac app target
-- XcodeGen resolves the local packages reproducibly
+- `InkribeTranscription` owns the exact JobQueue `1.0.0` dependency
+- the Mac app owns theme, commerce, onboarding, diagnostics, permissions, and platform UI concerns
+- the dependency graph remains one-way and acyclic
 
 ## V1 acceptance criterion
 

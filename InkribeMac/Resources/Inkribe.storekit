@@ -1,0 +1,102 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "F3320569-285D-45CA-9231-40B6FB4C4800",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "49.99",
+      "familyShareable" : false,
+      "internalID" : "60D686B8-2DE5-45F5-9297-69DE1B2562B2",
+      "localizations" : [
+        {
+          "description" : "Unlock Inkribe Pro permanently with one purchase.",
+          "displayName" : "Inkribe Pro Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.hoangbkit.inkribe.pro.lifetime",
+      "referenceName" : "Inkribe Pro Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "USA",
+    "_storeKitErrors" : [],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "DA959655-4932-45AE-94C0-C3D26389FCCC",
+      "localizations" : [
+        {
+          "description" : "Unlock Inkribe Pro.",
+          "displayName" : "Inkribe Pro",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "Inkribe Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "D4FB6898-7E90-4AE6-9FD3-2B026973058A",
+          "localizations" : [
+            {
+              "description" : "Unlock Inkribe Pro with a monthly subscription.",
+              "displayName" : "Inkribe Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.hoangbkit.inkribe.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Inkribe Pro Monthly",
+          "subscriptionGroupID" : "DA959655-4932-45AE-94C0-C3D26389FCCC",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "24.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "E997C5CC-522C-4301-B512-54A913221F38",
+          "localizations" : [
+            {
+              "description" : "Unlock Inkribe Pro for one year.",
+              "displayName" : "Inkribe Pro Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.hoangbkit.inkribe.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Inkribe Pro Yearly",
+          "subscriptionGroupID" : "DA959655-4932-45AE-94C0-C3D26389FCCC",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
