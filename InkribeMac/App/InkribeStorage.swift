@@ -1,6 +1,7 @@
 import Foundation
 import InkribeAudio
 import InkribeCore
+import InkribePersistence
 import InkribeTranscription
 
 struct InkribeStorageSnapshot: Equatable, Sendable {
@@ -102,7 +103,7 @@ extension InkribeAppState {
 }
 
 private enum InkribeStorageScanner {
-    static func fileByteCount(at url: URL) -> Int64 {
+    nonisolated static func fileByteCount(at url: URL) -> Int64 {
         guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
               values.isRegularFile == true,
               let size = values.fileSize else {
@@ -111,7 +112,7 @@ private enum InkribeStorageScanner {
         return Int64(size)
     }
 
-    static func recursiveByteCount(at directory: URL) throws -> Int64 {
+    nonisolated static func recursiveByteCount(at directory: URL) throws -> Int64 {
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
         guard let enumerator = FileManager.default.enumerator(
             at: directory,

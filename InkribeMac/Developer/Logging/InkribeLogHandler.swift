@@ -23,11 +23,8 @@ struct InkribeStoreLogHandler: LogHandler {
     var logLevel: Logger.Level = .debug
 
     private let label: String
-    private let store: LogStore
-
-    init(label: String, store: LogStore) {
+    init(label: String) {
         self.label = label
-        self.store = store
     }
 
     subscript(metadataKey key: String) -> Logger.Metadata.Value? {
@@ -56,7 +53,7 @@ struct InkribeStoreLogHandler: LogHandler {
         )
 
         Task { @MainActor in
-            store.append(entry)
+            LogStore.shared.append(entry)
         }
     }
 }
@@ -74,7 +71,7 @@ enum InkribeLogging {
             console.logLevel = .debug
 
             #if DEBUG
-            var inMemory = InkribeStoreLogHandler(label: label, store: LogStore.shared)
+            var inMemory = InkribeStoreLogHandler(label: label)
             inMemory.logLevel = .debug
             return MultiplexLogHandler([console, inMemory])
             #else

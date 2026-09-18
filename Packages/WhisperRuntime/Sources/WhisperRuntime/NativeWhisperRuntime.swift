@@ -168,7 +168,10 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
         params.print_progress = false
         params.print_realtime = false
         params.print_timestamps = false
-        params.detect_language = requestedLanguageCode == nil || requestedLanguageCode == "auto"
+        // Let whisper.cpp enter auto-language mode through its explicit
+        // "auto" language sentinel. Passing detect_language = true with a nil
+        // language can complete successfully with zero text segments.
+        params.detect_language = false
 
         let unmanagedState = Unmanaged.passRetained(callbackState)
         defer { unmanagedState.release() }
@@ -204,9 +207,11 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
                 }
             }
         } else {
-            params.language = nil
-            nativeResult = samples.withUnsafeBufferPointer { buffer in
-                whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+            nativeResult = "auto".withCString { language in
+                params.language = language
+                return samples.withUnsafeBufferPointer { buffer in
+                    whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+                }
             }
         }
 

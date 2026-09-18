@@ -1,5 +1,6 @@
 import InkribeCore
 import InkribeExport
+import InkribeTranscription
 import MacAppFoundation
 import SwiftUI
 

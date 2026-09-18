@@ -76,7 +76,7 @@ enum TranscriptExportCoordinator {
         case .plainText:
             .plainText
         case .markdown:
-            .markdown
+            UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
         case .srt:
             UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText
         case .vtt:

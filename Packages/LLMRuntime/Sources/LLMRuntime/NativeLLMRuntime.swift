@@ -141,7 +141,14 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
             throw LLMRuntimeError.couldNotCreateContext
         }
 
-        let loadedVocab = llama_model_get_vocab(loadedModel)
+        guard let loadedVocab = llama_model_get_vocab(loadedModel) else {
+            llama_free(loadedContext)
+            llama_model_free(loadedModel)
+            LlamaBackendLifetime.shared.release()
+            logger.error("Local model vocabulary unavailable", metadata: ["model": "\(descriptor.id)"])
+            throw LLMRuntimeError.couldNotLoadModel(descriptor.id)
+        }
+
         nativeState = LlamaNativeState(
             model: loadedModel,
             context: loadedContext,

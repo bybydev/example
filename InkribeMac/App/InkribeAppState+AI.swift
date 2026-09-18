@@ -1,6 +1,7 @@
 import Foundation
 import InkribeAI
 import InkribeCore
+import InkribePersistence
 
 extension InkribeAppState {
     func applyTranscriptAIResult(

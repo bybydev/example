@@ -269,24 +269,23 @@ struct InkribeApp: App {
     private var developerReplays: [FoundationDeveloperReplay] {
         var replays: [FoundationDeveloperReplay] = []
 
-        if let paywallConfiguration = InkribeCommerce.paywallConfiguration {
-            replays.append(
-                FoundationDeveloperReplay(
-                    id: "inkribe.pro-paywall",
-                    title: "Pro Paywall",
-                    systemImage: "crown.fill"
-                ) { dismiss in
-                    ProPaywallView(
-                        purchaseManager: purchases,
-                        configuration: paywallConfiguration,
-                        onPurchased: { _ in dismiss() },
-                        onRestored: dismiss,
-                        onClose: dismiss
-                    )
-                    .macAppTheme(themeStore)
-                }
-            )
-        }
+        let paywallConfiguration = InkribeCommerce.paywallConfiguration
+        replays.append(
+            FoundationDeveloperReplay(
+                id: "inkribe.pro-paywall",
+                title: "Pro Paywall",
+                systemImage: "crown.fill"
+            ) { dismiss in
+                ProPaywallView(
+                    purchaseManager: purchases,
+                    configuration: paywallConfiguration,
+                    onPurchased: { _ in dismiss() },
+                    onRestored: dismiss,
+                    onClose: dismiss
+                )
+                .macAppTheme(themeStore)
+            }
+        )
 
         replays.append(
             FoundationDeveloperReplay(

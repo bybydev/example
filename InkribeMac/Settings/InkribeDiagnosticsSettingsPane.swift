@@ -1,3 +1,4 @@
+import InkribeTranscription
 import MacAppFoundation
 import SwiftUI
 

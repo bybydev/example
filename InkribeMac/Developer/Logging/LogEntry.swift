@@ -10,7 +10,7 @@ struct LogEntry: Identifiable, Sendable {
     let message: String
     let metadata: String?
 
-    init(
+    nonisolated init(
         id: UUID = UUID(),
         timestamp: Date = .now,
         level: Logger.Level,

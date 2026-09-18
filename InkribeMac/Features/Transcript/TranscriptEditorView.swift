@@ -1,5 +1,6 @@
 import InkribeAI
 import InkribeCore
+import InkribeTranscription
 import MacAppFoundation
 import SwiftUI
 
@@ -29,6 +30,16 @@ struct TranscriptEditorView: View {
     private enum TextMode: String, CaseIterable, Hashable {
         case edited = "Edited"
         case raw = "Raw"
+    }
+
+    private var completedTranscriptionCount: Int {
+        appState.transcriptionQueue?.items.filter {
+            $0.transcriptID == transcriptID && $0.state == .complete
+        }.count ?? 0
+    }
+
+    private var transcriptLoadGeneration: String {
+        "\(transcriptID.rawValue.uuidString):\(completedTranscriptionCount)"
     }
 
     private var displayedText: String {
@@ -68,7 +79,7 @@ struct TranscriptEditorView: View {
                 )
             }
         }
-        .task(id: transcriptID) {
+        .task(id: transcriptLoadGeneration) {
             await load()
         }
         .task(id: editedText) {
