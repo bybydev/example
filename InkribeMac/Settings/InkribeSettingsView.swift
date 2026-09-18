@@ -379,6 +379,9 @@ private struct InkribeDiagnosticsSettingsPane: View {
 
     @Environment(\.macAppTheme) private var theme
     @State private var snapshot = InkribeRuntimeDiagnosticsSnapshot.capture()
+    @State private var queueRecoveryMessage: String?
+    @State private var queueRecoveryError: String?
+    @State private var showsQueueResetConfirmation = false
 
     var body: some View {
         settingsScroll {
@@ -446,6 +449,15 @@ private struct InkribeDiagnosticsSettingsPane: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
+
+                            HStack {
+                                Button("Retry Queue Storage") {
+                                    retryQueuePersistence()
+                                }
+                                Button("Reset Queue Storage…", role: .destructive) {
+                                    showsQueueResetConfirmation = true
+                                }
+                            }
                         }
                     } else {
                         Text("Transcription queue unavailable.")
@@ -454,6 +466,17 @@ private struct InkribeDiagnosticsSettingsPane: View {
 
                     if let startupIssue = appState.startupIssue {
                         Label(startupIssue, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if let queueRecoveryMessage {
+                        Text(queueRecoveryMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let queueRecoveryError {
+                        Text(queueRecoveryError)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
@@ -468,11 +491,46 @@ private struct InkribeDiagnosticsSettingsPane: View {
             }
         }
         .background(theme.canvas)
+        .confirmationDialog(
+            "Reset transcription queue storage?",
+            isPresented: $showsQueueResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset Queue Storage", role: .destructive) {
+                resetQueuePersistence()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes persisted transcription queue records so Inkribe can recover from damaged queue storage. Transcript documents and saved AI results are not deleted, but unfinished jobs will no longer be queued.")
+        }
+    }
+
+    private func retryQueuePersistence() {
+        queueRecoveryMessage = nil
+        queueRecoveryError = nil
+        do {
+            try appState.retryQueuePersistence()
+            queueRecoveryMessage = "Queue storage recovered."
+        } catch {
+            queueRecoveryError = error.localizedDescription
+        }
+    }
+
+    private func resetQueuePersistence() {
+        queueRecoveryMessage = nil
+        queueRecoveryError = nil
+        do {
+            try appState.resetQueuePersistence()
+            queueRecoveryMessage = "Queue storage reset. Existing transcript documents were kept."
+        } catch {
+            queueRecoveryError = error.localizedDescription
+        }
     }
 }
 
 private struct InkribeAboutSettingsPane: View {
     @Environment(\.macAppTheme) private var theme
+    @State private var showsThirdPartyNotices = false
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
@@ -490,12 +548,19 @@ private struct InkribeAboutSettingsPane: View {
                     LabeledContent("Processing", value: "Local by design")
                     LabeledContent("Platform", value: "macOS")
                     LabeledContent("Version", value: "\(version) (\(build))")
+                    Divider()
+                    Button("Third-Party Notices…") {
+                        showsThirdPartyNotices = true
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
             }
         }
         .background(theme.canvas)
+        .sheet(isPresented: $showsThirdPartyNotices) {
+            ThirdPartyNoticesView()
+        }
     }
 }
 

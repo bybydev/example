@@ -55,9 +55,22 @@ final class InkribeAppState {
     }
 
     func start() throws {
-        guard transcriptionQueue == nil else {
-            startupIssue = nil
-            return
+        if let transcriptionQueue {
+            guard startupIssue != nil
+                    || transcriptionQueue.persistenceIssueDescription != nil else {
+                return
+            }
+
+            do {
+                try transcriptionQueue.retryPersistence()
+                startupIssue = nil
+                logger.info("Transcription pipeline recovered")
+                return
+            } catch {
+                startupIssue = String(describing: error)
+                logger.error("App startup recovery failed: \(String(describing: error))")
+                throw error
+            }
         }
 
         do {
@@ -76,16 +89,47 @@ final class InkribeAppState {
             queue.eventHandler = { event in
                 Self.logQueueEvent(event, logger: queueLogger)
             }
-            try queue.start()
 
             self.transcriptRepository = repository
             self.mediaStore = mediaStore
             transcriptionQueue = queue
+
+            try queue.start()
             startupIssue = nil
             logger.info("Transcription pipeline initialized")
         } catch {
             startupIssue = String(describing: error)
             logger.error("App startup failed: \(String(describing: error))")
+            throw error
+        }
+    }
+
+    func retryQueuePersistence() throws {
+        guard let transcriptionQueue else {
+            throw AppStateError.pipelineUnavailable
+        }
+        do {
+            try transcriptionQueue.retryPersistence()
+            startupIssue = nil
+            logger.info("Transcription queue persistence recovered")
+        } catch {
+            startupIssue = String(describing: error)
+            logger.error("Transcription queue persistence retry failed")
+            throw error
+        }
+    }
+
+    func resetQueuePersistence() throws {
+        guard let transcriptionQueue else {
+            throw AppStateError.pipelineUnavailable
+        }
+        do {
+            try transcriptionQueue.resetPersistence()
+            startupIssue = nil
+            logger.warning("Transcription queue persistence was reset")
+        } catch {
+            startupIssue = String(describing: error)
+            logger.error("Transcription queue persistence reset failed")
             throw error
         }
     }

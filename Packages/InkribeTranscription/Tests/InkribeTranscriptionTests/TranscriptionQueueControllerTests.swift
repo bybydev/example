@@ -36,7 +36,11 @@ struct TranscriptionQueueControllerTests {
             executor: ImmediateExecutor()
         )
         try restored.start()
-        #expect(restored.items.contains(where: { $0.id == jobID && $0.transcriptID == transcriptID }))
+        try await waitUntil {
+            restored.items.first(where: { $0.id == jobID })?.state == .complete
+        }
+        #expect(restored.recordCount == 1)
+        #expect(restored.items.first?.transcriptID == transcriptID)
     }
 
     @Test func jobPayloadContainsOnlyStableIdentifiersAndLanguage() throws {
@@ -58,6 +62,58 @@ struct TranscriptionQueueControllerTests {
         #expect(payload["sourceMediaRelativePath"] as? String == "Sources/source.wav")
         #expect(payload["requestedLanguage"] as? String == "en")
         #expect(TranscriptionJob.maxConcurrentExecutions == 1)
+    }
+
+    @Test func transcriptionJobCodableRoundTripPreservesStablePayload() throws {
+        let job = TranscriptionJob(
+            id: UUID(),
+            payload: .init(
+                transcriptID: UUID(),
+                sourceMediaRelativePath: "Sources/round-trip.wav",
+                requestedLanguage: "ja"
+            )
+        )
+
+        let data = try JSONEncoder().encode(job)
+        let decoded = try JSONDecoder().decode(TranscriptionJob.self, from: data)
+
+        #expect(decoded.id == job.id)
+        #expect(decoded.payload == job.payload)
+    }
+
+    @Test func corruptQueueStoreCanRecoverAfterRepair() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let queueURL = directory.appendingPathComponent("jobs.json")
+        try Data("{ corrupt queue".utf8).write(to: queueURL, options: .atomic)
+
+        let controller = TranscriptionQueueController(
+            storeURL: queueURL,
+            executor: ImmediateExecutor()
+        )
+        var events: [TranscriptionQueueEvent] = []
+        controller.eventHandler = { events.append($0) }
+
+        do {
+            try controller.start()
+            Issue.record("Corrupt queue storage should fail startup")
+        } catch {
+            // Expected: persisted queue state is not silently discarded.
+        }
+
+        #expect(controller.startupErrorDescription != nil)
+        #expect(controller.persistenceIssueDescription != nil)
+        #expect(events.contains(.persistenceFailed))
+        #expect(controller.recordCount == 0)
+
+        try Data("[]".utf8).write(to: queueURL, options: .atomic)
+        try controller.retryPersistence()
+
+        #expect(controller.startupErrorDescription == nil)
+        #expect(controller.persistenceIssueDescription == nil)
+        #expect(controller.recordCount == 0)
     }
 
     @Test func successfulJobPersistsWhisperResultBeforeQueueCompletes() async throws {
@@ -227,6 +283,135 @@ struct TranscriptionQueueControllerTests {
         #expect(attempts == 2)
     }
 
+    @Test func processingRecordRecoversAfterRelaunchAndCompletesOnce() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let queueURL = directory.appendingPathComponent("jobs.json")
+        let first = TranscriptionQueueController(
+            storeURL: queueURL,
+            executor: BlockingExecutor()
+        )
+        try first.start()
+        let transcriptID = TranscriptID()
+        let jobID = try first.enqueue(
+            transcriptID: transcriptID,
+            sourceMediaRelativePath: "Sources/source.wav"
+        )
+        try await waitUntil {
+            first.items.first(where: { $0.id == jobID })?.state == .transcribing
+        }
+
+        let restoredDirectory = directory.appendingPathComponent("Restored", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: restoredDirectory,
+            withIntermediateDirectories: true
+        )
+        let restoredURL = restoredDirectory.appendingPathComponent("jobs.json")
+        try FileManager.default.copyItem(at: queueURL, to: restoredURL)
+
+        try first.cancel(id: jobID)
+        try await waitUntil {
+            first.items.first(where: { $0.id == jobID })?.state == .cancelled
+        }
+
+        let restored = TranscriptionQueueController(
+            storeURL: restoredURL,
+            executor: ImmediateExecutor()
+        )
+        try restored.start()
+        try await waitUntil {
+            restored.items.first(where: { $0.id == jobID })?.state == .complete
+        }
+
+        #expect(restored.recordCount == 1)
+        #expect(restored.items.first?.transcriptID == transcriptID)
+    }
+
+    @Test func missingDurableMediaFailsRetryWithoutDuplicatingTranscript() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let mediaStore = DurableMediaStore(
+            rootDirectoryURL: directory.appendingPathComponent("Media", isDirectory: true)
+        )
+        let repository = JSONTranscriptRepository(
+            fileURL: directory.appendingPathComponent("transcripts.json")
+        )
+        let transcript = Transcript(
+            title: "Missing source",
+            sourceMediaRelativePath: "Sources/missing.wav",
+            rawText: "Keep me",
+            editedText: "Keep me"
+        )
+        try await repository.save(transcript)
+
+        let executor = DefaultTranscriptionJobExecutor(
+            mediaStore: mediaStore,
+            whisperRuntime: FakeWhisperRuntime(
+                result: .init(detectedLanguageCode: "en", segments: [])
+            ),
+            transcriptRepository: repository
+        )
+        let controller = TranscriptionQueueController(
+            storeURL: directory.appendingPathComponent("jobs.json"),
+            executor: executor
+        )
+        try controller.start()
+        let jobID = try controller.enqueue(
+            transcriptID: transcript.id,
+            sourceMediaRelativePath: "Sources/missing.wav"
+        )
+
+        try await waitUntil {
+            controller.items.first(where: { $0.id == jobID })?.state == .failed
+        }
+        #expect(controller.recordCount == 1)
+
+        try controller.retry(id: jobID)
+        try await waitUntil {
+            controller.items.first(where: { $0.id == jobID })?.state == .failed
+        }
+
+        let all = try await repository.transcripts()
+        #expect(controller.recordCount == 1)
+        #expect(all.count == 1)
+        #expect(all.first?.id == transcript.id)
+        #expect(all.first?.rawText == "Keep me")
+        #expect(all.first?.editedText == "Keep me")
+    }
+
+    @Test func multipleJobsStayFIFOAndSingleConcurrency() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let executor = SerialProbeExecutor()
+        let controller = TranscriptionQueueController(
+            storeURL: directory.appendingPathComponent("jobs.json"),
+            executor: executor
+        )
+        try controller.start()
+
+        let transcriptIDs = [TranscriptID(), TranscriptID(), TranscriptID()]
+        let jobIDs = try transcriptIDs.map {
+            try controller.enqueue(
+                transcriptID: $0,
+                sourceMediaRelativePath: "Sources/\($0.rawValue.uuidString).wav"
+            )
+        }
+
+        try await waitUntil(attempts: 200) {
+            jobIDs.allSatisfy { id in
+                controller.items.first(where: { $0.id == id })?.state == .complete
+            }
+        }
+
+        let snapshot = await executor.snapshot()
+        #expect(snapshot.maximumActive == 1)
+        #expect(snapshot.starts == transcriptIDs.map(\.rawValue))
+    }
+
     private func waitUntil(
         attempts: Int = 100,
         condition: @MainActor () -> Bool
@@ -354,5 +539,29 @@ private actor FakeWhisperRuntime: WhisperRuntimeProtocol {
         progress?(0.5)
         progress?(1)
         return result
+    }
+}
+
+private actor SerialProbeExecutor: TranscriptionJobExecuting {
+    private var starts: [UUID] = []
+    private var active = 0
+    private var maximumActive = 0
+
+    func execute(
+        payload: TranscriptionJob.Payload,
+        progress: @escaping TranscriptionProgressHandler
+    ) async throws {
+        active += 1
+        maximumActive = max(maximumActive, active)
+        starts.append(payload.transcriptID)
+        defer { active -= 1 }
+
+        await progress(0.25, "Working")
+        try await Task.sleep(for: .milliseconds(30))
+        await progress(1, "Complete")
+    }
+
+    func snapshot() -> (starts: [UUID], maximumActive: Int) {
+        (starts, maximumActive)
     }
 }

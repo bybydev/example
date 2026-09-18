@@ -180,6 +180,30 @@ public final class TranscriptionQueueController {
         try queue.retryAll()
     }
 
+    public func retryPersistence() throws {
+        do {
+            if startupErrorDescription != nil {
+                try start()
+            } else {
+                try queue.perform(.retryPersistence)
+            }
+            startupErrorDescription = nil
+        } catch {
+            startupErrorDescription = String(describing: error)
+            throw error
+        }
+    }
+
+    public func resetPersistence() throws {
+        do {
+            try queue.perform(.resetPersistence)
+            startupErrorDescription = nil
+        } catch {
+            startupErrorDescription = String(describing: error)
+            throw error
+        }
+    }
+
     @discardableResult
     public func releaseIdleRuntimeResources() async -> Bool {
         guard activeCount == 0,

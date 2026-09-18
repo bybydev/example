@@ -138,6 +138,16 @@ Diagnostics stays local and content-minimal while reporting architecture, Metal 
 
 See `docs/SETTINGS_PERFORMANCE.md` for the authoritative preference, runtime-lifetime, storage, diagnostics, and compatibility contract.
 
+## Release hardening
+
+The v1 source contract pins offline sandbox behavior, queue persistence recovery, transcript-store failure safety, model-integrity failure behavior, and bundled third-party notices.
+
+A damaged queue store fails closed and remains recoverable from Diagnostics without discarding transcript documents. Shipped Inkribe source layers are guarded against direct network-client APIs, while the developer-only model asset tool remains separate from app runtime behavior.
+
+Third-party release provenance ships in `InkribeMac/Resources/ThirdPartyNotices.txt` and is readable from Settings → About.
+
+See `docs/RELEASE_HARDENING.md` and `docs/handoffs/PHASE_9.md` for the final v1 hardening contract and handoff.
+
 ## Product identity
 
 - Bundle identifier: `com.hoangbkit.inkribe`

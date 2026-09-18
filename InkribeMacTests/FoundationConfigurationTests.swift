@@ -1,4 +1,5 @@
 import Foundation
+import InkribeCore
 import InkribeTranscription
 import Testing
 @testable import Inkribe
@@ -35,6 +36,79 @@ import Testing
     let secondQueue = try #require(appState.transcriptionQueue)
 
     #expect(firstQueue === secondQueue)
+    #expect(appState.startupIssue == nil)
+}
+
+@MainActor
+@Test func appStateRecoversRepairedQueueStorageWithoutRecreatingPipeline() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    let queueURL = directory.appendingPathComponent("jobs.json")
+    try Data("{ corrupt queue".utf8).write(to: queueURL, options: .atomic)
+
+    let appState = InkribeAppState(
+        queueStoreURLProvider: { queueURL },
+        transcriptStoreURLProvider: { directory.appendingPathComponent("transcripts.json") },
+        mediaDirectoryURLProvider: { directory.appendingPathComponent("Media", isDirectory: true) },
+        executorFactory: { _, _ in StartupTestExecutor() }
+    )
+
+    do {
+        try appState.start()
+        Issue.record("Corrupt queue storage should fail startup")
+    } catch {
+        // Expected. The pipeline objects remain available for recovery.
+    }
+
+    let retainedQueue = try #require(appState.transcriptionQueue)
+    #expect(appState.transcriptRepository != nil)
+    #expect(appState.mediaStore != nil)
+    #expect(appState.startupIssue != nil)
+
+    try Data("[]".utf8).write(to: queueURL, options: .atomic)
+    try appState.retryQueuePersistence()
+
+    #expect(appState.transcriptionQueue === retainedQueue)
+    #expect(appState.startupIssue == nil)
+    #expect(retainedQueue.persistenceIssueDescription == nil)
+}
+
+@MainActor
+@Test func resettingDamagedQueueStoragePreservesTranscriptDocuments() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    let queueURL = directory.appendingPathComponent("jobs.json")
+    try Data("{ corrupt queue".utf8).write(to: queueURL, options: .atomic)
+
+    let appState = InkribeAppState(
+        queueStoreURLProvider: { queueURL },
+        transcriptStoreURLProvider: { directory.appendingPathComponent("transcripts.json") },
+        mediaDirectoryURLProvider: { directory.appendingPathComponent("Media", isDirectory: true) },
+        executorFactory: { _, _ in StartupTestExecutor() }
+    )
+
+    do {
+        try appState.start()
+        Issue.record("Corrupt queue storage should fail startup")
+    } catch {
+        // Expected.
+    }
+
+    let repository = try #require(appState.transcriptRepository)
+    let transcript = Transcript(title: "Keep me", rawText: "durable")
+    try await repository.save(transcript)
+
+    try appState.resetQueuePersistence()
+
+    let saved = try await appState.transcript(id: transcript.id)
+    #expect(saved?.rawText == "durable")
+    #expect(appState.transcriptionQueue?.recordCount == 0)
     #expect(appState.startupIssue == nil)
 }
 

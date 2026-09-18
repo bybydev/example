@@ -182,3 +182,16 @@ The queue/transcription contract is covered for:
 ## Later-phase rule
 
 Library/editor, local AI, export, Settings, and release hardening all consume the queue contract defined here. They may present or diagnose queue state, but they must not introduce another transcription scheduler or take ownership of native Whisper context lifetime away from the transcription layer.
+
+
+## Phase 9 persistence recovery
+
+Queue persistence failures are recoverable without introducing an Inkribe-owned scheduler.
+
+- `TranscriptionQueueController.retryPersistence()` retries startup/load recovery through the existing JobQueue instance and delegates runtime save recovery to JobQueue.
+- `resetPersistence()` is the explicit destructive fallback for queue records when persisted queue storage cannot be repaired.
+- `InkribeAppState` retains the queue controller, transcript repository, and durable media store when queue startup fails, so Diagnostics can recover the same pipeline rather than constructing a parallel state owner.
+- Retry success clears the startup/persistence issue.
+- Reset never deletes transcript documents or saved AI results.
+- Reset may discard unfinished/retryable transcription records, so the UI requires explicit confirmation.
+- Pending and interrupted processing records restore through JobQueue's v1.0.0 recovery semantics.
