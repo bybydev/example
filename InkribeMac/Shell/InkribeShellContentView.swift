@@ -1,10 +1,13 @@
 import InkribeCore
+import MacAppFoundation
 import SwiftUI
 
 @MainActor
 struct InkribeShellContentView: View {
     let appState: InkribeAppState
     @Bindable var state: InkribeShellState
+    let purchaseManager: PurchaseManager
+    let onOpenPaywall: () -> Void
 
     var body: some View {
         Group {
@@ -41,13 +44,17 @@ struct InkribeShellContentView: View {
         case .import:
             ImportView(
                 appState: appState,
+                purchaseManager: purchaseManager,
+                onOpenPaywall: onOpenPaywall,
                 onOpenTranscript: state.openTranscript
             )
 
         case .transcript(let transcriptID):
             TranscriptEditorView(
                 transcriptID: transcriptID,
-                appState: appState
+                appState: appState,
+                purchaseManager: purchaseManager,
+                onOpenPaywall: onOpenPaywall
             )
         }
     }

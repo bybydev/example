@@ -9,8 +9,10 @@ struct InkribeMainColumn: View {
     @Bindable var state: InkribeShellState
     let purchaseManager: PurchaseManager
     let onOpenPlan: () -> Void
+    let onOpenPaywall: () -> Void
 
     @Environment(\.macAppTheme) private var theme
+    @State private var upsellCapability: InkribeProCapability?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,7 +20,9 @@ struct InkribeMainColumn: View {
 
             InkribeShellContentView(
                 appState: appState,
-                state: state
+                state: state,
+                purchaseManager: purchaseManager,
+                onOpenPaywall: onOpenPaywall
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -26,6 +30,18 @@ struct InkribeMainColumn: View {
         }
         .background(theme.canvas)
         .accessibilityIdentifier("Inkribe.MainColumn")
+        .sheet(item: $upsellCapability) { capability in
+            InkribeProUpsellView(
+                capability: capability,
+                onUpgrade: {
+                    upsellCapability = nil
+                    onOpenPaywall()
+                },
+                onDismiss: {
+                    upsellCapability = nil
+                }
+            )
+        }
     }
 
     private var titlebar: some View {
@@ -43,7 +59,7 @@ struct InkribeMainColumn: View {
 
             ProPlanButton(
                 purchaseManager: purchaseManager,
-                onUpgrade: onOpenPlan,
+                onUpgrade: onOpenPaywall,
                 onManagePlan: onOpenPlan
             )
         }
@@ -67,55 +83,81 @@ struct InkribeMainColumn: View {
     private func transcriptExportMenu(_ transcriptID: TranscriptID) -> some View {
         Menu {
             Button("Copy Edited Transcript") {
-                copyTranscript(transcriptID, source: .edited)
+                TranscriptExportActions.copy(
+                    id: transcriptID,
+                    source: .edited,
+                    appState: appState
+                )
             }
 
             Button("Copy Raw Transcript") {
-                copyTranscript(transcriptID, source: .raw)
+                TranscriptExportActions.copy(
+                    id: transcriptID,
+                    source: .raw,
+                    appState: appState
+                )
             }
 
             Divider()
 
             Menu("Export Plain Text") {
                 Button("Edited…") {
-                    exportTranscript(
-                        transcriptID,
+                    TranscriptExportActions.export(
+                        id: transcriptID,
                         format: .plainText,
-                        source: .edited
+                        textSource: .edited,
+                        appState: appState
                     )
                 }
                 Button("Raw…") {
-                    exportTranscript(
-                        transcriptID,
+                    TranscriptExportActions.export(
+                        id: transcriptID,
                         format: .plainText,
-                        source: .raw
+                        textSource: .raw,
+                        appState: appState
                     )
                 }
             }
 
             Menu("Export Markdown") {
                 Button("Edited…") {
-                    exportTranscript(
-                        transcriptID,
+                    TranscriptExportActions.export(
+                        id: transcriptID,
                         format: .markdown,
-                        source: .edited
+                        textSource: .edited,
+                        appState: appState
                     )
                 }
                 Button("Raw…") {
-                    exportTranscript(
-                        transcriptID,
+                    TranscriptExportActions.export(
+                        id: transcriptID,
                         format: .markdown,
-                        source: .raw
+                        textSource: .raw,
+                        appState: appState
                     )
                 }
             }
 
-            Button("Export SRT Subtitles…") {
-                exportTranscript(transcriptID, format: .srt)
+            Button {
+                requestSubtitleExport(.srt, transcriptID: transcriptID)
+            } label: {
+                HStack {
+                    Text("Export SRT Subtitles…")
+                    if !purchaseManager.hasPro {
+                        ProBadge(style: .icon)
+                    }
+                }
             }
 
-            Button("Export WebVTT Subtitles…") {
-                exportTranscript(transcriptID, format: .vtt)
+            Button {
+                requestSubtitleExport(.vtt, transcriptID: transcriptID)
+            } label: {
+                HStack {
+                    Text("Export WebVTT Subtitles…")
+                    if !purchaseManager.hasPro {
+                        ProBadge(style: .icon)
+                    }
+                }
             }
         } label: {
             Image(systemName: "square.and.arrow.up")
@@ -124,6 +166,22 @@ struct InkribeMainColumn: View {
         .menuStyle(.borderlessButton)
         .help("Copy or export transcript")
         .accessibilityLabel("Transcript export actions")
+    }
+
+    private func requestSubtitleExport(
+        _ format: TranscriptExportFormat,
+        transcriptID: TranscriptID
+    ) {
+        switch InkribeProCapability.subtitleExport.decision(hasPro: purchaseManager.hasPro) {
+        case .allowed:
+            TranscriptExportActions.export(
+                id: transcriptID,
+                format: format,
+                appState: appState
+            )
+        case .requiresPro:
+            upsellCapability = .subtitleExport
+        }
     }
 
     private var statusBar: some View {
@@ -161,41 +219,5 @@ struct InkribeMainColumn: View {
                 : "Transcribing \(queue.activeCount)"
         }
         return "Ready"
-    }
-
-    private func copyTranscript(
-        _ transcriptID: TranscriptID,
-        source: TranscriptTextSource
-    ) {
-        Task { @MainActor in
-            do {
-                try await TranscriptExportCoordinator.copyTranscript(
-                    id: transcriptID,
-                    source: source,
-                    appState: appState
-                )
-            } catch {
-                TranscriptExportCoordinator.presentFailure(error, operation: "Copy Failed")
-            }
-        }
-    }
-
-    private func exportTranscript(
-        _ transcriptID: TranscriptID,
-        format: TranscriptExportFormat,
-        source: TranscriptTextSource = .edited
-    ) {
-        Task { @MainActor in
-            do {
-                _ = try await TranscriptExportCoordinator.exportTranscript(
-                    id: transcriptID,
-                    format: format,
-                    textSource: source,
-                    appState: appState
-                )
-            } catch {
-                TranscriptExportCoordinator.presentFailure(error, operation: "Export Failed")
-            }
-        }
     }
 }

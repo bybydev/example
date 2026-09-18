@@ -1,22 +1,43 @@
 import InkribeCore
 import InkribeTranscription
+import MacAppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
 struct ImportView: View {
     let appState: InkribeAppState
+    let purchaseManager: PurchaseManager
+    let onOpenPaywall: () -> Void
     let onOpenTranscript: (TranscriptID) -> Void
 
     @State private var preferences = InkribePreferences.shared
     @State private var isImporterPresented = false
+    @State private var pickerMode: PickerMode = .single
     @State private var isImporting = false
     @State private var language = TranscriptionLanguageCatalog.automaticCode
     @State private var hasLoadedDefaults = false
     @State private var errorDescription: String?
+    @State private var upsellCapability: InkribeProCapability?
+
+    private enum PickerMode {
+        case single
+        case multiple
+    }
 
     private var queueItems: [TranscriptionQueueItem] {
         appState.transcriptionQueue?.items ?? []
+    }
+
+    private var hasActiveQueueWork: Bool {
+        queueItems.contains { item in
+            switch item.state {
+            case .waiting, .transcribing, .pausing, .cancelling:
+                true
+            case .complete, .failed, .cancelled, .needsAttention:
+                false
+            }
+        }
     }
 
     var body: some View {
@@ -31,22 +52,39 @@ struct ImportView: View {
                 VStack(spacing: 6) {
                     Text("Import Audio or Video")
                         .font(.title2.weight(.semibold))
-                    Text("Drop files here or choose them from Finder. Inkribe copies source media into its local workspace before queueing transcription.")
+                    Text(importDescription)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: 480)
+                        .frame(maxWidth: 500)
                 }
 
                 TranscriptionLanguagePicker(selection: $language)
                     .disabled(isImporting)
 
-                Button {
-                    isImporterPresented = true
-                } label: {
-                    Label(isImporting ? "Importing…" : "Choose Files…", systemImage: "plus")
+                HStack(spacing: 10) {
+                    Button {
+                        requestImporter(.single)
+                    } label: {
+                        Label(isImporting ? "Importing…" : "Choose File…", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isImporting)
+
+                    ProGateButton(
+                        purchaseManager: purchaseManager,
+                        feature: InkribeProCapability.batchImport.premiumFeature,
+                        badgeStyle: .outline,
+                        onAction: {
+                            requestImporter(.multiple)
+                        },
+                        onUpgrade: {
+                            upsellCapability = .batchImport
+                        }
+                    ) {
+                        Label("Choose Multiple…", systemImage: "square.stack.3d.up")
+                    }
+                    .disabled(isImporting)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(isImporting)
 
                 if let errorDescription {
                     Text(errorDescription)
@@ -63,6 +101,16 @@ struct ImportView: View {
             .contentShape(Rectangle())
             .dropDestination(for: URL.self) { urls, _ in
                 guard !urls.isEmpty, !isImporting else { return false }
+
+                if case .requiresPro = InkribeProCapability.batchImport.importDecision(
+                    requestedFileCount: urls.count,
+                    hasActiveQueueWork: hasActiveQueueWork,
+                    hasPro: purchaseManager.hasPro
+                ) {
+                    upsellCapability = .batchImport
+                    return false
+                }
+
                 Task { await importURLs(urls) }
                 return true
             }
@@ -91,7 +139,7 @@ struct ImportView: View {
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.audio, .movie],
-            allowsMultipleSelection: true
+            allowsMultipleSelection: pickerMode == .multiple
         ) { result in
             switch result {
             case .success(let urls):
@@ -100,6 +148,40 @@ struct ImportView: View {
                 errorDescription = String(describing: error)
             }
         }
+        .sheet(item: $upsellCapability) { capability in
+            InkribeProUpsellView(
+                capability: capability,
+                onUpgrade: {
+                    upsellCapability = nil
+                    onOpenPaywall()
+                },
+                onDismiss: {
+                    upsellCapability = nil
+                }
+            )
+        }
+    }
+
+    private var importDescription: String {
+        if purchaseManager.hasPro {
+            return "Drop one or more files here or choose them from Finder. Inkribe copies source media into its local workspace before queueing transcription."
+        }
+        return "Drop one file here or choose it from Finder. Inkribe Pro unlocks multi-file batch import while single-file transcription stays available on Free."
+    }
+
+    private func requestImporter(_ mode: PickerMode) {
+        let requestedCount = mode == .multiple ? 2 : 1
+        if case .requiresPro = InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: requestedCount,
+            hasActiveQueueWork: hasActiveQueueWork,
+            hasPro: purchaseManager.hasPro
+        ) {
+            upsellCapability = .batchImport
+            return
+        }
+
+        pickerMode = mode
+        isImporterPresented = true
     }
 
     private func loadWorkflowDefaultsIfNeeded() {
@@ -112,6 +194,16 @@ struct ImportView: View {
 
     private func importURLs(_ urls: [URL]) async {
         guard !urls.isEmpty else { return }
+
+        if case .requiresPro = InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: urls.count,
+            hasActiveQueueWork: hasActiveQueueWork,
+            hasPro: purchaseManager.hasPro
+        ) {
+            upsellCapability = .batchImport
+            return
+        }
+
         isImporting = true
         errorDescription = nil
         defer { isImporting = false }

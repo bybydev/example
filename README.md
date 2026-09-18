@@ -2,6 +2,8 @@
 
 Inkribe is a macOS-first, fully offline speech-to-text workspace built around durable transcript documents.
 
+**v1 implementation status:** Phases 0–9 are complete. The numbered phase handoffs are historical implementation records; current behavior is defined by the architecture/feature contracts linked below.
+
 The v1 product flow is:
 
 ```text
@@ -183,6 +185,8 @@ See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `doc
 
 ## Development workflow
 
-Implementation proceeds phase by phase. Each phase uses its own pull request, updates its documentation and handoff before completion, and is squash-merged only when genuinely complete.
+The v1 implementation plan is complete. `docs/V1_IMPLEMENTATION_PLAN.md` and `docs/handoffs/PHASE_*.md` are retained as historical implementation records, not as the primary source for current behavior.
 
-See `AGENTS.md` for the repository working rules and `docs/V1_IMPLEMENTATION_PLAN.md` for the implementation sequence.
+For current ownership and behavior, prefer the focused contracts referenced throughout this README: architecture, queue, model assets, runtimes, transcription pipeline, transcript workspace, local AI, export, settings/performance, and release hardening.
+
+Post-v1 cleanup should consolidate existing ownership rather than weaken established persistence, privacy, offline, runtime, or package boundaries. See `docs/CONSOLIDATION.md` for the current consolidation rules and `AGENTS.md` for repository working rules.

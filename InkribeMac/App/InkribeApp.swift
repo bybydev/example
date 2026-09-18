@@ -27,8 +27,8 @@ struct InkribeApp: App {
         _settingsRouter = State(initialValue: MacAppSettingsRouter())
         _onboarding = State(
             initialValue: OnboardingState(
-                id: "inkribe",
-                stepCount: 4
+                id: InkribeOnboardingConfiguration.id,
+                stepCount: InkribeOnboardingConfiguration.stepCount
             )
         )
         _shellState = State(initialValue: InkribeShellState())
@@ -56,6 +56,7 @@ struct InkribeApp: App {
             .macAppTheme(themeStore)
             .managesPurchases(purchases)
         }
+        .defaultLaunchBehavior(onboarding.mainWindowLaunchBehavior)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1080, height: 720)
         .windowResizability(.contentMinSize)
@@ -142,6 +143,26 @@ struct InkribeApp: App {
             #endif
         }
 
+        OnboardingWindow(
+            "Welcome to Inkribe",
+            id: InkribeWindowID.onboarding,
+            state: onboarding,
+            defaultWidth: InkribeOnboardingConfiguration.defaultWidth,
+            defaultHeight: InkribeOnboardingConfiguration.defaultHeight
+        ) {
+            InkribeOnboardingView(onboarding: onboarding)
+                .macAppTheme(themeStore)
+        }
+
+        Window("Inkribe Pro", id: InkribeWindowID.proPaywall) {
+            InkribeProPaywallView(purchaseManager: purchases)
+                .macAppTheme(themeStore)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 860, height: 580)
+        .windowResizability(.contentSize)
+
         Settings {
             InkribeSettingsView(
                 purchaseManager: purchases,
@@ -160,7 +181,7 @@ struct InkribeApp: App {
         ) {
             FoundationDeveloperView(
                 purchaseManager: purchases,
-                configuration: FoundationDeveloperConfiguration()
+                configuration: developerConfiguration
             )
             .macAppTheme(themeStore)
         }
@@ -180,25 +201,11 @@ struct InkribeApp: App {
 
     private func copyActiveTranscript(source: TranscriptTextSource) {
         guard let id = shellState.activeTranscriptID else { return }
-        Task { @MainActor in
-            do {
-                try await TranscriptExportCoordinator.copyTranscript(
-                    id: id,
-                    source: source,
-                    appState: appState
-                )
-                logger.info(
-                    "Transcript copied to clipboard",
-                    metadata: ["source": "\(source.rawValue)"]
-                )
-            } catch {
-                logger.error(
-                    "Transcript copy failed",
-                    metadata: ["error_type": "\(String(reflecting: type(of: error)))"]
-                )
-                TranscriptExportCoordinator.presentFailure(error, operation: "Copy Failed")
-            }
-        }
+        TranscriptExportActions.copy(
+            id: id,
+            source: source,
+            appState: appState
+        )
     }
 
     private func exportActiveTranscript(
@@ -206,33 +213,100 @@ struct InkribeApp: App {
         source: TranscriptTextSource = .edited
     ) {
         guard let id = shellState.activeTranscriptID else { return }
-        Task { @MainActor in
-            do {
-                let didExport = try await TranscriptExportCoordinator.exportTranscript(
-                    id: id,
-                    format: format,
-                    textSource: source,
-                    appState: appState
-                )
-                if didExport {
-                    logger.info(
-                        "Transcript exported",
-                        metadata: [
-                            "format": "\(format.rawValue)",
-                            "source": "\(format.supportsTextSourceSelection ? source.rawValue : "segments")"
-                        ]
-                    )
-                }
-            } catch {
-                logger.error(
-                    "Transcript export failed",
-                    metadata: [
-                        "format": "\(format.rawValue)",
-                        "error_type": "\(String(reflecting: type(of: error)))"
+
+        if format == .srt || format == .vtt,
+           case .requiresPro = InkribeProCapability.subtitleExport.decision(
+               hasPro: purchases.hasPro
+           ) {
+            openWindow(id: InkribeWindowID.proPaywall)
+            return
+        }
+
+        TranscriptExportActions.export(
+            id: id,
+            format: format,
+            textSource: source,
+            appState: appState
+        )
+    }
+
+    #if DEBUG
+    private var developerConfiguration: FoundationDeveloperConfiguration {
+        FoundationDeveloperConfiguration(
+            replays: developerReplays,
+            additionalSections: [
+                FoundationDeveloperSection(
+                    id: "inkribe.product-flows",
+                    title: "Product Flows",
+                    items: [
+                        .value(
+                            FoundationDeveloperValue(
+                                id: "inkribe.onboarding-status",
+                                title: "Onboarding",
+                                value: {
+                                    onboarding.isCompleted
+                                        ? "Completed"
+                                        : "Step \(onboarding.currentStep + 1) of \(onboarding.stepCount)"
+                                }
+                            )
+                        ),
+                        .action(
+                            FoundationDeveloperAction(
+                                id: "inkribe.replay-onboarding",
+                                title: "Replay Onboarding",
+                                systemImage: "sparkles"
+                            ) {
+                                onboarding.restart()
+                                openWindow(id: InkribeWindowID.onboarding)
+                            }
+                        )
                     ]
                 )
-                TranscriptExportCoordinator.presentFailure(error, operation: "Export Failed")
-            }
-        }
+            ]
+        )
     }
+
+    private var developerReplays: [FoundationDeveloperReplay] {
+        var replays: [FoundationDeveloperReplay] = []
+
+        if let paywallConfiguration = InkribeCommerce.paywallConfiguration {
+            replays.append(
+                FoundationDeveloperReplay(
+                    id: "inkribe.pro-paywall",
+                    title: "Pro Paywall",
+                    systemImage: "crown.fill"
+                ) { dismiss in
+                    ProPaywallView(
+                        purchaseManager: purchases,
+                        configuration: paywallConfiguration,
+                        onPurchased: { _ in dismiss() },
+                        onRestored: dismiss,
+                        onClose: dismiss
+                    )
+                    .macAppTheme(themeStore)
+                }
+            )
+        }
+
+        replays.append(
+            FoundationDeveloperReplay(
+                id: "inkribe.ai-upsell",
+                title: "Local AI Upsell",
+                systemImage: "sparkles"
+            ) { dismiss in
+                InkribeProUpsellView(
+                    capability: .localAI,
+                    onUpgrade: {
+                        dismiss()
+                        openWindow(id: InkribeWindowID.proPaywall)
+                    },
+                    onDismiss: dismiss
+                )
+                .macAppTheme(themeStore)
+            }
+        )
+
+        return replays
+    }
+    #endif
 }

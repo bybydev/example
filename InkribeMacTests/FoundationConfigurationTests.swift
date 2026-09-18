@@ -17,6 +17,94 @@ import Testing
     )
 }
 
+@Test func commercePlaceholderLegalURLsAreExplicit() {
+    #expect(InkribeCommerce.termsURL.absoluteString == "https://example.com/inkribe/terms")
+    #expect(InkribeCommerce.privacyURL.absoluteString == "https://example.com/inkribe/privacy")
+}
+
+@Test func onboardingConfigurationMatchesShippingFlow() {
+    #expect(InkribeOnboardingConfiguration.id == "inkribe")
+    #expect(InkribeOnboardingConfiguration.stepCount == 4)
+    #expect(InkribeWindowID.onboarding == "inkribe.onboarding")
+}
+
+@Test func proCapabilitiesMatchShippingFeaturePolicy() {
+    #expect(InkribeProCapability.allCases.map(\.rawValue) == [
+        "local-ai",
+        "batch-import",
+        "subtitle-export"
+    ])
+    #expect(InkribeCommerce.configuration.features.map(\.id) == [
+        "local-ai",
+        "batch-import",
+        "subtitle-export"
+    ])
+}
+
+@Test func freeBatchImportCannotBypassQueuePolicyOneFileAtATime() {
+    #expect(
+        InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: 1,
+            hasActiveQueueWork: false,
+            hasPro: false
+        ) == .allowed
+    )
+
+    #expect(
+        InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: 2,
+            hasActiveQueueWork: false,
+            hasPro: false
+        ) == .requiresPro(feature: InkribeProCapability.batchImport.premiumFeature)
+    )
+
+    #expect(
+        InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: 1,
+            hasActiveQueueWork: true,
+            hasPro: false
+        ) == .requiresPro(feature: InkribeProCapability.batchImport.premiumFeature)
+    )
+
+    #expect(
+        InkribeProCapability.batchImport.importDecision(
+            requestedFileCount: 4,
+            hasActiveQueueWork: true,
+            hasPro: true
+        ) == .allowed
+    )
+}
+
+@MainActor
+@Test func proCatalogDescribesImplementedPremiumCapabilities() {
+    #expect(InkribeCommerce.configuration.features.map(\.id) == [
+        "local-ai",
+        "batch-import",
+        "subtitle-export"
+    ])
+    #expect(InkribeCommerce.configuration.features.map(\.title) == [
+        "Local AI Tools",
+        "Batch Transcription",
+        "Subtitle Export"
+    ])
+}
+
+@Test func proPolicyGatesNewPremiumActionsButAllowsPro() {
+    for capability in InkribeProCapability.allCases {
+        #expect(capability.decision(hasPro: false) == .requiresPro(feature: capability.premiumFeature))
+        #expect(capability.decision(hasPro: true) == .allowed)
+    }
+}
+
+@Test func proPolicyPreservesExistingContentAccess() {
+    #expect(
+        InkribeProCapability.localAI.decision(
+            hasPro: false,
+            isExistingContent: true
+        ) == .allowed
+    )
+}
+
 @MainActor
 @Test func appStateStartupIsIdempotent() throws {
     let directory = FileManager.default.temporaryDirectory

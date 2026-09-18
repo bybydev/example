@@ -66,7 +66,7 @@ The app is intentionally document/workspace-oriented in v1. System-wide dictatio
 | Commerce | Yearly Pro | ✅ | `com.hoangbkit.inkribe.pro.yearly` |
 | Commerce | Lifetime Pro | ✅ | `com.hoangbkit.inkribe.pro.lifetime` |
 | Commerce | Pro plan button | ✅ | Main titlebar only |
-| Commerce | Paywall / upsell / Pro badge | ✅ | Reuse MacAppFoundation |
+| Commerce | Paywall / upsell / Pro badge | ✅ | MAF paywall + contextual upsells + badges + gate primitive wired to the centralized Pro policy |
 | Developer | MAF Developer Tools window | ✅ Debug | Developer menu only |
 | Developer | Spokio-style Logs window | ✅ Debug | Bounded in-memory logs, copy/clear, auto-scroll |
 | CI | XcodeGen project | ✅ | Generated project committed |
@@ -81,12 +81,27 @@ The app is intentionally document/workspace-oriented in v1. System-wide dictatio
 3. **Import Queue** — local processing queue for one or many files.
 4. **Transcript Editor** — the primary working surface: transcript, timestamps, player, AI actions, export.
 5. **Settings** — separate MacAppFoundation Settings scene.
-6. **Paywall / Upsell** — framework-provided Pro surfaces with Inkribe copy/configuration.
+6. **Paywall / Upsell** — MAF Pro paywall plus contextual upsells for Local AI, batch import, and subtitle export.
 7. **Developer Tools / Logs** — Debug-only separate windows.
 
 ## Free vs Pro
 
-The StoreKit plumbing and all Pro UI exist in v1, but the exact Free/Pro feature matrix should remain centralized configuration until product policy is finalized.
+The Free/Pro matrix is centralized in `InkribeProCapability`.
+
+**Free**
+- recording;
+- single-file import/transcription;
+- Library and transcript editing;
+- Raw/Edited modes, search, synchronized playback, and timestamp seeking;
+- copy, TXT, and Markdown export;
+- access to existing transcripts and previously saved derived AI results.
+
+**Pro**
+- Local AI tools: Clean, Polish, Summarize, Notes, Action Items;
+- multi-file batch import through the persistent transcription queue;
+- SRT and WebVTT subtitle export.
+
+The MAF paywall currently uses explicit placeholder Terms and Privacy URLs under `example.com`. Replace both with production legal URLs before App Store submission.
 
 Rules:
 

@@ -9,6 +9,7 @@ struct InkribeRootView: View {
     let settingsRouter: MacAppSettingsRouter
 
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         InkribeShellView(
@@ -16,7 +17,8 @@ struct InkribeRootView: View {
             state: shellState,
             purchaseManager: purchaseManager,
             onOpenSettings: openSettingsWindow,
-            onOpenPlan: openPlan
+            onOpenPlan: openPlan,
+            onOpenPaywall: openPaywall
         )
     }
 
@@ -27,5 +29,9 @@ struct InkribeRootView: View {
     private func openPlan() {
         settingsRouter.request(.plan)
         openSettings()
+    }
+
+    private func openPaywall() {
+        openWindow(id: InkribeWindowID.proPaywall)
     }
 }

@@ -8,6 +8,7 @@ struct InkribeShellView: View {
     let purchaseManager: PurchaseManager
     let onOpenSettings: () -> Void
     let onOpenPlan: () -> Void
+    let onOpenPaywall: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.macAppTheme) private var theme
@@ -31,7 +32,8 @@ struct InkribeShellView: View {
                     appState: appState,
                     state: state,
                     purchaseManager: purchaseManager,
-                    onOpenPlan: onOpenPlan
+                    onOpenPlan: onOpenPlan,
+                    onOpenPaywall: onOpenPaywall
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

@@ -1,11 +1,14 @@
 import InkribeAI
 import InkribeCore
+import MacAppFoundation
 import SwiftUI
 
 @MainActor
 struct TranscriptEditorView: View {
     let transcriptID: TranscriptID
     let appState: InkribeAppState
+    let purchaseManager: PurchaseManager
+    let onOpenPaywall: () -> Void
 
     @State private var transcript: Transcript?
     @State private var editedText = ""
@@ -21,6 +24,7 @@ struct TranscriptEditorView: View {
     @State private var aiTask: Task<Void, Never>?
     @State private var aiResult: TranscriptAIResult?
     @State private var showsDerivedDocuments = false
+    @State private var upsellCapability: InkribeProCapability?
 
     private enum TextMode: String, CaseIterable, Hashable {
         case edited = "Edited"
@@ -88,6 +92,18 @@ struct TranscriptEditorView: View {
             TranscriptDerivedDocumentsSheet(
                 documents: transcript?.derivedDocuments ?? [],
                 currentRevision: transcript?.revision ?? 0
+            )
+        }
+        .sheet(item: $upsellCapability) { capability in
+            InkribeProUpsellView(
+                capability: capability,
+                onUpgrade: {
+                    upsellCapability = nil
+                    onOpenPaywall()
+                },
+                onDismiss: {
+                    upsellCapability = nil
+                }
             )
         }
         .onDisappear {
@@ -215,9 +231,14 @@ struct TranscriptEditorView: View {
         Menu {
             ForEach(TranscriptAIAction.allCases, id: \.self) { action in
                 Button {
-                    startAI(action)
+                    requestAI(action)
                 } label: {
-                    Label(action.displayName, systemImage: action.systemImage)
+                    HStack {
+                        Label(action.displayName, systemImage: action.systemImage)
+                        if !purchaseManager.hasPro {
+                            ProBadge(style: .icon)
+                        }
+                    }
                 }
             }
 
@@ -467,6 +488,15 @@ struct TranscriptEditorView: View {
             errorDescription = nil
         } catch {
             errorDescription = error.localizedDescription
+        }
+    }
+
+    private func requestAI(_ action: TranscriptAIAction) {
+        switch InkribeProCapability.localAI.decision(hasPro: purchaseManager.hasPro) {
+        case .allowed:
+            startAI(action)
+        case .requiresPro:
+            upsellCapability = .localAI
         }
     }
 

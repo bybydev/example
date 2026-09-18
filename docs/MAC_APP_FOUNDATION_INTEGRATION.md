@@ -1,5 +1,26 @@
 # Inkribe v1 — MacAppFoundation Integration
 
+## Current implementation status
+
+PR #12 completes all four previously deferred MacAppFoundation Pro surfaces against a centralized policy:
+
+- `ProPaywallView` is the single purchase surface opened from the titlebar plan button, Settings → Plan, contextual upsells, and gated app-menu subtitle export;
+- `ProUpsellView` is used for contextual Local AI, batch-import, and subtitle-export upgrade moments;
+- `ProBadge` marks locked AI actions, batch import, and subtitle export without labeling Free features as premium;
+- MAF gate primitives are used at action boundaries, including `ProGateButton` for multi-file import, while `PremiumAccessPolicy` preserves existing user content after entitlement loss.
+
+The locked v1 Pro capabilities are:
+
+1. Local AI Tools — Clean, Polish, Summarize, Notes, Action Items.
+2. Batch Transcription — multi-file Finder selection / drag-drop import into the persistent queue.
+3. Subtitle Export — SRT and WebVTT.
+
+Free retains recording, single-file transcription, Library/editor/playback/search, Copy/TXT/Markdown, and access to existing local content.
+
+The paywall currently uses two explicit development placeholders: `https://example.com/inkribe/terms` and `https://example.com/inkribe/privacy`. Replace both before App Store submission.
+
+First-launch onboarding is also fully wired through MAF `OnboardingState`, `OnboardingWindow`, `OnboardingView`, shared theming, and Developer Tools replay.
+
 ## Decision
 
 Inkribe v1 must use the latest tagged release of `hoangbkit/MacAppFoundation` available when implementation begins. At planning time, the latest tag is **1.0.0**.
@@ -136,12 +157,14 @@ Use:
 
 The main Inkribe window should be suppressed on first launch while onboarding is active, then become the normal launch destination after completion.
 
-Suggested v1 onboarding content:
+Shipping onboarding content:
 
-1. **Welcome** — Inkribe is fully offline; audio and transcripts stay on the Mac.
-2. **How it works** — Record/import → transcribe → edit → clean/summarize → export.
-3. **Microphone** — explain recording use and request permission only when appropriate.
-4. **Ready** — short summary and enter the Library.
+1. **Welcome** — private local speech-to-text and durable transcript workspace.
+2. **Create** — Record / Import / Review workflow.
+3. **Privacy** — bundled local Whisper/Qwen processing with no account or API key for the core workflow.
+4. **Ready** — enter the main Inkribe workspace.
+
+Onboarding does not pre-request microphone permission; recording requests access only when the user actually starts recording.
 
 Do not add a model-download step because production models are bundled.
 
@@ -244,9 +267,9 @@ This is especially useful for limits where the Free workflow remains usable afte
 
 ## Pro gating policy
 
-Do not hard-code the exact v1 Free/Pro entitlement matrix until product scope/pricing is finalized.
+The v1 Free/Pro entitlement matrix is centralized in `InkribeProCapability`; do not scatter additional `hasPro` policy through feature code.
 
-Implementation should nevertheless centralize feature IDs/policies so the final matrix is configuration-driven instead of scattered `hasPro` checks.
+The three v1 capability IDs are `local-ai`, `batch-import`, and `subtitle-export`. New premium capabilities must be added to that centralized policy rather than introduced as ad-hoc checks.
 
 Prefer MacAppFoundation gating primitives (`ProGate`, `ProGateButton`, locked overlays/popovers) where they fit. Direct `purchaseManager.hasPro` checks are acceptable for domain decisions that do not map cleanly to a reusable view gate.
 

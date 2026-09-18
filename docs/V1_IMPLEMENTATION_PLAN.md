@@ -1,5 +1,7 @@
 # Inkribe v1 Implementation Plan
 
+> **Status: complete.** Phases 0–9 were implemented and merged through PR #11. This document is retained as the historical v1 execution plan; use the focused architecture/feature contracts and README for current behavior.
+
 ## Product goal
 
 Inkribe v1 is a premium, fully offline macOS speech-to-text app. It should let a user record audio or import an audio/video file, transcribe it locally, edit the transcript, optionally clean or restructure the text with a bundled local LLM, and export the result without an account, cloud service, API key, or runtime model download.

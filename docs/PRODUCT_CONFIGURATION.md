@@ -42,12 +42,27 @@ let purchaseConfiguration = PurchaseConfiguration(
     ],
     preferredProductID: "com.hoangbkit.inkribe.pro.yearly",
     features: [
-        // Final v1 Free/Pro feature matrix is configured here once locked.
+        // Local AI Tools
+        // Batch Transcription
+        // Subtitle Export
     ]
 )
 ```
 
 Use **Yearly** as the initial preferred/highlighted recurring plan in the paywall unless product strategy changes before release. `PurchaseManager` remains the only production source of truth for entitlement state.
+
+## V1 Free / Pro policy
+
+The shipping policy is centralized in `InkribeProCapability`.
+
+| Capability | Free | Pro |
+| --- | --- | --- |
+| Local AI Tools | — | Clean, Polish, Summarize, Notes, Action Items |
+| Import | Single file | Multi-file batch import |
+| Text export | Copy, TXT, Markdown | Copy, TXT, Markdown, SRT, WebVTT |
+| Existing transcripts | Read/edit/play/export Free formats | Same + Pro actions |
+
+Entitlement changes never make existing local transcript documents unreadable. Previously saved AI-derived documents remain accessible; the entitlement controls creation of new Pro outputs/actions.
 
 ## Paywall behavior
 

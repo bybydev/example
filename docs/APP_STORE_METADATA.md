@@ -258,13 +258,14 @@ The phrase “100% offline” should only be used if it is clear that it describ
 
 ## Support / privacy URLs
 
-TBD before submission:
+Development placeholders:
 
+- Terms URL: `https://example.com/inkribe/terms`
+- Privacy Policy URL: `https://example.com/inkribe/privacy`
 - Support URL: `<support URL>`
-- Privacy Policy URL: `<privacy URL>`
 - Marketing URL: `<marketing URL, optional>`
 
-These should be finalized before App Store Connect submission.
+The Terms and Privacy URLs above are intentionally dummy development URLs and must be replaced before App Store Connect submission.
 
 ## Review notes draft
 

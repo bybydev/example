@@ -61,8 +61,8 @@ Inkribe/
 │   │   ├── Library/
 │   │   ├── Recorder/
 │   │   ├── Import/
-│   │   └── TranscriptEditor/
-│   ├── Settings/
+│   │   └── Transcript/
+│   ├── Settings/              # pane composition + one file per Inkribe pane
 │   ├── Developer/
 │   └── Resources/
 │
@@ -88,6 +88,17 @@ Inkribe/
 ```
 
 Package count may be consolidated if implementation proves some boundaries artificially small. Dependency direction and portability matter more than exact package count.
+
+## Current Mac-layer ownership
+
+Post-v1 consolidation keeps Mac-only responsibilities explicit rather than concentrating them in large catch-all files:
+
+- `InkribeSettingsView` composes Settings panes only; General, Transcription, AI Cleanup, Storage, Diagnostics, and About each own their presentation in separate files.
+- `TranscriptExportCoordinator` owns AppKit clipboard/save-panel mechanics; `TranscriptExportActions` owns presentation task/error/logging orchestration shared by the app menu and transcript titlebar.
+- `InkribeAppState` remains the app-layer transaction boundary for recording/import, queue/repository/media ownership, and transcript mutations. It is intentionally not split when doing so would require widening mutation access across files.
+- Shared packages remain the home for reusable domain/runtime/persistence/export behavior; source-file consolidation must not move Mac-only APIs into those packages.
+
+File size alone is not a reason to split an ownership boundary. Consolidation should reduce duplicate behavior or clarify responsibility without weakening encapsulation.
 
 ## Platform boundaries
 

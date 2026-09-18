@@ -1,3 +1,4 @@
+import Foundation
 import MacAppFoundation
 
 @MainActor
@@ -5,6 +6,10 @@ enum InkribeCommerce {
     static let monthlyProductID = "com.hoangbkit.inkribe.pro.monthly"
     static let yearlyProductID = "com.hoangbkit.inkribe.pro.yearly"
     static let lifetimeProductID = "com.hoangbkit.inkribe.pro.lifetime"
+
+    // Placeholder legal destinations for v1 development. Replace before submission.
+    static let termsURL = URL(string: "https://example.com/inkribe/terms")!
+    static let privacyURL = URL(string: "https://example.com/inkribe/privacy")!
 
     static let productIDs = [
         monthlyProductID,
@@ -15,7 +20,19 @@ enum InkribeCommerce {
     static let configuration = PurchaseConfiguration(
         productIDs: productIDs,
         preferredProductID: yearlyProductID,
-        features: []
+        features: InkribeProCapability.allCases.map(\.purchaseFeature)
+    )
+
+    static let paywallConfiguration = ProPaywallConfiguration(
+        title: "Inkribe Pro",
+        subtitle: "Unlock the power workflows already built into Inkribe.",
+        features: configuration.features.map { ProPaywallFeature($0) },
+        purchaseButtonTitle: "Continue",
+        highlightedProductID: yearlyProductID,
+        highlightedProductBadge: "BEST VALUE",
+        termsURL: termsURL,
+        privacyURL: privacyURL,
+        showsRedeemCode: true
     )
 
     #if DEBUG
