@@ -142,7 +142,7 @@ Added focused foundation tests for:
 
 - final custom two-column Mac shell
 - full-height structural divider
-- animated divider-attached sidebar toggle
+- animated main-titlebar sidebar toggle beside the expanded divider
 - Library / Record / Import navigation
 - main-titlebar Pro control placement
 

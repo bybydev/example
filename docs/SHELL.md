@@ -4,7 +4,7 @@ This document is the implementation contract for the permanent Inkribe macOS she
 
 ## Structural layout
 
-The main window is always two structural columns separated by one continuous divider:
+While the sidebar is expanded, the main window is two structural columns separated by one continuous divider:
 
 ```text
 Window
@@ -18,11 +18,11 @@ Window
     └── MainStatusOrPlayerBar
 ```
 
-The divider is not decorative. It is the boundary between sidebar-owned and main-owned window regions from the top edge to the bottom edge.
+The divider is not decorative. While the sidebar is visible, it is the boundary between sidebar-owned and main-owned window regions from the top edge to the bottom edge. When the sidebar collapses to zero, the divider collapses with it and the main column becomes full width.
 
 Consequences:
 
-- native traffic lights remain on the sidebar side of the divider;
+- while expanded, native traffic lights remain on the sidebar side of the divider;
 - page titles and page actions begin on the main side of the divider;
 - the Pro control is main-titlebar content and never appears above the sidebar;
 - status and future transcript-player bars belong only to the main column;
@@ -39,7 +39,8 @@ titlebar height             44 pt (MacAppFoundation window chrome)
 expanded sidebar            220 pt
 divider                       1 pt
 sidebar toggle               26 pt
-collapsed toggle clearance    4 pt
+collapsed sidebar             0 pt
+titlebar toggle spacing        8 pt
 status bar                   30 pt
 minimum window              760 × 520 pt
 collapse animation           0.22 s ease-in-out
@@ -47,21 +48,11 @@ collapse animation           0.22 s ease-in-out
 
 ### Collapsed state
 
-The navigation content collapses completely, but the structural sidebar rail does not shrink to a literal zero-width window region.
+The sidebar collapses to a literal zero-width region. The main column expands to the window's leading edge and the internal sidebar divider collapses away with it.
 
-A zero-width structural sidebar would move the full-height divider to the left edge of the window and place the native traffic lights on the main side of the divider. It would also force the divider-attached toggle into the traffic-light reserve. Both violate the shell contract.
+Native traffic lights then occupy the main titlebar's leading area. The main titlebar explicitly reserves `MacAppWindowChromeMetrics.trafficLightReserve` before placing the sidebar toggle and route title, so controls never overlap the traffic lights.
 
-The collapsed structural width is therefore:
-
-```text
-traffic-light reserve
-+ half of the divider-toggle width
-+ small clearance
-```
-
-With the current MacAppFoundation metrics this is approximately 93 pt.
-
-This supersedes the earlier planning shorthand that described the collapsed sidebar as `0`. The **navigation content width is effectively zero**; the remaining rail exists only to preserve native window controls and the continuous divider geometry.
+This keeps the collapsed state visually clean instead of leaving an empty structural rail.
 
 ## Sidebar state ownership
 
@@ -70,10 +61,9 @@ This supersedes the earlier planning shorthand that described the collapsed side
 - expanded/collapsed sidebar state;
 - persisted sidebar visibility;
 - current main-column route;
-- divider position;
-- divider-toggle position.
+- sidebar width and visibility.
 
-The divider and toggle must always derive from the same `sidebarWidth` value. Feature views must not store their own copies of sidebar width or visibility.
+Feature views must not store their own copies of sidebar width or visibility. The main-titlebar toggle reads the same shell state and moves automatically as the sidebar/main-column geometry animates.
 
 Sidebar visibility is persisted with `UserDefaults` under:
 
@@ -112,10 +102,11 @@ Keyboard navigation uses the same `InkribeShellState` owner as mouse navigation:
 
 ## Titlebar behavior
 
-The sidebar titlebar uses `MacAppWindowDragRegion` and reserves native traffic-light space.
+The sidebar titlebar uses `MacAppWindowDragRegion` and reserves native traffic-light space while the sidebar is expanded.
 
-The main titlebar starts after the divider and contains:
+The main titlebar starts after the divider while expanded. When collapsed, it becomes the full-width titlebar and reserves native traffic-light space itself. It contains:
 
+- the sidebar toggle;
 - the current route title;
 - page-level actions as later phases add them;
 - `ProPlanButton` on the right.
@@ -124,18 +115,13 @@ The titlebar backgrounds use MacAppFoundation semantic theme roles rather than h
 
 ## Sidebar toggle
 
-The toggle is overlaid directly on the divider and its center X is exactly the divider X.
+The toggle is a normal control inside the main titlebar, not an overlay on top of the divider.
 
-Expanded and collapsed transitions animate the same shared width, so these move together:
+When expanded, it sits immediately on the main side of the full-height divider. When collapsed, it moves left with the expanding main column but stays after the native traffic-light reserve.
 
-- sidebar column width;
-- divider;
-- toggle;
-- main-content leading edge.
+Expanded and collapsed transitions animate the sidebar width, divider width, main-column leading edge, titlebar reserve, and toggle position together. The divider therefore remains visually uninterrupted while present.
 
-When Reduce Motion is enabled, the shell changes state without the width transition.
-
-The collapsed width guarantees the toggle's left edge stays outside the traffic-light reserve.
+When Reduce Motion is enabled, the shell changes state without the geometry transition.
 
 ## Settings and Pro routing
 

@@ -36,6 +36,8 @@ packages:
     path: Packages/InkribeModelAssets
   WhisperRuntime:
     path: Packages/WhisperRuntime
+  DiarizationRuntime:
+    path: Packages/DiarizationRuntime
   LLMRuntime:
     path: Packages/LLMRuntime
 
@@ -131,6 +133,8 @@ targets:
         product: InkribeModelAssets
       - package: WhisperRuntime
         product: WhisperRuntime
+      - package: DiarizationRuntime
+        product: DiarizationRuntime
       - package: LLMRuntime
         product: LLMRuntime
 
@@ -153,6 +157,8 @@ targets:
         product: InkribeTranscription
       - package: InkribeAI
         product: InkribeAI
+      - package: LLMRuntime
+        product: LLMRuntime
 
 schemes:
   Inkribe:

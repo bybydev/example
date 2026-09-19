@@ -167,6 +167,7 @@ struct TranscriptDerivedDocumentsSheet: View {
                     systemImage: "sparkles",
                     description: Text("Generate a summary, notes, action items, or save a Clean/Polish copy.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -205,7 +206,13 @@ struct TranscriptDerivedDocumentsSheet: View {
                 }
             }
         }
-        .frame(minWidth: 620, idealWidth: 720, minHeight: 440, idealHeight: 560)
+        .frame(
+            minWidth: 620,
+            idealWidth: 720,
+            minHeight: 440,
+            idealHeight: 560,
+            alignment: .top
+        )
     }
 }
 

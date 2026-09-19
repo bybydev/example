@@ -1,6 +1,6 @@
 # Inkribe Native Runtime Contract
 
-Phase 3 establishes the native inference boundary used by transcription and local text generation.
+The native runtime boundary covers transcription, speaker diarization, and local text generation.
 
 The runtime packages remain reusable on macOS 15+ and iOS 26+. They do not depend on AppKit or MacAppFoundation, and all direct C API access stays internal to the runtime packages.
 
@@ -15,6 +15,14 @@ The runtime packages remain reusable on macOS 15+ and iOS 26+. They do not depen
 - Archive SHA-256: `033a43b0174e8cf9b366f72e4a428cdcf126f93ad1c87d3fa119a96bed6f231a`
 - Swift module: `whisper`
 
+### sherpa-onnx
+
+- Upstream: `k2-fsa/sherpa-onnx`
+- Stable version: `1.13.8`
+- Source revision: `11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf`
+- Swift product: `sherpa-onnx`
+- Used only for local speaker segmentation, embedding extraction, and clustering.
+
 ### llama.cpp
 
 - Upstream: `ggml-org/llama.cpp`
@@ -24,7 +32,7 @@ The runtime packages remain reusable on macOS 15+ and iOS 26+. They do not depen
 - Archive SHA-256: `b342a31c3160095d02777cbf1719013d4e6ff7556a1d46ab9eb5df0a93d13c47`
 - Swift module: `llama`
 
-Both dependencies use upstream Apple XCFramework artifacts pinned by Swift Package Manager checksum. Runtime code does not follow floating branches or download native engines at application runtime.
+The native dependencies use pinned Apple artifacts/packages rather than floating branches. Runtime code does not follow floating branches or download native engines at application runtime.
 
 ## Model ownership
 
@@ -42,7 +50,7 @@ No runtime silently falls back to another model, cache location, or remote downl
 
 ## Concurrency model
 
-`NativeWhisperRuntime` and `NativeLLMRuntime` are actors.
+`NativeWhisperRuntime`, `NativeSpeakerDiarizationRuntime`, and `NativeLLMRuntime` isolate native mutable state behind actor/package boundaries.
 
 That is intentional because both native engines expose mutable context state that should not be used concurrently from multiple feature tasks. One runtime instance therefore represents one serialized inference lane.
 
@@ -69,6 +77,7 @@ Explicit configuration remains available for focused diagnostics and future tuni
 - transcription from normalized WAV files;
 - requested language or automatic language detection;
 - segment start/end timestamps and text;
+- token-level timestamps/text for speaker alignment;
 - progress callbacks;
 - cooperative cancellation.
 
@@ -96,6 +105,20 @@ whisper.cpp receives both its native progress callback and abort callback throug
 Runtime diagnostics may include model identifier, backend, thread count, sample count, segment count, elapsed time, and error type.
 
 They must not contain audio samples or recognized transcript text.
+
+## Speaker diarization runtime
+
+`SpeakerDiarizationRuntimeProtocol` accepts the same normalized 16 kHz mono Float samples produced for Whisper and returns sorted speaker turns.
+
+`NativeSpeakerDiarizationRuntime` combines:
+
+- Pyannote Segmentation 3.0 ONNX for speaker activity/segmentation;
+- 3D-Speaker ERes2Net Base for speaker embeddings;
+- sherpa-onnx fast clustering for automatic speaker grouping.
+
+The runtime supports an optional known speaker count at its API boundary, while the current app flow uses automatic clustering. Models remain loaded across an active transcription queue batch and are explicitly released when the queue drains.
+
+`InkribeTranscription`, not the runtime, owns mapping those speaker turns onto Whisper token timestamps and smoothing very short speaker islands.
 
 ## LLM runtime
 
@@ -144,9 +167,15 @@ Runtime diagnostics may include model identifier, backend, thread count, prompt 
 
 They must not log prompt text or generated text.
 
+## LLM prompt formatting
+
+`LLMRuntime` receives a structured optional system prompt plus user prompt. Before tokenization it reads the default chat template embedded in the loaded GGUF with `llama_model_chat_template` and applies it with `llama_chat_apply_template`, requesting the assistant-generation prefix.
+
+This keeps Qwen control tokens and role formatting owned by the model/runtime layer rather than by feature prompt strings. Missing or unsupported chat-template formatting fails explicitly instead of silently falling back to an ad-hoc prompt envelope.
+
 ## Error contract
 
-Both runtimes surface typed, user-actionable Swift errors for malformed input, missing/corrupt model state, invalid limits, native loading failures, and native inference failures.
+The runtimes surface typed, user-actionable Swift errors for malformed input, missing/corrupt model state, invalid limits, native loading failures, and native inference failures.
 
 Native pointers and raw engine return types are not part of the public feature contract.
 

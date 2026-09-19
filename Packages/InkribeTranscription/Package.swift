@@ -11,6 +11,7 @@ let package = Package(
         .package(path: "../InkribeAudio"),
         .package(path: "../InkribePersistence"),
         .package(path: "../WhisperRuntime"),
+        .package(path: "../DiarizationRuntime"),
         .package(url: "https://github.com/hoangbkit/JobQueue.git", exact: "1.0.0")
     ],
     targets: [
@@ -21,6 +22,7 @@ let package = Package(
                 "InkribeAudio",
                 "InkribePersistence",
                 "WhisperRuntime",
+                "DiarizationRuntime",
                 .product(name: "JobQueue", package: "JobQueue")
             ]
         ),
@@ -32,6 +34,7 @@ let package = Package(
                 "InkribeAudio",
                 "InkribePersistence",
                 "WhisperRuntime",
+                "DiarizationRuntime",
                 .product(name: "JobQueue", package: "JobQueue")
             ]
         )

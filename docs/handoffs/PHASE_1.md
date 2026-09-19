@@ -10,18 +10,19 @@ The permanent Inkribe macOS shell is now established so later feature phases can
 
 ### Permanent two-column shell
 
-- Full-height `SidebarColumn` and `MainColumn` with one continuous divider.
-- Sidebar owns the native traffic-light titlebar region.
-- Main titlebar starts at the divider and owns page title/actions.
+- Expanded layout uses full-height `SidebarColumn` and `MainColumn` with one continuous divider.
+- While expanded, the sidebar owns the native traffic-light titlebar region.
+- While expanded, the main titlebar starts at the divider and owns its toggle/page title/actions; when collapsed it reserves the traffic-light region itself.
 - Main status bar is structurally constrained to the main column.
 - Full-size native window chrome is provided through MacAppFoundation while Inkribe owns shell geometry.
 
 ### Sidebar behavior
 
 - Expanded sidebar target is 220 pt.
-- Navigation content fully collapses.
-- Collapsed structural rail retains only the traffic-light reserve plus divider-toggle clearance.
-- Divider and toggle derive from the same shell width.
+- Sidebar collapses to a literal 0 pt.
+- The full-height divider collapses away with the sidebar.
+- The toggle lives in the main titlebar, immediately beside the divider while expanded.
+- In collapsed mode, the main titlebar reserves native traffic-light space before the toggle.
 - Toggle remains reachable in both states.
 - Sidebar visibility persists through `UserDefaults`.
 - Reduce Motion removes the coordinated width transition.
@@ -53,20 +54,19 @@ The permanent Inkribe macOS shell is now established so later feature phases can
 Focused shell-state tests cover:
 
 - default expanded geometry;
-- one-source divider/toggle geometry;
+- true 220 → 0 sidebar collapse;
 - sidebar visibility persistence across state owners;
-- collapsed toggle clearance from the native traffic-light reserve;
 - transcript routing as a main detail surface rather than a sidebar destination.
 
 ## Important implementation decisions
 
-### Collapsed structural rail is not literal zero
+### Collapsed sidebar is literal zero
 
-Earlier planning text said the collapsed sidebar width should be `0`, while the design diagrams still retained a native traffic-light region.
+The sidebar now collapses completely to 0 pt. Keeping an empty traffic-light rail in the content geometry made the collapsed state visually incorrect.
 
-A literal zero structural width would place the full-height divider to the left of the traffic lights and force the divider toggle into their reserved area. The implementation therefore treats **navigation content width as zero** while retaining a narrow structural rail for the native controls and toggle clearance.
+When collapsed, native traffic lights are handled by the full-width main titlebar instead. The main titlebar reserves the traffic-light region before its toggle/title controls, while the sidebar divider collapses away.
 
-`docs/SHELL.md` is the authoritative shell geometry contract from this phase onward.
+The toggle is intentionally not overlaid on the divider; this keeps the visible divider uninterrupted whenever the sidebar is expanded.
 
 ### One shell state owner
 

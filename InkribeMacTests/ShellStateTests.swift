@@ -5,7 +5,7 @@ import Testing
 @MainActor
 @Suite("Shell state")
 struct ShellStateTests {
-    @Test func sidebarDefaultsExpandedAndUsesSharedDividerGeometry() throws {
+    @Test func sidebarDefaultsExpandedAtConfiguredWidth() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -13,10 +13,9 @@ struct ShellStateTests {
 
         #expect(state.isSidebarExpanded)
         #expect(state.sidebarWidth == InkribeShellMetrics.expandedSidebarWidth)
-        #expect(state.dividerX == state.sidebarToggleCenterX)
     }
 
-    @Test func sidebarVisibilityPersistsAcrossStateOwners() throws {
+    @Test func sidebarCollapsesToZeroAndPersistsAcrossStateOwners() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -25,11 +24,8 @@ struct ShellStateTests {
 
         let restored = InkribeShellState(defaults: defaults)
         #expect(!restored.isSidebarExpanded)
-        #expect(restored.sidebarWidth == InkribeShellMetrics.collapsedSidebarWidth)
-        #expect(
-            restored.sidebarToggleCenterX - (InkribeShellMetrics.toggleDiameter / 2)
-                >= InkribeShellMetrics.trafficLightReserve
-        )
+        #expect(restored.sidebarWidth == 0)
+        #expect(InkribeShellMetrics.collapsedSidebarWidth == 0)
     }
 
     @Test func transcriptIsMainDetailRouteNotSidebarDestination() throws {

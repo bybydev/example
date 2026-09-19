@@ -1,5 +1,6 @@
 import Foundation
 import InkribeTranscription
+import LLMRuntime
 import Observation
 
 @MainActor
@@ -11,12 +12,14 @@ final class InkribePreferences {
         static let defaultTranscriptionLanguage = "Inkribe.preferences.defaultTranscriptionLanguage"
         static let defaultMicrophoneDeviceID = "Inkribe.preferences.defaultMicrophoneDeviceID"
         static let keepAIModelLoaded = "Inkribe.preferences.keepAIModelLoaded"
+        static let localAIModel = "Inkribe.preferences.localAIModel"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
     private var storedDefaultTranscriptionLanguage: String
     private var storedDefaultMicrophoneDeviceID: String?
     private var storedKeepAIModelLoaded: Bool
+    private var storedLocalAIModel: LLMModel
 
     var defaultTranscriptionLanguage: String {
         get { storedDefaultTranscriptionLanguage }
@@ -56,11 +59,22 @@ final class InkribePreferences {
         }
     }
 
+    var localAIModel: LLMModel {
+        get { storedLocalAIModel }
+        set {
+            if storedLocalAIModel != newValue {
+                storedLocalAIModel = newValue
+            }
+            defaults.set(newValue.rawValue, forKey: Key.localAIModel)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         defaults.register(defaults: [
             Key.defaultTranscriptionLanguage: TranscriptionLanguageCatalog.automaticCode,
-            Key.keepAIModelLoaded: false
+            Key.keepAIModelLoaded: false,
+            Key.localAIModel: LLMModel.defaultModel.rawValue
         ])
 
         storedDefaultTranscriptionLanguage = TranscriptionLanguageCatalog.normalizedSelection(
@@ -71,6 +85,9 @@ final class InkribePreferences {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
         storedKeepAIModelLoaded = defaults.bool(forKey: Key.keepAIModelLoaded)
+        storedLocalAIModel = LLMModel(
+            rawValue: defaults.string(forKey: Key.localAIModel) ?? ""
+        ) ?? .defaultModel
 
         defaults.set(
             storedDefaultTranscriptionLanguage,
@@ -82,12 +99,14 @@ final class InkribePreferences {
             defaults.removeObject(forKey: Key.defaultMicrophoneDeviceID)
         }
         defaults.set(storedKeepAIModelLoaded, forKey: Key.keepAIModelLoaded)
+        defaults.set(storedLocalAIModel.rawValue, forKey: Key.localAIModel)
     }
 
     func resetWorkflowDefaults() {
         defaultTranscriptionLanguage = TranscriptionLanguageCatalog.automaticCode
         defaultMicrophoneDeviceID = nil
         keepAIModelLoaded = false
+        localAIModel = .defaultModel
     }
 }
 

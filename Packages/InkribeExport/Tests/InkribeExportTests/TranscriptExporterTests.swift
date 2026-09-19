@@ -154,3 +154,34 @@ import Testing
         try exporter.document(for: transcript, format: .srt)
     }
 }
+
+
+@Test func subtitleExportIncludesRenamedSpeakers() throws {
+    let transcript = Transcript(
+        title: "Interview",
+        segments: [
+            TranscriptSegment(
+                startTime: 0,
+                endTime: 1,
+                text: "Hello",
+                speakerID: 0
+            ),
+            TranscriptSegment(
+                startTime: 1,
+                endTime: 2,
+                text: "Hi",
+                speakerID: 1
+            )
+        ],
+        speakers: [
+            TranscriptSpeaker(id: 0, name: "Alice"),
+            TranscriptSpeaker(id: 1, name: "Bob")
+        ]
+    )
+    let exporter = TranscriptExporter()
+
+    let document = try exporter.document(for: transcript, format: .srt)
+
+    #expect(document.content.contains("Alice: Hello"))
+    #expect(document.content.contains("Bob: Hi"))
+}

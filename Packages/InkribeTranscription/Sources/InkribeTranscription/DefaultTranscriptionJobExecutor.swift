@@ -1,3 +1,4 @@
+import DiarizationRuntime
 import Foundation
 import InkribeAudio
 import InkribeCore
@@ -12,17 +13,20 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
     private let mediaStore: DurableMediaStore
     private let decoder: AudioMediaDecoder
     private let whisperRuntime: any WhisperRuntimeProtocol
+    private let diarizationRuntime: (any SpeakerDiarizationRuntimeProtocol)?
     private let transcriptRepository: any TranscriptRepository
 
     public init(
         mediaStore: DurableMediaStore,
         decoder: AudioMediaDecoder = AudioMediaDecoder(),
         whisperRuntime: any WhisperRuntimeProtocol,
+        diarizationRuntime: (any SpeakerDiarizationRuntimeProtocol)? = nil,
         transcriptRepository: any TranscriptRepository
     ) {
         self.mediaStore = mediaStore
         self.decoder = decoder
         self.whisperRuntime = whisperRuntime
+        self.diarizationRuntime = diarizationRuntime
         self.transcriptRepository = transcriptRepository
     }
 
@@ -34,6 +38,7 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
         Self(
             mediaStore: mediaStore,
             whisperRuntime: try NativeWhisperRuntime.bundled(in: bundle),
+            diarizationRuntime: try NativeSpeakerDiarizationRuntime.bundled(in: bundle),
             transcriptRepository: transcriptRepository
         )
     }
@@ -61,7 +66,7 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
         let stream = AsyncStream<Double>.makeStream()
         let progressTask = Task {
             for await fraction in stream.stream {
-                let mapped = 0.18 + min(max(fraction, 0), 1) * 0.72
+                let mapped = 0.18 + min(max(fraction, 0), 1) * 0.55
                 await progress(mapped, "Transcribing")
             }
         }
@@ -89,6 +94,29 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
         }
 
         try Task.checkCancellation()
+
+        let aligned: SpeakerAlignmentResult
+        if let diarizationRuntime {
+            await progress(0.76, "Detecting speakers")
+            let speakerTurns = try await diarizationRuntime.diarize(
+                samples: decoded.samples,
+                sampleRate: Int(decoded.metadata.sampleRate),
+                speakerCount: nil
+            )
+            aligned = SpeakerAlignmentEngine().align(
+                tokens: result.tokens,
+                speakerTurns: speakerTurns,
+                fallbackSegments: result.segments
+            )
+        } else {
+            aligned = SpeakerAlignmentEngine().align(
+                tokens: result.tokens,
+                speakerTurns: [],
+                fallbackSegments: result.segments
+            )
+        }
+
+        try Task.checkCancellation()
         await progress(0.93, "Saving transcript")
 
         let previousRawText = transcript.rawText
@@ -106,13 +134,13 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
                 transcript.revision += 1
             }
         }
-        transcript.segments = result.segments.map {
-            TranscriptSegment(
-                startTime: $0.startTime,
-                endTime: $0.endTime,
-                text: $0.text
-            )
-        }
+        let stabilized = SpeakerIdentityStabilizer().stabilize(
+            aligned,
+            against: transcript.segments,
+            previousSpeakers: transcript.speakers
+        )
+        transcript.segments = stabilized.segments
+        transcript.speakers = stabilized.speakers
         transcript.updatedAt = .now
 
         // The durable transcript write is the commit point. Once it succeeds the
@@ -123,6 +151,7 @@ public struct DefaultTranscriptionJobExecutor: TranscriptionJobExecuting, Transc
 
     public func unloadTranscriptionModel() async {
         await whisperRuntime.unloadModel()
+        await diarizationRuntime?.unloadModels()
     }
 
     private func normalizedLanguage(_ language: String?) -> String? {

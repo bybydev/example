@@ -73,6 +73,18 @@ public struct WhisperAudioBuffer: Equatable, Sendable {
     }
 }
 
+public struct WhisperToken: Codable, Equatable, Sendable {
+    public let startTime: TimeInterval
+    public let endTime: TimeInterval
+    public let text: String
+
+    public init(startTime: TimeInterval, endTime: TimeInterval, text: String) {
+        self.startTime = max(0, startTime)
+        self.endTime = max(self.startTime, endTime)
+        self.text = text
+    }
+}
+
 public struct WhisperSegment: Codable, Equatable, Sendable {
     public let startTime: TimeInterval
     public let endTime: TimeInterval
@@ -88,10 +100,16 @@ public struct WhisperSegment: Codable, Equatable, Sendable {
 public struct WhisperTranscriptionResult: Codable, Equatable, Sendable {
     public let detectedLanguageCode: String?
     public let segments: [WhisperSegment]
+    public let tokens: [WhisperToken]
 
-    public init(detectedLanguageCode: String?, segments: [WhisperSegment]) {
+    public init(
+        detectedLanguageCode: String?,
+        segments: [WhisperSegment],
+        tokens: [WhisperToken] = []
+    ) {
         self.detectedLanguageCode = detectedLanguageCode
         self.segments = segments
+        self.tokens = tokens
     }
 
     public var text: String {

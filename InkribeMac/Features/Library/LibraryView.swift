@@ -31,6 +31,7 @@ struct LibraryView: View {
             Divider()
             content
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task {
             await reload()
         }
@@ -112,6 +113,7 @@ struct LibraryView: View {
                 systemImage: "exclamationmark.triangle",
                 description: Text(errorDescription)
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if transcripts.isEmpty {
             ContentUnavailableView {
                 Label("No Transcripts Yet", systemImage: "doc.text.magnifyingglass")
@@ -123,8 +125,10 @@ struct LibraryView: View {
                     Button("Import File", action: onImport)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if visibleTranscripts.isEmpty {
             ContentUnavailableView.search(text: searchText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {

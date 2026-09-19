@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Phase 6 adds constrained transcript transformation using the bundled local Qwen model through `LLMRuntime`. This is a document tool, not a generic chat surface.
+Inkribe provides constrained transcript transformation using selectable bundled local Qwen models through `LLMRuntime`. Qwen3 0.6B is the default; Qwen3 1.7B is available when the user prefers higher-quality output over speed and memory use. This is a document tool, not a generic chat surface.
 
 The five v1 actions are:
 
@@ -47,7 +47,7 @@ Empty input is rejected before model loading. Very short input is also rejected 
 
 ## Prompt contract
 
-`TranscriptAIPromptTemplates.version` identifies the checked-in prompt contract. Phase 6 uses version 1.
+`TranscriptAIPromptTemplates.version` identifies the checked-in prompt contract. The current implementation uses version 2.
 
 Prompts:
 
@@ -57,7 +57,10 @@ Prompts:
 - preserve source language;
 - request only the transformed result, without prefaces or analysis;
 - request no thinking output;
-- use a plain instruction envelope compatible with the generic runtime tokenizer instead of depending on parser-specific chat control tokens.
+- keep the system policy separate from the user transformation request;
+- let `LLMRuntime` apply the bundled GGUF model's native chat template through llama.cpp before tokenization;
+- never hand-build ChatML/control tokens in `InkribeAI`;
+- defensively remove exact standalone accidental result-wrapper lines before a result reaches the UI.
 
 Prompt text and transcript contents are not written to diagnostic logs.
 
@@ -139,9 +142,11 @@ Missing or stale derived output never makes the transcript itself unavailable.
 
 ## Model lifetime and diagnostics
 
-The Mac app keeps one shared local-AI controller so the bundled language model can remain loaded across transcript screens instead of being repeatedly recreated.
+The Mac app keeps one shared local-AI controller so the selected bundled language model can remain loaded across transcript screens instead of being repeatedly recreated.
 
-A later settings/performance phase may call the controller's explicit unload path when memory policy requires it.
+Settings persists the selected model. Changing that selection unloads the idle model/service so the next AI action constructs the newly selected runtime. The model picker is disabled while generation is active, so switching never tears a native runtime out from under an in-flight action.
+
+The default retention policy releases the model after each completed, cancelled, or failed action. Users can opt to keep it loaded for faster repeated actions.
 
 Diagnostics may record:
 

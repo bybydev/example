@@ -14,6 +14,18 @@
       "license": "MIT"
     },
     {
+      "id": "qwen3-0.6b-q4-k-m",
+      "runtime": "llm",
+      "displayName": "Qwen3 0.6B Q4_K_M",
+      "relativePath": "qwen/Qwen3-0.6B-Q4_K_M.gguf",
+      "sourceRepository": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "1208e45d782fe18602c5eaf10e5758d5b0f24c03",
+      "downloadURL": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/1208e45d782fe18602c5eaf10e5758d5b0f24c03/Qwen3-0.6B-Q4_K_M.gguf?download=true",
+      "sha256": "b0638f08417a2d3c8652760462eb5407c6e30173cf9608ad0820757a281eea0e",
+      "byteCount": 396704416,
+      "license": "Apache-2.0"
+    },
+    {
       "id": "qwen3-1.7b-q4-k-m",
       "runtime": "llm",
       "displayName": "Qwen3 1.7B Q4_K_M",
@@ -23,6 +35,30 @@
       "downloadURL": "https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf?download=true",
       "sha256": "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
       "byteCount": 1282439264,
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "pyannote-segmentation-3-onnx",
+      "runtime": "speakerSegmentation",
+      "displayName": "Pyannote Segmentation 3.0 ONNX",
+      "relativePath": "diarization/pyannote-segmentation-3.0.onnx",
+      "sourceRepository": "csukuangfj/sherpa-onnx-pyannote-segmentation-3-0",
+      "revision": "340b52f1f5cd12d45a30fa284691417eaad2ff92",
+      "downloadURL": "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/340b52f1f5cd12d45a30fa284691417eaad2ff92/model.onnx?download=true",
+      "sha256": "fed22097bca974bad329a930b60865703766ff89f05fa09060bf6fd44e92e319",
+      "byteCount": 5992778,
+      "license": "MIT"
+    },
+    {
+      "id": "3dspeaker-eres2net-base-3dspeaker-16k",
+      "runtime": "speakerEmbedding",
+      "displayName": "3D-Speaker ERes2Net Base 16 kHz",
+      "relativePath": "diarization/3dspeaker-eres2net-base.onnx",
+      "sourceRepository": "csukuangfj/speaker-embedding-models",
+      "revision": "8be2a75c9ed7a590538b268e46fbb65e1aa9d208",
+      "downloadURL": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/8be2a75c9ed7a590538b268e46fbb65e1aa9d208/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx?download=true",
+      "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+      "byteCount": 39593761,
       "license": "Apache-2.0"
     }
   ]

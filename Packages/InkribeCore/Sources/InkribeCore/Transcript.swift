@@ -17,17 +17,37 @@ public enum TranscriptLanguage: Codable, Equatable, Hashable, Sendable {
     case languageCode(String)
 }
 
+public struct TranscriptSpeaker: Identifiable, Codable, Equatable, Sendable {
+    public let id: Int
+    public var name: String
+
+    public init(id: Int, name: String? = nil) {
+        let normalizedID = max(0, id)
+        let normalizedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.id = normalizedID
+        self.name = normalizedName.isEmpty ? "Speaker \(normalizedID + 1)" : normalizedName
+    }
+}
+
 public struct TranscriptSegment: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public var startTime: TimeInterval
     public var endTime: TimeInterval
     public var text: String
+    public var speakerID: Int?
 
-    public init(id: UUID = UUID(), startTime: TimeInterval, endTime: TimeInterval, text: String) {
+    public init(
+        id: UUID = UUID(),
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        text: String,
+        speakerID: Int? = nil
+    ) {
         self.id = id
         self.startTime = startTime
         self.endTime = endTime
         self.text = text
+        self.speakerID = speakerID
     }
 }
 
@@ -73,6 +93,7 @@ public struct Transcript: Identifiable, Codable, Equatable, Sendable {
     public var editedText: String
     public var revision: Int
     public var segments: [TranscriptSegment]
+    public var speakers: [TranscriptSpeaker]
     public var derivedDocuments: [DerivedDocument]
 
     public init(
@@ -87,6 +108,7 @@ public struct Transcript: Identifiable, Codable, Equatable, Sendable {
         editedText: String = "",
         revision: Int = 0,
         segments: [TranscriptSegment] = [],
+        speakers: [TranscriptSpeaker] = [],
         derivedDocuments: [DerivedDocument] = []
     ) {
         self.id = id
@@ -100,6 +122,74 @@ public struct Transcript: Identifiable, Codable, Equatable, Sendable {
         self.editedText = editedText
         self.revision = revision
         self.segments = segments
+        self.speakers = speakers
         self.derivedDocuments = derivedDocuments
+    }
+
+    public func speakerName(for speakerID: Int) -> String {
+        speakers.first(where: { $0.id == speakerID })?.name
+            ?? "Speaker \(speakerID + 1)"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case createdAt
+        case updatedAt
+        case sourceMediaRelativePath
+        case languageCode
+        case duration
+        case rawText
+        case editedText
+        case revision
+        case segments
+        case speakers
+        case derivedDocuments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TranscriptID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        sourceMediaRelativePath = try container.decodeIfPresent(
+            String.self,
+            forKey: .sourceMediaRelativePath
+        )
+        languageCode = try container.decodeIfPresent(String.self, forKey: .languageCode)
+        duration = try container.decode(TimeInterval.self, forKey: .duration)
+        rawText = try container.decode(String.self, forKey: .rawText)
+        editedText = try container.decode(String.self, forKey: .editedText)
+        revision = try container.decode(Int.self, forKey: .revision)
+        segments = try container.decodeIfPresent(
+            [TranscriptSegment].self,
+            forKey: .segments
+        ) ?? []
+        speakers = try container.decodeIfPresent(
+            [TranscriptSpeaker].self,
+            forKey: .speakers
+        ) ?? []
+        derivedDocuments = try container.decodeIfPresent(
+            [DerivedDocument].self,
+            forKey: .derivedDocuments
+        ) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(sourceMediaRelativePath, forKey: .sourceMediaRelativePath)
+        try container.encodeIfPresent(languageCode, forKey: .languageCode)
+        try container.encode(duration, forKey: .duration)
+        try container.encode(rawText, forKey: .rawText)
+        try container.encode(editedText, forKey: .editedText)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(segments, forKey: .segments)
+        try container.encode(speakers, forKey: .speakers)
+        try container.encode(derivedDocuments, forKey: .derivedDocuments)
     }
 }

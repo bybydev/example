@@ -82,8 +82,13 @@ The inventory covers the exact pinned releases/revisions used by v1:
 - SwiftLog 1.11.0 — Apache-2.0 plus upstream NOTICE;
 - whisper.cpp 1.9.4 / b5130 — MIT;
 - llama.cpp 0.4.1 / b10964 — MIT;
+- sherpa-onnx 1.13.8 — Apache-2.0;
+- ONNX Runtime 1.28.2 — MIT;
 - Whisper Small multilingual model at revision `90a64d80ea254cf67575b41a5971f972c79f7b45` — upstream repository declares MIT;
-- Qwen3 1.7B Q4_K_M at revision `daeb8e2d528a760970442092f6bf1e55c3b659eb` — upstream repository declares Apache-2.0.
+- Qwen3 0.6B Q4_K_M at revision `1208e45d782fe18602c5eaf10e5758d5b0f24c03` — upstream repository declares Apache-2.0;
+- Qwen3 1.7B Q4_K_M at revision `daeb8e2d528a760970442092f6bf1e55c3b659eb` — upstream repository declares Apache-2.0;
+- Pyannote Segmentation 3.0 ONNX at revision `340b52f1f5cd12d45a30fa284691417eaad2ff92` — upstream repository declares MIT;
+- 3D-Speaker ERes2Net Base at revision `8be2a75c9ed7a590538b268e46fbb65e1aa9d208` — upstream repository declares Apache-2.0.
 
 MacAppFoundation 1.0.0 is first-party application infrastructure maintained by the Inkribe developer. Its pinned repository does not publish a separate license file, so Inkribe does not invent or assign one in third-party notices.
 
@@ -105,6 +110,6 @@ Phase 9 does not introduce a second scheduler, persistence layer, document repre
 - JobQueue owns processing state.
 - InkribePersistence owns transcript documents.
 - InkribeModelAssets owns production model identity and integrity.
-- WhisperRuntime and LLMRuntime own native inference state.
+- WhisperRuntime, DiarizationRuntime, and LLMRuntime own native inference state.
 - InkribeAI owns transcript-AI prompt/chunk/merge semantics.
 - The Mac application layer owns user-facing recovery, Settings, and notice presentation.

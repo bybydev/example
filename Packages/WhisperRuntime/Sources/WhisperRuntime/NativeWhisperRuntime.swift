@@ -168,6 +168,7 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
         params.print_progress = false
         params.print_realtime = false
         params.print_timestamps = false
+        params.token_timestamps = true
         // Let whisper.cpp enter auto-language mode through its explicit
         // "auto" language sentinel. Passing detect_language = true with a nil
         // language can complete successfully with zero text segments.
@@ -224,19 +225,51 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
 
         let segmentCount = Int(whisper_full_n_segments(context))
         var segments: [WhisperSegment] = []
+        var tokens: [WhisperToken] = []
         segments.reserveCapacity(segmentCount)
 
+        let endOfTextToken = whisper_token_eot(context)
         for index in 0..<segmentCount {
-            guard let textPointer = whisper_full_get_segment_text(context, Int32(index)) else { continue }
-            let start = TimeInterval(whisper_full_get_segment_t0(context, Int32(index))) / 100.0
-            let end = TimeInterval(whisper_full_get_segment_t1(context, Int32(index))) / 100.0
-            segments.append(
-                WhisperSegment(
-                    startTime: start,
-                    endTime: end,
-                    text: String(cString: textPointer)
+            let segmentIndex = Int32(index)
+            if let textPointer = whisper_full_get_segment_text(context, segmentIndex) {
+                let start = TimeInterval(whisper_full_get_segment_t0(context, segmentIndex)) / 100.0
+                let end = TimeInterval(whisper_full_get_segment_t1(context, segmentIndex)) / 100.0
+                segments.append(
+                    WhisperSegment(
+                        startTime: start,
+                        endTime: end,
+                        text: String(cString: textPointer)
+                    )
                 )
-            )
+            }
+
+            let tokenCount = Int(whisper_full_n_tokens(context, segmentIndex))
+            for tokenIndex in 0..<tokenCount {
+                let nativeTokenIndex = Int32(tokenIndex)
+                let data = whisper_full_get_token_data(
+                    context,
+                    segmentIndex,
+                    nativeTokenIndex
+                )
+                guard data.id < endOfTextToken,
+                      let tokenText = whisper_full_get_token_text(
+                        context,
+                        segmentIndex,
+                        nativeTokenIndex
+                      ) else {
+                    continue
+                }
+
+                let text = String(cString: tokenText)
+                guard !text.isEmpty else { continue }
+                tokens.append(
+                    WhisperToken(
+                        startTime: TimeInterval(data.t0) / 100.0,
+                        endTime: TimeInterval(data.t1) / 100.0,
+                        text: text
+                    )
+                )
+            }
         }
 
         let languageID = whisper_full_lang_id(context)
@@ -250,7 +283,8 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
 
         return WhisperTranscriptionResult(
             detectedLanguageCode: languageCode,
-            segments: segments
+            segments: segments,
+            tokens: tokens
         )
     }
 }

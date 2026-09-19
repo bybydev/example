@@ -9,7 +9,9 @@ Record or Import
   → durable app-owned media
   → persistent transcription job
   → local media decode
-  → local Whisper inference
+  → local Whisper inference + token timestamps
+  → local speaker diarization
+  → token/speaker alignment
   → durable transcript document
   → transcript route
 ```
@@ -79,11 +81,13 @@ If the audio sink fails, the recorder tears down the engine and the app state re
 1. resolves the existing transcript target;
 2. resolves durable media;
 3. decodes to Whisper's 16 kHz mono buffer contract;
-4. calls the shared Whisper runtime;
-5. maps inference progress into queue progress;
-6. stores detected/requested language, duration, raw text, timestamped segments, and updated time;
-7. keeps edited text synchronized only while the user has not diverged from raw text;
-8. saves the transcript durably before returning success.
+4. calls the shared Whisper runtime with token timestamps enabled;
+5. runs local speaker diarization through `DiarizationRuntime`;
+6. aligns Whisper tokens to speaker time ranges and smooths very short speaker islands;
+7. maps inference work into queue progress;
+8. stores detected/requested language, duration, raw text, speaker-aware timestamped segments, speaker labels, and updated time;
+9. keeps edited text synchronized only while the user has not diverged from raw text;
+10. saves the transcript durably before returning success.
 
 The executor protocol uses an Inkribe-owned progress closure. JobQueue's reporter type does not leak into the app or execution service boundary.
 
@@ -91,7 +95,7 @@ The executor protocol uses an Inkribe-owned progress closure. JobQueue's reporte
 
 Retry always targets the original transcript ID and original durable media path.
 
-When edited text still mirrors old raw text, the new transcription replaces both and advances the revision. If edited text has been manually changed, new raw transcription/segments can refresh without overwriting the manual edit or its revision.
+When edited text still mirrors old raw text, the new transcription replaces both and advances the revision. If edited text has been manually changed, new raw transcription/segments can refresh without overwriting the manual edit or its revision. Existing speaker names are stabilized across retries by matching old and new diarized speakers through temporal overlap before persistence. This avoids assuming that clustering IDs are stable between runs; unmatched new speakers receive fresh IDs/default names.
 
 This is the key idempotence rule that Phase 5 and Phase 6 can build on.
 

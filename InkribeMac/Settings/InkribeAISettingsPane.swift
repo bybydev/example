@@ -1,12 +1,32 @@
+import LLMRuntime
 import MacAppFoundation
 import SwiftUI
 
 struct InkribeAISettingsPane: View {
     @Bindable var preferences: InkribePreferences
+    @State private var aiController = TranscriptLocalAIController.shared
     @Environment(\.macAppTheme) private var theme
 
     var body: some View {
         InkribeSettingsSupport.scroll {
+            GroupBox("Local AI Model") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Model", selection: $preferences.localAIModel) {
+                        ForEach(LLMModel.allCases) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .frame(maxWidth: 320)
+                    .disabled(aiController.isGenerating)
+
+                    Text(preferences.localAIModel.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
             GroupBox("Model Memory") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(
@@ -33,9 +53,12 @@ struct InkribeAISettingsPane: View {
             }
         }
         .background(theme.canvas)
+        .onChange(of: preferences.localAIModel) { _, _ in
+            Task { await aiController.unloadModel() }
+        }
         .onChange(of: preferences.keepAIModelLoaded) { _, keepLoaded in
             guard !keepLoaded else { return }
-            Task { await TranscriptLocalAIController.shared.unloadModel() }
+            Task { await aiController.unloadModel() }
         }
     }
 }

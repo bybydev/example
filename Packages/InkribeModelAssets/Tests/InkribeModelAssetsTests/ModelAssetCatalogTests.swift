@@ -4,12 +4,15 @@ import Testing
 
 @Suite("Model asset catalog")
 struct ModelAssetCatalogTests {
-    @Test func productionManifestHasOneAssetPerRuntime() throws {
+    @Test func productionManifestSupportsMultipleLLMAssets() throws {
         let manifest = try ModelAssetCatalog.bundledManifest()
         #expect(manifest.schemaVersion == 1)
-        #expect(manifest.assets.count == ModelRuntime.allCases.count)
+        #expect(manifest.assets.count == 5)
         #expect(try manifest.asset(runtime: .whisper).id == "whisper-small-multilingual")
-        #expect(try manifest.asset(runtime: .llm).id == "qwen3-1.7b-q4-k-m")
+        #expect(manifest.assets(runtime: .llm).map(\.id) == [
+            "qwen3-0.6b-q4-k-m",
+            "qwen3-1.7b-q4-k-m"
+        ])
     }
 
     @Test func productionAssetsArePinnedToImmutableRevisions() throws {
@@ -26,7 +29,10 @@ struct ModelAssetCatalogTests {
     @Test func productionPathsStayStable() throws {
         let manifest = try ModelAssetCatalog.bundledManifest()
         #expect(try manifest.asset(runtime: .whisper).relativePath == "whisper/ggml-small.bin")
-        #expect(try manifest.asset(runtime: .llm).relativePath == "qwen/Qwen3-1.7B-Q4_K_M.gguf")
+        #expect(try manifest.asset(id: "qwen3-0.6b-q4-k-m").relativePath == "qwen/Qwen3-0.6B-Q4_K_M.gguf")
+        #expect(try manifest.asset(id: "qwen3-1.7b-q4-k-m").relativePath == "qwen/Qwen3-1.7B-Q4_K_M.gguf")
+        #expect(try manifest.asset(runtime: .speakerSegmentation).relativePath == "diarization/pyannote-segmentation-3.0.onnx")
+        #expect(try manifest.asset(runtime: .speakerEmbedding).relativePath == "diarization/3dspeaker-eres2net-base.onnx")
     }
 
     @Test func locatorUsesStableModelsRootAndRelativePath() throws {
@@ -48,8 +54,7 @@ struct ModelAssetCatalogTests {
         let locator = ModelAssetLocator(resourcesURL: fixtureResources)
         let manifest = try ModelAssetCatalog.bundledManifest()
 
-        for runtime in ModelRuntime.allCases {
-            let asset = try manifest.asset(runtime: runtime)
+        for asset in manifest.assets {
             let located = try locator.requireURL(for: asset)
             #expect(located.path.hasSuffix("/Models/\(asset.relativePath)"))
 
@@ -79,7 +84,10 @@ struct ModelAssetCatalogTests {
     @Test func productionLicensesAreExplicit() throws {
         let manifest = try ModelAssetCatalog.bundledManifest()
         #expect(try manifest.asset(runtime: .whisper).license == "MIT")
-        #expect(try manifest.asset(runtime: .llm).license == "Apache-2.0")
+        #expect(try manifest.asset(id: "qwen3-0.6b-q4-k-m").license == "Apache-2.0")
+        #expect(try manifest.asset(id: "qwen3-1.7b-q4-k-m").license == "Apache-2.0")
+        #expect(try manifest.asset(runtime: .speakerSegmentation).license == "MIT")
+        #expect(try manifest.asset(runtime: .speakerEmbedding).license == "Apache-2.0")
     }
 
     @Test func locatorReportsMissingAssetAtExpectedPath() throws {

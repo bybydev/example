@@ -34,7 +34,7 @@ The main window is structurally split into two full-height columns.
 
 ### Non-negotiable geometry
 
-- One vertical divider runs continuously from the top edge to the bottom edge.
+- While the sidebar is expanded, one vertical divider runs continuously from the top edge to the bottom edge; it collapses away with the zero-width sidebar.
 - The sidebar owns the traffic-light region above it.
 - The main titlebar begins at the divider.
 - Never place the app name, page title, search, export, Pro button, or other main-titlebar content above the sidebar.
@@ -43,14 +43,16 @@ The main window is structurally split into two full-height columns.
 
 ## Sidebar toggle
 
-The custom sidebar toggle is visually attached to the divider near the titlebar.
+The custom sidebar toggle lives in the main titlebar immediately beside the divider when expanded.
 
 Rules:
 
-- toggle position and divider position derive from the same `sidebarWidth`
 - expanded initial target: ~220 pt
 - collapsed width: 0
-- animate width, divider, button, and main-content expansion together
+- never overlay the toggle on the structural divider
+- when expanded, place the toggle just inside the main titlebar
+- when collapsed, reserve native traffic-light space before the toggle
+- animate sidebar width, divider, button position, and main-content expansion together
 - initial animation target: ~0.20–0.25 s ease-in-out
 - keep the button reachable when collapsed
 - fade sidebar contents while collapsing if necessary to avoid clipping
@@ -62,14 +64,14 @@ Concept:
 
 ```text
 Expanded
-┌───────────────────┬─┬───────────────────────────────┐
-│ ● ● ●             │◀│ Library                        │
-└───────────────────┴─┴───────────────────────────────┘
+┌───────────────────┬──────────────────────────────────┐
+│ ● ● ●             │ [◀] Library                       │
+└───────────────────┴──────────────────────────────────┘
 
 Collapsed
-┌──────┬─┬────────────────────────────────────────────┐
-│● ● ● │▶│ Library                                     │
-└──────┴─┴────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│ ● ● ●  [▶] Library                                   │
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Navigation
@@ -357,6 +359,17 @@ Use animation for:
 - small disclosure transitions
 
 Avoid animated gradients, bouncing icons, or excessive spring effects.
+
+## Empty-state layout
+
+Empty/loading/error content may center inside its available body region, but structural chrome never participates in that centering.
+
+- screen toolbars and control rows stay pinned to the top
+- queue headers and queue actions stay pinned to the top of their panel
+- transcript segment headers stay pinned to the top of the inspector
+- sheet headers and Done/Close actions stay pinned to the top
+- only the empty-state message/icon/actions center within the remaining content area
+- routed screens must own the full main-content rectangle so intrinsic-height empty views cannot pull their headers toward the vertical center
 
 ## Accessibility
 

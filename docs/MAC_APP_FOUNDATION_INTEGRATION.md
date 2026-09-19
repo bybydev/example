@@ -47,7 +47,7 @@ MacAppFoundation is shared infrastructure, not the Inkribe application shell.
 **Inkribe owns:**
 
 - the custom two-column main window shell
-- the full-height sidebar divider and animated divider-attached sidebar toggle
+- the full-height expanded-sidebar divider and animated main-titlebar sidebar toggle
 - Library / Record / Import / Transcript Editor navigation
 - transcription and AI workflows
 - app-specific Settings pane contents

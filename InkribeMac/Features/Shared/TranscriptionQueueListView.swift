@@ -54,7 +54,7 @@ struct TranscriptionQueueListView: View {
                     systemImage: "text.badge.checkmark",
                     description: Text("Imported files and recordings appear here while they are processed locally.")
                 )
-                .frame(maxWidth: .infinity, minHeight: 180)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -65,6 +65,7 @@ struct TranscriptionQueueListView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func row(_ item: TranscriptionQueueItem) -> some View {

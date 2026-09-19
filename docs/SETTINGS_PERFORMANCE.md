@@ -12,7 +12,7 @@ Inkribe contributes these product panes:
 
 - **General** — privacy and reset of workflow defaults
 - **Transcription** — default language and microphone
-- **AI Cleanup** — local AI model-retention behavior
+- **AI Cleanup** — local AI model selection and retention behavior
 - **Storage** — local data usage and source-media cleanup
 - **Diagnostics** — architecture, runtime policy, model presence, and queue health
 - **About** — product and build information
@@ -27,6 +27,7 @@ Current persisted values:
 
 - default transcription language
 - default microphone device ID, or `nil` for the current macOS system default
+- selected local AI model, defaulting to Qwen3 0.6B
 - whether the local AI model should remain loaded between actions
 
 The shared `TranscriptionLanguageCatalog` owns supported language codes and normalization. Record, Import, and Settings consume the same catalog so `Auto` and explicit language codes cannot drift between screens.
@@ -77,11 +78,17 @@ This keeps multi-file throughput efficient while avoiding an indefinitely reside
 
 ### Qwen / local AI
 
+The AI pane lets the user choose between bundled Qwen3 0.6B and Qwen3 1.7B. Qwen3 0.6B is the default. Changing the selected model unloads any idle retained AI service so the next action uses the new model; the picker is disabled during active generation.
+
 The default preference is **do not keep the AI model loaded between actions**.
 
 After a successful, cancelled, or failed local-AI action, `TranscriptLocalAIController` unloads Qwen and drops the retained service when that preference is off.
 
 When **Keep local AI model loaded between actions** is enabled, the service/model remains available for faster repeated Clean, Polish, Summary, Notes, and Action Items operations at the cost of higher idle memory use.
+
+### Speaker diarization
+
+The Pyannote segmentation and 3D-Speaker embedding models are owned by `DiarizationRuntime`. They stay warm while the transcription queue is processing a batch, including multi-file Pro imports, and are released together with Whisper when the queue drains. Speaker-count clustering remains automatic in the current UI.
 
 Turning retention off requests an unload only when generation is idle. If generation is currently active, its completion path observes the new preference and releases the model afterward. A Settings change therefore never tears a runtime out from under active generation.
 
@@ -125,7 +132,7 @@ The Diagnostics pane is local and content-minimal. It reports:
 - default Metal device presence/name
 - effective Whisper backend/thread policy
 - effective LLM backend/thread/context policy
-- bundled Whisper/Qwen model identity, runtime version/build, pinned model revision, expected size, license, and lightweight presence status
+- bundled Whisper, diarization, and all selectable Qwen model identities, runtime version/build, pinned model revisions, expected sizes, licenses, and lightweight presence status
 - JobQueue pause/activity/record counts
 - queue persistence issue and app startup issue when present
 

@@ -1,3 +1,4 @@
+import DiarizationRuntime
 import Foundation
 import InkribeAudio
 import InkribeCore
@@ -143,10 +144,19 @@ struct TranscriptionQueueControllerTests {
                 result: .init(
                     detectedLanguageCode: "vi",
                     segments: [
+                        .init(startTime: 0, endTime: 0.1, text: "Xin chào thế giới")
+                    ],
+                    tokens: [
                         .init(startTime: 0, endTime: 0.05, text: "Xin chào"),
                         .init(startTime: 0.05, endTime: 0.1, text: " thế giới")
                     ]
                 )
+            ),
+            diarizationRuntime: FakeDiarizationRuntime(
+                turns: [
+                    .init(speakerID: 0, startTime: 0, endTime: 0.05),
+                    .init(speakerID: 1, startTime: 0.05, endTime: 0.1)
+                ]
             ),
             transcriptRepository: repository
         )
@@ -170,6 +180,8 @@ struct TranscriptionQueueControllerTests {
         #expect(saved.editedText == "Xin chào thế giới")
         #expect(saved.languageCode == "vi")
         #expect(saved.segments.count == 2)
+        #expect(saved.segments.map(\.speakerID) == [0, 1])
+        #expect(saved.speakers.map(\.name) == ["Speaker 1", "Speaker 2"])
         #expect(saved.duration > 0)
         #expect(saved.revision == 1)
     }
@@ -563,5 +575,27 @@ private actor SerialProbeExecutor: TranscriptionJobExecuting {
 
     func snapshot() -> (starts: [UUID], maximumActive: Int) {
         (starts, maximumActive)
+    }
+}
+
+
+private actor FakeDiarizationRuntime: SpeakerDiarizationRuntimeProtocol {
+    enum FakeError: Error { case invalidBuffer }
+
+    let turns: [SpeakerTurn]
+
+    init(turns: [SpeakerTurn]) {
+        self.turns = turns
+    }
+
+    func diarize(
+        samples: [Float],
+        sampleRate: Int,
+        speakerCount: Int?
+    ) async throws -> [SpeakerTurn] {
+        guard sampleRate == 16_000, !samples.isEmpty else {
+            throw FakeError.invalidBuffer
+        }
+        return turns
     }
 }

@@ -24,12 +24,19 @@ struct TranscriptEditorView: View {
     @State private var aiController = TranscriptLocalAIController.shared
     @State private var aiTask: Task<Void, Never>?
     @State private var aiResult: TranscriptAIResult?
-    @State private var showsDerivedDocuments = false
+    @State private var inspectorPane: InspectorPane = .segments
     @State private var upsellCapability: InkribeProCapability?
+    @State private var speakerToRename: TranscriptSpeaker?
+    @State private var speakerNameDraft = ""
 
     private enum TextMode: String, CaseIterable, Hashable {
         case edited = "Edited"
         case raw = "Raw"
+    }
+
+    private enum InspectorPane: Hashable {
+        case segments
+        case aiResults
     }
 
     private var completedTranscriptionCount: Int {
@@ -79,6 +86,7 @@ struct TranscriptEditorView: View {
                 )
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: transcriptLoadGeneration) {
             await load()
         }
@@ -99,12 +107,6 @@ struct TranscriptEditorView: View {
                 try await applyAIResult(result, mode: applyMode)
             }
         }
-        .sheet(isPresented: $showsDerivedDocuments) {
-            TranscriptDerivedDocumentsSheet(
-                documents: transcript?.derivedDocuments ?? [],
-                currentRevision: transcript?.revision ?? 0
-            )
-        }
         .sheet(item: $upsellCapability) { capability in
             InkribeProUpsellView(
                 capability: capability,
@@ -116,6 +118,24 @@ struct TranscriptEditorView: View {
                     upsellCapability = nil
                 }
             )
+        }
+        .alert(
+            "Rename Speaker",
+            isPresented: Binding(
+                get: { speakerToRename != nil },
+                set: { if !$0 { speakerToRename = nil } }
+            )
+        ) {
+            TextField("Speaker name", text: $speakerNameDraft)
+            Button("Cancel", role: .cancel) {
+                speakerToRename = nil
+            }
+            Button("Save") {
+                Task { await renameSelectedSpeaker() }
+            }
+            .disabled(speakerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("This name is used for every segment assigned to this speaker.")
         }
         .onDisappear {
             aiTask?.cancel()
@@ -146,13 +166,14 @@ struct TranscriptEditorView: View {
 
                 Divider()
 
-                segmentPane(transcript)
+                inspector(transcript)
                     .frame(width: 330)
             }
 
             Divider()
             playerBar(transcript)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: .bottomLeading) {
             if let errorDescription {
                 HStack(spacing: 8) {
@@ -256,16 +277,15 @@ struct TranscriptEditorView: View {
             Divider()
 
             Button {
-                showsDerivedDocuments = true
+                inspectorPane = .aiResults
             } label: {
                 Label(
                     transcript.derivedDocuments.isEmpty
-                        ? "Saved AI Results"
-                        : "Saved AI Results (\(transcript.derivedDocuments.count))",
+                        ? "Show AI Results"
+                        : "Show AI Results (\(transcript.derivedDocuments.count))",
                     systemImage: "tray.full"
                 )
             }
-            .disabled(transcript.derivedDocuments.isEmpty)
         } label: {
             Image(systemName: "sparkles")
                 .frame(width: 20, height: 20)
@@ -325,18 +345,52 @@ struct TranscriptEditorView: View {
         .background(.background)
     }
 
+    private func inspector(_ transcript: Transcript) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("Inspector", selection: $inspectorPane) {
+                Text("Segments")
+                    .tag(InspectorPane.segments)
+                Text(
+                    transcript.derivedDocuments.isEmpty
+                        ? "AI Results"
+                        : "AI Results \(transcript.derivedDocuments.count)"
+                )
+                .tag(InspectorPane.aiResults)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .frame(height: 42)
+
+            Divider()
+
+            switch inspectorPane {
+            case .segments:
+                segmentPane(transcript)
+            case .aiResults:
+                aiResultsPane(transcript)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.quaternary.opacity(0.12))
+    }
+
     private func segmentPane(_ transcript: Transcript) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Segments")
-                    .font(.headline)
+                if !transcript.speakers.isEmpty {
+                    Text("\(transcript.speakers.count) speakers")
+                } else {
+                    Text("Segments")
+                }
                 Spacer()
                 Text("\(filteredSegments.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 14)
-            .frame(height: 42)
+            .frame(height: 32)
 
             Divider()
 
@@ -345,8 +399,10 @@ struct TranscriptEditorView: View {
                     "No timestamped segments",
                     systemImage: "text.line.first.and.arrowtriangle.forward"
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if filteredSegments.isEmpty {
                 ContentUnavailableView.search(text: searchText)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -368,7 +424,65 @@ struct TranscriptEditorView: View {
                 }
             }
         }
-        .background(.quaternary.opacity(0.12))
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func aiResultsPane(_ transcript: Transcript) -> some View {
+        let documents = transcript.derivedDocuments.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+
+        return Group {
+            if documents.isEmpty {
+                ContentUnavailableView(
+                    "No AI Results",
+                    systemImage: "sparkles",
+                    description: Text("Generate a summary, notes, action items, or save a Clean/Polish copy.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(documents) { document in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Text(document.kind.displayName)
+                                        .font(.headline)
+                                    if document.sourceRevision != transcript.revision {
+                                        Text("Older revision")
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(.quaternary, in: Capsule())
+                                    }
+                                    Spacer(minLength: 4)
+                                }
+
+                                Text(document.content)
+                                    .font(.system(size: 12.5))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                                HStack {
+                                    Text("Revision \(document.sourceRevision)")
+                                    Spacer()
+                                    Text(document.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            }
+                            .padding(12)
+                            .background(
+                                .quaternary.opacity(0.25),
+                                in: RoundedRectangle(cornerRadius: 9)
+                            )
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+        }
     }
 
     private func segmentRow(_ segment: TranscriptSegment) -> some View {
@@ -381,11 +495,20 @@ struct TranscriptEditorView: View {
                     .foregroundStyle(segment.id == currentSegmentID ? .primary : .secondary)
                     .frame(width: 42, alignment: .trailing)
 
-                Text(segment.text)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let speakerID = segment.speakerID {
+                        Text(transcript?.speakerName(for: speakerID) ?? "Speaker \(speakerID + 1)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(segment.text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -397,7 +520,43 @@ struct TranscriptEditorView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(Self.formatTime(segment.startTime)), \(segment.text)")
+        .contextMenu {
+            if let speakerID = segment.speakerID {
+                Button("Rename \(transcript?.speakerName(for: speakerID) ?? "Speaker \(speakerID + 1)")…") {
+                    beginRenamingSpeaker(speakerID)
+                }
+            }
+        }
+        .accessibilityLabel(
+            [
+                Self.formatTime(segment.startTime),
+                segment.speakerID.map { transcript?.speakerName(for: $0) ?? "Speaker \($0 + 1)" },
+                segment.text
+            ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        )
+    }
+
+    private func beginRenamingSpeaker(_ speakerID: Int) {
+        guard let speaker = transcript?.speakers.first(where: { $0.id == speakerID }) else { return }
+        speakerNameDraft = speaker.name
+        speakerToRename = speaker
+    }
+
+    private func renameSelectedSpeaker() async {
+        guard let speaker = speakerToRename else { return }
+        do {
+            transcript = try await appState.renameSpeaker(
+                transcriptID: transcriptID,
+                speakerID: speaker.id,
+                name: speakerNameDraft
+            )
+            speakerToRename = nil
+            errorDescription = nil
+        } catch {
+            errorDescription = error.localizedDescription
+        }
     }
 
     private func playerBar(_ transcript: Transcript) -> some View {
@@ -555,6 +714,8 @@ struct TranscriptEditorView: View {
             editedText = updated.editedText
             lastSavedText = updated.editedText
             mode = .edited
+        } else if applyMode == .saveDerivedDocument {
+            inspectorPane = .aiResults
         }
 
         aiResult = nil

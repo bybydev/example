@@ -1,3 +1,4 @@
+import DiarizationRuntime
 import Foundation
 import InkribeModelAssets
 import LLMRuntime
@@ -33,26 +34,48 @@ struct InkribeRuntimeDiagnosticsSnapshot: Equatable, Sendable {
         let locator = try? ModelAssetLocator(bundle: bundle)
 
         let whisperDescriptor = try? WhisperModelAsset.descriptor()
-        let llmDescriptor = try? LLMModelAsset.descriptor()
+        let segmentationDescriptor = try? SpeakerDiarizationModelAsset.segmentationDescriptor()
+        let embeddingDescriptor = try? SpeakerDiarizationModelAsset.embeddingDescriptor()
+        let llmDescriptors = (try? LLMModelAsset.descriptors()) ?? []
         let physicalMemory = min(
             ProcessInfo.processInfo.physicalMemory,
             UInt64(Int64.max)
         )
 
-        let models = [
+        var models = [
             modelDiagnostic(
                 descriptor: whisperDescriptor,
                 runtimeVersion: WhisperRuntimeRelease.stableVersion,
                 runtimeBuild: WhisperRuntimeRelease.binaryTag,
                 locator: locator
-            ),
-            modelDiagnostic(
-                descriptor: llmDescriptor,
-                runtimeVersion: LLMRuntimeRelease.stableVersion,
-                runtimeBuild: LLMRuntimeRelease.binaryTag,
-                locator: locator
             )
         ].compactMap { $0 }
+        models.append(
+            contentsOf: [
+                modelDiagnostic(
+                    descriptor: segmentationDescriptor,
+                    runtimeVersion: DiarizationRuntimeRelease.stableVersion,
+                    runtimeBuild: String(DiarizationRuntimeRelease.revision.prefix(8)),
+                    locator: locator
+                ),
+                modelDiagnostic(
+                    descriptor: embeddingDescriptor,
+                    runtimeVersion: DiarizationRuntimeRelease.stableVersion,
+                    runtimeBuild: String(DiarizationRuntimeRelease.revision.prefix(8)),
+                    locator: locator
+                )
+            ].compactMap { $0 }
+        )
+        models.append(
+            contentsOf: llmDescriptors.compactMap {
+                modelDiagnostic(
+                    descriptor: $0,
+                    runtimeVersion: LLMRuntimeRelease.stableVersion,
+                    runtimeBuild: LLMRuntimeRelease.binaryTag,
+                    locator: locator
+                )
+            }
+        )
 
         return Self(
             architecture: architectureName,

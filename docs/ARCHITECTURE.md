@@ -9,6 +9,7 @@ Key constraints:
 - fully offline core workflow
 - bundled production models
 - `whisper.cpp` for speech recognition
+- `sherpa-onnx` for local speaker diarization
 - `llama.cpp` for local text processing
 - `hoangbkit/JobQueue` exact version `1.0.0` for persisted job orchestration
 - XcodeGen-driven project
@@ -40,7 +41,12 @@ Key constraints:
        │      │   JobQueue   │    │ Whisper   │ └──────────────┘
        │      │ persistence  │    │ Runtime   │
        │      │ scheduler    │    │whisper.cpp│
-       │      └──────────────┘    └───────────┘
+       │      └──────────────┘    └─────┬─────┘
+       │                                │
+       │                         ┌──────▼──────────┐
+       │                         │ Diarization     │
+       │                         │ sherpa-onnx     │
+       │                         └─────────────────┘
        │
 ┌──────▼──────────┐    ┌────────────────┐    ┌─────────────────┐
 │   Persistence   │    │  InkribeAudio  │    │  InkribeExport │
@@ -69,16 +75,18 @@ Inkribe/
 ├── Packages/
 │   ├── InkribeCore/
 │   ├── InkribeAudio/
-│   ├── InkribeTranscription/   # depends on JobQueue + WhisperRuntime
+│   ├── InkribeTranscription/   # depends on JobQueue + Whisper/Diarization runtimes
 │   ├── InkribeAI/
 │   ├── InkribePersistence/
 │   ├── InkribeExport/
 │   ├── WhisperRuntime/
+│   ├── DiarizationRuntime/
 │   └── LLMRuntime/
 │
 ├── Models/                  # gitignored; production/fixture substitution point
 │   ├── whisper/
-│   └── qwen/
+│   ├── qwen/
+│   └── diarization/
 ├── testfixtures/
 ├── scripts/
 ├── ci_scripts/
@@ -136,6 +144,7 @@ InkribeCore
 
 InkribeTranscription → JobQueue
 InkribeTranscription → WhisperRuntime
+InkribeTranscription → DiarizationRuntime
 InkribeAI            → LLMRuntime
 ```
 
@@ -181,6 +190,7 @@ Transcript
 ├── rawText
 ├── editedText
 ├── segments[]
+├── speakers[]
 ├── derivedDocuments[]
 └── processingMetadata
 
@@ -188,7 +198,8 @@ TranscriptSegment
 ├── id
 ├── start
 ├── end
-└── text
+├── text
+└── speakerID?
 
 DerivedDocument
 ├── kind: summary | notes | actionItems | cleanedCopy | polishedCopy
@@ -258,11 +269,15 @@ JobQueue persists + schedules
       ↓
 WhisperRuntime.loadModel
       ↓
-WhisperRuntime.transcribe
+WhisperRuntime.transcribe + token timestamps
+      ↓
+DiarizationRuntime speaker turns
+      ↓
+token/speaker alignment + smoothing
       ↓
 JobProgressReporter updates UI
       ↓
-segments + detected language
+speaker-aware segments + detected language
       ↓
 persist transcript
       ↓
@@ -320,7 +335,8 @@ Production and test CI use the same runtime paths:
 ```text
 Models/
 ├── whisper/<model>
-└── qwen/<model.gguf>
+├── qwen/<model.gguf>
+└── diarization/<models.onnx>
 ```
 
 Test workflows:
@@ -431,7 +447,7 @@ Use Swift concurrency deliberately:
 
 - UI state updates on `@MainActor`
 - JobQueue owns serialized queue state
-- media decode, Whisper inference, and LLM inference stay off the main actor where appropriate
+- media decode, Whisper inference, speaker diarization, and LLM inference stay off the main actor where appropriate
 - runtime wrappers own synchronization of native C/C++ state
 - cancellation propagates UI → JobQueue job → service/runtime
 - transcription defaults to one concurrent execution
@@ -544,7 +560,7 @@ while reusing:
 
 - transcript domain types
 - `TranscriptionJob` and JobQueue orchestration
-- Whisper runtime
+- Whisper and speaker-diarization runtimes
 - AI actions and llama runtime
 - persistence layer/contracts
 - export generation

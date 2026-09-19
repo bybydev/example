@@ -97,7 +97,7 @@ public struct TranscriptExporter: Sendable {
             throw TranscriptExportError.noTimestampedSegments
         }
 
-        let cues = subtitleCues(from: transcript.segments)
+        let cues = subtitleCues(from: transcript)
         guard !cues.isEmpty else {
             throw TranscriptExportError.noTimestampedSegments
         }
@@ -126,8 +126,8 @@ public struct TranscriptExporter: Sendable {
         }
     }
 
-    private func subtitleCues(from segments: [TranscriptSegment]) -> [SubtitleCue] {
-        let ordered = segments.enumerated().sorted { lhs, rhs in
+    private func subtitleCues(from transcript: Transcript) -> [SubtitleCue] {
+        let ordered = transcript.segments.enumerated().sorted { lhs, rhs in
             let lhsStart = normalizedSeconds(lhs.element.startTime)
             let rhsStart = normalizedSeconds(rhs.element.startTime)
             if lhsStart != rhsStart { return lhsStart < rhsStart }
@@ -138,8 +138,14 @@ public struct TranscriptExporter: Sendable {
         cues.reserveCapacity(ordered.count)
 
         for (_, segment) in ordered {
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
+            let body = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { continue }
+            let text: String
+            if let speakerID = segment.speakerID {
+                text = "\(transcript.speakerName(for: speakerID)): \(body)"
+            } else {
+                text = body
+            }
 
             let start = milliseconds(from: normalizedSeconds(segment.startTime))
             let requestedEnd = milliseconds(from: normalizedSeconds(segment.endTime))

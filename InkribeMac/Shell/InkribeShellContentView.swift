@@ -21,6 +21,7 @@ struct InkribeShellContentView: View {
                 content
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("Inkribe.MainContent")
     }
 

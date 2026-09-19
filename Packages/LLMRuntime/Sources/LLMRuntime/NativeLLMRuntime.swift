@@ -5,6 +5,7 @@ import llama
 
 public actor NativeLLMRuntime: LLMRuntimeProtocol {
     private let modelURL: URL
+    private let descriptor: ModelAssetDescriptor
     private let configuration: LLMRuntimeConfiguration
     private let logger = Logger(label: "Inkribe.LLMRuntime")
 
@@ -13,19 +14,26 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
 
     public init(
         modelURL: URL,
+        descriptor: ModelAssetDescriptor,
         configuration: LLMRuntimeConfiguration = .recommended
     ) {
         self.modelURL = modelURL
+        self.descriptor = descriptor
         self.configuration = configuration
     }
 
     public static func bundled(
         in bundle: Bundle = .main,
+        model: LLMModel = .defaultModel,
         configuration: LLMRuntimeConfiguration = .recommended
     ) throws -> NativeLLMRuntime {
-        let descriptor = try LLMModelAsset.descriptor()
+        let descriptor = try LLMModelAsset.descriptor(model: model)
         let modelURL = try ModelAssetLocator(bundle: bundle).requireURL(for: descriptor)
-        return NativeLLMRuntime(modelURL: modelURL, configuration: configuration)
+        return NativeLLMRuntime(
+            modelURL: modelURL,
+            descriptor: descriptor,
+            configuration: configuration
+        )
     }
 
     public var isModelLoaded: Bool { nativeState != nil }
@@ -56,13 +64,14 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
 
         try loadModelIfNeeded()
         guard let state = nativeState else { throw LLMRuntimeError.modelNotLoaded }
+        let formattedPrompt = try formattedPrompt(for: request, model: state.model)
         state.abortState.reset()
         let startedAt = Date()
 
         logger.debug(
             "Local generation started",
             metadata: [
-                "prompt_utf8_bytes": "\(request.prompt.utf8.count)",
+                "prompt_utf8_bytes": "\(formattedPrompt.utf8.count)",
                 "maximum_output_tokens": "\(request.maximumOutputTokens)",
                 "thread_count": "\(configuration.threadCount)",
                 "backend": "\(configuration.useGPU ? "metal" : "cpu")"
@@ -71,7 +80,12 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
 
         do {
             let result = try await withTaskCancellationHandler {
-                try performGeneration(request, state: state, onToken: onToken)
+                try performGeneration(
+                    request,
+                    formattedPrompt: formattedPrompt,
+                    state: state,
+                    onToken: onToken
+                )
             } onCancel: {
                 state.abortState.cancel()
             }
@@ -99,7 +113,6 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
     private func loadModelIfNeeded() throws {
         guard nativeState == nil else { return }
 
-        let descriptor = try LLMModelAsset.descriptor()
         if !integrityChecked {
             try ModelAssetIntegrityChecker.check(modelURL, against: descriptor)
             integrityChecked = true
@@ -169,10 +182,11 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
 
     private func performGeneration(
         _ request: LLMGenerationRequest,
+        formattedPrompt: String,
         state: LlamaNativeState,
         onToken: LLMTokenHandler?
     ) throws -> String {
-        let promptTokens = try tokenize(request.prompt, vocab: state.vocab)
+        let promptTokens = try tokenize(formattedPrompt, vocab: state.vocab)
         let contextSize = Int(configuration.contextSize)
         guard promptTokens.count + request.maximumOutputTokens <= contextSize else {
             throw LLMRuntimeError.promptTooLong(
@@ -249,6 +263,84 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
         return output
     }
 
+    private func formattedPrompt(
+        for request: LLMGenerationRequest,
+        model: OpaquePointer
+    ) throws -> String {
+        guard let template = llama_model_chat_template(model, nil) else {
+            throw LLMRuntimeError.missingChatTemplate
+        }
+
+        return try "user".withCString { userRole in
+            try request.prompt.withCString { userContent in
+                let systemPrompt = request.systemPrompt?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if let systemPrompt, !systemPrompt.isEmpty {
+                    return try "system".withCString { systemRole in
+                        try systemPrompt.withCString { systemContent in
+                            var messages = [
+                                llama_chat_message(role: systemRole, content: systemContent),
+                                llama_chat_message(role: userRole, content: userContent)
+                            ]
+                            return try applyChatTemplate(
+                                template: template,
+                                messages: &messages
+                            )
+                        }
+                    }
+                }
+
+                var messages = [
+                    llama_chat_message(role: userRole, content: userContent)
+                ]
+                return try applyChatTemplate(
+                    template: template,
+                    messages: &messages
+                )
+            }
+        }
+    }
+
+    private func applyChatTemplate(
+        template: UnsafePointer<CChar>,
+        messages: inout [llama_chat_message]
+    ) throws -> String {
+        let required = messages.withUnsafeBufferPointer { messageBuffer in
+            llama_chat_apply_template(
+                template,
+                messageBuffer.baseAddress,
+                messageBuffer.count,
+                true,
+                nil,
+                0
+            )
+        }
+        guard required >= 0 else {
+            throw LLMRuntimeError.chatTemplateFormattingFailed(required)
+        }
+
+        var output = [CChar](repeating: 0, count: Int(required) + 1)
+        let written = messages.withUnsafeBufferPointer { messageBuffer in
+            output.withUnsafeMutableBufferPointer { outputBuffer in
+                llama_chat_apply_template(
+                    template,
+                    messageBuffer.baseAddress,
+                    messageBuffer.count,
+                    true,
+                    outputBuffer.baseAddress,
+                    Int32(outputBuffer.count)
+                )
+            }
+        }
+        guard written >= 0, Int(written) <= output.count else {
+            throw LLMRuntimeError.chatTemplateFormattingFailed(written)
+        }
+
+        let bytes = output.prefix(Int(written)).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
     private func makeSampler(_ configuration: LLMSamplingConfiguration) -> UnsafeMutablePointer<llama_sampler>? {
         guard let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params()) else {
             return nil
@@ -264,7 +356,7 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
 
     private func tokenize(_ text: String, vocab: OpaquePointer) throws -> [llama_token] {
         let utf8Count = text.utf8.count
-        let required = -llama_tokenize(vocab, text, Int32(utf8Count), nil, 0, true, false)
+        let required = -llama_tokenize(vocab, text, Int32(utf8Count), nil, 0, false, true)
         guard required > 0 else { throw LLMRuntimeError.tokenizationFailed(required) }
 
         let tokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(required))
@@ -275,8 +367,8 @@ public actor NativeLLMRuntime: LLMRuntimeProtocol {
             Int32(utf8Count),
             tokens,
             required,
-            true,
-            false
+            false,
+            true
         )
         guard count >= 0 else { throw LLMRuntimeError.tokenizationFailed(count) }
         return Array(UnsafeBufferPointer(start: tokens, count: Int(count)))

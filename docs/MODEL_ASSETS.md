@@ -25,7 +25,20 @@ Scripts and runtime-facing Swift APIs consume this manifest rather than duplicat
 - SHA-256: `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`
 - License: MIT
 
-### Local text model
+### Local text models
+
+Default:
+
+- ID: `qwen3-0.6b-q4-k-m`
+- Model: Qwen3 0.6B Q4_K_M
+- Upstream: `Qwen/Qwen3-0.6B-GGUF`
+- Revision: `1208e45d782fe18602c5eaf10e5758d5b0f24c03`
+- File: `Models/qwen/Qwen3-0.6B-Q4_K_M.gguf`
+- Bytes: `396704416`
+- SHA-256: `b0638f08417a2d3c8652760462eb5407c6e30173cf9608ad0820757a281eea0e`
+- License: Apache-2.0
+
+Higher-quality option:
 
 - ID: `qwen3-1.7b-q4-k-m`
 - Model: Qwen3 1.7B Q4_K_M
@@ -36,6 +49,22 @@ Scripts and runtime-facing Swift APIs consume this manifest rather than duplicat
 - SHA-256: `d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5`
 - License: Apache-2.0
 
+### Speaker diarization models
+
+- ID: `pyannote-segmentation-3-onnx`
+- Model: Pyannote Segmentation 3.0 ONNX
+- File: `Models/diarization/pyannote-segmentation-3.0.onnx`
+- Bytes: `5992778`
+- SHA-256: `fed22097bca974bad329a930b60865703766ff89f05fa09060bf6fd44e92e319`
+- License: MIT
+
+- ID: `3dspeaker-eres2net-base-3dspeaker-16k`
+- Model: 3D-Speaker ERes2Net Base 16 kHz
+- File: `Models/diarization/3dspeaker-eres2net-base.onnx`
+- Bytes: `39593761`
+- SHA-256: `1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b`
+- License: Apache-2.0
+
 ## Stable bundle layout
 
 Production and path fixtures use the same public layout:
@@ -44,8 +73,12 @@ Production and path fixtures use the same public layout:
 Models/
 ├── whisper/
 │   └── ggml-small.bin
-└── qwen/
-    └── Qwen3-1.7B-Q4_K_M.gguf
+├── qwen/
+│   ├── Qwen3-0.6B-Q4_K_M.gguf
+│   └── Qwen3-1.7B-Q4_K_M.gguf
+└── diarization/
+    ├── pyannote-segmentation-3.0.onnx
+    └── 3dspeaker-eres2net-base.onnx
 ```
 
 Runtime code must not look in alternate production/test directories. Tests that only need path semantics can populate `Models/` from `testfixtures/Models/`.
@@ -56,7 +89,7 @@ Runtime code must not look in alternate production/test directories. Tests that 
 
 It provides typed manifest decoding, manifest-shape checks, stable `Models/` URL construction, explicit missing-model errors, streaming SHA-256 and byte-count inspection, and integrity comparison against the manifest.
 
-`WhisperRuntime` and `LLMRuntime` expose their model descriptor through this shared package, so Phase 3 can add native inference without inventing new filenames or lookup rules.
+`WhisperRuntime` exposes its single model descriptor through this shared package. `LLMRuntime` maps user-selectable model IDs to descriptors from the same manifest, with Qwen3 0.6B as the default. `DiarizationRuntime` resolves its segmentation and speaker-embedding models through the same manifest.
 
 ## Download behavior
 

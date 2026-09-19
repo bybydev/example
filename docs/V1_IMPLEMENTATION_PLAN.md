@@ -269,7 +269,7 @@ The exact toggle visual can evolve, but its geometry and behavior are part of th
 - Implement custom title-bar/toolbar presentation while preserving native window controls and behaviors.
 - Implement the full-height sidebar/main divider and ensure titlebar/body/status-bar boundaries remain aligned through resize and fullscreen transitions.
 - Implement custom sidebar/navigation.
-- Implement the animated divider-attached sidebar toggle and shared `sidebarWidth` state.
+- Implement the animated main-titlebar sidebar toggle beside the divider, driven by shared `sidebarWidth` state; collapse the sidebar fully to zero and reserve traffic-light space in the main titlebar when collapsed.
 - Centralize shell/sidebar state in one root shell model/state owner; feature screens consume it rather than recreating it.
 - Persist sidebar visibility and expose a keyboard/menu command to toggle it.
 - Ensure no content-only status/player bar extends beneath the sidebar.

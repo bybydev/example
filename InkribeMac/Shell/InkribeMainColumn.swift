@@ -47,6 +47,8 @@ struct InkribeMainColumn: View {
 
     private var titlebar: some View {
         HStack(spacing: 12) {
+            sidebarToggle
+
             Text(state.route.title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(theme.textPrimary)
@@ -64,12 +66,20 @@ struct InkribeMainColumn: View {
                 onManagePlan: onOpenPlan
             )
         }
-        .padding(.leading, 16)
+        .padding(
+            .leading,
+            state.isSidebarExpanded
+                ? InkribeShellMetrics.titlebarLeadingSpacing
+                : InkribeShellMetrics.trafficLightReserve
+                    + InkribeShellMetrics.titlebarLeadingSpacing
+        )
         .padding(.trailing, 12)
         .frame(height: InkribeShellMetrics.titlebarHeight)
         .background {
             MacAppWindowDragRegion(
-                trafficLightReserve: 0,
+                trafficLightReserve: state.isSidebarExpanded
+                    ? 0
+                    : InkribeShellMetrics.trafficLightReserve,
                 background: theme.canvas
             )
         }
@@ -79,6 +89,33 @@ struct InkribeMainColumn: View {
                 .frame(height: 1)
         }
         .accessibilityIdentifier("Inkribe.MainTitlebar")
+    }
+
+    private var sidebarToggle: some View {
+        Button {
+            state.toggleSidebar()
+        } label: {
+            Image(systemName: state.isSidebarExpanded ? "sidebar.left" : "sidebar.right")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(
+                    width: InkribeShellMetrics.toggleDiameter,
+                    height: InkribeShellMetrics.toggleDiameter
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.textSecondary)
+        .background(
+            theme.surfaceRaised,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(theme.border, lineWidth: 0.75)
+        }
+        .contentShape(Rectangle())
+        .help(state.isSidebarExpanded ? "Hide Sidebar" : "Show Sidebar")
+        .accessibilityLabel(state.isSidebarExpanded ? "Hide sidebar" : "Show sidebar")
+        .accessibilityIdentifier("Inkribe.Sidebar.Toggle")
     }
 
     private func transcriptExportMenu(_ transcriptID: TranscriptID) -> some View {

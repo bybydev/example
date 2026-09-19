@@ -25,16 +25,43 @@ Source revision: b29c606e28a01b1bc8c1351026a0fa6e616bf6c4
 Source: https://github.com/ggml-org/llama.cpp
 License: MIT
 
+sherpa-onnx 1.13.8
+Source revision: 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf
+Source: https://github.com/k2-fsa/sherpa-onnx
+License: Apache-2.0
+
+ONNX Runtime 1.28.2
+Source: https://github.com/microsoft/onnxruntime
+License: MIT
+
 Whisper Small multilingual model
 Source: https://huggingface.co/ggerganov/whisper.cpp
 Revision: 90a64d80ea254cf67575b41a5971f972c79f7b45
 File: ggml-small.bin
 License declared by upstream model repository: MIT
 
+Qwen3 0.6B Q4_K_M model
+Source: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
+Revision: 1208e45d782fe18602c5eaf10e5758d5b0f24c03
+File: Qwen3-0.6B-Q4_K_M.gguf
+License declared by upstream model repository: Apache-2.0
+
 Qwen3 1.7B Q4_K_M model
 Source: https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF
 Revision: daeb8e2d528a760970442092f6bf1e55c3b659eb
 File: Qwen3-1.7B-Q4_K_M.gguf
+License declared by upstream model repository: Apache-2.0
+
+Pyannote Segmentation 3.0 ONNX model
+Source: https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0
+Revision: 340b52f1f5cd12d45a30fa284691417eaad2ff92
+File: pyannote-segmentation-3.0.onnx
+License declared by upstream model repository: MIT
+
+3D-Speaker ERes2Net Base 16 kHz model
+Source: https://huggingface.co/csukuangfj/speaker-embedding-models
+Revision: 8be2a75c9ed7a590538b268e46fbb65e1aa9d208
+File: 3dspeaker-eres2net-base.onnx
 License declared by upstream model repository: Apache-2.0
 
 MacAppFoundation 1.0.0 is first-party application infrastructure maintained by the Inkribe developer. The pinned repository does not publish a separate LICENSE file, so this third-party notice does not assign one.

@@ -4,6 +4,8 @@ import Foundation
 public enum ModelRuntime: String, Codable, CaseIterable, Hashable, Sendable {
     case whisper
     case llm
+    case speakerSegmentation
+    case speakerEmbedding
 }
 
 public struct ModelAssetDescriptor: Codable, Equatable, Sendable, Identifiable {
@@ -62,11 +64,19 @@ public struct ModelAssetManifest: Codable, Equatable, Sendable {
         return asset
     }
 
+    public func assets(runtime: ModelRuntime) -> [ModelAssetDescriptor] {
+        assets.filter { $0.runtime == runtime }
+    }
+
     public func asset(runtime: ModelRuntime) throws -> ModelAssetDescriptor {
-        guard let asset = assets.first(where: { $0.runtime == runtime }) else {
+        let matches = assets(runtime: runtime)
+        guard !matches.isEmpty else {
             throw ModelAssetError.missingRuntimeAsset(runtime)
         }
-        return asset
+        guard matches.count == 1 else {
+            throw ModelAssetError.ambiguousRuntimeAsset(runtime, count: matches.count)
+        }
+        return matches[0]
     }
 }
 
@@ -89,13 +99,13 @@ public enum ModelAssetCatalog {
 
         var ids = Set<String>()
         var paths = Set<String>()
-        var runtimes = Set<ModelRuntime>()
+        var runtimeCounts: [ModelRuntime: Int] = [:]
         let lowercaseHex = CharacterSet(charactersIn: "0123456789abcdef")
 
         for asset in manifest.assets {
             guard ids.insert(asset.id).inserted else { throw ModelAssetError.duplicateAssetID(asset.id) }
             guard paths.insert(asset.relativePath).inserted else { throw ModelAssetError.duplicateRelativePath(asset.relativePath) }
-            guard runtimes.insert(asset.runtime).inserted else { throw ModelAssetError.duplicateRuntimeAsset(asset.runtime) }
+            runtimeCounts[asset.runtime, default: 0] += 1
 
             guard !asset.id.isEmpty, !asset.displayName.isEmpty, !asset.sourceRepository.isEmpty, !asset.license.isEmpty else {
                 throw ModelAssetError.incompleteMetadata(asset.id)
@@ -123,8 +133,14 @@ public enum ModelAssetCatalog {
             guard asset.byteCount > 0 else { throw ModelAssetError.invalidByteCount(asset.id) }
         }
 
-        for runtime in ModelRuntime.allCases where !runtimes.contains(runtime) {
-            throw ModelAssetError.missingRuntimeAsset(runtime)
+        for runtime in ModelRuntime.allCases {
+            let count = runtimeCounts[runtime, default: 0]
+            guard count > 0 else {
+                throw ModelAssetError.missingRuntimeAsset(runtime)
+            }
+            if runtime != .llm, count > 1 {
+                throw ModelAssetError.duplicateRuntimeAsset(runtime)
+            }
         }
     }
 }
@@ -205,6 +221,7 @@ public enum ModelAssetError: Error, Equatable, Sendable {
     case duplicateAssetID(String)
     case duplicateRelativePath(String)
     case duplicateRuntimeAsset(ModelRuntime)
+    case ambiguousRuntimeAsset(ModelRuntime, count: Int)
     case incompleteMetadata(String)
     case invalidRelativePath(String)
     case invalidRevision(String)
@@ -228,6 +245,7 @@ extension ModelAssetError: LocalizedError {
         case .duplicateAssetID(let id): "Duplicate model asset id: \(id)."
         case .duplicateRelativePath(let path): "Duplicate model relative path: \(path)."
         case .duplicateRuntimeAsset(let runtime): "More than one model is configured for runtime \(runtime.rawValue)."
+        case .ambiguousRuntimeAsset(let runtime, let count): "Runtime \(runtime.rawValue) has \(count) configured models; select one by asset ID."
         case .incompleteMetadata(let id): "Model metadata is incomplete for \(id)."
         case .invalidRelativePath(let path): "Invalid model relative path: \(path)."
         case .invalidRevision(let id): "Model \(id) does not use a 40-character immutable revision."

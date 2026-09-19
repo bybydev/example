@@ -15,8 +15,8 @@ The app is intentionally document/workspace-oriented in v1. System-wide dictatio
 | Area | Feature | V1 | Notes |
 | --- | --- | :---: | --- |
 | App shell | Custom macOS window shell | ✅ | Native `NSWindow` underneath; custom titlebar/sidebar/content chrome |
-| App shell | Full-height sidebar divider | ✅ | Divider runs from top edge to bottom edge |
-| App shell | Animated divider-attached sidebar toggle | ✅ | Toggle moves with sidebar width; state persists |
+| App shell | Full-height sidebar divider | ✅ | Runs top-to-bottom while the sidebar is expanded; collapses away at 0 pt |
+| App shell | Animated main-titlebar sidebar toggle | ✅ | Sits beside the divider when expanded, clears traffic lights when collapsed; state persists |
 | App shell | MacAppFoundation themes | ✅ | Shared `MacAppThemeStore` |
 | Recording | Microphone recording | ✅ | Local only |
 | Recording | Pause / resume / stop | ✅ | Preserve one recording session |
@@ -35,6 +35,9 @@ The app is intentionally document/workspace-oriented in v1. System-wide dictatio
 | STT | Auto language detection | ✅ | Default behavior |
 | STT | Manual language selection | ✅ | Optional override |
 | STT | Segment timestamps | ✅ | Required for seeking/subtitle export |
+| Speakers | Local speaker diarization | ✅ | Pyannote segmentation + 3D-Speaker embeddings through sherpa-onnx |
+| Speakers | Token-level speaker alignment | ✅ | Whisper token timestamps split mixed-speaker segments |
+| Speakers | Rename speakers | ✅ | Names persist with the transcript and flow into subtitle export |
 | Library | Local transcript history | ✅ | No account/cloud dependency |
 | Library | Search by title/content | ✅ | Local index/search |
 | Library | Rename | ✅ | Transcript/document title |
@@ -45,7 +48,7 @@ The app is intentionally document/workspace-oriented in v1. System-wide dictatio
 | Editor | Transcript search | ✅ | In-document search |
 | Editor | Raw/original recoverability | ✅ | AI operations never silently destroy source text |
 | Local AI | `llama.cpp` runtime | ✅ | Shared local package |
-| Local AI | Bundled Qwen-class ~1.7B GGUF | ✅ | Exact model/revision pinned later |
+| Local AI | Bundled selectable Qwen models | ✅ | Qwen3 0.6B default; Qwen3 1.7B higher-quality option |
 | Local AI | Clean | ✅ | Punctuation, filler/repetition, obvious contextual corrections |
 | Local AI | Polish | ✅ | Spoken-to-written cleanup while preserving meaning |
 | Local AI | Summarize | ✅ | Derived document mode, not destructive overwrite |
@@ -92,7 +95,7 @@ The Free/Pro matrix is centralized in `InkribeProCapability`.
 - recording;
 - single-file import/transcription;
 - Library and transcript editing;
-- Raw/Edited modes, search, synchronized playback, and timestamp seeking;
+- Raw/Edited modes, search, synchronized playback, timestamp seeking, speaker detection, and speaker renaming;
 - copy, TXT, and Markdown export;
 - access to existing transcripts and previously saved derived AI results.
 
@@ -116,7 +119,6 @@ Rules:
 - automatic typing/pasting into the focused app
 - system audio capture
 - meeting-specific capture workflow
-- speaker diarization / speaker naming
 - word-level timestamp editor
 - translation workflow
 - watch folders

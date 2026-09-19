@@ -10,9 +10,16 @@ struct LLMRuntimeTests {
         #expect(LLMRuntimeRelease.revision.count == 40)
         #expect(LLMRuntimeRelease.archiveSHA256.count == 64)
 
-        let descriptor = try LLMModelAsset.descriptor()
-        #expect(descriptor.id == "qwen3-1.7b-q4-k-m")
-        #expect(descriptor.relativePath == "qwen/Qwen3-1.7B-Q4_K_M.gguf")
+        #expect(LLMModel.defaultModel == .qwen3_0_6B)
+
+        let small = try LLMModelAsset.descriptor()
+        #expect(small.id == "qwen3-0.6b-q4-k-m")
+        #expect(small.relativePath == "qwen/Qwen3-0.6B-Q4_K_M.gguf")
+
+        let large = try LLMModelAsset.descriptor(model: .qwen3_1_7B)
+        #expect(large.id == "qwen3-1.7b-q4-k-m")
+        #expect(large.relativePath == "qwen/Qwen3-1.7B-Q4_K_M.gguf")
+        #expect(try LLMModelAsset.descriptors().count == 2)
     }
 
     @Test func explicitConfigurationClampsUnsafeValues() {
@@ -31,11 +38,14 @@ struct LLMRuntimeTests {
 
     @Test func generationRequestKeepsDeterministicSamplingConfiguration() {
         let request = LLMGenerationRequest(
+            systemPrompt: "Stay grounded.",
             prompt: "Summarize this transcript.",
             maximumOutputTokens: 128,
             sampling: .init(temperature: 0.15, seed: 7)
         )
 
+        #expect(request.systemPrompt == "Stay grounded.")
+        #expect(request.prompt == "Summarize this transcript.")
         #expect(request.maximumOutputTokens == 128)
         #expect(request.sampling.temperature == 0.15)
         #expect(request.sampling.seed == 7)

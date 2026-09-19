@@ -18,11 +18,13 @@ public actor TranscriptAIService {
 
     public static func bundled(
         in bundle: Bundle = .main,
+        model: LLMModel = .defaultModel,
         configuration: LLMRuntimeConfiguration = .recommended,
         chunker: TranscriptAIChunker = .init()
     ) throws -> TranscriptAIService {
         let runtime = try NativeLLMRuntime.bundled(
             in: bundle,
+            model: model,
             configuration: configuration
         )
         return TranscriptAIService(runtime: runtime, chunker: chunker)
@@ -114,6 +116,7 @@ public actor TranscriptAIService {
     ) async throws -> [String] {
         try Task.checkCancellation()
         let request = LLMGenerationRequest(
+            systemPrompt: TranscriptAIPromptTemplates.systemPrompt,
             prompt: TranscriptAIPromptTemplates.transformPrompt(
                 action: action,
                 text: text,
@@ -206,6 +209,7 @@ public actor TranscriptAIService {
                 }.joined(separator: "\n\n")
 
                 let request = LLMGenerationRequest(
+                    systemPrompt: TranscriptAIPromptTemplates.systemPrompt,
                     prompt: TranscriptAIPromptTemplates.mergePrompt(
                         action: action,
                         partialOutputs: partials,
@@ -246,6 +250,22 @@ public actor TranscriptAIService {
             value = String(value[closing.upperBound...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
+
+        let accidentalWrapperLines: Set<String> = [
+            "<<RESULT>>",
+            "<RESULT>",
+            "</RESULT>",
+            "<</RESULT>>"
+        ]
+        value = value
+            .components(separatedBy: .newlines)
+            .filter {
+                !accidentalWrapperLines.contains(
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         return value
     }

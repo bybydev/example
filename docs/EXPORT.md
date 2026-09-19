@@ -8,8 +8,8 @@ Phase 7 adds deterministic, fully local finishing actions for durable `Transcrip
 - copy Raw Whisper transcript text
 - export Edited or Raw text as UTF-8 TXT
 - export Edited or Raw text as UTF-8 Markdown
-- export timestamped Whisper segments as SRT
-- export timestamped Whisper segments as WebVTT
+- export timestamped transcript segments as SRT
+- export timestamped transcript segments as WebVTT
 
 Formatting logic belongs to the cross-platform `InkribeExport` package. AppKit-only clipboard and save-panel behavior stays in the macOS app layer.
 
@@ -24,7 +24,7 @@ No implicit fallback occurs between them. If Edited text is intentionally empty,
 
 Text-source selection applies only to clipboard, TXT, and Markdown.
 
-SRT and WebVTT are generated from `Transcript.segments`. Edited prose is not substituted into subtitle cues because the edited document has no segment-level timing alignment contract.
+SRT and WebVTT are generated from `Transcript.segments`. Edited prose is not substituted into subtitle cues because the edited document has no segment-level timing alignment contract. When a segment has a diarized `speakerID`, export prefixes its persisted display name (for example, `Alice: Hello`). Speakerless/legacy segments export exactly as before.
 
 ## Text formats
 
@@ -53,6 +53,7 @@ Behavior:
 - SRT uses `HH:MM:SS,mmm`
 - WebVTT uses `HH:MM:SS.mmm` and begins with `WEBVTT`
 - empty segment text is skipped
+- persisted speaker names are prefixed when a segment has a speaker assignment
 - subtitle export fails with an actionable error when no usable timestamped segments exist
 
 The formatter does not mutate persisted segment data.

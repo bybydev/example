@@ -32,8 +32,6 @@ final class InkribeShellState {
             : InkribeShellMetrics.collapsedSidebarWidth
     }
 
-    var dividerX: CGFloat { sidebarWidth }
-    var sidebarToggleCenterX: CGFloat { dividerX }
 
     var activeTranscriptID: TranscriptID? {
         guard case .transcript(let id) = route else { return nil }

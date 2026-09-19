@@ -7,7 +7,7 @@ Inkribe is a macOS-first, fully offline speech-to-text workspace built around du
 The v1 product flow is:
 
 ```text
-Record or Import → Transcribe → Review/Edit → Clean/Polish/Summarize → Export
+Record or Import → Transcribe + Detect Speakers → Review/Edit → Clean/Polish/Summarize → Export
 ```
 
 Core transcription and transcript AI use bundled local models. The architecture keeps reusable domain, persistence, transcription, AI, export, runtime, and model-asset logic in shared packages so a future iOS target can reuse the same product core without a repo-wide extraction.
@@ -25,6 +25,7 @@ Packages/
   InkribeExport/             Transcript text/subtitle formatting contracts
   InkribeModelAssets/        Pinned model metadata, paths, integrity, tooling
   WhisperRuntime/            actor-isolated whisper.cpp inference boundary
+  DiarizationRuntime/        local sherpa-onnx speaker diarization boundary
   LLMRuntime/                actor-isolated llama.cpp generation boundary
 scripts/                     Model asset developer commands
 testfixtures/                Tiny path-compatible model fixtures
@@ -48,7 +49,10 @@ Production model metadata is centralized in `Packages/InkribeModelAssets/Sources
 Current v1 assets:
 
 - Whisper Small multilingual → `Models/whisper/ggml-small.bin`
+- Qwen3 0.6B Q4_K_M → `Models/qwen/Qwen3-0.6B-Q4_K_M.gguf`
 - Qwen3 1.7B Q4_K_M → `Models/qwen/Qwen3-1.7B-Q4_K_M.gguf`
+- Pyannote Segmentation 3.0 → `Models/diarization/pyannote-segmentation-3.0.onnx`
+- 3D-Speaker ERes2Net Base → `Models/diarization/3dspeaker-eres2net-base.onnx`
 
 Use `make download-models` to restore production weights, `make verify-models` to check their pinned size and SHA-256, and `make install-model-fixtures` to populate the same paths with tiny development fixtures.
 
@@ -59,9 +63,10 @@ See `docs/MODEL_ASSETS.md` for the authoritative asset contract.
 The reusable native runtime packages pin upstream Apple inference artifacts and keep direct C APIs internal:
 
 - `WhisperRuntime` → whisper.cpp `1.9.4` / binary `b5130`
+- `DiarizationRuntime` → sherpa-onnx `1.13.8`
 - `LLMRuntime` → llama.cpp `0.4.1` / binary `b10964`
 
-Both runtimes own model/context lifetime explicitly and serialize mutable native state through actors. Recommended policy uses Metal on Apple Silicon and CPU inference on Intel. Runtime diagnostics record operational metadata only, never transcript, audio, prompt, or generated content.
+These runtimes own model/context lifetime explicitly and isolate mutable native state behind package boundaries. Recommended policy uses Metal on Apple Silicon and CPU inference on Intel. Runtime diagnostics record operational metadata only, never transcript, audio, prompt, or generated content.
 
 See `docs/NATIVE_RUNTIMES.md` for native dependency pins, lifecycle, cancellation, sampling, audio, and prompt-layer boundaries.
 
@@ -73,13 +78,15 @@ Record and Import feed the same durable pipeline:
 app-owned media
   → persistent TranscriptionJob
   → 16 kHz mono decode
-  → WhisperRuntime
+  → WhisperRuntime token timestamps
+  → local speaker diarization
+  → token/speaker alignment
   → durable Transcript
 ```
 
 Record supports input-device selection, pause/resume, metering, and durable capture. Import supports multi-file selection and drag/drop for audio and video sources. JobQueue remains the single processing-state owner, while `InkribePersistence` remains transcript-content truth. Retries update the same transcript and preserve user-edited text once it has diverged from raw transcription.
 
-Whisper stays warm across an active queue batch and is released when JobQueue drains, so batch throughput does not require one model load per file while idle transcription memory is reclaimed afterward.
+Whisper and the speaker-diarization models stay warm across an active queue batch and are released when JobQueue drains, so batch throughput does not require repeated model loads while idle transcription memory is reclaimed afterward.
 
 See `docs/TRANSCRIPTION_PIPELINE.md` and `docs/JOB_QUEUE.md` for the durable storage, retry, cancellation, ownership, and runtime-lifetime contracts.
 
@@ -89,13 +96,13 @@ The Library and transcript editor operate directly on durable transcript documen
 
 Library capabilities include local title/content search, newest/oldest/title sorting, rename, delete with active-job protection, source-media cleanup, and direct navigation to transcript documents.
 
-The transcript editor keeps Raw Whisper output separate from user/AI Edited text, persists edits with revision tracking, retains timestamped segments, supports transcript search, and plays the original app-owned audio/video source with seek, scrub, ±10 second skip, segment seeking, and current-segment highlighting. Missing media disables playback without making transcript content unavailable.
+The transcript editor keeps Raw Whisper output separate from user/AI Edited text, persists edits with revision tracking, retains timestamped speaker-aware segments, lets users rename detected speakers, supports transcript search, and plays the original app-owned audio/video source with seek, scrub, ±10 second skip, segment seeking, and current-segment highlighting. Missing media disables playback without making transcript content unavailable.
 
 See `docs/TRANSCRIPT_WORKSPACE.md` for the Library/editor ownership, persistence, deletion, playback, and local-AI integration contracts.
 
 ## Offline local AI
 
-The transcript editor includes five constrained local AI actions using the bundled Qwen model through `LLMRuntime`:
+The transcript editor includes five constrained local AI actions using a selectable bundled Qwen model through `LLMRuntime`. Qwen3 0.6B is the default for lower memory use and faster local generation; Qwen3 1.7B remains available in Settings for higher-quality output:
 
 - Clean
 - Polish
@@ -119,8 +126,8 @@ The active transcript can be copied or exported without leaving the local docume
 - Copy Raw transcript
 - TXT from Edited or Raw text
 - Markdown from Edited or Raw text
-- SRT from timestamped transcript segments
-- WebVTT from timestamped transcript segments
+- SRT from timestamped transcript segments, including speaker names when available
+- WebVTT from timestamped transcript segments, including speaker names when available
 
 Text export preserves the selected source exactly; there is no hidden Raw/Edited fallback. Subtitle export stays segment-based because Edited prose does not have timestamp alignment. Valid overlapping cue timestamps are preserved, malformed durations are minimally repaired, and filenames are generated safely from the transcript title and creation date.
 
@@ -132,7 +139,7 @@ See `docs/EXPORT.md` for source-selection, filename, subtitle, privacy, and Mac 
 
 The native Mac Settings scene uses MacAppFoundation and combines Inkribe panes for General, Transcription, AI Cleanup, Storage, Diagnostics, and About with the built-in Appearance and Plan panes.
 
-`InkribePreferences` persists only durable workflow choices: default transcription language, default microphone (or the current macOS System Default), and optional Qwen retention between AI actions. Record and Import share one language catalog and can still override language per job.
+`InkribePreferences` persists only durable workflow choices: default transcription language, default microphone (or the current macOS System Default), selected local AI model, and optional Qwen retention between AI actions. Record and Import share one language catalog and can still override language per job.
 
 Storage shows app-owned mutable data and can remove source media from finished transcripts without deleting transcript text, timestamps, edits, or saved AI results. Media needed by unfinished or retryable queue records is preserved.
 

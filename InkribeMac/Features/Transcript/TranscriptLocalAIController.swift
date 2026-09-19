@@ -23,7 +23,9 @@ final class TranscriptLocalAIController {
 
     init(
         serviceFactory: @escaping ServiceFactory = {
-            try TranscriptAIService.bundled()
+            try TranscriptAIService.bundled(
+                model: InkribePreferences.shared.localAIModel
+            )
         },
         keepModelLoadedProvider: @escaping KeepModelLoadedProvider = {
             InkribePreferences.shared.keepAIModelLoaded

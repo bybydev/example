@@ -263,6 +263,29 @@ final class InkribeAppState {
         return transcript
     }
 
+    func renameSpeaker(
+        transcriptID: TranscriptID,
+        speakerID: Int,
+        name: String
+    ) async throws -> Transcript {
+        guard let transcriptRepository else { throw AppStateError.pipelineUnavailable }
+        guard var transcript = try await transcriptRepository.transcript(id: transcriptID) else {
+            throw AppStateError.transcriptNotFound
+        }
+
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { throw AppStateError.emptySpeakerName }
+        guard let index = transcript.speakers.firstIndex(where: { $0.id == speakerID }) else {
+            throw AppStateError.speakerNotFound
+        }
+        guard transcript.speakers[index].name != normalized else { return transcript }
+
+        transcript.speakers[index].name = normalized
+        transcript.updatedAt = .now
+        try await transcriptRepository.save(transcript)
+        return transcript
+    }
+
     func mediaURL(for transcript: Transcript) async throws -> URL? {
         guard let mediaStore else { throw AppStateError.pipelineUnavailable }
         guard let relativePath = transcript.sourceMediaRelativePath else { return nil }
@@ -379,6 +402,8 @@ final class InkribeAppState {
         case recordingFailed(String)
         case transcriptNotFound
         case emptyTranscriptTitle
+        case emptySpeakerName
+        case speakerNotFound
         case transcriptBusy
 
         var errorDescription: String? {
@@ -397,6 +422,10 @@ final class InkribeAppState {
                 "The transcript no longer exists."
             case .emptyTranscriptTitle:
                 "Transcript titles cannot be empty."
+            case .emptySpeakerName:
+                "Speaker names cannot be empty."
+            case .speakerNotFound:
+                "The selected speaker is no longer available."
             case .transcriptBusy:
                 "Wait for transcription to finish or cancel it before deleting this transcript."
             }

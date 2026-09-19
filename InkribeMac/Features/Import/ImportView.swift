@@ -129,6 +129,7 @@ struct ImportView: View {
             .frame(width: 340)
             .padding(20)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             loadWorkflowDefaultsIfNeeded()
         }
