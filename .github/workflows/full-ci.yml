@@ -1,0 +1,107 @@
+name: Full CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: byokchat-full-ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-ci:
+    name: Full unit test validation
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Run package tests
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift package sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/BYOKchat-SourcePackages
+          key: byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: |
+            byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Select iPhone simulator for active SDK
+        id: simulator
+        shell: bash
+        run: |
+          SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          RUNTIME_ID="$(
+            xcrun simctl list runtimes -j | python3 -c 'import json, sys; sdk = sys.argv[1]; data = json.load(sys.stdin); print(next((runtime["identifier"] for runtime in data.get("runtimes", []) if runtime.get("isAvailable", True) and runtime.get("version") == sdk), ""))' "$SDK_VERSION"
+          )"
+          if [[ -z "$RUNTIME_ID" ]]; then
+            echo "error: no available simulator runtime matches iOS SDK $SDK_VERSION" >&2
+            xcrun simctl list runtimes
+            exit 1
+          fi
+
+          SIMULATOR_UDID="$(
+            xcrun simctl list devices available -j | python3 -c 'import json, sys; runtime = sys.argv[1]; data = json.load(sys.stdin); print(next((device["udid"] for device in data.get("devices", {}).get(runtime, []) if device.get("isAvailable") and device.get("name", "").startswith("iPhone")), ""))' "$RUNTIME_ID"
+          )"
+          if [[ -z "$SIMULATOR_UDID" ]]; then
+            echo "error: no available iPhone simulator found for $RUNTIME_ID" >&2
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+          echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "runtime_id=$RUNTIME_ID" >> "$GITHUB_OUTPUT"
+          echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+          echo "Using iOS SDK $SDK_VERSION with simulator $SIMULATOR_UDID"
+
+      - name: Run iOS unit tests
+        shell: bash
+        run: |
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          xcodebuild test \
+            -project BYOKchat.xcodeproj \
+            -scheme BYOKchat \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/BYOKchat-full-iOS" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Run macOS unit tests
+        shell: bash
+        run: |
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          xcodebuild test \
+            -project BYOKchat.xcodeproj \
+            -scheme BYOKmac \
+            -configuration Debug \
+            -destination "platform=macOS,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/BYOKchat-full-macOS" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      # BYOKchatScreenshots is intentionally excluded here. It is a screenshot
+      # capture suite rather than core correctness coverage and costs extra
+      # simulator time. Run it explicitly when refreshing App Store screenshots.

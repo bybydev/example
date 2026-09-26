@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mycli-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift package sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/BYOKchat-SourcePackages
+          key: byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: |
+            byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Set build release tag
+        id: release
+        shell: bash
+        run: |
+          tag="mycli-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Build release: $tag"
+
+      - name: Archive unsigned iOS app
+        shell: bash
+        run: |
+          IOS_DERIVED="$RUNNER_TEMP/BYOKchat-iOS"
+          IOS_ARCHIVE="$RUNNER_TEMP/BYOKchat.xcarchive"
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
+
+          args=(
+            -project BYOKchat.xcodeproj
+            -scheme BYOKchat
+            -configuration Release
+            -sdk iphoneos
+            -destination "generic/platform=iOS"
+            -derivedDataPath "$IOS_DERIVED"
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
+            -archivePath "$IOS_ARCHIVE"
+            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO
+            archive
+          )
+          xcodebuild "${args[@]}"
+
+          test -d "$IOS_ARCHIVE"
+          IOS_APP_COUNT="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+          if [[ "$IOS_APP_COUNT" != "1" ]]; then
+            echo "error: expected exactly one iOS app in archive, found $IOS_APP_COUNT" >&2
+            exit 1
+          fi
+
+          mkdir -p "$ARTIFACTS"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$IOS_ARCHIVE" \
+            "$ARTIFACTS/BYOKchat-iOS-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+
+          rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
+
+      - name: Build unsigned universal macOS app
+        shell: bash
+        run: |
+          MAC_DERIVED="$RUNNER_TEMP/BYOKchat-macOS"
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
+
+          args=(
+            -project BYOKchat.xcodeproj
+            -scheme BYOKmac
+            -configuration Release
+            -sdk macosx
+            -destination "platform=macOS"
+            -derivedDataPath "$MAC_DERIVED"
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
+            ARCHS="arm64 x86_64"
+            ONLY_ACTIVE_ARCH=NO
+            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO
+            build
+          )
+          xcodebuild "${args[@]}"
+
+          MAC_PRODUCTS="$MAC_DERIVED/Build/Products/Release"
+          MAC_APP_COUNT="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+          if [[ "$MAC_APP_COUNT" != "1" ]]; then
+            echo "error: expected exactly one macOS app, found $MAC_APP_COUNT" >&2
+            exit 1
+          fi
+          MAC_APP="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print)"
+
+          MAC_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$MAC_APP/Contents/Info.plist")"
+          MAC_ARCHS="$(lipo -archs "$MAC_APP/Contents/MacOS/$MAC_EXECUTABLE")"
+          echo "macOS architectures: $MAC_ARCHS"
+          [[ " $MAC_ARCHS " == *" arm64 "* ]] || { echo "error: arm64 slice missing" >&2; exit 1; }
+          [[ " $MAC_ARCHS " == *" x86_64 "* ]] || { echo "error: x86_64 slice missing" >&2; exit 1; }
+
+          ICON_FOUND=false
+          if find "$MAC_APP/Contents/Resources" -maxdepth 1 -type f -name '*.icns' -print -quit | grep -q .; then
+            ICON_FOUND=true
+          fi
+
+          ASSETS_CAR="$MAC_APP/Contents/Resources/Assets.car"
+          if [[ -f "$ASSETS_CAR" ]]; then
+            ASSET_INFO="$RUNNER_TEMP/BYOKchat-macOS-assets.json"
+            xcrun assetutil --info "$ASSETS_CAR" > "$ASSET_INFO"
+            if grep -Fq 'AppIcon' "$ASSET_INFO"; then
+              ICON_FOUND=true
+            fi
+          fi
+
+          if [[ "$ICON_FOUND" != "true" ]]; then
+            echo "error: compiled macOS app icon output was not found" >&2
+            exit 1
+          fi
+
+          mkdir -p "$ARTIFACTS"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$MAC_APP" \
+            "$ARTIFACTS/BYOKchat-macOS-universal-unsigned-${{ steps.release.outputs.tag }}.zip"
+
+          rm -rf "$MAC_DERIVED"
+
+      - name: Verify release archives
+        shell: bash
+        run: |
+          ls -lh artifacts
+
+          test -f "artifacts/BYOKchat-iOS-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+          test -f "artifacts/BYOKchat-macOS-universal-unsigned-${{ steps.release.outputs.tag }}.zip"
+
+          for archive in artifacts/*.zip; do
+            bytes="$(stat -f%z "$archive")"
+            if (( bytes >= 2147483648 )); then
+              echo "error: $archive is too large for a GitHub Release asset" >&2
+              exit 1
+            fi
+          done
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" artifacts/*.zip \
+            --target "$RELEASE_SHA" \
+            --title "$RELEASE_TAG" \
+            --prerelease \
+            --generate-notes

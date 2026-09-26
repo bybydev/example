@@ -1,0 +1,79 @@
+name: Fast CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: byokchat-fast-ci-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-ci:
+    name: Fast validation
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Run package tests
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift package sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/BYOKchat-SourcePackages
+          key: byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: |
+            byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build iOS app
+        shell: bash
+        run: |
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          xcodebuild \
+            -project BYOKchat.xcodeproj \
+            -scheme BYOKchat \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$RUNNER_TEMP/BYOKchat-fast-iOS" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Build macOS app
+        shell: bash
+        run: |
+          SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
+          xcodebuild \
+            -project BYOKchat.xcodeproj \
+            -scheme BYOKmac \
+            -configuration Debug \
+            -sdk macosx \
+            -destination "platform=macOS,arch=arm64" \
+            -derivedDataPath "$RUNNER_TEMP/BYOKchat-fast-macOS" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
