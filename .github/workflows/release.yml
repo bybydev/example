@@ -53,113 +53,119 @@ jobs:
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Build release: $tag"
 
-      - name: Archive unsigned iOS app
+      - name: Archive unsigned iOS app (Debug and Release)
         shell: bash
         run: |
-          IOS_DERIVED="$RUNNER_TEMP/BYOKchat-iOS"
-          IOS_ARCHIVE="$RUNNER_TEMP/BYOKchat.xcarchive"
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
-
-          args=(
-            -project BYOKchat.xcodeproj
-            -scheme BYOKchat
-            -configuration Release
-            -sdk iphoneos
-            -destination "generic/platform=iOS"
-            -derivedDataPath "$IOS_DERIVED"
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
-            -archivePath "$IOS_ARCHIVE"
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            archive
-          )
-          xcodebuild "${args[@]}"
-
-          test -d "$IOS_ARCHIVE"
-          IOS_APP_COUNT="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
-          if [[ "$IOS_APP_COUNT" != "1" ]]; then
-            echo "error: expected exactly one iOS app in archive, found $IOS_APP_COUNT" >&2
-            exit 1
-          fi
-
           mkdir -p "$ARTIFACTS"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$IOS_ARCHIVE" \
-            "$ARTIFACTS/BYOKchat-iOS-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
 
-          rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
+          for CONFIGURATION in Debug Release; do
+            IOS_DERIVED="$RUNNER_TEMP/BYOKchat-iOS-$CONFIGURATION"
+            IOS_ARCHIVE="$RUNNER_TEMP/BYOKchat-$CONFIGURATION.xcarchive"
 
-      - name: Build unsigned universal macOS app
+            xcodebuild \
+              -project BYOKchat.xcodeproj \
+              -scheme BYOKchat \
+              -configuration "$CONFIGURATION" \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -derivedDataPath "$IOS_DERIVED" \
+              -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+              -archivePath "$IOS_ARCHIVE" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              archive
+
+            test -d "$IOS_ARCHIVE"
+            IOS_APP_COUNT="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+            if [[ "$IOS_APP_COUNT" != "1" ]]; then
+              echo "error: expected exactly one iOS app in $CONFIGURATION archive, found $IOS_APP_COUNT" >&2
+              exit 1
+            fi
+
+            CONFIGURATION_LOWER="$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+            ditto -c -k --sequesterRsrc --keepParent \
+              "$IOS_ARCHIVE" \
+              "$ARTIFACTS/BYOKchat-iOS-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+
+            rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
+          done
+
+      - name: Build unsigned universal macOS app (Debug and Release)
         shell: bash
         run: |
-          MAC_DERIVED="$RUNNER_TEMP/BYOKchat-macOS"
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
+          mkdir -p "$ARTIFACTS"
 
-          args=(
-            -project BYOKchat.xcodeproj
-            -scheme BYOKmac
-            -configuration Release
-            -sdk macosx
-            -destination "platform=macOS"
-            -derivedDataPath "$MAC_DERIVED"
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
-            ARCHS="arm64 x86_64"
-            ONLY_ACTIVE_ARCH=NO
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            build
-          )
-          xcodebuild "${args[@]}"
+          for CONFIGURATION in Debug Release; do
+            MAC_DERIVED="$RUNNER_TEMP/BYOKchat-macOS-$CONFIGURATION"
 
-          MAC_PRODUCTS="$MAC_DERIVED/Build/Products/Release"
-          MAC_APP_COUNT="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
-          if [[ "$MAC_APP_COUNT" != "1" ]]; then
-            echo "error: expected exactly one macOS app, found $MAC_APP_COUNT" >&2
-            exit 1
-          fi
-          MAC_APP="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print)"
+            xcodebuild \
+              -project BYOKchat.xcodeproj \
+              -scheme BYOKmac \
+              -configuration "$CONFIGURATION" \
+              -sdk macosx \
+              -destination "platform=macOS" \
+              -derivedDataPath "$MAC_DERIVED" \
+              -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+              ARCHS="arm64 x86_64" \
+              ONLY_ACTIVE_ARCH=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              build
 
-          MAC_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$MAC_APP/Contents/Info.plist")"
-          MAC_ARCHS="$(lipo -archs "$MAC_APP/Contents/MacOS/$MAC_EXECUTABLE")"
-          echo "macOS architectures: $MAC_ARCHS"
-          [[ " $MAC_ARCHS " == *" arm64 "* ]] || { echo "error: arm64 slice missing" >&2; exit 1; }
-          [[ " $MAC_ARCHS " == *" x86_64 "* ]] || { echo "error: x86_64 slice missing" >&2; exit 1; }
+            MAC_PRODUCTS="$MAC_DERIVED/Build/Products/$CONFIGURATION"
+            MAC_APP_COUNT="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+            if [[ "$MAC_APP_COUNT" != "1" ]]; then
+              echo "error: expected exactly one macOS app for $CONFIGURATION, found $MAC_APP_COUNT" >&2
+              exit 1
+            fi
+            MAC_APP="$(find "$MAC_PRODUCTS" -maxdepth 1 -type d -name '*.app' -print)"
 
-          ICON_FOUND=false
-          if find "$MAC_APP/Contents/Resources" -maxdepth 1 -type f -name '*.icns' -print -quit | grep -q .; then
-            ICON_FOUND=true
-          fi
+            MAC_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$MAC_APP/Contents/Info.plist")"
+            MAC_ARCHS="$(lipo -archs "$MAC_APP/Contents/MacOS/$MAC_EXECUTABLE")"
+            echo "$CONFIGURATION macOS architectures: $MAC_ARCHS"
+            [[ " $MAC_ARCHS " == *" arm64 "* ]] || { echo "error: arm64 slice missing" >&2; exit 1; }
+            [[ " $MAC_ARCHS " == *" x86_64 "* ]] || { echo "error: x86_64 slice missing" >&2; exit 1; }
 
-          ASSETS_CAR="$MAC_APP/Contents/Resources/Assets.car"
-          if [[ -f "$ASSETS_CAR" ]]; then
-            ASSET_INFO="$RUNNER_TEMP/BYOKchat-macOS-assets.json"
-            xcrun assetutil --info "$ASSETS_CAR" > "$ASSET_INFO"
-            if grep -Fq 'AppIcon' "$ASSET_INFO"; then
+            ICON_FOUND=false
+            if find "$MAC_APP/Contents/Resources" -maxdepth 1 -type f -name '*.icns' -print -quit | grep -q .; then
               ICON_FOUND=true
             fi
-          fi
 
-          if [[ "$ICON_FOUND" != "true" ]]; then
-            echo "error: compiled macOS app icon output was not found" >&2
-            exit 1
-          fi
+            ASSETS_CAR="$MAC_APP/Contents/Resources/Assets.car"
+            if [[ -f "$ASSETS_CAR" ]]; then
+              ASSET_INFO="$RUNNER_TEMP/BYOKchat-macOS-$CONFIGURATION-assets.json"
+              xcrun assetutil --info "$ASSETS_CAR" > "$ASSET_INFO"
+              if grep -Fq 'AppIcon' "$ASSET_INFO"; then
+                ICON_FOUND=true
+              fi
+            fi
 
-          mkdir -p "$ARTIFACTS"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$MAC_APP" \
-            "$ARTIFACTS/BYOKchat-macOS-universal-unsigned-${{ steps.release.outputs.tag }}.zip"
+            if [[ "$ICON_FOUND" != "true" ]]; then
+              echo "error: compiled macOS app icon output was not found for $CONFIGURATION" >&2
+              exit 1
+            fi
 
-          rm -rf "$MAC_DERIVED"
+            CONFIGURATION_LOWER="$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+            ditto -c -k --sequesterRsrc --keepParent \
+              "$MAC_APP" \
+              "$ARTIFACTS/BYOKchat-macOS-universal-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.zip"
+
+            rm -rf "$MAC_DERIVED"
+          done
 
       - name: Verify release archives
         shell: bash
         run: |
           ls -lh artifacts
 
-          test -f "artifacts/BYOKchat-iOS-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
-          test -f "artifacts/BYOKchat-macOS-universal-unsigned-${{ steps.release.outputs.tag }}.zip"
+          for configuration in debug release; do
+            test -f "artifacts/BYOKchat-iOS-$configuration-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+            test -f "artifacts/BYOKchat-macOS-universal-$configuration-unsigned-${{ steps.release.outputs.tag }}.zip"
+          done
 
           for archive in artifacts/*.zip; do
             bytes="$(stat -f%z "$archive")"
