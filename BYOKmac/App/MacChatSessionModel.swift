@@ -137,6 +137,7 @@ final class MacChatSessionModel {
     } catch is CancellationError {
       // Deletion cancels in-flight hydration.
     } catch {
+      MacAppAnalytics.reportError("conversation_load_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
     }
   }
@@ -238,6 +239,7 @@ final class MacChatSessionModel {
       } catch is CancellationError {
       } catch {
         if draftRevisions[conversationID] == revision {
+          MacAppAnalytics.reportError("draft_save_failed", component: "chat_storage")
           errorMessage = error.localizedDescription
         }
       }
@@ -271,6 +273,7 @@ final class MacChatSessionModel {
       } catch is CancellationError {
       } catch {
         isSearching = false
+        MacAppAnalytics.reportError("conversation_search_failed", component: "chat_storage")
         errorMessage = error.localizedDescription
       }
     }
@@ -285,6 +288,7 @@ final class MacChatSessionModel {
       try await reloadSummaries()
       return true
     } catch {
+      MacAppAnalytics.reportError("conversation_rename_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
       return false
     }
@@ -322,6 +326,7 @@ final class MacChatSessionModel {
     } catch {
       setDraft(draftBeforeDelete, conversationID: id)
       try? await reloadSummaries()
+      MacAppAnalytics.reportError("conversation_delete_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
       return false
     }
@@ -529,6 +534,7 @@ final class MacChatSessionModel {
         effectiveID = conversation.id
         try await reloadSummaries()
       } catch {
+        MacAppAnalytics.reportError("conversation_create_failed", component: "chat_storage")
         errorMessage = error.localizedDescription
         newChatDraft = trimmed
         return nil
@@ -698,6 +704,7 @@ final class MacChatSessionModel {
     if !didStartTurn, let draft = action.draftToRestoreIfTurnNeverStarts {
       setDraft(draft, conversationID: conversationID)
     }
+    MacAppAnalytics.reportError("chat_generation_failed", component: "chat_runtime")
     errorMessage = error.localizedDescription
     try? await reloadConversation(conversationID)
     try? await reloadSummaries()
@@ -744,6 +751,7 @@ final class MacChatSessionModel {
       await streamAccumulator.remove(message.id)
       livePresentations.removeValue(forKey: message.id)?.cancelPendingRenders()
       if message.status == .failed {
+        MacAppAnalytics.reportError("chat_generation_failed", component: "chat_runtime")
         errorMessage = message.errorDescription ?? "The response failed."
       }
       try? await reloadConversation(conversationID)

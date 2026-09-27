@@ -365,6 +365,7 @@ struct MacRichMessageView: View {
     do {
       try message.content.write(to: url, atomically: true, encoding: .utf8)
     } catch {
+      MacAppAnalytics.reportError("message_export_failed", component: "chat")
       chats.errorMessage = error.localizedDescription
     }
   }

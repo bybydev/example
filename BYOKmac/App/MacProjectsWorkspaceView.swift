@@ -1026,6 +1026,7 @@ private struct MacProjectSourcesWorkspaceView: View {
   private func importFiles(_ result: Result<[URL], Error>) {
     switch result {
     case .failure(let error):
+      MacAppAnalytics.reportError("project_file_picker_failed", component: "projects")
       workspace.errorMessage = error.localizedDescription
     case .success(let urls):
       guard !urls.isEmpty else { return }
@@ -1061,6 +1062,7 @@ private struct MacProjectSourcesWorkspaceView: View {
             await mcp.reloadFromStorage()
           }
         } catch {
+          MacAppAnalytics.reportError("project_file_import_failed", component: "projects")
           workspace.errorMessage = error.localizedDescription
         }
       }

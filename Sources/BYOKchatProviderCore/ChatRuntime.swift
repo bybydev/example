@@ -378,6 +378,7 @@ public actor ChatRuntime {
             }
           }
 
+          try Task.checkCancellation()
           guard let finalResponse else {
             throw ProviderError.prematureStreamEnd
           }

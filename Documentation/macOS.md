@@ -4,7 +4,7 @@
 
 The native macOS app is implemented on top of the shared `BYOKchatProviderCore` runtime.
 
-Phase 10 purchases and Pro entitlement are now implemented with **MacAppFoundation 0.1.0**, pinned exactly in `project.yml`. The Mac app reuses the same BYOK Pro product identifiers and free/Pro business rules as iOS; StoreKit entitlement state is owned by MacAppFoundation rather than duplicated in BYOKchat.
+Purchases, Pro entitlement, and first-party macOS app analytics are implemented with **MacAppFoundation 1.4.0**, pinned exactly in `project.yml`. The Mac app reuses the same BYOK Pro product identifiers and free/Pro business rules as iOS; StoreKit entitlement state is owned by MacAppFoundation rather than duplicated in BYOKchat.
 
 ## Architecture boundary
 
@@ -13,7 +13,7 @@ The platform boundary is intentional:
 - `BYOKmac/**` owns the native macOS app lifecycle, orchestration, navigation, views, Settings, menus, desktop interaction behavior, and app-specific Pro policy composition.
 - `BYOKchat/**` remains the iOS app layer.
 - `Sources/BYOKchatProviderCore/**` owns platform-neutral providers, conversations, persistence, projects, Library, MCP/tools, usage analytics, telemetry, portability, and file storage.
-- `MacAppFoundation` owns reusable macOS StoreKit 2 commerce, entitlement evaluation, paywall/Plan primitives, purchase simulation, and developer purchase tooling.
+- `MacAppFoundation` owns reusable macOS StoreKit 2 commerce, entitlement evaluation, paywall/Plan primitives, purchase simulation, developer purchase tooling, and first-party app analytics.
 - `project.yml` is the source of truth for target/package configuration.
 
 Mac UI must not depend on the iOS app layer, and shared core should not accumulate Mac-only conditionals for view concerns.
@@ -177,6 +177,12 @@ Creation is gated at the model boundary so every entry point observes the same r
 
 ## Analytics
 
+BYOKchat has two intentionally separate analytics layers. User-facing usage/performance analytics remain local/shared runtime capabilities, while MacAppFoundation provides privacy-bounded first-party app telemetry for product health and commerce funnels.
+
+The Mac app creates one `AppAnalyticsClient` with app ID `byokchat`, uses `Bundle.main.bundleIdentifier` (`com.hoangbkit.byokchat`) as the native app key, and sends to `https://analytics.133043.xyz`. The same client is shared through `.managesAnalytics(analytics)` across app scenes, so MAF lifecycle/session accounting and automatic `ProPaywallView` commerce events use one installation identity. This telemetry does not include prompts, message text, filenames, provider credentials, StoreKit receipts, transaction IDs, or arbitrary error text.
+
+Mac failures are also reported through MAF's bounded error stream using stable snake-case codes plus low-cardinality components. Coverage includes startup/recovery, chat persistence and generation, provider/MCP/workspace mutations, attachment handling, Library/project file operations, data portability, and diagnostics/export failures. Cancellation and normal user-validation paths are not intentionally reported, and raw `Error` text is never sent.
+
 Usage and performance analytics are shared runtime capabilities rather than a Mac-specific implementation.
 
 `ChatBilling`, `TelemetryAnalytics`, and the shared `UsageAnalytics` presentation model provide:
@@ -247,6 +253,6 @@ Current release identity remains:
 
 The approved BYOKchat artwork in the iOS asset catalog remains the source artwork for the Mac AppIcon/Icon Composer asset.
 
-## Phase 10 dependency lock
+## MacAppFoundation dependency lock
 
-Phase 10 is implemented against the exact public `MacAppFoundation` tag **0.1.0**. Do not silently move this dependency to `master` or a later tag as part of unrelated work. Upgrade it explicitly when BYOKchat intentionally adopts a newer MacAppFoundation release.
+The macOS app is implemented against the exact public `MacAppFoundation` tag **1.4.0**. Do not silently move this dependency to `master` or a later tag as part of unrelated work. Upgrade it explicitly when BYOKchat intentionally adopts a newer MacAppFoundation release.

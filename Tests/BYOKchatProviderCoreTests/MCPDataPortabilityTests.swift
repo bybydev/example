@@ -40,7 +40,8 @@ import Testing
   #expect(!serialized.contains("mcp-super-secret"))
 
   let backup = try JSONDecoder.provider.decode(BYOKchatBackup.self, from: backupData)
-  #expect(backup.mcpWorkspace?.servers == [server])
+  let persistedServer = try await mcp.server(id: server.id)
+  #expect(backup.mcpWorkspace?.servers == [persistedServer])
   #expect(backup.preferences.defaultSystemPrompt == "Be concise.")
 
   let summary = try await service.importBackup(backupData, strategy: .replaceExisting)

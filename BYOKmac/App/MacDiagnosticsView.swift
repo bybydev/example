@@ -291,6 +291,7 @@ private struct MacTelemetryLogsView: View {
     do {
       try bytes.write(to: url, options: .atomic)
     } catch {
+      MacAppAnalytics.reportError("diagnostics_write_failed", component: "diagnostics")
       diagnostics.errorMessage = error.localizedDescription
     }
   }

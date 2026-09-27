@@ -283,6 +283,18 @@ public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
     self.conversations = conversations
     self.tombstones = tombstones
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, conversations, tombstones
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+      ?? Self.currentSchemaVersion
+    conversations = try container.decodeIfPresent([ChatConversation].self, forKey: .conversations) ?? []
+    tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
+  }
 }
 
 /// Compact message metadata kept in index.json for analytics and attachment

@@ -35,7 +35,7 @@ public struct TelemetryLogFilter: Sendable, Equatable {
     if let modelID, event.modelID != modelID { return false }
     if let conversationID, event.conversationID != conversationID { return false }
 
-    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let query = Self.normalizedSearchText(searchText)
     guard !query.isEmpty else { return true }
 
     var searchable = [
@@ -56,7 +56,17 @@ public struct TelemetryLogFilter: Sendable, Equatable {
       searchable.append(key)
       searchable.append(value)
     }
-    return searchable.contains { $0.lowercased().contains(query) }
+    return searchable.contains { Self.normalizedSearchText($0).contains(query) }
+  }
+
+  private static func normalizedSearchText(_ value: String) -> String {
+    value
+      .lowercased()
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .replacingOccurrences(of: ".", with: " ")
+      .split(whereSeparator: { $0.isWhitespace })
+      .joined(separator: " ")
   }
 }
 

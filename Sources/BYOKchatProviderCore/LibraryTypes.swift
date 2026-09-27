@@ -79,4 +79,16 @@ public struct LibraryWorkspaceState: Codable, Sendable, Equatable {
     self.entries = entries
     self.tombstones = tombstones
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, entries, tombstones
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+      ?? Self.currentSchemaVersion
+    entries = try container.decodeIfPresent([LibraryEntry].self, forKey: .entries) ?? []
+    tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
+  }
 }

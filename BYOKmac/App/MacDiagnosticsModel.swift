@@ -46,6 +46,7 @@ final class MacDiagnosticsModel {
     do {
       return try TelemetryDiagnostics.exportJSON(events: events)
     } catch {
+      MacAppAnalytics.reportError("diagnostics_export_failed", component: "diagnostics")
       errorMessage = error.localizedDescription
       return nil
     }

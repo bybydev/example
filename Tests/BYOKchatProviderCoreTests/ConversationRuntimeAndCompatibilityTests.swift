@@ -79,12 +79,10 @@ import Testing
     partialPersistenceInterval: .seconds(30)
   )
   let stream = await chat.send(conversationID: conversation.id, userText: "Hello")
-  let consumer = Task {
-    do {
-      for try await _ in stream {}
-    } catch {}
+  var iterator = stream.makeAsyncIterator()
+  while let event = try await iterator.next() {
+    if case .textDelta(_, let value) = event, value == "Partial" { break }
   }
-  try await Task.sleep(for: .milliseconds(30))
   await chat.flushActiveGenerations()
 
   let flushed = try await store.conversation(id: conversation.id)
@@ -92,8 +90,6 @@ import Testing
   #expect(flushed.messages.last?.content == "Partial")
 
   await chat.cancel(conversationID: conversation.id)
-  consumer.cancel()
-  _ = await consumer.result
 }
 
 @Test func olderConversationJSONRemainsDecodable() async throws {

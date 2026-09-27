@@ -175,7 +175,7 @@ private func openAIResponsesAccount() -> ResolvedProviderAccount {
 @Test func openAIResponsesReplaysRawOutputForToolContinuation() async throws {
   let toolResponse = Data(
     """
-    {"id":"resp_tool","model":"gpt-5.6-sol","status":"completed","output":[{"id":"rs_tool","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{\"city\":\"Hanoi\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}
+    {"id":"resp_tool","model":"gpt-5.6-sol","status":"completed","output":[{"id":"rs_tool","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{\\\"city\\\":\\\"Hanoi\\\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}
     """.utf8
   )
   let finalResponse = Data(

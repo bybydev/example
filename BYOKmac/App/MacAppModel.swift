@@ -62,6 +62,35 @@ enum MacStartupState: Sendable, Equatable {
   case failed(MacStartupFailure)
 }
 
+private extension MacStartupStage {
+  var analyticsErrorCode: String {
+    switch self {
+    case .preparingStorage:
+      "startup_storage_failed"
+    case .composingServices:
+      "startup_services_failed"
+    case .preparingFiles:
+      "startup_files_failed"
+    case .loadingProviders:
+      "startup_providers_failed"
+    case .loadingProjects:
+      "startup_projects_failed"
+    case .loadingTools:
+      "startup_tools_failed"
+    case .loadingChats:
+      "startup_chats_failed"
+    case .loadingLibrary:
+      "startup_library_failed"
+    case .reconciling:
+      "startup_reconcile_failed"
+    case .maintenance:
+      "startup_maintenance_failed"
+    case .recovering:
+      "workspace_recovery_failed"
+    }
+  }
+}
+
 typealias MacCoreServicesFactory = @MainActor (BYOKStorageEnvironment) throws -> BYOKCoreServices
 
 @MainActor
@@ -162,6 +191,7 @@ final class MacAppModel {
       clearRuntimeModels()
       await performStart()
     } catch {
+      MacAppAnalytics.reportError("workspace_recovery_failed", component: "startup")
       startupState = .failed(MacStartupFailure(stage: .recovering, error: error))
     }
   }
@@ -377,6 +407,7 @@ final class MacAppModel {
 
       startupState = .ready
     } catch {
+      MacAppAnalytics.reportError(currentStage.analyticsErrorCode, component: "startup")
       clearRuntimeModels()
       startupState = .failed(MacStartupFailure(stage: currentStage, error: error))
     }

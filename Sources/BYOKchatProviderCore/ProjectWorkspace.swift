@@ -188,6 +188,22 @@ public struct ProjectWorkspaceState: Codable, Sendable, Equatable {
     self.conversationProjectIDs = conversationProjectIDs
     self.tombstones = tombstones
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, projects, conversationProjectIDs, tombstones
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+      ?? Self.currentSchemaVersion
+    projects = try container.decodeIfPresent([ChatProject].self, forKey: .projects) ?? []
+    conversationProjectIDs = try container.decodeIfPresent(
+      [String: String].self,
+      forKey: .conversationProjectIDs
+    ) ?? [:]
+    tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
+  }
 }
 
 public protocol ProjectWorkspacePersistence: Sendable {

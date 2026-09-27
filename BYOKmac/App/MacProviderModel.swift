@@ -180,6 +180,7 @@ final class MacProviderModel {
           : ModelID(rawValue: defaultModel.trimmingCharacters(in: .whitespacesAndNewlines))
       )
     } catch {
+      MacAppAnalytics.reportError("provider_save_failed", component: "provider")
       errorMessage = error.localizedDescription
       return nil
     }
@@ -187,6 +188,7 @@ final class MacProviderModel {
     do {
       try await installConfiguredModels(for: account)
     } catch {
+      MacAppAnalytics.reportError("provider_model_setup_failed", component: "provider")
       let setupError = error
       let rollbackWarning = await rollbackCreatedAccount(account.id)
       try? await reloadSnapshot()
@@ -200,6 +202,7 @@ final class MacProviderModel {
     do {
       try await reloadSnapshot()
     } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       errorMessage = "Connection was saved, but the provider list could not refresh: \(error.localizedDescription)"
     }
     return account.id
@@ -227,6 +230,7 @@ final class MacProviderModel {
     do {
       original = try await workspace.account(id: accountID)
     } catch {
+      MacAppAnalytics.reportError("provider_load_failed", component: "provider")
       errorMessage = error.localizedDescription
       return false
     }
@@ -251,6 +255,7 @@ final class MacProviderModel {
       }
       try await accountManager.updateAccount(updated)
     } catch {
+      MacAppAnalytics.reportError("provider_update_failed", component: "provider")
       errorMessage = error.localizedDescription
       return false
     }
@@ -261,6 +266,7 @@ final class MacProviderModel {
         do {
           try await accountManager.setCredential(trimmedCredential, accountID: accountID)
         } catch {
+          MacAppAnalytics.reportError("provider_credential_save_failed", component: "provider")
           let credentialError = error
           let rollbackWarning = await rollbackUpdatedAccount(original)
           try? await reloadSnapshot()
@@ -277,16 +283,19 @@ final class MacProviderModel {
     do {
       try await installConfiguredSeedModels(for: updated)
     } catch {
+      MacAppAnalytics.reportError("provider_model_sync_failed", component: "provider")
       warnings.append("Connection changes were saved, but seed models could not be synchronized: \(error.localizedDescription)")
     }
     do {
       try await accountManager.synchronizeCustomProviders()
     } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       warnings.append("Connection changes were saved, but provider registration could not refresh: \(error.localizedDescription)")
     }
     do {
       try await reloadSnapshot()
     } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       warnings.append("Connection changes were saved, but the provider list could not refresh: \(error.localizedDescription)")
     }
 
@@ -408,10 +417,12 @@ final class MacProviderModel {
       do {
         try await reloadSnapshot()
       } catch {
+        MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
         warnings.append("Connection was deleted, but the provider list could not refresh: \(error.localizedDescription)")
       }
       errorMessage = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
     } catch {
+      MacAppAnalytics.reportError("provider_delete_failed", component: "provider")
       errorMessage = error.localizedDescription
     }
   }
@@ -666,12 +677,14 @@ final class MacProviderModel {
     do {
       try await mutation()
     } catch {
+      MacAppAnalytics.reportError("provider_operation_failed", component: "provider")
       errorMessage = error.localizedDescription
       return
     }
     do {
       try await reloadSnapshot()
     } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       errorMessage = "\(warningPrefix) \(error.localizedDescription)"
     }
   }
@@ -686,12 +699,14 @@ final class MacProviderModel {
     do {
       try await mutation()
     } catch {
+      MacAppAnalytics.reportError("provider_operation_failed", component: "provider")
       errorMessage = error.localizedDescription
       return false
     }
     do {
       try await reloadSnapshot()
     } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       errorMessage = "\(warningPrefix) \(error.localizedDescription)"
     }
     return true

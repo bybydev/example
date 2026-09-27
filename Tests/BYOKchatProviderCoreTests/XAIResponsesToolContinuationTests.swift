@@ -51,7 +51,7 @@ private func xAIToolAccount() -> ResolvedProviderAccount {
 @Test func xAIResponsesReplaysEncryptedReasoningAndFunctionCallAcrossToolRound() async throws {
   let toolResponse = Data(
     """
-    {"id":"resp_tool","model":"grok-4.6","status":"completed","output":[{"id":"rs_tool","type":"reasoning","encrypted_content":"encrypted-xai-state","summary":[]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{\"city\":\"Hanoi\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}
+    {"id":"resp_tool","model":"grok-4.6","status":"completed","output":[{"id":"rs_tool","type":"reasoning","encrypted_content":"encrypted-xai-state","summary":[]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{\\\"city\\\":\\\"Hanoi\\\"}"}],"usage":{"input_tokens":5,"output_tokens":3}}
     """.utf8
   )
   let finalResponse = Data(

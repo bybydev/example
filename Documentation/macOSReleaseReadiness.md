@@ -2,7 +2,7 @@
 
 This is the release checklist for the currently implemented native macOS product surface.
 
-Purchases, paywalls, Pro entitlement, restore, Plan settings, and Debug purchase tooling are provided by **MacAppFoundation 0.1.0**, pinned exactly in `project.yml`. The Mac app uses the same BYOK Pro product identifiers and free/Pro business rules as iOS; it does not maintain a second entitlement store.
+Purchases, paywalls, Pro entitlement, restore, Plan settings, Debug purchase tooling, and first-party app analytics are provided by **MacAppFoundation 1.4.0**, pinned exactly in `project.yml`. The Mac app uses the same BYOK Pro product identifiers and free/Pro business rules as iOS; it does not maintain a second entitlement store.
 
 ## Primary window
 
@@ -46,7 +46,7 @@ Purchases, paywalls, Pro entitlement, restore, Plan settings, and Debug purchase
 
 ## Purchases and BYOK Pro
 
-- `MacAppFoundation` is pinned to exact tag `0.1.0`.
+- `MacAppFoundation` is pinned to exact tag `1.4.0`.
 - macOS and iOS use the same product IDs: monthly, yearly, and lifetime BYOK Pro.
 - `PurchaseManager` is the production entitlement source of truth and is prepared/refreshed through `managesPurchases`.
 - The app owns the BYOK Pro paywall window and Plan settings tab while MacAppFoundation owns StoreKit purchase/restore behavior.
@@ -57,6 +57,10 @@ Purchases, paywalls, Pro entitlement, restore, Plan settings, and Debug purchase
 
 ## Analytics
 
+- Product telemetry uses one MAF `AppAnalyticsClient` with app ID `byokchat`, app key `com.hoangbkit.byokchat` from the runtime bundle identifier, and `https://analytics.133043.xyz` as the server.
+- `.managesAnalytics(analytics)` is attached to the Mac scenes, including the Pro paywall, so lifecycle/session telemetry and bounded MAF commerce-funnel events share the same client.
+- Product telemetry remains separate from BYOKchat's user-facing local usage analytics and must not include prompts, message text, filenames, credentials, receipts, transaction IDs, or arbitrary error text.
+- App failures use MAF `trackError` with stable error codes/components across startup, chat, provider/MCP/workspace, attachments, Library/projects, data portability, and export/diagnostic boundaries; raw `Error` descriptions are never uploaded.
 - Free: Month only, with spend, model requests, input tokens, and output tokens reconstructed from persisted messages.
 - Pro: Today, 7D, 30D, Month, and All ranges through the shared `UsageAnalytics` filtering model.
 - Pro adds cached/reasoning/tool totals, TTFT, duration, speed, reliability, failures, provider/model breakdowns, per-conversation analytics, local telemetry statistics, and monthly budgets.

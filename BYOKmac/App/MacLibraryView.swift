@@ -209,6 +209,7 @@ struct MacLibraryView: View {
     ) { result in
       switch result {
       case .failure(let error):
+        MacAppAnalytics.reportError("library_picker_failed", component: "library")
         workspace.errorMessage = error.localizedDescription
       case .success(let urls):
         importFiles(urls)
@@ -954,6 +955,7 @@ struct MacLibraryView: View {
           normalizeSelection()
         }
       } catch {
+        MacAppAnalytics.reportError("library_import_failed", component: "library")
         workspace.errorMessage = error.localizedDescription
         normalizeSelection()
       }
@@ -1004,6 +1006,7 @@ struct MacLibraryView: View {
       } catch {
         if previewLoadingID == requestedID {
           previewLoadingID = nil
+          MacAppAnalytics.reportError("library_preview_failed", component: "library")
           workspace.errorMessage = error.localizedDescription
         }
       }
@@ -1062,6 +1065,7 @@ struct MacLibraryView: View {
           try data.write(to: destination, options: .atomic)
         }
       } catch {
+        MacAppAnalytics.reportError("library_export_failed", component: "library")
         workspace.errorMessage = error.localizedDescription
       }
     }
@@ -1080,6 +1084,7 @@ struct MacLibraryView: View {
       do {
         try data.write(to: destination, options: .atomic)
       } catch {
+        MacAppAnalytics.reportError("library_export_failed", component: "library")
         workspace.errorMessage = error.localizedDescription
       }
     }
@@ -1136,6 +1141,7 @@ struct MacLibraryView: View {
         NSSharingServicePicker(items: urls)
           .show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
       } catch {
+        MacAppAnalytics.reportError("library_share_failed", component: "library")
         workspace.errorMessage = error.localizedDescription
       }
     }

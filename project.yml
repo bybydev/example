@@ -15,7 +15,7 @@ packages:
     exactVersion: 1.4.0
   MacAppFoundation:
     url: https://github.com/hoangbkit/MacAppFoundation
-    exactVersion: 0.1.0
+    exactVersion: 1.4.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     exactVersion: 2.4.1

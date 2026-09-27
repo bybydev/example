@@ -194,8 +194,17 @@ final class ProviderWorkspaceTests: XCTestCase {
     let runtime = ProviderRuntime(registry: registry, workspace: workspace, accounts: manager)
     try await runtime.registerCustomProvider(definition)
     let account = try await manager.createAccount(
-      kind: .openAICompatible, providerID: definition.id, label: "Local", credential: nil,
-      defaultModelID: "model")
+      kind: .openAICompatible,
+      label: "Local",
+      credential: nil,
+      providerID: definition.id,
+      chatCompletionsPath: definition.chatCompletionsPath,
+      modelsPath: definition.modelsPath,
+      authChoice: definition.authentication,
+      seedModelIDs: definition.seedModels.map { $0.id.rawValue },
+      baseURLOverride: definition.defaultBaseURL,
+      defaultModelID: "model"
+    )
 
     let resolved = try await manager.resolvedAccount(id: account.id)
     XCTAssertNil(resolved.apiKey)

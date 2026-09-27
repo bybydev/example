@@ -38,19 +38,22 @@ final class MacDataManagementModel {
   }
 
   func makeBackupData() async -> Data? {
-    await performResult {
+    await performResult(errorCode: "backup_export_failed") {
       try await service.exportBackup(defaultSystemPrompt: app.preferences.defaultSystemPrompt)
     }
   }
 
   func makeProviderConfigurationData() async -> Data? {
-    await performResult {
+    await performResult(errorCode: "provider_config_export_failed") {
       try await providerWorkspace.exportConfiguration()
     }
   }
 
   func importBackup(from url: URL, strategy: ProviderImportStrategy) async {
-    await perform("Backup imported. Re-enter credentials for imported connections and MCP servers.") {
+    await perform(
+      "Backup imported. Re-enter credentials for imported connections and MCP servers.",
+      errorCode: "backup_import_failed"
+    ) {
       let data = try await Self.readSecurityScopedData(from: url)
       let existingDefaultPrompt = app.preferences.defaultSystemPrompt
       let resourcesBefore = await resourceSnapshot()
@@ -86,6 +89,7 @@ final class MacDataManagementModel {
       do {
         try await app.reloadAfterDataMutation()
       } catch {
+        MacAppAnalytics.reportError("post_import_refresh_failed", component: "data")
         // Persistent restore is authoritative. A presentation refresh failure must not tell
         // the user the backup failed and invite a dangerous retry of an already-committed import.
         statusMessage =
@@ -111,7 +115,10 @@ final class MacDataManagementModel {
   }
 
   func importProviderConfiguration(from url: URL, strategy: ProviderImportStrategy) async {
-    await perform("Connection configuration imported. Credentials were not included.") {
+    await perform(
+      "Connection configuration imported. Credentials were not included.",
+      errorCode: nil
+    ) {
       let data = try await Self.readSecurityScopedData(from: url)
       let imported = try JSONDecoder().decode(ProviderWorkspaceState.self, from: data)
       let existingState = await providerWorkspace.snapshot()
@@ -141,6 +148,7 @@ final class MacDataManagementModel {
         do {
           try await app.reloadAfterDataMutation()
         } catch {
+          MacAppAnalytics.reportError("post_import_refresh_failed", component: "data")
           statusMessage =
             "Connection configuration imported, but the app could not refresh its views: \(error.localizedDescription)"
         }
@@ -148,6 +156,7 @@ final class MacDataManagementModel {
           errorMessage = ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
         }
       } catch {
+        MacAppAnalytics.reportError("provider_config_import_failed", component: "data")
         try? await app.reloadAfterDataMutation()
         throw error
       }
@@ -155,7 +164,7 @@ final class MacDataManagementModel {
   }
 
   func deleteAllConversations() async {
-    await perform("All conversations deleted") {
+    await perform("All conversations deleted", errorCode: "delete_conversations_failed") {
       await app.stopAllGenerations()
       let conversationIDs = await conversations.conversationSummaries().map(\.id)
 
@@ -183,7 +192,10 @@ final class MacDataManagementModel {
   }
 
   func deleteAllCredentials() async {
-    await perform("All provider and MCP credentials removed") {
+    await perform(
+      "All provider and MCP credentials removed",
+      errorCode: "delete_credentials_failed"
+    ) {
       await app.stopAllGenerations()
       var cleanupWarnings: [String] = []
 
@@ -238,6 +250,7 @@ final class MacDataManagementModel {
           + result.cleanupWarnings.joined(separator: "\n\n")
       }
     } catch {
+      MacAppAnalytics.reportError("reset_application_failed", component: "data")
       errorMessage = error.localizedDescription
     }
   }
@@ -266,6 +279,7 @@ final class MacDataManagementModel {
 
   private func perform(
     _ success: String,
+    errorCode: String?,
     operation: @MainActor () async throws -> Void
   ) async {
     isBusy = true
@@ -276,11 +290,15 @@ final class MacDataManagementModel {
       try await operation()
       if errorMessage == nil, statusMessage == nil { statusMessage = success }
     } catch {
+      if let errorCode {
+        MacAppAnalytics.reportError(errorCode, component: "data")
+      }
       errorMessage = error.localizedDescription
     }
   }
 
   private func performResult<Value: Sendable>(
+    errorCode: String,
     _ operation: @MainActor () async throws -> Value
   ) async -> Value? {
     isBusy = true
@@ -290,6 +308,7 @@ final class MacDataManagementModel {
     do {
       return try await operation()
     } catch {
+      MacAppAnalytics.reportError(errorCode, component: "data")
       errorMessage = error.localizedDescription
       return nil
     }

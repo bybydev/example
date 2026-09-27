@@ -150,15 +150,11 @@ import Testing
     partialPersistenceInterval: .zero
   )
   let stream = await chat.send(conversationID: conversation.id, userText: "Hello")
-  let task = Task {
-    do {
-      for try await _ in stream {}
-    } catch {}
+  var iterator = stream.makeAsyncIterator()
+  while let event = try await iterator.next() {
+    if case .textDelta(_, let value) = event, value == "Partial" { break }
   }
-  try await Task.sleep(for: .milliseconds(30))
   await chat.cancel(conversationID: conversation.id)
-  task.cancel()
-  _ = await task.result
 
   let saved = try await store.conversation(id: conversation.id)
   let assistant = try #require(saved.messages.last)

@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import MacAppFoundation
 import SwiftUI
 
@@ -20,6 +21,7 @@ struct BYOKmacApp: App {
   )
 
   private let purchases = MacPurchaseStore.manager
+  private let analytics = MacAppAnalytics.client
 
   var body: some Scene {
     Window("BYOKchat", id: BYOKmacWindowID.main) {
@@ -34,6 +36,7 @@ struct BYOKmacApp: App {
         .environment(proGateCenter)
         .environment(settingsRouter)
         .managesPurchases(purchases)
+        .managesAnalytics(analytics)
         .managesMacProAccess(
           model: model,
           purchases: purchases,
@@ -98,6 +101,7 @@ struct BYOKmacApp: App {
         .preferredColorScheme(model.theme.preferredColorScheme)
         .tint(MacDesignTokens.Colors.accent)
         .environment(\.macThemeRevision, model.theme.revision)
+        .managesAnalytics(analytics)
     }
     .windowStyle(.hiddenTitleBar)
 
@@ -107,6 +111,7 @@ struct BYOKmacApp: App {
         .tint(MacDesignTokens.Colors.accent)
         .environment(\.macThemeRevision, model.theme.revision)
         .environment(purchases)
+        .managesAnalytics(analytics)
     }
     .windowStyle(.hiddenTitleBar)
     .defaultSize(width: 860, height: 600)
@@ -122,6 +127,7 @@ struct BYOKmacApp: App {
         configuration: MacPurchaseStore.developerConfiguration
       )
       .environment(purchases)
+      .managesAnalytics(analytics)
     }
     .defaultSize(
       width: MacAppFoundationDeveloperTools.defaultWidth,
@@ -134,6 +140,7 @@ struct BYOKmacApp: App {
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)
+        .managesAnalytics(analytics)
         .managesMacProAccess(
           model: model,
           purchases: purchases,

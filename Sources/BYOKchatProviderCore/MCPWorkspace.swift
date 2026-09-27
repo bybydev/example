@@ -25,6 +25,23 @@ public struct MCPWorkspaceState: Codable, Sendable, Equatable {
     self.chatConfigurations = chatConfigurations
     self.tombstones = tombstones
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, servers, snapshots, chatConfigurations, tombstones
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+      ?? Self.currentSchemaVersion
+    servers = try container.decodeIfPresent([MCPRemoteServer].self, forKey: .servers) ?? []
+    snapshots = try container.decodeIfPresent([MCPServerSnapshot].self, forKey: .snapshots) ?? []
+    chatConfigurations = try container.decodeIfPresent(
+      [String: MCPChatToolConfiguration].self,
+      forKey: .chatConfigurations
+    )
+    tombstones = try container.decodeIfPresent([String: Date].self, forKey: .tombstones) ?? [:]
+  }
 }
 
 public protocol MCPWorkspacePersistence: Sendable {

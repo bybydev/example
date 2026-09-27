@@ -423,6 +423,7 @@ final class MacWorkspaceModel {
       statusMessage = successMessage
       return true
     } catch {
+      MacAppAnalytics.reportError("workspace_operation_failed", component: "workspace")
       errorMessage = error.localizedDescription
       return false
     }
@@ -449,6 +450,7 @@ final class MacWorkspaceModel {
       statusMessage = successMessage
       return value
     } catch {
+      MacAppAnalytics.reportError("workspace_operation_failed", component: "workspace")
       errorMessage = error.localizedDescription
       return nil
     }

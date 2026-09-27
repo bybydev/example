@@ -685,6 +685,7 @@ private struct MacComposerView: View {
       case .success(let urls):
         importURLs(urls)
       case .failure(let error):
+        MacAppAnalytics.reportError("attachment_picker_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }
@@ -925,6 +926,7 @@ private struct MacComposerView: View {
       do {
         appendAttachments(try await MacAttachmentImporter.importURLs(urls))
       } catch {
+        MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }
@@ -936,6 +938,7 @@ private struct MacComposerView: View {
       do {
         appendAttachments(try await MacAttachmentImporter.importDroppedImages(images))
       } catch {
+        MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }
@@ -947,6 +950,7 @@ private struct MacComposerView: View {
       do {
         appendAttachments(try await MacAttachmentImporter.importPasteboard())
       } catch {
+        MacAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }

@@ -43,7 +43,7 @@ struct AttachmentBlobStoreTests {
     let reloaded = FileAttachmentBlobStore(directory: directory)
     let loaded = try #require(await reloaded.metadata(for: "abc-2"))
     #expect(loaded.byteCount == 3)
-    #expect(await reloaded.storedIDs() == ["abc-2"])
+    #expect(try await reloaded.storedIDs() == ["abc-2"])
     try? FileManager.default.removeItem(at: directory)
   }
 
@@ -93,7 +93,7 @@ struct AttachmentBlobStoreTests {
 
     try await store.writeIfAbsent("abc-4", data: Data([1]), metadata: metadata)
     _ = try await store.thumbnailData("abc-4", maxPixelSize: 64)
-    let ids = await store.storedIDs()
+    let ids = try await store.storedIDs()
     #expect(ids == ["abc-4"])
   }
 
@@ -148,10 +148,12 @@ struct AttachmentBlobStoreTests {
         content: "Mixed",
         attachments: [
           ChatAttachment(
+            id: "present",
             kind: .image, filename: "present.jpg", mimeType: "image/jpeg",
             data: Data(), declaredByteCount: 1
           ),
           ChatAttachment(
+            id: "gone",
             kind: .file, filename: "gone.pdf", mimeType: "application/pdf",
             data: Data(), declaredByteCount: 4
           ),
@@ -166,6 +168,6 @@ struct AttachmentBlobStoreTests {
     // Confirmed-missing blobs drop out of the request (adapters reject empty
     // payloads) but the stored row is untouched and still surfaces the
     // "unavailable" state in the UI.
-    #expect(store.referencedAttachmentIDs() == [])
+    #expect(await store.referencedAttachmentIDs() == [])
   }
 }

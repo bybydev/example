@@ -242,6 +242,7 @@ struct MacDataManagementView: View {
       try dataBytes.write(to: url, options: .atomic)
       data.statusMessage = "Exported \(url.lastPathComponent)"
     } catch {
+      MacAppAnalytics.reportError("data_export_write_failed", component: "data")
       data.errorMessage = error.localizedDescription
     }
   }

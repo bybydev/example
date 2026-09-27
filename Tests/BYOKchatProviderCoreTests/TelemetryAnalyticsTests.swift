@@ -59,7 +59,7 @@ import Testing
   #expect(aggregate.providerSuccessRate == 2.0 / 3.0)
   #expect(aggregate.medianTTFTMilliseconds == 200)
   #expect(aggregate.medianDurationMilliseconds == 2_000)
-  #expect(aggregate.p95DurationMilliseconds == 2_900)
+  #expect(abs((aggregate.p95DurationMilliseconds ?? 0) - 2_900) < 0.001)
   #expect(aggregate.medianOutputTokensPerSecond == 30)
   #expect(aggregate.toolCallCount == 2)
   #expect(aggregate.toolSuccessRate == 0.5)

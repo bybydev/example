@@ -234,6 +234,7 @@ final class MacMCPModel {
       }
       return true
     } catch {
+      MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return false
     }
@@ -259,6 +260,7 @@ final class MacMCPModel {
       statusMessage = cleanupWarning.map { "MCP server deleted. \($0)" } ?? "MCP server deleted"
       return true
     } catch {
+      MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return false
     }
@@ -286,6 +288,7 @@ final class MacMCPModel {
       statusMessage = discoveryWarning
       return true
     } catch {
+      MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return false
     }
@@ -377,6 +380,7 @@ final class MacMCPModel {
         try await reloadSnapshot()
         await approvals.resolve(requestID, decision: .allowOnce)
       } catch {
+        MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
         errorMessage = error.localizedDescription
         await approvals.resolve(requestID, decision: .deny)
       }
@@ -595,6 +599,7 @@ final class MacMCPModel {
       statusMessage = successMessage
       return true
     } catch {
+      MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return false
     }

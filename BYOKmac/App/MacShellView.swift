@@ -267,6 +267,7 @@ struct MacShellView: View {
           do {
             try await store.clear(freshKey)
           } catch {
+            MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
             chats.errorMessage = "New chat was reset, but pending attachment cleanup failed: \(error.localizedDescription)"
           }
         }
@@ -309,6 +310,7 @@ struct MacShellView: View {
           )
         }
       } catch {
+        MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }
@@ -339,6 +341,7 @@ struct MacShellView: View {
           }
         }
       } catch {
+        MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
         chats.errorMessage = "Attachment could not be removed: \(error.localizedDescription)"
       }
     }
@@ -364,6 +367,7 @@ struct MacShellView: View {
         pendingAttachmentsByKey[destinationKey] = values
       }
     } catch {
+      MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
       chats.errorMessage = "The chat started, but pending attachments could not be transferred: \(error.localizedDescription)"
     }
   }
@@ -396,6 +400,7 @@ struct MacShellView: View {
       }
       pendingAttachmentsByKey.removeValue(forKey: key)
     } catch {
+      MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
       chats.errorMessage = "Attachments were sent, but pending-state cleanup failed: \(error.localizedDescription)"
     }
   }
@@ -411,6 +416,7 @@ struct MacShellView: View {
       }
       pendingAttachmentsByKey.removeValue(forKey: key)
     } catch {
+      MacAppAnalytics.reportError("pending_attachment_store_failed", component: "attachments")
       chats.errorMessage = "Conversation was deleted, but pending attachment cleanup failed: \(error.localizedDescription)"
     }
   }
@@ -989,6 +995,7 @@ final class MacChatNavigation {
     } catch {
       guard !Task.isCancelled, revision == selectionRevision else { return }
       isPreparing = false
+      MacAppAnalytics.reportError("conversation_prepare_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
       requestedID = displayedID
     }
