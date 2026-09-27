@@ -24,10 +24,7 @@ struct MacSettingsView: View {
     }
     .frame(minWidth: 900, idealWidth: 940, minHeight: 620, idealHeight: 660)
     .background(MacDesignTokens.Colors.canvas)
-    .preferredColorScheme(model.theme.preferredColorScheme)
-    .tint(MacDesignTokens.Colors.accent)
     .groupBoxStyle(MacSettingsGroupBoxStyle())
-    .environment(\.macThemeRevision, model.theme.revision)
     .onAppear(perform: consumeRouterRequest)
     .onChange(of: settingsRouter.requestID) { _, _ in
       consumeRouterRequest()
@@ -56,7 +53,7 @@ struct MacSettingsView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
-          settingsSidebarSection("Application", tabs: [.general, .appearance])
+          settingsSidebarSection("Application", tabs: [.general, .theme])
           settingsSidebarSection("Account", tabs: [.plan, .connections])
           settingsSidebarSection("Features", tabs: [.tools])
           settingsSidebarSection("Advanced", tabs: [.data, .diagnostics])
@@ -125,8 +122,13 @@ struct MacSettingsView: View {
         .padding(20)
         .frame(maxWidth: 760, maxHeight: .infinity)
       }
-    case .appearance:
-      MacAppearanceSettingsView(theme: model.theme, purchaseManager: purchaseManager)
+    case .theme:
+      MacAppThemeSettingsPane(
+        themeStore: model.themeStore,
+        purchaseManager: purchaseManager,
+        variant: .compact,
+        onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
+      )
     case .connections:
       MacConnectionSettingsView(model: model)
     case .tools:
@@ -142,7 +144,7 @@ struct MacSettingsView: View {
     switch tab {
     case .general: "General"
     case .plan: "Plan"
-    case .appearance: "Appearance"
+    case .theme: "Theme"
     case .connections: "Connections"
     case .tools: "Tools"
     case .data: "Data"
@@ -156,7 +158,7 @@ struct MacSettingsView: View {
       "Chat behavior and defaults for new conversations."
     case .plan:
       "Manage BYOK Pro access, purchases, and subscription status."
-    case .appearance:
+    case .theme:
       "Choose the color theme used throughout BYOKchat."
     case .connections:
       "Configure the provider accounts used to run chats."
@@ -173,7 +175,7 @@ struct MacSettingsView: View {
     switch tab {
     case .general: "gearshape"
     case .plan: "creditcard"
-    case .appearance: "paintpalette"
+    case .theme: "paintpalette"
     case .connections: "bolt.horizontal.circle"
     case .tools: "wrench.and.screwdriver"
     case .data: "externaldrive"
@@ -338,105 +340,6 @@ private struct MacGeneralSettingsView: View {
   }
 }
 
-private struct MacAppearanceSettingsView: View {
-  @Bindable var theme: MacThemeModel
-  let purchaseManager: PurchaseManager
-
-  @Environment(\.openWindow) private var openWindow
-
-  private let columns = [
-    GridItem(.adaptive(minimum: 155, maximum: 190), spacing: 12)
-  ]
-
-  var body: some View {
-    ScrollView {
-      LazyVGrid(columns: columns, spacing: 12) {
-        ForEach(MacThemeID.allCases) { item in
-          themeCard(item)
-        }
-      }
-      .padding(22)
-      .frame(maxWidth: 780)
-    }
-    .background(MacDesignTokens.Colors.canvas)
-  }
-
-  private func themeCard(_ item: MacThemeID) -> some View {
-    let palette = item.palette
-    let unlocked = MacProAccess.canUseTheme(item, hasPro: purchaseManager.hasPro)
-
-    return Button {
-      if unlocked {
-        theme.selectedID = item
-      } else {
-        openWindow(id: MacWindowID.proPaywall)
-      }
-    } label: {
-      VStack(alignment: .leading, spacing: 10) {
-        VStack(spacing: 0) {
-          HStack(spacing: 5) {
-            Circle().fill(palette.accent).frame(width: 7, height: 7)
-            RoundedRectangle(cornerRadius: 3).fill(palette.textMuted.opacity(0.45)).frame(height: 6)
-            RoundedRectangle(cornerRadius: 3).fill(palette.textMuted.opacity(0.24)).frame(width: 34, height: 6)
-          }
-          .padding(10)
-
-          VStack(alignment: .leading, spacing: 6) {
-            RoundedRectangle(cornerRadius: 4).fill(palette.textPrimary.opacity(0.82)).frame(width: 78, height: 7)
-            RoundedRectangle(cornerRadius: 4).fill(palette.textMuted.opacity(0.45)).frame(width: 112, height: 6)
-            HStack {
-              Spacer()
-              RoundedRectangle(cornerRadius: 10).fill(palette.selection).frame(width: 70, height: 24)
-            }
-          }
-          .padding(10)
-          .background(palette.surface)
-        }
-        .background(palette.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(palette.separator, lineWidth: 1)
-        }
-
-        HStack {
-          Text(item.title)
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-            .lineLimit(1)
-          Spacer()
-          if theme.selectedID == item {
-            Image(systemName: "checkmark.circle.fill")
-              .foregroundStyle(MacDesignTokens.Colors.accent)
-          } else if !unlocked {
-            Image(systemName: "crown.fill")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          }
-        }
-      }
-      .padding(10)
-      .background(
-        theme.selectedID == item ? MacDesignTokens.Colors.selection : MacDesignTokens.Colors.surface,
-        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
-      )
-      .overlay {
-        RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
-          .stroke(
-            theme.selectedID == item
-              ? MacDesignTokens.Colors.accent.opacity(0.65)
-              : MacDesignTokens.Colors.separator.opacity(0.78),
-            lineWidth: 1
-          )
-      }
-      .opacity(unlocked || theme.selectedID == item ? 1 : 0.72)
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(item.title)
-    .accessibilityValue(theme.selectedID == item ? "Selected" : unlocked ? "Available" : "Requires BYOK Pro")
-  }
-}
-
 private struct MacConnectionSettingsView: View {
   let model: MacAppModel
   @State private var showingConnections = false
@@ -476,9 +379,6 @@ private struct MacConnectionSettingsView: View {
     .sheet(isPresented: $showingConnections) {
       if let providers = model.providers {
         MacProviderManagementView(model: providers)
-          .preferredColorScheme(model.theme.preferredColorScheme)
-          .tint(MacDesignTokens.Colors.accent)
-          .environment(\.macThemeRevision, model.theme.revision)
       }
     }
   }
@@ -549,9 +449,6 @@ private struct MacToolsSettingsView: View {
     .sheet(isPresented: $showingServers) {
       if let mcp = model.mcp {
         MacMCPServerListView(mcp: mcp)
-          .preferredColorScheme(model.theme.preferredColorScheme)
-          .tint(MacDesignTokens.Colors.accent)
-          .environment(\.macThemeRevision, model.theme.revision)
       }
     }
   }
@@ -592,16 +489,5 @@ private struct MacDiagnosticsSettingsView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(MacDesignTokens.Colors.canvas)
     }
-  }
-}
-
-private struct MacThemeRevisionKey: EnvironmentKey {
-  static let defaultValue = 0
-}
-
-extension EnvironmentValues {
-  var macThemeRevision: Int {
-    get { self[MacThemeRevisionKey.self] }
-    set { self[MacThemeRevisionKey.self] = newValue }
   }
 }

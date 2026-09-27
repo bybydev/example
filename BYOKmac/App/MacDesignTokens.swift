@@ -1,4 +1,5 @@
 import AppKit
+import MacAppFoundation
 import SwiftUI
 
 enum MacDesignTokens {
@@ -30,7 +31,7 @@ enum MacDesignTokens {
     static let composerMaximumWidth: CGFloat = transcriptMaximumWidth
     static let composerBottomMargin: CGFloat = 18
     static let composerReservedScrollSpace: CGFloat = 120
-    static let titlebarHeight: CGFloat = 44
+    static let titlebarHeight: CGFloat = 52
     static let titlebarTrafficLightReserve: CGFloat = 76
   }
 
@@ -44,8 +45,13 @@ enum MacDesignTokens {
     static let interactionDuration: Double = 0.12
   }
 
+  @MainActor
   enum Colors {
-    private static var palette: MacThemePalette { MacThemeRegistry.selectedID.palette }
+    private static var palette: MacAppThemePalette {
+      MacThemeFoundation.store
+        .currentTheme(hasPro: MacPurchaseStore.manager.hasPro)
+        .palette
+    }
 
     static var canvas: Color { palette.canvas }
     static var surface: Color { palette.surface }

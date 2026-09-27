@@ -1,6 +1,7 @@
 import AppKit
 import BYOKchatProviderCore
 import Foundation
+import MacAppFoundation
 import Observation
 
 enum MacStartupStage: String, Sendable, Equatable {
@@ -128,7 +129,7 @@ func resolveMacProjectTarget(
 final class MacAppModel {
   let storageEnvironment: BYOKStorageEnvironment
   let preferences: MacPreferencesModel
-  let theme: MacThemeModel
+  let themeStore: MacAppThemeStore
 
   private(set) var startupState: MacStartupState = .idle
   private(set) var coreServices: BYOKCoreServices?
@@ -156,7 +157,7 @@ final class MacAppModel {
     self.storageEnvironment = storageEnvironment
     self.coreServicesFactory = coreServicesFactory
     preferences = MacPreferencesModel()
-    theme = MacThemeModel()
+    themeStore = MacThemeFoundation.store
   }
 
   var isReady: Bool {

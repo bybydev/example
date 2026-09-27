@@ -2,7 +2,7 @@
 
 This is the release checklist for the currently implemented native macOS product surface.
 
-Purchases, paywalls, Pro entitlement, restore, Plan settings, Debug purchase tooling, and first-party app analytics are provided by **MacAppFoundation 1.4.0**, pinned exactly in `project.yml`. The Mac app uses the same BYOK Pro product identifiers and free/Pro business rules as iOS; it does not maintain a second entitlement store.
+Purchases, paywalls, Pro entitlement, shared themes, restore, Plan settings, Debug purchase tooling, and first-party app analytics are provided by **MacAppFoundation 1.5.0**, pinned exactly in `project.yml`. The Mac app uses the same BYOK Pro product identifiers and non-theme resource limits as iOS; it does not maintain a second entitlement or theme-access store.
 
 ## Primary window
 
@@ -46,11 +46,12 @@ Purchases, paywalls, Pro entitlement, restore, Plan settings, Debug purchase too
 
 ## Purchases and BYOK Pro
 
-- `MacAppFoundation` is pinned to exact tag `1.4.0`.
+- `MacAppFoundation` is pinned to exact tag `1.5.0`.
 - macOS and iOS use the same product IDs: monthly, yearly, and lifetime BYOK Pro.
 - `PurchaseManager` is the production entitlement source of truth and is prepared/refreshed through `managesPurchases`.
 - The app owns the BYOK Pro paywall window and Plan settings tab while MacAppFoundation owns StoreKit purchase/restore behavior.
-- Free limits match iOS: 2 themes, 1 provider connection, 1 project, 1 MCP server, and 10 saved Library files.
+- Free theme access is MAF-owned: GitHub Dark Dimmed and GitHub Light are Free; System and the other ten built-in themes require Pro.
+- Other Free limits match iOS: 1 provider connection, 1 project, 1 MCP server, and 10 saved Library files.
 - Existing provider connections, projects, MCP servers, and Library files remain accessible/editable after entitlement loss; creation beyond the free limits is gated.
 - Advanced Analytics is Pro; free users retain basic monthly spend/request/input/output analytics.
 - Debug builds expose MacAppFoundation purchase simulation and Developer Tools without replacing Release StoreKit behavior.

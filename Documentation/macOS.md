@@ -4,7 +4,7 @@
 
 The native macOS app is implemented on top of the shared `BYOKchatProviderCore` runtime.
 
-Purchases, Pro entitlement, and first-party macOS app analytics are implemented with **MacAppFoundation 1.4.0**, pinned exactly in `project.yml`. The Mac app reuses the same BYOK Pro product identifiers and free/Pro business rules as iOS; StoreKit entitlement state is owned by MacAppFoundation rather than duplicated in BYOKchat.
+Purchases, Pro entitlement, shared macOS themes, and first-party macOS app analytics are implemented with **MacAppFoundation 1.5.0**, pinned exactly in `project.yml`. The Mac app reuses the same BYOK Pro product identifiers and non-theme resource limits as iOS; StoreKit entitlement state and Mac theme access are owned by MacAppFoundation rather than duplicated in BYOKchat.
 
 ## Architecture boundary
 
@@ -164,9 +164,9 @@ The app provides:
 - privacy/terms/redeem-code presentation;
 - Debug-only MacAppFoundation Developer Tools and simulated purchase controls.
 
-Free/Pro rules mirror iOS:
+Free/Pro resource limits mirror iOS, while macOS theme access is defined by the MAF catalog:
 
-- 2 themes free, all themes with Pro;
+- GitHub Dark Dimmed and GitHub Light are Free; System and the other ten built-in MAF themes require Pro;
 - 1 provider connection free, unlimited with Pro;
 - 1 project free, unlimited with Pro;
 - 1 MCP server free, unlimited with Pro;
@@ -255,4 +255,4 @@ The approved BYOKchat artwork in the iOS asset catalog remains the source artwor
 
 ## MacAppFoundation dependency lock
 
-The macOS app is implemented against the exact public `MacAppFoundation` tag **1.4.0**. Do not silently move this dependency to `master` or a later tag as part of unrelated work. Upgrade it explicitly when BYOKchat intentionally adopts a newer MacAppFoundation release.
+The macOS app is implemented against the exact public `MacAppFoundation` tag **1.5.0**. Do not silently move this dependency to `master` or a later tag as part of unrelated work. Upgrade it explicitly when BYOKchat intentionally adopts a newer MacAppFoundation release.

@@ -29,9 +29,7 @@ struct BYOKmacApp: App {
         .frame(minWidth: 760, minHeight: 520)
         .ignoresSafeArea(edges: .top)
         .background(MacMainWindowConfigurator())
-        .preferredColorScheme(model.theme.preferredColorScheme)
-        .tint(MacDesignTokens.Colors.accent)
-        .environment(\.macThemeRevision, model.theme.revision)
+        .macAppTheme(model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)
@@ -98,18 +96,14 @@ struct BYOKmacApp: App {
       defaultHeight: 540
     ) {
       MacBYOKOnboardingView(onboarding: onboarding)
-        .preferredColorScheme(model.theme.preferredColorScheme)
-        .tint(MacDesignTokens.Colors.accent)
-        .environment(\.macThemeRevision, model.theme.revision)
+        .macAppTheme(model.themeStore, purchaseManager: purchases)
         .managesAnalytics(analytics)
     }
     .windowStyle(.hiddenTitleBar)
 
     Window("BYOK Pro", id: MacWindowID.proPaywall) {
       MacProPaywallWindow(purchaseManager: purchases)
-        .preferredColorScheme(model.theme.preferredColorScheme)
-        .tint(MacDesignTokens.Colors.accent)
-        .environment(\.macThemeRevision, model.theme.revision)
+        .macAppTheme(model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .managesAnalytics(analytics)
     }
@@ -126,6 +120,7 @@ struct BYOKmacApp: App {
         purchaseManager: purchases,
         configuration: MacPurchaseStore.developerConfiguration
       )
+      .macAppTheme(model.themeStore, purchaseManager: purchases)
       .environment(purchases)
       .managesAnalytics(analytics)
     }
@@ -137,6 +132,7 @@ struct BYOKmacApp: App {
 
     Settings {
       MacSettingsView(model: model, purchaseManager: purchases)
+        .macAppTheme(model.themeStore, purchaseManager: purchases)
         .environment(purchases)
         .environment(proGateCenter)
         .environment(settingsRouter)
@@ -180,10 +176,6 @@ private struct MacProSceneLifecycleModifier: ViewModifier {
       MacPurchaseStore.restrictions.clear()
     }
 
-    model.theme.reconcileProAccess(
-      hasPro: access == .pro,
-      isChecking: access == .checking
-    )
     model.chats?.refreshNewChatTargetAfterProviderChanges()
   }
 }
@@ -207,23 +199,82 @@ private extension View {
 
 @MainActor
 private struct MacMainWindowConfigurator: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSView {
+  func makeNSView(context: Context) -> MacMainWindowConfigurationView {
     MacMainWindowConfigurationView()
   }
 
-  func updateNSView(_ nsView: NSView, context: Context) {}
+  func updateNSView(_ nsView: MacMainWindowConfigurationView, context: Context) {}
 }
 
 @MainActor
 private final class MacMainWindowConfigurationView: NSView {
+  private static let toolbarIdentifier = NSToolbar.Identifier("BYOKchatTitlebarGeometry")
+
+  private var toolbarVisibilityBeforeFullScreen: Bool?
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    NotificationCenter.default.removeObserver(self)
+    toolbarVisibilityBeforeFullScreen = nil
     guard let window else { return }
 
     window.styleMask.insert(.fullSizeContentView)
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.titlebarSeparatorStyle = .none
+
+    if window.toolbar == nil {
+      let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+      toolbar.allowsUserCustomization = false
+      toolbar.autosavesConfiguration = false
+      window.toolbar = toolbar
+    }
+    window.toolbarStyle = .unified
+
+    for name in [
+      NSWindow.willEnterFullScreenNotification,
+      NSWindow.didEnterFullScreenNotification,
+    ] {
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(hideToolbarForFullScreen(_:)),
+        name: name,
+        object: window
+      )
+    }
+
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(windowDidExitFullScreen(_:)),
+      name: NSWindow.didExitFullScreenNotification,
+      object: window
+    )
+
+    if window.styleMask.contains(.fullScreen) {
+      hideToolbarForFullScreen()
+    }
+  }
+
+  @objc
+  private func hideToolbarForFullScreen(_ notification: Notification) {
+    hideToolbarForFullScreen()
+  }
+
+  private func hideToolbarForFullScreen() {
+    guard let toolbar = window?.toolbar else { return }
+
+    if toolbarVisibilityBeforeFullScreen == nil {
+      toolbarVisibilityBeforeFullScreen = toolbar.isVisible
+    }
+    toolbar.isVisible = false
+  }
+
+  @objc
+  private func windowDidExitFullScreen(_ notification: Notification) {
+    if let toolbarVisibilityBeforeFullScreen {
+      window?.toolbar?.isVisible = toolbarVisibilityBeforeFullScreen
+    }
+    toolbarVisibilityBeforeFullScreen = nil
   }
 }
 

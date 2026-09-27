@@ -1716,7 +1716,7 @@
 			repositoryURL = "https://github.com/hoangbkit/MacAppFoundation";
 			requirement = {
 				kind = exactVersion;
-				version = 0.1.0;
+				version = 1.5.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

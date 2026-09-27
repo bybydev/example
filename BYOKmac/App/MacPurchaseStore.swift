@@ -12,7 +12,7 @@ enum MacWindowID {
 enum MacSettingsTab: String, CaseIterable, Sendable {
   case general
   case plan
-  case appearance
+  case theme
   case connections
   case tools
   case data
@@ -252,8 +252,8 @@ enum MacPurchaseStore {
       id: "themes",
       systemImage: "paintpalette.fill",
       title: "All themes",
-      message: "Free includes 2 themes. Pro unlocks the complete theme collection.",
-      freeValue: "2 themes",
+      message: "GitHub Dark Dimmed and GitHub Light are free. Pro unlocks every MAF theme.",
+      freeValue: "2 GitHub themes",
       proValue: "All themes"
     ),
     PurchaseFeature(
@@ -382,7 +382,6 @@ enum MacPurchaseStore {
 }
 
 enum MacProFeature: String, Sendable {
-  case themes
   case providerAccounts
   case projects
   case mcpServers
@@ -408,7 +407,6 @@ final class MacProGateCenter {
 
 @MainActor
 enum MacProAccess {
-  static let freeThemeCount = BYOKProPolicy.freeThemeCount
   static let freeProviderAccountLimit = BYOKProPolicy.freeProviderAccountLimit
   static let freeProjectLimit = BYOKProPolicy.freeProjectLimit
   static let freeMCPServerLimit = BYOKProPolicy.freeMCPServerLimit
@@ -427,17 +425,6 @@ enum MacProAccess {
 
   static var hasPro: Bool { entitlementAccess == .pro }
   static var isCheckingEntitlement: Bool { entitlementAccess == .checking }
-
-  static func canUseTheme(
-    _ theme: MacThemeID,
-    hasPro: Bool,
-    entitlement: MacProEntitlementAccess? = nil
-  ) -> Bool {
-    let access = entitlement ?? entitlementAccess
-    if hasPro || access == .pro || access == .checking { return true }
-    guard let index = MacThemeID.allCases.firstIndex(of: theme) else { return false }
-    return BYOKProPolicy.canUseTheme(at: index, hasPro: false)
-  }
 
   static func canCreateProviderAccount(currentCount: Int, hasPro: Bool) -> Bool {
     BYOKProPolicy.canCreateProviderAccount(currentCount: currentCount, hasPro: hasPro)

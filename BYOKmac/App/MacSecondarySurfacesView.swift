@@ -113,9 +113,6 @@ struct MacSecondarySurfacesView: View {
     chats: MacChatSessionModel
   ) -> some View {
     MacShellView(model: model)
-      .preferredColorScheme(model.theme.preferredColorScheme)
-      .tint(MacDesignTokens.Colors.accent)
-      .environment(\.macThemeRevision, model.theme.revision)
       .sheet(
         item: Binding(
           get: { utilitySheets.destination },
@@ -128,9 +125,6 @@ struct MacSecondarySurfacesView: View {
         MacUtilitySheetContainer(destination: destination) {
           utilityContent(destination, workspace: workspace, mcp: mcp, chats: chats)
         }
-        .preferredColorScheme(model.theme.preferredColorScheme)
-        .tint(MacDesignTokens.Colors.accent)
-        .environment(\.macThemeRevision, model.theme.revision)
         .environment(workspace)
         .environment(mcp)
         .environment(chats)

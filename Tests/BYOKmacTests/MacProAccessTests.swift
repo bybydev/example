@@ -1,19 +1,22 @@
 import BYOKchatProviderCore
 import Foundation
+import MacAppFoundation
 import Testing
 @testable import BYOKmac
 
 @MainActor
 struct MacProAccessTests {
-  @Test("Free theme access is limited to two themes after entitlement resolves")
-  func themeLimit() {
-    let themes = MacThemeID.allCases
-    #expect(themes.count > MacProAccess.freeThemeCount)
-    #expect(MacProAccess.canUseTheme(themes[0], hasPro: false, entitlement: .free))
-    #expect(MacProAccess.canUseTheme(themes[1], hasPro: false, entitlement: .free))
-    #expect(!MacProAccess.canUseTheme(themes[2], hasPro: false, entitlement: .free))
-    #expect(MacProAccess.canUseTheme(themes[2], hasPro: false, entitlement: .checking))
-    #expect(MacProAccess.canUseTheme(themes[2], hasPro: true, entitlement: .pro))
+  @Test("Only the two GitHub themes are Free")
+  func themeAccessConfiguration() {
+    let configuration = MacThemeFoundation.configuration
+
+    #expect(configuration.themes.count == 13)
+    #expect(configuration.defaultThemeID == .githubLight)
+    #expect(!configuration.isProTheme(.githubDarkDimmed))
+    #expect(!configuration.isProTheme(.githubLight))
+    #expect(configuration.isProTheme(.system))
+    #expect(configuration.isProTheme(.midnight))
+    #expect(configuration.proThemeIDs.count == 11)
   }
 
   @Test("Free provider accounts stop at one")
@@ -165,22 +168,35 @@ struct MacProAccessTests {
     #expect(restrictions.isProviderRestricted(imported, currentIDs: [existing, imported], entitlement: .free))
   }
 
-  @Test("Paid theme survives checking but falls back after entitlement resolves Free")
-  func themeReconciliation() {
+  @Test("MAF preserves a Pro preference while Free users see the GitHub fallback")
+  func themeEntitlementFallback() {
     let suite = "MacProAccessTests.theme.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
-    defer {
-      defaults.removePersistentDomain(forName: suite)
-      MacThemeRegistry.selectedID = .system
-    }
+    defer { defaults.removePersistentDomain(forName: suite) }
 
-    defaults.set(MacThemeID.midnight.rawValue, forKey: "mac.theme")
-    let theme = MacThemeModel(defaults: defaults)
-    theme.reconcileProAccess(hasPro: false, isChecking: true)
-    #expect(theme.selectedID == .midnight)
+    defaults.set(MacAppThemeID.midnight.rawValue, forKey: MacThemeFoundation.storageKey)
+    let store = MacThemeFoundation.makeStore(defaults: defaults)
 
-    theme.reconcileProAccess(hasPro: false, isChecking: false)
-    #expect(theme.selectedID == .system)
+    #expect(store.selectedThemeID == .midnight)
+    #expect(store.effectiveThemeID(hasPro: false) == .githubLight)
+    #expect(store.effectiveThemeID(hasPro: true) == .midnight)
+    #expect(defaults.string(forKey: MacThemeFoundation.storageKey) == MacAppThemeID.midnight.rawValue)
+  }
+
+  @Test("Legacy BYOKchat theme IDs migrate to MAF IDs")
+  func legacyThemeIDMigration() {
+    let suite = "MacProAccessTests.themeMigration.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    defaults.set("githubDarkDimmed", forKey: MacThemeFoundation.storageKey)
+    let store = MacThemeFoundation.makeStore(defaults: defaults)
+
+    #expect(store.selectedThemeID == .githubDarkDimmed)
+    #expect(
+      defaults.string(forKey: MacThemeFoundation.storageKey)
+        == MacAppThemeID.githubDarkDimmed.rawValue
+    )
   }
 }
 
