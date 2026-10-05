@@ -77,7 +77,9 @@ public enum ChatContextBuilder {
     modelMaxOutputTokens: Int? = nil,
     tools: [ChatToolDefinition] = [],
     requiredTailMessages: [ProviderMessage] = [],
-    policy: ChatContextPolicy = .automatic
+    policy: ChatContextPolicy = .automatic,
+    capabilities: ResolvedModelCapabilities? = nil,
+    providerKind: ProviderKind? = nil
   ) throws -> ChatContextResult {
     let outputReserve = policy.outputReserve(
       requested: reservedOutputTokens ?? conversation.options.maxOutputTokens,
@@ -140,12 +142,28 @@ public enum ChatContextBuilder {
       }
     }
 
-    let turns = makeTurns(
+    var turns = makeTurns(
       from: eligible,
       activeProviderID: conversation.providerID,
       activeAccountID: conversation.accountID,
       activeModelID: conversation.modelID
     )
+    var requiredTailMessages = requiredTailMessages
+    var tools = tools
+    if let capabilities, let providerKind {
+      if capabilities[.tools] == .unsupported { tools = [] }
+      // Project before estimating context, preserving turn boundaries for reduction.
+      for index in turns.indices {
+        turns[index].messages = try ModelRequestPolicy.project(
+          messages: turns[index].messages, kind: providerKind, capabilities: capabilities,
+          validateLatestUser: index == turns.count - 1
+        )
+      }
+      requiredTailMessages = try ModelRequestPolicy.project(
+        messages: requiredTailMessages, kind: providerKind, capabilities: capabilities,
+        validateLatestUser: false
+      )
+    }
     let toolCost = estimate(toolDefinitions: tools)
     let fixedCost = estimate(messages: fixedMessages)
       + toolCost
@@ -359,3 +377,4 @@ public enum ChatContextBuilder {
     return 12 + estimateTokens(toolContinuation.payload.compactJSONString())
   }
 }
+

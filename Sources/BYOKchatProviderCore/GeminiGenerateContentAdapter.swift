@@ -50,6 +50,16 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       guard wire.supportedGenerationMethods?.contains("generateContent") != false else { return nil }
       let id = wire.baseModelID ?? wire.name.replacingOccurrences(of: "models/", with: "")
       guard !id.isEmpty else { return nil }
+      var evidence = ModelCapabilityEvidence()
+      evidence.set(.reasoning, supported: wire.thinking, source: .discovery)
+      evidence.set(.textInput, supported: true, source: .adapter)
+      evidence.set(.textOutput, supported: true, source: .adapter)
+      // These are adapter/model-family assumptions, not live modality discovery.
+      evidence.set(.imageInput, supported: true, source: .inference)
+      evidence.set(.fileInput, supported: true, source: .inference)
+      evidence.set(.tools, supported: true, source: .inference)
+      if let value = wire.inputTokenLimit, value > 0 { evidence.contextWindowSource = .discovery }
+      if let value = wire.outputTokenLimit, value > 0 { evidence.maxOutputTokensSource = .discovery }
       var parameters: Set<String> = ["maxOutputTokens", "tools"]
       if supportsSamplingParameters(id) {
         parameters.formUnion(["temperature", "topP"])
@@ -59,11 +69,12 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         providerID: definition.id,
         id: ModelID(rawValue: id),
         displayName: wire.displayName ?? id,
-        contextWindow: wire.inputTokenLimit,
-        maxOutputTokens: wire.outputTokenLimit,
+        contextWindow: wire.inputTokenLimit.flatMap { $0 > 0 ? $0 : nil },
+        maxOutputTokens: wire.outputTokenLimit.flatMap { $0 > 0 ? $0 : nil },
         supportedParameters: parameters,
         inputModalities: ["text", "image", "file"],
-        outputModalities: ["text"]
+        outputModalities: ["text"],
+        capabilityEvidence: evidence
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)
@@ -288,6 +299,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
   private func validateRequest(_ request: ProviderRequest, account: ResolvedProviderAccount) throws
     -> ProviderRequest
   {
+    let request = try ModelRequestPolicy.prepare(request, kind: definition.capabilityKind)
     let model = request.model.rawValue
       .replacingOccurrences(of: "models/", with: "")
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -388,22 +400,14 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         thinking["includeThoughts"] = .bool(false)
       }
 
-      let isGemini3 = request.model.rawValue.lowercased().hasPrefix("gemini-3")
-      if isGemini3 {
+      if request.capabilities?.reasoning.kind == .efforts {
         if let effort = reasoning.effort {
-          let level: String
-          switch effort {
-          case .minimal: level = "minimal"
-          case .low: level = "low"
-          case .medium: level = "medium"
-          case .high, .max: level = "high"
-          }
-          thinking["thinkingLevel"] = .string(level)
+          thinking["thinkingLevel"] = .string(effort.rawValue)
         }
       } else if reasoning.enabled == false {
         thinking["thinkingBudget"] = .number(0)
       } else if let budget = reasoning.maxTokens {
-        thinking["thinkingBudget"] = .number(Double(max(0, budget)))
+        thinking["thinkingBudget"] = .number(Double(budget))
       }
       if !thinking.isEmpty { generation["thinkingConfig"] = .object(thinking) }
     }
@@ -592,12 +596,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     var values = Dictionary(uniqueKeysWithValues: seed.map { ($0.id, $0) })
     for model in discovered {
       if let existing = values[model.id] {
-        var merged = model
-        if merged.contextWindow == nil { merged.contextWindow = existing.contextWindow }
-        if merged.maxOutputTokens == nil { merged.maxOutputTokens = existing.maxOutputTokens }
-        merged.supportedParameters.formUnion(existing.supportedParameters)
-        merged.inputModalities.formUnion(existing.inputModalities)
-        values[model.id] = merged
+        values[model.id] = model.mergingCapabilities(from: existing)
       } else {
         values[model.id] = model
       }

@@ -78,17 +78,14 @@ final class MacProviderModel {
     return usableModelID(for: account)
   }
 
-  func reasoningDefault(for accountID: ProviderAccountID?) -> ReasoningOptions? {
-    account(accountID)?.kind.reasoningDefault
+  func capabilities(accountID: ProviderAccountID, modelID: ModelID) -> ResolvedModelCapabilities {
+    let record = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
+    return ModelCapabilityResolver.resolve(kind: account(accountID)?.kind ?? .openAICompatible,
+      modelID: modelID, model: record?.model)
   }
 
   func supportsReasoning(accountID: ProviderAccountID, modelID: ModelID) -> Bool {
-    guard let record = models(for: accountID, includeHidden: true).first(where: { $0.model.id == modelID })
-    else { return false }
-    let parameters = record.model.supportedParameters
-    return !parameters.isDisjoint(with: [
-      "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
-    ])
+    capabilities(accountID: accountID, modelID: modelID)[.reasoning] == .supported
   }
 
   var resolvedDefaultAccount: ProviderAccount? {
@@ -115,9 +112,7 @@ final class MacProviderModel {
     return MacChatTarget(
       accountID: account.id,
       modelID: modelID,
-      reasoning: supportsReasoning(accountID: account.id, modelID: modelID)
-        ? account.kind.reasoningDefault
-        : nil
+      reasoning: nil
     )
   }
 

@@ -239,14 +239,26 @@ public actor ProviderRuntime {
     -> ProviderResponse
   {
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    return try await makeAdapter(for: resolved).generate(request: request, account: resolved)
+    let prepared = try await prepare(request, account: resolved)
+    return try await makeAdapter(for: resolved).generate(request: prepared, account: resolved)
   }
 
   public func stream(request: ProviderRequest, accountID: ProviderAccountID) async throws
     -> AsyncThrowingStream<ProviderStreamEvent, Error>
   {
     let resolved = try await accounts.resolvedAccount(id: accountID)
-    return makeAdapter(for: resolved).stream(request: request, account: resolved)
+    let prepared = try await prepare(request, account: resolved)
+    return makeAdapter(for: resolved).stream(request: prepared, account: resolved)
+  }
+
+  private func prepare(_ request: ProviderRequest, account: ResolvedProviderAccount) async throws -> ProviderRequest {
+    var request = request
+    if request.capabilities == nil {
+      let record = await workspace.modelRecords(for: account.id, includeHidden: true)
+        .first { $0.model.id == request.model }
+      request.capabilities = ModelCapabilityResolver.resolve(kind: account.kind, modelID: request.model, model: record?.model)
+    }
+    return try ModelRequestPolicy.prepare(request, kind: account.kind)
   }
 
   /// Direct-resolution entry points: callers that already hold a
@@ -280,3 +292,4 @@ public actor ProviderRuntime {
     }
   }
 }
+

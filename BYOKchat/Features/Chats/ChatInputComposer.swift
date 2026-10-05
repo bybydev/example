@@ -136,7 +136,8 @@ struct ChatComposer: View {
       modelName: model?.displayName ?? conversation.modelID.rawValue,
       modelID: conversation.modelID.rawValue,
       supportedParameters: model?.supportedParameters ?? [],
-      reasoning: conversation.options.reasoning
+      reasoning: conversation.options.reasoning,
+      capabilities: providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
     )
     targetDetails = "\(account?.label ?? providerName) · \(model?.displayName ?? conversation.modelID.rawValue)"
     openTarget = openChatSettings
@@ -488,10 +489,6 @@ private struct ChatComposerContentHeightKey: PreferenceKey {
 }
 
 enum ComposerTargetLabelFormatter {
-  private static let reasoningParameters: Set<String> = [
-    "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
-  ]
-
   private static let recognizableFamilies = [
     "gpt", "claude", "sonnet", "opus", "haiku", "gemini", "deepseek", "qwen",
     "llama", "mistral", "grok", "kimi", "nemotron", "phi", "command r", "minimax",
@@ -503,7 +500,8 @@ enum ComposerTargetLabelFormatter {
     modelName: String,
     modelID: String,
     supportedParameters: Set<String>,
-    reasoning: ReasoningOptions?
+    reasoning: ReasoningOptions?,
+    capabilities: ResolvedModelCapabilities? = nil
   ) -> String {
     let source = modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? modelID
@@ -518,9 +516,12 @@ enum ComposerTargetLabelFormatter {
     }
     parts.append(compactModel)
 
-    if !supportedParameters.isDisjoint(with: reasoningParameters) {
-      parts.append(reasoningLabel(reasoning))
-    }
+    let control = capabilities?.reasoning ?? ModelCapabilityResolver.resolve(
+      kind: ProviderKind.allCases.first { $0.defaultProviderID == providerID } ?? .openAICompatible,
+      modelID: ModelID(rawValue: modelID)
+    ).reasoning
+    let label = control.label(for: reasoning)
+    if !label.isEmpty { parts.append(label) }
 
     return parts.filter { !$0.isEmpty }.joined(separator: " · ")
   }
@@ -582,18 +583,6 @@ enum ComposerTargetLabelFormatter {
     return value
   }
 
-  private static func reasoningLabel(_ reasoning: ReasoningOptions?) -> String {
-    guard reasoning?.enabled == true else { return "Off" }
-    guard let effort = reasoning?.effort else { return "On" }
-    switch effort {
-    case .minimal: return "Min"
-    case .low: return "Low"
-    case .medium: return "Med"
-    case .high: return "High"
-    case .max: return "Max"
-    }
-  }
-
   private static func shortProviderName(providerID: ProviderID, displayName: String) -> String {
     switch providerID {
     case BuiltInProviders.openRouterID: return "OR"
@@ -618,3 +607,4 @@ enum ComposerTargetLabelFormatter {
     value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 }
+

@@ -178,7 +178,8 @@ struct MacShellView: View {
     .sheet(isPresented: $showingTargetPicker) {
       MacTargetPickerView(
         providers: providers,
-        initialTarget: chats.target(for: targetPickerConversationID)
+        initialTarget: chats.target(for: targetPickerConversationID),
+        maxOutputTokens: chats.conversation(targetPickerConversationID)?.options.maxOutputTokens
       ) { target in
         await chats.applyTarget(target, conversationID: targetPickerConversationID)
       }
@@ -1027,3 +1028,4 @@ final class MacChatNavigation {
     }
   }
 }
+

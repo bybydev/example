@@ -376,20 +376,7 @@ public actor ProviderWorkspaceStore {
   }
 
   private func mergeModel(_ current: ProviderModel, _ incoming: ProviderModel) -> ProviderModel {
-    var result = incoming
-    if result.displayName.isEmpty { result.displayName = current.displayName }
-    if result.contextWindow == nil { result.contextWindow = current.contextWindow }
-    if result.maxOutputTokens == nil { result.maxOutputTokens = current.maxOutputTokens }
-    if result.promptPricePerToken == nil {
-      result.promptPricePerToken = current.promptPricePerToken
-    }
-    if result.completionPricePerToken == nil {
-      result.completionPricePerToken = current.completionPricePerToken
-    }
-    result.supportedParameters.formUnion(current.supportedParameters)
-    result.inputModalities.formUnion(current.inputModalities)
-    result.outputModalities.formUnion(current.outputModalities)
-    return result
+    incoming.mergingCapabilities(from: current)
   }
 
   private func mergeByID<Value, ID: Hashable>(
@@ -399,3 +386,4 @@ public actor ProviderWorkspaceStore {
     return current + incoming.filter { !existing.contains($0[keyPath: id]) }
   }
 }
+

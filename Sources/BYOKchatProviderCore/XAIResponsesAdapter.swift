@@ -203,6 +203,14 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         isChatModelID(id)
       else { return nil }
 
+      var evidence = ModelCapabilityEvidence()
+      evidence.modalities(arrayValue(model["input_modalities"])?.compactMap(stringValue), input: true)
+      evidence.modalities(arrayValue(model["output_modalities"])?.compactMap(stringValue), input: false)
+      // The Files API is a separate adapter route, not an exhaustive catalog modality.
+      evidence.facts.removeValue(forKey: .fileInput)
+      evidence.set(.fileInput, supported: true, source: .adapter)
+      let contextWindow = intValue(model["context_length"]).flatMap { $0 > 0 ? $0 : nil }
+      if contextWindow != nil { evidence.contextWindowSource = .discovery }
       let inputModalities = Set(
         (arrayValue(model["input_modalities"]) ?? []).compactMap(stringValue)
       )
@@ -213,15 +221,16 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         providerID: definition.id,
         id: ModelID(rawValue: id),
         displayName: id,
-        contextWindow: intValue(model["context_length"]),
+        contextWindow: contextWindow,
         contextWindowKind: .combined,
         supportedParameters: [],
         inputModalities: inputModalities.isEmpty ? ["text"] : inputModalities,
         outputModalities: outputModalities.isEmpty ? ["text"] : outputModalities,
         promptPricePerToken: tokenPricePerToken(model["prompt_text_token_price"]),
-        completionPricePerToken: tokenPricePerToken(model["completion_text_token_price"])
+        completionPricePerToken: tokenPricePerToken(model["completion_text_token_price"]),
+        capabilityEvidence: evidence
       )
-      // xAI Files attachments are an inference capability layered on language
+      // xAI Files attachments are an adapter route layered on language
       // models rather than a modality reported by `/language-models`.
       providerModel.inputModalities.insert("file")
       return enrichDiscoveredModel(providerModel)
@@ -242,13 +251,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
   private func enrichDiscoveredModel(_ model: ProviderModel) -> ProviderModel {
     var result = model
     if let seed = definition.seedModels.first(where: { $0.id == model.id }) {
+      result = result.mergingCapabilities(from: seed)
       if result.displayName == result.id.rawValue { result.displayName = seed.displayName }
-      if result.contextWindow == nil { result.contextWindow = seed.contextWindow }
-      if result.contextWindowKind == nil { result.contextWindowKind = seed.contextWindowKind }
-      if result.maxOutputTokens == nil { result.maxOutputTokens = seed.maxOutputTokens }
-      result.supportedParameters.formUnion(seed.supportedParameters)
-      result.inputModalities.formUnion(seed.inputModalities)
-      result.outputModalities.formUnion(seed.outputModalities)
     }
 
     result.supportedParameters.formUnion(["temperature", "top_p", "max_output_tokens", "tools"])
@@ -267,24 +271,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     var values = Dictionary(uniqueKeysWithValues: seed.map { ($0.id, $0) })
     for model in discovered {
       if let existing = values[model.id] {
-        var merged = model
-        if merged.displayName == merged.id.rawValue { merged.displayName = existing.displayName }
-        if merged.contextWindow == nil { merged.contextWindow = existing.contextWindow }
-        if merged.contextWindowKind == nil { merged.contextWindowKind = existing.contextWindowKind }
-        if merged.maxOutputTokens == nil { merged.maxOutputTokens = existing.maxOutputTokens }
-        if merged.promptPricePerToken == nil {
-          merged.promptPricePerToken = existing.promptPricePerToken
-        }
-        if merged.completionPricePerToken == nil {
-          merged.completionPricePerToken = existing.completionPricePerToken
-        }
-        merged.supportedParameters.formUnion(existing.supportedParameters)
-        if !modelSupportsReasoningControl(model.id.rawValue) {
-          merged.supportedParameters.remove("reasoning")
-        }
-        merged.inputModalities.formUnion(existing.inputModalities)
-        merged.outputModalities.formUnion(existing.outputModalities)
-        values[model.id] = merged
+        values[model.id] = model.mergingCapabilities(from: existing)
       } else {
         values[model.id] = model
       }
@@ -300,6 +287,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     _ request: ProviderRequest,
     account: ResolvedProviderAccount
   ) throws -> ProviderRequest {
+    let request = try ModelRequestPolicy.prepare(request, kind: definition.capabilityKind)
     let model = request.model.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !model.isEmpty else { throw ProviderError.invalidModel }
     guard let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
@@ -395,7 +383,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     if let maxOutputTokens = request.options.maxOutputTokens {
       body["max_output_tokens"] = .number(Double(maxOutputTokens))
     }
-    if let reasoning = reasoningValue(request.options.reasoning, model: request.model.rawValue) {
+    if let reasoning = reasoningValue(request.options.reasoning, control: request.capabilities?.reasoning
+      ?? ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: request.model)) {
       body["reasoning"] = reasoning
     }
     if let value = request.options.temperature { body["temperature"] = .number(value) }
@@ -442,6 +431,13 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
           ])
         )
       } else {
+        if let text = attachment.utf8Text {
+          contentParts.append(.object([
+            "type": .string("input_text"),
+            "text": .string("File: \(attachment.filename)\n\n\(text)"),
+          ]))
+          continue
+        }
         guard let fileID = uploadedFileIDs[attachment.id] else {
           throw ProviderError.invalidRequest(
             "xAI file upload was not available for \(attachment.filename)."
@@ -493,49 +489,22 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
   // MARK: - xAI reasoning
 
   private func modelUsesReasoning(_ model: String) -> Bool {
-    let value = model.lowercased()
-    if value.contains("non-reasoning") { return false }
-    if value.hasPrefix("grok-4.6") || value.hasPrefix("grok-4.5") { return true }
-    if value.hasPrefix("grok-4.3") { return true }
-    if value.hasPrefix("grok-4.20") { return true }
-    return false
+    let control = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: ModelID(rawValue: model))
+    return control.kind != .unknown && control.kind != .unsupported
   }
 
   private func modelSupportsReasoningControl(_ model: String) -> Bool {
-    let value = model.lowercased()
-    if value.contains("non-reasoning") { return false }
-    if value.contains("multi-agent") { return true }
-    return value.hasPrefix("grok-4.6")
-      || value.hasPrefix("grok-4.5")
-      || value.hasPrefix("grok-4.3")
+    ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: ModelID(rawValue: model)).kind == .efforts
   }
 
-  private func modelAllowsNoReasoning(_ model: String) -> Bool {
-    model.lowercased().hasPrefix("grok-4.3")
-  }
-
-  private func modelSupportsXHigh(_ model: String) -> Bool {
-    let value = model.lowercased()
-    return value.hasPrefix("grok-4.6") || value.contains("multi-agent")
-  }
-
-  private func reasoningValue(_ options: ReasoningOptions?, model: String) -> JSONValue? {
-    guard modelSupportsReasoningControl(model) else { return nil }
-    guard let options else { return nil }
-
-    let effort: String
+  private func reasoningValue(_ options: ReasoningOptions?, control: ModelReasoningControl) -> JSONValue? {
+    guard control.kind == .efforts, let options = control.normalize(options) else { return nil }
     if options.enabled == false {
-      effort = modelAllowsNoReasoning(model) ? "none" : "low"
-    } else {
-      switch options.effort ?? .high {
-      case .minimal: effort = "low"
-      case .low: effort = "low"
-      case .medium: effort = "medium"
-      case .high: effort = "high"
-      case .max: effort = modelSupportsXHigh(model) ? "xhigh" : "high"
-      }
+      guard let value = control.offWireValue else { return nil }
+      return .object(["effort": .string(value)])
     }
-    return .object(["effort": .string(effort)])
+    guard let effort = options.effort else { return nil }
+    return .object(["effort": .string(effort.rawValue)])
   }
 
   // MARK: - Files API
@@ -546,7 +515,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
   ) async throws -> [String: String] {
     var result: [String: String] = [:]
     for message in request.messages {
-      for attachment in message.attachments ?? [] where !attachment.isImage {
+      for attachment in message.attachments ?? [] where !attachment.isImage && attachment.utf8Text == nil {
         if result[attachment.id] != nil { continue }
         result[attachment.id] = try await uploadFile(attachment, account: account)
       }

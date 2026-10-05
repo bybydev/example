@@ -855,15 +855,7 @@ extension ChatView {
   var targetReasoning: ReasoningOptions? {
     if let conversation { return conversation.options.reasoning }
     if let targetOverride { return targetOverride.reasoning }
-    guard let providerID = defaultAccount?.providerID else { return nil }
-    switch providerID {
-    case BuiltInProviders.deepSeekID, BuiltInProviders.anthropicID:
-      return .init(enabled: true, effort: .high)
-    case BuiltInProviders.geminiID:
-      return .init(enabled: true, effort: .medium)
-    default:
-      return nil
-    }
+    return nil
   }
 
   /// Account feeding the target chip / picker sheet: the conversation's own
@@ -893,7 +885,8 @@ extension ChatView {
         modelName: model?.displayName ?? conversation.modelID.rawValue,
         modelID: conversation.modelID.rawValue,
         supportedParameters: model?.supportedParameters ?? [],
-        reasoning: conversation.options.reasoning
+        reasoning: conversation.options.reasoning,
+        capabilities: providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
       )
     }
     if project?.accountID != nil && defaultAccount == nil {
@@ -921,7 +914,8 @@ extension ChatView {
         modelName: model?.displayName ?? modelID.rawValue,
         modelID: modelID.rawValue,
         supportedParameters: model?.supportedParameters ?? [],
-        reasoning: targetReasoning
+        reasoning: targetReasoning,
+        capabilities: providers.capabilities(accountID: account.id, modelID: modelID)
       )
     }
   }
@@ -1172,3 +1166,4 @@ extension ChatView {
     }
   }
 }
+

@@ -25,7 +25,7 @@ import Testing
   #expect(root["reasoning"] == nil)
 }
 
-@Test func xAIMaxReasoningMapsToOnlySupportedEffortForEachFamily() async throws {
+@Test func xAIStaleMaxReasoningUsesProviderDefaultWithoutClaimingXHigh() async throws {
   let transport = XAIReasoningMockTransport(
     responses: [
       xAIReasoningResponse(model: "grok-4.6"),
@@ -50,9 +50,21 @@ import Testing
   let grok45 = try requestRoot(try #require(await transport.request(at: 1)))
   let multiAgent = try requestRoot(try #require(await transport.request(at: 2)))
 
-  #expect(reasoningEffort(grok46) == "xhigh")
-  #expect(reasoningEffort(grok45) == "high")
-  #expect(reasoningEffort(multiAgent) == "xhigh")
+  #expect(reasoningEffort(grok46) == nil)
+  #expect(reasoningEffort(grok45) == nil)
+  #expect(reasoningEffort(multiAgent) == nil)
+}
+
+@Test func xAIExplicitXHighIsPreservedOnSupportingFamilies() async throws {
+  let transport = XAIReasoningMockTransport(responses: [xAIReasoningResponse(model: "grok-4.6")])
+  let adapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: transport)
+  _ = try await adapter.generate(
+    request: .init(model: "grok-4.6", messages: [.init(role: .user, content: "Hello")],
+      options: .init(reasoning: .init(enabled: true, effort: .xhigh))),
+    account: xAIReasoningAccount()
+  )
+  let root = try requestRoot(try #require(await transport.request(at: 0)))
+  #expect(reasoningEffort(root) == "xhigh")
 }
 
 private actor XAIReasoningMockTransport: ProviderHTTPTransport {

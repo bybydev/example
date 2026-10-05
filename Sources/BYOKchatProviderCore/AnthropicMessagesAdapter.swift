@@ -47,6 +47,15 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     }
 
     let discovered = decoded.data.map { wire in
+      var evidence = ModelCapabilityEvidence()
+      evidence.set(.imageInput, supported: wire.capabilities?.imageInput?.supported, source: .discovery)
+      evidence.set(.fileInput, supported: wire.capabilities?.pdfInput?.supported, source: .discovery)
+      evidence.set(.reasoning, supported: wire.capabilities?.thinking?.supported, source: .discovery)
+      evidence.set(.textInput, supported: true, source: .adapter)
+      evidence.set(.textOutput, supported: true, source: .adapter)
+      evidence.set(.tools, supported: true, source: .adapter)
+      if let value = wire.maxInputTokens, value > 0 { evidence.contextWindowSource = .discovery }
+      if let value = wire.maxTokens, value > 0 { evidence.maxOutputTokensSource = .discovery }
       var modalities: Set<String> = ["text"]
       if wire.capabilities?.imageInput?.supported == true { modalities.insert("image") }
       if wire.capabilities?.pdfInput?.supported == true { modalities.insert("file") }
@@ -62,7 +71,8 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         maxOutputTokens: wire.maxTokens.flatMap { $0 > 0 ? $0 : nil },
         supportedParameters: parameters,
         inputModalities: modalities,
-        outputModalities: ["text"]
+        outputModalities: ["text"],
+        capabilityEvidence: evidence
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)
@@ -312,6 +322,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   private func validateRequest(_ request: ProviderRequest, account: ResolvedProviderAccount) throws
     -> ProviderRequest
   {
+    let request = try ModelRequestPolicy.prepare(request, kind: definition.capabilityKind)
     let model = request.model.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !model.isEmpty else { throw ProviderError.invalidModel }
     guard account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
@@ -404,13 +415,19 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       if reasoning.enabled == false {
         body["thinking"] = .object(["type": .string("disabled")])
       } else if reasoning.enabled == true || reasoning.effort != nil || reasoning.maxTokens != nil {
-        body["thinking"] = .object([
-          "type": .string("adaptive"),
-          "display": .string(reasoning.excludeFromResponse ? "omitted" : "summarized"),
-        ])
+        if let budget = reasoning.maxTokens {
+          body["thinking"] = .object([
+            "type": .string("enabled"), "budget_tokens": .number(Double(budget)),
+          ])
+        } else {
+          body["thinking"] = .object([
+            "type": .string("adaptive"),
+            "display": .string(reasoning.excludeFromResponse ? "omitted" : "summarized"),
+          ])
+        }
       }
       if let effort = reasoning.effort {
-        let value = effort == .minimal ? "low" : effort.rawValue
+        let value = effort.rawValue
         body["output_config"] = .object(["effort": .string(value)])
       }
     }
@@ -608,12 +625,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     var values = Dictionary(uniqueKeysWithValues: seed.map { ($0.id, $0) })
     for model in discovered {
       if let existing = values[model.id] {
-        var merged = model
-        if merged.contextWindow == nil { merged.contextWindow = existing.contextWindow }
-        if merged.maxOutputTokens == nil { merged.maxOutputTokens = existing.maxOutputTokens }
-        merged.supportedParameters.formUnion(existing.supportedParameters)
-        merged.inputModalities.formUnion(existing.inputModalities)
-        values[model.id] = merged
+        values[model.id] = model.mergingCapabilities(from: existing)
       } else {
         values[model.id] = model
       }

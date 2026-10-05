@@ -183,6 +183,10 @@ public extension ProviderKind {
   /// Curated fallback models merged into a fresh account so the model picker
   /// is usable before (or without) discovery.
   var seedModels: [ProviderModel] {
+    catalogModels.map { $0.withCatalogEvidence() }
+  }
+
+  private var catalogModels: [ProviderModel] {
     switch self {
     case .openai:
       [

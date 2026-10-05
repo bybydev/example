@@ -339,14 +339,8 @@ final class MacChatSessionModel {
 
     let conversation = hydratedConversations[conversationID] ?? summary(conversationID)
     guard let conversation else { return accessiblePreferredTarget() }
-    let reasoning: ReasoningOptions?
-    if hydratedConversations[conversationID] != nil {
-      reasoning = conversation.options.reasoning
-    } else if providers.supportsReasoning(accountID: conversation.accountID, modelID: conversation.modelID) {
-      reasoning = providers.reasoningDefault(for: conversation.accountID)
-    } else {
-      reasoning = nil
-    }
+    let reasoning = providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
+      .reasoning.normalize(conversation.options.reasoning)
     return MacChatTarget(
       accountID: conversation.accountID,
       modelID: conversation.modelID,
@@ -355,6 +349,9 @@ final class MacChatSessionModel {
   }
 
   func applyTarget(_ target: MacChatTarget, conversationID: ConversationID?) async -> Bool {
+    var target = target
+    target.reasoning = providers.capabilities(accountID: target.accountID, modelID: target.modelID)
+      .reasoning.normalize(target.reasoning)
     guard !isProviderRestricted(target.accountID) else {
       blockRestoredResource("provider connection", feature: .providerAccounts)
       return false
@@ -383,10 +380,7 @@ final class MacChatSessionModel {
       if account.kind != .openRouter {
         options.openRouterRouting = nil
       }
-      options.reasoning = providers.supportsReasoning(
-        accountID: target.accountID,
-        modelID: target.modelID
-      ) ? target.reasoning : nil
+      options.reasoning = target.reasoning
 
       try await store.updateTarget(
         conversationID,
@@ -869,9 +863,7 @@ final class MacChatSessionModel {
     return MacChatTarget(
       accountID: account.id,
       modelID: modelID,
-      reasoning: providers.supportsReasoning(accountID: account.id, modelID: modelID)
-        ? providers.reasoningDefault(for: account.id)
-        : nil
+      reasoning: nil
     )
   }
 
@@ -1018,3 +1010,4 @@ struct MacPreparedConversation: Identifiable, Sendable {
 
   static var newChat: Self { Self(id: nil, conversation: nil, answers: [:]) }
 }
+

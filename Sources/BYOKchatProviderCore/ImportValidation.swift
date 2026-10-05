@@ -6,6 +6,36 @@ public enum WorkspaceImportValidator {
     var modelID: ModelID
   }
 
+  private static func validateCapabilityEvidence(_ model: ProviderModel) throws {
+    func invalid(_ message: String) -> ProviderError {
+      .importConflict("Model \(model.id.rawValue): \(message)")
+    }
+    if let value = model.contextWindow, value <= 0 { throw invalid("context window must be positive.") }
+    if let value = model.maxOutputTokens, value <= 0 { throw invalid("maximum output tokens must be positive.") }
+    guard let control = model.capabilityEvidence?.reasoningControl else { return }
+    guard Set(control.efforts).count == control.efforts.count else { throw invalid("duplicate reasoning efforts.") }
+    if control.kind == .efforts, control.efforts.isEmpty { throw invalid("effort controls must contain valid choices.") }
+    if let value = control.defaultEffort, control.kind == .efforts, !control.efforts.contains(value) {
+      throw invalid("default effort is not in the supported choices.")
+    }
+    if control.allowsOff, control.offWireValue == nil { throw invalid("Off requires an explicit wire representation.") }
+    if control.kind == .budget, control.budget == nil { throw invalid("budget control is missing its bounds.") }
+    if control.combinesEffortAndBudget == true, control.budget == nil || control.efforts.isEmpty {
+      throw invalid("combined controls require both an effort list and a budget.")
+    }
+    if let support = model.capabilityEvidence?.facts[.reasoning]?.support,
+      (support == .unsupported && control.kind != .unsupported && control.kind != .unknown)
+        || (support == .supported && control.kind == .unsupported) {
+      throw invalid("reasoning support contradicts the control metadata.")
+    }
+    if let budget = control.budget {
+      guard budget.minimum > 0, budget.maximum.map({ $0 >= budget.minimum }) ?? true,
+        (budget.defaultTokens == -1 && budget.allowsAutomatic)
+          || (budget.defaultTokens >= budget.minimum && budget.defaultTokens <= (budget.maximum ?? Int.max))
+      else { throw invalid("invalid thinking budget bounds or default.") }
+    }
+  }
+
   public static func validateProviderWorkspace(_ workspace: ProviderWorkspaceState) throws {
     try requireUnique(
       workspace.customProviders,
@@ -53,6 +83,7 @@ public enum WorkspaceImportValidator {
           "Custom provider \(definition.id.rawValue) contains duplicate seed model \($0.rawValue)."
         }
       )
+      for model in definition.seedModels { try validateCapabilityEvidence(model) }
       for model in definition.seedModels where model.providerID != definition.id {
         throw ProviderError.importConflict(
           "Seed model \(model.id.rawValue) does not belong to provider \(definition.id.rawValue)."
@@ -119,6 +150,7 @@ public enum WorkspaceImportValidator {
     }
 
     for record in workspace.modelRecords {
+      try validateCapabilityEvidence(record.model)
       guard let account = accountsByID[record.accountID] else {
         throw ProviderError.importConflict(
           "Model \(record.model.id.rawValue) references unknown account \(record.accountID.rawValue)."

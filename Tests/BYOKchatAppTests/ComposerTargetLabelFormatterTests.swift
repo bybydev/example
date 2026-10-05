@@ -27,10 +27,10 @@ struct ComposerTargetLabelFormatterTests {
       modelName: "Gemini 2.5 Pro",
       modelID: "gemini-2.5-pro",
       supportedParameters: ["thinking"],
-      reasoning: .init(enabled: true, effort: .medium)
+      reasoning: .init(enabled: true, maxTokens: 1_024)
     )
 
-    #expect(label == "Gemini 2.5 Pro · Med")
+    #expect(label == "Gemini 2.5 Pro · 1024 tokens")
   }
 
   @Test("Uses model family instead of Anthropic provider name")
@@ -58,7 +58,19 @@ struct ComposerTargetLabelFormatterTests {
       reasoning: nil
     )
 
-    #expect(label == "OR · Nova 3.1 · Off")
+    #expect(label == "OR · Nova 3.1")
+  }
+
+  @Test("Provider Default is distinct from explicit Off")
+  func providerDefaultAndOffLabels() {
+    func label(_ options: ReasoningOptions?) -> String {
+      ComposerTargetLabelFormatter.make(providerID: "openai", providerName: "OpenAI",
+        modelName: "GPT-5.6 Sol", modelID: "gpt-5.6-sol", supportedParameters: ["reasoning"],
+        reasoning: options)
+    }
+    #expect(label(nil).hasSuffix("Default (Medium)"))
+    #expect(label(.init(enabled: false)).hasSuffix("Off"))
+    #expect(label(.init(enabled: true, effort: .xhigh)).hasSuffix("Extra High"))
   }
 }
 

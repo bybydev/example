@@ -898,7 +898,9 @@ private struct MacComposerView: View {
       modelName: selectedModel?.displayName ?? target.modelID.rawValue,
       modelID: target.modelID.rawValue,
       supportedParameters: selectedModel?.supportedParameters ?? [],
-      reasoning: target.reasoning
+      reasoning: target.reasoning,
+      capabilities: ModelCapabilityResolver.resolve(kind: selectedAccount?.kind ?? .openAICompatible,
+        modelID: target.modelID, model: selectedModel)
     )
   }
 
@@ -1098,3 +1100,4 @@ extension EnvironmentValues {
     set { self[MacPreparedAnswersKey.self] = newValue }
   }
 }
+

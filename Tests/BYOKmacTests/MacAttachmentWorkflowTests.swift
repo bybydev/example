@@ -151,7 +151,7 @@ struct MacAttachmentWorkflowTests {
     #expect(throws: ProviderError.self) {
       try MacAttachmentCompatibility.validate(
         [attachment],
-        providerKind: .gemini,
+        providerKind: .anthropic,
         inputModalities: ["text"]
       )
     }

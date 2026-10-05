@@ -8,6 +8,7 @@ extension OpenAICompatibleAdapter {
   func validate(request: ProviderRequest, account: ResolvedProviderAccount) throws
     -> ProviderRequest
   {
+    let request = try ModelRequestPolicy.prepare(request, kind: definition.capabilityKind)
     let model = request.model.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !model.isEmpty else { throw ProviderError.invalidModel }
     let messages = request.messages.compactMap { message -> ProviderMessage? in
@@ -135,7 +136,7 @@ extension OpenAICompatibleAdapter {
           body["thinking"] = .object(["type": .string(enabled ? "enabled" : "disabled")])
         }
         if reasoning.enabled != false, let effort = reasoning.effort {
-          body["reasoning_effort"] = .string(effort == .max ? "max" : "high")
+          body["reasoning_effort"] = .string(effort.rawValue)
         }
       }
       if streaming {
@@ -310,11 +311,7 @@ extension OpenAICompatibleAdapter {
     var values = Dictionary(uniqueKeysWithValues: seed.map { ($0.id, $0) })
     for model in discovered {
       if let existing = values[model.id] {
-        var merged = model
-        if merged.contextWindow == nil { merged.contextWindow = existing.contextWindow }
-        if merged.maxOutputTokens == nil { merged.maxOutputTokens = existing.maxOutputTokens }
-        merged.supportedParameters.formUnion(existing.supportedParameters)
-        values[model.id] = merged
+        values[model.id] = model.mergingCapabilities(from: existing)
       } else {
         values[model.id] = model
       }
@@ -324,3 +321,4 @@ extension OpenAICompatibleAdapter {
     }
   }
 }
+

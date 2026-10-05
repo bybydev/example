@@ -2,6 +2,25 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        required: true
+        default: macOS
+        type: choice
+        options:
+          - macOS
+          - iOS
+          - both
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Debug
+          - Release
+          - both
 
 permissions:
   contents: write
@@ -23,8 +42,13 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
 
-      - name: Show toolchain
+      - name: Show selection and toolchain
+        env:
+          BUILD_PLATFORM: ${{ inputs.platform }}
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
         run: |
+          echo "Platform: $BUILD_PLATFORM"
+          echo "Configuration: $BUILD_CONFIGURATION"
           sw_vers
           uname -m
           xcodebuild -version
@@ -53,14 +77,25 @@ jobs:
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Build release: $tag"
 
-      - name: Archive unsigned iOS app (Debug and Release)
+      - name: Archive unsigned iOS app
+        if: ${{ inputs.platform == 'iOS' || inputs.platform == 'both' }}
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
         shell: bash
         run: |
+          set -euo pipefail
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ARTIFACTS"
 
-          for CONFIGURATION in Debug Release; do
+          case "$BUILD_CONFIGURATION" in
+            Debug) configurations=(Debug) ;;
+            Release) configurations=(Release) ;;
+            both) configurations=(Debug Release) ;;
+            *) echo "error: unsupported configuration $BUILD_CONFIGURATION" >&2; exit 1 ;;
+          esac
+
+          for CONFIGURATION in "${configurations[@]}"; do
             IOS_DERIVED="$RUNNER_TEMP/BYOKchat-iOS-$CONFIGURATION"
             IOS_ARCHIVE="$RUNNER_TEMP/BYOKchat-$CONFIGURATION.xcarchive"
 
@@ -92,14 +127,25 @@ jobs:
             rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
           done
 
-      - name: Build unsigned universal macOS app (Debug and Release)
+      - name: Build unsigned universal macOS app
+        if: ${{ inputs.platform == 'macOS' || inputs.platform == 'both' }}
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
         shell: bash
         run: |
+          set -euo pipefail
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
           mkdir -p "$ARTIFACTS"
 
-          for CONFIGURATION in Debug Release; do
+          case "$BUILD_CONFIGURATION" in
+            Debug) configurations=(Debug) ;;
+            Release) configurations=(Release) ;;
+            both) configurations=(Debug Release) ;;
+            *) echo "error: unsupported configuration $BUILD_CONFIGURATION" >&2; exit 1 ;;
+          esac
+
+          for CONFIGURATION in "${configurations[@]}"; do
             MAC_DERIVED="$RUNNER_TEMP/BYOKchat-macOS-$CONFIGURATION"
 
             xcodebuild \
@@ -158,13 +204,33 @@ jobs:
           done
 
       - name: Verify release archives
+        env:
+          BUILD_PLATFORM: ${{ inputs.platform }}
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
         shell: bash
         run: |
+          set -euo pipefail
           ls -lh artifacts
 
-          for configuration in debug release; do
-            test -f "artifacts/BYOKchat-iOS-$configuration-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
-            test -f "artifacts/BYOKchat-macOS-universal-$configuration-unsigned-${{ steps.release.outputs.tag }}.zip"
+          case "$BUILD_CONFIGURATION" in
+            Debug) configurations=(debug) ;;
+            Release) configurations=(release) ;;
+            both) configurations=(debug release) ;;
+            *) echo "error: unsupported configuration $BUILD_CONFIGURATION" >&2; exit 1 ;;
+          esac
+
+          case "$BUILD_PLATFORM" in
+            iOS|macOS|both) ;;
+            *) echo "error: unsupported platform $BUILD_PLATFORM" >&2; exit 1 ;;
+          esac
+
+          for configuration in "${configurations[@]}"; do
+            if [[ "$BUILD_PLATFORM" == "iOS" || "$BUILD_PLATFORM" == "both" ]]; then
+              test -f "artifacts/BYOKchat-iOS-$configuration-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+            fi
+            if [[ "$BUILD_PLATFORM" == "macOS" || "$BUILD_PLATFORM" == "both" ]]; then
+              test -f "artifacts/BYOKchat-macOS-universal-$configuration-unsigned-${{ steps.release.outputs.tag }}.zip"
+            fi
           done
 
           for archive in artifacts/*.zip; do

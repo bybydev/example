@@ -57,8 +57,19 @@ public struct ProviderMessage: Codable, Sendable, Equatable {
   }
 }
 
-public enum ReasoningEffort: String, Codable, Sendable, CaseIterable {
-  case minimal, low, medium, high, max
+public enum ReasoningEffort: String, Codable, Hashable, Sendable, CaseIterable {
+  case minimal, low, medium, high, xhigh, max
+
+  public var title: String {
+    switch self {
+    case .minimal: "Minimal"
+    case .low: "Low"
+    case .medium: "Medium"
+    case .high: "High"
+    case .xhigh: "Extra High"
+    case .max: "Max"
+    }
+  }
 }
 
 public struct ReasoningOptions: Codable, Sendable, Equatable {
@@ -132,16 +143,20 @@ public struct ProviderRequest: Sendable, Equatable {
   public var messages: [ProviderMessage]
   public var options: ProviderRequestOptions
   public var tools: [ChatToolDefinition]
+  /// A turn-scoped snapshot shared by context preparation and serialization.
+  public var capabilities: ResolvedModelCapabilities?
   public init(
     model: ModelID,
     messages: [ProviderMessage],
     options: ProviderRequestOptions = .init(),
-    tools: [ChatToolDefinition] = []
+    tools: [ChatToolDefinition] = [],
+    capabilities: ResolvedModelCapabilities? = nil
   ) {
     self.model = model
     self.messages = messages
     self.options = options
     self.tools = tools
+    self.capabilities = capabilities
   }
 }
 
@@ -228,6 +243,8 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   public var supportedParameters: Set<String>
   public var inputModalities: Set<String>
   public var outputModalities: Set<String>
+  /// Absent on legacy workspaces. Legacy sets are hints, not exhaustive evidence.
+  public var capabilityEvidence: ModelCapabilityEvidence?
   public var promptPricePerToken: String?
   public var completionPricePerToken: String?
   /// Legacy field: no longer written, decoded-and-dropped so old persisted
@@ -245,7 +262,8 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     inputModalities: Set<String> = ["text"],
     outputModalities: Set<String> = ["text"],
     promptPricePerToken: String? = nil,
-    completionPricePerToken: String? = nil
+    completionPricePerToken: String? = nil,
+    capabilityEvidence: ModelCapabilityEvidence? = nil
   ) {
     self.providerID = providerID
     self.id = id
@@ -258,6 +276,7 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     self.outputModalities = outputModalities
     self.promptPricePerToken = promptPricePerToken
     self.completionPricePerToken = completionPricePerToken
+    self.capabilityEvidence = capabilityEvidence
     self.isSeed = nil
   }
 

@@ -118,9 +118,7 @@ func resolveMacProjectTarget(
   return MacChatTarget(
     accountID: accountID,
     modelID: modelID,
-    reasoning: providers.supportsReasoning(accountID: accountID, modelID: modelID)
-      ? providers.reasoningDefault(for: accountID)
-      : nil
+    reasoning: nil
   )
 }
 

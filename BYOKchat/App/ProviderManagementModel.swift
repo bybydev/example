@@ -32,6 +32,12 @@ final class ProviderManagementModel {
     self.runtime = runtime
   }
 
+  func capabilities(accountID: ProviderAccountID, modelID: ModelID) -> ResolvedModelCapabilities {
+    let record = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
+    let account = accounts.first { $0.id == accountID }
+    return ModelCapabilityResolver.resolve(kind: account?.kind ?? .openAICompatible, modelID: modelID, model: record?.model)
+  }
+
   func load() async {
     await perform() {
       try await workspace.load()
@@ -435,3 +441,4 @@ final class ProviderManagementModel {
     }
   }
 }
+

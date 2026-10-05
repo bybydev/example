@@ -42,6 +42,61 @@ private actor NativeMockTransport: ProviderHTTPTransport {
   func lastRequest() -> URLRequest? { requests.last }
 }
 
+@Test func anthropicDiscoveryKeepsMissingAndNegativeCapabilitiesDistinct() async throws {
+  let data = Data("""
+    {"data":[{"id":"claude-sonnet-5","display_name":"Sonnet","capabilities":{"image_input":{"supported":false},"thinking":{"supported":false}}},{"id":"claude-unknown","display_name":"Unknown"}]}
+    """.utf8)
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic,
+    transport: NativeMockTransport(data: data))
+  let models = try await adapter.listModels(account: nativeAccount("anthropic"))
+  let sonnet = try #require(models.first { $0.id == "claude-sonnet-5" })
+  let unknown = try #require(models.first { $0.id == "claude-unknown" })
+  let resolved = ModelCapabilityResolver.resolve(kind: .anthropic, modelID: sonnet.id, model: sonnet)
+  #expect(resolved[.imageInput] == .unsupported)
+  #expect(resolved.reasoning.kind == .unsupported)
+  #expect(resolved[.fileInput] == .supported)
+  #expect(unknown.capabilityEvidence?.facts[.imageInput] == nil)
+  #expect(unknown.capabilityEvidence?.facts[.reasoning] == nil)
+}
+
+@Test func anthropicLegacyThinkingBudgetUsesEnabledWireContract() async throws {
+  let data = Data("""
+    {"id":"msg","model":"claude-3-7-sonnet","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}
+    """.utf8)
+  let transport = NativeMockTransport(data: data)
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: transport)
+  _ = try await adapter.generate(request: .init(model: "claude-3-7-sonnet",
+    messages: [.init(role: .user, content: "Hello")],
+    options: .init(maxOutputTokens: 4_096, reasoning: .init(enabled: true, maxTokens: 1_024))),
+    account: nativeAccount("anthropic"))
+  let request = try #require(await transport.lastRequest())
+  let bytes = try #require(request.httpBody)
+  let body = try #require(JSONDecoder.provider.decode(JSONValue.self, from: bytes).objectValue)
+  #expect(body["thinking"] == .object(["type": .string("enabled"), "budget_tokens": .number(1_024)]))
+  #expect(body["output_config"] == nil)
+}
+
+@Test func geminiAutomaticBudgetAndOffSerializeAsDifferentValues() async throws {
+  for tokens in [-1, 0] {
+    let data = Data("""
+      {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]},"finishReason":"STOP"}]}
+      """.utf8)
+    let transport = NativeMockTransport(data: data)
+    let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: transport)
+    let reasoning = tokens == 0 ? ReasoningOptions(enabled: false) : ReasoningOptions(enabled: true, maxTokens: tokens)
+    _ = try await adapter.generate(request: .init(model: "gemini-2.5-flash",
+      messages: [.init(role: .user, content: "Hello")], options: .init(reasoning: reasoning)),
+      account: nativeAccount("gemini"))
+    let request = try #require(await transport.lastRequest())
+    let bytes = try #require(request.httpBody)
+    let root = try #require(JSONDecoder.provider.decode(JSONValue.self, from: bytes).objectValue)
+    let generation = try #require(root["generationConfig"]?.objectValue)
+    let thinking = try #require(generation["thinkingConfig"]?.objectValue)
+    #expect(thinking["thinkingBudget"] == .number(Double(tokens)))
+    #expect(thinking["thinkingLevel"] == nil)
+  }
+}
+
 private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount {
   ResolvedProviderAccount(
     kind: ProviderKind(providerID: providerID),

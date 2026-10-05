@@ -28,9 +28,7 @@ struct TargetPickerView: View {
 
   @State private var accountID: ProviderAccountID
   @State private var modelID: ModelID?
-  @State private var effort: ReasoningEffort
-  @State private var reasoningEnabled: Bool
-  @State private var didTouchReasoning = false
+  @State private var reasoning: ReasoningOptions?
   @State private var searchText = ""
   @State private var isCommitting = false
 
@@ -53,15 +51,12 @@ struct TargetPickerView: View {
       ?? providers.accounts.first(where: { $0.id == resolvedAccount })?.defaultModelID
       ?? providers.models(for: resolvedAccount).first(where: \.isAvailable)?.model.id
     _modelID = State(initialValue: resolvedModel)
-    let effortSeed = initialReasoning?.effort ?? providers.reasoningDefault(
-      for: providers.accounts.first(where: { $0.id == resolvedAccount })?.providerID
-    )?.effort ?? .high
-    _effort = State(initialValue: effortSeed)
-    _reasoningEnabled = State(
-      initialValue: initialReasoning?.enabled
-        ?? (providers.reasoningDefault(
-          for: providers.accounts.first(where: { $0.id == resolvedAccount })?.providerID
-        ) != nil))
+    let account = providers.accounts.first { $0.id == resolvedAccount }
+    let model = providers.models(for: resolvedAccount, includeHidden: true).first { $0.model.id == resolvedModel }?.model
+    let control = account.map {
+      ModelCapabilityResolver.resolve(kind: $0.kind, modelID: resolvedModel ?? "", model: model).reasoning
+    } ?? ModelReasoningControl()
+    _reasoning = State(initialValue: control.normalize(initialReasoning))
   }
 
   private var accounts: [ProviderAccount] {
@@ -86,11 +81,18 @@ struct TargetPickerView: View {
     }
   }
 
-  private var supportsReasoning: Bool {
-    guard let parameters = selectedRecord?.model.supportedParameters else { return false }
-    return !parameters.isDisjoint(with: [
-      "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
-    ])
+  private var reasoningControl: ModelReasoningControl {
+    guard let account = selectedAccount, let modelID else { return .init() }
+    return ModelCapabilityResolver.resolve(kind: account.kind, modelID: modelID, model: selectedRecord?.model).reasoning
+  }
+
+  private var reasoningError: String? {
+    let outputLimit: Int?
+    if selectedAccount?.kind == .anthropic {
+      if case .existingChat(let conversation, _) = mode { outputLimit = conversation.options.maxOutputTokens ?? 4_096 }
+      else { outputLimit = 4_096 }
+    } else { outputLimit = nil }
+    return reasoningControl.budgetValidationMessage(reasoning, outputLimit: outputLimit)
   }
 
   var body: some View {
@@ -98,13 +100,14 @@ struct TargetPickerView: View {
       List {
         accountStripSection
         modelListSection
-        if supportsReasoning {
+        if !reasoningControl.choices.isEmpty {
           reasoningSection
         }
       }
       .scrollContentBackground(.hidden)
       .foregroundStyle(theme.primaryForegroundColor)
       .background(AppThemeBackground(theme: theme))
+      .onChange(of: reasoningControl) { _, control in reasoning = control.normalize(reasoning) }
       .navigationTitle("Model")
       .navigationBarTitleDisplayMode(.inline)
       .searchable(text: $searchText, prompt: "Search models")
@@ -114,7 +117,7 @@ struct TargetPickerView: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { commit() }
-            .disabled(modelID == nil || isCommitting)
+            .disabled(modelID == nil || isCommitting || reasoningError != nil)
         }
       }
     }
@@ -263,45 +266,35 @@ struct TargetPickerView: View {
 
   private var reasoningSection: some View {
     Section("Reasoning") {
-      Toggle("Thinking", isOn: Binding(
-        get: { reasoningEnabled },
-        set: { value in
-          reasoningEnabled = value
-          didTouchReasoning = true
-        }
-      ))
-      if reasoningEnabled {
-        Picker("Effort", selection: Binding(
-          get: { effort },
-          set: { value in
-            effort = value
-            didTouchReasoning = true
-          }
-        )) {
-          ForEach(supportedEfforts, id: \.self) { candidate in
-            Text(reasoningTitle(candidate)).tag(candidate)
-          }
+      Picker("Thinking", selection: Binding(
+        get: { reasoningControl.choice(for: reasoning) },
+        set: { reasoning = reasoningControl.options(for: $0, preserving: reasoning) }
+      )) {
+        ForEach(reasoningControl.choices, id: \.self) { choice in
+          Text(choice.title).tag(choice)
         }
       }
+      if reasoningControl.choice(for: reasoning) == .budget
+        || (reasoningControl.combinesEffortAndBudget == true && reasoning != nil && reasoning?.enabled != false),
+        let budget = reasoningControl.budget {
+        TextField("Token budget", value: Binding(
+          get: { reasoning?.maxTokens ?? budget.defaultTokens },
+          set: { value in
+            var options = reasoning ?? ReasoningOptions(enabled: true)
+            options.maxTokens = value
+            reasoning = options
+          }
+        ), format: .number)
+        .keyboardType(.numbersAndPunctuation)
+        Text(budget.allowsAutomatic ? "Use -1 for automatic thinking." : "Minimum \(budget.minimum) tokens.")
+          .font(.caption)
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      Text(reasoningError ?? reasoningControl.label(for: reasoning))
+        .font(.caption)
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
-  }
-
-  /// Effort stops to offer. No model metadata today distinguishes a provider
-  /// that caps below `max`, so the full ladder is offered; the adapters
-  /// clamp where a provider tops out (e.g. DeepSeek maps non-max → high).
-  private var supportedEfforts: [ReasoningEffort] {
-    ReasoningEffort.allCases
-  }
-
-  private func reasoningTitle(_ candidate: ReasoningEffort) -> String {
-    switch candidate {
-    case .minimal: "Minimal"
-    case .low: "Low"
-    case .medium: "Medium"
-    case .high: "High"
-    case .max: "Max"
-    }
   }
 
   // MARK: - Selection
@@ -312,24 +305,15 @@ struct TargetPickerView: View {
     modelID =
       account.defaultModelID
       ?? providers.models(for: account.id).first(where: \.isAvailable)?.model.id
-    // Re-seed the kind default only when the user hasn't touched reasoning
-    // this staging session; their staged choice survives provider browsing.
-    guard !didTouchReasoning else { return }
-    if let reasoning = providers.reasoningDefault(for: account.providerID) {
-      reasoningEnabled = true
-      effort = reasoning.effort ?? .high
-    } else {
-      reasoningEnabled = false
-    }
+    reasoning = reasoningControl.normalize(reasoning)
   }
 
   /// Commit happens only on Done: whatever is staged at that moment
   /// (account, model, effort) is applied once, then the sheet dismisses.
   private func commit() {
-    guard !isCommitting, let account = selectedAccount, let modelID else { return }
+    guard !isCommitting, reasoningError == nil, let account = selectedAccount, let modelID else { return }
     isCommitting = true
-    let reasoning: ReasoningOptions? =
-      reasoningEnabled ? .init(enabled: true, effort: effort) : nil
+    let reasoning = reasoningControl.normalize(reasoning)
 
     switch mode {
     case .stage(let commit):
@@ -355,15 +339,5 @@ struct TargetPickerView: View {
         }
       }
     }
-  }
-}
-
-extension ProviderManagementModel {
-  /// Kind-seeded reasoning default for an account's provider, from the kind
-  /// spec (DeepSeek/Anthropic high, Gemini medium, else none).
-  func reasoningDefault(for providerID: ProviderID?) -> ReasoningOptions? {
-    guard let providerID, let account = accounts.first(where: { $0.providerID == providerID })
-    else { return nil }
-    return account.kind.reasoningDefault
   }
 }

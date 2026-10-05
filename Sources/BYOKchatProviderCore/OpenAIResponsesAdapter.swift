@@ -182,17 +182,8 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
   private func enrichDiscoveredModel(_ model: ProviderModel) -> ProviderModel {
     var result = model
     if let seed = definition.seedModels.first(where: { $0.id == model.id }) {
+      result = result.mergingCapabilities(from: seed)
       if result.displayName == result.id.rawValue { result.displayName = seed.displayName }
-      if result.contextWindow == nil { result.contextWindow = seed.contextWindow }
-      if result.contextWindowKind == nil { result.contextWindowKind = seed.contextWindowKind }
-      if result.maxOutputTokens == nil { result.maxOutputTokens = seed.maxOutputTokens }
-      if result.promptPricePerToken == nil { result.promptPricePerToken = seed.promptPricePerToken }
-      if result.completionPricePerToken == nil {
-        result.completionPricePerToken = seed.completionPricePerToken
-      }
-      result.supportedParameters.formUnion(seed.supportedParameters)
-      result.inputModalities.formUnion(seed.inputModalities)
-      result.outputModalities.formUnion(seed.outputModalities)
     }
 
     result.supportedParameters.insert("max_output_tokens")
@@ -212,6 +203,7 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
     _ request: ProviderRequest,
     account: ResolvedProviderAccount
   ) throws -> ProviderRequest {
+    let request = try ModelRequestPolicy.prepare(request, kind: definition.capabilityKind)
     let model = request.model.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !model.isEmpty else { throw ProviderError.invalidModel }
     if definition.authentication != .none {
@@ -313,7 +305,8 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       body["max_output_tokens"] = .number(Double(maxOutputTokens))
     }
 
-    let reasoning = reasoningValue(request.options.reasoning, model: request.model.rawValue)
+    let reasoning = reasoningValue(request.options.reasoning, control: request.capabilities?.reasoning
+      ?? ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: request.model))
     if let reasoning { body["reasoning"] = reasoning }
 
     if supportsSamplingControls(model: request.model.rawValue, reasoning: reasoning) {
@@ -362,6 +355,11 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
             "detail": .string("auto"),
           ])
         )
+      } else if let text = attachment.utf8Text {
+        contentParts.append(.object([
+          "type": .string("input_text"),
+          "text": .string("File: \(attachment.filename)\n\n\(text)"),
+        ]))
       } else {
         contentParts.append(
           .object([
@@ -412,54 +410,22 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
     ])
   }
 
-  private func reasoningValue(_ options: ReasoningOptions?, model: String) -> JSONValue? {
-    guard let options, modelSupportsReasoning(model) else { return nil }
+  private func reasoningValue(_ options: ReasoningOptions?, control: ModelReasoningControl) -> JSONValue? {
+    guard let options = control.normalize(options) else { return nil }
     var object: [String: JSONValue] = [:]
-
     if options.enabled == false {
-      if let effort = disabledReasoningEffort(for: model) {
-        object["effort"] = .string(effort)
-      } else {
-        return nil
-      }
-    } else if let effort = options.effort {
-      object["effort"] = .string(openAIEffort(effort, model: model))
-    }
-
-    if options.enabled != false {
-      object["summary"] = .string("auto")
+      guard let wire = control.offWireValue else { return nil }
+      object["effort"] = .string(wire)
+    } else {
+      if let effort = options.effort { object["effort"] = .string(effort.rawValue) }
+      if !options.excludeFromResponse { object["summary"] = .string("auto") }
     }
     return object.isEmpty ? nil : .object(object)
   }
 
   private func modelSupportsReasoning(_ model: String) -> Bool {
-    let value = model.lowercased()
-    return value.hasPrefix("gpt-5") || value.hasPrefix("gpt-6")
-      || value.hasPrefix("o1") || value.hasPrefix("o3") || value.hasPrefix("o4")
-  }
-
-  private func disabledReasoningEffort(for model: String) -> String? {
-    let value = model.lowercased()
-    if value.hasPrefix("gpt-6") { return "low" }
-    if value.hasPrefix("gpt-5.6") || value.hasPrefix("gpt-5.5") || value.hasPrefix("gpt-5.4") {
-      return "none"
-    }
-    if value == "gpt-5" || value.hasPrefix("gpt-5-") { return "minimal" }
-    return nil
-  }
-
-  private func openAIEffort(_ effort: ReasoningEffort, model: String) -> String {
-    let value = model.lowercased()
-    switch effort {
-    case .minimal:
-      if value.hasPrefix("gpt-5.6") || value.hasPrefix("gpt-6") { return "low" }
-      return "minimal"
-    case .max:
-      if value.hasPrefix("gpt-5.6") || value.hasPrefix("gpt-6") { return "max" }
-      return "high"
-    case .low, .medium, .high:
-      return effort.rawValue
-    }
+    let control = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: ModelID(rawValue: model))
+    return control.kind != .unknown && control.kind != .unsupported
   }
 
   private func supportsSamplingControls(model: String, reasoning: JSONValue?) -> Bool {

@@ -6,10 +6,6 @@ import Foundation
 /// model supports it — a reasoning-effort abbreviation. Mirrors the iOS
 /// composer's target chip.
 enum MacTargetLabelFormatter {
-  private static let reasoningParameters: Set<String> = [
-    "reasoning", "thinking", "reasoning_effort", "thinkingConfig", "effort",
-  ]
-
   private static let recognizableFamilies = [
     "gpt", "claude", "sonnet", "opus", "haiku", "gemini", "deepseek", "qwen",
     "llama", "mistral", "grok", "kimi", "nemotron", "phi", "command r", "minimax",
@@ -21,7 +17,8 @@ enum MacTargetLabelFormatter {
     modelName: String,
     modelID: String,
     supportedParameters: Set<String>,
-    reasoning: ReasoningOptions?
+    reasoning: ReasoningOptions?,
+    capabilities: ResolvedModelCapabilities? = nil
   ) -> String {
     let source = modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? modelID
@@ -36,9 +33,12 @@ enum MacTargetLabelFormatter {
     }
     parts.append(compactModel)
 
-    if !supportedParameters.isDisjoint(with: reasoningParameters) {
-      parts.append(reasoningLabel(reasoning))
-    }
+    let control = capabilities?.reasoning ?? ModelCapabilityResolver.resolve(
+      kind: ProviderKind.allCases.first { $0.defaultProviderID == providerID } ?? .openAICompatible,
+      modelID: ModelID(rawValue: modelID)
+    ).reasoning
+    let label = control.label(for: reasoning)
+    if !label.isEmpty { parts.append(label) }
 
     return parts.filter { !$0.isEmpty }.joined(separator: " · ")
   }
@@ -100,18 +100,6 @@ enum MacTargetLabelFormatter {
     return value
   }
 
-  private static func reasoningLabel(_ reasoning: ReasoningOptions?) -> String {
-    guard reasoning?.enabled == true else { return "Off" }
-    guard let effort = reasoning?.effort else { return "On" }
-    switch effort {
-    case .minimal: return "Min"
-    case .low: return "Low"
-    case .medium: return "Med"
-    case .high: return "High"
-    case .max: return "Max"
-    }
-  }
-
   private static func shortProviderName(providerID: ProviderID, displayName: String) -> String {
     switch providerID {
     case BuiltInProviders.openRouterID: return "OR"
@@ -136,3 +124,4 @@ enum MacTargetLabelFormatter {
     value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 }
+

@@ -56,18 +56,31 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } catch {
       throw ProviderError.invalidResponse
     }
-    let discovered = decoded.data.map {
-      ProviderModel(
+    let discovered = decoded.data.map { wire in
+      var evidence = ModelCapabilityEvidence()
+      // OpenRouter specifies exhaustive lists. Custom-compatible catalogs may
+      // provide partial hints using the same field names.
+      let exhaustive = definition.behavior == .openRouter
+      evidence.modalities(wire.architecture?.inputModalities, input: true, exhaustive: exhaustive)
+      evidence.modalities(wire.architecture?.outputModalities, input: false, exhaustive: exhaustive)
+      evidence.parameters(wire.supportedParameters, exhaustive: exhaustive)
+      let contextWindow = wire.contextLength.flatMap { $0 > 0 ? $0 : nil }
+        ?? wire.topProvider?.contextLength.flatMap { $0 > 0 ? $0 : nil }
+      let outputLimit = wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
+      if contextWindow != nil { evidence.contextWindowSource = .discovery }
+      if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
+      return ProviderModel(
         providerID: definition.id,
-        id: ModelID(rawValue: $0.id),
-        displayName: $0.name ?? $0.id,
-        contextWindow: $0.contextLength ?? $0.topProvider?.contextLength,
-        maxOutputTokens: $0.topProvider?.maxCompletionTokens,
-        supportedParameters: Set($0.supportedParameters ?? []),
-        inputModalities: Set($0.architecture?.inputModalities ?? ["text"]),
-        outputModalities: Set($0.architecture?.outputModalities ?? ["text"]),
-        promptPricePerToken: $0.pricing?.prompt,
-        completionPricePerToken: $0.pricing?.completion
+        id: ModelID(rawValue: wire.id),
+        displayName: wire.name ?? wire.id,
+        contextWindow: contextWindow,
+        maxOutputTokens: outputLimit,
+        supportedParameters: Set(wire.supportedParameters ?? []),
+        inputModalities: Set(wire.architecture?.inputModalities ?? ["text"]),
+        outputModalities: Set(wire.architecture?.outputModalities ?? ["text"]),
+        promptPricePerToken: wire.pricing?.prompt,
+        completionPricePerToken: wire.pricing?.completion,
+        capabilityEvidence: evidence
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)

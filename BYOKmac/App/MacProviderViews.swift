@@ -5,13 +5,13 @@ import SwiftUI
 struct MacTargetPickerView: View {
   @Bindable var providers: MacProviderModel
   let initialTarget: MacChatTarget?
+  let maxOutputTokens: Int?
   let onCommit: (MacChatTarget) async -> Bool
 
   @Environment(\.dismiss) private var dismiss
   @State private var accountID: ProviderAccountID?
   @State private var modelID: ModelID?
-  @State private var reasoningEnabled = false
-  @State private var effort: ReasoningEffort = .high
+  @State private var reasoning: ReasoningOptions?
   @State private var searchText = ""
   @State private var isSaving = false
   @State private var showingProviders = false
@@ -19,16 +19,18 @@ struct MacTargetPickerView: View {
   init(
     providers: MacProviderModel,
     initialTarget: MacChatTarget?,
+    maxOutputTokens: Int? = nil,
     onCommit: @escaping (MacChatTarget) async -> Bool
   ) {
     self.providers = providers
     self.initialTarget = initialTarget
+    self.maxOutputTokens = maxOutputTokens
     self.onCommit = onCommit
     let seed = initialTarget ?? providers.preferredTarget()
     _accountID = State(initialValue: seed?.accountID)
     _modelID = State(initialValue: seed?.modelID)
-    _reasoningEnabled = State(initialValue: seed?.reasoning?.enabled == true)
-    _effort = State(initialValue: seed?.reasoning?.effort ?? .high)
+    let control = seed.map { providers.capabilities(accountID: $0.accountID, modelID: $0.modelID).reasoning } ?? ModelReasoningControl()
+    _reasoning = State(initialValue: control.normalize(seed?.reasoning))
   }
 
   private var readyAccounts: [ProviderAccount] {
@@ -46,9 +48,14 @@ struct MacTargetPickerView: View {
     }
   }
 
-  private var supportsReasoning: Bool {
-    guard let accountID, let modelID else { return false }
-    return providers.supportsReasoning(accountID: accountID, modelID: modelID)
+  private var reasoningControl: ModelReasoningControl {
+    guard let accountID, let modelID else { return .init() }
+    return providers.capabilities(accountID: accountID, modelID: modelID).reasoning
+  }
+
+  private var reasoningError: String? {
+    reasoningControl.budgetValidationMessage(reasoning,
+      outputLimit: providers.account(accountID)?.kind == .anthropic ? (maxOutputTokens ?? 4_096) : nil)
   }
 
   var body: some View {
@@ -61,7 +68,7 @@ struct MacTargetPickerView: View {
         Button("Cancel") { dismiss() }
         Button("Done") { save() }
           .keyboardShortcut(.defaultAction)
-          .disabled(accountID == nil || modelID == nil || isSaving)
+          .disabled(accountID == nil || modelID == nil || isSaving || reasoningError != nil)
       }
       .padding(16)
 
@@ -134,21 +141,35 @@ struct MacTargetPickerView: View {
             }
           }
 
-          if supportsReasoning {
+          if !reasoningControl.choices.isEmpty {
             Divider()
-            HStack(spacing: 14) {
-              Toggle("Reasoning", isOn: $reasoningEnabled)
-                .toggleStyle(.switch)
-              if reasoningEnabled {
-                Picker("Effort", selection: $effort) {
-                  ForEach(ReasoningEffort.allCases, id: \.rawValue) { value in
-                    Text(reasoningTitle(value)).tag(value)
-                  }
+            VStack(alignment: .leading, spacing: 8) {
+              Picker("Reasoning", selection: Binding(
+                get: { reasoningControl.choice(for: reasoning) },
+                set: { reasoning = reasoningControl.options(for: $0, preserving: reasoning) }
+              )) {
+                ForEach(reasoningControl.choices, id: \.self) { choice in
+                  Text(choice.title).tag(choice)
                 }
-                .labelsHidden()
-                .frame(width: 120)
               }
-              Spacer()
+              if reasoningControl.choice(for: reasoning) == .budget
+                || (reasoningControl.combinesEffortAndBudget == true && reasoning != nil && reasoning?.enabled != false),
+                let budget = reasoningControl.budget {
+                TextField("Token budget", value: Binding(
+                  get: { reasoning?.maxTokens ?? budget.defaultTokens },
+                  set: { value in
+                    var options = reasoning ?? ReasoningOptions(enabled: true)
+                    options.maxTokens = value
+                    reasoning = options
+                  }
+                ), format: .number)
+                Text(budget.allowsAutomatic ? "Use -1 for automatic thinking." : "Minimum \(budget.minimum) tokens.")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Text(reasoningError ?? reasoningControl.label(for: reasoning))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .padding(12)
           }
@@ -160,11 +181,8 @@ struct MacTargetPickerView: View {
     .sheet(isPresented: $showingProviders, onDismiss: repairSelection) {
       MacProviderManagementView(model: providers)
     }
-    .onChange(of: modelID) { _, newValue in
-      guard let accountID, let newValue else { return }
-      if !providers.supportsReasoning(accountID: accountID, modelID: newValue) {
-        reasoningEnabled = false
-      }
+    .onChange(of: reasoningControl) { _, control in
+      reasoning = control.normalize(reasoning)
     }
   }
 
@@ -178,8 +196,7 @@ struct MacTargetPickerView: View {
       let seed = providers.preferredTarget()
       self.accountID = seed?.accountID
       self.modelID = seed?.modelID
-      reasoningEnabled = seed?.reasoning?.enabled == true
-      effort = seed?.reasoning?.effort ?? .high
+      reasoning = reasoningControl.normalize(seed?.reasoning)
       return
     }
   }
@@ -189,26 +206,16 @@ struct MacTargetPickerView: View {
     accountID = value
     modelID = account.defaultModelID
       ?? providers.models(for: value).first(where: { $0.isAvailable })?.model.id
-    if let reasoning = account.kind.reasoningDefault,
-      let modelID,
-      providers.supportsReasoning(accountID: value, modelID: modelID)
-    {
-      reasoningEnabled = true
-      effort = reasoning.effort ?? .high
-    } else {
-      reasoningEnabled = false
-    }
+    reasoning = reasoningControl.normalize(reasoning)
   }
 
   private func save() {
-    guard !isSaving, let accountID, let modelID else { return }
+    guard !isSaving, reasoningError == nil, let accountID, let modelID else { return }
     isSaving = true
     let target = MacChatTarget(
       accountID: accountID,
       modelID: modelID,
-      reasoning: supportsReasoning && reasoningEnabled
-        ? ReasoningOptions(enabled: true, effort: effort)
-        : nil
+      reasoning: reasoningControl.normalize(reasoning)
     )
     Task { @MainActor in
       if await onCommit(target) {
@@ -216,16 +223,6 @@ struct MacTargetPickerView: View {
       } else {
         isSaving = false
       }
-    }
-  }
-
-  private func reasoningTitle(_ value: ReasoningEffort) -> String {
-    switch value {
-    case .minimal: "Minimal"
-    case .low: "Low"
-    case .medium: "Medium"
-    case .high: "High"
-    case .max: "Max"
     }
   }
 }

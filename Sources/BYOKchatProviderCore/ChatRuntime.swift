@@ -237,12 +237,16 @@ public actor ChatRuntime {
       telemetry.turnStarted(turn, operation: operationName)
 
       let conversation = try await conversations.conversation(id: conversationID)
-      let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID)
+      let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID, includeHidden: true)
         .first { $0.model.id == conversation.modelID }
       let model = modelRecord?.model
-      let contextWindowKind = model?.effectiveContextWindowKind ?? .combined
+      let account = try await providerWorkspace.account(id: conversation.accountID)
+      let capabilities = ModelCapabilityResolver.resolve(kind: account.kind, modelID: conversation.modelID, model: model)
+      let contextWindowKind = capabilities.contextWindowKind
+      var effectiveOptions = conversation.options
+      effectiveOptions.reasoning = capabilities.reasoning.normalize(effectiveOptions.reasoning)
       let tools: [ChatToolDefinition]
-      if let toolRuntime {
+      if capabilities[.tools] != .unsupported, let toolRuntime {
         tools = await toolRuntime.availableTools(conversationID: conversationID)
       } else {
         tools = []
@@ -250,11 +254,13 @@ public actor ChatRuntime {
 
       let context = try ChatContextBuilder.build(
         conversation: conversation,
-        contextWindow: model?.contextWindow,
+        contextWindow: capabilities.contextWindow,
         contextWindowKind: contextWindowKind,
-        reservedOutputTokens: conversation.options.maxOutputTokens,
-        modelMaxOutputTokens: model?.maxOutputTokens,
-        tools: tools
+        reservedOutputTokens: effectiveOptions.maxOutputTokens,
+        modelMaxOutputTokens: capabilities.maxOutputTokens,
+        tools: tools,
+        capabilities: capabilities,
+        providerKind: account.kind
       )
       try await conversations.setContextOmissionCount(
         context.omittedMessageCount,
@@ -298,8 +304,9 @@ public actor ChatRuntime {
         let request = ProviderRequest(
           model: conversation.modelID,
           messages: requestMessages,
-          options: conversation.options,
-          tools: tools
+          options: effectiveOptions,
+          tools: tools,
+          capabilities: capabilities
         )
         telemetry.providerRequestStarted(
           conversation: conversation,
@@ -477,12 +484,14 @@ public actor ChatRuntime {
 
           let continuedContext = try ChatContextBuilder.build(
             conversation: conversation,
-            contextWindow: model?.contextWindow,
+            contextWindow: capabilities.contextWindow,
             contextWindowKind: contextWindowKind,
-            reservedOutputTokens: conversation.options.maxOutputTokens,
-            modelMaxOutputTokens: model?.maxOutputTokens,
+            reservedOutputTokens: effectiveOptions.maxOutputTokens,
+            modelMaxOutputTokens: capabilities.maxOutputTokens,
             tools: tools,
-            requiredTailMessages: continuationMessages
+            requiredTailMessages: continuationMessages,
+            capabilities: capabilities,
+            providerKind: account.kind
           )
           requestMessages = continuedContext.messages
           // Tool-round continuations rebuild context; the newest fetched bytes

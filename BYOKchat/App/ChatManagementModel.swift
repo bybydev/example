@@ -253,7 +253,7 @@ final class ChatManagementModel {
         accountID: account.id,
         modelID: modelID,
         systemPrompt: systemPrompt,
-        options: defaultOptions(providerID: account.providerID)
+        options: .init()
       )
       hydratedConversations[conversation.id] = conversation
 
@@ -311,6 +311,11 @@ final class ChatManagementModel {
     options: ProviderRequestOptions
   ) async -> Bool {
     do {
+      let model = await providerWorkspace.modelRecords(for: account.id, includeHidden: true)
+        .first { $0.model.id == modelID }?.model
+      var options = options
+      options.reasoning = ModelCapabilityResolver.resolve(kind: account.kind, modelID: modelID, model: model)
+        .reasoning.normalize(options.reasoning)
       try await conversationStore.updateTarget(
         conversationID,
         providerID: account.providerID,
@@ -638,16 +643,4 @@ final class ChatManagementModel {
     presentStreamTarget(messageID, conversationID: conversationID)
   }
 
-  private func defaultOptions(providerID: ProviderID) -> ProviderRequestOptions {
-    switch providerID {
-    case BuiltInProviders.deepSeekID:
-      return .init(reasoning: .init(enabled: true, effort: .high))
-    case BuiltInProviders.anthropicID:
-      return .init(reasoning: .init(enabled: true, effort: .high))
-    case BuiltInProviders.geminiID:
-      return .init(reasoning: .init(enabled: true, effort: .medium))
-    default:
-      return .init()
-    }
-  }
 }
