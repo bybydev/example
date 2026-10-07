@@ -49,6 +49,17 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
             }
 
+            Section("Storage") {
+                NavigationLink {
+                    StorageManagementView()
+                } label: {
+                    Label(
+                        "Storage",
+                        systemImage: "externaldrive"
+                    )
+                }
+            }
+
             Section("About") {
                 LabeledContent("Synthesis", value: "On-device")
                 LabeledContent("Version", value: version)

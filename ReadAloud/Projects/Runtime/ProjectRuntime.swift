@@ -630,10 +630,60 @@ final class ProjectRuntime {
     func clearGeneratedAudio(
         itemIDs: Set<UUID>
     ) async throws {
+        guard !itemIDs.isEmpty else {
+            return
+        }
+
+        queueController
+            .setPlaybackActive(true)
+
+        defer {
+            queueController
+                .setPlaybackActive(
+                    blocksQueuedGeneration
+                )
+        }
+
+        if let activeItemID =
+                activity.activeItemID,
+           itemIDs.contains(
+                activeItemID
+           )
+        {
+            await persistPlaybackCheckpoint()
+            stopPlayback()
+            queueController
+                .setPlaybackActive(true)
+        }
+
         try await persistence.clearGeneratedAudio(
             itemIDs: itemIDs
         )
         try await refresh()
+    }
+
+    func storageBreakdown()
+        async throws -> ProjectStorageBreakdown
+    {
+        try await persistence
+            .storageBreakdown()
+    }
+
+    func clearTemporaryCache()
+        async throws
+    {
+        queueController
+            .setPlaybackActive(true)
+
+        defer {
+            queueController
+                .setPlaybackActive(
+                    blocksQueuedGeneration
+                )
+        }
+
+        try await cacheCoordinator
+            .clearAllParagraphCache()
     }
 
     func rename(to title: String) async throws {

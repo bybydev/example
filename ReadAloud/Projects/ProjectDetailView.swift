@@ -212,7 +212,10 @@ struct ProjectDetailView: View {
             )
         }
         .sheet(isPresented: $storagePresented) {
-            ProjectStorageSheet(model: model)
+            ProjectStorageSheet(
+                model: model,
+                onChanged: notifyProjectChanged
+            )
         }
         .alert(
             "Rename Project",
@@ -1199,39 +1202,194 @@ private struct OfflineAudioSheet: View {
 }
 
 private struct ProjectStorageSheet: View {
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss)
+    private var dismiss
+
+    @State private var
+        clearGeneratedAudioPresented = false
+
     let model: ProjectDetailModel
+    let onChanged: () -> Void
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Generated Audio") {
-                    LabeledContent(
-                        "Size",
-                        value: ByteCountFormatter.string(
-                            fromByteCount: model.generatedAudioBytes,
-                            countStyle: .file
+                if let storage =
+                    model.storageBreakdown
+                {
+                    Section("Usage") {
+                        storageRow(
+                            "Total",
+                            storage.totalBytes
                         )
-                    )
-                    LabeledContent(
-                        "Ready Offline",
-                        value: "\(model.readyOfflineCount) / \(model.items.count)"
-                    )
-                }
+                        storageRow(
+                            "Source",
+                            storage.sourceBytes
+                        )
+                        storageRow(
+                            "Generated Audio",
+                            storage
+                                .generatedAudioBytes
+                        )
+                        storageRow(
+                            "Temporary Cache",
+                            storage
+                                .temporaryCacheBytes
+                        )
+                        storageRow(
+                            "Artwork",
+                            storage.artworkBytes
+                        )
+                        storageRow(
+                            "Project Data",
+                            storage
+                                .projectDataBytes
+                        )
 
-                Section {
-                    Text("Detailed source/cache storage management is handled in the dedicated storage phase. This summary reports finalized item audio known to the project.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        if storage
+                            .workingBytes > 0
+                        {
+                            storageRow(
+                                "Working Data",
+                                storage
+                                    .workingBytes
+                            )
+                        }
+                    }
+
+                    Section("Offline") {
+                        LabeledContent(
+                            "Ready Offline",
+                            value:
+                                "\(model.readyOfflineCount) / \(model.items.count)"
+                        )
+
+                        if model.generatingCount > 0 {
+                            LabeledContent(
+                                "Generating",
+                                value:
+                                    String(
+                                        model
+                                            .generatingCount
+                                    )
+                            )
+                        }
+
+                        if model.waitingCount > 0 {
+                            LabeledContent(
+                                "Waiting",
+                                value:
+                                    String(
+                                        model
+                                            .waitingCount
+                                    )
+                            )
+                        }
+                    }
+
+                    Section {
+                        Button(
+                            "Clear Temporary Cache"
+                        ) {
+                            Task {
+                                if await model
+                                    .clearTemporaryCache()
+                                {
+                                    onChanged()
+                                }
+                            }
+                        }
+                        .disabled(
+                            storage
+                                .temporaryCacheBytes
+                                == 0
+                        )
+
+                        if storage
+                            .generatedAudioBytes > 0
+                        {
+                            Button(
+                                "Clear Generated Audio",
+                                role: .destructive
+                            ) {
+                                clearGeneratedAudioPresented =
+                                    true
+                            }
+                        }
+                    } footer: {
+                        Text(
+                            "Temporary cache is rebuildable paragraph audio. Clearing generated audio removes Ready Offline media but keeps the source, project data, and reading progress."
+                        )
+                    }
+                } else {
+                    ProgressView(
+                        "Calculating Storage…"
+                    )
                 }
             }
             .navigationTitle("Storage")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(
+                .inline
+            )
+            .task {
+                await model.refreshStorage()
+            }
+            .refreshable {
+                await model.refreshStorage()
+            }
+            .confirmationDialog(
+                "Clear Generated Audio?",
+                isPresented:
+                    $clearGeneratedAudioPresented,
+                titleVisibility: .visible
+            ) {
+                Button(
+                    "Clear Generated Audio",
+                    role: .destructive
+                ) {
+                    Task {
+                        if await model
+                            .clearAllGeneratedAudio()
+                        {
+                            onChanged()
+                        }
+                    }
+                }
+                Button(
+                    "Cancel",
+                    role: .cancel
+                ) {}
+            } message: {
+                Text(
+                    "Finalized offline audio for this project will be removed. The source document and reading progress remain."
+                )
+            }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(
+                    placement:
+                        .confirmationAction
+                ) {
+                    Button("Done") {
+                        dismiss()
+                    }
                 }
             }
         }
+    }
+
+    private func storageRow(
+        _ title: String,
+        _ bytes: Int64
+    ) -> some View {
+        LabeledContent(
+            title,
+            value:
+                ByteCountFormatter
+                    .string(
+                        fromByteCount:
+                            bytes,
+                        countStyle: .file
+                    )
+        )
     }
 }

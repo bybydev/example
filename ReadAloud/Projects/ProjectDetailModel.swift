@@ -22,6 +22,8 @@ final class ProjectDetailModel {
 
     let runtime: ProjectRuntime
     var errorMessage: String?
+    private(set) var storageBreakdown:
+        ProjectStorageBreakdown?
 
     init(runtime: ProjectRuntime) {
         self.runtime = runtime
@@ -108,6 +110,36 @@ final class ProjectDetailModel {
             errorMessage = nil
         } catch {
             errorMessage = Self.message(for: error)
+        }
+    }
+
+    func refreshStorage() async {
+        do {
+            storageBreakdown =
+                try await runtime
+                    .storageBreakdown()
+            errorMessage = nil
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+        }
+    }
+
+    func clearTemporaryCache()
+        async -> Bool
+    {
+        do {
+            try await runtime
+                .clearTemporaryCache()
+            storageBreakdown =
+                try await runtime
+                    .storageBreakdown()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
         }
     }
 
@@ -317,6 +349,9 @@ final class ProjectDetailModel {
             try await runtime.clearGeneratedAudio(
                 itemIDs: [itemID]
             )
+            storageBreakdown =
+                try await runtime
+                    .storageBreakdown()
             errorMessage = nil
             return true
         } catch {
@@ -330,6 +365,9 @@ final class ProjectDetailModel {
             try await runtime.clearGeneratedAudio(
                 itemIDs: Set(items.map(\.id))
             )
+            storageBreakdown =
+                try await runtime
+                    .storageBreakdown()
             errorMessage = nil
             return true
         } catch {

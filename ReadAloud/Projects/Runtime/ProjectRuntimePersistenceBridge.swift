@@ -4,6 +4,24 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
     let projectID: UUID
     let store: ProjectStore
 
+    func storageBreakdown()
+        async throws -> ProjectStorageBreakdown
+    {
+        try await store
+            .storageBreakdown(
+                projectID: projectID
+            )
+    }
+
+    func clearTemporaryCache()
+        async throws
+    {
+        _ = try await store
+            .clearTemporaryCache(
+                projectID: projectID
+            )
+    }
+
     func load() async throws -> LoadedProject {
         try await store.loadProject(projectID: projectID)
     }

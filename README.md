@@ -552,6 +552,57 @@ than whichever project is currently being browsed. It shows project title,
 current chapter/status, chapter progress, play/pause, and opens that same
 runtime in Reader when tapped.
 
+## Storage and offline management
+
+Phase 10 makes local project storage visible and separates rebuildable cache
+from durable/offline media.
+
+Settings now includes a Storage destination with:
+
+- total ReadAloud project storage;
+- per-project storage totals;
+- source bytes;
+- finalized generated audio bytes;
+- temporary paragraph-cache bytes;
+- artwork bytes;
+- internal working-data bytes when present;
+- remaining project-data bytes for metadata, normalized content, queue state,
+  and other durable package files.
+
+Storage accounting is derived from the actual project package on disk rather
+than estimated from text or item metadata. Invalid/unattributed package bytes
+are reported separately instead of being silently assigned to a valid project.
+
+Cleanup semantics are intentionally explicit:
+
+- **Clear Temporary Cache** removes only paragraph audio cache under
+  `cache/paragraphs/`; it never removes retained source, project/content JSON,
+  artwork, finalized WAV files, reading progress, or queue intent.
+- **Clear Generated Audio** removes finalized item WAV/metadata, clears matching
+  generation intent, and invalidates exact audio-position identity while
+  preserving the content bookmark.
+- **Clear Cache & Regenerate** removes both finalized audio and paragraph cache
+  for the selected items before enqueueing fresh generation.
+- **Delete Project** remains the only normal action that removes the complete
+  `.readaloud` package.
+
+Loaded runtimes coordinate maintenance with the Phase 8 generation queue.
+Generation is paused while audio/cache files are being removed, affected
+playback is checkpointed and stopped before finalized audio is deleted, and the
+queue resumes only after durable state has been refreshed. This prevents a
+worker from recreating an asset immediately after the user clears it.
+
+The existing Offline Audio sheet remains the project-level generation manager:
+it shows Ready / Generating / Waiting state, per-item audio sizes, Generate
+Selected / Remaining, Retry, Regenerate, Clear Cache & Regenerate, and Clear
+Generated Audio. The project Storage sheet now complements it with the complete
+on-disk byte breakdown and safe cache cleanup.
+
+Internal transaction/runtime files under `temp/` are shown as Working Data but
+are not deleted by the user-facing temporary-cache action. They remain
+system-managed so cleanup cannot race an active atomic audio commit or JobQueue
+runtime write.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

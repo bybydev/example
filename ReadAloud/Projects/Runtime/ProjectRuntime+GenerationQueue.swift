@@ -436,14 +436,27 @@ extension ProjectRuntime {
             return
         }
 
-        try await persistence
-            .clearGeneratedAudio(
-                itemIDs: itemIDs
-            )
-        try await cacheCoordinator
-            .clearParagraphCache(
-                itemIDs: itemIDs
-            )
+        queueController
+            .setPlaybackActive(true)
+
+        defer {
+            queueController
+                .setPlaybackActive(
+                    blocksQueuedGeneration
+                )
+        }
+
+        if let activeItemID =
+                activity.activeItemID,
+           itemIDs.contains(
+                activeItemID
+           )
+        {
+            await persistPlaybackCheckpoint()
+            stopPlayback()
+            queueController
+                .setPlaybackActive(true)
+        }
 
         let requests =
             itemStates.compactMap {
@@ -462,6 +475,14 @@ extension ProjectRuntime {
                 )
             }
 
+        try await persistence
+            .clearGeneratedAudio(
+                itemIDs: itemIDs
+            )
+        try await cacheCoordinator
+            .clearParagraphCache(
+                itemIDs: itemIDs
+            )
         try await persistence
             .enqueueGeneration(
                 requests,

@@ -307,6 +307,152 @@ actor ProjectStore {
         )
     }
 
+    func storageSummary()
+        throws -> ReadAloudStorageSummary
+    {
+        let catalog = try catalog()
+        var projects:
+            [ProjectStorageBreakdown] = []
+        projects.reserveCapacity(
+            catalog.projects.count
+        )
+
+        for snapshot in catalog.projects {
+            projects.append(
+                try storageBreakdown(
+                    projectID: snapshot.id
+                )
+            )
+        }
+
+        projects.sort {
+            if $0.totalBytes
+                != $1.totalBytes
+            {
+                return $0.totalBytes
+                    > $1.totalBytes
+            }
+            return $0.title
+                .localizedStandardCompare(
+                    $1.title
+                ) == .orderedAscending
+        }
+
+        let totalBytes =
+            try byteCount(
+                at: rootURL
+            )
+        let attributed =
+            projects.reduce(Int64(0)) {
+                $0 + $1.totalBytes
+            }
+
+        return ReadAloudStorageSummary(
+            totalBytes: totalBytes,
+            projects: projects,
+            unattributedBytes:
+                max(
+                    0,
+                    totalBytes
+                        - attributed
+                )
+        )
+    }
+
+    func storageBreakdown(
+        projectID: UUID
+    ) throws -> ProjectStorageBreakdown {
+        let project =
+            try loadProjectMetadata(
+                projectID: projectID
+            )
+        let paths =
+            try pathsForExistingProject(
+                projectID
+            )
+
+        let totalBytes =
+            try byteCount(
+                at: paths.packageURL
+            )
+        let sourceBytes =
+            try byteCount(
+                at:
+                    paths.sourceDirectory
+            )
+        let generatedAudioBytes =
+            try byteCount(
+                at:
+                    paths.audioDirectory
+            )
+        let temporaryCacheBytes =
+            try byteCount(
+                at:
+                    paths
+                        .paragraphCacheDirectory
+            )
+        let artworkBytes =
+            try byteCount(
+                at:
+                    paths
+                        .artworkCacheDirectory
+            )
+        let workingBytes =
+            try byteCount(
+                at:
+                    paths.tempDirectory
+            )
+
+        let categorized =
+            sourceBytes
+            + generatedAudioBytes
+            + temporaryCacheBytes
+            + artworkBytes
+            + workingBytes
+
+        return ProjectStorageBreakdown(
+            projectID: projectID,
+            title: project.title,
+            totalBytes: totalBytes,
+            sourceBytes: sourceBytes,
+            generatedAudioBytes:
+                generatedAudioBytes,
+            temporaryCacheBytes:
+                temporaryCacheBytes,
+            artworkBytes: artworkBytes,
+            workingBytes: workingBytes,
+            projectDataBytes:
+                max(
+                    0,
+                    totalBytes
+                        - categorized
+                )
+        )
+    }
+
+    @discardableResult
+    func clearTemporaryCache(
+        projectID: UUID
+    ) throws -> Int64 {
+        let paths =
+            try pathsForExistingProject(
+                projectID
+            )
+        let before =
+            try byteCount(
+                at:
+                    paths
+                        .paragraphCacheDirectory
+            )
+
+        try clearDirectoryContents(
+            paths
+                .paragraphCacheDirectory
+        )
+
+        return before
+    }
+
     func loadSnapshot(projectID: UUID) throws -> ProjectSnapshot {
         ProjectSnapshot(project: try loadProjectMetadata(projectID: projectID))
     }
@@ -1453,6 +1599,171 @@ actor ProjectStore {
             projectID: projectID,
             rootURL: rootURL
         )
+    }
+
+    private func byteCount(
+        at url: URL
+    ) throws -> Int64 {
+        var isDirectory:
+            ObjCBool = false
+
+        guard fileManager
+            .fileExists(
+                atPath: url.path,
+                isDirectory:
+                    &isDirectory
+            )
+        else {
+            return 0
+        }
+
+        if !isDirectory.boolValue {
+            do {
+                let values =
+                    try url
+                        .resourceValues(
+                            forKeys: [
+                                .fileSizeKey,
+                                .isRegularFileKey,
+                            ]
+                        )
+                guard values
+                    .isRegularFile
+                    == true
+                else {
+                    return 0
+                }
+                return Int64(
+                    values.fileSize
+                        ?? 0
+                )
+            } catch {
+                throw ProjectStoreError.io(
+                    "Unable to measure storage: \(error)"
+                )
+            }
+        }
+
+        guard let enumerator =
+            fileManager.enumerator(
+                at: url,
+                includingPropertiesForKeys: [
+                    .fileSizeKey,
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ],
+                options: [
+                    .skipsHiddenFiles,
+                ]
+            )
+        else {
+            throw ProjectStoreError.io(
+                "Unable to enumerate storage at \(url.lastPathComponent)."
+            )
+        }
+
+        var total: Int64 = 0
+
+        while let entry =
+            enumerator.nextObject()
+                as? URL
+        {
+            do {
+                let values =
+                    try entry
+                        .resourceValues(
+                            forKeys: [
+                                .fileSizeKey,
+                                .isRegularFileKey,
+                                .isSymbolicLinkKey,
+                            ]
+                        )
+
+                if values
+                    .isSymbolicLink
+                    == true
+                {
+                    enumerator
+                        .skipDescendants()
+                    continue
+                }
+
+                guard values
+                    .isRegularFile
+                    == true
+                else {
+                    continue
+                }
+
+                total += Int64(
+                    values.fileSize
+                        ?? 0
+                )
+            } catch {
+                throw ProjectStoreError.io(
+                    "Unable to measure project storage: \(error)"
+                )
+            }
+        }
+
+        return total
+    }
+
+    private func clearDirectoryContents(
+        _ directory: URL
+    ) throws {
+        do {
+            try fileManager
+                .createDirectory(
+                    at: directory,
+                    withIntermediateDirectories:
+                        true
+                )
+
+            let entries =
+                try fileManager
+                    .contentsOfDirectory(
+                        at: directory,
+                        includingPropertiesForKeys:
+                            [.isSymbolicLinkKey],
+                        options: []
+                    )
+
+            for entry in entries {
+                let values =
+                    try entry
+                        .resourceValues(
+                            forKeys: [
+                                .isSymbolicLinkKey,
+                            ]
+                        )
+                guard values
+                    .isSymbolicLink
+                    != true
+                else {
+                    try fileManager
+                        .removeItem(
+                            at: entry
+                        )
+                    continue
+                }
+
+                try fileManager
+                    .removeItem(
+                        at: entry
+                    )
+            }
+        } catch {
+            if let storeError =
+                error
+                as? ProjectStoreError
+            {
+                throw storeError
+            }
+            throw ProjectStoreError.io(
+                "Unable to clear temporary cache: \(error)"
+            )
+        }
     }
 
     private func replaceStagedFile(

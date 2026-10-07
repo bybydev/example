@@ -602,6 +602,33 @@ actor ProjectCacheCoordinator {
         )
     }
 
+    func clearAllParagraphCache()
+        throws
+    {
+        guard fileManager.fileExists(
+            atPath:
+                paragraphCacheDirectory
+                    .path
+        ) else {
+            return
+        }
+
+        let entries =
+            try fileManager
+                .contentsOfDirectory(
+                    at:
+                        paragraphCacheDirectory,
+                    includingPropertiesForKeys:
+                        nil,
+                    options: []
+                )
+
+        for entry in entries {
+            try fileManager
+                .removeItem(at: entry)
+        }
+    }
+
     func clearParagraphCache(
         itemIDs: Set<UUID>
     ) throws {
