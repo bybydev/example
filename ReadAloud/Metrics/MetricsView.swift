@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import SwiftUI
 
@@ -72,3 +73,4 @@ struct MetricsView: View {
         return String(format: "%.2f×", value)
     }
 }
+#endif

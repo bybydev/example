@@ -519,7 +519,7 @@ private struct LibraryProjectRow: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text(sourceLabel(entry.snapshot.sourceType))
+                    Text(ReadAloudDisplay.sourceType(entry.snapshot.sourceType))
                     if entry.snapshot.projectProgress > 0 {
                         Text("·")
                         Text(
@@ -535,14 +535,6 @@ private struct LibraryProjectRow: View {
         .padding(.vertical, 4)
     }
 
-    private func sourceLabel(_ type: ProjectSourceType) -> String {
-        switch type {
-        case .epub: "EPUB"
-        case .pdf: "PDF"
-        case .document: "Document"
-        case .paste: "Text"
-        }
-    }
 }
 
 private struct LibraryIssuesSheet: View {
@@ -602,7 +594,7 @@ private struct ProjectInfoSheet: View {
                 Section("Project") {
                     LabeledContent(
                         "Type",
-                        value: sourceLabel(entry.snapshot.sourceType)
+                        value: ReadAloudDisplay.sourceType(entry.snapshot.sourceType)
                     )
                     LabeledContent {
                         Text(
@@ -634,14 +626,6 @@ private struct ProjectInfoSheet: View {
         }
     }
 
-    private func sourceLabel(_ type: ProjectSourceType) -> String {
-        switch type {
-        case .epub: "EPUB"
-        case .pdf: "PDF"
-        case .document: "Document"
-        case .paste: "Text"
-        }
-    }
 }
 
 private struct PasteDraft {

@@ -1,5 +1,9 @@
 # ReadAloud 1.0 Pre-Implementation Decisions
 
+> Status: historical pre-implementation record. These decisions have been
+> applied to the 1.0 codebase. Use `CURRENT_ARCHITECTURE.md` for maintenance
+> work and `PERSISTENCE_CONTRACT.md` for durable semantics.
+
 ## Purpose
 
 This document locks the decisions that would be expensive to change after product implementation begins.

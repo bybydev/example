@@ -1,5 +1,10 @@
 # ReadAloud 1.0 Multi-Phase Implementation Plan
 
+> Status: historical implementation record. ReadAloud 1.0 implementation is
+> complete. Use `CURRENT_ARCHITECTURE.md` for the current system and
+> `RELEASE_CHECKLIST.md` for shipping work.
+
+
 ## Purpose
 
 This plan turns the architecture, product scope, and iOS design in this PR into an implementation sequence for ReadAloud 1.0.

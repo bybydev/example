@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 
 struct ReaderSample: Identifiable, Sendable {
@@ -41,3 +42,4 @@ struct ReaderSample: Identifiable, Sendable {
         ),
     ]
 }
+#endif

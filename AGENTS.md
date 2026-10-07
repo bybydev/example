@@ -10,8 +10,10 @@ These rules apply to work in the ReadAloud repository.
 - Do not hand-edit generated Xcode project files.
 - The generated `ReadAloud.xcodeproj` and `Package.resolved` follow the portfolio convention: they are checked-in, owner-managed artifacts.
 - Do not run XcodeGen, regenerate the project, resolve packages, or update `Package.resolved` unless explicitly requested.
-- Product architecture lives under `docs/`.
-- `docs/PERSISTENCE_CONTRACT.md` is authoritative for durable 1.0 project semantics once implementation begins.
+- `docs/CURRENT_ARCHITECTURE.md` is the current implemented-system overview.
+- `docs/PERSISTENCE_CONTRACT.md` is authoritative for durable project/audio/resume semantics.
+- `docs/RELEASE_CHECKLIST.md` is authoritative for the current 1.0 shipping checklist.
+- Phased planning/baseline documents are historical context unless a new task explicitly reactivates them.
 
 ## Branching
 
@@ -30,19 +32,25 @@ These rules apply to work in the ReadAloud repository.
 - keep generic Kokoro runtime fixture/model infrastructure in KokoroCoreML
 - preserve the internal engineering name `ReadAloud` even if the public app brand changes
 
-## CI workflows
+## CI and release automation
 
-ReadAloud has exactly three primary GitHub Actions workflows:
+The canonical ReadAloud 1.0 shipping path is manual/local using Xcode/mycli and
+`docs/RELEASE_CHECKLIST.md`.
 
-- Fast CI
-- Full CI
-- Release
+The existing `.github/workflows/release.yml` is legacy/non-canonical for 1.0.
+Do not modify, trigger, repair, or expand CI/release workflows unless explicitly
+requested.
 
-All are manual-only and must work against the branch/ref selected at dispatch time.
+`docs/CI_RELEASE.md` is a deferred blueprint for a future manual Fast CI /
+Full CI / Release setup; it does not describe the currently implemented
+workflow set.
 
-Do not add automatic push, pull-request, or scheduled triggers. Do not hardcode checkout to `master` or `develop`.
+If workflow work is explicitly requested:
 
-Follow `docs/CI_RELEASE.md`.
+- keep workflows manual-only;
+- do not add push, pull-request, or scheduled triggers;
+- do not hardcode checkout to `master` or `develop`;
+- preserve branch/ref-aware execution.
 
 ## Testing/build policy
 

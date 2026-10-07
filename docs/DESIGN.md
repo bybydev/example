@@ -6,7 +6,7 @@ ReadAloud should feel like a serious reading/listening product: closer to a focu
 
 The app should hide sophisticated local generation, queue, cache, and package machinery behind a calm native iOS interface.
 
-The design should not mechanically copy Spokio's Mac UI. Reuse Spokio's product concepts and state semantics, then reinterpret them for iPhone and iPad.
+The design should not mechanically copy Spokio's Mac UI. Reuse Spokio's product concepts and state semantics, then reinterpret them for iPhone. iPad is outside the 1.0 product boundary.
 
 ## Information architecture
 

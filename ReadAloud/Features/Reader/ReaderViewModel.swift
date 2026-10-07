@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import Observation
 
@@ -264,3 +265,4 @@ final class ReaderViewModel {
         String(format: "%.3fs", seconds)
     }
 }
+#endif

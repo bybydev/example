@@ -1,8 +1,14 @@
-# ReadAloud CI and Release Contract
+# ReadAloud CI and Release Blueprint
+
+> Status: deferred after ReadAloud 1.0. This document describes the intended
+> future manual Fast CI / Full CI / Release setup. It is not the current
+> implemented workflow set. The 1.0 canonical shipping path is the manual/local
+> process in `RELEASE_CHECKLIST.md`. Do not implement or run this blueprint
+> unless explicitly requested.
 
 ## Purpose
 
-ReadAloud uses exactly three primary GitHub Actions workflows:
+The intended future setup uses exactly three primary GitHub Actions workflows:
 
 ```
 .github/workflows/

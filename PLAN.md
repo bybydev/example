@@ -4,12 +4,11 @@
 >
 > This file documents the completed Kokoro prototype work and its intentionally narrow original non-goals. It is **not** the implementation plan for ReadAloud 1.0.
 >
-> For current product work, use:
+> For current product maintenance, use:
 >
-> - `docs/PRE_IMPLEMENTATION.md`
-> - `docs/ARCHITECTURE.md`
+> - `docs/CURRENT_ARCHITECTURE.md`
 > - `docs/PERSISTENCE_CONTRACT.md`
-> - `docs/IMPLEMENTATION_PLAN.md`
+> - `docs/RELEASE_CHECKLIST.md`
 > - `docs/PRODUCT_PLAN.md`
 > - `docs/DESIGN.md`
 

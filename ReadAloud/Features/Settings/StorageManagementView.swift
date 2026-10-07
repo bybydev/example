@@ -285,7 +285,7 @@ struct StorageManagementView: View {
             LabeledContent(
                 "Total",
                 value:
-                    byteString(
+                    ReadAloudDisplay.byteCount(
                         model.summary
                             .totalBytes
                     )
@@ -297,7 +297,7 @@ struct StorageManagementView: View {
                 LabeledContent(
                     "Other",
                     value:
-                        byteString(
+                        ReadAloudDisplay.byteCount(
                             model.summary
                                 .unattributedBytes
                         )
@@ -333,7 +333,7 @@ struct StorageManagementView: View {
                                 .lineLimit(1)
                             Spacer()
                             Text(
-                                byteString(
+                                ReadAloudDisplay.byteCount(
                                     project
                                         .totalBytes
                                 )
@@ -372,14 +372,6 @@ struct StorageManagementView: View {
         }
     }
 
-    private func byteString(
-        _ bytes: Int64
-    ) -> String {
-        ByteCountFormatter.string(
-            fromByteCount: bytes,
-            countStyle: .file
-        )
-    }
 }
 
 private struct ProjectStorageManagementView:
@@ -401,45 +393,9 @@ private struct ProjectStorageManagementView:
                     projectID: projectID
                 )
             {
-                Section("Usage") {
-                    storageRow(
-                        "Total",
-                        storage.totalBytes
-                    )
-                    storageRow(
-                        "Source",
-                        storage.sourceBytes
-                    )
-                    storageRow(
-                        "Generated Audio",
-                        storage
-                            .generatedAudioBytes
-                    )
-                    storageRow(
-                        "Temporary Cache",
-                        storage
-                            .temporaryCacheBytes
-                    )
-                    storageRow(
-                        "Artwork",
-                        storage.artworkBytes
-                    )
-                    storageRow(
-                        "Project Data",
-                        storage
-                            .projectDataBytes
-                    )
-
-                    if storage
-                        .workingBytes > 0
-                    {
-                        storageRow(
-                            "Working Data",
-                            storage
-                                .workingBytes
-                        )
-                    }
-                }
+                ProjectStorageUsageSection(
+                    storage: storage
+                )
 
                 Section {
                     Button(
@@ -529,19 +485,4 @@ private struct ProjectStorageManagementView:
         }
     }
 
-    private func storageRow(
-        _ title: String,
-        _ bytes: Int64
-    ) -> some View {
-        LabeledContent(
-            title,
-            value:
-                ByteCountFormatter
-                    .string(
-                        fromByteCount:
-                            bytes,
-                        countStyle: .file
-                    )
-        )
-    }
 }

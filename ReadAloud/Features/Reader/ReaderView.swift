@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import SwiftUI
 
@@ -133,3 +134,4 @@ struct ReaderView: View {
 #Preview {
     ReaderView()
 }
+#endif

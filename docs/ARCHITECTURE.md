@@ -1,5 +1,9 @@
 # ReadAloud 1.0 Architecture
 
+> Status: historical target architecture from before implementation. For the
+> implemented 1.0 ownership/component map, use `CURRENT_ARCHITECTURE.md`.
+> `PERSISTENCE_CONTRACT.md` remains authoritative for durable semantics.
+
 ## Purpose
 
 This document defines the target architecture for turning the current ReadAloud prototype into a sophisticated offline reading and listening app.

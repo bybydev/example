@@ -885,7 +885,10 @@ private struct ProjectDetailInfoSheet: View {
                     }
                     LabeledContent(
                         "Source",
-                        value: sourceLabel(project.source.type)
+                        value:
+                            ReadAloudDisplay.sourceType(
+                                project.source.type
+                            )
                     )
                     LabeledContent(
                         "Items",
@@ -924,16 +927,6 @@ private struct ProjectDetailInfoSheet: View {
         }
     }
 
-    private func sourceLabel(
-        _ type: ProjectSourceType
-    ) -> String {
-        switch type {
-        case .epub: "EPUB"
-        case .pdf: "PDF"
-        case .document: "Document"
-        case .paste: "Text"
-        }
-    }
 }
 
 private struct ProjectItemInfoSheet: View {
@@ -1301,45 +1294,9 @@ private struct ProjectStorageSheet: View {
                 if let storage =
                     model.storageBreakdown
                 {
-                    Section("Usage") {
-                        storageRow(
-                            "Total",
-                            storage.totalBytes
-                        )
-                        storageRow(
-                            "Source",
-                            storage.sourceBytes
-                        )
-                        storageRow(
-                            "Generated Audio",
-                            storage
-                                .generatedAudioBytes
-                        )
-                        storageRow(
-                            "Temporary Cache",
-                            storage
-                                .temporaryCacheBytes
-                        )
-                        storageRow(
-                            "Artwork",
-                            storage.artworkBytes
-                        )
-                        storageRow(
-                            "Project Data",
-                            storage
-                                .projectDataBytes
-                        )
-
-                        if storage
-                            .workingBytes > 0
-                        {
-                            storageRow(
-                                "Working Data",
-                                storage
-                                    .workingBytes
-                            )
-                        }
-                    }
+                    ProjectStorageUsageSection(
+                        storage: storage
+                    )
 
                     Section("Offline") {
                         LabeledContent(
@@ -1461,19 +1418,4 @@ private struct ProjectStorageSheet: View {
         }
     }
 
-    private func storageRow(
-        _ title: String,
-        _ bytes: Int64
-    ) -> some View {
-        LabeledContent(
-            title,
-            value:
-                ByteCountFormatter
-                    .string(
-                        fromByteCount:
-                            bytes,
-                        countStyle: .file
-                    )
-        )
-    }
 }

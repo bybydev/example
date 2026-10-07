@@ -1,5 +1,9 @@
 # ReadAloud iOS App Baseline
 
+> Status: historical integration baseline used to establish ReadAloud 1.0.
+> Use `CURRENT_ARCHITECTURE.md` and the current `project.yml` for the
+> implemented app configuration.
+
 ## Purpose
 
 ReadAloud should follow the established conventions used across Hoang's existing iOS apps instead of inventing a new app-shell/configuration pattern.
