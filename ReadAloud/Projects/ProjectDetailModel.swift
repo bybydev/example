@@ -11,43 +11,56 @@ final class ProjectDetailModel {
         let generationStatus: ProjectItemGenerationStatus
 
         var id: UUID { item.id }
-    }
 
-    private(set) var project: ProjectDocument?
-    private(set) var items: [ItemEntry] = []
-    private(set) var artworkURL: URL?
-    private(set) var isLoading = false
-    private(set) var didLoad = false
-    var errorMessage: String?
-
-    let projectID: UUID
-
-    private let projectStore: ProjectStore?
-    private let initializationError: String?
-
-    init(projectID: UUID) {
-        self.projectID = projectID
-        do {
-            projectStore = try ProjectStore()
-            initializationError = nil
-        } catch {
-            projectStore = nil
-            initializationError = Self.message(for: error)
+        init(runtimeState: ProjectRuntimeItemState) {
+            item = runtimeState.item
+            resolved = runtimeState.resolved
+            generationKey = runtimeState.generationKey
+            generationStatus = runtimeState.generationStatus
         }
     }
 
+    let runtime: ProjectRuntime
+    var errorMessage: String?
+
+    init(runtime: ProjectRuntime) {
+        self.runtime = runtime
+    }
+
+    var projectID: UUID {
+        runtime.id
+    }
+
+    var project: ProjectDocument? {
+        runtime.project
+    }
+
+    var items: [ItemEntry] {
+        runtime.itemStates.map(ItemEntry.init)
+    }
+
+    var artworkURL: URL? {
+        runtime.artworkURL
+    }
+
+    var isLoading: Bool {
+        runtime.isLoading
+    }
+
+    var didLoad: Bool {
+        runtime.didLoad
+    }
+
     var resolvedProjectSettings: ResolvedNarrationSettings {
-        NarrationSettingsResolver.resolveProject(
-            project?.settings ?? ProjectNarrationSettings()
-        )
+        runtime.resolvedProjectSettings
     }
 
     var currentItemID: UUID? {
-        project?.playback?.currentItemID
+        runtime.currentItemID
     }
 
     var continueItemID: UUID? {
-        currentItemID ?? items.first?.id
+        runtime.continueItemID
     }
 
     var readyOfflineCount: Int {
@@ -81,103 +94,27 @@ final class ProjectDetailModel {
     }
 
     func loadIfNeeded() async {
-        guard !didLoad else { return }
-        await refresh()
+        do {
+            try await runtime.loadIfNeeded()
+            errorMessage = nil
+        } catch {
+            errorMessage = Self.message(for: error)
+        }
     }
 
     func refresh() async {
-        guard let projectStore else {
-            errorMessage = initializationError
-                ?? "Unable to open this project."
-            didLoad = true
-            return
-        }
-
-        isLoading = true
-        defer {
-            isLoading = false
-            didLoad = true
-        }
-
         do {
-            let loaded = try await projectStore.loadProject(
-                projectID: projectID
-            )
-            let runtimeRevision =
-                try ReadAloudSynthesisContract.runtimeRevision()
-
-            var prepared: [(
-                item: ProjectContentItem,
-                resolved: ResolvedNarrationSettings,
-                generationKey: String
-            )] = []
-            prepared.reserveCapacity(loaded.items.count)
-
-            var requests: [ProjectGenerationStatusRequest] = []
-            requests.reserveCapacity(loaded.items.count)
-
-            for item in loaded.items.sorted(by: { $0.order < $1.order }) {
-                let resolved = try NarrationSettingsResolver.resolve(
-                    item: item.settings,
-                    project: loaded.project.settings
-                )
-                let generationKey =
-                    try ReadAloudSynthesisContract.generationKey(
-                        item: item,
-                        resolved: resolved,
-                        runtimeRevision: runtimeRevision
-                    )
-
-                prepared.append(
-                    (item, resolved, generationKey)
-                )
-                requests.append(
-                    ProjectGenerationStatusRequest(
-                        itemID: item.id,
-                        generationKey: generationKey,
-                        contentRevision: item.contentRevision,
-                        voiceID: resolved.voiceID,
-                        speed: resolved.speed
-                    )
-                )
-            }
-
-            let statuses = try await projectStore.generationStatuses(
-                projectID: projectID,
-                requests: requests
-            )
-            let rootURL = await projectStore.rootURL
-
-            project = loaded.project
-            items = prepared.map {
-                ItemEntry(
-                    item: $0.item,
-                    resolved: $0.resolved,
-                    generationKey: $0.generationKey,
-                    generationStatus:
-                        statuses[$0.item.id] ?? .notGenerated
-                )
-            }
-            artworkURL = makeArtworkURL(
-                project: loaded.project,
-                rootURL: rootURL
-            )
+            try await runtime.refresh()
+            errorMessage = nil
         } catch {
             errorMessage = Self.message(for: error)
         }
     }
 
     func setProjectVoice(_ voiceID: String?) async -> Bool {
-        guard let projectStore, let project else { return false }
-        var settings = project.settings
-        settings.voiceID = voiceID
-
         do {
-            _ = try await projectStore.updateSettings(
-                projectID: projectID,
-                settings: settings
-            )
-            await refresh()
+            try await runtime.updateProjectVoice(voiceID)
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -186,16 +123,9 @@ final class ProjectDetailModel {
     }
 
     func setProjectSpeed(_ speed: Double?) async -> Bool {
-        guard let projectStore, let project else { return false }
-        var settings = project.settings
-        settings.speed = speed
-
         do {
-            _ = try await projectStore.updateSettings(
-                projectID: projectID,
-                settings: settings
-            )
-            await refresh()
+            try await runtime.updateProjectSpeed(speed)
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -207,89 +137,80 @@ final class ProjectDetailModel {
         itemID: UUID,
         mode: ItemSettingMode
     ) async -> Bool {
-        guard let entry = itemEntry(itemID) else { return false }
-        var settings = entry.item.settings
-        settings.voice.mode = mode
-
-        if mode == .custom,
-           settings.voice.customValue == nil {
-            settings.voice.customValue = entry.resolved.voiceID
+        do {
+            try await runtime.updateItemVoiceMode(
+                itemID: itemID,
+                mode: mode
+            )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
         }
-
-        return await saveItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
     }
 
     func setItemVoice(
         itemID: UUID,
         voiceID: String
     ) async -> Bool {
-        guard let entry = itemEntry(itemID) else { return false }
-        var settings = entry.item.settings
-        settings.voice.mode = .custom
-        settings.voice.customValue = voiceID
-        return await saveItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
+        do {
+            try await runtime.updateItemVoice(
+                itemID: itemID,
+                voiceID: voiceID
+            )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
+        }
     }
 
     func setItemSpeedMode(
         itemID: UUID,
         mode: ItemSettingMode
     ) async -> Bool {
-        guard let entry = itemEntry(itemID) else { return false }
-        var settings = entry.item.settings
-        settings.speed.mode = mode
-
-        if mode == .custom,
-           settings.speed.customValue == nil {
-            settings.speed.customValue = entry.resolved.speed
+        do {
+            try await runtime.updateItemSpeedMode(
+                itemID: itemID,
+                mode: mode
+            )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
         }
-
-        return await saveItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
     }
 
     func setItemSpeed(
         itemID: UUID,
         speed: Double
     ) async -> Bool {
-        guard let entry = itemEntry(itemID) else { return false }
-        var settings = entry.item.settings
-        settings.speed.mode = .custom
-        settings.speed.customValue = speed
-        return await saveItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
+        do {
+            try await runtime.updateItemSpeed(
+                itemID: itemID,
+                speed: speed
+            )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = Self.message(for: error)
+            return false
+        }
     }
 
     func queueGeneration(
         itemID: UUID,
         regenerate: Bool
     ) async -> Bool {
-        guard let projectStore,
-              let entry = itemEntry(itemID) else {
-            return false
-        }
-
         do {
-            try await projectStore.enqueueGeneration(
-                projectID: projectID,
-                requests: [
-                    ProjectGenerationRequest(
-                        itemID: itemID,
-                        generationKey: entry.generationKey
-                    )
-                ],
-                replaceExisting: regenerate
+            try await runtime.enqueueGeneration(
+                itemID: itemID,
+                regenerate: regenerate
             )
-            await refresh()
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -298,29 +219,9 @@ final class ProjectDetailModel {
     }
 
     func queueRemaining() async -> Bool {
-        guard let projectStore else { return false }
-
-        let requests = items.compactMap { entry in
-            switch entry.generationStatus.state {
-            case .readyOffline, .generating, .waiting:
-                return nil
-            case .notGenerated, .needsAttention:
-                return ProjectGenerationRequest(
-                    itemID: entry.id,
-                    generationKey: entry.generationKey
-                )
-            }
-        }
-
-        guard !requests.isEmpty else { return true }
-
         do {
-            try await projectStore.enqueueGeneration(
-                projectID: projectID,
-                requests: requests,
-                replaceExisting: false
-            )
-            await refresh()
+            try await runtime.enqueueRemainingGeneration()
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -329,14 +230,11 @@ final class ProjectDetailModel {
     }
 
     func clearGeneratedAudio(itemID: UUID) async -> Bool {
-        guard let projectStore else { return false }
-
         do {
-            try await projectStore.clearGeneratedAudio(
-                projectID: projectID,
+            try await runtime.clearGeneratedAudio(
                 itemIDs: [itemID]
             )
-            await refresh()
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -345,14 +243,11 @@ final class ProjectDetailModel {
     }
 
     func clearAllGeneratedAudio() async -> Bool {
-        guard let projectStore else { return false }
-
         do {
-            try await projectStore.clearGeneratedAudio(
-                projectID: projectID,
+            try await runtime.clearGeneratedAudio(
                 itemIDs: Set(items.map(\.id))
             )
-            await refresh()
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -361,14 +256,9 @@ final class ProjectDetailModel {
     }
 
     func rename(to title: String) async -> Bool {
-        guard let projectStore else { return false }
-
         do {
-            _ = try await projectStore.renameProject(
-                projectID: projectID,
-                to: title
-            )
-            await refresh()
+            try await runtime.rename(to: title)
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -377,12 +267,9 @@ final class ProjectDetailModel {
     }
 
     func deleteProject() async -> Bool {
-        guard let projectStore else { return false }
-
         do {
-            try await projectStore.deleteProject(
-                projectID: projectID
-            )
+            try await runtime.deleteProject()
+            errorMessage = nil
             return true
         } catch {
             errorMessage = Self.message(for: error)
@@ -391,48 +278,7 @@ final class ProjectDetailModel {
     }
 
     func itemEntry(_ itemID: UUID) -> ItemEntry? {
-        items.first { $0.id == itemID }
-    }
-
-    private func saveItemSettings(
-        itemID: UUID,
-        settings: ItemNarrationSettings
-    ) async -> Bool {
-        guard let projectStore else { return false }
-
-        do {
-            _ = try await projectStore.updateContentItemSettings(
-                projectID: projectID,
-                itemID: itemID,
-                settings: settings
-            )
-            await refresh()
-            return true
-        } catch {
-            errorMessage = Self.message(for: error)
-            return false
-        }
-    }
-
-    private func makeArtworkURL(
-        project: ProjectDocument,
-        rootURL: URL
-    ) -> URL? {
-        guard let relativePath = project.artwork?.relativePath else {
-            return nil
-        }
-
-        var url = ProjectPackagePaths.packageURL(
-            projectID: project.id,
-            rootURL: rootURL
-        )
-        for component in relativePath.split(separator: "/") {
-            url.append(
-                path: String(component),
-                directoryHint: .inferFromPath
-            )
-        }
-        return url
+        runtime.itemState(itemID).map(ItemEntry.init)
     }
 
     nonisolated private static func message(

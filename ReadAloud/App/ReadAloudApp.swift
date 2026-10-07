@@ -6,6 +6,7 @@ import SwiftUI
 struct ReadAloudApp: App {
     @State private var purchaseManager: PurchaseManager
     @State private var themeManager: ThemeManager
+    @State private var runtimeManager: ProjectRuntimeManager
 
     init() {
         _purchaseManager = State(
@@ -15,6 +16,9 @@ struct ReadAloudApp: App {
                 simulatedProducts: [],
                 simulatedPersistenceKey: "com.hoangbkit.readaloud.simulated-purchases"
             )
+        )
+        _runtimeManager = State(
+            initialValue: ProjectRuntimeManager()
         )
         _themeManager = State(
             initialValue: ThemeManager(
@@ -31,6 +35,7 @@ struct ReadAloudApp: App {
             RootView()
                 .environment(purchaseManager)
                 .environment(themeManager)
+                .environment(runtimeManager)
                 .managesPurchases(purchaseManager)
                 .appFoundationTheme(
                     themeManager,

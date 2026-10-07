@@ -330,6 +330,34 @@ current generation key plus valid audio metadata and the finalized WAV identity,
 not from queue state or file presence alone. Regeneration leaves the known-good
 audio in place until a future generation commits its replacement.
 
+## Project runtime
+
+Phase 5 introduces the reference-stable runtime layer for project activity.
+`ProjectRuntimeManager` is installed at the app root and owns loaded project
+runtimes. Repeated navigation to the same project reuses the same runtime
+reference and deduplicates in-flight acquisition.
+
+Each `ProjectRuntime` owns:
+
+- active project identity and hydrated project/item state;
+- the existing streaming `ReadAloudPipeline` synthesis/playback owner;
+- durable queue state through `ProjectQueueController`;
+- cache/package paths through `ProjectCacheCoordinator`;
+- disk mutations through `ProjectRuntimePersistenceBridge`;
+- aggregated playback/queue activity and item generation state.
+
+Project Detail no longer creates its own `ProjectStore`. It is a UI adapter
+over the shared runtime, and the Phase 6 Reader route already receives that same
+runtime instance. The tab-root mini-player host observes the manager/runtime
+rather than creating playback state of its own.
+
+Library remains snapshot-driven and lightweight. Library rename/delete actions
+synchronize any loaded runtime so cached project state cannot become stale.
+
+The historical DEBUG prototype Reader still owns its standalone prototype
+pipeline and remains isolated from the 1.0 project navigation. Product project
+screens use `ProjectRuntime` as the ownership boundary.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

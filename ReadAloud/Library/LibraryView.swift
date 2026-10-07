@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
     @State private var model = LibraryModel()
     @State private var isFileImporterPresented = false
     @State private var allowedContentTypes: [UTType] = [.data]
@@ -114,10 +115,14 @@ struct LibraryView: View {
             Button("Rename") {
                 guard let target = renameTarget else { return }
                 Task {
-                    _ = await model.rename(
+                    if await model.rename(
                         projectID: target.id,
                         to: renameText
-                    )
+                    ) {
+                        try? await runtimeManager.refreshIfLoaded(
+                            projectID: target.id
+                        )
+                    }
                     renameTarget = nil
                 }
             }
@@ -142,7 +147,11 @@ struct LibraryView: View {
             Button("Delete Project", role: .destructive) {
                 guard let target = deleteTarget else { return }
                 Task {
-                    _ = await model.delete(projectID: target.id)
+                    if await model.delete(projectID: target.id) {
+                        runtimeManager.forget(
+                            projectID: target.id
+                        )
+                    }
                     deleteTarget = nil
                 }
             }
@@ -176,7 +185,7 @@ struct LibraryView: View {
             if let entry = model.continueListening {
                 Section("Continue Listening") {
                     NavigationLink {
-                        ProjectDetailView(
+                        ProjectDetailRuntimeHost(
                             projectID: entry.id,
                             initialTitle: entry.snapshot.title,
                             onProjectChanged: {
@@ -220,7 +229,15 @@ struct LibraryView: View {
                 } else {
                     ForEach(model.filteredEntries) { entry in
                         NavigationLink {
-                            ProjectDetailPlaceholderView(entry: entry)
+                            ProjectDetailRuntimeHost(
+                                projectID: entry.id,
+                                initialTitle: entry.snapshot.title,
+                                onProjectChanged: {
+                                    Task {
+                                        await model.refresh()
+                                    }
+                                }
+                            )
                         } label: {
                             LibraryProjectRow(entry: entry)
                         }

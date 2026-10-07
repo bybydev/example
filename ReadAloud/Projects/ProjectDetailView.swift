@@ -1,6 +1,80 @@
 import Foundation
 import SwiftUI
 
+struct ProjectDetailRuntimeHost: View {
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @State private var runtime: ProjectRuntime?
+    @State private var errorMessage: String?
+    @State private var isLoading = true
+
+    let projectID: UUID
+    let initialTitle: String
+    let onProjectChanged: () -> Void
+
+    init(
+        projectID: UUID,
+        initialTitle: String,
+        onProjectChanged: @escaping () -> Void = {}
+    ) {
+        self.projectID = projectID
+        self.initialTitle = initialTitle
+        self.onProjectChanged = onProjectChanged
+    }
+
+    var body: some View {
+        Group {
+            if let runtime {
+                ProjectDetailView(
+                    runtime: runtime,
+                    initialTitle: initialTitle,
+                    onProjectChanged: onProjectChanged
+                )
+            } else if isLoading {
+                ProgressView("Opening Project…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "Project Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(
+                        errorMessage ?? "This project could not be opened."
+                    )
+                )
+            }
+        }
+        .navigationTitle(runtime?.project?.title ?? initialTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: projectID) {
+            if let runtime {
+                runtimeManager.makeActive(runtime)
+                return
+            }
+
+            isLoading = true
+            defer { isLoading = false }
+
+            do {
+                runtime = try await runtimeManager.activate(
+                    projectID: projectID
+                )
+                errorMessage = nil
+            } catch {
+                errorMessage = Self.message(for: error)
+            }
+        }
+    }
+
+    nonisolated private static func message(
+        for error: Error
+    ) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription {
+            return description
+        }
+        return String(describing: error)
+    }
+}
+
 struct ProjectDetailView: View {
     private struct ItemTarget: Identifiable {
         let id: UUID
@@ -13,6 +87,7 @@ struct ProjectDetailView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
     @State private var model: ProjectDetailModel
     @State private var projectVoicePresented = false
     @State private var projectSpeedPresented = false
@@ -31,14 +106,14 @@ struct ProjectDetailView: View {
     let onProjectChanged: () -> Void
 
     init(
-        projectID: UUID,
+        runtime: ProjectRuntime,
         initialTitle: String,
         onProjectChanged: @escaping () -> Void = {}
     ) {
         self.initialTitle = initialTitle
         self.onProjectChanged = onProjectChanged
         _model = State(
-            initialValue: ProjectDetailModel(projectID: projectID)
+            initialValue: ProjectDetailModel(runtime: runtime)
         )
     }
 
@@ -67,6 +142,7 @@ struct ProjectDetailView: View {
             }
         }
         .task {
+            runtimeManager.makeActive(model.runtime)
             await model.loadIfNeeded()
         }
         .refreshable {
@@ -84,7 +160,7 @@ struct ProjectDetailView: View {
         ) {
             if let readerTarget {
                 ReaderPlaceholderView(
-                    projectID: model.projectID,
+                    runtime: model.runtime,
                     itemID: readerTarget.itemID,
                     title: readerTarget.title
                 )
@@ -166,6 +242,9 @@ struct ProjectDetailView: View {
             Button("Delete Project", role: .destructive) {
                 Task {
                     if await model.deleteProject() {
+                        runtimeManager.forget(
+                            projectID: model.projectID
+                        )
                         notifyProjectChanged()
                         dismiss()
                     }
@@ -611,17 +690,20 @@ private struct ProjectItemRow: View {
 }
 
 private struct ReaderPlaceholderView: View {
-    let projectID: UUID
+    let runtime: ProjectRuntime
     let itemID: UUID
     let title: String
 
     var body: some View {
+        let currentTitle =
+            runtime.itemState(itemID)?.item.title ?? title
+
         ContentUnavailableView {
-            Label(title, systemImage: "text.book.closed")
+            Label(currentTitle, systemImage: "text.book.closed")
         } description: {
             Text("Reader implementation arrives in Phase 6.")
         }
-        .navigationTitle(title)
+        .navigationTitle(currentTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
