@@ -159,10 +159,9 @@ struct ProjectDetailView: View {
             )
         ) {
             if let readerTarget {
-                ReaderPlaceholderView(
+                ProjectReaderView(
                     runtime: model.runtime,
-                    itemID: readerTarget.itemID,
-                    title: readerTarget.title
+                    initialItemID: readerTarget.itemID
                 )
             }
         }
@@ -322,7 +321,15 @@ struct ProjectDetailView: View {
                     } label: {
                         ProjectItemRow(
                             entry: entry,
-                            isCurrent: model.currentItemID == entry.id
+                            isCurrent: model.currentItemID == entry.id,
+                            isPlaying:
+                                model.runtime.isPlaybackActive
+                                && model.runtime.activity.activeItemID
+                                    == entry.id,
+                            isPaused:
+                                model.runtime.isPlaybackPaused
+                                && model.runtime.activity.activeItemID
+                                    == entry.id
                         )
                     }
                     .buttonStyle(.plain)
@@ -621,6 +628,8 @@ struct ProjectDetailView: View {
 private struct ProjectItemRow: View {
     let entry: ProjectDetailModel.ItemEntry
     let isCurrent: Bool
+    let isPlaying: Bool
+    let isPaused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -667,6 +676,10 @@ private struct ProjectItemRow: View {
     }
 
     private var statusLabel: String {
+        if isPlaying {
+            return isPaused ? "Paused" : "Playing"
+        }
+
         switch entry.generationStatus.state {
         case .readyOffline: "Ready Offline"
         case .generating: "Generating"
@@ -677,6 +690,12 @@ private struct ProjectItemRow: View {
     }
 
     private var statusIcon: String {
+        if isPlaying {
+            return isPaused
+                ? "pause.circle.fill"
+                : "play.circle.fill"
+        }
+
         switch entry.generationStatus.state {
         case .readyOffline: "checkmark.circle.fill"
         case .generating: "waveform"
@@ -687,25 +706,6 @@ private struct ProjectItemRow: View {
     }
 
 
-}
-
-private struct ReaderPlaceholderView: View {
-    let runtime: ProjectRuntime
-    let itemID: UUID
-    let title: String
-
-    var body: some View {
-        let currentTitle =
-            runtime.itemState(itemID)?.item.title ?? title
-
-        ContentUnavailableView {
-            Label(currentTitle, systemImage: "text.book.closed")
-        } description: {
-            Text("Reader implementation arrives in Phase 6.")
-        }
-        .navigationTitle(currentTitle)
-        .navigationBarTitleDisplayMode(.inline)
-    }
 }
 
 private struct ProjectDetailInfoSheet: View {

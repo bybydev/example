@@ -39,6 +39,7 @@ final class SpeechPlaybackQueue {
     private var queuedDurationSeconds = 0.0
     private var connectedSampleRate: Double?
     private var connectedChannelCount: AVAudioChannelCount?
+    private var isPaused = false
 
     var onSnapshotChange: ((Snapshot) -> Void)?
 
@@ -92,7 +93,7 @@ final class SpeechPlaybackQueue {
             }
         }
 
-        if !playerNode.isPlaying {
+        if !isPaused && !playerNode.isPlaying {
             playerNode.play()
         }
 
@@ -124,8 +125,27 @@ final class SpeechPlaybackQueue {
         }
     }
 
+    func pause() {
+        guard !isPaused else { return }
+        isPaused = true
+        if playerNode.isPlaying {
+            playerNode.pause()
+        }
+        notifySnapshotChange()
+    }
+
+    func resume() {
+        guard isPaused else { return }
+        isPaused = false
+        if !pendingDurations.isEmpty && !playerNode.isPlaying {
+            playerNode.play()
+        }
+        notifySnapshotChange()
+    }
+
     func stop() {
         generation += 1
+        isPaused = false
         playerNode.stop()
 
         pendingDurations.removeAll()

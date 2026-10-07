@@ -358,6 +358,44 @@ The historical DEBUG prototype Reader still owns its standalone prototype
 pipeline and remains isolated from the 1.0 project navigation. Product project
 screens use `ProjectRuntime` as the ownership boundary.
 
+## Reader
+
+Phase 6 replaces the project Reader placeholder with the real runtime-backed
+reading/listening experience.
+
+Reader now provides:
+
+- readable chapter/section text with persisted appearance controls;
+- current-paragraph highlighting driven by the runtime's audible paragraph;
+- saved-bookmark restoration when re-entering Reader;
+- manual scrolling that never gets force-corrected back to playback;
+- an explicit Return to Current affordance after the user scrolls or browses
+  another chapter;
+- play, pause, resume, stop, backward/forward seek, automatic chapter
+  continuation, previous/next chapter browsing, voice and synthesis-speed
+  access;
+- a searchable Chapters sheet with live playback/offline status and preserved
+  manifest hierarchy;
+- current-chapter generation/offline actions and chapter info;
+- direct Continue Listening routing from Library;
+- the same ProjectRuntime observed by Reader, Project Detail, and the global
+  mini-player.
+
+Streaming playback persists a content bookmark at the start of each audible
+normalized-text paragraph and keeps `audioPosition` nil until a finalized
+audio identity exists. Voice/synthesis-speed changes stop an affected old
+stream while preserving that bookmark.
+
+The ±15-second Reader controls are intentionally mapped to the nearest
+paragraph boundary using estimated speech duration during streaming. Phase 7's
+finalized audio timeline is responsible for exact generation-bound audio
+seeking; Phase 6 does not invent exact seconds for a stream that has no durable
+audio revision yet.
+
+Reader paragraph transitions reuse one active audio session/engine sequence
+instead of tearing audio down between paragraphs. Pause intent is owned by
+ProjectRuntime so it remains stable during synthesis and between paragraphs.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

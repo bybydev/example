@@ -185,8 +185,9 @@ struct LibraryView: View {
             if let entry = model.continueListening {
                 Section("Continue Listening") {
                     NavigationLink {
-                        ProjectDetailRuntimeHost(
+                        ProjectReaderRuntimeHost(
                             projectID: entry.id,
+                            initialItemID: nil,
                             initialTitle: entry.snapshot.title,
                             onProjectChanged: {
                                 Task {

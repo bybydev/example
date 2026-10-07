@@ -242,6 +242,8 @@ final class ReaderViewModel {
             return "Synthesizing \(current)/\(total)…"
         case .playing:
             return "Playing"
+        case .paused:
+            return "Paused"
         case .finished:
             return "Finished"
         case .failed(let message):

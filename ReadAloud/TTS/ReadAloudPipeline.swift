@@ -8,6 +8,7 @@ final class ReadAloudPipeline {
         case warmingUp
         case synthesizing(current: Int, total: Int)
         case playing
+        case paused
         case finished
         case failed(String)
     }
@@ -59,6 +60,7 @@ final class ReadAloudPipeline {
 
     private var readingTask: Task<Void, Error>?
     private var activeOperationID: UUID?
+    private var isPaused = false
 
     private(set) var state: State = .idle
     var onEvent: ((Event) -> Void)?
@@ -83,9 +85,12 @@ final class ReadAloudPipeline {
     func read(
         text: String,
         voice: KokoroEngine.Voice = .heart,
-        speed: Float = 1.0
+        speed: Float = 1.0,
+        continuous: Bool = false
     ) async throws {
-        resetActiveOperation()
+        resetActiveOperation(
+            stopPlayback: !continuous
+        )
 
         let chunks = scheduler.chunks(
             for: text,
@@ -112,7 +117,9 @@ final class ReadAloudPipeline {
                 voice: voice,
                 speed: speed,
                 readStart: readStart,
-                operationID: operationID
+                operationID: operationID,
+                stopPlaybackOnCompletion:
+                    !continuous
             )
         }
 
@@ -131,7 +138,9 @@ final class ReadAloudPipeline {
 
             readingTask = nil
             activeOperationID = nil
-            setState(.finished)
+            if !continuous {
+                setState(.finished)
+            }
         } catch is CancellationError {
             finishCancellation(operationID)
             throw PipelineError.cancelled
@@ -209,6 +218,29 @@ final class ReadAloudPipeline {
         }
     }
 
+    func finishContinuousPlayback() {
+        activeOperationID = nil
+        readingTask?.cancel()
+        readingTask = nil
+        isPaused = false
+        playback.stop()
+        setState(.finished)
+    }
+
+    func pause() {
+        guard activeOperationID != nil, !isPaused else { return }
+        isPaused = true
+        playback.pause()
+        setState(.paused)
+    }
+
+    func resume() {
+        guard activeOperationID != nil, isPaused else { return }
+        isPaused = false
+        playback.resume()
+        setState(.playing)
+    }
+
     func stop() {
         resetActiveOperation()
         setState(.idle)
@@ -225,7 +257,8 @@ final class ReadAloudPipeline {
         voice: KokoroEngine.Voice,
         speed: Float,
         readStart: ContinuousClock.Instant,
-        operationID: UUID
+        operationID: UUID,
+        stopPlaybackOnCompletion: Bool
     ) async throws {
         try requireActiveOperation(operationID)
 
@@ -255,10 +288,12 @@ final class ReadAloudPipeline {
             let chunkNumber = offset + 1
 
             setState(
-                .synthesizing(
-                    current: chunkNumber,
-                    total: chunks.count
-                )
+                isPaused
+                    ? .paused
+                    : .synthesizing(
+                        current: chunkNumber,
+                        total: chunks.count
+                    )
             )
 
             onEvent?(
@@ -300,24 +335,31 @@ final class ReadAloudPipeline {
             )
 
             if offset == 0 {
-                setState(.playing)
+                setState(isPaused ? .paused : .playing)
             }
         }
 
-        setState(.playing)
+        setState(isPaused ? .paused : .playing)
         await playback.waitUntilDrained()
         try requireActiveOperation(operationID)
 
-        playback.stop()
+        if stopPlaybackOnCompletion {
+            playback.stop()
+        }
     }
 
-    private func resetActiveOperation() {
+    private func resetActiveOperation(
+        stopPlayback: Bool = true
+    ) {
         activeOperationID = nil
+        isPaused = false
 
         readingTask?.cancel()
         readingTask = nil
 
-        playback.stop()
+        if stopPlayback {
+            playback.stop()
+        }
     }
 
     private func finishCancellation(_ operationID: UUID) {

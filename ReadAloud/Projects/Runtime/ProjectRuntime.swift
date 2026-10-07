@@ -16,6 +16,7 @@ nonisolated enum ProjectRuntimePlaybackState: Equatable, Sendable {
     case warmingUp
     case synthesizing(current: Int, total: Int)
     case playing
+    case paused
     case finished
     case failed(String)
 }
@@ -25,6 +26,11 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
     var activeItemID: UUID?
     var queuedAudioBuffers: Int
     var queuedAudioDurationSeconds: Double
+    var currentParagraphRange: AudioSourceRange?
+    var currentParagraphIndex: Int?
+    var paragraphCount: Int
+    var itemProgress: Double
+    var projectProgress: Double
     var waitingGenerationJobs: Int
     var generatingJobs: Int
     var failedGenerationJobs: Int
@@ -34,6 +40,11 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
         activeItemID: UUID? = nil,
         queuedAudioBuffers: Int = 0,
         queuedAudioDurationSeconds: Double = 0,
+        currentParagraphRange: AudioSourceRange? = nil,
+        currentParagraphIndex: Int? = nil,
+        paragraphCount: Int = 0,
+        itemProgress: Double = 0,
+        projectProgress: Double = 0,
         waitingGenerationJobs: Int = 0,
         generatingJobs: Int = 0,
         failedGenerationJobs: Int = 0
@@ -42,6 +53,11 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
         self.activeItemID = activeItemID
         self.queuedAudioBuffers = queuedAudioBuffers
         self.queuedAudioDurationSeconds = queuedAudioDurationSeconds
+        self.currentParagraphRange = currentParagraphRange
+        self.currentParagraphIndex = currentParagraphIndex
+        self.paragraphCount = paragraphCount
+        self.itemProgress = itemProgress
+        self.projectProgress = projectProgress
         self.waitingGenerationJobs = waitingGenerationJobs
         self.generatingJobs = generatingJobs
         self.failedGenerationJobs = failedGenerationJobs
@@ -49,7 +65,7 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
 
     var hasActivePlaybackWork: Bool {
         switch playbackState {
-        case .loading, .warmingUp, .synthesizing, .playing:
+        case .loading, .warmingUp, .synthesizing, .playing, .paused:
             return true
         case .idle, .finished, .failed:
             return false
@@ -66,17 +82,20 @@ final class ProjectRuntime {
     let queueController: ProjectQueueController
     let cacheCoordinator: ProjectCacheCoordinator
 
-    private(set) var project: ProjectDocument?
+    var project: ProjectDocument?
     private(set) var manifest: ProjectContentManifest?
     private(set) var itemStates: [ProjectRuntimeItemState] = []
     private(set) var artworkURL: URL?
-    private(set) var activity = ProjectRuntimeActivity()
+    var activity = ProjectRuntimeActivity()
     private(set) var isLoading = false
     private(set) var didLoad = false
-    private(set) var revision: UInt64 = 0
+    var revision: UInt64 = 0
     private(set) var lastErrorMessage: String?
 
-    @ObservationIgnored private let pipeline: ReadAloudPipeline
+    @ObservationIgnored let pipeline: ReadAloudPipeline
+    @ObservationIgnored var playbackTask: Task<Void, Never>?
+    @ObservationIgnored var playbackOperationID: UUID?
+    @ObservationIgnored var readerPauseRequested = false
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
     init(
@@ -111,8 +130,8 @@ final class ProjectRuntime {
     }
 
     var currentItemID: UUID? {
-        project?.playback?.currentItemID
-            ?? activity.activeItemID
+        activity.activeItemID
+            ?? project?.playback?.currentItemID
     }
 
     var continueItemID: UUID? {
@@ -194,6 +213,8 @@ final class ProjectRuntime {
 
             project = loaded.project
             manifest = loaded.manifest
+            activity.projectProgress =
+                loaded.project.playback?.projectProgress ?? 0
             queueController.publish(loaded.queue)
             activity.waitingGenerationJobs =
                 queueController.waitingCount
@@ -240,6 +261,10 @@ final class ProjectRuntime {
         }
         var settings = project.settings
         settings.voiceID = voiceID
+        try stopPlaybackIfProjectNarrationChanges(
+            from: project.settings,
+            to: settings
+        )
         try await persistence.updateProjectSettings(settings)
         try await refresh()
     }
@@ -250,6 +275,10 @@ final class ProjectRuntime {
         }
         var settings = project.settings
         settings.speed = speed
+        try stopPlaybackIfProjectNarrationChanges(
+            from: project.settings,
+            to: settings
+        )
         try await persistence.updateProjectSettings(settings)
         try await refresh()
     }
@@ -271,6 +300,11 @@ final class ProjectRuntime {
             settings.voice.customValue = entry.resolved.voiceID
         }
 
+        try stopPlaybackIfItemNarrationChanges(
+            itemID: itemID,
+            from: entry.item.settings,
+            to: settings
+        )
         try await persistence.updateItemSettings(
             itemID: itemID,
             settings: settings
@@ -291,6 +325,11 @@ final class ProjectRuntime {
         settings.voice.mode = .custom
         settings.voice.customValue = voiceID
 
+        try stopPlaybackIfItemNarrationChanges(
+            itemID: itemID,
+            from: entry.item.settings,
+            to: settings
+        )
         try await persistence.updateItemSettings(
             itemID: itemID,
             settings: settings
@@ -315,6 +354,11 @@ final class ProjectRuntime {
             settings.speed.customValue = entry.resolved.speed
         }
 
+        try stopPlaybackIfItemNarrationChanges(
+            itemID: itemID,
+            from: entry.item.settings,
+            to: settings
+        )
         try await persistence.updateItemSettings(
             itemID: itemID,
             settings: settings
@@ -335,11 +379,67 @@ final class ProjectRuntime {
         settings.speed.mode = .custom
         settings.speed.customValue = speed
 
+        try stopPlaybackIfItemNarrationChanges(
+            itemID: itemID,
+            from: entry.item.settings,
+            to: settings
+        )
         try await persistence.updateItemSettings(
             itemID: itemID,
             settings: settings
         )
         try await refresh()
+    }
+
+    private func stopPlaybackIfProjectNarrationChanges(
+        from oldSettings: ProjectNarrationSettings,
+        to newSettings: ProjectNarrationSettings
+    ) throws {
+        guard activity.hasActivePlaybackWork,
+              let activeItemID = activity.activeItemID,
+              let active = itemState(activeItemID)
+        else {
+            return
+        }
+
+        let oldResolved = try NarrationSettingsResolver.resolve(
+            item: active.item.settings,
+            project: oldSettings
+        )
+        let newResolved = try NarrationSettingsResolver.resolve(
+            item: active.item.settings,
+            project: newSettings
+        )
+
+        if oldResolved != newResolved {
+            stopPlayback()
+        }
+    }
+
+    private func stopPlaybackIfItemNarrationChanges(
+        itemID: UUID,
+        from oldSettings: ItemNarrationSettings,
+        to newSettings: ItemNarrationSettings
+    ) throws {
+        guard activity.hasActivePlaybackWork,
+              activity.activeItemID == itemID,
+              let project
+        else {
+            return
+        }
+
+        let oldResolved = try NarrationSettingsResolver.resolve(
+            item: oldSettings,
+            project: project.settings
+        )
+        let newResolved = try NarrationSettingsResolver.resolve(
+            item: newSettings,
+            project: project.settings
+        )
+
+        if oldResolved != newResolved {
+            stopPlayback()
+        }
     }
 
     func enqueueGeneration(
@@ -415,13 +515,25 @@ final class ProjectRuntime {
     }
 
     func stopPlayback() {
+        playbackOperationID = nil
+        readerPauseRequested = false
+        playbackTask?.cancel()
+        playbackTask = nil
         pipeline.stop()
         activity.activeItemID = nil
+        activity.currentParagraphRange = nil
+        activity.currentParagraphIndex = nil
+        activity.paragraphCount = 0
+        activity.itemProgress = 0
     }
 
     func shutdown() {
         refreshGeneration &+= 1
         isLoading = false
+        playbackOperationID = nil
+        readerPauseRequested = false
+        playbackTask?.cancel()
+        playbackTask = nil
         pipeline.onEvent = nil
         pipeline.stop()
         activity = ProjectRuntimeActivity()
@@ -432,7 +544,19 @@ final class ProjectRuntime {
     ) {
         switch event {
         case .state(let state):
-            activity.playbackState = Self.playbackState(state)
+            if readerPauseRequested {
+                switch state {
+                case .idle, .finished, .failed:
+                    activity.playbackState =
+                        Self.playbackState(state)
+                case .loading, .warmingUp, .synthesizing,
+                     .playing, .paused:
+                    activity.playbackState = .paused
+                }
+            } else {
+                activity.playbackState =
+                    Self.playbackState(state)
+            }
         case .queueChanged(
             let queuedBuffers,
             let queuedDurationSeconds
@@ -470,6 +594,8 @@ final class ProjectRuntime {
             )
         case .playing:
             return .playing
+        case .paused:
+            return .paused
         case .finished:
             return .finished
         case .failed(let message):
@@ -494,7 +620,7 @@ final class ProjectRuntime {
         return url
     }
 
-    nonisolated private static func message(
+    nonisolated static func message(
         for error: Error
     ) -> String {
         if let localized = error as? LocalizedError,

@@ -7,6 +7,7 @@ final class ProjectRuntimeManager {
     private(set) var activeRuntime: ProjectRuntime?
     private(set) var loadedRuntimeIDs: Set<UUID> = []
     private(set) var initializationError: String?
+    private(set) var readerProjectID: UUID?
 
     @ObservationIgnored private let projectStore: ProjectStore?
     @ObservationIgnored private var runtimes: [UUID: ProjectRuntime] = [:]
@@ -124,6 +125,17 @@ final class ProjectRuntimeManager {
         try await runtime.refresh()
     }
 
+    func beginReader(_ runtime: ProjectRuntime) {
+        guard runtimes[runtime.id] === runtime else { return }
+        activeRuntime = runtime
+        readerProjectID = runtime.id
+    }
+
+    func endReader(_ runtime: ProjectRuntime) {
+        guard readerProjectID == runtime.id else { return }
+        readerProjectID = nil
+    }
+
     func makeActive(_ runtime: ProjectRuntime) {
         guard runtimes[runtime.id] === runtime else { return }
         activeRuntime = runtime
@@ -142,6 +154,9 @@ final class ProjectRuntimeManager {
         if activeRuntime === runtime {
             activeRuntime = nil
         }
+        if readerProjectID == runtime.id {
+            readerProjectID = nil
+        }
         runtime.shutdown()
         publishLoadedRuntimeIDs()
     }
@@ -151,6 +166,7 @@ final class ProjectRuntimeManager {
     ) {
         let removable = runtimes.values.filter { runtime in
             runtime.id != projectID
+                && runtime.id != readerProjectID
                 && !runtime.isBackgroundWorkActive
         }
 
@@ -174,6 +190,7 @@ final class ProjectRuntimeManager {
         runtimes.removeAll()
         loadedRuntimeIDs = []
         activeRuntime = nil
+        readerProjectID = nil
         for runtime in values {
             runtime.shutdown()
         }

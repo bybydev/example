@@ -23,58 +23,134 @@ struct RootView: View {
 
 private struct ProjectMiniPlayerHost: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @State private var readerPresented = false
 
     var body: some View {
-        if let runtime = runtimeManager.activeRuntime,
-           runtime.activity.hasActivePlaybackWork {
-            HStack(spacing: 12) {
-                Image(systemName: "waveform")
-                    .foregroundStyle(.secondary)
+        Group {
+            if let runtime = runtimeManager.activeRuntime,
+               runtimeManager.readerProjectID != runtime.id,
+               runtime.activity.hasActivePlaybackWork {
+                VStack(spacing: 6) {
+                    HStack(spacing: 12) {
+                        Button {
+                            readerPresented = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "waveform")
+                                    .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(runtime.project?.title ?? "ReadAloud")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 2
+                                ) {
+                                    Text(
+                                        runtime.project?.title
+                                            ?? "ReadAloud"
+                                    )
+                                    .font(
+                                        .subheadline.weight(
+                                            .semibold
+                                        )
+                                    )
+                                    .lineLimit(1)
 
-                    Text(activityLabel(runtime.activity))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                                    Text(
+                                        miniPlayerSubtitle(runtime)
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button {
+                            if runtime.isPlaybackPaused {
+                                runtime.resumePlayback()
+                            } else {
+                                runtime.pausePlayback()
+                            }
+                        } label: {
+                            Image(
+                                systemName:
+                                    runtime.isPlaybackPaused
+                                    ? "play.fill"
+                                    : "pause.fill"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(
+                            runtime.isPlaybackPaused
+                                ? "Resume"
+                                : "Pause"
+                        )
+
+                        Button {
+                            runtime.stopPlayback()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop Playback")
+                    }
+
+                    ProgressView(
+                        value: runtime.activity.projectProgress
+                    )
                 }
-
-                Spacer()
-
-                Button {
-                    runtime.stopPlayback()
-                } label: {
-                    Image(systemName: "stop.fill")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Stop Playback")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(.regularMaterial)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
+        }
+        .sheet(isPresented: $readerPresented) {
+            if let runtime = runtimeManager.activeRuntime {
+                NavigationStack {
+                    ProjectReaderView(
+                        runtime: runtime,
+                        initialItemID:
+                            runtime.activity.activeItemID
+                            ?? runtime.continueItemID
+                    )
+                }
+            }
         }
     }
 
-    private func activityLabel(
-        _ activity: ProjectRuntimeActivity
+    private func miniPlayerSubtitle(
+        _ runtime: ProjectRuntime
     ) -> String {
-        switch activity.playbackState {
+        let itemTitle = runtime.activity.activeItemID
+            .flatMap { runtime.itemState($0)?.item.title }
+
+        switch runtime.activity.playbackState {
         case .idle:
-            return "Idle"
+            return itemTitle ?? "Idle"
         case .loading:
-            return "Loading…"
+            return itemTitle.map { "\($0) · Loading…" }
+                ?? "Loading…"
         case .warmingUp:
-            return "Preparing…"
+            return itemTitle.map { "\($0) · Preparing…" }
+                ?? "Preparing…"
         case .synthesizing(let current, let total):
-            return "Preparing \(current) of \(total)…"
+            let status = "Preparing \(current) of \(total)…"
+            return itemTitle.map { "\($0) · \(status)" }
+                ?? status
         case .playing:
-            return "Playing"
+            return itemTitle.map { "\($0) · Playing" }
+                ?? "Playing"
+        case .paused:
+            return itemTitle.map { "\($0) · Paused" }
+                ?? "Paused"
         case .finished:
-            return "Finished"
+            return itemTitle ?? "Finished"
         case .failed:
-            return "Playback needs attention"
+            return itemTitle.map {
+                "\($0) · Needs attention"
+            } ?? "Playback needs attention"
         }
     }
 }
