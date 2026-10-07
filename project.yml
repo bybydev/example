@@ -41,6 +41,7 @@ fileGroups:
   - AppStore
   - docs
   - scripts
+  - testfixtures
 
 settings:
   base:
@@ -61,17 +62,13 @@ targets:
       Release: Config/Release.xcconfig
     sources:
       - path: ReadAloud
-      - path: Resources/Kokoro
+      - path: .build-resources/Kokoro
         type: folder
         buildPhase: resources
     preBuildScripts:
-      - name: Validate Kokoro Assets
+      - name: Stage Kokoro Resources
         script: |
-          bash "$SRCROOT/scripts/validate-kokoro-assets-for-build.sh"
-        inputFiles:
-          - $(SRCROOT)/Resources/Kokoro
-          - $(SRCROOT)/scripts/validate-kokoro-assets-for-build.sh
-          - $(SRCROOT)/scripts/kokoro-pins.sh
+          bash "$SRCROOT/scripts/stage-kokoro-resources-for-build.sh"
         basedOnDependencyAnalysis: false
     dependencies:
       - package: AppFoundation

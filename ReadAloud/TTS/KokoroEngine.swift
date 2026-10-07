@@ -78,9 +78,17 @@ actor KokoroEngine {
                 subdirectory: KokoroResources.bundleSubdirectory
             )
 
+            let assetPolicy: KokoroAssetPolicy = switch KokoroResources.resourceMode {
+            case .production:
+                .productionOnly
+            case .fixture:
+                .executableFixture
+            }
+
             tts = try await KokoroTTS.load(
                 resources: resources,
-                computePolicy: .gistDefault
+                computePolicy: .gistDefault,
+                assetPolicy: assetPolicy
             )
         } catch is CancellationError {
             throw EngineError.cancelled

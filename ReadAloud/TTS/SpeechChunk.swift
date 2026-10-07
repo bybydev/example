@@ -1,21 +1,24 @@
 import Foundation
 
-struct SpeechChunk: Identifiable, Equatable, Sendable {
+nonisolated struct SpeechChunk: Identifiable, Equatable, Sendable {
     let id: Int
     let text: String
     let targetBucketSeconds: Int
+    let maxChunkSeconds: Double
     let estimatedDurationSeconds: Double
 }
 
-struct SpeechChunkScheduler: Sendable {
-    private let availableBuckets = KokoroResources.buckets
+nonisolated struct SpeechChunkScheduler: Sendable {
+    private let availableBuckets: [Int]
+    private let keepsShortSourceChunks: Bool
 
-    private var firstBucketSeconds: Int {
-        availableBuckets.first ?? 3
-    }
-
-    private var steadyBucketSeconds: Int {
-        availableBuckets.dropFirst().first ?? firstBucketSeconds
+    init(
+        availableBuckets: [Int] = KokoroResources.buckets,
+        keepsShortSourceChunks: Bool = KokoroResources.resourceMode == .fixture
+    ) {
+        let normalized = Array(Set(availableBuckets.filter { $0 > 0 })).sorted()
+        self.availableBuckets = normalized.isEmpty ? [15] : normalized
+        self.keepsShortSourceChunks = keepsShortSourceChunks
     }
 
     func chunks(
@@ -34,9 +37,12 @@ struct SpeechChunkScheduler: Sendable {
         var isFirstChunk = true
 
         while !pending.isEmpty {
-            let preferredBucket = isFirstChunk
-                ? firstBucketSeconds
-                : steadyBucketSeconds
+            let preferredSourceSeconds = preferredSourceSeconds(
+                isFirstChunk: isFirstChunk
+            )
+            let preferredModelBucket = minimumBucket(
+                forSourceTarget: preferredSourceSeconds
+            )
 
             var unit = pending.removeFirst()
             var estimate = estimatedDuration(
@@ -44,12 +50,10 @@ struct SpeechChunkScheduler: Sendable {
                 speed: normalizedSpeed
             )
 
-            // Bucket targets are soft: retain a complete sentence or clause
-            // even when that means using the next larger bucket.
-            if estimate > Double(preferredBucket) {
+            if estimate > Double(preferredSourceSeconds) {
                 let pieces = split(
                     unit,
-                    targetDurationSeconds: Double(preferredBucket),
+                    targetDurationSeconds: Double(preferredSourceSeconds),
                     speed: normalizedSpeed
                 )
 
@@ -69,12 +73,7 @@ struct SpeechChunkScheduler: Sendable {
                 }
             }
 
-            var bucket = smallestBucket(
-                fitting: estimate,
-                minimum: preferredBucket
-            )
-
-            if estimate <= Double(preferredBucket) {
+            if estimate <= Double(preferredSourceSeconds) {
                 var combined = unit
 
                 while let next = pending.first {
@@ -84,7 +83,7 @@ struct SpeechChunkScheduler: Sendable {
                         speed: normalizedSpeed
                     )
 
-                    guard candidateEstimate <= Double(preferredBucket) else {
+                    guard candidateEstimate <= Double(preferredSourceSeconds) else {
                         break
                     }
 
@@ -97,14 +96,21 @@ struct SpeechChunkScheduler: Sendable {
                     of: unit,
                     speed: normalizedSpeed
                 )
-                bucket = preferredBucket
             }
+
+            let bucket = smallestBucket(
+                fitting: estimate,
+                minimum: preferredModelBucket
+            )
 
             result.append(
                 SpeechChunk(
                     id: index,
                     text: unit,
                     targetBucketSeconds: bucket,
+                    maxChunkSeconds: keepsShortSourceChunks
+                        ? Double(preferredSourceSeconds)
+                        : Double(bucket),
                     estimatedDurationSeconds: estimate
                 )
             )
@@ -116,9 +122,21 @@ struct SpeechChunkScheduler: Sendable {
         return result
     }
 
+    private func preferredSourceSeconds(isFirstChunk: Bool) -> Int {
+        if keepsShortSourceChunks {
+            return isFirstChunk ? 3 : 7
+        }
+
+        if isFirstChunk {
+            return availableBuckets.first ?? 3
+        }
+
+        return availableBuckets.dropFirst().first
+            ?? availableBuckets.first
+            ?? 3
+    }
+
     private func sentenceUnits(from text: String) -> [String] {
-        // A line wrap, decimal point, or abbreviation is not by itself the
-        // end of a sentence. Let Foundation find linguistic boundaries.
         let text = normalize(text)
         var units: [String] = []
         text.enumerateSubstrings(
@@ -149,12 +167,16 @@ struct SpeechChunkScheduler: Sendable {
         let characters = text.count
 
         let wordEstimate = Double(words) / 2.6
-        // Match the SDK's TextChunker so it does not re-split a sentence
-        // solely because our duration estimate selected too small a bucket.
         let characterEstimate = Double(characters) / 14.0
         let base = max(wordEstimate, characterEstimate, 0.25)
 
         return base / speed
+    }
+
+    private func minimumBucket(forSourceTarget target: Int) -> Int {
+        availableBuckets.first { $0 >= target }
+            ?? availableBuckets.last
+            ?? target
     }
 
     private func smallestBucket(
@@ -163,7 +185,7 @@ struct SpeechChunkScheduler: Sendable {
     ) -> Int {
         availableBuckets.first {
             $0 >= minimum && Double($0) >= duration
-        } ?? (availableBuckets.last ?? 30)
+        } ?? (availableBuckets.last ?? minimum)
     }
 
     private func split(
@@ -177,8 +199,6 @@ struct SpeechChunkScheduler: Sendable {
 
         for word in text.split(whereSeparator: { $0.isWhitespace }) {
             words.append(String(word))
-            // Keep closing quotes/brackets attached to their clause. Looking
-            // at word endings also protects numbers such as 1,000 and 10:30.
             let ending = word.reversed().first { !"\"'”’)]}".contains($0) }
             if let ending, ",;:—–".contains(ending) {
                 clauses.append(words.joined(separator: " "))
@@ -191,16 +211,26 @@ struct SpeechChunkScheduler: Sendable {
 
         var pieces: [String] = []
         var current = ""
+
         for clause in clauses {
-            if estimatedDuration(of: clause, speed: speed) > maximum {
+            let clauseDuration = estimatedDuration(
+                of: clause,
+                speed: speed
+            )
+            let requiresWordSplit = clauseDuration > maximum
+                || (keepsShortSourceChunks && clauseDuration > targetDurationSeconds)
+
+            if requiresWordSplit {
                 if !current.isEmpty {
                     pieces.append(current)
                     current = ""
                 }
-                // Only the model's largest bucket forces a word boundary.
+
                 pieces.append(contentsOf: splitByWords(
                     clause,
-                    maxDurationSeconds: maximum,
+                    maxDurationSeconds: keepsShortSourceChunks
+                        ? min(targetDurationSeconds, maximum)
+                        : maximum,
                     speed: speed
                 ))
                 continue
@@ -215,9 +245,11 @@ struct SpeechChunkScheduler: Sendable {
                 current = candidate
             }
         }
+
         if !current.isEmpty {
             pieces.append(current)
         }
+
         return pieces
     }
 

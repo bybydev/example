@@ -1,11 +1,57 @@
 import Foundation
 
 enum KokoroResources {
-    static let bundleSubdirectory = "Kokoro"
-    static let buckets = [3, 7, 10, 15, 30]
-    static let voiceIDs = ["af_heart", "af_bella", "am_michael"]
+    nonisolated enum ResourceMode: String, Sendable {
+        case production
+        case fixture
+    }
 
-    enum ResourceError: LocalizedError {
+    nonisolated private struct ResourceModeMarker: Decodable {
+        let mode: String
+    }
+
+    nonisolated private struct ManifestShape: Decodable {
+        let buckets: [Int]
+    }
+
+    nonisolated static let bundleSubdirectory = "Kokoro"
+    nonisolated static let resourceModeMarker = "ReadAloudResourceMode.json"
+    nonisolated static let voiceIDs = ["af_heart", "af_bella", "am_michael"]
+
+    nonisolated static var resourceMode: ResourceMode {
+        guard
+            let root = try? rootURL(),
+            let data = try? Data(
+                contentsOf: root.appendingPathComponent(resourceModeMarker)
+            ),
+            let marker = try? JSONDecoder().decode(
+                ResourceModeMarker.self,
+                from: data
+            ),
+            let mode = ResourceMode(rawValue: marker.mode)
+        else {
+            // Missing/invalid staging metadata must fail closed to production
+            // admission rather than enabling fixture assets accidentally.
+            return .production
+        }
+
+        return mode
+    }
+
+    nonisolated static var buckets: [Int] {
+        guard
+            let data = try? Data(contentsOf: manifestURL()),
+            let manifest = try? JSONDecoder().decode(ManifestShape.self, from: data),
+            !manifest.buckets.isEmpty,
+            manifest.buckets.allSatisfy({ $0 > 0 })
+        else {
+            return resourceMode == .fixture ? [15] : [3, 7, 10, 15, 30]
+        }
+
+        return manifest.buckets
+    }
+
+    nonisolated enum ResourceError: LocalizedError {
         case missingBundleResources
         case missingResource(String)
         case unsupportedBucket(Int)
@@ -25,7 +71,7 @@ enum KokoroResources {
         }
     }
 
-    static func rootURL(in bundle: Bundle = .main) throws -> URL {
+    nonisolated static func rootURL(in bundle: Bundle = .main) throws -> URL {
         guard let resourceURL = bundle.resourceURL else {
             throw ResourceError.missingBundleResources
         }
@@ -46,7 +92,7 @@ enum KokoroResources {
         return root
     }
 
-    static func manifestURL(in bundle: Bundle = .main) throws -> URL {
+    nonisolated static func manifestURL(in bundle: Bundle = .main) throws -> URL {
         try requiredURL(
             "KokoroRuntimeManifest.json",
             in: bundle,
@@ -54,7 +100,7 @@ enum KokoroResources {
         )
     }
 
-    static func durationModelURL(in bundle: Bundle = .main) throws -> URL {
+    nonisolated static func durationModelURL(in bundle: Bundle = .main) throws -> URL {
         try requiredURL(
             "coreml/kokoro_duration_t128.mlpackage",
             in: bundle,
@@ -62,7 +108,7 @@ enum KokoroResources {
         )
     }
 
-    static func f0ModelURL(
+    nonisolated static func f0ModelURL(
         for bucket: Int,
         in bundle: Bundle = .main
     ) throws -> URL {
@@ -74,7 +120,7 @@ enum KokoroResources {
         )
     }
 
-    static func decoderPreModelURL(
+    nonisolated static func decoderPreModelURL(
         for bucket: Int,
         in bundle: Bundle = .main
     ) throws -> URL {
@@ -86,7 +132,7 @@ enum KokoroResources {
         )
     }
 
-    static func generatorModelURL(
+    nonisolated static func generatorModelURL(
         for bucket: Int,
         in bundle: Bundle = .main
     ) throws -> URL {
@@ -98,7 +144,7 @@ enum KokoroResources {
         )
     }
 
-    static func voiceURL(
+    nonisolated static func voiceURL(
         for voiceID: String,
         in bundle: Bundle = .main
     ) throws -> URL {
@@ -113,7 +159,7 @@ enum KokoroResources {
         )
     }
 
-    static func vocabularyURL(in bundle: Bundle = .main) throws -> URL {
+    nonisolated static func vocabularyURL(in bundle: Bundle = .main) throws -> URL {
         try requiredURL(
             "runtime/kokoro-vocab.json",
             in: bundle,
@@ -121,7 +167,7 @@ enum KokoroResources {
         )
     }
 
-    static func hnsfWeightsURL(in bundle: Bundle = .main) throws -> URL {
+    nonisolated static func hnsfWeightsURL(in bundle: Bundle = .main) throws -> URL {
         try requiredURL(
             "runtime/hnsf_weights.json",
             in: bundle,
@@ -129,13 +175,13 @@ enum KokoroResources {
         )
     }
 
-    private static func validate(bucket: Int) throws {
+    nonisolated private static func validate(bucket: Int) throws {
         guard buckets.contains(bucket) else {
             throw ResourceError.unsupportedBucket(bucket)
         }
     }
 
-    private static func requiredURL(
+    nonisolated private static func requiredURL(
         _ relativePath: String,
         in bundle: Bundle,
         isDirectory: Bool

@@ -60,6 +60,29 @@ Verify an existing local asset set without replacing files:
 bash scripts/verify-kokoro-assets.sh
 ```
 
+
+### Executable fixture assets
+
+Download and verify the matching KokoroCoreML 1.1.0 executable fixture with:
+
+```bash
+bash scripts/download-kokoro-fixture.sh
+```
+
+The archive SHA-256 and fixture runtime revision are pinned in
+`scripts/kokoro-fixture-pins.sh`. The extracted fixture is stored under
+`testfixtures/kokoro` and remains uncommitted.
+
+Production is the default build resource mode. To explicitly stage the
+executable fixture instead:
+
+```bash
+READALOUD_KOKORO_RESOURCE_MODE=fixture xcodebuild ...
+```
+
+Fixture mode never downloads the production models.
+
+
 The asset pipeline pins the upstream Hugging Face revision and first verifies
 the full-profile runtime manifest against `scripts/kokoro-checksums.sha256`.
 Every selected model file, voice, vocab file, and hn-NSF weight file is then
@@ -78,8 +101,20 @@ manifest remain ignored by Git.
 
 ## App resource bundling
 
-XcodeGen copies `Resources/Kokoro` into the app as a folder resource named
-`Kokoro`, preserving the upstream SDK layout:
+ReadAloud keeps production and fixture sources separate, then stages exactly one
+validated resource root into `.build-resources/Kokoro` before the resource copy
+phase. XcodeGen bundles that staged folder as `Kokoro`.
+
+- `production` mode validates and stages `Resources/Kokoro`
+- `fixture` mode validates and stages `testfixtures/kokoro`
+- the staged root records `ReadAloudResourceMode.json`
+- runtime admission uses `.productionOnly` for production and
+  `.executableFixture` only for an explicitly staged fixture build
+
+This prevents production and synthetic model trees from being bundled together
+and keeps KokoroCoreML's manifest-keyed compiled caches isolated.
+
+The staged bundle preserves the upstream SDK layout:
 
 ```text
 Kokoro/
@@ -96,10 +131,17 @@ Kokoro/
     └── hnsf_weights.json
 ```
 
-A pre-build validation script fails with a direct message if the downloaded
-resource set is incomplete or declares an SDK commit different from the vendored
-source pin. `KokoroResources` provides app-side URLs for the
-manifest, model packages, voices, vocab, and hn-NSF weights.
+The pre-build staging script validates the selected mode before copying it.
+Production keeps the existing verified provenance, five-bucket model set, and
+synthetic-asset rejection. Fixture validation requires the exact
+`fixture-executable-v1` profile, the published 1.1.0 runtime revision, one
+15-second acoustic bucket, four model packages, three synthetic voices, and the
+declared file/tree hashes.
+
+`KokoroResources` reads the staged manifest's available buckets so the
+scheduler does not invent missing fixture models. The streaming planner still
+uses short 3-second/7-second source chunks; the Kokoro provider maps those
+chunks onto the selected bundle's available model buckets.
 
 The source `.mlpackage` directories are bundled intact. The upstream SDK
 compiles and caches Core ML models in its writable manifest-keyed cache rather

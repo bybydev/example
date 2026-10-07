@@ -14,12 +14,21 @@ build/
 .build/
 .swiftpm/
 
-# Downloaded Kokoro assets
+# Downloaded production Kokoro assets
 Resources/Kokoro/*
 !Resources/Kokoro/.gitkeep
+
+# Downloaded executable Kokoro fixture
+testfixtures/kokoro/*
+!testfixtures/kokoro/.gitkeep
+
+# Generated build resource staging
+.build-resources/Kokoro/*
+!.build-resources/Kokoro/.gitkeep
 
 # Pinned upstream Kokoro SDK checkout
 Vendor/kokoro-coreml/
 
-# Resumable Kokoro download cache
+# Resumable Kokoro download caches
 .cache/kokoro-downloads/
+.cache/kokoro-fixtures/

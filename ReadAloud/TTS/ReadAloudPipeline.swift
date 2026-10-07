@@ -273,7 +273,7 @@ final class ReadAloudPipeline {
                 text: chunk.text,
                 voice: voice,
                 speed: speed,
-                maxChunkSeconds: Double(chunk.targetBucketSeconds)
+                maxChunkSeconds: chunk.maxChunkSeconds
             )
 
             try requireActiveOperation(operationID)
