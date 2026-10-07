@@ -1,5 +1,18 @@
 # ReadAloud Kokoro Core ML Prototype Plan
 
+> **Status: historical prototype plan.**
+>
+> This file documents the completed Kokoro prototype work and its intentionally narrow original non-goals. It is **not** the implementation plan for ReadAloud 1.0.
+>
+> For current product work, use:
+>
+> - `docs/PRE_IMPLEMENTATION.md`
+> - `docs/ARCHITECTURE.md`
+> - `docs/PERSISTENCE_CONTRACT.md`
+> - `docs/IMPLEMENTATION_PLAN.md`
+> - `docs/PRODUCT_PLAN.md`
+> - `docs/DESIGN.md`
+
 ## Goal
 
 Build a minimal iOS app that can read text continuously with Kokoro 82M Core ML and expose enough runtime metrics to judge real-time performance on-device.

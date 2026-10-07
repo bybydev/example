@@ -1,40 +1,49 @@
 # ReadAloud
 
-Minimal iOS prototype for local Kokoro Core ML text-to-speech.
+ReadAloud is evolving from a local Kokoro Core ML prototype into a sophisticated offline document-to-speech reader for iPhone.
+
+The current product direction, architecture, persistence contracts, design, and implementation phases live under `docs/`.
 
 ## Project configuration
 
 - Bundle ID: `com.hoangbkit.readaloud`
 - Development team: `J458WW3452`
-- Minimum iOS: 18.0
-- Minimum macOS: 15.0
+- Product baseline: iOS 26+ for iPhone
+- iPad support: No
+- The prototype macOS target is not part of ReadAloud 1.0
 - Project generation: XcodeGen
-- Generated Xcode project is intentionally not committed.
+- `project.yml` is the source of truth; the generated Xcode project and `Package.resolved` are checked-in owner-managed artifacts.
+
+
+## 1.0 documentation
+
+Read these before implementation:
+
+- `docs/IOS_APP_BASELINE.md` — common setup reused from Spokio iOS, MiLove, and Palette
+- `docs/CI_RELEASE.md` — manual branch-aware Fast CI, Full CI, and Release contract
+- `docs/PRE_IMPLEMENTATION.md` — decisions that must be locked before product work
+- `docs/ARCHITECTURE.md` — target system architecture
+- `docs/PERSISTENCE_CONTRACT.md` — durable project/runtime contract
+- `docs/IMPLEMENTATION_PLAN.md` — phased implementation plan
+- `docs/PRODUCT_PLAN.md` — product scope and quality bar
+- `docs/DESIGN.md` — iPhone UX design
+- `AGENTS.md` — repository working rules
+
+`PLAN.md` documents the completed prototype effort and is retained only as historical context.
 
 ## Kokoro SDK
 
-ReadAloud consumes the `KokoroTTS` product from the sibling local
-`KokoroCoreML` Swift package.
+ReadAloud consumes the `KokoroTTS` product from KokoroCoreML, with the 1.0 implementation baseline pinned to stable tag `1.1.0`.
 
-Keep the repositories next to each other:
+KokoroCoreML 1.1.0 also publishes the executable fixture archive used by ReadAloud fixture builds. ReadAloud consumes that artifact; it does not own the fixture generator.
 
-```text
-Developer/
-├── KokoroCoreML/
-└── ReadAloud/
-```
-
-Prepare the verified Kokoro assets with:
+Prepare the verified production Kokoro assets with:
 
 ```bash
 bash scripts/bootstrap.sh
 ```
 
-XcodeGen consumes the local package at:
-
-```text
-../KokoroCoreML
-```
+XcodeGen should consume the released package using `exactVersion: 1.1.0` during Phase 0.
 
 ## Kokoro assets
 
@@ -191,8 +200,6 @@ For a physical iPhone, generate the project and build the `ReadAloud` scheme wit
 
 ## Current scope
 
-Phases 0-5, consolidation, and the static correctness pass are implemented.
-The correctness pass aligns the vendored SDK with the pinned runtime manifest,
-enforces that relationship during asset/build validation, and connects
-AVAudioPlayerNode using Kokoro's actual PCM format. See `PLAN.md` for the
-implementation breakdown.
+The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.
+
+Use the 1.0 docs above as the source of truth. `PLAN.md` is historical.
