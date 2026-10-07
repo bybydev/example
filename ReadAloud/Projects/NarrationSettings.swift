@@ -13,8 +13,18 @@ nonisolated enum ReadAloudNarrationCatalog {
     ]
 
     static let synthesisSpeeds: [Double] = [0.8, 1.0, 1.2]
-    static let appDefaultVoiceID = "af_heart"
-    static let appDefaultSpeed = 1.0
+    static let freeDefaultVoiceID =
+        "af_heart"
+
+    static var appDefaultVoiceID: String {
+        ReadAloudPreferences
+            .defaultVoiceID
+    }
+
+    static var appDefaultSpeed: Double {
+        ReadAloudPreferences
+            .defaultSpeed
+    }
     static let synthesisConfigVersion = 1
 
     static func voiceName(_ id: String) -> String {
@@ -29,47 +39,79 @@ nonisolated struct ResolvedNarrationSettings: Equatable, Sendable {
 
 nonisolated enum NarrationSettingsResolver {
     static func resolveProject(
-        _ project: ProjectNarrationSettings
+        _ project: ProjectNarrationSettings,
+        hasPro: Bool = true
     ) -> ResolvedNarrationSettings {
-        ResolvedNarrationSettings(
-            voiceID: project.voiceID
-                ?? ReadAloudNarrationCatalog.appDefaultVoiceID,
-            speed: project.speed
-                ?? ReadAloudNarrationCatalog.appDefaultSpeed
+        let requestedVoiceID =
+            project.voiceID
+            ?? ReadAloudNarrationCatalog
+                .appDefaultVoiceID
+
+        return ResolvedNarrationSettings(
+            voiceID:
+                ReadAloudAccessPolicy
+                    .effectiveVoiceID(
+                        requestedVoiceID,
+                        hasPro: hasPro
+                    ),
+            speed:
+                project.speed
+                ?? ReadAloudNarrationCatalog
+                    .appDefaultSpeed
         )
     }
 
     static func resolve(
         item: ItemNarrationSettings,
-        project: ProjectNarrationSettings
+        project: ProjectNarrationSettings,
+        hasPro: Bool = true
     ) throws -> ResolvedNarrationSettings {
-        let projectResolved = resolveProject(project)
+        let projectResolved =
+            resolveProject(
+                project,
+                hasPro: hasPro
+            )
+
+        guard hasPro else {
+            return projectResolved
+        }
 
         let voiceID: String
         switch item.voice.mode {
         case .inherit:
-            voiceID = projectResolved.voiceID
+            voiceID =
+                projectResolved.voiceID
         case .custom:
-            guard let custom = item.voice.customValue,
+            guard let custom =
+                    item.voice.customValue,
                   !custom.isEmpty else {
-                throw ProjectStoreError.invalidData(
-                    "Custom item voice requires a remembered voice."
-                )
+                throw ProjectStoreError
+                    .invalidData(
+                        "Custom item voice requires a remembered voice."
+                    )
             }
-            voiceID = custom
+            voiceID =
+                ReadAloudAccessPolicy
+                    .effectiveVoiceID(
+                        custom,
+                        hasPro: true
+                    )
         }
 
         let speed: Double
         switch item.speed.mode {
         case .inherit:
-            speed = projectResolved.speed
+            speed =
+                projectResolved.speed
         case .custom:
-            guard let custom = item.speed.customValue,
+            guard let custom =
+                    item.speed.customValue,
                   custom.isFinite,
                   custom > 0 else {
-                throw ProjectStoreError.invalidData(
-                    "Custom item speed requires a valid remembered speed."
-                )
+                throw ProjectStoreError
+                    .invalidData(
+                        "Custom item speed requires a valid remembered speed."
+                    )
             }
             speed = custom
         }

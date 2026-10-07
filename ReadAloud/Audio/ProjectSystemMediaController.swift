@@ -10,7 +10,8 @@ final class ProjectSystemMediaController {
         case play
         case pause
         case togglePlayPause
-        case skip(Double)
+        case skipForward
+        case skipBackward
         case next
         case previous
         case seek(Double)
@@ -139,6 +140,7 @@ final class ProjectSystemMediaController {
             ? .paused
             : .playing
 
+        updateSkipIntervals()
         updateCommandAvailability(
             runtime
         )
@@ -178,14 +180,7 @@ final class ProjectSystemMediaController {
         let center =
             MPRemoteCommandCenter.shared()
 
-        center.skipForwardCommand
-            .preferredIntervals = [
-                NSNumber(value: 15),
-            ]
-        center.skipBackwardCommand
-            .preferredIntervals = [
-                NSNumber(value: 15),
-            ]
+        updateSkipIntervals()
 
         addTarget(
             to: center.playCommand,
@@ -202,11 +197,11 @@ final class ProjectSystemMediaController {
         )
         addTarget(
             to: center.skipForwardCommand,
-            action: .skip(15)
+            action: .skipForward
         )
         addTarget(
             to: center.skipBackwardCommand,
-            action: .skip(-15)
+            action: .skipBackward
         )
         addTarget(
             to: center.nextTrackCommand,
@@ -314,9 +309,20 @@ final class ProjectSystemMediaController {
                 )
             }
 
-        case .skip(let seconds):
+        case .skipForward:
             try? runtime.seekPlayback(
-                by: seconds
+                by: Double(
+                    ReadAloudPreferences
+                        .skipInterval
+                )
+            )
+
+        case .skipBackward:
+            try? runtime.seekPlayback(
+                by: -Double(
+                    ReadAloudPreferences
+                        .skipInterval
+                )
             )
 
         case .next:
@@ -355,6 +361,25 @@ final class ProjectSystemMediaController {
         }
 
         publish(runtime)
+    }
+
+    private func updateSkipIntervals() {
+        let interval =
+            NSNumber(
+                value:
+                    ReadAloudPreferences
+                        .skipInterval
+            )
+        let center =
+            MPRemoteCommandCenter.shared()
+        center.skipForwardCommand
+            .preferredIntervals = [
+                interval,
+            ]
+        center.skipBackwardCommand
+            .preferredIntervals = [
+                interval,
+            ]
     }
 
     private func updateCommandAvailability(

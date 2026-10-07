@@ -93,6 +93,8 @@ final class ProjectRuntime {
     var lastErrorMessage: String?
 
     @ObservationIgnored let pipeline: ReadAloudPipeline
+    @ObservationIgnored let hasProAccess:
+        @MainActor () -> Bool
     @ObservationIgnored var playbackTask: Task<Void, Never>?
     @ObservationIgnored var playbackOperationID: UUID?
     @ObservationIgnored var readerPauseRequested = false
@@ -109,11 +111,15 @@ final class ProjectRuntime {
         id: UUID,
         packageURL: URL,
         persistence: ProjectRuntimePersistenceBridge,
+        hasPro:
+            @escaping @MainActor () -> Bool
+            = { false },
         pipeline: ReadAloudPipeline = ReadAloudPipeline()
     ) {
         self.id = id
         self.packageURL = packageURL.standardizedFileURL
         self.persistence = persistence
+        self.hasProAccess = hasPro
         self.pipeline = pipeline
         self.queueController = ProjectQueueController()
         self.cacheCoordinator = ProjectCacheCoordinator(
@@ -129,9 +135,24 @@ final class ProjectRuntime {
         }
     }
 
+    var hasPro: Bool {
+        hasProAccess()
+    }
+
     var blocksQueuedGeneration: Bool {
-        activity.hasActivePlaybackWork
-            && finalAudioAsset == nil
+        guard activity
+            .hasActivePlaybackWork
+        else {
+            return false
+        }
+
+        if finalAudioAsset == nil {
+            return true
+        }
+
+        return !hasPro
+            || !ReadAloudPreferences
+                .generateWhileListening
     }
 
     var isBackgroundWorkActive: Bool {
@@ -141,7 +162,8 @@ final class ProjectRuntime {
 
     var resolvedProjectSettings: ResolvedNarrationSettings {
         NarrationSettingsResolver.resolveProject(
-            project?.settings ?? ProjectNarrationSettings()
+            project?.settings ?? ProjectNarrationSettings(),
+            hasPro: hasPro
         )
     }
 
@@ -213,7 +235,8 @@ final class ProjectRuntime {
 
                 let resolved = try NarrationSettingsResolver.resolve(
                     item: item.settings,
-                    project: loaded.project.settings
+                    project: loaded.project.settings,
+                    hasPro: hasPro
                 )
                 let generationKey =
                     try ReadAloudSynthesisContract.generationKey(
@@ -285,6 +308,93 @@ final class ProjectRuntime {
         }
     }
 
+    func refreshForExternalPreferencesChange()
+        async
+    {
+        guard let project else {
+            try? await refresh()
+            return
+        }
+
+        var affectedItemIDs =
+            Set<UUID>()
+
+        for state in itemStates {
+            do {
+                let resolved =
+                    try NarrationSettingsResolver
+                        .resolve(
+                            item:
+                                state.item
+                                    .settings,
+                            project:
+                                project
+                                    .settings,
+                            hasPro: hasPro
+                        )
+                if resolved
+                    != state.resolved
+                {
+                    affectedItemIDs
+                        .insert(
+                            state.id
+                        )
+                }
+            } catch {
+                lastErrorMessage =
+                    Self.message(
+                        for: error
+                    )
+                return
+            }
+        }
+
+        queueController
+            .setPlaybackActive(true)
+
+        defer {
+            prefetchScheduledItemIDs
+                .removeAll()
+            queueController
+                .setPlaybackActive(
+                    blocksQueuedGeneration
+                )
+        }
+
+        if let activeItemID =
+                activity.activeItemID,
+           affectedItemIDs
+            .contains(activeItemID)
+        {
+            await persistPlaybackCheckpoint()
+            stopPlayback()
+            queueController
+                .setPlaybackActive(true)
+        }
+
+        do {
+            if !affectedItemIDs.isEmpty {
+                _ = try await persistence
+                    .removeGenerationJobs(
+                        itemIDs:
+                            affectedItemIDs,
+                        states: [
+                            .queued,
+                            .generating,
+                            .failed,
+                        ]
+                    )
+            }
+
+            try await refresh()
+        } catch {
+            lastErrorMessage =
+                Self.message(
+                    for: error
+                )
+        }
+    }
+
     func persistPlayback(
         _ playback: ProjectPlaybackState?
     ) async throws {
@@ -293,6 +403,19 @@ final class ProjectRuntime {
     }
 
     func updateProjectVoice(_ voiceID: String?) async throws {
+        if let voiceID,
+           !ReadAloudAccessPolicy
+            .canUseVoice(
+                voiceID,
+                hasPro: hasPro
+            )
+        {
+            throw ReadAloudAccessError
+                .requiresPro(
+                    .advancedVoices
+                )
+        }
+
         guard let project else {
             throw ProjectStoreError.projectNotFound(id)
         }
@@ -358,6 +481,14 @@ final class ProjectRuntime {
         itemID: UUID,
         mode: ItemSettingMode
     ) async throws {
+        if mode == .custom {
+            try ReadAloudAccessPolicy
+                .requirePro(
+                    .itemNarrationOverrides,
+                    hasPro: hasPro
+                )
+        }
+
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -396,11 +527,29 @@ final class ProjectRuntime {
         itemID: UUID,
         voiceID: String
     ) async throws {
+        try ReadAloudAccessPolicy
+            .requirePro(
+                .itemNarrationOverrides,
+                hasPro: hasPro
+            )
+
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
             )
         }
+        guard ReadAloudAccessPolicy
+            .canUseVoice(
+                voiceID,
+                hasPro: hasPro
+            )
+        else {
+            throw ReadAloudAccessError
+                .requiresPro(
+                    .advancedVoices
+                )
+        }
+
         var settings = entry.item.settings
         settings.voice.mode = .custom
         settings.voice.customValue = voiceID
@@ -430,6 +579,14 @@ final class ProjectRuntime {
         itemID: UUID,
         mode: ItemSettingMode
     ) async throws {
+        if mode == .custom {
+            try ReadAloudAccessPolicy
+                .requirePro(
+                    .itemNarrationOverrides,
+                    hasPro: hasPro
+                )
+        }
+
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -468,6 +625,12 @@ final class ProjectRuntime {
         itemID: UUID,
         speed: Double
     ) async throws {
+        try ReadAloudAccessPolicy
+            .requirePro(
+                .itemNarrationOverrides,
+                hasPro: hasPro
+            )
+
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -513,7 +676,8 @@ final class ProjectRuntime {
                         item:
                             state.item.settings,
                         project:
-                            oldSettings
+                            oldSettings,
+                        hasPro: hasPro
                     )
             let newResolved =
                 try NarrationSettingsResolver
@@ -521,7 +685,8 @@ final class ProjectRuntime {
                         item:
                             state.item.settings,
                         project:
-                            newSettings
+                            newSettings,
+                        hasPro: hasPro
                     )
 
             if oldResolved != newResolved {
@@ -545,11 +710,13 @@ final class ProjectRuntime {
 
         let oldResolved = try NarrationSettingsResolver.resolve(
             item: active.item.settings,
-            project: oldSettings
+            project: oldSettings,
+            hasPro: hasPro
         )
         let newResolved = try NarrationSettingsResolver.resolve(
             item: active.item.settings,
-            project: newSettings
+            project: newSettings,
+            hasPro: hasPro
         )
 
         if oldResolved != newResolved {
@@ -571,11 +738,13 @@ final class ProjectRuntime {
 
         let oldResolved = try NarrationSettingsResolver.resolve(
             item: oldSettings,
-            project: project.settings
+            project: project.settings,
+            hasPro: hasPro
         )
         let newResolved = try NarrationSettingsResolver.resolve(
             item: newSettings,
-            project: project.settings
+            project: project.settings,
+            hasPro: hasPro
         )
 
         if oldResolved != newResolved {
@@ -606,6 +775,12 @@ final class ProjectRuntime {
     }
 
     func enqueueRemainingGeneration() async throws {
+        try ReadAloudAccessPolicy
+            .requirePro(
+                .bulkGeneration,
+                hasPro: hasPro
+            )
+
         let requests = itemStates.compactMap { entry in
             switch entry.generationStatus.state {
             case .readyOffline, .generating, .waiting:

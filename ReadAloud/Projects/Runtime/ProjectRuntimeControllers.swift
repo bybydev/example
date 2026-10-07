@@ -269,8 +269,7 @@ final class ProjectQueueController {
         }
 
         if runtime?
-            .activity
-            .hasActivePlaybackWork
+            .blocksQueuedGeneration
             == true,
            !executionQueue.isPaused
         {

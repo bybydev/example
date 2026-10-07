@@ -1,3 +1,4 @@
+import AppFoundation
 import Foundation
 import SwiftUI
 
@@ -515,11 +516,16 @@ struct ProjectReaderView: View {
 
             HStack(spacing: 34) {
                 Button {
-                    seek(by: -15)
+                    seek(
+                        by: -Double(
+                            ReadAloudPreferences
+                                .skipInterval
+                        )
+                    )
                 } label: {
                     Image(
                         systemName:
-                            "gobackward.15"
+                            "gobackward.\(ReadAloudPreferences.skipInterval)"
                     )
                     .font(.title2)
                 }
@@ -556,11 +562,16 @@ struct ProjectReaderView: View {
                 )
 
                 Button {
-                    seek(by: 15)
+                    seek(
+                        by: Double(
+                            ReadAloudPreferences
+                                .skipInterval
+                        )
+                    )
                 } label: {
                     Image(
                         systemName:
-                            "goforward.15"
+                            "goforward.\(ReadAloudPreferences.skipInterval)"
                     )
                     .font(.title2)
                 }
@@ -1148,7 +1159,9 @@ struct ProjectReaderView: View {
 
 private struct ReaderChaptersSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
     @State private var searchText = ""
+    @State private var paywallPresented = false
 
     let runtime: ProjectRuntime
     let selectedItemID: UUID?
@@ -1221,6 +1234,12 @@ private struct ReaderChaptersSheet: View {
 
                 Section {
                     Button {
+                        guard purchases.hasPro
+                        else {
+                            paywallPresented = true
+                            return
+                        }
+
                         Task {
                             do {
                                 try await runtime
@@ -1250,6 +1269,12 @@ private struct ReaderChaptersSheet: View {
             .navigationBarTitleDisplayMode(
                 .inline
             )
+            .sheet(
+                isPresented:
+                    $paywallPresented
+            ) {
+                ReadAloudProPaywall()
+            }
             .toolbar {
                 ToolbarItem(
                     placement:

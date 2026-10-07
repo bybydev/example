@@ -327,6 +327,14 @@ extension ProjectRuntime {
         itemIDs: Set<UUID>,
         regenerate: Bool
     ) async throws {
+        if itemIDs.count > 1 {
+            try ReadAloudAccessPolicy
+                .requirePro(
+                    .bulkGeneration,
+                    hasPro: hasPro
+                )
+        }
+
         let requests =
             itemStates.compactMap {
                 state
@@ -369,6 +377,12 @@ extension ProjectRuntime {
     func enqueueAllGeneration()
         async throws
     {
+        try ReadAloudAccessPolicy
+            .requirePro(
+                .bulkGeneration,
+                hasPro: hasPro
+            )
+
         try await enqueueSelectedGeneration(
             itemIDs:
                 Set(itemStates.map(\.id)),
@@ -432,6 +446,12 @@ extension ProjectRuntime {
     func clearCacheAndRegenerate(
         itemIDs: Set<UUID>
     ) async throws {
+        try ReadAloudAccessPolicy
+            .requirePro(
+                .advancedRegeneration,
+                hasPro: hasPro
+            )
+
         guard !itemIDs.isEmpty else {
             return
         }
@@ -494,8 +514,16 @@ extension ProjectRuntime {
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard !prefetchScheduledItemIDs
-            .contains(itemID),
+        guard hasPro else {
+            return
+        }
+
+        let prefetchCount =
+            ReadAloudPreferences
+                .prefetchCount
+        guard prefetchCount > 0,
+              !prefetchScheduledItemIDs
+                .contains(itemID),
               let currentIndex =
                 itemStates.firstIndex(
                     where: {
@@ -513,7 +541,9 @@ extension ProjectRuntime {
         let upperBound =
             min(
                 itemStates.count,
-                currentIndex + 3
+                currentIndex
+                    + 1
+                    + prefetchCount
             )
         guard currentIndex + 1
                 < upperBound

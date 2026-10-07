@@ -153,7 +153,23 @@ final class LibraryModel {
         }
     }
 
-    func importFile(_ url: URL) async -> Bool {
+    func importFile(
+        _ url: URL,
+        hasPro: Bool
+    ) async -> Bool {
+        do {
+            try ReadAloudAccessPolicy
+                .requireLibraryCapacity(
+                    existingProjectCount:
+                        entries.count,
+                    hasPro: hasPro
+                )
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+
         guard let importer else {
             errorMessage = initializationError ?? "Import is unavailable."
             return false
@@ -189,8 +205,22 @@ final class LibraryModel {
 
     func importPaste(
         text: String,
-        suggestedTitle: String?
+        suggestedTitle: String?,
+        hasPro: Bool
     ) async -> Bool {
+        do {
+            try ReadAloudAccessPolicy
+                .requireLibraryCapacity(
+                    existingProjectCount:
+                        entries.count,
+                    hasPro: hasPro
+                )
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+
         guard let importer else {
             errorMessage = initializationError ?? "Import is unavailable."
             return false

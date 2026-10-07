@@ -1,8 +1,10 @@
+import AppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(PurchaseManager.self) private var purchases
     @State private var model = LibraryModel()
     @State private var isFileImporterPresented = false
     @State private var allowedContentTypes: [UTType] = [.data]
@@ -14,6 +16,7 @@ struct LibraryView: View {
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
     @State private var importTask: Task<Void, Never>?
+    @State private var paywallPresented = false
 
     var body: some View {
         @Bindable var model = model
@@ -72,6 +75,12 @@ struct LibraryView: View {
                     startPasteImport(text: text, title: title)
                 }
             )
+        }
+        .sheet(
+            isPresented:
+                $paywallPresented
+        ) {
+            ReadAloudProPaywall()
         }
         .sheet(item: $infoTarget) { entry in
             ProjectInfoSheet(entry: entry)
@@ -309,6 +318,8 @@ struct LibraryView: View {
     @ViewBuilder
     private var addMenuItems: some View {
         Button {
+            guard canCreateProject()
+            else { return }
             presentFileImporter(
                 types: [UTType(filenameExtension: "epub") ?? .data]
             )
@@ -317,18 +328,24 @@ struct LibraryView: View {
         }
 
         Button {
+            guard canCreateProject()
+            else { return }
             presentFileImporter(types: [.pdf])
         } label: {
             Label("Import PDF", systemImage: "doc.richtext")
         }
 
         Button {
+            guard canCreateProject()
+            else { return }
             presentFileImporter(types: documentTypes)
         } label: {
             Label("Import Document", systemImage: "doc.text")
         }
 
         Button {
+            guard canCreateProject()
+            else { return }
             pasteDraft = PasteDraft()
             isPastePresented = true
         } label: {
@@ -374,6 +391,25 @@ struct LibraryView: View {
         return resolved.isEmpty ? [.data] : resolved
     }
 
+    private func canCreateProject()
+        -> Bool
+    {
+        let allowed =
+            ReadAloudAccessPolicy
+                .canCreateProject(
+                    existingProjectCount:
+                        model.entries.count,
+                    hasPro:
+                        purchases.hasPro
+                )
+
+        if !allowed {
+            paywallPresented = true
+        }
+
+        return allowed
+    }
+
     private func presentFileImporter(types: [UTType]) {
         allowedContentTypes = types
         isFileImporterPresented = true
@@ -386,8 +422,14 @@ struct LibraryView: View {
 
     private func startFileImport(_ url: URL) {
         importTask?.cancel()
+        guard canCreateProject()
+        else { return }
+
         importTask = Task {
-            _ = await model.importFile(url)
+            _ = await model.importFile(
+                url,
+                hasPro: purchases.hasPro
+            )
             importTask = nil
         }
     }
@@ -400,7 +442,8 @@ struct LibraryView: View {
         importTask = Task {
             _ = await model.importPaste(
                 text: text,
-                suggestedTitle: title
+                suggestedTitle: title,
+                hasPro: purchases.hasPro
             )
             importTask = nil
             if model.errorMessage == nil {

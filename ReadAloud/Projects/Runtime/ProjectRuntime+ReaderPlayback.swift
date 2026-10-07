@@ -557,9 +557,18 @@ extension ProjectRuntime {
                 try ReadAloudSynthesisContract
                     .runtimeRevision()
 
+            let playbackEndIndex =
+                ReadAloudPreferences
+                    .continueToNextChapter
+                ? itemStates.count
+                : min(
+                    itemStates.count,
+                    initialIndex + 1
+                )
+
             for itemIndex
                 in initialIndex
-                    ..< itemStates.count {
+                    ..< playbackEndIndex {
                 try requirePlaybackOperation(
                     operationID
                 )
@@ -687,12 +696,21 @@ extension ProjectRuntime {
             finalAudioPositionSeconds = 0
             finalAudioPlaybackOriginSeconds = 0
             activity.itemProgress = 1
-            activity.projectProgress = 1
+
+            let reachedProjectEnd =
+                playbackEndIndex
+                    == itemStates.count
+
+            if reachedProjectEnd {
+                activity.projectProgress = 1
+            }
 
             if var playback =
                 project?.playback {
-                playback.projectProgress =
-                    1
+                if reachedProjectEnd {
+                    playback.projectProgress =
+                        1
+                }
                 playback.lastPlayedAt =
                     .now
 

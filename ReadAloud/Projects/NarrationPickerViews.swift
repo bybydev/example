@@ -1,7 +1,10 @@
+import AppFoundation
 import SwiftUI
 
 struct ProjectVoicePicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
+    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
@@ -12,7 +15,13 @@ struct ProjectVoicePicker: View {
                     selectionRow(
                         title: "App Default",
                         detail: ReadAloudNarrationCatalog.voiceName(
-                            ReadAloudNarrationCatalog.appDefaultVoiceID
+                            ReadAloudAccessPolicy
+                                .effectiveVoiceID(
+                                    ReadAloudNarrationCatalog
+                                        .appDefaultVoiceID,
+                                    hasPro:
+                                        purchases.hasPro
+                                )
                         ),
                         selected: model.project?.settings.voiceID == nil
                     ) {
@@ -22,7 +31,14 @@ struct ProjectVoicePicker: View {
                     ForEach(ReadAloudNarrationCatalog.voices) { voice in
                         selectionRow(
                             title: voice.name,
-                            detail: nil,
+                            detail:
+                                ReadAloudAccessPolicy
+                                    .freeVoiceIDs
+                                    .contains(
+                                        voice.id
+                                    )
+                                ? nil
+                                : "Pro",
                             selected:
                                 model.project?.settings.voiceID == voice.id
                         ) {
@@ -37,6 +53,11 @@ struct ProjectVoicePicker: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(
+                isPresented: $paywallPresented
+            ) {
+                ReadAloudProPaywall()
             }
         }
     }
@@ -68,6 +89,17 @@ struct ProjectVoicePicker: View {
     }
 
     private func update(_ voiceID: String?) {
+        if let voiceID,
+           !ReadAloudAccessPolicy
+            .canUseVoice(
+                voiceID,
+                hasPro: purchases.hasPro
+            )
+        {
+            paywallPresented = true
+            return
+        }
+
         Task {
             if await model.setProjectVoice(voiceID) {
                 onChanged()
@@ -164,6 +196,8 @@ struct ProjectSpeedPicker: View {
 
 struct ItemVoicePicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
+    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let itemID: UUID
     let onChanged: () -> Void
@@ -219,6 +253,11 @@ struct ItemVoicePicker: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(
+                isPresented: $paywallPresented
+            ) {
+                ReadAloudProPaywall()
+            }
         }
     }
 
@@ -249,6 +288,13 @@ struct ItemVoicePicker: View {
     }
 
     private func setMode(_ mode: ItemSettingMode) {
+        if mode == .custom,
+           !purchases.hasPro
+        {
+            paywallPresented = true
+            return
+        }
+
         Task {
             if await model.setItemVoiceMode(
                 itemID: itemID,
@@ -260,6 +306,11 @@ struct ItemVoicePicker: View {
     }
 
     private func setVoice(_ voiceID: String) {
+        guard purchases.hasPro else {
+            paywallPresented = true
+            return
+        }
+
         Task {
             if await model.setItemVoice(
                 itemID: itemID,
@@ -273,6 +324,8 @@ struct ItemVoicePicker: View {
 
 struct ItemSpeedPicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
+    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let itemID: UUID
     let onChanged: () -> Void
@@ -336,6 +389,11 @@ struct ItemSpeedPicker: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(
+                isPresented: $paywallPresented
+            ) {
+                ReadAloudProPaywall()
+            }
         }
     }
 
@@ -366,6 +424,13 @@ struct ItemSpeedPicker: View {
     }
 
     private func setMode(_ mode: ItemSettingMode) {
+        if mode == .custom,
+           !purchases.hasPro
+        {
+            paywallPresented = true
+            return
+        }
+
         Task {
             if await model.setItemSpeedMode(
                 itemID: itemID,
@@ -377,6 +442,11 @@ struct ItemSpeedPicker: View {
     }
 
     private func setSpeed(_ speed: Double) {
+        guard purchases.hasPro else {
+            paywallPresented = true
+            return
+        }
+
         Task {
             if await model.setItemSpeed(
                 itemID: itemID,

@@ -10,11 +10,18 @@ final class ProjectRuntimeManager {
     private(set) var readerProjectID: UUID?
 
     @ObservationIgnored private let projectStore: ProjectStore?
+    @ObservationIgnored private let hasPro:
+        @MainActor () -> Bool
     @ObservationIgnored private var runtimes: [UUID: ProjectRuntime] = [:]
     @ObservationIgnored private var loadingTasks:
         [UUID: Task<ProjectRuntime, Error>] = [:]
 
-    init() {
+    init(
+        hasPro:
+            @escaping @MainActor () -> Bool
+            = { false }
+    ) {
+        self.hasPro = hasPro
         do {
             projectStore = try ProjectStore()
             initializationError = nil
@@ -72,7 +79,8 @@ final class ProjectRuntimeManager {
                 persistence: ProjectRuntimePersistenceBridge(
                     projectID: projectID,
                     store: projectStore
-                )
+                ),
+                hasPro: hasPro
             )
             runtimes[projectID] = runtime
         }
@@ -137,6 +145,17 @@ final class ProjectRuntimeManager {
             return
         }
         try await runtime.refresh()
+    }
+
+    func refreshAllLoaded()
+        async
+    {
+        for runtime in runtimes.values
+            where runtime.didLoad
+        {
+            await runtime
+                .refreshForExternalPreferencesChange()
+        }
     }
 
     func beginReader(_ runtime: ProjectRuntime) {
