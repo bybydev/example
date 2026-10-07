@@ -62,7 +62,11 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 
 ### Archive / submission
 
-The 1.0 canonical release path is manual/local using project.yml plus mycli/Xcode.
+The GitHub **Release** workflow may be used first to create an unsigned mycli
+archive for the selected branch, configuration, and fixture/real model set.
+
+The canonical App Store submission path remains manual/local using project.yml
+plus mycli/Xcode with verified real resources.
 
 - Stage verified production Kokoro resources, not fixture resources.
 - Generate the Xcode project from project.yml if the owner-managed project needs regeneration.
@@ -80,4 +84,4 @@ The 1.0 canonical release path is manual/local using project.yml plus mycli/Xcod
 - Full accessibility certification across every screen/state.
 - Automatic storage quotas/eviction/cloud sync.
 - Additional migration versions beyond the current explicit v1 boundary.
-- CI expansion/repair. The existing GitHub release workflow is not the canonical 1.0 submission path and was not modified or run in this final pass.
+- Fast CI / Full CI implementation. The manual Release artifact workflow is implemented; App Store upload remains intentionally outside GitHub Actions.

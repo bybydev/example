@@ -34,16 +34,21 @@ These rules apply to work in the ReadAloud repository.
 
 ## CI and release automation
 
-The canonical ReadAloud 1.0 shipping path is manual/local using Xcode/mycli and
+The canonical App Store shipping path remains manual/local using Xcode/mycli and
 `docs/RELEASE_CHECKLIST.md`.
 
-The existing `.github/workflows/release.yml` is legacy/non-canonical for 1.0.
-Do not modify, trigger, repair, or expand CI/release workflows unless explicitly
-requested.
+`.github/workflows/release.yml` is the implemented manual mycli artifact
+workflow. It must build the exact selected GitHub ref and expose two independent
+choices:
 
-`docs/CI_RELEASE.md` is a deferred blueprint for a future manual Fast CI /
-Full CI / Release setup; it does not describe the currently implemented
-workflow set.
+- configuration: Debug or Release
+- Kokoro resources: fixture or real
+
+The workflow publishes one unsigned iOS `.xcarchive` prerelease under the
+`mycli-build-*` namespace. It does not upload to App Store Connect.
+
+Fast CI and Full CI remain deferred. `docs/CI_RELEASE.md` records the current
+Release contract plus the deferred Fast/Full blueprint.
 
 If workflow work is explicitly requested:
 

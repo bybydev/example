@@ -1,14 +1,12 @@
-# ReadAloud CI and Release Blueprint
+# ReadAloud CI and Release Contract
 
-> Status: deferred after ReadAloud 1.0. This document describes the intended
-> future manual Fast CI / Full CI / Release setup. It is not the current
-> implemented workflow set. The 1.0 canonical shipping path is the manual/local
-> process in `RELEASE_CHECKLIST.md`. Do not implement or run this blueprint
-> unless explicitly requested.
+> Status: Release is implemented. Fast CI and Full CI remain deferred.
+> App Store submission remains a separate manual/local process described in
+> `RELEASE_CHECKLIST.md`.
 
 ## Purpose
 
-The intended future setup uses exactly three primary GitHub Actions workflows:
+The long-term setup uses three primary GitHub Actions workflows:
 
 ```
 .github/workflows/
@@ -262,33 +260,36 @@ File:
 .github/workflows/release.yml
 ```
 
+## Status
+
+Implemented.
+
 ## Goal
 
-Create a manual ReadAloud build/release from exactly the branch/ref selected by the user.
+Create one unsigned iOS mycli artifact from exactly the branch/ref selected by
+the user. The workflow is for local deployment/manual QA, not direct App Store
+upload.
 
 Release must never silently switch to `master` or `develop`.
 
-## Trigger
+## Trigger and inputs
 
-Manual only.
-
-Suggested inputs:
+Manual only:
 
 ```yaml
 on:
   workflow_dispatch:
     inputs:
       configuration:
-        description: Configuration
+        description: Build configuration
         required: true
         default: Release
         type: choice
         options:
           - Debug
           - Release
-          - both
       resources:
-        description: Kokoro resources
+        description: Kokoro models
         required: true
         default: fixture
         type: choice
@@ -296,6 +297,9 @@ on:
           - fixture
           - real
 ```
+
+Exactly one configuration/resource combination is built per run, so mycli sees
+one compatible iOS archive in the generated prerelease.
 
 Additional explicit App Store/TestFlight actions can be added later, but the selected branch/ref remains authoritative.
 

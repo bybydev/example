@@ -274,11 +274,13 @@ Kokoro resources have two explicit modes:
 - production: verified real assets, shipping eligible
 - fixture: deterministic executable fixture, development only
 
-The canonical 1.0 submission path is manual/local using Xcode/mycli and the
-steps in `RELEASE_CHECKLIST.md`.
+The canonical App Store submission path is manual/local using Xcode/mycli and
+the steps in `RELEASE_CHECKLIST.md`.
 
-The existing GitHub release workflow is legacy/non-canonical for 1.0 and should
-not be modified or triggered unless explicitly requested.
+The manual GitHub Release workflow is implemented for disposable mycli artifacts.
+It builds the exact selected ref and lets the user choose Debug/Release and
+fixture/real Kokoro resources. It publishes one unsigned iOS `.xcarchive`
+prerelease and never uploads to App Store Connect.
 
 ## Maintenance source of truth
 

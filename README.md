@@ -198,10 +198,16 @@ ReadAloud Pro adds:
 
 Marketing version: **1.0**
 
-The canonical 1.0 shipping path is manual/local using Xcode/mycli and
+The canonical App Store shipping path is manual/local using Xcode/mycli and
 `docs/RELEASE_CHECKLIST.md`.
 
-The existing GitHub release workflow is legacy/non-canonical for 1.0. Do not
-modify or trigger CI/release workflows unless explicitly requested.
+The manual GitHub **Release** workflow creates disposable unsigned iOS archives
+for mycli. In the Actions UI, select:
+
+- **Configuration:** Debug or Release
+- **Kokoro models:** fixture or real
+
+The workflow always builds the selected branch/ref and publishes one
+`mycli-build-*` prerelease. It does not upload to App Store Connect.
 
 App Store metadata lives under `AppStore/`.

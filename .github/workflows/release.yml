@@ -1,32 +1,55 @@
 name: Release
 
+# Manual mycli artifact workflow.
+# Builds exactly the branch/ref selected in the GitHub Actions UI.
 on:
   workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Debug
+          - Release
+      resources:
+        description: Kokoro models
+        required: true
+        default: fixture
+        type: choice
+        options:
+          - fixture
+          - real
 
 permissions:
   contents: write
 
 concurrency:
-  group: readaloud-release
+  group: readaloud-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
-    name: Build and release
-    runs-on: macos-15
+    name: Build iOS ${{ inputs.configuration }} · ${{ inputs.resources }}
+    runs-on: macos-26
+    timeout-minutes: 90
 
     steps:
-      - name: Checkout master
-        uses: actions/checkout@v4
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
         with:
-          ref: master
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
-      - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
-
-      - name: Show toolchain
+      - name: Show selection and toolchain
+        shell: bash
         run: |
+          set -euo pipefail
+          echo "Ref:           ${{ github.ref }}"
+          echo "Configuration: ${{ inputs.configuration }}"
+          echo "Resources:     ${{ inputs.resources }}"
+          echo "Commit:        $(git rev-parse HEAD)"
           sw_vers
           uname -m
           xcodebuild -version
@@ -35,140 +58,207 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Restore Kokoro model cache
-        id: kokoro-cache
-        uses: actions/cache/restore@v4
+      - name: Resolve resource mode
+        id: resources
+        shell: bash
+        env:
+          SELECTED_RESOURCES: ${{ inputs.resources }}
+        run: |
+          set -euo pipefail
+          case "$SELECTED_RESOURCES" in
+            fixture)
+              echo "mode=fixture" >> "$GITHUB_OUTPUT"
+              ;;
+            real)
+              echo "mode=production" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "error: unsupported resources selection: $SELECTED_RESOURCES" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Cache fixture resources
+        if: ${{ inputs.resources == 'fixture' }}
+        id: fixture-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            testfixtures/kokoro
+            .cache/kokoro-fixtures
+          key: readaloud-kokoro-fixture-${{ hashFiles('scripts/kokoro-fixture-pins.sh', 'scripts/download-kokoro-fixture.sh', 'scripts/validate-kokoro-assets-for-build.sh') }}
+
+      - name: Cache real resources
+        if: ${{ inputs.resources == 'real' }}
+        id: real-cache
+        uses: actions/cache@v4
         with:
           path: |
             Resources/Kokoro
             .cache/kokoro-downloads
-          key: kokoro-assets-${{ hashFiles('scripts/kokoro-pins.sh', 'scripts/kokoro-checksums.sha256', 'scripts/download-kokoro-assets.sh') }}
+          key: readaloud-kokoro-real-${{ hashFiles('scripts/kokoro-pins.sh', 'scripts/kokoro-checksums.sha256', 'scripts/download-kokoro-assets.sh', 'scripts/validate-kokoro-assets-for-build.sh') }}
 
-      - name: Prepare Kokoro models
+      - name: Download fixture resources
+        if: ${{ inputs.resources == 'fixture' && steps.fixture-cache.outputs.cache-hit != 'true' }}
+        run: bash scripts/download-kokoro-fixture.sh
+
+      - name: Download real resources
+        if: ${{ inputs.resources == 'real' && steps.real-cache.outputs.cache-hit != 'true' }}
         run: bash scripts/bootstrap.sh
 
-      - name: Save Kokoro model cache
-        if: steps.kokoro-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            Resources/Kokoro
-            .cache/kokoro-downloads
-          key: kokoro-assets-${{ hashFiles('scripts/kokoro-pins.sh', 'scripts/kokoro-checksums.sha256', 'scripts/download-kokoro-assets.sh') }}
+      - name: Validate selected resources
+        shell: bash
+        env:
+          RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [[ "$RESOURCE_MODE" == "fixture" ]]; then
+            bash scripts/validate-kokoro-assets-for-build.sh               --mode fixture               --root testfixtures/kokoro
+          else
+            bash scripts/validate-kokoro-assets-for-build.sh               --mode production               --root Resources/Kokoro
+          fi
+
+      - name: Stage selected resources
+        shell: bash
+        env:
+          READALOUD_KOKORO_RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
+        run: |
+          set -euo pipefail
+          bash scripts/stage-kokoro-resources-for-build.sh
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: xcodegen generate --spec project.yml
 
-      - name: Calculate next patch version
-        id: version
+      - name: Cache Swift package sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ReadAloud-SourcePackages
+          key: readaloud-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'ReadAloud.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+
+      - name: Set build release tag
+        id: release
         shell: bash
         run: |
-          git fetch --tags --force
-
-          next="$(python3 - <<'PY'
-          import re
-          import subprocess
-
-          versions = []
-          tags = subprocess.check_output(
-              ["git", "tag", "--list"],
-              text=True,
-          ).splitlines()
-
-          for tag in tags:
-              match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag.strip())
-              if match:
-                  versions.append(tuple(map(int, match.groups())))
-
-          if not versions:
-              print("1.0.0")
-          else:
-              major, minor, patch = max(versions)
-              print(f"{major}.{minor}.{patch + 1}")
-          PY
-          )"
-
-          echo "version=$next" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          tag="mycli-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Next release: $next"
+          echo "Build release: $tag"
 
       - name: Archive unsigned iOS app
         shell: bash
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
+          RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
         run: |
-          IOS_DERIVED="$RUNNER_TEMP/ReadAloud-iOS"
-          IOS_ARCHIVE="$RUNNER_TEMP/ReadAloud.xcarchive"
-          SOURCE_PACKAGES="$RUNNER_TEMP/ReadAloud-SourcePackages"
+          set -euo pipefail
 
-          args=(
-            -project ReadAloud.xcodeproj
-            -scheme ReadAloud
-            -configuration Release
-            -sdk iphoneos
-            -destination "generic/platform=iOS"
-            -derivedDataPath "$IOS_DERIVED"
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
-            -archivePath "$IOS_ARCHIVE"
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            archive
-          )
-          xcodebuild "${args[@]}"
+          SOURCE_PACKAGES="$RUNNER_TEMP/ReadAloud-SourcePackages"
+          IOS_DERIVED="$RUNNER_TEMP/ReadAloud-iOS-$BUILD_CONFIGURATION"
+          IOS_ARCHIVE="$RUNNER_TEMP/ReadAloud-$BUILD_CONFIGURATION.xcarchive"
+          ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
+
+          mkdir -p "$ARTIFACTS"
+
+          READALOUD_KOKORO_RESOURCE_MODE="$RESOURCE_MODE"           xcodebuild             -project ReadAloud.xcodeproj             -scheme ReadAloud             -configuration "$BUILD_CONFIGURATION"             -sdk iphoneos             -destination "generic/platform=iOS"             -derivedDataPath "$IOS_DERIVED"             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"             -archivePath "$IOS_ARCHIVE"             -skipMacroValidation             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             archive
 
           test -d "$IOS_ARCHIVE"
-          test -d "$IOS_ARCHIVE/Products/Applications/ReadAloud.app"
 
-          mkdir -p artifacts
-          ditto -c -k --sequesterRsrc --keepParent             "$IOS_ARCHIVE"             "artifacts/ReadAloud-iOS-unsigned-${{ steps.version.outputs.version }}.xcarchive.zip"
+          IOS_APP_COUNT="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+          if [[ "$IOS_APP_COUNT" != "1" ]]; then
+            echo "error: expected exactly one iOS app in archive, found $IOS_APP_COUNT" >&2
+            exit 1
+          fi
 
+          IOS_APP="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print)"
+          IOS_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist")"
+
+          echo "Bundle ID: $IOS_BUNDLE_ID"
+          [[ "$IOS_BUNDLE_ID" == "com.hoangbkit.readaloud" ]] || {
+            echo "error: unexpected iOS bundle identifier: $IOS_BUNDLE_ID" >&2
+            exit 1
+          }
+
+          MODE_FILE="$IOS_APP/Kokoro/ReadAloudResourceMode.json"
+          MANIFEST="$IOS_APP/Kokoro/KokoroRuntimeManifest.json"
+          test -f "$MODE_FILE"
+          test -f "$MANIFEST"
+
+          python3 - "$MODE_FILE" "$MANIFEST" "$RESOURCE_MODE" <<'PY'
+          import json
+          import sys
+
+          mode_path, manifest_path, expected = sys.argv[1:4]
+
+          with open(mode_path, "r", encoding="utf-8") as handle:
+              mode = json.load(handle).get("mode")
+          if mode != expected:
+              raise SystemExit(
+                  f"error: archived resource mode mismatch: {mode!r} != {expected!r}"
+              )
+
+          with open(manifest_path, "r", encoding="utf-8") as handle:
+              manifest = json.load(handle)
+
+          if expected == "fixture":
+              if manifest.get("bundle_profile") != "fixture-executable-v1":
+                  raise SystemExit("error: fixture archive has unexpected Kokoro profile")
+              if not isinstance(manifest.get("synthetic_fixture"), dict):
+                  raise SystemExit("error: fixture archive is missing synthetic fixture identity")
+          else:
+              if manifest.get("bundle_profile") != "custom":
+                  raise SystemExit("error: real archive has unexpected Kokoro profile")
+              if manifest.get("synthetic_fixture") is not None:
+                  raise SystemExit("error: real archive contains synthetic fixture metadata")
+              if manifest.get("hf_provenance_verified") is not True:
+                  raise SystemExit("error: real archive does not contain verified production provenance")
+
+          print(f"Archived Kokoro resources verified: {expected}")
+          PY
+
+          CONFIGURATION_LOWER="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+          ARTIFACT="$ARTIFACTS/ReadAloud-iOS-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
+
+          ditto -c -k --sequesterRsrc --keepParent             "$IOS_ARCHIVE"             "$ARTIFACT"
+
+          echo "Artifact: $ARTIFACT"
           rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
 
-      - name: Build unsigned macOS app
+      - name: Verify release archive
         shell: bash
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
         run: |
-          MAC_DERIVED="$RUNNER_TEMP/ReadAloud-macOS"
-          SOURCE_PACKAGES="$RUNNER_TEMP/ReadAloud-SourcePackages"
+          set -euo pipefail
 
-          args=(
-            -project ReadAloud.xcodeproj
-            -scheme ReadAloudMac
-            -configuration Release
-            -sdk macosx
-            -destination "platform=macOS"
-            -derivedDataPath "$MAC_DERIVED"
-            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"
-            ARCHS=arm64
-            ONLY_ACTIVE_ARCH=YES
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            build
-          )
-          xcodebuild "${args[@]}"
+          CONFIGURATION_LOWER="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+          ARTIFACT="artifacts/ReadAloud-iOS-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
 
-          MAC_APP="$MAC_DERIVED/Build/Products/Release/ReadAloud.app"
-          test -d "$MAC_APP"
+          test -f "$ARTIFACT"
+          ls -lh "$ARTIFACT"
 
-          ditto -c -k --sequesterRsrc --keepParent             "$MAC_APP"             "artifacts/ReadAloud-macOS-arm64-unsigned-${{ steps.version.outputs.version }}.zip"
+          bytes="$(stat -f%z "$ARTIFACT")"
+          if (( bytes >= 2147483648 )); then
+            echo "error: archive exceeds GitHub Release's 2 GB asset limit" >&2
+            exit 1
+          fi
 
-          rm -rf "$MAC_DERIVED"
-
-      - name: Verify release archives
-        shell: bash
-        run: |
-          ls -lh artifacts
-
-          for archive in artifacts/*.zip; do
-            bytes="$(stat -f%z "$archive")"
-            if (( bytes >= 2147483648 )); then
-              echo "error: $archive is too large for a GitHub Release asset" >&2
-              exit 1
-            fi
-          done
-
-      - name: Create GitHub release
+      - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          RELEASE_SHA: ${{ steps.version.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+          BUILD_CONFIGURATION: ${{ inputs.configuration }}
+          BUILD_RESOURCES: ${{ inputs.resources }}
         shell: bash
         run: |
-          gh release create "$VERSION"             artifacts/*.zip             --target "$RELEASE_SHA"             --title "$VERSION"             --generate-notes
+          set -euo pipefail
+
+          gh release create "$RELEASE_TAG"             artifacts/*.xcarchive.zip             --target "$RELEASE_SHA"             --title "$RELEASE_TAG · $BUILD_CONFIGURATION · $BUILD_RESOURCES"             --prerelease             --notes "ReadAloud iOS unsigned mycli artifact.
+
+          Configuration: $BUILD_CONFIGURATION
+          Kokoro resources: $BUILD_RESOURCES
+          Source ref: ${{ github.ref }}
+          Source commit: $RELEASE_SHA
+
+          Fixture artifacts are development-only and must never be uploaded to App Store Connect."
