@@ -1,0 +1,34 @@
+Turn EPUBs, PDFs, documents, and pasted text into a private listening library with speech generated directly on your iPhone.
+
+READ DOCUMENTS YOUR WAY
+• Import EPUB, PDF, supported documents, or paste text
+• Keep chapter and section structure instead of flattening everything into one long block
+• Adjust voice and synthesis speed for comfortable listening
+• Follow the currently spoken paragraph while reading
+
+LISTEN OFFLINE
+• Speech is generated on-device with local Core ML models
+• Generate chapters for offline listening
+• Reuse finalized audio without synthesizing it again
+• Continue from your saved reading and listening position
+
+BUILT FOR LONG-FORM LISTENING
+• Organize durable projects in your personal Library
+• Continue Listening from where you stopped
+• Use background playback, Lock Screen controls, Control Center, and chapter navigation
+• Manage generated audio and temporary cache separately
+
+PRIVATE BY DESIGN
+ReadAloud is local-first. Your imported documents, normalized text, generated audio, reading progress, and settings stay on your device. No account is required and document text is not sent to a remote speech service.
+
+FREE TO START
+Free includes up to three Library projects, the Heart voice, normal reading and streaming playback, single-chapter offline generation, storage cleanup, and two themes.
+
+READALOUD PRO
+Pro unlocks an unlimited Library, all bundled voices, per-chapter narration overrides, bulk offline generation, automatic prefetch, generate-while-listening, advanced regeneration controls, and premium themes.
+
+Terms of use:
+https://github.com/hoangbkit/ReadAloud/blob/master/docs/TERMS.md
+
+Privacy policy:
+https://github.com/hoangbkit/ReadAloud/blob/master/docs/PRIVACY.md

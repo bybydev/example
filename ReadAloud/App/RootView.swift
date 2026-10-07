@@ -143,6 +143,19 @@ private struct ProjectMiniPlayerHost: View {
                             runtime.activity
                                 .itemProgress
                     )
+                    .accessibilityLabel(
+                        "Chapter playback progress"
+                    )
+                    .accessibilityValue(
+                        Text(
+                            runtime.activity
+                                .itemProgress,
+                            format:
+                                .percent.precision(
+                                    .fractionLength(0)
+                                )
+                        )
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)

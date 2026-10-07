@@ -17,12 +17,12 @@ enum ReadAloudCommerce {
     static let privacyURL =
         URL(
             string:
-                "https://github.com/hoangbkit/ReadAloud/blob/develop/docs/PRIVACY.md"
+                "https://github.com/hoangbkit/ReadAloud/blob/master/docs/PRIVACY.md"
         )!
     static let termsURL =
         URL(
             string:
-                "https://github.com/hoangbkit/ReadAloud/blob/develop/docs/TERMS.md"
+                "https://github.com/hoangbkit/ReadAloud/blob/master/docs/TERMS.md"
         )!
 
     static let features:

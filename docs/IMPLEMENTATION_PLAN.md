@@ -1039,6 +1039,14 @@ Free mode must still demonstrate the real product.
 
 ---
 
+# Final 1.0 execution note
+
+For the 1.0 release, the original Phases 12–15 were intentionally collapsed into one final release-hardening pass after Phase 11. The reduced scope keeps analytics inert/disabled, relies on the existing manual release path instead of expanding CI, and implements only release-critical reliability, accessibility, metadata, privacy, and submission preparation.
+
+The detailed Phase 12–15 sections below are retained as backlog/reference for post-1.0 work.
+
+---
+
 # Phase 12 — Analytics and Product Diagnostics
 
 ## Goal

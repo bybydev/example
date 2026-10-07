@@ -96,6 +96,9 @@ struct ProjectReaderView: View {
     @Environment(ProjectRuntimeManager.self)
     private var runtimeManager
 
+    @Environment(\.accessibilityReduceMotion)
+    private var reduceMotion
+
     @State private var displayedItemID: UUID?
     @State private var followsPlaybackContext = true
     @State private var followsParagraph = true
@@ -398,13 +401,20 @@ struct ProjectReaderView: View {
                     return
                 }
 
-                withAnimation(
-                    .easeInOut(duration: 0.25)
-                ) {
+                if reduceMotion {
                     proxy.scrollTo(
                         index,
                         anchor: .center
                     )
+                } else {
+                    withAnimation(
+                        .easeInOut(duration: 0.25)
+                    ) {
+                        proxy.scrollTo(
+                            index,
+                            anchor: .center
+                        )
+                    }
                 }
             }
         }
@@ -503,6 +513,18 @@ struct ProjectReaderView: View {
             ProgressView(
                 value: controlProgress
             )
+            .accessibilityLabel(
+                "Chapter playback progress"
+            )
+            .accessibilityValue(
+                Text(
+                    controlProgress,
+                    format:
+                        .percent.precision(
+                            .fractionLength(0)
+                        )
+                )
+            )
 
             if let playbackStatusText {
                 Text(playbackStatusText)
@@ -536,7 +558,7 @@ struct ProjectReaderView: View {
                         || !runtime.isPlaybackActive
                 )
                 .accessibilityLabel(
-                    "Seek backward"
+                    "Seek backward \(ReadAloudPreferences.skipInterval) seconds"
                 )
 
                 Button {
@@ -582,7 +604,7 @@ struct ProjectReaderView: View {
                         || !runtime.isPlaybackActive
                 )
                 .accessibilityLabel(
-                    "Seek forward"
+                    "Seek forward \(ReadAloudPreferences.skipInterval) seconds"
                 )
             }
 

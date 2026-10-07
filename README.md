@@ -1,6 +1,6 @@
 # ReadAloud
 
-ReadAloud is evolving from a local Kokoro Core ML prototype into a sophisticated offline document-to-speech reader for iPhone.
+ReadAloud is a local-first, offline document-to-speech reader for iPhone.
 
 The current product direction, architecture, persistence contracts, design, and implementation phases live under `docs/`.
 
@@ -27,6 +27,7 @@ Read these before implementation:
 - `docs/IMPLEMENTATION_PLAN.md` — phased implementation plan
 - `docs/PRODUCT_PLAN.md` — product scope and quality bar
 - `docs/DESIGN.md` — iPhone UX design
+- `docs/RELEASE_CHECKLIST.md` — final 1.0 manual release and submission checklist
 - `AGENTS.md` — repository working rules
 
 `PLAN.md` documents the completed prototype effort and is retained only as historical context.
@@ -199,9 +200,9 @@ scheduled playback. The loaded Kokoro engine stays alive between reads so
 already-loaded/compiled model state can be reused. `unload()` explicitly drops
 the engine when needed.
 
-## Reader prototype UI
+## DEBUG Reader prototype
 
-The reader screen now drives the complete local pipeline. It includes:
+The developer-only prototype screen drives the standalone local pipeline and is not part of the normal 1.0 product navigation. It includes:
 
 - editable text input;
 - bundled voice selection;
@@ -605,6 +606,6 @@ runtime write.
 
 ## Current scope
 
-The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.
+ReadAloud 1.0 implementation is complete through final release hardening: durable projects/import, structured Reader playback, persistent/offline audio, queue/prefetch generation, background/system media controls, storage management, and the AppFoundation product shell.
 
-Use the 1.0 docs above as the source of truth. `PLAN.md` is historical.
+The final release pass intentionally keeps analytics disabled by default and uses the manual/mycli/Xcode release path instead of expanding CI. See `docs/RELEASE_CHECKLIST.md` for the remaining human submission checks. `PLAN.md` is historical.

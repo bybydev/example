@@ -1,0 +1,7 @@
+ReadAloud requires no account or login.
+
+Core text-to-speech is performed on-device using bundled Core ML resources. Imported document contents are not sent to a remote speech service.
+
+The Free experience can be reviewed without a purchase. ReadAloud Pro uses the StoreKit products configured for the app and unlocks unlimited projects, additional voices, per-chapter narration controls, bulk/offline generation features, and premium themes.
+
+Background audio is used for spoken-document playback. The app supports iPhone only and requires iOS 26 or later.

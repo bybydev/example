@@ -1,0 +1,1 @@
+ReadAloud 1.0 introduces a private offline listening library for EPUBs, PDFs, documents, and pasted text, with on-device speech, background playback, offline generation, storage controls, and ReadAloud Pro.

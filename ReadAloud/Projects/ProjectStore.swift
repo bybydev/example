@@ -141,6 +141,11 @@ actor ProjectStore {
         } catch {
             throw ProjectStoreError.io(String(describing: error))
         }
+
+        Self.cleanupStaleCreatingDirectories(
+            rootURL: self.rootURL,
+            fileManager: fileManager
+        )
     }
 
     @discardableResult
@@ -475,6 +480,11 @@ actor ProjectStore {
         let paths = ProjectPackagePaths(packageURL: packageURL)
 
         let project = try loadProjectMetadata(projectID: projectID)
+        try requireRetainedSourceCompatibility(
+            project: project,
+            packageRootURL: packageURL
+        )
+
         let manifest: ProjectContentManifest = try readDocument(
             ProjectContentManifest.self,
             at: paths.contentManifest,
@@ -1762,6 +1772,90 @@ actor ProjectStore {
             }
             throw ProjectStoreError.io(
                 "Unable to clear temporary cache: \(error)"
+            )
+        }
+    }
+
+    private static func cleanupStaleCreatingDirectories(
+        rootURL: URL,
+        fileManager: FileManager,
+        now: Date = .now
+    ) {
+        let cutoff = now.addingTimeInterval(
+            -6 * 60 * 60
+        )
+
+        guard let entries =
+                try? fileManager.contentsOfDirectory(
+                    at: rootURL,
+                    includingPropertiesForKeys: [
+                        .contentModificationDateKey,
+                        .isDirectoryKey,
+                        .isSymbolicLinkKey,
+                    ],
+                    options: []
+                )
+        else {
+            return
+        }
+
+        for entry in entries
+            where entry.lastPathComponent
+                .hasPrefix(".creating-")
+        {
+            guard let values =
+                    try? entry.resourceValues(
+                        forKeys: [
+                            .contentModificationDateKey,
+                            .isDirectoryKey,
+                            .isSymbolicLinkKey,
+                        ]
+                    ),
+                  values.isDirectory == true,
+                  values.isSymbolicLink != true,
+                  let modified =
+                    values.contentModificationDate,
+                  modified < cutoff
+            else {
+                continue
+            }
+
+            try? fileManager.removeItem(
+                at: entry
+            )
+        }
+    }
+
+    private func requireRetainedSourceCompatibility(
+        project: ProjectDocument,
+        packageRootURL: URL
+    ) throws {
+        let sourceURL = try packageURL(
+            forRelativePath:
+                project.source.relativePath,
+            in: packageRootURL
+        )
+
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(
+            atPath: sourceURL.path,
+            isDirectory: &isDirectory
+        ),
+        !isDirectory.boolValue
+        else {
+            throw ProjectStoreError.invalidData(
+                "Retained source file is missing."
+            )
+        }
+
+        let revision = try ProjectDigest.sha256(
+            fileAt: sourceURL
+        )
+        guard revision
+                == project.source.sourceRevision
+        else {
+            throw ProjectStoreError.invalidData(
+                "Retained source bytes do not match sourceRevision."
             )
         }
     }
