@@ -47,6 +47,25 @@ final class SpeechPlaybackQueue {
         audioEngine.attach(playerNode)
     }
 
+    var playedSeconds: Double {
+        guard let nodeTime =
+                playerNode.lastRenderTime,
+              let playerTime =
+                playerNode.playerTime(
+                    forNodeTime: nodeTime
+                ),
+              playerTime.sampleRate > 0
+        else {
+            return 0
+        }
+
+        return max(
+            0,
+            Double(playerTime.sampleTime)
+                / playerTime.sampleRate
+        )
+    }
+
     var snapshot: Snapshot {
         Snapshot(
             queuedBuffers: pendingDurations.count,

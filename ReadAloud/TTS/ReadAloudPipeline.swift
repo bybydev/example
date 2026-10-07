@@ -1,4 +1,5 @@
 import Foundation
+import KokoroTTS
 
 @MainActor
 final class ReadAloudPipeline {
@@ -61,9 +62,18 @@ final class ReadAloudPipeline {
     private var readingTask: Task<Void, Error>?
     private var activeOperationID: UUID?
     private var isPaused = false
+    private var playbackPositionOriginSeconds = 0.0
 
     private(set) var state: State = .idle
     var onEvent: ((Event) -> Void)?
+
+    var playbackPositionSeconds: Double {
+        max(
+            0,
+            playback.playedSeconds
+                - playbackPositionOriginSeconds
+        )
+    }
 
     init() {
         let playback = SpeechPlaybackQueue()
@@ -86,7 +96,9 @@ final class ReadAloudPipeline {
         text: String,
         voice: KokoroEngine.Voice = .heart,
         speed: Float = 1.0,
-        continuous: Bool = false
+        continuous: Bool = false,
+        onAudio:
+            ((KokoroAudio) -> Void)? = nil
     ) async throws {
         resetActiveOperation(
             stopPlayback: !continuous
@@ -119,7 +131,8 @@ final class ReadAloudPipeline {
                 readStart: readStart,
                 operationID: operationID,
                 stopPlaybackOnCompletion:
-                    !continuous
+                    !continuous,
+                onAudio: onAudio
             )
         }
 
@@ -158,6 +171,81 @@ final class ReadAloudPipeline {
                 setState(.failed(Self.message(for: error)))
             }
 
+            throw error
+        }
+    }
+
+    func play(
+        audio: KokoroAudio,
+        continuous: Bool = false
+    ) async throws {
+        guard !audio.samples.isEmpty else {
+            throw PipelineError.emptyText
+        }
+
+        resetActiveOperation(
+            stopPlayback: !continuous
+        )
+
+        let operationID = UUID()
+        activeOperationID = operationID
+        setState(.loading)
+
+        do {
+            try playback.prepare()
+            try requireActiveOperation(
+                operationID
+            )
+            playbackPositionOriginSeconds =
+                playback.playedSeconds
+            try playback.enqueue(audio)
+            setState(
+                isPaused
+                    ? .paused
+                    : .playing
+            )
+
+            await withTaskCancellationHandler {
+                await playback
+                    .waitUntilDrained()
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.stop()
+                }
+            }
+
+            try requireActiveOperation(
+                operationID
+            )
+            activeOperationID = nil
+
+            if !continuous {
+                playback.stop()
+                setState(.finished)
+            }
+        } catch is CancellationError {
+            finishCancellation(
+                operationID
+            )
+            throw PipelineError.cancelled
+        } catch PipelineError.cancelled {
+            finishCancellation(
+                operationID
+            )
+            throw PipelineError.cancelled
+        } catch {
+            if activeOperationID
+                == operationID {
+                playback.stop()
+                activeOperationID = nil
+                setState(
+                    .failed(
+                        Self.message(
+                            for: error
+                        )
+                    )
+                )
+            }
             throw error
         }
     }
@@ -224,6 +312,7 @@ final class ReadAloudPipeline {
         readingTask = nil
         isPaused = false
         playback.stop()
+        playbackPositionOriginSeconds = 0
         setState(.finished)
     }
 
@@ -258,7 +347,9 @@ final class ReadAloudPipeline {
         speed: Float,
         readStart: ContinuousClock.Instant,
         operationID: UUID,
-        stopPlaybackOnCompletion: Bool
+        stopPlaybackOnCompletion: Bool,
+        onAudio:
+            ((KokoroAudio) -> Void)?
     ) async throws {
         try requireActiveOperation(operationID)
 
@@ -313,6 +404,8 @@ final class ReadAloudPipeline {
 
             try requireActiveOperation(operationID)
 
+            onAudio?(result.audio)
+
             let underrun = offset > 0 && playback.snapshot.queuedBuffers == 0
 
             try playback.enqueue(result.audio)
@@ -353,6 +446,9 @@ final class ReadAloudPipeline {
     ) {
         activeOperationID = nil
         isPaused = false
+        if stopPlayback {
+            playbackPositionOriginSeconds = 0
+        }
 
         readingTask?.cancel()
         readingTask = nil

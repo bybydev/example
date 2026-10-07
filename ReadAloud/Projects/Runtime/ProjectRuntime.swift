@@ -90,12 +90,15 @@ final class ProjectRuntime {
     private(set) var isLoading = false
     private(set) var didLoad = false
     var revision: UInt64 = 0
-    private(set) var lastErrorMessage: String?
+    var lastErrorMessage: String?
 
     @ObservationIgnored let pipeline: ReadAloudPipeline
     @ObservationIgnored var playbackTask: Task<Void, Never>?
     @ObservationIgnored var playbackOperationID: UUID?
     @ObservationIgnored var readerPauseRequested = false
+    @ObservationIgnored var finalAudioAsset:
+        ProjectFinalAudioAsset?
+    @ObservationIgnored var finalAudioPositionSeconds = 0.0
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
     init(
@@ -520,6 +523,8 @@ final class ProjectRuntime {
         playbackTask?.cancel()
         playbackTask = nil
         pipeline.stop()
+        finalAudioAsset = nil
+        finalAudioPositionSeconds = 0
         activity.activeItemID = nil
         activity.currentParagraphRange = nil
         activity.currentParagraphIndex = nil
@@ -536,6 +541,8 @@ final class ProjectRuntime {
         playbackTask = nil
         pipeline.onEvent = nil
         pipeline.stop()
+        finalAudioAsset = nil
+        finalAudioPositionSeconds = 0
         activity = ProjectRuntimeActivity()
     }
 

@@ -396,6 +396,61 @@ Reader paragraph transitions reuse one active audio session/engine sequence
 instead of tearing audio down between paragraphs. Pause intent is owned by
 ProjectRuntime so it remains stable during synthesis and between paragraphs.
 
+## Streaming and persistent generation
+
+Phase 7 combines the existing low-latency streaming path with durable
+offline-ready audio.
+
+Playback now follows this decision:
+
+```
+compatible finalized WAV exists?
+  yes -> play the verified WAV
+  no  -> stream paragraph audio through Kokoro
+         -> reuse compatible paragraph cache when available
+         -> cache newly synthesized paragraph audio
+         -> finalize the item only when every paragraph is available
+```
+
+Paragraph cache identity includes the stable item ID, paragraph index,
+paragraph text revision, resolved voice, canonical synthesis speed, Kokoro
+runtime revision, and synthesis configuration version. Cache entries are
+derived data: partial, stale, malformed, or hash-mismatched entries are deleted
+and regenerated without affecting project correctness.
+
+Final item audio is 24 kHz mono 16-bit PCM WAV plus
+`audio/<item-id>.metadata.json`. The metadata contains the deterministic
+generation key, WAV SHA-256 audio revision, resolved narration identity, and a
+source-segment timeline built from the actual persisted sample counts. Segment
+timing is never estimated from text length.
+
+Final WAV + metadata replacement is staged together with rollback copies.
+Existing known-good audio remains untouched until staged replacement is ready;
+ordinary replacement failures restore the previous pair.
+
+Resume semantics:
+
+- streaming playback persists only the normalized-text content bookmark;
+- verified finalized playback persists that bookmark plus
+  `generationKey + audioRevision + exact seconds`;
+- matching generation key and audio revision restore exact seconds;
+- a regenerated WAV with a different audio revision restores from the
+  bookmark's segment start;
+- stale/incompatible finalized audio is never played;
+- voice/synthesis-speed changes and Clear Generated Audio preserve the content
+  bookmark while invalidating exact audio seconds.
+
+The Reader's ±15-second controls therefore use actual finalized WAV time while
+playing compatible persistent audio. They retain the Phase 6 paragraph-boundary
+fallback only for live streaming, where no durable audio identity exists yet.
+
+Streaming playback itself satisfies existing Generate intent when it completes
+the same generation. A verified final asset takes precedence over stale queued
+or generating history for Ready Offline status.
+
+Phase 8 remains responsible for executing durable queued generation and
+prefetch independently of foreground Reader playback.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

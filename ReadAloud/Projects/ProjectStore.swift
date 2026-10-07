@@ -687,104 +687,521 @@ actor ProjectStore {
         return metadata
     }
 
+    func loadCompatibleFinalAudio(
+        projectID: UUID,
+        request: ProjectGenerationStatusRequest
+    ) throws -> ProjectFinalAudioAsset? {
+        let paths =
+            try pathsForExistingProject(
+                projectID
+            )
+        let wavURL =
+            paths.audioWAV(
+                request.itemID
+            )
+        let metadataURL =
+            paths.audioMetadata(
+                request.itemID
+            )
+
+        guard fileManager.fileExists(
+            atPath: wavURL.path
+        ),
+        fileManager.fileExists(
+            atPath: metadataURL.path
+        ) else {
+            return nil
+        }
+
+        do {
+            let metadata:
+                GeneratedAudioMetadata =
+                    try readDocument(
+                        GeneratedAudioMetadata.self,
+                        at: metadataURL,
+                        relativePath:
+                            ProjectPackagePaths
+                                .relativeAudioMetadataPath(
+                                    request.itemID
+                                )
+                    )
+            try ProjectValidation.validate(
+                metadata
+            )
+            try requireAudioMetadataCompatibility(
+                metadata,
+                in: paths
+            )
+
+            guard metadata.itemID
+                    == request.itemID,
+                  metadata.generationKey
+                    == request.generationKey,
+                  metadata.contentRevision
+                    == request.contentRevision,
+                  metadata.voiceID
+                    == request.voiceID,
+                  metadata.speed
+                    == request.speed else {
+                return nil
+            }
+
+            let wavData =
+                try Data(contentsOf: wavURL)
+            guard ProjectDigest.sha256(
+                wavData
+            ) == metadata.audioRevision else {
+                return nil
+            }
+
+            let audio =
+                try ProjectWAVCodec.decode(
+                    wavData
+                )
+            let duration =
+                Double(audio.samples.count)
+                / Double(audio.sampleRate)
+            let tolerance =
+                1.0 / Double(audio.sampleRate)
+
+            guard abs(
+                metadata.durationSeconds
+                    - duration
+            ) <= tolerance else {
+                return nil
+            }
+
+            return ProjectFinalAudioAsset(
+                metadata: metadata,
+                wavData: wavData
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    func commitGeneratedAudio(
+        projectID: UUID,
+        wavData: Data,
+        metadata: GeneratedAudioMetadata,
+        now: Date = .now
+    ) throws {
+        try ProjectValidation.validate(
+            metadata
+        )
+
+        let paths =
+            try pathsForExistingProject(
+                projectID
+            )
+        try requireAudioMetadataCompatibility(
+            metadata,
+            in: paths
+        )
+
+        guard ProjectDigest.sha256(
+            wavData
+        ) == metadata.audioRevision else {
+            throw ProjectStoreError.invalidData(
+                "Final WAV bytes do not match audioRevision."
+            )
+        }
+
+        let audio =
+            try ProjectWAVCodec.decode(
+                wavData
+            )
+        let duration =
+            Double(audio.samples.count)
+            / Double(audio.sampleRate)
+        let tolerance =
+            1.0 / Double(audio.sampleRate)
+
+        guard abs(
+            metadata.durationSeconds
+                - duration
+        ) <= tolerance else {
+            throw ProjectStoreError.invalidData(
+                "Final WAV duration does not match metadata."
+            )
+        }
+
+        let transactionDirectory =
+            paths.tempDirectory.appending(
+                path:
+                    "audio-commit-\(UUID().uuidString.lowercased())",
+                directoryHint: .isDirectory
+            )
+
+        do {
+            try fileManager.createDirectory(
+                at: transactionDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            throw ProjectStoreError.io(
+                "Unable to create audio transaction directory: \(error)"
+            )
+        }
+
+        defer {
+            try? fileManager.removeItem(
+                at: transactionDirectory
+            )
+        }
+
+        let stagedWAV =
+            transactionDirectory.appending(
+                path: "staged.wav"
+            )
+        let stagedMetadata =
+            transactionDirectory.appending(
+                path: "staged.metadata.json"
+            )
+        let backupWAV =
+            transactionDirectory.appending(
+                path: "previous.wav"
+            )
+        let backupMetadata =
+            transactionDirectory.appending(
+                path: "previous.metadata.json"
+            )
+
+        let destinationWAV =
+            paths.audioWAV(
+                metadata.itemID
+            )
+        let destinationMetadata =
+            paths.audioMetadata(
+                metadata.itemID
+            )
+
+        let hadWAV =
+            fileManager.fileExists(
+                atPath:
+                    destinationWAV.path
+            )
+        let hadMetadata =
+            fileManager.fileExists(
+                atPath:
+                    destinationMetadata.path
+            )
+
+        do {
+            try wavData.write(
+                to: stagedWAV,
+                options: .atomic
+            )
+            let metadataData =
+                try ProjectJSONCodec.encode(
+                    metadata
+                )
+            try metadataData.write(
+                to: stagedMetadata,
+                options: .atomic
+            )
+
+            if hadWAV {
+                try fileManager.copyItem(
+                    at: destinationWAV,
+                    to: backupWAV
+                )
+            }
+            if hadMetadata {
+                try fileManager.copyItem(
+                    at: destinationMetadata,
+                    to: backupMetadata
+                )
+            }
+
+            try replaceStagedFile(
+                stagedWAV,
+                destination:
+                    destinationWAV
+            )
+            try replaceStagedFile(
+                stagedMetadata,
+                destination:
+                    destinationMetadata
+            )
+
+            guard ProjectDigest.sha256(
+                fileAt: destinationWAV
+            ) == metadata.audioRevision else {
+                throw ProjectStoreError.invalidData(
+                    "Committed WAV failed revision verification."
+                )
+            }
+
+            let committed:
+                GeneratedAudioMetadata =
+                    try readDocument(
+                        GeneratedAudioMetadata.self,
+                        at:
+                            destinationMetadata,
+                        relativePath:
+                            ProjectPackagePaths
+                                .relativeAudioMetadataPath(
+                                    metadata.itemID
+                                )
+                    )
+            guard committed == metadata else {
+                throw ProjectStoreError.invalidData(
+                    "Committed audio metadata failed verification."
+                )
+            }
+        } catch {
+            restoreFinalAudioPair(
+                destinationWAV:
+                    destinationWAV,
+                destinationMetadata:
+                    destinationMetadata,
+                backupWAV: backupWAV,
+                backupMetadata:
+                    backupMetadata,
+                hadWAV: hadWAV,
+                hadMetadata:
+                    hadMetadata
+            )
+
+            if let storeError =
+                error as? ProjectStoreError {
+                throw storeError
+            }
+            throw ProjectStoreError.io(
+                "Unable to commit generated audio: \(error)"
+            )
+        }
+
+        var queue =
+            try loadQueue(
+                projectID: projectID
+            )
+        var queueChanged = false
+
+        for index in queue.jobs.indices {
+            guard queue.jobs[index]
+                    .itemID
+                    == metadata.itemID,
+                  queue.jobs[index]
+                    .generationKey
+                    == metadata.generationKey
+            else {
+                continue
+            }
+
+            if queue.jobs[index].state
+                == .queued
+                || queue.jobs[index].state
+                    == .generating
+            {
+                queue.jobs[index].state =
+                    .completed
+                queue.jobs[index].updatedAt =
+                    now
+                queue.jobs[index].lastError =
+                    nil
+                queueChanged = true
+            }
+        }
+
+        if queueChanged {
+            try? saveQueue(
+                projectID: projectID,
+                queue: queue
+            )
+        }
+        try? touchProject(
+            projectID: projectID,
+            at: now
+        )
+    }
+
     func generationStatuses(
         projectID: UUID,
         requests: [ProjectGenerationStatusRequest]
     ) throws -> [UUID: ProjectItemGenerationStatus] {
-        let paths = try pathsForExistingProject(projectID)
-        let queue = try loadQueue(projectID: projectID)
-        var result: [UUID: ProjectItemGenerationStatus] = [:]
-        result.reserveCapacity(requests.count)
+        let paths =
+            try pathsForExistingProject(
+                projectID
+            )
+        let queue =
+            try loadQueue(
+                projectID: projectID
+            )
+        var result:
+            [UUID: ProjectItemGenerationStatus] = [:]
+        result.reserveCapacity(
+            requests.count
+        )
 
         for request in requests {
-            let matchingJobs = queue.jobs
-                .filter {
-                    $0.itemID == request.itemID
-                        && $0.generationKey == request.generationKey
-                }
-                .sorted { $0.updatedAt > $1.updatedAt }
+            let matchingJobs =
+                queue.jobs
+                    .filter {
+                        $0.itemID
+                            == request.itemID
+                            && $0.generationKey
+                                == request.generationKey
+                    }
+                    .sorted {
+                        $0.updatedAt
+                            > $1.updatedAt
+                    }
 
-            if matchingJobs.contains(where: { $0.state == .generating }) {
-                result[request.itemID] = ProjectItemGenerationStatus(
-                    state: .generating,
-                    audioBytes: audioByteCount(
-                        at: paths.audioWAV(request.itemID)
-                    )
+            let audioURL =
+                paths.audioWAV(
+                    request.itemID
                 )
-                continue
-            }
-
-            if matchingJobs.contains(where: { $0.state == .queued }) {
-                result[request.itemID] = ProjectItemGenerationStatus(
-                    state: .waiting,
-                    audioBytes: audioByteCount(
-                        at: paths.audioWAV(request.itemID)
-                    )
+            let metadataURL =
+                paths.audioMetadata(
+                    request.itemID
                 )
-                continue
-            }
-
-            let audioURL = paths.audioWAV(request.itemID)
-            let metadataURL = paths.audioMetadata(request.itemID)
-            let hasAudio = fileManager.fileExists(atPath: audioURL.path)
-            let hasMetadata = fileManager.fileExists(atPath: metadataURL.path)
+            let hasAudio =
+                fileManager.fileExists(
+                    atPath:
+                        audioURL.path
+                )
+            let hasMetadata =
+                fileManager.fileExists(
+                    atPath:
+                        metadataURL.path
+                )
 
             if hasAudio && hasMetadata {
                 do {
-                    let metadata: GeneratedAudioMetadata = try readDocument(
-                        GeneratedAudioMetadata.self,
-                        at: metadataURL,
-                        relativePath: ProjectPackagePaths.relativeAudioMetadataPath(
-                            request.itemID
+                    let metadata:
+                        GeneratedAudioMetadata =
+                            try readDocument(
+                                GeneratedAudioMetadata.self,
+                                at:
+                                    metadataURL,
+                                relativePath:
+                                    ProjectPackagePaths
+                                        .relativeAudioMetadataPath(
+                                            request.itemID
+                                        )
+                            )
+                    try ProjectValidation
+                        .validate(
+                            metadata
                         )
-                    )
-                    try ProjectValidation.validate(metadata)
                     try requireAudioMetadataCompatibility(
                         metadata,
                         in: paths
                     )
 
-                    let audioBytes = audioByteCount(at: audioURL)
-                    let audioRevision = try ProjectDigest.sha256(
-                        fileAt: audioURL
-                    )
-                    if metadata.generationKey == request.generationKey,
-                       metadata.audioRevision == audioRevision,
-                       metadata.contentRevision == request.contentRevision,
-                       metadata.voiceID == request.voiceID,
-                       metadata.speed == request.speed,
+                    let audioBytes =
+                        audioByteCount(
+                            at: audioURL
+                        )
+                    let audioRevision =
+                        try ProjectDigest
+                            .sha256(
+                                fileAt:
+                                    audioURL
+                            )
+
+                    if metadata.generationKey
+                            == request.generationKey,
+                       metadata.audioRevision
+                            == audioRevision,
+                       metadata.contentRevision
+                            == request.contentRevision,
+                       metadata.voiceID
+                            == request.voiceID,
+                       metadata.speed
+                            == request.speed,
                        let audioBytes,
                        audioBytes > 0 {
-                        result[request.itemID] = ProjectItemGenerationStatus(
-                            state: .readyOffline,
-                            audioBytes: audioBytes
-                        )
+                        result[
+                            request.itemID
+                        ] =
+                            ProjectItemGenerationStatus(
+                                state:
+                                    .readyOffline,
+                                audioBytes:
+                                    audioBytes
+                            )
                         continue
                     }
                 } catch {
-                    // Invalid or incompatible durable audio is surfaced below as
-                    // a recoverable needs-attention state.
+                    // Valid matching final audio is the only
+                    // path that can become Ready Offline.
                 }
+            }
 
-                result[request.itemID] = ProjectItemGenerationStatus(
-                    state: .needsAttention,
-                    audioBytes: audioByteCount(at: audioURL)
-                )
+            if matchingJobs.contains(
+                where: {
+                    $0.state
+                        == .generating
+                }
+            ) {
+                result[
+                    request.itemID
+                ] =
+                    ProjectItemGenerationStatus(
+                        state:
+                            .generating,
+                        audioBytes:
+                            audioByteCount(
+                                at:
+                                    audioURL
+                            )
+                    )
                 continue
             }
 
-            if hasAudio || hasMetadata
-                || matchingJobs.contains(where: {
-                    $0.state == .failed || $0.state == .completed
-                }) {
-                result[request.itemID] = ProjectItemGenerationStatus(
-                    state: .needsAttention,
-                    audioBytes: audioByteCount(at: audioURL)
-                )
+            if matchingJobs.contains(
+                where: {
+                    $0.state
+                        == .queued
+                }
+            ) {
+                result[
+                    request.itemID
+                ] =
+                    ProjectItemGenerationStatus(
+                        state:
+                            .waiting,
+                        audioBytes:
+                            audioByteCount(
+                                at:
+                                    audioURL
+                            )
+                    )
                 continue
             }
 
-            result[request.itemID] = .notGenerated
+            if hasAudio
+                || hasMetadata
+                || matchingJobs.contains(
+                    where: {
+                        $0.state
+                            == .failed
+                            || $0.state
+                                == .completed
+                    }
+                )
+            {
+                result[
+                    request.itemID
+                ] =
+                    ProjectItemGenerationStatus(
+                        state:
+                            .needsAttention,
+                        audioBytes:
+                            audioByteCount(
+                                at:
+                                    audioURL
+                            )
+                    )
+                continue
+            }
+
+            result[
+                request.itemID
+            ] = .notGenerated
         }
 
         return result
@@ -925,6 +1342,96 @@ actor ProjectStore {
             projectID: projectID,
             rootURL: rootURL
         )
+    }
+
+    private func replaceStagedFile(
+        _ staged: URL,
+        destination: URL
+    ) throws {
+        try fileManager.createDirectory(
+            at:
+                destination
+                    .deletingLastPathComponent(),
+            withIntermediateDirectories:
+                true
+        )
+
+        if fileManager.fileExists(
+            atPath: destination.path
+        ) {
+            _ = try fileManager
+                .replaceItemAt(
+                    destination,
+                    withItemAt: staged,
+                    backupItemName: nil,
+                    options: []
+                )
+        } else {
+            try fileManager.moveItem(
+                at: staged,
+                to: destination
+            )
+        }
+    }
+
+    private func restoreFinalAudioPair(
+        destinationWAV: URL,
+        destinationMetadata: URL,
+        backupWAV: URL,
+        backupMetadata: URL,
+        hadWAV: Bool,
+        hadMetadata: Bool
+    ) {
+        restoreFile(
+            destination: destinationWAV,
+            backup: backupWAV,
+            hadPrevious: hadWAV
+        )
+        restoreFile(
+            destination:
+                destinationMetadata,
+            backup: backupMetadata,
+            hadPrevious: hadMetadata
+        )
+    }
+
+    private func restoreFile(
+        destination: URL,
+        backup: URL,
+        hadPrevious: Bool
+    ) {
+        if hadPrevious {
+            guard fileManager.fileExists(
+                atPath: backup.path
+            ) else {
+                // Backup creation may have failed before any replacement.
+                // In that case the safest action is to leave the existing
+                // destination untouched.
+                return
+            }
+
+            if fileManager.fileExists(
+                atPath: destination.path
+            ) {
+                try? fileManager.removeItem(
+                    at: destination
+                )
+            }
+
+            try? fileManager.copyItem(
+                at: backup,
+                to: destination
+            )
+            return
+        }
+
+        if fileManager.fileExists(
+            atPath: destination.path
+        ) {
+            try? fileManager.removeItem(
+                at: destination
+            )
+        }
     }
 
     private func pathsForExistingProject(

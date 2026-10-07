@@ -183,6 +183,28 @@ nonisolated enum ProjectValidation {
             field: "audio.runtimeRevision"
         )
 
+        let expectedGenerationKey =
+            try ProjectGenerationKey.make(
+                GenerationKeyInput(
+                    contentRevision:
+                        metadata.contentRevision,
+                    resolvedVoiceID:
+                        metadata.voiceID,
+                    canonicalSpeed:
+                        metadata.speed,
+                    kokoroRuntimeRevision:
+                        metadata.runtimeRevision,
+                    synthesisConfigVersion:
+                        metadata.synthesisConfigVersion
+                )
+            )
+        guard metadata.generationKey
+                == expectedGenerationKey else {
+            throw ProjectStoreError.invalidData(
+                "Audio generationKey does not match its synthesis identity"
+            )
+        }
+
         guard metadata.synthesisConfigVersion >= 1 else {
             throw ProjectStoreError.invalidData(
                 "Audio synthesisConfigVersion must be positive"

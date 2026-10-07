@@ -8,6 +8,26 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         try await store.loadProject(projectID: projectID)
     }
 
+    func loadCompatibleFinalAudio(
+        request: ProjectGenerationStatusRequest
+    ) async throws -> ProjectFinalAudioAsset? {
+        try await store.loadCompatibleFinalAudio(
+            projectID: projectID,
+            request: request
+        )
+    }
+
+    func commitGeneratedAudio(
+        wavData: Data,
+        metadata: GeneratedAudioMetadata
+    ) async throws {
+        try await store.commitGeneratedAudio(
+            projectID: projectID,
+            wavData: wavData,
+            metadata: metadata
+        )
+    }
+
     func updatePlayback(
         _ playback: ProjectPlaybackState?
     ) async throws {
