@@ -20,16 +20,23 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
             )
         )
 
-        let document = try await Task.detached(
+        let extractionTask = Task.detached(
             priority: .userInitiated
         ) {
-            try extractor.extract(
+            try Task.checkCancellation()
+            return try extractor.extract(
                 from: url,
                 options: TextExtractionOptions(
                     startAccessingSecurityScopedResource: false
                 )
             )
-        }.value
+        }
+
+        let document = try await withTaskCancellationHandler {
+            try await extractionTask.value
+        } onCancel: {
+            extractionTask.cancel()
+        }
 
         progress?(
             ReadAloudImportProgress(

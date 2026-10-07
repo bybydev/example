@@ -3,14 +3,9 @@ import SwiftUI
 struct RootView: View {
     var body: some View {
         TabView {
-            Tab("ReadAloud", systemImage: "book.pages") {
+            Tab("Library", systemImage: "books.vertical") {
                 NavigationStack {
-                    ContentUnavailableView(
-                        "ReadAloud",
-                        systemImage: "book.pages",
-                        description: Text("The 1.0 product experience is being built on the new project architecture.")
-                    )
-                    .navigationTitle("ReadAloud")
+                    LibraryView()
                 }
             }
 
@@ -20,5 +15,16 @@ struct RootView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            MiniPlayerSlot()
+        }
+    }
+}
+
+/// Phase 3 reserves the global placement for the persistent player without
+/// introducing a second playback state before ProjectRuntime exists.
+private struct MiniPlayerSlot: View {
+    var body: some View {
+        EmptyView()
     }
 }

@@ -1,0 +1,691 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct LibraryView: View {
+    @State private var model = LibraryModel()
+    @State private var isFileImporterPresented = false
+    @State private var allowedContentTypes: [UTType] = [.data]
+    @State private var pasteDraft = PasteDraft()
+    @State private var isPastePresented = false
+    @State private var renameTarget: LibraryModel.Entry?
+    @State private var renameText = ""
+    @State private var deleteTarget: LibraryModel.Entry?
+    @State private var infoTarget: LibraryModel.Entry?
+    @State private var isIssuesPresented = false
+    @State private var importTask: Task<Void, Never>?
+
+    var body: some View {
+        @Bindable var model = model
+
+        Group {
+            if model.isLoading && !model.didLoad {
+                ProgressView("Loading Library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.entries.isEmpty
+                        && model.catalogIssues.isEmpty
+                        && model.searchText.isEmpty {
+                emptyState
+            } else {
+                libraryContent
+            }
+        }
+        .navigationTitle("Library")
+        .searchable(
+            text: $model.searchText,
+            placement: .navigationBarDrawer(displayMode: .automatic),
+            prompt: "Search Library"
+        )
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                sortMenu
+                addMenu
+            }
+        }
+        .refreshable {
+            await model.refresh()
+        }
+        .task {
+            await model.loadIfNeeded()
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: allowedContentTypes
+        ) { result in
+            switch result {
+            case .success(let url):
+                startFileImport(url)
+            case .failure(let error):
+                model.errorMessage = error.localizedDescription
+            }
+        }
+        .sheet(isPresented: $isPastePresented) {
+            PasteTextSheet(
+                draft: $pasteDraft,
+                onCancel: {
+                    isPastePresented = false
+                },
+                onImport: {
+                    let text = pasteDraft.text
+                    let title = pasteDraft.title
+                    isPastePresented = false
+                    startPasteImport(text: text, title: title)
+                }
+            )
+        }
+        .sheet(item: $infoTarget) { entry in
+            ProjectInfoSheet(entry: entry)
+        }
+        .sheet(isPresented: $isIssuesPresented) {
+            LibraryIssuesSheet(issues: model.catalogIssues)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.importProgress != nil },
+                set: { presented in
+                    if !presented {
+                        importTask?.cancel()
+                    }
+                }
+            )
+        ) {
+            if let progress = model.importProgress {
+                ImportProgressSheet(
+                    progress: progress,
+                    onCancel: {
+                        importTask?.cancel()
+                    }
+                )
+                .interactiveDismissDisabled()
+            }
+        }
+        .alert(
+            "Rename Project",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { presented in
+                    if !presented {
+                        renameTarget = nil
+                    }
+                }
+            )
+        ) {
+            TextField("Title", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                guard let target = renameTarget else { return }
+                Task {
+                    _ = await model.rename(
+                        projectID: target.id,
+                        to: renameText
+                    )
+                    renameTarget = nil
+                }
+            }
+            .disabled(
+                renameText.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty
+            )
+        }
+        .confirmationDialog(
+            "Delete Project?",
+            isPresented: Binding(
+                get: { deleteTarget != nil },
+                set: { presented in
+                    if !presented {
+                        deleteTarget = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Project", role: .destructive) {
+                guard let target = deleteTarget else { return }
+                Task {
+                    _ = await model.delete(projectID: target.id)
+                    deleteTarget = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let deleteTarget {
+                Text("“\(deleteTarget.snapshot.title)” and its local audio will be removed from this device.")
+            }
+        }
+        .alert(
+            "Library Error",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { presented in
+                    if !presented {
+                        model.errorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                model.errorMessage = nil
+            }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    private var libraryContent: some View {
+        List {
+            if let entry = model.continueListening {
+                Section("Continue Listening") {
+                    NavigationLink {
+                        ProjectDetailPlaceholderView(entry: entry)
+                    } label: {
+                        ContinueListeningCard(entry: entry)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if !model.catalogIssues.isEmpty {
+                Section {
+                    Button {
+                        isIssuesPresented = true
+                    } label: {
+                        Label(
+                            "\(model.catalogIssues.count) project package(s) need attention",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.subheadline)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                if model.filteredEntries.isEmpty {
+                    ContentUnavailableView(
+                        "No Results",
+                        systemImage: "magnifyingglass",
+                        description: Text(
+                            "No projects match “\(model.searchText)”."
+                        )
+                    )
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(model.filteredEntries) { entry in
+                        NavigationLink {
+                            ProjectDetailPlaceholderView(entry: entry)
+                        } label: {
+                            LibraryProjectRow(entry: entry)
+                        }
+                        .contextMenu {
+                            projectMenu(entry)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", role: .destructive) {
+                                deleteTarget = entry
+                            }
+                            Button("Rename") {
+                                beginRename(entry)
+                            }
+                            .tint(.accentColor)
+                        }
+                    }
+                }
+            } header: {
+                Text("Your Library")
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Your Library Is Empty", systemImage: "books.vertical")
+        } description: {
+            Text("Add a book, PDF, or document and listen completely on your device.")
+        } actions: {
+            Menu {
+                addMenuItems
+            } label: {
+                Label("Add a Document", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker(
+                "Sort",
+                selection: Binding(
+                    get: { model.sortOption },
+                    set: { model.sortOption = $0 }
+                )
+            ) {
+                ForEach(LibraryModel.SortOption.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .accessibilityLabel("Sort Library")
+    }
+
+    private var addMenu: some View {
+        Menu {
+            addMenuItems
+        } label: {
+            Image(systemName: "plus")
+        }
+        .accessibilityLabel("Add to Library")
+    }
+
+    @ViewBuilder
+    private var addMenuItems: some View {
+        Button {
+            presentFileImporter(
+                types: [UTType(filenameExtension: "epub") ?? .data]
+            )
+        } label: {
+            Label("Import EPUB", systemImage: "book.closed")
+        }
+
+        Button {
+            presentFileImporter(types: [.pdf])
+        } label: {
+            Label("Import PDF", systemImage: "doc.richtext")
+        }
+
+        Button {
+            presentFileImporter(types: documentTypes)
+        } label: {
+            Label("Import Document", systemImage: "doc.text")
+        }
+
+        Button {
+            pasteDraft = PasteDraft()
+            isPastePresented = true
+        } label: {
+            Label("Paste Text", systemImage: "doc.on.clipboard")
+        }
+    }
+
+    @ViewBuilder
+    private func projectMenu(_ entry: LibraryModel.Entry) -> some View {
+        Button {
+            infoTarget = entry
+        } label: {
+            Label("Project Info", systemImage: "info.circle")
+        }
+
+        Button {
+            beginRename(entry)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            deleteTarget = entry
+        } label: {
+            Label("Delete Project", systemImage: "trash")
+        }
+    }
+
+    private var documentTypes: [UTType] {
+        let extensions = [
+            "txt", "text",
+            "md", "markdown", "mdown", "mkd",
+            "srt", "vtt", "webvtt",
+            "rtf",
+            "html", "htm",
+            "docx", "odt", "pptx",
+        ]
+        let resolved = extensions.compactMap {
+            UTType(filenameExtension: $0)
+        }
+        return resolved.isEmpty ? [.data] : resolved
+    }
+
+    private func presentFileImporter(types: [UTType]) {
+        allowedContentTypes = types
+        isFileImporterPresented = true
+    }
+
+    private func beginRename(_ entry: LibraryModel.Entry) {
+        renameTarget = entry
+        renameText = entry.snapshot.title
+    }
+
+    private func startFileImport(_ url: URL) {
+        importTask?.cancel()
+        importTask = Task {
+            _ = await model.importFile(url)
+            importTask = nil
+        }
+    }
+
+    private func startPasteImport(
+        text: String,
+        title: String
+    ) {
+        importTask?.cancel()
+        importTask = Task {
+            _ = await model.importPaste(
+                text: text,
+                suggestedTitle: title
+            )
+            importTask = nil
+            if model.errorMessage == nil {
+                pasteDraft = PasteDraft()
+            }
+        }
+    }
+}
+
+private struct ContinueListeningCard: View {
+    let entry: LibraryModel.Entry
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ProjectArtworkView(
+                url: entry.artworkURL,
+                sourceType: entry.snapshot.sourceType,
+                width: 72,
+                height: 96
+            )
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(entry.snapshot.title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                if let author = entry.snapshot.author {
+                    Text(author)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                ProgressView(value: entry.snapshot.projectProgress)
+
+                Text(entry.snapshot.projectProgress, format: .percent.precision(.fractionLength(0)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 6)
+
+            Image(systemName: "play.fill")
+                .font(.title3)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+private struct LibraryProjectRow: View {
+    let entry: LibraryModel.Entry
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ProjectArtworkView(
+                url: entry.artworkURL,
+                sourceType: entry.snapshot.sourceType,
+                width: 52,
+                height: 70
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.snapshot.title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                if let author = entry.snapshot.author {
+                    Text(author)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                HStack(spacing: 8) {
+                    Text(sourceLabel(entry.snapshot.sourceType))
+                    if entry.snapshot.projectProgress > 0 {
+                        Text("·")
+                        Text(
+                            entry.snapshot.projectProgress,
+                            format: .percent.precision(.fractionLength(0))
+                        )
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func sourceLabel(_ type: ProjectSourceType) -> String {
+        switch type {
+        case .epub: "EPUB"
+        case .pdf: "PDF"
+        case .document: "Document"
+        case .paste: "Text"
+        }
+    }
+}
+
+private struct ProjectDetailPlaceholderView: View {
+    let entry: LibraryModel.Entry
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(entry.snapshot.title, systemImage: "book.pages")
+        } description: {
+            Text("Project Detail arrives in Phase 4.")
+        }
+        .navigationTitle(entry.snapshot.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct LibraryIssuesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let issues: [ProjectCatalogIssue]
+
+    var body: some View {
+        NavigationStack {
+            List(issues, id: \.packageName) { issue in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(issue.packageName)
+                        .font(.headline)
+                    Text(issue.message)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 3)
+            }
+            .navigationTitle("Library Issues")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct ProjectInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: LibraryModel.Entry
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(alignment: .top, spacing: 16) {
+                        ProjectArtworkView(
+                            url: entry.artworkURL,
+                            sourceType: entry.snapshot.sourceType,
+                            width: 72,
+                            height: 96
+                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entry.snapshot.title)
+                                .font(.headline)
+                            if let author = entry.snapshot.author {
+                                Text(author)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section("Project") {
+                    LabeledContent(
+                        "Type",
+                        value: sourceLabel(entry.snapshot.sourceType)
+                    )
+                    LabeledContent {
+                        Text(
+                            entry.snapshot.projectProgress,
+                            format: .percent.precision(.fractionLength(0))
+                        )
+                    } label: {
+                        Text("Progress")
+                    }
+                    LabeledContent {
+                        Text(entry.snapshot.createdAt, format: .dateTime)
+                    } label: {
+                        Text("Added")
+                    }
+                    LabeledContent {
+                        Text(entry.snapshot.updatedAt, format: .dateTime)
+                    } label: {
+                        Text("Updated")
+                    }
+                }
+            }
+            .navigationTitle("Project Info")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func sourceLabel(_ type: ProjectSourceType) -> String {
+        switch type {
+        case .epub: "EPUB"
+        case .pdf: "PDF"
+        case .document: "Document"
+        case .paste: "Text"
+        }
+    }
+}
+
+private struct PasteDraft {
+    var title = ""
+    var text = ""
+}
+
+private struct PasteTextSheet: View {
+    @Binding var draft: PasteDraft
+    let onCancel: () -> Void
+    let onImport: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Title") {
+                    TextField("Optional title", text: $draft.title)
+                }
+
+                Section("Text") {
+                    TextEditor(text: $draft.text)
+                        .frame(minHeight: 240)
+                }
+            }
+            .navigationTitle("Paste Text")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add", action: onImport)
+                        .disabled(
+                            draft.text.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            ).isEmpty
+                        )
+                }
+            }
+        }
+    }
+}
+
+private struct ImportProgressSheet: View {
+    let progress: ReadAloudImportProgress
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer()
+
+                Image(systemName: "books.vertical")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+
+                VStack(spacing: 8) {
+                    Text("Importing")
+                        .font(.title2.bold())
+                    Text(stageLabel(progress))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let value = progress.fractionCompleted {
+                    ProgressView(value: value)
+                        .padding(.horizontal, 32)
+                } else {
+                    ProgressView()
+                }
+
+                if let detail = progress.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+
+                Spacer()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func stageLabel(
+        _ progress: ReadAloudImportProgress
+    ) -> String {
+        switch progress.stage {
+        case .preparing: "Preparing…"
+        case .extracting: "Extracting content…"
+        case .normalizing: "Organizing content…"
+        case .persisting: "Adding to Library…"
+        case .finished: "Finishing…"
+        }
+    }
+}

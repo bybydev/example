@@ -282,6 +282,22 @@ package. The final package becomes visible only after source SHA-256 validation
 and all writes succeed, so a failed import does not register a broken Library
 project.
 
+## Library
+
+Phase 3 replaces the prototype-first launch screen with the real Library home.
+
+The Library stays snapshot-driven: it reads `project.json` metadata through
+`ProjectStore.catalog()` and does not hydrate content items just to render the
+shelf. It provides Continue Listening, artwork, progress/source metadata,
+search, sort, pull-to-refresh, rename, delete, project-info actions, and
+per-package corruption warnings.
+
+The Add menu connects the Phase 2 importer to native file import and pasted
+text. Import progress/errors remain local to Library, and failed imports never
+create visible partial projects. Project navigation is established now; the
+actual Project Detail implementation belongs to Phase 4. A global mini-player
+slot is reserved at the tab root for the later shared playback runtime.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.
