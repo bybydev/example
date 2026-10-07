@@ -28,6 +28,7 @@ final class ChatManagementModel {
   var isBusy = false
   var errorMessage: String?
   var onFileReferencesChanged: (() -> Void)?
+  var onNewChatDiscarded: (() async -> Void)?
   var backgroundKeeper: BackgroundActivityKeeper?
 
   private let providerWorkspace: ProviderWorkspaceStore
@@ -40,7 +41,7 @@ final class ChatManagementModel {
   /// rule. Wired from AppModel so chat creation and every UI surface agree.
   var resolveDefaultAccountID: () -> ProviderAccountID?
   private var hydratedConversations: [ConversationID: ChatConversation] = [:]
-  private var loadingConversationIDs: Set<ConversationID> = []
+  private var loadingConversationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var conversationLoadFailures: Set<ConversationID> = []
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var draftTasks: [ConversationID: Task<Void, Never>] = [:]
@@ -49,6 +50,187 @@ final class ChatManagementModel {
   private var searchRevision: UInt = 0
   private var streamTargets: [ChatMessageID: LiveMessage] = [:]
   private var streamPresentationTasks: [ChatMessageID: Task<Void, Never>] = [:]
+
+  private var newChatTask: Task<ConversationID?, Never>?
+  private var newChatTaskProjectID: ProjectID?
+  private var newChatTaskID: UUID?
+  private var activeNewChatID: ConversationID?
+  private var activeNewChatProjectID: ProjectID?
+  private var ownedNewChatIDs: Set<ConversationID> = []
+  private var abandonedNewChatIDs: Set<ConversationID> = []
+  private var discardingConversationIDs: Set<ConversationID> = []
+  private var configurationOperations: [ConversationID: Int] = [:]
+  private var failedConfigurationKeys: [ConversationID: Set<String>] = [:]
+  private var configurationWaiters: [ConversationID: [CheckedContinuation<Void, Never>]] = [:]
+  private var preparingConversationIDs: Set<ConversationID> = []
+  private var draftsDuringPreparation: [ConversationID: String] = [:]
+
+  /// List/search surfaces use committed index rows, never optimistic messages
+  /// from the hydrated editor. Selecting an unsent chat does not make it history.
+  var historyConversations: [ChatConversation] {
+    conversations.filter { conversation in
+      if conversation.isIOSNewChat == true {
+        return conversation.messages.contains { $0.role == .user }
+      }
+      return conversation.messageCount > 0
+    }
+  }
+
+  func canSend(_ id: ConversationID) -> Bool {
+    hasConversation(id) && !abandonedNewChatIDs.contains(id) && !discardingConversationIDs.contains(id)
+      && configurationOperations[id, default: 0] == 0
+      && (failedConfigurationKeys[id]?.isEmpty ?? true)
+      && generationTasks[id] == nil
+  }
+
+  func beginConfiguration(_ id: ConversationID, key: String) -> Bool {
+    guard hasConversation(id), !abandonedNewChatIDs.contains(id),
+      !discardingConversationIDs.contains(id), !preparingConversationIDs.contains(id)
+    else { return false }
+    configurationOperations[id, default: 0] += 1
+    return true
+  }
+
+  func endConfiguration(_ id: ConversationID, key: String, succeeded: Bool) {
+    configurationOperations[id, default: 0] -= 1
+    if succeeded {
+      failedConfigurationKeys[id]?.remove(key)
+      if key == "mcp.replace" || key == "mcp.reset" {
+        failedConfigurationKeys[id] = failedConfigurationKeys[id]?.filter { !$0.hasPrefix("mcp.") }
+      }
+    } else if key != "rename" {
+      failedConfigurationKeys[id, default: []].insert(key)
+    }
+    if configurationOperations[id, default: 0] == 0 {
+      for waiter in configurationWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
+    }
+    retryAbandonedNewChat(id)
+  }
+
+  func pendingConfigurationIssue(_ id: ConversationID) -> String? {
+    guard !(failedConfigurationKeys[id]?.isEmpty ?? true) else { return nil }
+    return "Chat settings could not be saved. Retry the failed setting before sending."
+  }
+
+  private func waitForConfiguration(_ id: ConversationID) async {
+    guard configurationOperations[id, default: 0] > 0 else { return }
+    await withCheckedContinuation { configurationWaiters[id, default: []].append($0) }
+  }
+
+  /// One creation task across all entry points. Same-scope requests coalesce;
+  /// a different scope waits for creation to settle before allocating its UUID.
+  func newChat(projectID: ProjectID?) async -> ConversationID? {
+    if let task = newChatTask {
+      let scope = newChatTaskProjectID
+      let token = newChatTaskID
+      let id = await task.value
+      finishNewChatCreation(id, projectID: scope, token: token)
+      if scope == projectID { return id }
+      return await newChat(projectID: projectID)
+    }
+    if let id = activeNewChatID, activeNewChatProjectID == projectID,
+      hasConversation(id), !abandonedNewChatIDs.contains(id), !discardingConversationIDs.contains(id),
+      !isGenerating(id), !historyConversations.contains(where: { $0.id == id })
+    {
+      return id
+    }
+    newChatTaskProjectID = projectID
+    let token = UUID()
+    newChatTaskID = token
+    let task = Task { @MainActor in
+      await self.createConversation(projectID: projectID, managedNewChat: true)
+    }
+    newChatTask = task
+    let id = await task.value
+    finishNewChatCreation(id, projectID: projectID, token: token)
+    return id
+  }
+
+  private func finishNewChatCreation(_ id: ConversationID?, projectID: ProjectID?, token: UUID?) {
+    guard newChatTaskID == token else { return }
+    if let id {
+      activeNewChatID = id
+      activeNewChatProjectID = projectID
+    }
+    newChatTask = nil
+    newChatTaskID = nil
+  }
+
+  /// Called only by explicit navigation/session changes, not view disappearance.
+  func abandonNewChat(_ id: ConversationID?) {
+    guard let id, ownedNewChatIDs.contains(id) else { return }
+    if activeNewChatID == id { activeNewChatID = nil }
+    if historyConversations.contains(where: { $0.id == id }) { return }
+    abandonedNewChatIDs.insert(id)
+    retryAbandonedNewChat(id)
+  }
+
+  func recoverUnsentNewChats() async {
+    ownedNewChatIDs.formUnion(conversations.filter { $0.isIOSNewChat == true }.map(\.id))
+    for conversation in conversations where conversation.isIOSNewChat == true
+      && !conversation.messages.contains(where: { $0.role == .user })
+    {
+      abandonedNewChatIDs.insert(conversation.id)
+      await discardAbandonedNewChat(conversation.id)
+    }
+  }
+
+  func retryAbandonedNewChats() {
+    for id in abandonedNewChatIDs { retryAbandonedNewChat(id) }
+  }
+
+  private func retryAbandonedNewChat(_ id: ConversationID) {
+    guard abandonedNewChatIDs.contains(id) else { return }
+    Task { @MainActor in await self.discardAbandonedNewChat(id) }
+  }
+
+  private func discardAbandonedNewChat(_ id: ConversationID) async {
+    guard abandonedNewChatIDs.contains(id), ownedNewChatIDs.contains(id),
+      activeNewChatID != id, generationTasks[id] == nil,
+      configurationOperations[id, default: 0] == 0,
+      discardingConversationIDs.insert(id).inserted
+    else { return }
+    defer { discardingConversationIDs.remove(id) }
+
+    // Reserve the ID before awaiting. Send/configuration/draft writes now refuse
+    // it; drain an already-running debounce before reading durable eligibility.
+    if let task = draftTasks.removeValue(forKey: id) {
+      task.cancel()
+      await task.value
+    }
+    await loadingConversationTasks[id]?.value
+    draftRevisions.removeValue(forKey: id)
+    do {
+      if let persisted = try await conversationStore.persistedConversation(id: id) {
+        guard persisted.isIOSNewChat == true else {
+          abandonedNewChatIDs.remove(id)
+          return
+        }
+        if persisted.messages.contains(where: { $0.role == .user }) {
+          abandonedNewChatIDs.remove(id)
+          try await conversationStore.restorePersistedConversation(id: id)
+          try await reloadSnapshot()
+          return
+        }
+      }
+      // The owning shard is deleted LAST. A crash/partial failure before then
+      // retains the durable marker so startup can retry companion cleanup.
+      try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
+      try await projectWorkspace?.removeConversation(id)
+      try await conversationStore.deleteConversation(id)
+      hydratedConversations.removeValue(forKey: id)
+      failedConfigurationKeys.removeValue(forKey: id)
+      configurationOperations.removeValue(forKey: id)
+      abandonedNewChatIDs.remove(id)
+      ownedNewChatIDs.remove(id)
+      try await reloadSnapshot()
+      await onNewChatDiscarded?()
+    } catch {
+      // Keep ownership and the hidden cleanup-pending ID; foreground/startup
+      // can retry without reusing it or deleting a sent conversation.
+      errorMessage = "Could not discard an unsent chat: \(error.localizedDescription)"
+    }
+  }
 
   private static let streamPresentationInterval: Duration = .milliseconds(50)
 
@@ -99,16 +281,28 @@ final class ChatManagementModel {
   }
 
   func loadConversation(_ id: ConversationID) async {
-    guard hydratedConversations[id] == nil, loadingConversationIDs.insert(id).inserted else { return }
-    defer { loadingConversationIDs.remove(id) }
-    do {
-      hydratedConversations[id] = try await conversationStore.conversation(id: id)
-      conversationLoadFailures.remove(id)
-      try await reloadSnapshot()
-    } catch {
-      conversationLoadFailures.insert(id)
-      errorMessage = error.localizedDescription
+    if let task = loadingConversationTasks[id] {
+      await task.value
+      return
     }
+    guard hydratedConversations[id] == nil else { return }
+    let task = Task { @MainActor in
+      do {
+        self.hydratedConversations[id] = try await self.conversationStore.conversation(id: id)
+        self.conversationLoadFailures.remove(id)
+        try await self.reloadSnapshot()
+      } catch {
+        self.conversationLoadFailures.insert(id)
+        self.errorMessage = error.localizedDescription
+      }
+    }
+    loadingConversationTasks[id] = task
+    await task.value
+    loadingConversationTasks.removeValue(forKey: id)
+  }
+
+  func failedToLoad(_ id: ConversationID) -> Bool {
+    conversationLoadFailures.contains(id)
   }
 
   func displayMessage(_ message: ChatMessage) -> ChatMessage {
@@ -136,6 +330,13 @@ final class ChatManagementModel {
   var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
 
   func saveDraft(_ text: String, conversationID: ConversationID) {
+    guard hasConversation(conversationID), !abandonedNewChatIDs.contains(conversationID),
+      !discardingConversationIDs.contains(conversationID)
+    else { return }
+    if preparingConversationIDs.contains(conversationID) {
+      draftsDuringPreparation[conversationID] = text
+      return
+    }
     let value = text.isEmpty ? nil : text
     if var loaded = hydratedConversations[conversationID] {
       loaded.draftText = value
@@ -185,7 +386,8 @@ final class ChatManagementModel {
         let results = await conversationStore.search(trimmed)
         try Task.checkCancellation()
         guard searchRevision == revision else { return }
-        searchResults = results
+        let visibleIDs = Set(historyConversations.map(\.id))
+        searchResults = results.filter { visibleIDs.contains($0.conversationID) }
         searchTask = nil
       } catch {
       }
@@ -193,7 +395,11 @@ final class ChatManagementModel {
   }
 
   @discardableResult
-  func createConversation(projectID: ProjectID? = nil) async -> ConversationID? {
+  func createConversation(
+    projectID: ProjectID? = nil,
+    managedNewChat: Bool = false
+  ) async -> ConversationID? {
+    var createdID: ConversationID?
     do {
       let accounts = await providerWorkspace.allAccounts().filter(\.isEnabled)
       guard !accounts.isEmpty else {
@@ -237,7 +443,9 @@ final class ChatManagementModel {
           )
         }
         modelID = configuredModelID
-      } else if let fallback = account.defaultModelID ?? models.first(where: \.isAvailable)?.model.id {
+      } else if let fallback = models.first(where: {
+        $0.model.id == account.defaultModelID && $0.isAvailable
+      })?.model.id ?? models.first(where: \.isAvailable)?.model.id {
         modelID = fallback
       } else {
         throw ProviderError.invalidModel
@@ -248,12 +456,17 @@ final class ChatManagementModel {
         ? preferences.defaultSystemPrompt
         : projectInstructions
 
+      let id = ConversationID()
+      createdID = id
+      if managedNewChat { ownedNewChatIDs.insert(id) }
       let conversation = try await conversationStore.createConversation(
         providerID: account.providerID,
         accountID: account.id,
         modelID: modelID,
         systemPrompt: systemPrompt,
-        options: .init()
+        options: .init(),
+        id: id,
+        isIOSNewChat: managedNewChat ? true : nil
       )
       hydratedConversations[conversation.id] = conversation
 
@@ -261,8 +474,10 @@ final class ChatManagementModel {
         do {
           try await projectWorkspace.assignConversation(conversation.id, to: projectID)
         } catch {
-          try? await conversationStore.deleteConversation(conversation.id)
-          hydratedConversations.removeValue(forKey: conversation.id)
+          if !managedNewChat {
+            try? await conversationStore.deleteConversation(conversation.id)
+            hydratedConversations.removeValue(forKey: conversation.id)
+          }
           throw error
         }
       }
@@ -271,23 +486,37 @@ final class ChatManagementModel {
       return conversation.id
     } catch {
       errorMessage = error.localizedDescription
+      if managedNewChat, let createdID {
+        abandonedNewChatIDs.insert(createdID)
+        await discardAbandonedNewChat(createdID)
+      }
       return nil
     }
   }
 
   func deleteConversation(_ id: ConversationID) async {
+    guard discardingConversationIDs.insert(id).inserted else { return }
+    defer { discardingConversationIDs.remove(id) }
     await stop(id)
-    draftTasks[id]?.cancel()
-    draftTasks.removeValue(forKey: id)
+    await waitForConfiguration(id)
+    await loadingConversationTasks[id]?.value
+    if let task = draftTasks.removeValue(forKey: id) {
+      task.cancel()
+      await task.value
+    }
     draftRevisions.removeValue(forKey: id)
     streamRevisions.removeValue(forKey: id)
     activeToolCallsByConversation.removeValue(forKey: id)
     hydratedConversations.removeValue(forKey: id)
     conversationLoadFailures.remove(id)
     do {
-      try await conversationStore.deleteConversation(id)
       try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
       try await projectWorkspace?.removeConversation(id)
+      try await conversationStore.deleteConversation(id)
+      ownedNewChatIDs.remove(id)
+      abandonedNewChatIDs.remove(id)
+      failedConfigurationKeys.removeValue(forKey: id)
+      if activeNewChatID == id { activeNewChatID = nil }
       try await reloadSnapshot()
     } catch {
       errorMessage = error.localizedDescription
@@ -295,9 +524,13 @@ final class ChatManagementModel {
   }
 
   func renameConversation(_ id: ConversationID, title: String) async {
+    guard beginConfiguration(id, key: "rename") else { return }
+    var succeeded = false
+    defer { endConfiguration(id, key: "rename", succeeded: succeeded) }
     do {
       try await conversationStore.renameConversation(id, title: title)
       try await reloadSnapshot()
+      succeeded = true
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -310,6 +543,9 @@ final class ChatManagementModel {
     systemPrompt: String,
     options: ProviderRequestOptions
   ) async -> Bool {
+    guard beginConfiguration(conversationID, key: "target") else { return false }
+    var succeeded = false
+    defer { endConfiguration(conversationID, key: "target", succeeded: succeeded) }
     do {
       let model = await providerWorkspace.modelRecords(for: account.id, includeHidden: true)
         .first { $0.model.id == modelID }?.model
@@ -325,6 +561,7 @@ final class ChatManagementModel {
         options: options
       )
       try await reloadSnapshot()
+      succeeded = true
       return true
     } catch {
       errorMessage = error.localizedDescription
@@ -360,16 +597,21 @@ final class ChatManagementModel {
     await conversationStore.attachmentData(id)
   }
 
+  @discardableResult
   func send(
     conversationID: ConversationID,
     text: String,
-    attachments: [ChatAttachment] = []
-  ) {
-    guard generationTasks[conversationID] == nil else { return }
+    attachments: [ChatAttachment] = [],
+    onMessagePersisted: (@MainActor (Bool) -> Void)? = nil
+  ) -> Bool {
+    guard canSend(conversationID) else { return false }
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    else { return false }
+    preparingConversationIDs.insert(conversationID)
 
-    saveDraft("", conversationID: conversationID)
-
-    if var conversation = hydratedConversations[conversationID] {
+    if var conversation = hydratedConversations[conversationID],
+      conversation.isIOSNewChat != true || historyConversations.contains(where: { $0.id == conversationID })
+    {
       let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
       if !trimmed.isEmpty || !attachments.isEmpty {
         let now = Date.now
@@ -392,8 +634,10 @@ final class ChatManagementModel {
 
     startGeneration(
       conversationID: conversationID,
-      action: .send(text, attachments)
+      action: .send(text, attachments),
+      onMessagePersisted: onMessagePersisted
     )
+    return true
   }
 
   func editAndResend(
@@ -454,9 +698,10 @@ final class ChatManagementModel {
 
   private func startGeneration(
     conversationID: ConversationID,
-    action: GenerationAction
+    action: GenerationAction,
+    onMessagePersisted: (@MainActor (Bool) -> Void)? = nil
   ) {
-    guard generationTasks[conversationID] == nil else { return }
+    guard canSend(conversationID) else { return }
     if activeConversationIDs.isEmpty {
       backgroundKeeper?.begin()
     }
@@ -465,6 +710,9 @@ final class ChatManagementModel {
     generationTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
       var didReceiveInlineFailure = false
+      var reportedPersistence = false
+      let previousUserCount = conversations.first(where: { $0.id == conversationID })?
+        .messages.filter { $0.role == .user }.count ?? 0
       defer {
         clearLiveMessages(for: conversationID)
         activeConversationIDs.remove(conversationID)
@@ -473,11 +721,17 @@ final class ChatManagementModel {
         }
         activeToolCallsByConversation.removeValue(forKey: conversationID)
         generationTasks.removeValue(forKey: conversationID)
+        retryAbandonedNewChat(conversationID)
       }
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
         case .send(let text, let attachments):
+          if let draftTask = draftTasks.removeValue(forKey: conversationID) {
+            draftTask.cancel()
+            await draftTask.value
+          }
+          try Task.checkCancellation()
           stream = await runtime.send(
             conversationID: conversationID,
             userText: text,
@@ -496,6 +750,11 @@ final class ChatManagementModel {
           )
         }
         for try await event in stream {
+          if case .turnStarted = event, !reportedPersistence {
+            reportedPersistence = true
+            finishSendPreparation(conversationID, committed: true, action: action)
+            onMessagePersisted?(true)
+          }
           if case .failed = event {
             didReceiveInlineFailure = true
           }
@@ -509,6 +768,34 @@ final class ChatManagementModel {
         }
         try? await reloadSnapshot()
       }
+      if !reportedPersistence {
+        // The shard may have committed even if the index write failed. Read it
+        // before deciding whether to retain the composer or expose history.
+        var committed = false
+        do {
+          let persisted = try await conversationStore.persistedConversation(id: conversationID)
+          let userCount = persisted?.messages.filter { $0.role == .user }.count ?? 0
+          committed = userCount > previousUserCount
+          try await conversationStore.restorePersistedConversation(id: conversationID)
+          try await reloadSnapshot()
+          finishSendPreparation(conversationID, committed: committed, action: action)
+          onMessagePersisted?(committed)
+        } catch {
+          errorMessage = error.localizedDescription
+          finishSendPreparation(conversationID, committed: committed, action: action)
+          onMessagePersisted?(committed)
+        }
+      }
+    }
+  }
+
+  private func finishSendPreparation(_ id: ConversationID, committed: Bool, action: GenerationAction) {
+    guard preparingConversationIDs.remove(id) != nil else { return }
+    let latestDraft = draftsDuringPreparation.removeValue(forKey: id)
+    if let latestDraft {
+      saveDraft(latestDraft, conversationID: id)
+    } else if !committed, case .send(let text, _) = action {
+      saveDraft(text, conversationID: id)
     }
   }
 
@@ -556,6 +843,9 @@ final class ChatManagementModel {
 
   private func reloadSnapshot() async throws {
     conversations = await conversationStore.conversationSummaries()
+    ownedNewChatIDs.formUnion(conversations.filter { $0.isIOSNewChat == true }.map(\.id))
+    let visibleIDs = Set(historyConversations.map(\.id))
+    searchResults.removeAll { !visibleIDs.contains($0.conversationID) }
     let validIDs = Set(conversations.map(\.id))
     for id in Array(hydratedConversations.keys) where !validIDs.contains(id) {
       hydratedConversations.removeValue(forKey: id)

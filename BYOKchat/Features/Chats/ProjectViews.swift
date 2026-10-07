@@ -723,10 +723,8 @@ struct ProjectDetailView: View {
   }
 
   private var conversations: [ChatConversation] {
-    // Untouched chats are transient; hide them unless one is on screen.
-    chats.conversations.filter {
+    chats.historyConversations.filter {
       projects.projectID(for: $0.id) == projectID
-        && (!($0.messages.isEmpty) || $0.id == visibleConversationID)
     }
   }
 

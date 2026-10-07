@@ -15,6 +15,8 @@ struct ChatListView: View {
   @State private var renameText = ""
   @State private var searchText = ""
   @State private var searchTarget: ConversationSearchResult?
+  @State private var isCreatingChat = false
+  @State private var creationRevision: UInt = 0
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
@@ -22,7 +24,7 @@ struct ChatListView: View {
       Group {
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           searchResults
-        } else if chats.conversations.isEmpty {
+        } else if chats.historyConversations.isEmpty {
           ContentUnavailableView {
             Label("No Chats", systemImage: "bubble.left.and.bubble.right")
           } description: {
@@ -52,7 +54,7 @@ struct ChatListView: View {
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button("New Chat", systemImage: "square.and.pencil") { createChat() }
-            .disabled(providers.accounts.isEmpty)
+            .disabled(providers.accounts.isEmpty || isCreatingChat)
         }
       }
       .navigationDestination(for: ConversationID.self) { id in
@@ -64,9 +66,16 @@ struct ChatListView: View {
           providers: providers,
           projects: projects,
           mcp: mcp,
-          library: library
+          library: library,
+          pushedFromStack: true,
+          startNewChat: createChat
         )
       }
+    }
+    .onChange(of: path) { oldValue, newValue in
+      if isCreatingChat { creationRevision &+= 1 }
+      let kept = Set(newValue)
+      for id in oldValue where !kept.contains(id) { chats.abandonNewChat(id) }
     }
     .alert(
       "Rename Chat",
@@ -87,7 +96,7 @@ struct ChatListView: View {
 
   private var conversationList: some View {
     List {
-      ForEach(chats.conversations) { conversation in
+      ForEach(chats.historyConversations) { conversation in
         NavigationLink(value: conversation.id) {
           ConversationRow(
             conversation: conversation,
@@ -111,7 +120,7 @@ struct ChatListView: View {
         }
       }
       .onDelete { offsets in
-        let ids = offsets.map { chats.conversations[$0].id }
+        let ids = offsets.map { chats.historyConversations[$0].id }
         for id in ids {
           Task {
             await chats.deleteConversation(id)
@@ -145,11 +154,29 @@ struct ChatListView: View {
   }
 
   private func createChat() {
+    guard !isCreatingChat else { return }
+    if let id = path.last, chats.hasConversation(id), !chats.isGenerating(id),
+      !chats.historyConversations.contains(where: { $0.id == id })
+    { return }
     searchTarget = nil
-    Task {
-      if let id = await chats.createConversation() {
-        path.append(id)
+    let requestedPath = path
+    let revision = creationRevision
+    isCreatingChat = true
+    Task { @MainActor in
+      defer { isCreatingChat = false }
+      guard let id = await chats.newChat(projectID: nil) else { return }
+      guard creationRevision == revision, path == requestedPath else {
+        chats.abandonNewChat(id)
+        return
       }
+      await projects.reloadFromStorage()
+      await mcp.reloadFromStorage()
+      guard creationRevision == revision, path == requestedPath else {
+        chats.abandonNewChat(id)
+        return
+      }
+      if let previous = path.last { chats.abandonNewChat(previous) }
+      path = [id]
     }
   }
 }

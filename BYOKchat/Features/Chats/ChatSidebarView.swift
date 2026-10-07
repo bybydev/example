@@ -231,7 +231,7 @@ struct ChatSidebarView: View {
       LazyVStack(alignment: .leading, spacing: 1) {
         primaryNavigation
 
-        if chats.conversations.isEmpty {
+        if chats.historyConversations.isEmpty {
           ContentUnavailableView(
             "No Chats",
             systemImage: "bubble.left",
@@ -418,21 +418,15 @@ struct ChatSidebarView: View {
     )
   }
 
-  /// Untouched chats are transient (they're discarded on exit), so they only
-  /// appear while actually on screen.
-  private func isListable(_ conversation: ChatConversation) -> Bool {
-    !conversation.messages.isEmpty || conversation.id == selectedConversationID
-  }
-
   private var pinnedConversations: [ChatConversation] {
-    chats.conversations
-      .filter { pinnedIDSet.contains($0.id.rawValue) && isListable($0) }
+    chats.historyConversations
+      .filter { pinnedIDSet.contains($0.id.rawValue) }
       .sorted { $0.updatedAt > $1.updatedAt }
   }
 
   private var recentConversations: [ChatConversation] {
-    chats.conversations
-      .filter { !pinnedIDSet.contains($0.id.rawValue) && isListable($0) }
+    chats.historyConversations
+      .filter { !pinnedIDSet.contains($0.id.rawValue) }
       .sorted { $0.updatedAt > $1.updatedAt }
   }
 

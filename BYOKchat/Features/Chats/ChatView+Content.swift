@@ -26,7 +26,7 @@ extension ChatView {
           draft: $draft,
           attachments: pendingAttachments,
           isGenerating: false,
-          canSend: configurationIssue(conversation) == nil,
+          canSend: configurationIssue(conversation) == nil && chats.canSend(conversation.id),
           conversation: conversation,
           chats: chats,
           providers: providers,
@@ -258,7 +258,7 @@ extension ChatView {
             draft: $draft,
             attachments: pendingAttachments,
             isGenerating: chats.isGenerating(conversationID),
-            canSend: configurationIssue(conversation) == nil,
+            canSend: configurationIssue(conversation) == nil && chats.canSend(conversation.id),
             conversation: conversation,
             chats: chats,
             providers: providers,
@@ -293,14 +293,18 @@ extension ChatView {
   private func send() {
     let text = draft
     let attachments = pendingAttachments
-    draft = ""
-    pendingAttachments = []
     followsLatest = true
     showJumpToLatest = false
     chats.send(
       conversationID: conversationID,
       text: text,
-      attachments: attachments
+      attachments: attachments,
+      onMessagePersisted: { committed in
+        guard committed else { return } // Retry keeps text and attachment bytes.
+        if draft == text { draft = "" }
+        let sentIDs = Set(attachments.map(\.id))
+        pendingAttachments.removeAll { sentIDs.contains($0.id) }
+      }
     )
   }
 
@@ -355,6 +359,7 @@ extension ChatView {
   }
 
   private func configurationIssue(_ conversation: ChatConversation) -> String? {
+    if let issue = chats.pendingConfigurationIssue(conversation.id) { return issue }
     guard providers.definitions.contains(where: { $0.id == conversation.providerID }) else {
       return "This conversation references a provider that is no longer configured."
     }
@@ -811,15 +816,12 @@ private extension JSONValue {
 // MARK: - Empty-state surface (ported from the retired NewChatView)
 
 extension ChatView {
-  /// Provider/model resolution for fresh mode: target override, then project
-  /// pinning, then the provider model's resolved default (the single rule —
+  /// Provider/model resolution for connection setup: project pinning, then
+  /// the provider model's resolved default (the single rule —
   /// stored-if-usable → ready → enabled → first, never rewritten).
   var defaultAccount: ProviderAccount? {
     let enabled = providers.accounts.filter(\.isEnabled)
 
-    if let targetOverride {
-      return enabled.first { $0.id == targetOverride.accountID }
-    }
     if let accountID = project?.accountID {
       return enabled.first { $0.id == accountID }
     }
@@ -838,11 +840,6 @@ extension ChatView {
     guard let account = defaultAccount else { return nil }
     let models = providers.models(for: account.id).filter(\.isAvailable)
 
-    if let targetOverride, targetOverride.accountID == account.id {
-      return models.contains(where: { $0.model.id == targetOverride.modelID })
-        ? targetOverride.modelID
-        : nil
-    }
     if let projectModelID = project?.modelID {
       return models.contains(where: { $0.model.id == projectModelID }) ? projectModelID : nil
     }
@@ -872,13 +869,8 @@ extension ChatView {
     return .ready
   }
 
-  var canStartFreshConversation: Bool {
-    readiness == .ready
-  }
-
   var targetReasoning: ReasoningOptions? {
     if let conversation { return conversation.options.reasoning }
-    if let targetOverride { return targetOverride.reasoning }
     return nil
   }
 
@@ -944,29 +936,6 @@ extension ChatView {
     }
   }
 
-  /// Applies a chip-picked target. Fresh mode stages it pre-send; existing
-  /// conversations update in place.
-  func applyPickedTarget(_ selection: NewChatTargetSelection) {
-    if isFresh {
-      targetOverride = selection
-      return
-    }
-    guard let conversation,
-      let account = providers.accounts.first(where: { $0.id == selection.accountID })
-    else { return }
-    var options = conversation.options
-    options.reasoning = selection.reasoning
-    Task {
-      _ = await chats.updateTarget(
-        conversationID: conversation.id,
-        account: account,
-        modelID: selection.modelID,
-        systemPrompt: conversation.systemPrompt,
-        options: options
-      )
-    }
-  }
-
   var targetDetails: String {
     guard let account = defaultAccount else { return "No connection configured" }
     switch readiness {
@@ -986,7 +955,12 @@ extension ChatView {
   var emptyStateContent: some View {
     switch readiness {
     case .ready:
-      readyChatContent(subline: usingFreshModelLabel)
+      VStack(spacing: 16) {
+        Text("Opening your chat")
+          .font(.title2.weight(.semibold))
+        Button("Open Chat", action: onReadyForConversation)
+          .buttonStyle(.borderedProminent)
+      }
     case .noConnection, .missingCredential, .noModel:
       setupContent
     }
@@ -1169,7 +1143,7 @@ extension ChatView {
   func openCurrentTarget() {
     switch readiness {
     case .ready:
-      showTargetPicker = true
+      if isFresh { onReadyForConversation() } else { showTargetSettings = true }
     case .noConnection, .missingCredential, .noModel:
       if (project?.accountID != nil && defaultAccount == nil)
         || (project?.modelID != nil && defaultModelID == nil)

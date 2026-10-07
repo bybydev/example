@@ -7,6 +7,7 @@ import SwiftUI
 /// keeps swapping the root.
 enum AppRoute: Hashable {
   case project(ProjectID)
+  case newChatSetup(ProjectID)
   /// A live conversation shown inside the stack. "New chat" inside a project
   /// creates the conversation eagerly, so this is the only chat shape there
   /// is — an empty one is just a chat with no messages yet.
@@ -35,8 +36,10 @@ struct AppRootView: View {
   /// Pushed screens layered above the main content (project details, pushed
   /// project chats).
   @State private var navigationPath: [AppRoute] = []
-  /// Guards double-taps on a project's New Chat from stacking two empties.
-  @State private var isCreatingStackChat = false
+  @State private var isCreatingNewChat = false
+  @State private var pendingNewChatProjectID: ProjectID?
+  @State private var newChatRequestRevision: UInt = 0
+  @State private var newChatRequestPath: [AppRoute] = []
   @State private var selectedConversationID: ConversationID?
   @State private var initialScrollMessageID: ChatMessageID?
   @State private var isSidebarPresented = false
@@ -128,6 +131,9 @@ struct AppRootView: View {
     // A pushed project chat that never received a message is discarded when
     // it leaves the stack, so backing out of "New Chat" leaves no clutter.
     .onChange(of: navigationPath) { oldValue, newValue in
+      if isCreatingNewChat && newValue != newChatRequestPath {
+        invalidateNewChatRequest()
+      }
       let oldChats = oldValue.compactMap(\.chatID)
       let kept = Set(newValue.compactMap(\.chatID))
       for id in oldChats where !kept.contains(id) {
@@ -142,6 +148,8 @@ struct AppRootView: View {
     .onChange(of: scenePhase) { _, phase in
       if phase != .active {
         Task { await model.chats.persistActiveMessages() }
+      } else {
+        model.chats.retryAbandonedNewChats()
       }
     }
     .sheet(isPresented: $isSettingsPresented) {
@@ -164,7 +172,7 @@ struct AppRootView: View {
       .interactiveDismissDisabled()
     }
     .overlay(alignment: .top) {
-      if model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
+      if isCreatingNewChat || model.providers.isBusy || model.chats.isBusy || model.projects.isBusy || model.mcp.isBusy
         || model.dataPortability.isBusy
       {
         ProgressView()
@@ -214,7 +222,7 @@ struct AppRootView: View {
     NavigationStack(path: $navigationPath) {
       Group {
         if let selectedConversationID,
-          model.chats.conversation(selectedConversationID) != nil
+          model.chats.hasConversation(selectedConversationID)
         {
           ChatView(
             subject: .existing(selectedConversationID),
@@ -282,7 +290,7 @@ struct AppRootView: View {
             )
           }
         } else {
-          // Home: fresh pre-creation chat surface.
+          // Connection setup only. A ready target opens a real conversation.
           ChatView(
             subject: .fresh(projectID: nil),
             chats: model.chats,
@@ -290,9 +298,8 @@ struct AppRootView: View {
             projects: model.projects,
             mcp: model.mcp,
             library: model.library,
-            onFreshConversationCreated: selectConversation,
-            openSidebar: openSidebar,
-            openSettings: openSettings
+            onReadyForConversation: { startNewChat(in: nil) },
+            openSidebar: openSidebar
           )
         }
       }
@@ -310,7 +317,18 @@ struct AppRootView: View {
             mcp: model.mcp,
             newChat: startNewChat(in:),
             openChat: selectProjectConversation,
-            newChatInStack: { pushEmptyProjectChat(projectID) }
+            newChatInStack: { startNewChat(in: projectID) }
+          )
+        case .newChatSetup(let projectID):
+          ChatView(
+            subject: .fresh(projectID: projectID),
+            chats: model.chats,
+            providers: model.providers,
+            projects: model.projects,
+            mcp: model.mcp,
+            library: model.library,
+            pushedFromStack: true,
+            onReadyForConversation: { startNewChat(in: projectID) }
           )
         case .chat(let conversationID):
           ChatView(
@@ -324,7 +342,7 @@ struct AppRootView: View {
             openSidebar: {},
             startNewChat: {
               if let projectID = model.projects.projectID(for: conversationID) {
-                pushEmptyProjectChat(projectID)
+                startNewChat(in: projectID)
               }
             },
             openProject: {}
@@ -370,53 +388,93 @@ struct AppRootView: View {
     withAnimation { isSidebarPresented = false }
   }
 
-  /// "New chat" inside a project is just a chat with no messages yet: create
-  /// the conversation with the project's defaults and push a real ChatView.
-  private func pushEmptyProjectChat(_ projectID: ProjectID) {
-    guard !isCreatingStackChat else { return }
-    isCreatingStackChat = true
-    Task { @MainActor in
-      defer { isCreatingStackChat = false }
-      guard
-        let id = await model.chats.createConversation(projectID: projectID)
-      else { return }
-      await model.projects.reloadFromStorage()
-      await model.mcp.reloadFromStorage()
-      navigationPath.append(.chat(id))
-    }
+  private var visibleConversationID: ConversationID? {
+    if let last = navigationPath.last { return last.chatID }
+    return selectedConversationID
   }
 
-  /// A zero-message conversation stops existing the moment it stops being the
-  /// visible chat — drafts included, per the strict-cleanup rule.
+  private func invalidateNewChatRequest() {
+    newChatRequestRevision &+= 1
+    isCreatingNewChat = false
+  }
+
   private func discardIfEmpty(_ id: ConversationID?) {
-    guard let id,
-      let conversation = model.chats.conversation(id),
-      conversation.messages.isEmpty,
-      !model.chats.isGenerating(id)
-    else { return }
-    Task { await model.chats.deleteConversation(id) }
+    model.chats.abandonNewChat(id)
   }
 
   private func startNewChat(in projectID: ProjectID?) {
-    if let projectID {
-      // Every project-scoped new chat is a real, eagerly created conversation.
-      closeSidebar()
-      pushEmptyProjectChat(projectID)
-      return
-    }
-    navigationPath = []
-    discardIfEmpty(selectedConversationID)
-    selectedConversationID = nil
-    initialScrollMessageID = nil
-    activeProjectViewID = nil
-    openedChatFromProject = false
-    activeScreen = nil
     closeSidebar()
+    if isCreatingNewChat && pendingNewChatProjectID == projectID { return }
+    if let id = visibleConversationID,
+      model.chats.hasConversation(id),
+      !model.chats.historyConversations.contains(where: { $0.id == id }),
+      !model.chats.isGenerating(id), model.projects.projectID(for: id) == projectID
+    {
+      return // Repeated New Chat preserves the active unsent session and edits.
+    }
+
+    invalidateNewChatRequest()
+    let revision = newChatRequestRevision
+    discardIfEmpty(visibleConversationID)
+    if projectID == nil {
+      discardIfEmpty(selectedConversationID)
+      navigationPath = []
+      selectedConversationID = nil
+      initialScrollMessageID = nil
+      activeProjectViewID = nil
+      openedChatFromProject = false
+      activeScreen = nil
+    }
+    pendingNewChatProjectID = projectID
+    newChatRequestPath = navigationPath
+    isCreatingNewChat = true
+
+    Task { @MainActor in
+      let id = await model.chats.newChat(projectID: projectID)
+      guard revision == newChatRequestRevision else {
+        // A newer same-scope request may share this exact creation task.
+        if !(isCreatingNewChat && pendingNewChatProjectID == projectID),
+          id != visibleConversationID {
+          model.chats.abandonNewChat(id)
+        }
+        return
+      }
+      await model.projects.reloadFromStorage()
+      await model.mcp.reloadFromStorage()
+      guard revision == newChatRequestRevision else {
+        if !(isCreatingNewChat && pendingNewChatProjectID == projectID),
+          id != visibleConversationID {
+          model.chats.abandonNewChat(id)
+        }
+        return
+      }
+      isCreatingNewChat = false
+      guard let id else {
+        if let projectID, navigationPath.last != .newChatSetup(projectID) {
+          navigationPath.append(.newChatSetup(projectID))
+        }
+        return
+      }
+      if projectID != nil {
+        if navigationPath.last?.chatID == id { return }
+        // Starting after a sent project chat replaces that top chat, preserving
+        // the project's Back destination rather than stacking another chat.
+        if navigationPath.last?.chatID != nil {
+          navigationPath.removeLast()
+        } else if case .newChatSetup? = navigationPath.last {
+          navigationPath.removeLast()
+        }
+        navigationPath.append(.chat(id))
+      } else {
+        selectedConversationID = id
+      }
+    }
   }
 
   /// Sidebar menu sections replace the main screen; whatever was showing
   /// yields.
   private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
+    invalidateNewChatRequest()
     navigationPath = []
     discardIfEmpty(selectedConversationID)
     selectedConversationID = nil
@@ -429,6 +487,7 @@ struct AppRootView: View {
 
   /// Back chevron on a project chat: swap the chat for its project's screen.
   private func exitToProjectView() {
+    invalidateNewChatRequest()
     guard let conversationID = selectedConversationID else { return }
     activeProjectViewID = model.projects.projectID(for: conversationID)
     openedChatFromProject = false
@@ -445,6 +504,7 @@ struct AppRootView: View {
   }
 
   private func selectConversation(_ id: ConversationID) {
+    invalidateNewChatRequest()
     navigationPath = []
     discardIfEmpty(selectedConversationID == id ? nil : selectedConversationID)
     selectedConversationID = id
@@ -456,6 +516,7 @@ struct AppRootView: View {
   }
 
   private func selectSearchResult(_ result: ConversationSearchResult) {
+    invalidateNewChatRequest()
     navigationPath = []
     discardIfEmpty(selectedConversationID == result.conversationID ? nil : selectedConversationID)
     selectedConversationID = result.conversationID

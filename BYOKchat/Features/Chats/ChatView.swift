@@ -7,12 +7,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Which chat surface `ChatView` presents. There is exactly one chat view in
-/// the app; a "new chat" is the same surface before its first send.
+/// the app; new chats use real conversations before their first send.
 enum ChatSubject {
   /// A persisted conversation (root-selected or stack-pushed).
   case existing(ConversationID)
-  /// Home-screen pre-creation mode: hero + composer, no store writes until
-  /// the first message creates the conversation.
+  /// Setup-only fallback when no usable account/model exists yet. Once ready,
+  /// the root creates a real conversation and presents the existing surface.
   case fresh(projectID: ProjectID?)
 
   var existingID: ConversationID? {
@@ -38,12 +38,10 @@ struct ChatView: View {
   /// leading hamburger for a back chevron next to the project pill.
   let enteredFromProject: Bool
   let openSidebar: () -> Void
-  /// Presents app Settings (fresh mode menu + Connections sheet link-through).
-  var openSettings: () -> Void = {}
   let startNewChat: () -> Void
   let openProject: () -> Void
-  /// Fresh mode only: hands off after the first send creates the conversation.
-  var onFreshConversationCreated: (ConversationID) -> Void = { _ in }
+  /// Setup-only fallback asks the root coordinator to open a real conversation.
+  var onReadyForConversation: () -> Void = {}
 
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
@@ -59,9 +57,6 @@ struct ChatView: View {
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
   @State var restoredDraft = false
-  @State var isCreatingFresh = false
-  @State var targetOverride: NewChatTargetSelection?
-  @State var showTargetPicker = false
   @State var showConnections = false
   @State var showProjectEditorSheet = false
   @State var showTargetSettings = false
@@ -96,17 +91,15 @@ struct ChatView: View {
     mcp: MCPManagementModel,
     library: LibraryManagementModel,
     pushedFromStack: Bool = false,
-    onFreshConversationCreated: @escaping (ConversationID) -> Void = { _ in },
+    onReadyForConversation: @escaping () -> Void = {},
     openSidebar: @escaping () -> Void = {},
-    openSettings: @escaping () -> Void = {},
     startNewChat: @escaping () -> Void = {},
     openProject: @escaping () -> Void = {}
   ) {
     self.subject = subject
-    // Placeholder identity so non-fresh code paths keep a stable value; fresh
-    // mode branches away before anything reads the store through it.
+    // Setup never uses this editor identity for storage or configuration.
     self.conversationID =
-      subject.existingID ?? ConversationID(rawValue: "fresh-\(UUID().uuidString.lowercased())")
+      subject.existingID ?? ConversationID()
     self.initialScrollMessageID = initialScrollMessageID
     self.enteredFromProject = enteredFromProject
     self.chats = chats
@@ -115,8 +108,7 @@ struct ChatView: View {
     self.mcp = mcp
     self.library = library
     self.pushedFromStack = pushedFromStack
-    self.onFreshConversationCreated = onFreshConversationCreated
-    self.openSettings = openSettings
+    self.onReadyForConversation = onReadyForConversation
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
     self.openProject = openProject
@@ -164,18 +156,6 @@ struct ChatView: View {
       maxSelectionCount: 8,
       matching: .images
     )
-    .sheet(isPresented: $showTargetPicker) {
-      if let account = targetPickerAccount, let modelID = targetPickerInitialModelID {
-        NewChatTargetPickerView(
-          initialAccountID: account.id,
-          initialModelID: modelID,
-          initialReasoning: targetReasoning,
-          providers: providers
-        ) { selection in
-          applyPickedTarget(selection)
-        }
-      }
-    }
     .onChange(of: photoPickerItems) { _, items in
       importPhotos(items)
     }
@@ -201,7 +181,11 @@ struct ChatView: View {
       if let conversation {
         chatContent(conversation)
       } else {
-        ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
+        if chats.hasConversation(conversationID) && !chats.failedToLoad(conversationID) {
+          ProgressView("Loading chat…")
+        } else {
+          ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
+        }
       }
     }
     .background(theme.backgroundColor)
@@ -254,29 +238,38 @@ struct ChatView: View {
           Button("Tools", systemImage: "wrench.and.screwdriver") {
             showToolSettings = true
           }
-          Button("Usage", systemImage: "chart.bar.xaxis") {
-            showUsage = true
+          if let project {
+            Button("Project Settings", systemImage: "folder.badge.gearshape") {
+              showProjectEditorSheet = true
+            }
           }
-          Button("Rename", systemImage: "pencil") {
-            renameText = conversation?.title ?? ""
-            showRename = true
-          }
-          Button("Export Markdown", systemImage: "square.and.arrow.up") {
-            prepareMarkdownExport()
-          }
-          Divider()
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            Task { @MainActor in
-              await chats.deleteConversation(conversationID)
-              await projects.reloadFromStorage()
-              await mcp.reloadFromStorage()
-              if pushedFromStack {
-                // Popping lands on the screen beneath; starting a "next" chat
-                // here would push and immediately pop it.
-                dismiss()
-              } else {
-                startNewChat()
-                dismiss()
+          // Use committed history state, so drafts and optimistic UI edits
+          // cannot expose actions that need saved conversation content.
+          if chats.historyConversations.contains(where: { $0.id == conversationID }) {
+            Button("Usage", systemImage: "chart.bar.xaxis") {
+              showUsage = true
+            }
+            Button("Rename", systemImage: "pencil") {
+              renameText = conversation?.title ?? ""
+              showRename = true
+            }
+            Button("Export Markdown", systemImage: "square.and.arrow.up") {
+              prepareMarkdownExport()
+            }
+            Divider()
+            Button("Delete", systemImage: "trash", role: .destructive) {
+              Task { @MainActor in
+                await chats.deleteConversation(conversationID)
+                await projects.reloadFromStorage()
+                await mcp.reloadFromStorage()
+                if pushedFromStack {
+                  // Popping lands on the screen beneath; starting a "next" chat
+                  // here would push and immediately pop it.
+                  dismiss()
+                } else {
+                  startNewChat()
+                  dismiss()
+                }
               }
             }
           }
@@ -303,6 +296,12 @@ struct ChatView: View {
         projects: projects,
         mcp: mcp
       )
+    }
+    .sheet(isPresented: $showProjectEditorSheet) {
+      if let project {
+        ProjectEditorView(project: project, projects: projects, providers: providers, mcp: mcp)
+          .presentationDragIndicator(.visible)
+      }
     }
     .sheet(isPresented: $showUsage) {
       UsageDashboardView(
@@ -364,6 +363,7 @@ struct ChatView: View {
     .task(id: conversationID) {
       pendingAttachments = []
       photoPickerItems = []
+      await chats.loadConversation(conversationID)
       guard !restoredDraft else { return }
       draft = chats.draft(for: conversationID)
       restoredDraft = true
@@ -374,7 +374,7 @@ struct ChatView: View {
     }
   }
 
-  // MARK: Fresh mode (home pre-creation surface)
+  // MARK: Connection setup fallback (no configurable staged chat)
 
   private func freshContent(_ projectID: ProjectID?) -> some View {
     ZStack {
@@ -400,9 +400,11 @@ struct ChatView: View {
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {
-        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
-          .labelStyle(.iconOnly)
-          .accessibilityLabel("Open sidebar")
+        if !pushedFromStack {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
       }
 
       if let project {
@@ -418,7 +420,6 @@ struct ChatView: View {
             Button("Project Settings", systemImage: "folder.badge.gearshape") {
               showProjectEditorSheet = true
             }
-            Button("Settings", systemImage: "gearshape", action: openSettings)
           } label: {
             Image(systemName: "ellipsis")
           }
@@ -426,15 +427,8 @@ struct ChatView: View {
         }
       } else {
         ToolbarItemGroup(placement: .topBarTrailing) {
-          Button("New Chat", systemImage: "square.and.pencil", action: resetFreshChat)
+          Button("New Chat", systemImage: "square.and.pencil", action: onReadyForConversation)
             .labelStyle(.iconOnly)
-
-          Menu {
-            Button("Settings", systemImage: "gearshape", action: openSettings)
-          } label: {
-            Image(systemName: "ellipsis")
-          }
-          .accessibilityLabel("More options")
         }
       }
     }
@@ -460,72 +454,8 @@ struct ChatView: View {
         .presentationDragIndicator(.visible)
       }
     }
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      freshComposer
-    }
-  }
-
-  private var freshComposer: ChatComposer {
-    ChatComposer(
-      draft: $draft,
-      attachments: pendingAttachments,
-      activity: isCreatingFresh ? ChatComposerActivity.creating : ChatComposerActivity.idle,
-      canSend: canStartFreshConversation,
-      targetSummary: targetSummary,
-      targetDetails: targetDetails,
-      openTarget: openCurrentTarget,
-      pickPhoto: { showPhotoPicker = true },
-      pickFile: { showFileImporter = true },
-      pickFromLibrary: { showLibraryPicker = true },
-      projectFiles: [],
-      attachProjectFile: { _ in },
-      removeAttachment: removePendingAttachment,
-      send: startFreshConversation
-    )
-  }
-
-  private func resetFreshChat() {
-    draft = ""
-    pendingAttachments = []
-    photoPickerItems = []
-    targetOverride = nil
-  }
-
-  private func startFreshConversation() {
-    let normalized = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    let attachments = pendingAttachments
-    guard !normalized.isEmpty || !attachments.isEmpty else { return }
-    guard !isCreatingFresh else { return }
-    guard case .ready = readiness, defaultAccount != nil, defaultModelID != nil else {
-      return
-    }
-    guard case .fresh(let projectID) = subject else { return }
-
-    isCreatingFresh = true
-    Task { @MainActor in
-      defer { isCreatingFresh = false }
-      guard let id = await chats.createConversation(projectID: projectID) else { return }
-      await projects.reloadFromStorage()
-      await mcp.reloadFromStorage()
-
-      if let targetOverride,
-        let account = providers.accounts.first(where: { $0.id == targetOverride.accountID }),
-        let created = chats.conversation(id)
-      {
-        var options = created.options
-        options.reasoning = targetOverride.reasoning
-        guard await chats.updateTarget(
-          conversationID: id,
-          account: account,
-          modelID: targetOverride.modelID,
-          systemPrompt: created.systemPrompt,
-          options: options
-        ) else { return }
-      }
-
-      resetFreshChat()
-      chats.send(conversationID: id, text: normalized, attachments: attachments)
-      onFreshConversationCreated(id)
+    .onChange(of: readiness, initial: true) { _, value in
+      if value == .ready { onReadyForConversation() }
     }
   }
 

@@ -97,6 +97,16 @@ final class AppModel {
     chatModel.backgroundKeeper = backgroundKeeper
     library = libraryModel
     mcp = mcpModel
+    mcpModel.beginChatConfiguration = { [weak chatModel] id, key in
+      chatModel?.beginConfiguration(id, key: key) ?? false
+    }
+    mcpModel.endChatConfiguration = { [weak chatModel] id, key, succeeded in
+      chatModel?.endConfiguration(id, key: key, succeeded: succeeded)
+    }
+    chatModel.onNewChatDiscarded = { [weak projectModel, weak mcpModel] in
+      await projectModel?.reloadFromStorage()
+      await mcpModel?.reloadFromStorage()
+    }
     dataPortability = DataPortabilityModel(
       service: coreServices.dataPortability,
       providerWorkspace: coreServices.providerWorkspace,
@@ -155,6 +165,7 @@ final class AppModel {
     await mcp.load()
     await chats.load()
     await library.load()
+    await chats.recoverUnsentNewChats()
     await projects.reconcile(conversations: chats.conversations)
     await mcp.reloadFromStorage()
     await sweepOrphanFiles()
@@ -166,6 +177,8 @@ final class AppModel {
 @MainActor
 @Observable
 final class MCPManagementModel {
+  var beginChatConfiguration: (ConversationID, String) -> Bool = { _, _ in true }
+  var endChatConfiguration: (ConversationID, String, Bool) -> Void = { _, _, _ in }
   private(set) var servers: [MCPRemoteServer] = []
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
@@ -407,7 +420,7 @@ final class MCPManagementModel {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async {
-    await perform(nil) {
+    await perform(nil, conversationID: conversationID, configurationKey: "mcp.server.\(serverID.rawValue)") {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
           throw MCPError.invalidServer("Enable this MCP server in Settings first.")
@@ -429,7 +442,7 @@ final class MCPManagementModel {
     exposedToolName: String,
     conversationID: ConversationID
   ) async {
-    await perform(nil) {
+    await perform(nil, conversationID: conversationID, configurationKey: "mcp.policy.\(exposedToolName)") {
       try await materializeInheritedConfigurationIfNeeded(conversationID)
       try await workspace.setChatToolPolicy(
         policy,
@@ -444,14 +457,14 @@ final class MCPManagementModel {
     _ configuration: MCPChatToolConfiguration,
     conversationID: ConversationID
   ) async {
-    await perform("Tool preset applied") {
+    await perform("Tool preset applied", conversationID: conversationID, configurationKey: "mcp.replace") {
       try await workspace.replaceChatConfiguration(configuration, conversationID: conversationID)
       try await reloadSnapshot()
     }
   }
 
   func removeChatConfiguration(_ conversationID: ConversationID) async {
-    await perform(nil) {
+    await perform(nil, conversationID: conversationID, configurationKey: "mcp.reset") {
       try await workspace.removeChatConfiguration(conversationID: conversationID)
       try await reloadSnapshot()
     }
@@ -559,15 +572,55 @@ final class MCPManagementModel {
     }
   }
 
-  private func perform(_ success: String?, operation: () async throws -> Void) async {
+  private var operationCount = 0
+  private var operationInProgress = false
+  private var operationWaiters: [CheckedContinuation<Void, Never>] = []
+
+  private func acquireOperation() async {
+    if !operationInProgress {
+      operationInProgress = true
+      return
+    }
+    await withCheckedContinuation { operationWaiters.append($0) }
+  }
+
+  private func releaseOperation() {
+    if operationWaiters.isEmpty {
+      operationInProgress = false
+    } else {
+      operationWaiters.removeFirst().resume()
+    }
+  }
+
+  private func perform(
+    _ success: String?,
+    conversationID: ConversationID? = nil,
+    configurationKey: String = "",
+    operation: () async throws -> Void
+  ) async {
+    if let conversationID {
+      guard beginChatConfiguration(conversationID, configurationKey) else { return }
+    }
+    var succeeded = false
+    operationCount += 1
+    isBusy = true
+    await acquireOperation()
     errorMessage = nil
     statusMessage = nil
     warningMessage = nil
     isBusy = true
-    defer { isBusy = false }
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+      if let conversationID {
+        endChatConfiguration(conversationID, configurationKey, succeeded)
+      }
+    }
     do {
       try await operation()
       statusMessage = success
+      succeeded = true
     } catch {
       errorMessage = error.localizedDescription
     }

@@ -199,6 +199,10 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
   public var lastContextOmittedMessageCount: Int
   public var draftText: String?
 
+  /// Opt-in ownership for iOS new-chat cleanup. Older/imported/macOS records
+  /// leave this nil. A persisted user message always takes precedence.
+  public var isIOSNewChat: Bool?
+
   /// Present only on the lightweight conversation objects synthesized from
   /// `index.json`. Full conversation shards leave these nil.
   public var indexedMessageCount: Int?
@@ -217,6 +221,7 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     messages: [ChatMessage] = [],
     lastContextOmittedMessageCount: Int = 0,
     draftText: String? = nil,
+    isIOSNewChat: Bool? = nil,
     indexedMessageCount: Int? = nil,
     indexedLastMessagePreview: String? = nil
   ) {
@@ -232,6 +237,7 @@ public struct ChatConversation: Codable, Sendable, Equatable, Identifiable {
     self.messages = messages
     self.lastContextOmittedMessageCount = lastContextOmittedMessageCount
     self.draftText = draftText
+    self.isIOSNewChat = isIOSNewChat
     self.indexedMessageCount = indexedMessageCount
     self.indexedLastMessagePreview = indexedLastMessagePreview
   }
@@ -377,6 +383,7 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
   public var accountID: ProviderAccountID
   public var modelID: ModelID
   public var draftText: String?
+  public var isIOSNewChat: Bool?
   public var messageCount: Int
   public var lastMessagePreview: String?
   public var messages: [ConversationIndexMessage]
@@ -393,6 +400,7 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
     accountID = conversation.accountID
     modelID = conversation.modelID
     draftText = conversation.draftText
+    isIOSNewChat = conversation.isIOSNewChat
     messageCount = conversation.messages.count
     lastMessagePreview = conversation.messages.last(where: {
       !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -420,6 +428,7 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
       modelID: modelID,
       messages: messages.map(\.summaryMessage),
       draftText: draftText,
+      isIOSNewChat: isIOSNewChat,
       indexedMessageCount: messageCount,
       indexedLastMessagePreview: lastMessagePreview
     )

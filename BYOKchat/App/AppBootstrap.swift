@@ -49,6 +49,9 @@ final class AppBootstrapController {
       try Self.throwIfModelFailed(model.library.errorMessage, stage: .loadingChats)
 
       state = .loading(.reconciling)
+      // Stores are fully loaded. Only records explicitly owned by the iOS
+      // new-chat lifecycle are eligible; persisted user messages always survive.
+      await model.chats.recoverUnsentNewChats()
       await model.projects.reconcile(conversations: model.chats.conversations)
       try Self.throwIfModelFailed(model.projects.errorMessage, stage: .reconciling)
       await model.mcp.reloadFromStorage()

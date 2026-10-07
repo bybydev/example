@@ -124,7 +124,7 @@ struct SidebarProjectsView: View {
   }
 
   private func projectDetail(_ project: ChatProject) -> String {
-    let chatCount = chats.conversations.filter { projects.projectID(for: $0.id) == project.id }.count
+    let chatCount = chats.historyConversations.filter { projects.projectID(for: $0.id) == project.id }.count
     let fileCount = project.projectFiles.count
 
     switch (chatCount, fileCount) {

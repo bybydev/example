@@ -159,18 +159,47 @@ public actor ConversationStore {
     accountID: ProviderAccountID,
     modelID: ModelID,
     systemPrompt: String = "",
-    options: ProviderRequestOptions = .init()
+    options: ProviderRequestOptions = .init(),
+    id: ConversationID = .init(),
+    isIOSNewChat: Bool? = nil
   ) async throws -> ChatConversation {
     let value = ChatConversation(
+      id: id,
       providerID: providerID,
       accountID: accountID,
       modelID: modelID,
       systemPrompt: systemPrompt,
-      options: options
+      options: options,
+      isIOSNewChat: isIOSNewChat
     )
     state.conversations.append(value)
     try await persist(conversationIDs: [value.id])
     return value
+  }
+
+  /// Reads durable state without trusting optimistic/cache mutations. Cleanup
+  /// callers must also exclude in-flight writes in their lifecycle coordinator.
+  public func persistedConversation(id: ConversationID) async throws -> ChatConversation? {
+    guard let data = try await persistence.loadShard(id: id.rawValue) else { return nil }
+    return try decodeShard(data, expectedID: id.rawValue).conversation
+  }
+
+  /// Restore a failed first append from its authoritative shard. A failed blob
+  /// or shard write must not leave an unsaved user message in the mutable cache
+  /// for the next draft save/retry to persist accidentally.
+  public func restorePersistedConversation(id: ConversationID) async throws {
+    // Evict first, even when the durable read fails. A later draft/save must
+    // reload the shard rather than accidentally commit the failed append.
+    state.conversations.removeAll { $0.id == id }
+    deferredDirtyIDs.remove(id)
+    guard var persisted = try await persistedConversation(id: id) else { return }
+    let repaired = repairInterruptedMessages(in: &persisted)
+    state.conversations.append(persisted)
+    indexEntries[id] = ConversationIndexEntry(conversation: persisted)
+    if repaired {
+      try await persistence.saveShard(id: id.rawValue, data: shardData(persisted))
+      try await persistIndex()
+    }
   }
 
   public func deleteConversation(_ id: ConversationID) async throws {
