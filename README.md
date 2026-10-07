@@ -451,6 +451,54 @@ or generating history for Ready Offline status.
 Phase 8 remains responsible for executing durable queued generation and
 prefetch independently of foreground Reader playback.
 
+## Durable queue and prefetch
+
+Phase 8 turns `queue/jobs.json` into an executable, recoverable generation
+queue while keeping it as the single durable source of truth.
+
+The in-process scheduler uses `JobQueue 1.0.0`, but its own persistence is
+derived runtime state under the project `temp/` directory and is rebuilt from
+`queue/jobs.json` whenever a project runtime is loaded. Durable job IDs are
+also used as JobQueue IDs so execution events map back to the persisted intent
+without a second identity system.
+
+Queue lifecycle rules:
+
+- stale persisted `generating` jobs recover to `queued` on cold runtime load;
+- job start persists `generating` and increments the attempt count;
+- yielding for foreground playback persists the job back to `queued`;
+- success persists `completed`;
+- failures persist `failed` plus the error message;
+- cancellation removes queued/generating intent rather than inventing a
+  separate durable cancelled state;
+- retry creates fresh queued intent using the item's current generation key;
+- narration-setting changes discard stale queued/generating/failed intent for
+  affected items.
+
+Queue execution is single-concurrency and shares the same `KokoroEngine` used
+by Reader streaming. It therefore never loads a second speech model. Missing
+paragraphs are synthesized with the same `SpeechChunkScheduler`, stored in the
+Phase 7 paragraph cache, then finalized through the same WAV + metadata
+transaction.
+
+Foreground playback always has priority. When Reader needs Kokoro for live
+streaming, the generation queue pauses and any executing job is cancelled back
+to retryable queued intent; completed paragraph cache survives that yield.
+When Reader is playing an already-finalized WAV, Kokoro is idle, so queued
+generation may run safely while the user continues listening.
+
+Prefetch policy is deliberately small and understandable: entering a chapter
+queues at most the next two not-ready chapters. Prefetch never bypasses durable
+queue order and never replaces a valid Ready Offline asset.
+
+Project Detail and Offline Audio expose the durable queue state and operations:
+Generate, Generate Selected, Generate Remaining, Generate All, Cancel, Retry,
+Regenerate, and Clear Cache & Regenerate.
+
+Background execution is still opportunistic. Phase 8 guarantees persisted
+intent and safe recovery; it does not claim indefinite iOS background synthesis.
+Phase 9 owns system background playback / Now Playing integration.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

@@ -267,7 +267,7 @@ nonisolated enum GenerationJobOperation: String, Codable, Sendable {
     case generate
 }
 
-nonisolated enum GenerationJobState: String, Codable, Sendable {
+nonisolated enum GenerationJobState: String, Codable, Hashable, Sendable {
     case queued
     case generating
     case failed

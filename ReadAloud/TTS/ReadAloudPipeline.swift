@@ -54,7 +54,7 @@ final class ReadAloudPipeline {
         }
     }
 
-    private let engine: KokoroEngine
+    let engine: KokoroEngine
     private let playback: SpeechPlaybackQueue
     private let scheduler: SpeechChunkScheduler
     private let maxQueuedBuffers = 2

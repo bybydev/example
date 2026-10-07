@@ -337,19 +337,39 @@ struct ProjectDetailView: View {
                         itemMenu(entry)
                     }
                     .swipeActions(edge: .trailing) {
-                        Button(
-                            entry.generationStatus.state == .readyOffline
-                                ? "Regenerate"
-                                : "Generate"
-                        ) {
-                            generate(
-                                entry,
-                                regenerate:
-                                    entry.generationStatus.state
-                                        == .readyOffline
-                            )
+                        switch entry.generationStatus.state {
+                        case .waiting, .generating:
+                            Button(
+                                "Cancel",
+                                role: .destructive
+                            ) {
+                                cancelGeneration(entry)
+                            }
+
+                        case .needsAttention:
+                            Button("Retry") {
+                                retryGeneration(entry)
+                            }
+                            .tint(.accentColor)
+
+                        case .readyOffline:
+                            Button("Regenerate") {
+                                generate(
+                                    entry,
+                                    regenerate: true
+                                )
+                            }
+                            .tint(.accentColor)
+
+                        case .notGenerated:
+                            Button("Generate") {
+                                generate(
+                                    entry,
+                                    regenerate: false
+                                )
+                            }
+                            .tint(.accentColor)
                         }
-                        .tint(.accentColor)
                     }
                 }
             } header: {
@@ -446,22 +466,69 @@ struct ProjectDetailView: View {
             Label("Open Reader", systemImage: "play.fill")
         }
 
-        if entry.generationStatus.state != .readyOffline {
+        switch entry.generationStatus.state {
+        case .notGenerated:
             Button {
-                generate(entry, regenerate: false)
+                generate(
+                    entry,
+                    regenerate: false
+                )
             } label: {
                 Label(
                     "Generate Offline",
                     systemImage: "arrow.down.circle"
                 )
             }
-        }
 
-        if entry.generationStatus.state != .notGenerated {
-            Button {
-                generate(entry, regenerate: true)
+        case .waiting, .generating:
+            Button(role: .destructive) {
+                cancelGeneration(entry)
             } label: {
-                Label("Regenerate", systemImage: "arrow.clockwise")
+                Label(
+                    "Cancel Generation",
+                    systemImage: "xmark.circle"
+                )
+            }
+
+        case .needsAttention:
+            Button {
+                retryGeneration(entry)
+            } label: {
+                Label(
+                    "Retry Generation",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+
+            Button {
+                clearCacheAndRegenerate(entry)
+            } label: {
+                Label(
+                    "Clear Cache & Regenerate",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+
+        case .readyOffline:
+            Button {
+                generate(
+                    entry,
+                    regenerate: true
+                )
+            } label: {
+                Label(
+                    "Regenerate",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+
+            Button {
+                clearCacheAndRegenerate(entry)
+            } label: {
+                Label(
+                    "Clear Cache & Regenerate",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
             }
         }
 
@@ -535,6 +602,19 @@ struct ProjectDetailView: View {
             }
 
             Button {
+                Task {
+                    if await model.queueAll() {
+                        notifyProjectChanged()
+                    }
+                }
+            } label: {
+                Label(
+                    "Generate All",
+                    systemImage: "square.and.arrow.down"
+                )
+            }
+
+            Button {
                 offlinePresented = true
             } label: {
                 Label(
@@ -578,6 +658,42 @@ struct ProjectDetailView: View {
             if await model.queueGeneration(
                 itemID: entry.id,
                 regenerate: regenerate
+            ) {
+                notifyProjectChanged()
+            }
+        }
+    }
+
+    private func cancelGeneration(
+        _ entry: ProjectDetailModel.ItemEntry
+    ) {
+        Task {
+            if await model.cancelGeneration(
+                itemIDs: [entry.id]
+            ) {
+                notifyProjectChanged()
+            }
+        }
+    }
+
+    private func retryGeneration(
+        _ entry: ProjectDetailModel.ItemEntry
+    ) {
+        Task {
+            if await model.retryGeneration(
+                itemIDs: [entry.id]
+            ) {
+                notifyProjectChanged()
+            }
+        }
+    }
+
+    private func clearCacheAndRegenerate(
+        _ entry: ProjectDetailModel.ItemEntry
+    ) {
+        Task {
+            if await model.clearCacheAndRegenerate(
+                itemIDs: [entry.id]
             ) {
                 notifyProjectChanged()
             }
@@ -859,12 +975,13 @@ private struct ProjectItemInfoSheet: View {
 
 private struct OfflineAudioSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var selection = Set<UUID>()
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
     var body: some View {
         NavigationStack {
-            List {
+            List(selection: $selection) {
                 Section("Summary") {
                     LabeledContent(
                         "Ready",
@@ -911,20 +1028,75 @@ private struct OfflineAudioSheet: View {
                                 .foregroundStyle(.secondary)
                             }
                         }
+                        .tag(entry.id)
                         .contextMenu {
-                            Button(
-                                entry.generationStatus.state == .readyOffline
-                                    ? "Regenerate"
-                                    : "Generate Offline"
-                            ) {
-                                Task {
-                                    if await model.queueGeneration(
-                                        itemID: entry.id,
-                                        regenerate:
-                                            entry.generationStatus.state
-                                                == .readyOffline
-                                    ) {
-                                        onChanged()
+                            switch entry.generationStatus.state {
+                            case .notGenerated:
+                                Button("Generate Offline") {
+                                    Task {
+                                        if await model.queueGeneration(
+                                            itemID: entry.id,
+                                            regenerate: false
+                                        ) {
+                                            onChanged()
+                                        }
+                                    }
+                                }
+
+                            case .waiting, .generating:
+                                Button(
+                                    "Cancel Generation",
+                                    role: .destructive
+                                ) {
+                                    Task {
+                                        if await model.cancelGeneration(
+                                            itemIDs: [entry.id]
+                                        ) {
+                                            onChanged()
+                                        }
+                                    }
+                                }
+
+                            case .needsAttention:
+                                Button("Retry Generation") {
+                                    Task {
+                                        if await model.retryGeneration(
+                                            itemIDs: [entry.id]
+                                        ) {
+                                            onChanged()
+                                        }
+                                    }
+                                }
+
+                                Button("Clear Cache & Regenerate") {
+                                    Task {
+                                        if await model.clearCacheAndRegenerate(
+                                            itemIDs: [entry.id]
+                                        ) {
+                                            onChanged()
+                                        }
+                                    }
+                                }
+
+                            case .readyOffline:
+                                Button("Regenerate") {
+                                    Task {
+                                        if await model.queueGeneration(
+                                            itemID: entry.id,
+                                            regenerate: true
+                                        ) {
+                                            onChanged()
+                                        }
+                                    }
+                                }
+
+                                Button("Clear Cache & Regenerate") {
+                                    Task {
+                                        if await model.clearCacheAndRegenerate(
+                                            itemIDs: [entry.id]
+                                        ) {
+                                            onChanged()
+                                        }
                                     }
                                 }
                             }
@@ -951,6 +1123,25 @@ private struct OfflineAudioSheet: View {
                 }
 
                 Section {
+                    if !selection.isEmpty {
+                        Button {
+                            let selected = selection
+                            Task {
+                                if await model.queueSelected(
+                                    itemIDs: selected
+                                ) {
+                                    selection.removeAll()
+                                    onChanged()
+                                }
+                            }
+                        } label: {
+                            Label(
+                                "Generate Selected",
+                                systemImage: "checkmark.circle"
+                            )
+                        }
+                    }
+
                     Button {
                         Task {
                             if await model.queueRemaining() {
@@ -983,6 +1174,10 @@ private struct OfflineAudioSheet: View {
             .navigationTitle("Offline Audio")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    EditButton()
+                }
+
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }

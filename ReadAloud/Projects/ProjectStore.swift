@@ -1207,6 +1207,117 @@ actor ProjectStore {
         return result
     }
 
+    @discardableResult
+    func recoverGenerationQueue(
+        projectID: UUID,
+        now: Date = .now
+    ) throws -> ProjectQueueDocument {
+        var queue = try loadQueue(
+            projectID: projectID
+        )
+        var changed = false
+
+        for index in queue.jobs.indices {
+            guard queue.jobs[index].state
+                    == .generating
+            else {
+                continue
+            }
+
+            queue.jobs[index].state =
+                .queued
+            queue.jobs[index].updatedAt =
+                now
+            queue.jobs[index].lastError =
+                nil
+            changed = true
+        }
+
+        if changed {
+            try saveQueue(
+                projectID: projectID,
+                queue: queue
+            )
+        }
+
+        return queue
+    }
+
+    @discardableResult
+    func updateGenerationJob(
+        projectID: UUID,
+        jobID: UUID,
+        state: GenerationJobState,
+        incrementAttempt: Bool = false,
+        errorMessage: String? = nil,
+        now: Date = .now
+    ) throws -> ProjectQueueDocument {
+        var queue = try loadQueue(
+            projectID: projectID
+        )
+
+        guard let index =
+            queue.jobs.firstIndex(
+                where: { $0.id == jobID }
+            )
+        else {
+            return queue
+        }
+
+        queue.jobs[index].state = state
+        queue.jobs[index].updatedAt = now
+        queue.jobs[index].lastError =
+            errorMessage
+
+        if incrementAttempt {
+            queue.jobs[index].attempt += 1
+        }
+
+        try saveQueue(
+            projectID: projectID,
+            queue: queue
+        )
+        return queue
+    }
+
+    @discardableResult
+    func removeGenerationJobs(
+        projectID: UUID,
+        itemIDs: Set<UUID>,
+        states: Set<GenerationJobState>? = nil
+    ) throws -> ProjectQueueDocument {
+        guard !itemIDs.isEmpty else {
+            return try loadQueue(
+                projectID: projectID
+            )
+        }
+
+        var queue = try loadQueue(
+            projectID: projectID
+        )
+        queue.jobs.removeAll { job in
+            guard itemIDs.contains(
+                job.itemID
+            ) else {
+                return false
+            }
+
+            if let states {
+                return states.contains(
+                    job.state
+                )
+            }
+
+            return true
+        }
+
+        try saveQueue(
+            projectID: projectID,
+            queue: queue
+        )
+        return queue
+    }
+
     func enqueueGeneration(
         projectID: UUID,
         requests: [ProjectGenerationRequest],

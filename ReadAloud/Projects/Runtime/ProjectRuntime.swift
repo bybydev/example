@@ -99,6 +99,8 @@ final class ProjectRuntime {
     @ObservationIgnored var finalAudioAsset:
         ProjectFinalAudioAsset?
     @ObservationIgnored var finalAudioPositionSeconds = 0.0
+    @ObservationIgnored var prefetchScheduledItemIDs = Set<UUID>()
+    @ObservationIgnored private var didRecoverGenerationQueue = false
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
     init(
@@ -119,6 +121,11 @@ final class ProjectRuntime {
         pipeline.onEvent = { [weak self] event in
             self?.handlePipelineEvent(event)
         }
+    }
+
+    var blocksQueuedGeneration: Bool {
+        activity.hasActivePlaybackWork
+            && finalAudioAsset == nil
     }
 
     var isBackgroundWorkActive: Bool {
@@ -143,7 +150,25 @@ final class ProjectRuntime {
 
     func loadIfNeeded() async throws {
         guard !didLoad else { return }
-        try await refresh()
+
+        if !didRecoverGenerationQueue {
+            _ = try await persistence
+                .recoverGenerationQueue()
+            didRecoverGenerationQueue = true
+        }
+
+        do {
+            try await refresh()
+            try queueController.configure(
+                runtime: self
+            )
+            queueController.setPlaybackActive(
+                blocksQueuedGeneration
+            )
+        } catch {
+            didLoad = false
+            throw error
+        }
     }
 
     func refresh() async throws {
@@ -218,13 +243,6 @@ final class ProjectRuntime {
             manifest = loaded.manifest
             activity.projectProgress =
                 loaded.project.playback?.projectProgress ?? 0
-            queueController.publish(loaded.queue)
-            activity.waitingGenerationJobs =
-                queueController.waitingCount
-            activity.generatingJobs =
-                queueController.generatingCount
-            activity.failedGenerationJobs =
-                queueController.failedCount
             itemStates = prepared.map {
                 ProjectRuntimeItemState(
                     item: $0.item,
@@ -234,6 +252,13 @@ final class ProjectRuntime {
                         statuses[$0.item.id] ?? .notGenerated
                 )
             }
+            queueController.publish(loaded.queue)
+            activity.waitingGenerationJobs =
+                queueController.waitingCount
+            activity.generatingJobs =
+                queueController.generatingCount
+            activity.failedGenerationJobs =
+                queueController.failedCount
             artworkURL = makeArtworkURL(project: loaded.project)
             lastErrorMessage = nil
             didLoad = true
@@ -268,7 +293,24 @@ final class ProjectRuntime {
             from: project.settings,
             to: settings
         )
+        let affectedItemIDs =
+            try narrationAffectedItemIDs(
+                from: project.settings,
+                to: settings
+            )
         try await persistence.updateProjectSettings(settings)
+        if !affectedItemIDs.isEmpty {
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs:
+                        affectedItemIDs,
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+        }
         try await refresh()
     }
 
@@ -282,7 +324,24 @@ final class ProjectRuntime {
             from: project.settings,
             to: settings
         )
+        let affectedItemIDs =
+            try narrationAffectedItemIDs(
+                from: project.settings,
+                to: settings
+            )
         try await persistence.updateProjectSettings(settings)
+        if !affectedItemIDs.isEmpty {
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs:
+                        affectedItemIDs,
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+        }
         try await refresh()
     }
 
@@ -312,6 +371,15 @@ final class ProjectRuntime {
             itemID: itemID,
             settings: settings
         )
+        _ = try await persistence
+            .removeGenerationJobs(
+                itemIDs: [itemID],
+                states: [
+                    .queued,
+                    .generating,
+                    .failed,
+                ]
+            )
         try await refresh()
     }
 
@@ -337,6 +405,15 @@ final class ProjectRuntime {
             itemID: itemID,
             settings: settings
         )
+        _ = try await persistence
+            .removeGenerationJobs(
+                itemIDs: [itemID],
+                states: [
+                    .queued,
+                    .generating,
+                    .failed,
+                ]
+            )
         try await refresh()
     }
 
@@ -366,6 +443,15 @@ final class ProjectRuntime {
             itemID: itemID,
             settings: settings
         )
+        _ = try await persistence
+            .removeGenerationJobs(
+                itemIDs: [itemID],
+                states: [
+                    .queued,
+                    .generating,
+                    .failed,
+                ]
+            )
         try await refresh()
     }
 
@@ -391,7 +477,50 @@ final class ProjectRuntime {
             itemID: itemID,
             settings: settings
         )
+        _ = try await persistence
+            .removeGenerationJobs(
+                itemIDs: [itemID],
+                states: [
+                    .queued,
+                    .generating,
+                    .failed,
+                ]
+            )
         try await refresh()
+    }
+
+    private func narrationAffectedItemIDs(
+        from oldSettings:
+            ProjectNarrationSettings,
+        to newSettings:
+            ProjectNarrationSettings
+    ) throws -> Set<UUID> {
+        var affected = Set<UUID>()
+
+        for state in itemStates {
+            let oldResolved =
+                try NarrationSettingsResolver
+                    .resolve(
+                        item:
+                            state.item.settings,
+                        project:
+                            oldSettings
+                    )
+            let newResolved =
+                try NarrationSettingsResolver
+                    .resolve(
+                        item:
+                            state.item.settings,
+                        project:
+                            newSettings
+                    )
+
+            if oldResolved != newResolved {
+                affected.insert(state.id)
+            }
+        }
+
+        return affected
     }
 
     private func stopPlaybackIfProjectNarrationChanges(
@@ -541,6 +670,7 @@ final class ProjectRuntime {
         playbackTask = nil
         pipeline.onEvent = nil
         pipeline.stop()
+        queueController.shutdown()
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
         activity = ProjectRuntimeActivity()
@@ -564,6 +694,9 @@ final class ProjectRuntime {
                 activity.playbackState =
                     Self.playbackState(state)
             }
+            queueController.setPlaybackActive(
+                blocksQueuedGeneration
+            )
         case .queueChanged(
             let queuedBuffers,
             let queuedDurationSeconds
@@ -576,6 +709,9 @@ final class ProjectRuntime {
             activity.activeItemID = nil
             activity.queuedAudioBuffers = 0
             activity.queuedAudioDurationSeconds = 0
+            queueController.setPlaybackActive(
+                false
+            )
         case .modelLoaded,
              .chunkStarted,
              .chunkReady,

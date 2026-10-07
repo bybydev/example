@@ -57,6 +57,43 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         )
     }
 
+    func recoverGenerationQueue()
+        async throws -> ProjectQueueDocument
+    {
+        try await store
+            .recoverGenerationQueue(
+                projectID: projectID
+            )
+    }
+
+    func updateGenerationJob(
+        jobID: UUID,
+        state: GenerationJobState,
+        incrementAttempt: Bool = false,
+        errorMessage: String? = nil
+    ) async throws -> ProjectQueueDocument {
+        try await store.updateGenerationJob(
+            projectID: projectID,
+            jobID: jobID,
+            state: state,
+            incrementAttempt:
+                incrementAttempt,
+            errorMessage:
+                errorMessage
+        )
+    }
+
+    func removeGenerationJobs(
+        itemIDs: Set<UUID>,
+        states: Set<GenerationJobState>? = nil
+    ) async throws -> ProjectQueueDocument {
+        try await store.removeGenerationJobs(
+            projectID: projectID,
+            itemIDs: itemIDs,
+            states: states
+        )
+    }
+
     func enqueueGeneration(
         _ requests: [ProjectGenerationRequest],
         replaceExisting: Bool

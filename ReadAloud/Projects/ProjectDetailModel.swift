@@ -229,6 +229,89 @@ final class ProjectDetailModel {
         }
     }
 
+    func queueSelected(
+        itemIDs: Set<UUID>,
+        regenerate: Bool = false
+    ) async -> Bool {
+        do {
+            try await runtime
+                .enqueueSelectedGeneration(
+                    itemIDs: itemIDs,
+                    regenerate: regenerate
+                )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+    }
+
+    func queueAll() async -> Bool {
+        do {
+            try await runtime
+                .enqueueAllGeneration()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+    }
+
+    func cancelGeneration(
+        itemIDs: Set<UUID>
+    ) async -> Bool {
+        do {
+            try await runtime
+                .cancelGeneration(
+                    itemIDs: itemIDs
+                )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+    }
+
+    func retryGeneration(
+        itemIDs: Set<UUID>
+    ) async -> Bool {
+        do {
+            try await runtime
+                .retryGeneration(
+                    itemIDs: itemIDs
+                )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+    }
+
+    func clearCacheAndRegenerate(
+        itemIDs: Set<UUID>
+    ) async -> Bool {
+        do {
+            try await runtime
+                .clearCacheAndRegenerate(
+                    itemIDs: itemIDs
+                )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage =
+                Self.message(for: error)
+            return false
+        }
+    }
+
     func clearGeneratedAudio(itemID: UUID) async -> Bool {
         do {
             try await runtime.clearGeneratedAudio(

@@ -332,6 +332,9 @@ extension ProjectRuntime {
         playbackTask = nil
         pipeline.stop()
         finalAudioAsset = nil
+        queueController.setPlaybackActive(
+            true
+        )
         finalAudioPositionSeconds = 0
 
         let operationID = UUID()
@@ -422,6 +425,10 @@ extension ProjectRuntime {
                         == initialIndex
                     ? initialOffsetUTF16
                     : 0
+
+                await schedulePrefetch(
+                    after: state.id
+                )
 
                 let request =
                     generationStatusRequest(
@@ -578,6 +585,9 @@ extension ProjectRuntime {
     ) async throws {
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
+        queueController.setPlaybackActive(
+            true
+        )
 
         let startParagraphIndex =
             ReaderTextLayout
@@ -812,7 +822,7 @@ extension ProjectRuntime {
         }
     }
 
-    private func finalizeItemIfComplete(
+    func finalizeItemIfComplete(
         itemState:
             ProjectRuntimeItemState,
         paragraphs:
@@ -1044,6 +1054,9 @@ extension ProjectRuntime {
         finalAudioAsset = asset
         finalAudioPositionSeconds =
             actualStart
+        queueController.setPlaybackActive(
+            false
+        )
 
         try await publishFinalAudioPosition(
             asset: asset,
