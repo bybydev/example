@@ -264,20 +264,19 @@ public actor MCPWorkspaceStore {
     defer { endMutation() }
 
     var candidate = state
-    let exposedNames = Set(
-      candidate.snapshots.first(where: { $0.serverID == id })?.tools.map {
-        MCPToolNamespace.exposedName(serverID: id, remoteName: $0.remoteName)
-      } ?? []
-    )
+    let knownServerIDs = Set(candidate.servers.map(\.id)).union(
+      (candidate.chatConfigurations ?? [:]).values.flatMap(\.enabledServerIDs)
+    ).union(candidate.tombstones.keys.map { MCPServerID(rawValue: $0) })
     candidate.servers.removeAll { $0.id == id }
     candidate.snapshots.removeAll { $0.serverID == id }
     candidate.tombstones[id.rawValue] = .now
 
     if var configurations = candidate.chatConfigurations {
       for key in Array(configurations.keys) {
-        guard var configuration = configurations[key] else { continue }
-        configuration.enabledServerIDs.removeAll { $0 == id }
-        for name in exposedNames { configuration.toolPolicies.removeValue(forKey: name) }
+        guard let existing = configurations[key] else { continue }
+        let configuration = try MCPToolNamespace.removingServerReferences(
+          id, from: existing, knownServerIDs: knownServerIDs
+        )
         if configuration.enabledServerIDs.isEmpty && configuration.toolPolicies.isEmpty {
           configurations.removeValue(forKey: key)
         } else {

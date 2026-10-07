@@ -582,6 +582,42 @@ public actor ProjectWorkspaceStore {
     }
   }
 
+  /// Remove a deleted MCP server from every default/preset in one transaction.
+  /// Preserve optional/empty configuration semantics and all unrelated fields.
+  public func removeMCPServerReferences(
+    _ serverID: MCPServerID,
+    knownServerIDs: [MCPServerID]
+  ) async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    var candidate = state
+    let configurations = candidate.projects.flatMap { project in
+      [project.mcpConfiguration].compactMap { $0 }
+        + project.projectToolPresets.map(\.configuration)
+    }
+    let knownIDs = Set(knownServerIDs).union(configurations.flatMap(\.enabledServerIDs))
+    for index in candidate.projects.indices {
+      let original = candidate.projects[index]
+      if let configuration = original.mcpConfiguration {
+        candidate.projects[index].mcpConfiguration = try MCPToolNamespace.removingServerReferences(
+          serverID, from: configuration, knownServerIDs: knownIDs
+        )
+      }
+      if var presets = original.toolPresets {
+        for presetIndex in presets.indices {
+          presets[presetIndex].configuration = try MCPToolNamespace.removingServerReferences(
+            serverID, from: presets[presetIndex].configuration, knownServerIDs: knownIDs
+          )
+        }
+        candidate.projects[index].toolPresets = presets
+      }
+      if candidate.projects[index] != original { candidate.projects[index].updatedAt = .now }
+    }
+    guard candidate != state else { return }
+    state = try await committedState(candidate)
+  }
+
   public func deleteProject(_ id: ProjectID) async throws {
     await beginMutation()
     defer { endMutation() }

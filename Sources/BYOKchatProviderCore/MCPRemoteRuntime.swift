@@ -111,9 +111,26 @@ public actor MCPRemoteRuntime {
   }
 
   public func deleteServer(_ id: MCPServerID) async throws {
-    connections.removeValue(forKey: id)
+    // Keep the server visible when Keychain cleanup fails. If the subsequent
+    // workspace commit fails, restore its credential so retry does not leave
+    // a retained authenticated server silently broken.
+    let previousCredential = try await vault.credential(serverID: id)
     try await vault.removeCredential(serverID: id)
-    try await workspace.deleteServer(id)
+    do {
+      try await workspace.deleteServer(id)
+    } catch {
+      let deletionError = error
+      do {
+        try await vault.setCredential(previousCredential, serverID: id)
+      } catch {
+        connections.removeValue(forKey: id)
+        throw MCPError.transport(
+          "MCP server deletion failed and its Keychain credential could not be restored. The server remains available for deletion retry. Restore its credential to use it: \(error.localizedDescription)"
+        )
+      }
+      throw deletionError
+    }
+    connections.removeValue(forKey: id)
   }
 
   @discardableResult

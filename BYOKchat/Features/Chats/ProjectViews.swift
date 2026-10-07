@@ -362,6 +362,7 @@ struct ProjectEditorView: View {
             .background(.regularMaterial, in: Capsule())
         }
       }
+      .projectErrorPresenter(projects)
     }
   }
 
@@ -406,7 +407,6 @@ struct ProjectEditorView: View {
         ) != nil
       }
       if succeeded {
-        await mcp.reloadFromStorage()
         dismiss()
       }
     }
@@ -418,16 +418,51 @@ struct ProjectEditorView: View {
       projects.errorMessage = error.localizedDescription
     case .success(let urls):
       do {
-        var additions: [ProjectFile] = []
+        guard urls.count <= 8 - projectFiles.count else {
+          throw ProjectWorkspaceError.tooManyFiles
+        }
+        let existingBytes = projectFiles.reduce(0) { $0 + $1.byteCount }
+        let maximumFileBytes = 20 * 1_024 * 1_024
+        let maximumTotalBytes = 40 * 1_024 * 1_024
+        guard existingBytes <= maximumTotalBytes else { throw ProjectWorkspaceError.filesTooLarge }
+
+        // Keep provider access active across metadata inspection and reads;
+        // reject the complete batch before loading its first payload.
+        var accessedURLs: [URL] = []
+        defer { for url in accessedURLs { url.stopAccessingSecurityScopedResource() } }
+        var inspected: [(url: URL, type: UTType)] = []
+        var preflightBytes = existingBytes
         for url in urls {
-          let access = url.startAccessingSecurityScopedResource()
-          defer { if access { url.stopAccessingSecurityScopedResource() } }
-          let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
-          if let fileSize = values.fileSize, fileSize > 20 * 1_024 * 1_024 {
-            throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
+          if url.startAccessingSecurityScopedResource() { accessedURLs.append(url) }
+          let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isRegularFileKey])
+          guard values.isRegularFile == true else {
+            throw ProviderError.invalidRequest("\(url.lastPathComponent) is not a readable regular file.")
           }
-          let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+          guard let fileSize = values.fileSize, fileSize >= 0 else {
+            throw ProviderError.invalidRequest("The size of \(url.lastPathComponent) is unavailable. Download it locally and try again.")
+          }
+          guard fileSize <= maximumFileBytes else {
+            throw ProjectWorkspaceError.fileTooLarge(url.lastPathComponent)
+          }
+          guard fileSize <= maximumTotalBytes - preflightBytes else {
+            throw ProjectWorkspaceError.filesTooLarge
+          }
+          preflightBytes += fileSize
           let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
+          inspected.append((url, type))
+        }
+
+        var additions: [ProjectFile] = []
+        var actualBytes = existingBytes
+        for (url, type) in inspected {
+          let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+          guard data.count <= maximumFileBytes else {
+            throw ProjectWorkspaceError.fileTooLarge(url.lastPathComponent)
+          }
+          guard data.count <= maximumTotalBytes - actualBytes else {
+            throw ProjectWorkspaceError.filesTooLarge
+          }
+          actualBytes += data.count
           additions.append(
             ProjectFile(
               filename: url.lastPathComponent,
@@ -437,12 +472,6 @@ struct ProjectEditorView: View {
           )
         }
         let combined = projectFiles + additions
-        guard combined.count <= 8 else {
-          throw ProviderError.invalidRequest("A project can contain at most 8 reference files.")
-        }
-        guard combined.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
-          throw ProviderError.invalidRequest("Project reference files cannot exceed 40 MB total.")
-        }
         projectFiles = combined
       } catch {
         projects.errorMessage = error.localizedDescription
@@ -802,8 +831,7 @@ struct ProjectDetailView: View {
     ) {
       Button("Delete Project", role: .destructive) {
         Task { @MainActor in
-          await projects.deleteProject(projectID)
-          await mcp.reloadFromStorage()
+          guard await projects.deleteProject(projectID) else { return }
           if let homeExit {
             homeExit()
           } else {
@@ -815,6 +843,7 @@ struct ProjectDetailView: View {
     } message: {
       Text("Chats in this project will be kept and moved back to standalone chats.")
     }
+    .projectErrorPresenter(projects)
   }
 
   /// Pushed details keep their context: the composer layers on top instead of
@@ -970,5 +999,57 @@ struct ProjectDetailView: View {
     default:
       return "\(serverCount) server\(serverCount == 1 ? "" : "s") · \(presetCount) preset\(presetCount == 1 ? "" : "s")"
     }
+  }
+}
+
+/// The active Project surface owns its alert; root is a fallback. Capture the
+/// error identity when presenting so dismissal cannot erase a newer failure.
+private struct ProjectErrorPresenter: ViewModifier {
+  let projects: ProjectManagementModel
+  @State private var presenterID = UUID()
+  @State private var presentedError: ProjectManagementModel.OperationError?
+
+  func body(content: Content) -> some View {
+    let alertError = presentedError
+    return content
+      .onAppear { projects.registerErrorPresenter(presenterID) }
+      .onDisappear { projects.unregisterErrorPresenter(presenterID) }
+      .onChange(of: projects.errorForPresenter(presenterID), initial: true) { _, error in
+        if error == nil {
+          presentedError = nil
+        } else if presentedError == nil {
+          presentedError = error
+        }
+      }
+      .alert(
+        "Project Error",
+        isPresented: Binding(
+          get: { presentedError != nil },
+          set: { if !$0, let error = alertError { acknowledge(error) } }
+        ),
+        presenting: alertError
+      ) { error in
+        Button("OK") { acknowledge(error) }
+      } message: { error in
+        Text(error.message)
+      }
+  }
+
+  private func acknowledge(_ error: ProjectManagementModel.OperationError) {
+    guard presentedError?.id == error.id else { return }
+    projects.acknowledgeError(error, in: presenterID)
+    presentedError = nil
+    // If another failure arrived while this alert was visible, its identity
+    // did not change on dismissal. Present it on the next UI turn.
+    Task { @MainActor in
+      await Task.yield()
+      if presentedError == nil { presentedError = projects.errorForPresenter(presenterID) }
+    }
+  }
+}
+
+extension View {
+  func projectErrorPresenter(_ projects: ProjectManagementModel) -> some View {
+    modifier(ProjectErrorPresenter(projects: projects))
   }
 }

@@ -114,13 +114,13 @@ struct SidebarProjectsView: View {
         pendingDelete = nil
         Task { @MainActor in
           await projects.deleteProject(project.id)
-          await mcp.reloadFromStorage()
         }
       }
       Button("Cancel", role: .cancel) { pendingDelete = nil }
     } message: {
       Text("Chats in this project will be kept and moved back to standalone chats.")
     }
+    .projectErrorPresenter(projects)
   }
 
   private func projectDetail(_ project: ChatProject) -> String {

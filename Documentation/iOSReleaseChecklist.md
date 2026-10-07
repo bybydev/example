@@ -22,6 +22,10 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
 - [x] New Library saves enforce the current Free policy inside serialized store mutations; already-listed attachments remain idempotent.
 - [x] Library attachment batches preflight composer metadata before loading originals, exclude existing attachment IDs, and retain final composer validation.
 - [x] Library source subtitles/search use index-backed chat summaries without hydrating chat shards.
+- [x] Project mutations and chat Tools writes share the iOS MCP operation queue; inheritance refreshes before a mutation completes and materialization reads authoritative stores.
+- [x] Project editor/list/detail/sidebar errors have local ownership with root fallback; alert dismissal handles only the displayed error, and failed deletion keeps its detail view open.
+- [x] Project reference-file imports preflight the entire batch from metadata before reading bytes and validate actual sizes before accepting any additions.
+- [x] MCP deletion scrubs Project defaults/presets and chat permissions independently of discovery cache, refreshes both models, and preserves a deletion retry path on persistence/credential failure.
 
 ## Must do on Mac before upload
 
@@ -47,6 +51,7 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
 - [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, saved files per `BYOKProPolicy.freeLibraryItemLimit`, 2 free themes, basic analytics.
 - [ ] Complete the MCP smoke path below on the intended Release/TestFlight build; opening MCP settings alone is insufficient.
 - [ ] Complete the Library smoke path below on the intended Release/TestFlight build; opening Library alone is insufficient.
+- [ ] Complete the Projects smoke path below on the intended Release/TestFlight build; creating a Project alone is insufficient.
 - [ ] Archive Release and run Xcode **Validate App**. Resolve every validation/privacy-manifest warning before upload.
 - [ ] Upload the archive to App Store Connect/TestFlight and install that uploaded build once before submission.
 - [ ] Generate final App Store screenshots using `BYOKchatScreenshots` / `scripts/capture_app_store_screenshots.sh`; inspect the actual PNGs before upload.
@@ -122,3 +127,26 @@ Code completion does not mark these checks as passed. Record results for the exa
 Library validation results: **not run**. Replace this note with the build identifier, device, and results after completing the smoke path. Library is ready for iOS 1.0 only after this path passes.
 
 Deferred to iOS 1.0.1/later: bounded response-image downloads and strict image-signature checks; preserving file-type semantics on rename. These are outside issue #40's 1.0 implementation.
+
+## Projects release smoke path (issue #44)
+
+Code completion does not mark these checks as passed. Record results for the exact physical-iPhone release build before submission. These checks require explicit authorization before the assistant runs them.
+
+- [ ] Create a Project with provider/model defaults and instructions. Create a new Project chat and verify those defaults. Edit the Project defaults and confirm existing chats keep their current provider/model.
+- [ ] Add Project reference files and attach one from the composer; create/apply a reusable prompt preset.
+- [ ] Configure different MCP defaults in Projects A and B. Add a standalone chat to A, move it to B, then remove it. Tools immediately reflects the current inheritance at each step.
+- [ ] Immediately customize a server toggle/permission after each membership change. Repeat with overlapping actions and Always Allow approval persistence; the explicit override must use current inheritance. An existing explicit override survives membership changes.
+- [ ] Trigger duplicate-name/preset validation, import/read, and storage failures where reproducible. The active Project sheet/list/detail/sidebar displays one local error, retains unsaved editor state, and root does not duplicate it.
+- [ ] Dismiss a Project error while another Project or provider/chat/MCP error is pending. Only the displayed error is acknowledged; remaining errors stay available. Verify root fallback when no local Project surface is visible.
+- [ ] With existing and unsaved Project files, reject selections exceeding 8 files, 20 MB per file, or 40 MB combined before reading selected payloads. Unknown size metadata is visibly rejected. Check failed reads/changed sizes where reproducible: accept no subset and keep the previous file list. Valid batches append normally.
+- [ ] Delete an MCP server used by multiple Project defaults, tool presets, and explicit chat permissions. Verify its IDs/policies disappear, other settings and preset identities remain, summaries update, and inherited chat Tools refreshes. Repeat after invalidating/changing discovery so older policy keys are covered.
+- [ ] Where reproducible, fail Project cleanup, Keychain cleanup, or MCP deletion persistence. The server remains available for deletion retry, partial cleanup is reflected accurately, no full-success message appears, and retry completes. A failed MCP commit restores its previous credential; restoration failure is reported explicitly.
+- [ ] For imported server IDs sharing the same eight-character tool namespace, deletion with ambiguous policies reports a clear error and preserves the server and permissions rather than guessing ownership. Remove conflicting permissions and retry.
+- [ ] Fail Project deletion where reproducible: detail remains open and its chats survive. Retry successfully: the view exits and its chats become standalone.
+- [ ] Relaunch and verify membership, files, defaults, prompts, permissions, and successful server cleanup persist.
+
+Projects validation results: **not run**. Replace this note with the build identifier, device, and results after completing the smoke path. Projects is ready for iOS 1.0 only after this path passes.
+
+Implementation boundaries: no Projects architecture redesign or macOS UI changes. The coordinated server deletion commits Project cleanup first, then removes the credential and commits MCP deletion, restoring the credential if that commit fails. Stores remain separate persistence domains; a later-stage failure can leave already-committed Project cleanup in place, and the retained server allows idempotent retry. Existing exposed names and empty-configuration semantics are preserved.
+
+Deferred to iOS 1.0.1/later: empty Project MCP configuration normalization; earlier preset-limit/name validation UX; missing Project-file blob reconciliation; Sources preview/open. Separate explicit-empty chat-override semantics are also outside issue #44.

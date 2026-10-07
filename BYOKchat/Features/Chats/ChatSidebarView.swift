@@ -65,6 +65,7 @@ struct ChatSidebarView: View {
     .safeAreaPadding(.top, 8)
     .safeAreaPadding(.bottom, 8)
     .background(theme.backgroundColor.ignoresSafeArea())
+    .projectErrorPresenter(projects)
     .contentShape(Rectangle())
     .gesture(
       DragGesture(minimumDistance: 20)

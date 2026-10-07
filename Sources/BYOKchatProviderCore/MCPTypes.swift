@@ -241,12 +241,7 @@ public enum MCPToolNamespace {
   public static let maximumExposedNameLength = 64
 
   public static func exposedName(serverID: MCPServerID, remoteName: String) -> String {
-    let prefixSource = serverID.rawValue.lowercased().filter { character in
-      character.isASCII && (character.isLetter || character.isNumber)
-    }
-    let serverPrefix = String(prefixSource.prefix(8)).isEmpty
-      ? "server"
-      : String(prefixSource.prefix(8))
+    let fixed = serverNamespace(serverID)
     let sanitized = remoteName.map { character -> Character in
       if character.isASCII
         && (character.isLetter || character.isNumber || character == "_" || character == "-")
@@ -258,10 +253,43 @@ public enum MCPToolNamespace {
     let body = String(sanitized).isEmpty ? "tool" : String(sanitized)
     let hashInput = serverID.rawValue + "\u{0}" + remoteName
     let suffix = String(format: "%08x", stableHash(hashInput))
-    let fixed = "mcp_\(serverPrefix)_"
     let reserved = fixed.count + 1 + suffix.count
     let available = max(1, maximumExposedNameLength - reserved)
     return fixed + String(body.prefix(available)) + "_" + suffix
+  }
+
+  /// Discovery may have changed or been invalidated. Stored policy keys still
+  /// identify the server namespace, so cleanup must not depend on that cache.
+  /// The existing namespace truncates IDs; reject ambiguous ownership rather
+  /// than erasing another server's policies. No persisted names are changed.
+  public static func removingServerReferences(
+    _ serverID: MCPServerID,
+    from configuration: MCPChatToolConfiguration,
+    knownServerIDs: Set<MCPServerID>
+  ) throws -> MCPChatToolConfiguration {
+    let prefix = serverNamespace(serverID)
+    let policyNames = configuration.toolPolicies.keys.filter { $0.hasPrefix(prefix) }
+    if !policyNames.isEmpty,
+      knownServerIDs.contains(where: { $0 != serverID && serverNamespace($0) == prefix })
+    {
+      throw MCPError.invalidServer(
+        "Two MCP servers share a tool namespace. Remove their saved tool permissions before retrying deletion."
+      )
+    }
+    var result = configuration
+    result.enabledServerIDs.removeAll { $0 == serverID }
+    for name in policyNames { result.toolPolicies.removeValue(forKey: name) }
+    return result
+  }
+
+  private static func serverNamespace(_ serverID: MCPServerID) -> String {
+    let prefixSource = serverID.rawValue.lowercased().filter { character in
+      character.isASCII && (character.isLetter || character.isNumber)
+    }
+    let serverPrefix = String(prefixSource.prefix(8)).isEmpty
+      ? "server"
+      : String(prefixSource.prefix(8))
+    return "mcp_\(serverPrefix)_"
   }
 
   private static func stableHash(_ value: String) -> UInt32 {

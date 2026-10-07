@@ -20,6 +20,15 @@ enum AppRoute: Hashable {
 }
 
 struct AppRootView: View {
+  private struct RootError: Equatable {
+    enum Source: Equatable {
+      case chat, provider, mcp
+      case project(ProjectManagementModel.OperationError)
+    }
+    let source: Source
+    let message: String
+  }
+
   private struct ChatPresentationID: Hashable {
     let conversationID: ConversationID
     let messageID: ChatMessageID?
@@ -52,6 +61,7 @@ struct AppRootView: View {
   /// Sidebar menu section currently replacing the main screen. Mutually
   /// exclusive with the states above.
   @State private var activeScreen: ChatSidebarView.SidebarDestination?
+  @State private var presentedRootError: RootError?
 
   var body: some View {
     Group {
@@ -77,7 +87,8 @@ struct AppRootView: View {
   }
 
   private var readyAppContent: some View {
-    ZStack {
+    let alertError = presentedRootError
+    return ZStack {
       theme.backgroundColor
         .ignoresSafeArea()
 
@@ -181,39 +192,71 @@ struct AppRootView: View {
           .padding(.top, 8)
       }
     }
+    .onChange(of: rootErrorCandidate, initial: true) { _, _ in synchronizeRootErrorPresentation() }
+    .onChange(of: model.projects.errorForPresenter()) { _, _ in synchronizeRootErrorPresentation() }
+    .onChange(of: model.mcp.shouldPresentError()) { _, _ in synchronizeRootErrorPresentation() }
     .alert(
       "BYOKchat",
       isPresented: Binding(
-        get: {
-          model.providers.errorMessage != nil
-            || model.chats.errorMessage != nil
-            || model.projects.errorMessage != nil
-            || model.mcp.shouldPresentError()
-        },
+        get: { presentedRootError != nil },
         set: { presented in
-          if !presented {
-            model.providers.errorMessage = nil
-            model.chats.errorMessage = nil
-            model.projects.errorMessage = nil
-            if model.mcp.shouldPresentError() { model.mcp.errorMessage = nil }
+          if !presented, let error = alertError {
+            acknowledgeRootError(error)
           }
         }
-      )
-    ) {
-      Button("OK") {
-        model.providers.errorMessage = nil
-        model.chats.errorMessage = nil
-        model.projects.errorMessage = nil
-        if model.mcp.shouldPresentError() { model.mcp.errorMessage = nil }
+      ),
+      presenting: alertError
+    ) { error in
+      Button("OK") { acknowledgeRootError(error) }
+    } message: { error in
+      Text(error.message)
+    }
+  }
+
+  private var rootErrorCandidate: RootError? {
+    if let message = model.chats.errorMessage { return RootError(source: .chat, message: message) }
+    if let error = model.projects.errorForPresenter() {
+      return RootError(source: .project(error), message: error.message)
+    }
+    if let message = model.providers.errorMessage { return RootError(source: .provider, message: message) }
+    if model.mcp.shouldPresentError(), let message = model.mcp.errorMessage {
+      return RootError(source: .mcp, message: message)
+    }
+    return nil
+  }
+
+  private func synchronizeRootErrorPresentation() {
+    // Ownership can change even while a higher-priority error is pending.
+    // A local surface takes over without acknowledging the Project/MCP error.
+    if let displayed = presentedRootError {
+      switch displayed.source {
+      case .project:
+        if model.projects.errorForPresenter() == nil { presentedRootError = nil }
+      case .mcp:
+        if !model.mcp.shouldPresentError() { presentedRootError = nil }
+      case .chat, .provider:
+        break
       }
-    } message: {
-      Text(
-        model.chats.errorMessage
-          ?? model.projects.errorMessage
-          ?? model.providers.errorMessage
-          ?? (model.mcp.shouldPresentError() ? model.mcp.errorMessage : nil)
-          ?? "Unknown error"
-      )
+    }
+    if presentedRootError == nil { presentedRootError = rootErrorCandidate }
+  }
+
+  private func acknowledgeRootError(_ error: RootError) {
+    guard presentedRootError == error else { return }
+    switch error.source {
+    case .chat:
+      if model.chats.errorMessage == error.message { model.chats.errorMessage = nil }
+    case .provider:
+      if model.providers.errorMessage == error.message { model.providers.errorMessage = nil }
+    case .mcp:
+      if model.mcp.shouldPresentError(), model.mcp.errorMessage == error.message { model.mcp.errorMessage = nil }
+    case .project(let projectError):
+      model.projects.acknowledgeError(projectError)
+    }
+    presentedRootError = nil
+    Task { @MainActor in
+      await Task.yield()
+      synchronizeRootErrorPresentation()
     }
   }
 

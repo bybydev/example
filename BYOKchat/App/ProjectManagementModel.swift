@@ -8,8 +8,43 @@ final class ProjectManagementModel {
   private(set) var projects: [ChatProject] = []
   private(set) var conversationProjectIDs: [ConversationID: ProjectID] = [:]
   var isBusy = false
-  var errorMessage: String?
+  struct OperationError: Identifiable, Equatable {
+    let id = UUID()
+    let message: String
+  }
+
+  private(set) var operationError: OperationError?
+  var errorMessage: String? {
+    get { operationError?.message }
+    set { operationError = newValue.map { OperationError(message: $0) } }
+  }
   var statusMessage: String?
+  /// Installed by AppModel: Project writes and chat Tools writes share MCP's
+  /// operation queue, including the derived-state refresh before releasing it.
+  var coordinateMutation: @MainActor (@MainActor () async throws -> Void) async throws -> Void = { operation in
+    try await operation()
+  }
+  var beginChatConfiguration: (ConversationID, String) -> Bool = { _, _ in true }
+  var endChatConfiguration: (ConversationID, String, Bool) -> Void = { _, _, _ in }
+  private var errorPresenterIDs: [UUID] = []
+
+  func registerErrorPresenter(_ id: UUID) {
+    errorPresenterIDs.removeAll { $0 == id }
+    errorPresenterIDs.append(id)
+  }
+
+  func unregisterErrorPresenter(_ id: UUID) {
+    errorPresenterIDs.removeAll { $0 == id }
+  }
+
+  func errorForPresenter(_ id: UUID? = nil) -> OperationError? {
+    errorPresenterIDs.last == id ? operationError : nil
+  }
+
+  func acknowledgeError(_ error: OperationError, in presenterID: UUID? = nil) {
+    guard errorForPresenter(presenterID)?.id == error.id else { return }
+    operationError = nil
+  }
   /// App-layer hook fired after snapshot refreshes; AppModel runs the
   /// orphan-file sweep in response (project file pointers may have shrunk).
   var onFileReferencesChanged: (() -> Void)?
@@ -28,9 +63,8 @@ final class ProjectManagementModel {
   }
 
   func reloadFromStorage() async {
-    await perform(nil) {
-      await reloadSnapshot()
-    }
+    // Snapshot-only refreshes must not acknowledge an unrelated pending error.
+    await reloadSnapshot()
   }
 
   /// Authoritative reference-file IDs for the app-level orphan sweep.
@@ -125,29 +159,37 @@ final class ProjectManagementModel {
     }
   }
 
-  func deleteProject(_ id: ProjectID) async {
-    await perform("Project deleted; its chats are now standalone") {
+  @discardableResult
+  func deleteProject(_ id: ProjectID) async -> Bool {
+    await performResult("Project deleted; its chats are now standalone") {
       try await workspace.deleteProject(id)
       await reloadSnapshot()
     }
   }
 
+  @discardableResult
   func assignConversation(_ conversationID: ConversationID, to projectID: ProjectID?) async -> Bool {
-    await performResult(nil) {
+    let key = "project.membership"
+    guard beginChatConfiguration(conversationID, key) else {
+      errorMessage = "This chat is no longer available or is preparing a message. Try the Project change again when it is ready."
+      return false
+    }
+    var succeeded = false
+    defer { endChatConfiguration(conversationID, key, succeeded) }
+    succeeded = await performResult(nil) {
       try await workspace.assignConversation(conversationID, to: projectID)
       await reloadSnapshot()
     }
+    return succeeded
   }
 
-  func removeConversation(_ conversationID: ConversationID) async {
-    await perform(nil) {
-      try await workspace.removeConversation(conversationID)
-      await reloadSnapshot()
-    }
+  @discardableResult
+  func removeConversation(_ conversationID: ConversationID) async -> Bool {
+    await assignConversation(conversationID, to: nil)
   }
 
   func reconcile(conversations: [ChatConversation]) async {
-    await perform(nil) {
+    await perform(nil, coordinatesMCP: true) {
       try await workspace.reconcileConversationIDs(Set(conversations.map(\.id)))
       await reloadSnapshot()
     }
@@ -167,24 +209,35 @@ final class ProjectManagementModel {
     onFileReferencesChanged?()
   }
 
-  private func perform(_ successMessage: String?, operation: () async throws -> Void) async {
-    isBusy = true
-    errorMessage = nil
-    defer { isBusy = false }
-    do {
-      try await operation()
-      if let successMessage { statusMessage = successMessage }
-    } catch {
-      errorMessage = error.localizedDescription
-    }
+  private func perform(
+    _ successMessage: String?,
+    coordinatesMCP: Bool = false,
+    operation: @MainActor () async throws -> Void
+  ) async {
+    _ = await performResult(successMessage, coordinatesMCP: coordinatesMCP, operation: operation)
   }
 
-  private func performResult(_ successMessage: String?, operation: () async throws -> Void) async -> Bool {
+  private var operationCount = 0
+
+  private func performResult(
+    _ successMessage: String?,
+    coordinatesMCP: Bool = true,
+    operation: @MainActor () async throws -> Void
+  ) async -> Bool {
+    operationCount += 1
     isBusy = true
     errorMessage = nil
-    defer { isBusy = false }
+    statusMessage = nil
+    defer {
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
     do {
-      try await operation()
+      if coordinatesMCP {
+        try await coordinateMutation(operation)
+      } else {
+        try await operation()
+      }
       if let successMessage { statusMessage = successMessage }
       return true
     } catch {

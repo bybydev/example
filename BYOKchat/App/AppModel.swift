@@ -103,6 +103,17 @@ final class AppModel {
     mcpModel.endChatConfiguration = { [weak chatModel] id, key, succeeded in
       chatModel?.endConfiguration(id, key: key, succeeded: succeeded)
     }
+    projectModel.beginChatConfiguration = mcpModel.beginChatConfiguration
+    projectModel.endChatConfiguration = mcpModel.endChatConfiguration
+    projectModel.coordinateMutation = { [weak mcpModel] operation in
+      guard let mcpModel else {
+        throw ProviderError.invalidRequest("Project coordination is unavailable. Please try again.")
+      }
+      try await mcpModel.coordinateProjectMutation(operation)
+    }
+    mcpModel.onProjectStateChanged = { [weak projectModel] in
+      await projectModel?.reloadFromStorage()
+    }
     chatModel.onNewChatDiscarded = { [weak projectModel, weak mcpModel] in
       await projectModel?.reloadFromStorage()
       await mcpModel?.reloadFromStorage()
@@ -179,6 +190,7 @@ final class AppModel {
 final class MCPManagementModel {
   var beginChatConfiguration: (ConversationID, String) -> Bool = { _, _ in true }
   var endChatConfiguration: (ConversationID, String, Bool) -> Void = { _, _, _ in }
+  var onProjectStateChanged: @MainActor () async -> Void = {}
   private(set) var servers: [MCPRemoteServer] = []
   private(set) var snapshotsByServer: [MCPServerID: MCPServerSnapshot] = [:]
   private(set) var credentialServerIDs: Set<MCPServerID> = []
@@ -242,6 +254,22 @@ final class MCPManagementModel {
     await perform(nil) {
       try await reloadSnapshot()
     }
+  }
+
+  /// Hold the existing MCP queue across a Project commit and cache refresh.
+  /// Do not call perform()/reloadFromStorage() inside this operation: they
+  /// acquire the same queue. Project failures retain Project error ownership.
+  func coordinateProjectMutation(_ operation: @MainActor () async throws -> Void) async throws {
+    operationCount += 1
+    isBusy = true
+    await acquireOperation()
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
+    try await operation()
+    await reloadProjectInheritance()
   }
 
   func snapshot(for serverID: MCPServerID) -> MCPServerSnapshot? {
@@ -400,7 +428,23 @@ final class MCPManagementModel {
 
   func deleteServer(_ serverID: MCPServerID) async {
     await perform("MCP server deleted") {
-      try await runtime.deleteServer(serverID)
+      do {
+        let snapshot = await workspace.snapshot()
+        let serverIDs = snapshot.servers.map(\.id)
+          + snapshot.tombstones.keys.map { MCPServerID(rawValue: $0) }
+        // Project persistence must succeed while the server is still visible
+        // for retry. This is one serialized Project JSON commit, not a series
+        // of independent per-project updates.
+        try await projectWorkspace.removeMCPServerReferences(serverID, knownServerIDs: serverIDs)
+        await onProjectStateChanged()
+        try await runtime.deleteServer(serverID)
+      } catch {
+        // An earlier store may have committed. Publish its real state while
+        // preserving the original error and leaving deletion retryable.
+        await onProjectStateChanged()
+        try? await reloadSnapshot()
+        throw error
+      }
       try await reloadSnapshot()
     }
   }
@@ -481,7 +525,8 @@ final class MCPManagementModel {
     if decision == .alwaysAllow,
       let request = pendingApprovals.first(where: { $0.id == requestID })
     {
-      do {
+      var persisted = false
+      await perform(nil, conversationID: request.conversationID, configurationKey: "mcp.policy.\(request.exposedToolName)") {
         try await materializeInheritedConfigurationIfNeeded(request.conversationID)
         try await workspace.setChatToolPolicy(
           .alwaysAllow,
@@ -489,9 +534,11 @@ final class MCPManagementModel {
           conversationID: request.conversationID
         )
         try await reloadSnapshot()
+        persisted = true
         await approvals.resolve(requestID, decision: .allowOnce)
-      } catch {
-        errorMessage = error.localizedDescription
+      }
+      if !persisted {
+        // Persistence failed or the chat was retired before the write began.
         await approvals.resolve(requestID, decision: .deny)
       }
       return
@@ -512,8 +559,8 @@ final class MCPManagementModel {
   }
 
   private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
-    guard chatConfigurations[conversationID] == nil,
-      let inherited = inheritedChatConfigurations[conversationID]
+    guard await workspace.explicitChatConfiguration(for: conversationID) == nil,
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
     else { return }
     try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
   }
@@ -530,14 +577,7 @@ final class MCPManagementModel {
       }
     )
 
-    let projectSnapshot = await projectWorkspace.snapshot()
-    let projectsByID = Dictionary(uniqueKeysWithValues: projectSnapshot.projects.map { ($0.id.rawValue, $0) })
-    inheritedChatConfigurations = Dictionary(
-      uniqueKeysWithValues: projectSnapshot.conversationProjectIDs.compactMap { conversationID, projectID in
-        guard let configuration = projectsByID[projectID]?.mcpConfiguration else { return nil }
-        return (ConversationID(rawValue: conversationID), configuration)
-      }
-    )
+    await reloadProjectInheritance()
 
     var credentials: Set<MCPServerID> = []
     for server in servers {
@@ -546,6 +586,20 @@ final class MCPManagementModel {
       }
     }
     credentialServerIDs = credentials
+  }
+
+  /// Project writes do not change credentials or explicit chat overrides.
+  /// Refreshing inheritance is nonthrowing, so an unrelated Keychain read
+  /// cannot turn a durably saved Project into an apparent failed save.
+  private func reloadProjectInheritance() async {
+    let projectSnapshot = await projectWorkspace.snapshot()
+    let projectsByID = Dictionary(uniqueKeysWithValues: projectSnapshot.projects.map { ($0.id.rawValue, $0) })
+    inheritedChatConfigurations = Dictionary(
+      uniqueKeysWithValues: projectSnapshot.conversationProjectIDs.compactMap { conversationID, projectID in
+        guard let configuration = projectsByID[projectID]?.mcpConfiguration else { return nil }
+        return (ConversationID(rawValue: conversationID), configuration)
+      }
+    )
   }
 
   private func startInteractionObserversIfNeeded() {
