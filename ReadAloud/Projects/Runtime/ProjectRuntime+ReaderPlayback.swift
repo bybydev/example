@@ -22,6 +22,31 @@ extension ProjectRuntime {
         }
     }
 
+    var currentFinalAudioPositionSeconds: Double {
+        guard let asset =
+                finalAudioAsset
+        else {
+            return finalAudioPositionSeconds
+        }
+
+        let live =
+            finalAudioPlaybackOriginSeconds
+            + pipeline
+                .playbackPositionSeconds
+
+        return min(
+            asset.metadata
+                .durationSeconds,
+            max(
+                0,
+                max(
+                    finalAudioPositionSeconds,
+                    live
+                )
+            )
+        )
+    }
+
     var isPlaybackPaused: Bool {
         readerPauseRequested
             || activity.playbackState
@@ -79,6 +104,9 @@ extension ProjectRuntime {
         readerPauseRequested = true
         pipeline.pause()
         activity.playbackState = .paused
+        ProjectSystemMediaController
+            .shared
+            .publish(self)
     }
 
     func resumePlayback() {
@@ -93,6 +121,10 @@ extension ProjectRuntime {
             activity.playbackState =
                 .playing
         }
+
+        ProjectSystemMediaController
+            .shared
+            .publish(self)
     }
 
     func togglePlayback(
@@ -140,7 +172,7 @@ extension ProjectRuntime {
                     .durationSeconds,
                 max(
                     0,
-                    finalAudioPositionSeconds
+                    currentFinalAudioPositionSeconds
                         + seconds
                 )
             )
@@ -245,6 +277,138 @@ extension ProjectRuntime {
         }
     }
 
+    func seekPlayback(
+        to positionSeconds: Double
+    ) throws {
+        guard let currentItemID =
+                activity.activeItemID,
+              let asset =
+                finalAudioAsset,
+              asset.metadata.itemID
+                == currentItemID
+        else {
+            return
+        }
+
+        let shouldRemainPaused =
+            isPlaybackPaused
+        let targetSeconds =
+            min(
+                asset.metadata
+                    .durationSeconds,
+                max(
+                    0,
+                    positionSeconds
+                )
+            )
+        let range =
+            finalAudioSegment(
+                in: asset.metadata,
+                at: targetSeconds
+            )?.sourceRange
+            ?? activity
+                .currentParagraphRange
+            ?? AudioSourceRange(
+                startUTF16: 0,
+                endUTF16: 1
+            )
+
+        startReaderPlayback(
+            itemID: currentItemID,
+            offsetUTF16:
+                range.startUTF16,
+            exactStartSeconds:
+                targetSeconds,
+            allowsExactAudioResume:
+                false
+        )
+
+        if shouldRemainPaused {
+            pausePlayback()
+        }
+    }
+
+    func persistPlaybackCheckpoint()
+        async
+    {
+        guard let playback =
+                project?.playback
+        else {
+            return
+        }
+
+        if let operationID =
+                playbackOperationID,
+           let asset =
+                finalAudioAsset,
+           let itemID =
+                activity.activeItemID,
+           asset.metadata.itemID
+                == itemID,
+           let state =
+                itemState(itemID)
+        {
+            let paragraphs =
+                ReaderTextLayout
+                    .paragraphs(
+                        in:
+                            state.item.text
+                    )
+            let position =
+                min(
+                    asset.metadata
+                        .durationSeconds,
+                    max(
+                        0,
+                        currentFinalAudioPositionSeconds
+                    )
+                )
+
+            do {
+                try await
+                    publishFinalAudioPosition(
+                        asset: asset,
+                        itemState: state,
+                        paragraphs:
+                            paragraphs,
+                        positionSeconds:
+                            position,
+                        persist: true,
+                        operationID:
+                            operationID
+                    )
+            } catch is CancellationError {
+                return
+            } catch {
+                lastErrorMessage =
+                    Self.message(
+                        for: error
+                    )
+            }
+            return
+        }
+
+        do {
+            var checkpoint = playback
+            checkpoint.lastPlayedAt = .now
+            try await persistence
+                .updatePlayback(
+                    checkpoint
+                )
+            project?.playback =
+                checkpoint
+            revision &+= 1
+            ProjectSystemMediaController
+                .shared
+                .publish(self)
+        } catch {
+            lastErrorMessage =
+                Self.message(
+                    for: error
+                )
+        }
+    }
+
     func playNextItem(
         after itemID: UUID
     ) throws {
@@ -332,6 +496,7 @@ extension ProjectRuntime {
         playbackTask = nil
         pipeline.stop()
         finalAudioAsset = nil
+        finalAudioPlaybackOriginSeconds = 0
         queueController.setPlaybackActive(
             true
         )
@@ -520,6 +685,7 @@ extension ProjectRuntime {
                 .finishContinuousPlayback()
             finalAudioAsset = nil
             finalAudioPositionSeconds = 0
+            finalAudioPlaybackOriginSeconds = 0
             activity.itemProgress = 1
             activity.projectProgress = 1
 
@@ -585,6 +751,7 @@ extension ProjectRuntime {
     ) async throws {
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
+        finalAudioPlaybackOriginSeconds = 0
         queueController.setPlaybackActive(
             true
         )
@@ -1054,6 +1221,8 @@ extension ProjectRuntime {
         finalAudioAsset = asset
         finalAudioPositionSeconds =
             actualStart
+        finalAudioPlaybackOriginSeconds =
+            actualStart
         queueController.setPlaybackActive(
             false
         )
@@ -1333,6 +1502,9 @@ extension ProjectRuntime {
         finalAudioPositionSeconds =
             position
         revision &+= 1
+        ProjectSystemMediaController
+            .shared
+            .publish(self)
     }
 
     private func finalAudioStartSeconds(
@@ -1564,6 +1736,9 @@ extension ProjectRuntime {
         activity.projectProgress =
             projectProgress
         revision &+= 1
+        ProjectSystemMediaController
+            .shared
+            .publish(self)
     }
 
     private func projectProgress(

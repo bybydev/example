@@ -499,6 +499,59 @@ Background execution is still opportunistic. Phase 8 guarantees persisted
 intent and safe recovery; it does not claim indefinite iOS background synthesis.
 Phase 9 owns system background playback / Now Playing integration.
 
+## Background playback and system media
+
+Phase 9 makes ReadAloud participate in iOS system audio like a normal
+spoken-audio app.
+
+The app declares the `audio` background mode and keeps playback on an
+`AVAudioSession` configured with the `.playback` category and
+`.spokenAudio` mode. The audio session remains active while audio is playing
+or paused and is deactivated when playback stops.
+
+Audio-session behavior:
+
+- an interruption pauses playback and records whether it was actively playing;
+- interruption end resumes only when iOS reports `shouldResume` and ReadAloud
+  had been playing before the interruption;
+- unplugging an active output route pauses without automatically resuming;
+- media-services reset rebuilds the `AVAudioEngine` / player-node graph,
+  stops the invalidated playback operation, and leaves the durable content
+  bookmark available for user-initiated resume.
+
+One app-wide system-media controller owns `MPNowPlayingInfoCenter` and
+`MPRemoteCommandCenter`. Loaded project runtimes do not register duplicate
+remote-command handlers.
+
+Now Playing publishes the current section title, project title, author when
+available, project artwork, play/pause state, and finalized-audio duration /
+elapsed position when a verified WAV is active.
+
+Supported system commands:
+
+- play / pause / toggle;
+- skip backward 15 seconds;
+- skip forward 15 seconds;
+- previous / next chapter when available;
+- direct playback-position scrubbing when compatible finalized audio exists.
+
+Finalized WAV playback uses the live player sample clock for elapsed time,
+system scrubbing, lifecycle checkpoints, and ±15-second seeking. The reported
+position is never allowed to move backward behind the last observed durable
+position. Streaming playback keeps the Phase 6/7 paragraph-boundary seek
+fallback and does not invent an exact audio timeline.
+
+When the app becomes inactive or enters the background, active runtimes persist
+a playback checkpoint. Compatible finalized audio stores
+`generationKey + audioRevision + exact seconds`; streaming stores the current
+content bookmark. Relaunch never autoplays. Continue Listening reopens the
+persisted item and resumes with the normal compatibility rules.
+
+The persistent mini-player resolves the runtime that is actually playing rather
+than whichever project is currently being browsed. It shows project title,
+current chapter/status, chapter progress, play/pause, and opens that same
+runtime in Reader when tapped.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

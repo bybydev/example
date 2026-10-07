@@ -103,6 +103,20 @@ final class ProjectRuntimeManager {
         }
     }
 
+    var playbackRuntime: ProjectRuntime? {
+        if let activeRuntime,
+           activeRuntime.isPlaybackActive
+        {
+            return activeRuntime
+        }
+
+        return runtimes.values.first(
+            where: {
+                $0.isPlaybackActive
+            }
+        )
+    }
+
     func runtimeIfLoaded(
         projectID: UUID
     ) -> ProjectRuntime? {
@@ -179,6 +193,20 @@ final class ProjectRuntimeManager {
         }
 
         publishLoadedRuntimeIDs()
+    }
+
+    func persistPlaybackCheckpoints()
+        async
+    {
+        let playing =
+            runtimes.values.filter {
+                $0.isPlaybackActive
+            }
+
+        for runtime in playing {
+            await runtime
+                .persistPlaybackCheckpoint()
+        }
     }
 
     func shutdownAll() {

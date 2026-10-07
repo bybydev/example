@@ -66,6 +66,8 @@ final class ReadAloudPipeline {
 
     private(set) var state: State = .idle
     var onEvent: ((Event) -> Void)?
+    var onAudioSessionEvent:
+        ((SpeechPlaybackQueue.SessionEvent) -> Void)?
 
     var playbackPositionSeconds: Double {
         max(
@@ -89,6 +91,10 @@ final class ReadAloudPipeline {
                     queuedDurationSeconds: snapshot.queuedDurationSeconds
                 )
             )
+        }
+
+        playback.onSessionEvent = { [weak self] event in
+            self?.onAudioSessionEvent?(event)
         }
     }
 
@@ -328,6 +334,18 @@ final class ReadAloudPipeline {
         isPaused = false
         playback.resume()
         setState(.playing)
+    }
+
+    func shutdown() {
+        onEvent = nil
+        onAudioSessionEvent = nil
+        readingTask?.cancel()
+        readingTask = nil
+        activeOperationID = nil
+        isPaused = false
+        playbackPositionOriginSeconds = 0
+        playback.shutdown()
+        state = .idle
     }
 
     func stop() {

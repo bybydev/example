@@ -99,6 +99,8 @@ final class ProjectRuntime {
     @ObservationIgnored var finalAudioAsset:
         ProjectFinalAudioAsset?
     @ObservationIgnored var finalAudioPositionSeconds = 0.0
+    @ObservationIgnored var finalAudioPlaybackOriginSeconds = 0.0
+    @ObservationIgnored var shouldResumeAfterInterruption = false
     @ObservationIgnored var prefetchScheduledItemIDs = Set<UUID>()
     @ObservationIgnored private var didRecoverGenerationQueue = false
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
@@ -120,6 +122,10 @@ final class ProjectRuntime {
 
         pipeline.onEvent = { [weak self] event in
             self?.handlePipelineEvent(event)
+        }
+        pipeline.onAudioSessionEvent = {
+            [weak self] event in
+            self?.handleAudioSessionEvent(event)
         }
     }
 
@@ -264,6 +270,9 @@ final class ProjectRuntime {
             didLoad = true
             isLoading = false
             revision &+= 1
+            ProjectSystemMediaController
+                .shared
+                .publish(self)
         } catch {
             guard generation == refreshGeneration else {
                 return
@@ -654,6 +663,8 @@ final class ProjectRuntime {
         pipeline.stop()
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
+        finalAudioPlaybackOriginSeconds = 0
+        shouldResumeAfterInterruption = false
         activity.activeItemID = nil
         activity.currentParagraphRange = nil
         activity.currentParagraphIndex = nil
@@ -668,12 +679,16 @@ final class ProjectRuntime {
         readerPauseRequested = false
         playbackTask?.cancel()
         playbackTask = nil
-        pipeline.onEvent = nil
-        pipeline.stop()
+        pipeline.shutdown()
         queueController.shutdown()
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
+        finalAudioPlaybackOriginSeconds = 0
+        shouldResumeAfterInterruption = false
         activity = ProjectRuntimeActivity()
+        ProjectSystemMediaController
+            .shared
+            .detach(self)
     }
 
     private func handlePipelineEvent(
@@ -697,6 +712,17 @@ final class ProjectRuntime {
             queueController.setPlaybackActive(
                 blocksQueuedGeneration
             )
+
+            if activity.hasActivePlaybackWork {
+                ProjectSystemMediaController
+                    .shared
+                    .activate(self)
+            } else {
+                ProjectSystemMediaController
+                    .shared
+                    .clear(self)
+            }
+
         case .queueChanged(
             let queuedBuffers,
             let queuedDurationSeconds
@@ -704,6 +730,9 @@ final class ProjectRuntime {
             activity.queuedAudioBuffers = queuedBuffers
             activity.queuedAudioDurationSeconds =
                 queuedDurationSeconds
+            ProjectSystemMediaController
+                .shared
+                .publish(self)
         case .stopped:
             activity.playbackState = .idle
             activity.activeItemID = nil
@@ -712,11 +741,81 @@ final class ProjectRuntime {
             queueController.setPlaybackActive(
                 false
             )
+            ProjectSystemMediaController
+                .shared
+                .clear(self)
         case .modelLoaded,
              .chunkStarted,
              .chunkReady,
              .warmUpFinished:
             break
+        }
+    }
+
+    private func handleAudioSessionEvent(
+        _ event:
+            SpeechPlaybackQueue.SessionEvent
+    ) {
+        switch event {
+        case .interruptionBegan:
+            shouldResumeAfterInterruption =
+                isPlaybackActive
+                && !isPlaybackPaused
+
+            guard isPlaybackActive else {
+                return
+            }
+
+            Task { [weak self] in
+                await self?
+                    .persistPlaybackCheckpoint()
+            }
+            pausePlayback()
+
+        case .interruptionEnded(
+            let shouldResume
+        ):
+            let resume =
+                shouldResume
+                && shouldResumeAfterInterruption
+            shouldResumeAfterInterruption =
+                false
+
+            if resume {
+                resumePlayback()
+            }
+
+        case .routeBecameUnavailable:
+            shouldResumeAfterInterruption =
+                false
+
+            guard isPlaybackActive,
+                  !isPlaybackPaused
+            else {
+                return
+            }
+
+            Task { [weak self] in
+                await self?
+                    .persistPlaybackCheckpoint()
+            }
+            pausePlayback()
+
+        case .mediaServicesWereReset:
+            shouldResumeAfterInterruption =
+                false
+
+            guard isPlaybackActive else {
+                return
+            }
+
+            Task { [weak self] in
+                await self?
+                    .persistPlaybackCheckpoint()
+            }
+            stopPlayback()
+            lastErrorMessage =
+                "Audio services restarted. Resume playback to continue."
         }
     }
 

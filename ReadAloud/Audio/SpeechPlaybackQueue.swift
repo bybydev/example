@@ -4,6 +4,15 @@ import KokoroTTS
 
 @MainActor
 final class SpeechPlaybackQueue {
+    enum SessionEvent: Equatable, Sendable {
+        case interruptionBegan
+        case interruptionEnded(
+            shouldResume: Bool
+        )
+        case routeBecameUnavailable
+        case mediaServicesWereReset
+    }
+
     struct Snapshot: Equatable, Sendable {
         let queuedBuffers: Int
         let queuedDurationSeconds: Double
@@ -29,8 +38,8 @@ final class SpeechPlaybackQueue {
         let continuation: CheckedContinuation<Void, Never>
     }
 
-    private let audioEngine = AVAudioEngine()
-    private let playerNode = AVAudioPlayerNode()
+    private var audioEngine = AVAudioEngine()
+    private var playerNode = AVAudioPlayerNode()
 
     private var pendingDurations: [UUID: Double] = [:]
     private var depthWaiters: [DepthWaiter] = []
@@ -40,11 +49,16 @@ final class SpeechPlaybackQueue {
     private var connectedSampleRate: Double?
     private var connectedChannelCount: AVAudioChannelCount?
     private var isPaused = false
+    private var notificationObservers:
+        [NSObjectProtocol] = []
 
     var onSnapshotChange: ((Snapshot) -> Void)?
+    var onSessionEvent:
+        ((SessionEvent) -> Void)?
 
     init() {
         audioEngine.attach(playerNode)
+        installAudioSessionObservers()
     }
 
     var playedSeconds: Double {
@@ -155,8 +169,16 @@ final class SpeechPlaybackQueue {
 
     func resume() {
         guard isPaused else { return }
+
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance()
+            .setActive(true)
+        #endif
+
         isPaused = false
-        if !pendingDurations.isEmpty && !playerNode.isPlaying {
+        if !pendingDurations.isEmpty
+            && !playerNode.isPlaying
+        {
             playerNode.play()
         }
         notifySnapshotChange()
@@ -186,6 +208,182 @@ final class SpeechPlaybackQueue {
 
         notifySnapshotChange()
     }
+
+    func shutdown() {
+        stop()
+
+        for observer in notificationObservers {
+            NotificationCenter.default
+                .removeObserver(observer)
+        }
+        notificationObservers.removeAll()
+        onSnapshotChange = nil
+        onSessionEvent = nil
+    }
+
+    private func installAudioSessionObservers() {
+        #if os(iOS)
+        let center = NotificationCenter.default
+
+        notificationObservers.append(
+            center.addObserver(
+                forName:
+                    AVAudioSession
+                        .interruptionNotification,
+                object:
+                    AVAudioSession.sharedInstance(),
+                queue: .main
+            ) { [weak self] notification in
+                let rawType =
+                    notification.userInfo?[
+                        AVAudioSession
+                            .InterruptionTypeKey
+                    ] as? UInt
+                let rawOptions =
+                    notification.userInfo?[
+                        AVAudioSession
+                            .InterruptionOptionKey
+                    ] as? UInt
+                    ?? 0
+
+                Task { @MainActor [weak self] in
+                    self?.handleInterruption(
+                        rawType: rawType,
+                        rawOptions:
+                            rawOptions
+                    )
+                }
+            }
+        )
+
+        notificationObservers.append(
+            center.addObserver(
+                forName:
+                    AVAudioSession
+                        .routeChangeNotification,
+                object:
+                    AVAudioSession.sharedInstance(),
+                queue: .main
+            ) { [weak self] notification in
+                let rawReason =
+                    notification.userInfo?[
+                        AVAudioSession
+                            .RouteChangeReasonKey
+                    ] as? UInt
+
+                Task { @MainActor [weak self] in
+                    self?.handleRouteChange(
+                        rawReason:
+                            rawReason
+                    )
+                }
+            }
+        )
+
+        notificationObservers.append(
+            center.addObserver(
+                forName:
+                    AVAudioSession
+                        .mediaServicesWereResetNotification,
+                object:
+                    AVAudioSession.sharedInstance(),
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleMediaServicesReset()
+                }
+            }
+        )
+        #endif
+    }
+
+    private func handleMediaServicesReset() {
+        generation += 1
+        playerNode.stop()
+
+        pendingDurations.removeAll()
+        queuedDurationSeconds = 0
+        resumeDepthWaiters()
+        resumeDrainWaiters()
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        audioEngine = AVAudioEngine()
+        playerNode = AVAudioPlayerNode()
+        audioEngine.attach(playerNode)
+        connectedSampleRate = nil
+        connectedChannelCount = nil
+        isPaused = false
+
+        notifySnapshotChange()
+        onSessionEvent?(
+            .mediaServicesWereReset
+        )
+    }
+
+    #if os(iOS)
+    private func handleInterruption(
+        rawType: UInt?,
+        rawOptions: UInt
+    ) {
+        guard let rawType,
+              let type =
+                AVAudioSession
+                    .InterruptionType(
+                        rawValue: rawType
+                    )
+        else {
+            return
+        }
+
+        switch type {
+        case .began:
+            onSessionEvent?(
+                .interruptionBegan
+            )
+
+        case .ended:
+            let options =
+                AVAudioSession
+                    .InterruptionOptions(
+                        rawValue: rawOptions
+                    )
+            onSessionEvent?(
+                .interruptionEnded(
+                    shouldResume:
+                        options.contains(
+                            .shouldResume
+                        )
+                )
+            )
+
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleRouteChange(
+        rawReason: UInt?
+    ) {
+        guard let rawReason,
+              let reason =
+                AVAudioSession
+                    .RouteChangeReason(
+                        rawValue: rawReason
+                    )
+        else {
+            return
+        }
+
+        if reason == .oldDeviceUnavailable {
+            onSessionEvent?(
+                .routeBecameUnavailable
+            )
+        }
+    }
+    #endif
 
     private func ensureEngineReady(for format: AVAudioFormat) throws {
         if let connectedSampleRate,

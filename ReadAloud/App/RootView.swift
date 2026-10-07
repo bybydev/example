@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct RootView: View {
+    @Environment(\.scenePhase)
+    private var scenePhase
+
+    @Environment(ProjectRuntimeManager.self)
+    private var runtimeManager
+
     var body: some View {
         TabView {
             Tab("Library", systemImage: "books.vertical") {
@@ -18,87 +24,124 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ProjectMiniPlayerHost()
         }
+        .onChange(of: scenePhase) {
+            _, phase in
+
+            guard phase != .active
+            else {
+                return
+            }
+
+            Task {
+                await runtimeManager
+                    .persistPlaybackCheckpoints()
+            }
+        }
     }
 }
 
 private struct ProjectMiniPlayerHost: View {
-    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(ProjectRuntimeManager.self)
+    private var runtimeManager
+
     @State private var readerPresented = false
 
     var body: some View {
         Group {
-            if let runtime = runtimeManager.activeRuntime,
-               runtimeManager.readerProjectID != runtime.id,
-               runtime.activity.hasActivePlaybackWork {
+            if let runtime =
+                    runtimeManager.playbackRuntime,
+               runtimeManager.readerProjectID
+                != runtime.id
+            {
                 VStack(spacing: 6) {
                     HStack(spacing: 12) {
                         Button {
+                            runtimeManager
+                                .makeActive(runtime)
                             readerPresented = true
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: "waveform")
-                                    .foregroundStyle(.secondary)
+                                Image(
+                                    systemName:
+                                        "waveform"
+                                )
+                                .foregroundStyle(
+                                    .secondary
+                                )
 
                                 VStack(
                                     alignment: .leading,
                                     spacing: 2
                                 ) {
                                     Text(
-                                        runtime.project?.title
+                                        runtime.project?
+                                            .title
                                             ?? "ReadAloud"
                                     )
                                     .font(
-                                        .subheadline.weight(
-                                            .semibold
-                                        )
+                                        .subheadline
+                                            .weight(
+                                                .semibold
+                                            )
                                     )
                                     .lineLimit(1)
 
                                     Text(
-                                        miniPlayerSubtitle(runtime)
+                                        miniPlayerSubtitle(
+                                            runtime
+                                        )
                                     )
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(
+                                        .secondary
+                                    )
                                     .lineLimit(1)
                                 }
                             }
+                            .contentShape(
+                                Rectangle()
+                            )
                         }
                         .buttonStyle(.plain)
 
-                        Spacer()
+                        Spacer(minLength: 8)
 
                         Button {
-                            if runtime.isPlaybackPaused {
-                                runtime.resumePlayback()
+                            if runtime
+                                .isPlaybackPaused
+                            {
+                                runtime
+                                    .resumePlayback()
                             } else {
-                                runtime.pausePlayback()
+                                runtime
+                                    .pausePlayback()
                             }
                         } label: {
                             Image(
                                 systemName:
-                                    runtime.isPlaybackPaused
+                                    runtime
+                                        .isPlaybackPaused
                                     ? "play.fill"
                                     : "pause.fill"
+                            )
+                            .frame(
+                                width: 34,
+                                height: 34
                             )
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(
-                            runtime.isPlaybackPaused
-                                ? "Resume"
-                                : "Pause"
+                            runtime
+                                .isPlaybackPaused
+                            ? "Resume"
+                            : "Pause"
                         )
-
-                        Button {
-                            runtime.stopPlayback()
-                        } label: {
-                            Image(systemName: "stop.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Stop Playback")
                     }
 
                     ProgressView(
-                        value: runtime.activity.projectProgress
+                        value:
+                            runtime.activity
+                                .itemProgress
                     )
                 }
                 .padding(.horizontal, 16)
@@ -106,14 +149,22 @@ private struct ProjectMiniPlayerHost: View {
                 .background(.regularMaterial)
             }
         }
-        .sheet(isPresented: $readerPresented) {
-            if let runtime = runtimeManager.activeRuntime {
+        .sheet(
+            isPresented: $readerPresented
+        ) {
+            if let runtime =
+                runtimeManager.playbackRuntime
+                    ?? runtimeManager
+                        .activeRuntime
+            {
                 NavigationStack {
                     ProjectReaderView(
                         runtime: runtime,
                         initialItemID:
-                            runtime.activity.activeItemID
-                            ?? runtime.continueItemID
+                            runtime.activity
+                                .activeItemID
+                            ?? runtime
+                                .continueItemID
                     )
                 }
             }
@@ -123,34 +174,47 @@ private struct ProjectMiniPlayerHost: View {
     private func miniPlayerSubtitle(
         _ runtime: ProjectRuntime
     ) -> String {
-        let itemTitle = runtime.activity.activeItemID
-            .flatMap { runtime.itemState($0)?.item.title }
+        let itemTitle =
+            runtime.activity
+                .activeItemID
+                .flatMap {
+                    runtime.itemState($0)?
+                        .item.title
+                }
+                ?? runtime.currentItemID
+                    .flatMap {
+                        runtime.itemState($0)?
+                            .item.title
+                    }
 
-        switch runtime.activity.playbackState {
-        case .idle:
-            return itemTitle ?? "Idle"
-        case .loading:
-            return itemTitle.map { "\($0) · Loading…" }
-                ?? "Loading…"
-        case .warmingUp:
-            return itemTitle.map { "\($0) · Preparing…" }
-                ?? "Preparing…"
-        case .synthesizing(let current, let total):
-            let status = "Preparing \(current) of \(total)…"
-            return itemTitle.map { "\($0) · \(status)" }
-                ?? status
-        case .playing:
-            return itemTitle.map { "\($0) · Playing" }
-                ?? "Playing"
-        case .paused:
-            return itemTitle.map { "\($0) · Paused" }
-                ?? "Paused"
-        case .finished:
-            return itemTitle ?? "Finished"
-        case .failed:
-            return itemTitle.map {
-                "\($0) · Needs attention"
-            } ?? "Playback needs attention"
-        }
+        let status: String =
+            switch runtime
+                .activity
+                .playbackState
+            {
+            case .idle:
+                "Idle"
+            case .loading:
+                "Loading…"
+            case .warmingUp:
+                "Preparing…"
+            case .synthesizing(
+                let current,
+                let total
+            ):
+                "Preparing \(current) of \(total)…"
+            case .playing:
+                "Playing"
+            case .paused:
+                "Paused"
+            case .finished:
+                "Finished"
+            case .failed:
+                "Needs attention"
+            }
+
+        return itemTitle.map {
+            "\($0) · \(status)"
+        } ?? status
     }
 }
