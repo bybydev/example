@@ -38,7 +38,7 @@ enum BYOKProFeature: String, Sendable {
     case .analytics:
       "Unlock advanced analytics"
     case .libraryItems:
-      "Free includes 10 saved files"
+      "Free includes \(BYOKProPolicy.freeLibraryItemLimit) saved files"
     }
   }
 
@@ -83,7 +83,11 @@ enum BYOKProAccess {
     LimitReachedComparisonRow(feature: "Connections", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "Projects", freeValue: "1", proValue: "Unlimited"),
     LimitReachedComparisonRow(feature: "MCP servers", freeValue: "1", proValue: "Unlimited"),
-    LimitReachedComparisonRow(feature: "Saved files", freeValue: "10", proValue: "Unlimited"),
+    LimitReachedComparisonRow(
+      feature: "Saved files",
+      freeValue: String(BYOKProPolicy.freeLibraryItemLimit),
+      proValue: "Unlimited"
+    ),
     LimitReachedComparisonRow(feature: "Usage analytics", freeValue: "Basic", proValue: "Advanced"),
   ]
 

@@ -276,6 +276,11 @@ final class ChatManagementModel {
     return nil
   }
 
+  /// Index-backed metadata lookup; never schedules a conversation shard read.
+  func summary(_ id: ConversationID) -> ChatConversation? {
+    conversations.first { $0.id == id }
+  }
+
   func hasConversation(_ id: ConversationID) -> Bool {
     conversations.contains { $0.id == id }
   }

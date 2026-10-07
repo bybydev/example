@@ -8,6 +8,7 @@ import SwiftUI
 struct LibraryAttachmentPickerView: View {
   let library: LibraryManagementModel
   let chats: ChatManagementModel
+  let pendingAttachments: [ChatAttachment]
   /// Receives the chosen attachments (validated by the caller on append).
   let onAdd: ([ChatAttachment]) -> Void
 
@@ -24,6 +25,7 @@ struct LibraryAttachmentPickerView: View {
   @State private var selectedSavedIDs: Set<LibraryEntryID> = []
   @State private var selectedChatItemIDs: Set<String> = []
   @State private var isPreparing = false
+  @State private var errorMessage: String?
 
   var body: some View {
     NavigationStack {
@@ -34,6 +36,7 @@ struct LibraryAttachmentPickerView: View {
           }
         }
         .pickerStyle(.segmented)
+        .disabled(isPreparing)
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 6)
@@ -46,6 +49,7 @@ struct LibraryAttachmentPickerView: View {
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { dismiss() }
+            .disabled(isPreparing)
         }
         ToolbarItem(placement: .primaryAction) {
           if isPreparing {
@@ -60,13 +64,26 @@ struct LibraryAttachmentPickerView: View {
         }
       }
     }
+    .interactiveDismissDisabled(isPreparing)
+    .onChange(of: attachedIDs) { _, ids in
+      selectedSavedIDs = selectedSavedIDs.filter { !ids.contains($0.rawValue) }
+      selectedChatItemIDs.subtract(ids)
+    }
+    .alert("Attachment Error", isPresented: Binding(
+      get: { errorMessage != nil },
+      set: { if !$0 { errorMessage = nil } }
+    )) {
+      Button("OK") { errorMessage = nil }
+    } message: {
+      Text(errorMessage ?? "Unknown error")
+    }
   }
 
   @ViewBuilder
   private var content: some View {
     switch tab {
     case .saved:
-      if library.entries.isEmpty {
+      if savedEntries.isEmpty {
         ContentUnavailableView(
           "Library is Empty",
           systemImage: "books.vertical",
@@ -74,7 +91,7 @@ struct LibraryAttachmentPickerView: View {
         )
       } else {
         list {
-          ForEach(library.entries) { entry in
+          ForEach(savedEntries) { entry in
             savedRow(entry)
           }
         }
@@ -186,11 +203,20 @@ struct LibraryAttachmentPickerView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .disabled(isPreparing)
     .accessibilityLabel(title)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 
   // MARK: - Data
+
+  private var attachedIDs: Set<String> {
+    Set(pendingAttachments.map(\.id))
+  }
+
+  private var savedEntries: [LibraryEntry] {
+    library.entries.filter { !attachedIDs.contains($0.id.rawValue) }
+  }
 
   private var selectionCount: Int {
     switch tab {
@@ -212,7 +238,7 @@ struct LibraryAttachmentPickerView: View {
 
   private var chatItems: [ChatLibraryItem] {
     var items: [ChatLibraryItem] = []
-    var seenIDs: Set<String> = []
+    var seenIDs = attachedIDs
     for conversation in chats.conversations {
       for message in conversation.messages {
         // Rows are metadata-only; presence is decided by ID, not by bytes.
@@ -244,28 +270,45 @@ struct LibraryAttachmentPickerView: View {
   }
 
   private func addSelection() async {
+    guard !isPreparing else { return }
     isPreparing = true
     defer { isPreparing = false }
+
+    // Snapshot the complete selection using metadata. No original blob read
+    // occurs until the whole batch (including the composer) passes preflight.
+    let selectedEntries = savedEntries.filter { selectedSavedIDs.contains($0.id) }
+    let selectedItems = chatItems.filter { selectedChatItemIDs.contains($0.id) }
+    let selectedByteCounts: [Int]
+    switch tab {
+    case .saved: selectedByteCounts = selectedEntries.map(\.byteCount)
+    case .fromChats: selectedByteCounts = selectedItems.map { $0.attachment.byteCount }
+    }
+    guard !selectedByteCounts.isEmpty, selectedByteCounts.count == selectionCount else {
+      errorMessage = "The selection changed or includes an item already attached. Please select again."
+      return
+    }
+    guard preflight(selectedByteCounts) else { return }
 
     var result: [ChatAttachment] = []
     switch tab {
     case .fromChats:
-      let wanted = selectedChatItemIDs
-      var fetched: [ChatAttachment] = []
-      for item in chatItems where wanted.contains(item.id) {
+      for item in selectedItems {
         // Rows hold metadata only; fetch the original now that it is
         // actually being attached.
-        if let data = await chats.attachmentData(item.id), !data.isEmpty {
-          var attachment = item.attachment
-          attachment.data = data
-          fetched.append(attachment)
+        guard let data = await chats.attachmentData(item.id), !data.isEmpty else {
+          errorMessage = "The file '\(item.attachment.filename)' could not be loaded."
+          return
         }
+        var attachment = item.attachment
+        attachment.data = data
+        result.append(attachment)
       }
-      result = fetched
     case .saved:
-      let entries = library.entries.filter { selectedSavedIDs.contains($0.id) }
-      for entry in entries {
-        guard let data = await library.data(for: entry) else { continue }
+      for entry in selectedEntries {
+        guard let data = await library.data(for: entry), !data.isEmpty else {
+          errorMessage = "The file '\(entry.filename)' could not be loaded."
+          return
+        }
         // Same-ID reuse keeps blob storage deduplicated.
         result.append(
           ChatAttachment(
@@ -281,5 +324,23 @@ struct LibraryAttachmentPickerView: View {
     guard !result.isEmpty else { return }
     onAdd(result)
     dismiss()
+  }
+
+  private func preflight(_ selectedByteCounts: [Int]) -> Bool {
+    guard pendingAttachments.count + selectedByteCounts.count <= 8 else {
+      errorMessage = "A message can include at most 8 attachments."
+      return false
+    }
+    let byteCounts = pendingAttachments.map(\.byteCount) + selectedByteCounts
+    guard byteCounts.allSatisfy({ $0 > 0 && $0 <= 20 * 1_024 * 1_024 }) else {
+      errorMessage = "Each attachment must contain bytes and be no larger than 20 MB."
+      return false
+    }
+    // Per-item/count bounds above keep this sum bounded as well.
+    guard byteCounts.reduce(0, +) <= 40 * 1_024 * 1_024 else {
+      errorMessage = "Attachments in one message cannot exceed 40 MB total."
+      return false
+    }
+    return true
   }
 }

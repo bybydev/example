@@ -80,6 +80,8 @@ struct ChatView: View {
   @State var photoPickerItems: [PhotosPickerItem] = []
   @State var showFileImporter = false
   @State var showLibraryPicker = false
+  @State var libraryErrorMessage: String?
+  @State var showLibraryUpsell = false
 
   init(
     subject: ChatSubject,
@@ -167,10 +169,35 @@ struct ChatView: View {
       importFiles(result)
     }
     .sheet(isPresented: $showLibraryPicker) {
-      LibraryAttachmentPickerView(library: library, chats: chats) { attachments in
+      LibraryAttachmentPickerView(
+        library: library,
+        chats: chats,
+        pendingAttachments: pendingAttachments
+      ) { attachments in
         appendAttachments(attachments)
       }
       .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showLibraryUpsell) {
+      BYOKProUpsellFlow(feature: .libraryItems)
+    }
+    .alert("Library Error", isPresented: Binding(
+      get: { libraryErrorMessage != nil },
+      set: { if !$0 { libraryErrorMessage = nil } }
+    )) {
+      Button("OK") { libraryErrorMessage = nil }
+    } message: {
+      Text(libraryErrorMessage ?? "Unknown error")
+    }
+  }
+
+  /// Message actions report only to this chat; root and LibraryView errors
+  /// remain untouched. Save Images owns its errors while its sheet is active.
+  func handleLibraryError(_ error: Error) {
+    if error is LibraryCapacityError {
+      showLibraryUpsell = true
+    } else {
+      libraryErrorMessage = error.localizedDescription
     }
   }
 
@@ -560,6 +587,10 @@ struct ChatView: View {
   func appendAttachments(_ additions: [ChatAttachment]) {
     guard !additions.isEmpty else { return }
     let combined = pendingAttachments + additions
+    guard Set(combined.map(\.id)).count == combined.count else {
+      chats.errorMessage = "This attachment is already in the message."
+      return
+    }
     guard combined.count <= 8 else {
       chats.errorMessage = "A message can include at most 8 attachments."
       return

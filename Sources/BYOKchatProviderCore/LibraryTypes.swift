@@ -1,5 +1,17 @@
 import Foundation
 
+/// A creation limit, distinct from a storage failure so the app can offer Pro.
+public enum LibraryCapacityError: LocalizedError, Sendable {
+  case limitReached(Int)
+
+  public var errorDescription: String? {
+    switch self {
+    case .limitReached(let limit):
+      "Free includes \(limit) saved files. Upgrade to BYOK Pro to save more."
+    }
+  }
+}
+
 public struct LibraryEntryID: RawRepresentable, Hashable, Codable, Sendable,
   ExpressibleByStringLiteral, CustomStringConvertible
 {

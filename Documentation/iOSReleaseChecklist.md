@@ -18,6 +18,10 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
 - [x] English App Store metadata and an App Review notes template are in the repo.
 - [x] MCP saving separates persistence from discovery; post-save warnings remain visible in the server list.
 - [x] MCP editor/Tools errors use a local presenter with root fallback, URL elicitation shows its destination, and enum selections initialize backing values.
+- [x] Chat and Save Images own Library save errors locally; LibraryView retains its own alert.
+- [x] New Library saves enforce the current Free policy inside serialized store mutations; already-listed attachments remain idempotent.
+- [x] Library attachment batches preflight composer metadata before loading originals, exclude existing attachment IDs, and retain final composer validation.
+- [x] Library source subtitles/search use index-backed chat summaries without hydrating chat shards.
 
 ## Must do on Mac before upload
 
@@ -40,8 +44,9 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
   - purchase grants Pro immediately
   - Restore Purchases works after reinstall/sign-out scenario
   - recurring subscription management link opens correctly
-- [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, 10 saved files, 2 free themes, basic analytics.
+- [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, saved files per `BYOKProPolicy.freeLibraryItemLimit`, 2 free themes, basic analytics.
 - [ ] Complete the MCP smoke path below on the intended Release/TestFlight build; opening MCP settings alone is insufficient.
+- [ ] Complete the Library smoke path below on the intended Release/TestFlight build; opening Library alone is insufficient.
 - [ ] Archive Release and run Xcode **Validate App**. Resolve every validation/privacy-manifest warning before upload.
 - [ ] Upload the archive to App Store Connect/TestFlight and install that uploaded build once before submission.
 - [ ] Generate final App Store screenshots using `BYOKchatScreenshots` / `scripts/capture_app_store_screenshots.sh`; inspect the actual PNGs before upload.
@@ -97,3 +102,23 @@ Code completion does not mark these checks as passed. Record results for the exa
 - [ ] Cancel generation while awaiting an approval or elicitation and confirm the pending interaction clears.
 
 Validation results: **not run**. Replace this note with the build identifier, device, and results after completing the smoke path.
+
+## Library release smoke path (issue #40)
+
+Code completion does not mark these checks as passed. Record results for the exact physical-iPhone release build before submission.
+
+- [ ] Manually add an image and a document; preview and share both.
+- [ ] Attach a saved Library item to a fresh chat and to an existing chat. Items already pending in the composer are excluded from both picker tabs.
+- [ ] With existing composer attachments, reject an entire selected batch that exceeds 8 attachments, 20 MB per item, or 40 MB total. Confirm no selected originals are loaded for a rejected batch, and a valid batch appends normally.
+- [ ] Save a sent attachment to Library and an assistant response as Markdown. Induce missing-blob/storage failures and confirm one Chat-owned Library alert; dismissing it leaves unrelated errors untouched.
+- [ ] Save remote and embedded response images. Induce fetch/storage failures and confirm one local Save Images alert, with unsaved selections retained for retry and successful saves excluded from retry.
+- [ ] At the current `BYOKProPolicy.freeLibraryItemLimit`, a new attachment save opens the Pro upsell. Repeat saving an already-listed attachment: no duplicate entry or upsell. With one Free slot remaining, overlap saves and confirm only one new entry is committed.
+- [ ] Verify Pro saves are unrestricted by item count; after entitlement loss, existing entries still open, preview, share, and attach.
+- [ ] Open Library with entries from many chats and verify source labels/search match current chat titles without loading chat shards. Deleted source chats fall back to Chat; Open Source Chat keeps its existing behavior.
+- [ ] Delete a Library entry still referenced by a chat and confirm the chat attachment remains available.
+- [ ] Delete the final owner and confirm orphan cleanup eventually removes the blob.
+- [ ] Relaunch and verify entries, thumbnails, and source labels remain correct.
+
+Library validation results: **not run**. Replace this note with the build identifier, device, and results after completing the smoke path. Library is ready for iOS 1.0 only after this path passes.
+
+Deferred to iOS 1.0.1/later: bounded response-image downloads and strict image-signature checks; preserving file-type semantics on rename. These are outside issue #40's 1.0 implementation.

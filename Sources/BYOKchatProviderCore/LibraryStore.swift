@@ -100,6 +100,7 @@ public actor LibraryStore {
     mimeType: String,
     data: Data,
     source: LibraryEntrySource = .manual,
+    maximumEntryCount: Int? = nil,
     at date: Date = .now
   ) async throws -> LibraryEntry {
     let entries = try await addItems([
@@ -110,7 +111,7 @@ public actor LibraryStore {
         source: source,
         date: date
       )
-    ])
+    ], maximumEntryCount: maximumEntryCount)
     return entries[0]
   }
 
@@ -121,6 +122,7 @@ public actor LibraryStore {
   public func addAttachments(
     _ attachments: [ChatAttachment],
     source: LibraryEntrySource = .manual,
+    maximumEntryCount: Int? = nil,
     at date: Date = .now
   ) async throws -> [LibraryEntry] {
     guard !attachments.isEmpty else { return [] }
@@ -133,7 +135,8 @@ public actor LibraryStore {
           source: source,
           date: date
         )
-      }
+      },
+      maximumEntryCount: maximumEntryCount
     )
   }
 
@@ -141,6 +144,7 @@ public actor LibraryStore {
   public func addAttachment(
     _ attachment: ChatAttachment,
     source: LibraryEntrySource,
+    maximumEntryCount: Int? = nil,
     at date: Date = .now
   ) async throws -> LibraryEntry {
     try await add(
@@ -148,6 +152,7 @@ public actor LibraryStore {
       mimeType: attachment.mimeType,
       data: attachment.data,
       source: source,
+      maximumEntryCount: maximumEntryCount,
       at: date
     )
   }
@@ -163,6 +168,7 @@ public actor LibraryStore {
     mimeType: String,
     byteCount: Int,
     source: LibraryEntrySource,
+    maximumEntryCount: Int? = nil,
     at date: Date = .now
   ) async throws -> LibraryEntry {
     await beginMutation()
@@ -171,6 +177,8 @@ public actor LibraryStore {
     if let existing = state.entries.first(where: { $0.id.rawValue == fileID }) {
       return existing
     }
+
+    try requireCapacity(for: 1, maximumEntryCount: maximumEntryCount)
 
     // A positive byteCount in chat metadata does not prove the shared blob is
     // still present. Verify the authoritative blob store before publishing a
@@ -300,7 +308,10 @@ public actor LibraryStore {
     let date: Date
   }
 
-  private func addItems(_ items: [LibraryPendingItem]) async throws -> [LibraryEntry] {
+  private func addItems(
+    _ items: [LibraryPendingItem],
+    maximumEntryCount: Int?
+  ) async throws -> [LibraryEntry] {
     guard !items.isEmpty else { return [] }
 
     let entries = try items.map { item -> LibraryEntry in
@@ -327,6 +338,8 @@ public actor LibraryStore {
     await beginMutation()
     defer { endMutation() }
 
+    try requireCapacity(for: entries.count, maximumEntryCount: maximumEntryCount)
+
     // Blobs land before metadata for the same crash-ordering reason as
     // ConversationStore.persist. Failed metadata persistence leaves only
     // sweepable orphan blobs, never an uncommitted live Library row.
@@ -347,6 +360,15 @@ public actor LibraryStore {
     candidate.entries.append(contentsOf: entries)
     try await commit(candidate)
     return entries
+  }
+
+  /// Must run under the mutation lock, against the last committed state.
+  /// Restores and reads intentionally remain unrestricted after entitlement loss.
+  private func requireCapacity(for newCount: Int, maximumEntryCount: Int?) throws {
+    guard let limit = maximumEntryCount else { return }
+    guard newCount <= max(0, limit - state.entries.count) else {
+      throw LibraryCapacityError.limitReached(limit)
+    }
   }
 
   private func beginMutation() async {

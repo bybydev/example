@@ -85,6 +85,7 @@ extension ChatView {
                       && !chats.isGenerating(conversationID),
                     conversationID: conversationID,
                     library: library,
+                    onLibraryError: handleLibraryError,
                     loadThumbnail: chats.attachmentThumbnail,
                     edit: {
                       editText = stored.content

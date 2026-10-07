@@ -369,6 +369,7 @@ struct ChatMessageView: View {
   /// both are provided.
   var conversationID: ConversationID? = nil
   var library: LibraryManagementModel? = nil
+  var onLibraryError: ((Error) -> Void)? = nil
   /// Async thumbnail fetch for persisted attachment blobs (nil hides the
   /// loading/unavailable pipeline; only in-memory bytes render).
   var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
@@ -382,7 +383,6 @@ struct ChatMessageView: View {
   @State private var showMessageInfo = false
   @State private var showSourcesSheet = false
   @State private var showImageSaveSheet = false
-  @State private var showLibraryUpsell = false
 
   private var imageCandidates: [ResponseImageCandidate] {
     guard library != nil, conversationID != nil, !message.content.isEmpty else { return [] }
@@ -464,7 +464,9 @@ struct ChatMessageView: View {
           filename: attachment.filename,
           mimeType: attachment.mimeType,
           byteCount: attachment.byteCount,
-          source: .chat(conversationID: conversationID, messageID: message.id)
+          source: .chat(conversationID: conversationID, messageID: message.id),
+          hasPro: purchaseManager.hasPro,
+          onError: onLibraryError
         )
       }
     }
@@ -503,13 +505,8 @@ struct ChatMessageView: View {
           conversationID: conversationID,
           messageID: message.id,
           library: library
-        ) { error in
-          library.errorMessage = error
-        }
+        )
       }
-    }
-    .sheet(isPresented: $showLibraryUpsell) {
-      BYOKProUpsellFlow(feature: .libraryItems)
     }
   }
 
@@ -579,10 +576,6 @@ struct ChatMessageView: View {
   private var libraryActions: some View {
     if let conversationID, let library {
       Button("Save to Library", systemImage: "books.vertical") {
-        guard canSaveToLibrary(library) else {
-          showLibraryUpsell = true
-          return
-        }
         Task { @MainActor in
           // Locale-independent stamp keeps generated filenames predictable.
           let parts = Calendar.current.dateComponents([.year, .month, .day], from: message.createdAt)
@@ -595,7 +588,9 @@ struct ChatMessageView: View {
               mimeType: "text/markdown",
               data: Data(message.content.utf8)
             ),
-            source: .chat(conversationID: conversationID, messageID: message.id)
+            source: .chat(conversationID: conversationID, messageID: message.id),
+            hasPro: purchaseManager.hasPro,
+            onError: onLibraryError
           )
         }
       }
@@ -604,7 +599,7 @@ struct ChatMessageView: View {
       if !imageCandidates.isEmpty {
         Button("Save Images…", systemImage: "photo.on.rectangle") {
           guard canSaveToLibrary(library) else {
-            showLibraryUpsell = true
+            onLibraryError?(LibraryCapacityError.limitReached(BYOKProPolicy.freeLibraryItemLimit))
             return
           }
           showImageSaveSheet = true

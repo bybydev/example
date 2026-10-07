@@ -10,13 +10,15 @@ struct ResponseImageSaveSheet: View {
   let conversationID: ConversationID
   let messageID: ChatMessageID
   let library: LibraryManagementModel
-  let onError: (String) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
   @Environment(PurchaseManager.self) private var purchaseManager
   @State private var selected: Set<String> = []
   @State private var isSaving = false
+  @State private var errorMessage: String?
+  @State private var showLibraryUpsell = false
+  @State private var didInitializeSelection = false
 
   var body: some View {
     NavigationStack {
@@ -46,6 +48,7 @@ struct ResponseImageSaveSheet: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isSaving)
       }
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
@@ -55,6 +58,7 @@ struct ResponseImageSaveSheet: View {
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { dismiss() }
+            .disabled(isSaving)
         }
         ToolbarItem(placement: .primaryAction) {
           if isSaving {
@@ -69,10 +73,23 @@ struct ResponseImageSaveSheet: View {
       }
     }
     .presentationDragIndicator(.visible)
+    .interactiveDismissDisabled(isSaving)
+    .sheet(isPresented: $showLibraryUpsell) {
+      BYOKProUpsellFlow(feature: .libraryItems)
+    }
+    .alert("Library Error", isPresented: Binding(
+      get: { errorMessage != nil },
+      set: { if !$0 { errorMessage = nil } }
+    )) {
+      Button("OK") { errorMessage = nil }
+    } message: {
+      Text(errorMessage ?? "Unknown error")
+    }
     .onAppear {
       // Default to saving everything found.
-      if selected.isEmpty {
+      if !didInitializeSelection {
         selected = Set(candidates.map(\.id))
+        didInitializeSelection = true
       }
     }
   }
@@ -85,21 +102,22 @@ struct ResponseImageSaveSheet: View {
   }
 
   private func saveSelection() async {
+    guard !isSaving else { return }
     isSaving = true
     defer { isSaving = false }
 
-    var savedCount = 0
+    let wanted = selected
+    var failures: [String] = []
+    var reachedCapacity = false
     for (index, candidate) in candidates.enumerated()
-    where selected.contains(candidate.id) {
+    where wanted.contains(candidate.id) {
       // The free tier caps total saved files; stop at the cap instead of
       // failing mid-download.
       guard BYOKProAccess.canCreateLibraryItem(
         currentCount: library.entries.count,
         hasPro: purchaseManager.hasPro
       ) else {
-        onError(
-          "Saved \(savedCount) of \(selected.count) — free includes \(BYOKProAccess.freeLibraryItemLimit) saved files."
-        )
+        reachedCapacity = true
         break
       }
       guard
@@ -108,7 +126,7 @@ struct ResponseImageSaveSheet: View {
           maxByteCount: LibraryStore.maxByteCount
         )
       else {
-        onError("Couldn't fetch \(candidate.label).")
+        failures.append("Couldn't fetch \(candidate.label).")
         continue
       }
       let filename = ResponseImageScanner.suggestedFilename(
@@ -120,11 +138,32 @@ struct ResponseImageSaveSheet: View {
         filename: filename,
         mimeType: mimeType,
         data: data,
-        source: .chat(conversationID: conversationID, messageID: messageID)
+        source: .chat(conversationID: conversationID, messageID: messageID),
+        hasPro: purchaseManager.hasPro,
+        onError: { error in
+          if error is LibraryCapacityError {
+            reachedCapacity = true
+          } else {
+            failures.append("\(candidate.label): \(error.localizedDescription)")
+          }
+        }
       )
-      if added != nil { savedCount += 1 }
+      // Keep only unsaved selections for retry, without duplicating successes.
+      if added != nil { selected.remove(candidate.id) }
+      if reachedCapacity { break }
     }
-    dismiss()
+    if !failures.isEmpty {
+      if reachedCapacity {
+        failures.append(
+          LibraryCapacityError.limitReached(BYOKProPolicy.freeLibraryItemLimit).localizedDescription
+        )
+      }
+      errorMessage = failures.joined(separator: "\n")
+    } else if reachedCapacity {
+      showLibraryUpsell = true
+    } else {
+      dismiss()
+    }
   }
 
   /// Sniff the encoding rather than trusting the link; adapters and viewers

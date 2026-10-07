@@ -298,7 +298,7 @@ struct LibraryView: View {
 
   private func sourceChatTitle(for entry: LibraryEntry) -> String? {
     guard case .chat(let conversationID, _) = entry.source else { return nil }
-    return chats.conversation(conversationID)?.title
+    return chats.summary(conversationID)?.title ?? "Chat"
   }
 
   private var allSelected: Bool {
@@ -457,8 +457,8 @@ struct LibraryView: View {
 
   private func subtitle(for entry: LibraryEntry) -> String {
     switch entry.source {
-    case .chat(let conversationID, _):
-      let title = chats.conversation(conversationID)?.title ?? "Chat"
+    case .chat:
+      let title = sourceChatTitle(for: entry) ?? "Chat"
       return "\(title) · \(entry.byteCountText)"
     case .project:
       return entry.byteCountText
@@ -519,7 +519,9 @@ struct LibraryView: View {
           _ = await library.add(
             filename: Self.importFilename(stamp: stamp, index: batchIndex),
             mimeType: "image/jpeg",
-            data: jpeg
+            data: jpeg,
+            hasPro: purchaseManager.hasPro,
+            onError: handleSaveError
           )
         } catch {
           library.errorMessage = error.localizedDescription
@@ -560,13 +562,17 @@ struct LibraryView: View {
               _ = await library.add(
                 filename: url.deletingPathExtension().lastPathComponent + ".jpg",
                 mimeType: "image/jpeg",
-                data: jpeg
+                data: jpeg,
+                hasPro: purchaseManager.hasPro,
+                onError: handleSaveError
               )
             } else {
               _ = await library.add(
                 filename: url.lastPathComponent,
                 mimeType: type.preferredMIMEType ?? "application/octet-stream",
-                data: data
+                data: data,
+                hasPro: purchaseManager.hasPro,
+                onError: handleSaveError
               )
             }
           } catch {
@@ -574,6 +580,14 @@ struct LibraryView: View {
           }
         }
       }
+    }
+  }
+
+  private func handleSaveError(_ error: Error) {
+    if error is LibraryCapacityError {
+      showProUpsell = true
+    } else {
+      library.errorMessage = error.localizedDescription
     }
   }
 

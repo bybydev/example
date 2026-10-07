@@ -43,14 +43,17 @@ final class LibraryManagementModel {
     filename: String,
     mimeType: String,
     data: Data,
-    source: LibraryEntrySource = .manual
+    source: LibraryEntrySource = .manual,
+    hasPro: Bool,
+    onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning {
+    await performReturning(onError: onError) {
       try await self.store.add(
         filename: filename,
         mimeType: mimeType,
         data: data,
-        source: source
+        source: source,
+        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
       )
     }
   }
@@ -58,10 +61,16 @@ final class LibraryManagementModel {
   @discardableResult
   func addAttachment(
     _ attachment: ChatAttachment,
-    source: LibraryEntrySource
+    source: LibraryEntrySource,
+    hasPro: Bool,
+    onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning {
-      try await self.store.addAttachment(attachment, source: source)
+    await performReturning(onError: onError) {
+      try await self.store.addAttachment(
+        attachment,
+        source: source,
+        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
+      )
     }
   }
 
@@ -84,15 +93,18 @@ final class LibraryManagementModel {
     filename: String,
     mimeType: String,
     byteCount: Int,
-    source: LibraryEntrySource
+    source: LibraryEntrySource,
+    hasPro: Bool,
+    onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning {
+    await performReturning(onError: onError) {
       try await self.store.ensureListed(
         fileID: fileID,
         filename: filename,
         mimeType: mimeType,
         byteCount: byteCount,
-        source: source
+        source: source,
+        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
       )
     }
   }
@@ -119,7 +131,12 @@ final class LibraryManagementModel {
     }
   }
 
-  private func performReturning<T>(_ operation: () async throws -> T?) async -> T? {
+  /// A chat/sheet supplies its own error owner. The default preserves LibraryView's
+  /// local model-backed alert without also publishing a chat failure there.
+  private func performReturning<T>(
+    onError: ((Error) -> Void)? = nil,
+    _ operation: () async throws -> T?
+  ) async -> T? {
     isBusy = true
     defer { isBusy = false }
     do {
@@ -127,7 +144,11 @@ final class LibraryManagementModel {
       entries = await store.entries()
       return result
     } catch {
-      errorMessage = error.localizedDescription
+      if let onError {
+        onError(error)
+      } else {
+        errorMessage = error.localizedDescription
+      }
       return nil
     }
   }
