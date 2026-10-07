@@ -101,6 +101,19 @@ nonisolated enum ProjectAtomicWriter {
     }
 }
 
+nonisolated enum ProjectRetainedSource: Sendable {
+    case file(URL)
+    case data(Data)
+}
+
+nonisolated struct ProjectRetainedArtwork: Sendable {
+    let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+}
+
 actor ProjectStore {
     let rootURL: URL
     private let fileManager: FileManager
@@ -162,7 +175,9 @@ actor ProjectStore {
         project: ProjectDocument,
         manifest: ProjectContentManifest,
         items: [ProjectContentItem],
-        queue: ProjectQueueDocument = ProjectQueueDocument()
+        queue: ProjectQueueDocument = ProjectQueueDocument(),
+        retainedSource: ProjectRetainedSource? = nil,
+        retainedArtwork: ProjectRetainedArtwork? = nil
     ) throws {
         try ProjectValidation.validate(project)
         try ProjectValidation.validate(manifest)
@@ -190,6 +205,18 @@ actor ProjectStore {
 
         do {
             try createPackageDirectories(paths)
+            if let retainedSource {
+                try retainSource(
+                    retainedSource,
+                    project: project,
+                    paths: paths
+                )
+            }
+            try retainArtwork(
+                retainedArtwork,
+                project: project,
+                paths: paths
+            )
             try ProjectAtomicWriter.write(
                 project,
                 to: paths.projectJSON,
@@ -692,6 +719,94 @@ actor ProjectStore {
             from: data,
             relativePath: relativePath
         )
+    }
+
+    private func retainSource(
+        _ source: ProjectRetainedSource,
+        project: ProjectDocument,
+        paths: ProjectPackagePaths
+    ) throws {
+        let destination = try packageURL(
+            forRelativePath: project.source.relativePath,
+            in: paths.packageURL
+        )
+
+        do {
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            switch source {
+            case .file(let sourceURL):
+                try fileManager.copyItem(at: sourceURL, to: destination)
+            case .data(let data):
+                try data.write(to: destination, options: .atomic)
+            }
+        } catch {
+            throw ProjectStoreError.io(
+                "Unable to retain original source: \(error)"
+            )
+        }
+
+        let revision = try ProjectDigest.sha256(fileAt: destination)
+        guard revision == project.source.sourceRevision else {
+            throw ProjectStoreError.invalidData(
+                "Retained source bytes do not match sourceRevision"
+            )
+        }
+    }
+
+    private func retainArtwork(
+        _ artwork: ProjectRetainedArtwork?,
+        project: ProjectDocument,
+        paths: ProjectPackagePaths
+    ) throws {
+        switch (project.artwork, artwork) {
+        case (nil, nil):
+            return
+        case (.some, nil), (nil, .some):
+            throw ProjectStoreError.invalidData(
+                "Project artwork metadata and retained artwork must agree"
+            )
+        case (.some(let metadata), .some(let artwork)):
+            let destination = try packageURL(
+                forRelativePath: metadata.relativePath,
+                in: paths.packageURL
+            )
+            do {
+                try fileManager.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try artwork.data.write(to: destination, options: .atomic)
+            } catch {
+                throw ProjectStoreError.io(
+                    "Unable to retain project artwork: \(error)"
+                )
+            }
+        }
+    }
+
+    private func packageURL(
+        forRelativePath relativePath: String,
+        in packageURL: URL
+    ) throws -> URL {
+        try ProjectValidation.requireSafeRelativePath(relativePath)
+
+        var result = packageURL
+        for component in relativePath.split(separator: "/") {
+            result.append(
+                path: String(component),
+                directoryHint: .inferFromPath
+            )
+        }
+
+        let root = packageURL.standardizedFileURL.path
+        let target = result.standardizedFileURL.path
+        guard target.hasPrefix("\(root)/") else {
+            throw ProjectStoreError.unsafeRelativePath(relativePath)
+        }
+        return result
     }
 
     private func loadContentManifest(

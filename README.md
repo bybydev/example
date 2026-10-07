@@ -259,6 +259,29 @@ revision hashes ordered item identity/revisions plus hierarchy, while generation
 keys deterministically bind item revision, resolved voice/speed, Kokoro runtime
 revision, and synthesis configuration version.
 
+## Unified import pipeline
+
+Phase 2 adds one import coordinator that normalizes every supported source into
+the Phase 1 project contract before publishing the package:
+
+- EPUB uses EpubKit spine order, metadata, TOC hierarchy where it maps to
+  playable chapters, cover artwork, and parser diagnostics.
+- PDF uses PDFKitAudio audiobook chapters/page ranges, OCR diagnostics, and the
+  generated cover thumbnail.
+- TextExtractor-backed documents preserve package-provided structural segments
+  such as presentation slides and subtitle cues; otherwise they become one
+  normalized document item rather than inventing structure the extractor did
+  not expose.
+- pasted text is retained as an internal UTF-8 `.txt` source and normalized
+  into one project item.
+
+External files are copied out of security-scoped access into a private temporary
+workspace first. The final source, optional artwork, manifest, items, queue, and
+project metadata are then committed through the hidden `.readaloud` staging
+package. The final package becomes visible only after source SHA-256 validation
+and all writes succeed, so a failed import does not register a broken Library
+project.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.
