@@ -298,6 +298,38 @@ create visible partial projects. Project navigation is established now; the
 actual Project Detail implementation belongs to Phase 4. A global mini-player
 slot is reserved at the tab root for the later shared playback runtime.
 
+## Project Detail and narration settings
+
+Phase 4 replaces the Library project placeholder with the real Project Detail
+experience. A project is fully hydrated only after the user opens it; Library
+remains snapshot-driven.
+
+Project Detail now provides project artwork/metadata/progress, Continue
+Listening routing, project voice/speed defaults, stable ordered items, durable
+offline-generation states, item actions, project rename/delete/info actions,
+and lightweight offline/storage management.
+
+Narration resolution follows the persistence contract independently for voice
+and speed:
+
+```
+item Custom -> remembered item value
+item Default -> project default
+project default absent -> app default
+```
+
+Selecting Default changes only the item's `inherit` mode. Remembered custom
+values remain persisted and are restored when Custom is selected again.
+Changing a project default never overwrites item overrides. If a narration
+change affects the current item, the content bookmark is preserved while the
+old exact-audio position is invalidated.
+
+Generate/Regenerate actions in this phase persist durable queue intent only;
+the runtime queue executor arrives later. Ready Offline is derived from the
+current generation key plus valid audio metadata and the finalized WAV identity,
+not from queue state or file presence alone. Regeneration leaves the known-good
+audio in place until a future generation commits its replacement.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.

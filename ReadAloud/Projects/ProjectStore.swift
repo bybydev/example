@@ -426,6 +426,25 @@ actor ProjectStore {
         now: Date = .now
     ) throws -> ProjectDocument {
         var project = try loadProjectMetadata(projectID: projectID)
+
+        if let currentItemID = project.playback?.currentItemID {
+            let item = try loadContentItem(
+                projectID: projectID,
+                itemID: currentItemID
+            )
+            let oldResolved = try NarrationSettingsResolver.resolve(
+                item: item.settings,
+                project: project.settings
+            )
+            let newResolved = try NarrationSettingsResolver.resolve(
+                item: item.settings,
+                project: settings
+            )
+            if oldResolved != newResolved {
+                project.playback?.audioPosition = nil
+            }
+        }
+
         project.settings = settings
         project.updatedAt = now
         try ProjectValidation.validate(project)
@@ -548,6 +567,46 @@ actor ProjectStore {
         return item
     }
 
+    @discardableResult
+    func updateContentItemSettings(
+        projectID: UUID,
+        itemID: UUID,
+        settings: ItemNarrationSettings,
+        now: Date = .now
+    ) throws -> ProjectContentItem {
+        var project = try loadProjectMetadata(projectID: projectID)
+        var item = try loadContentItem(
+            projectID: projectID,
+            itemID: itemID
+        )
+
+        let oldResolved = try NarrationSettingsResolver.resolve(
+            item: item.settings,
+            project: project.settings
+        )
+        let newResolved = try NarrationSettingsResolver.resolve(
+            item: settings,
+            project: project.settings
+        )
+
+        item.settings = settings
+        try saveContentItem(
+            projectID: projectID,
+            item: item
+        )
+
+        if project.playback?.currentItemID == itemID,
+           oldResolved != newResolved {
+            project.playback?.audioPosition = nil
+        }
+        project.updatedAt = now
+        try writeProjectDocument(
+            project,
+            packageURL: packageURL(for: projectID)
+        )
+        return item
+    }
+
     func saveQueue(
         projectID: UUID,
         queue: ProjectQueueDocument
@@ -626,6 +685,220 @@ actor ProjectStore {
             in: paths
         )
         return metadata
+    }
+
+    func generationStatuses(
+        projectID: UUID,
+        requests: [ProjectGenerationStatusRequest]
+    ) throws -> [UUID: ProjectItemGenerationStatus] {
+        let paths = try pathsForExistingProject(projectID)
+        let queue = try loadQueue(projectID: projectID)
+        var result: [UUID: ProjectItemGenerationStatus] = [:]
+        result.reserveCapacity(requests.count)
+
+        for request in requests {
+            let matchingJobs = queue.jobs
+                .filter {
+                    $0.itemID == request.itemID
+                        && $0.generationKey == request.generationKey
+                }
+                .sorted { $0.updatedAt > $1.updatedAt }
+
+            if matchingJobs.contains(where: { $0.state == .generating }) {
+                result[request.itemID] = ProjectItemGenerationStatus(
+                    state: .generating,
+                    audioBytes: audioByteCount(
+                        at: paths.audioWAV(request.itemID)
+                    )
+                )
+                continue
+            }
+
+            if matchingJobs.contains(where: { $0.state == .queued }) {
+                result[request.itemID] = ProjectItemGenerationStatus(
+                    state: .waiting,
+                    audioBytes: audioByteCount(
+                        at: paths.audioWAV(request.itemID)
+                    )
+                )
+                continue
+            }
+
+            let audioURL = paths.audioWAV(request.itemID)
+            let metadataURL = paths.audioMetadata(request.itemID)
+            let hasAudio = fileManager.fileExists(atPath: audioURL.path)
+            let hasMetadata = fileManager.fileExists(atPath: metadataURL.path)
+
+            if hasAudio && hasMetadata {
+                do {
+                    let metadata: GeneratedAudioMetadata = try readDocument(
+                        GeneratedAudioMetadata.self,
+                        at: metadataURL,
+                        relativePath: ProjectPackagePaths.relativeAudioMetadataPath(
+                            request.itemID
+                        )
+                    )
+                    try ProjectValidation.validate(metadata)
+                    try requireAudioMetadataCompatibility(
+                        metadata,
+                        in: paths
+                    )
+
+                    let audioBytes = audioByteCount(at: audioURL)
+                    let audioRevision = try ProjectDigest.sha256(
+                        fileAt: audioURL
+                    )
+                    if metadata.generationKey == request.generationKey,
+                       metadata.audioRevision == audioRevision,
+                       metadata.contentRevision == request.contentRevision,
+                       metadata.voiceID == request.voiceID,
+                       metadata.speed == request.speed,
+                       let audioBytes,
+                       audioBytes > 0 {
+                        result[request.itemID] = ProjectItemGenerationStatus(
+                            state: .readyOffline,
+                            audioBytes: audioBytes
+                        )
+                        continue
+                    }
+                } catch {
+                    // Invalid or incompatible durable audio is surfaced below as
+                    // a recoverable needs-attention state.
+                }
+
+                result[request.itemID] = ProjectItemGenerationStatus(
+                    state: .needsAttention,
+                    audioBytes: audioByteCount(at: audioURL)
+                )
+                continue
+            }
+
+            if hasAudio || hasMetadata
+                || matchingJobs.contains(where: {
+                    $0.state == .failed || $0.state == .completed
+                }) {
+                result[request.itemID] = ProjectItemGenerationStatus(
+                    state: .needsAttention,
+                    audioBytes: audioByteCount(at: audioURL)
+                )
+                continue
+            }
+
+            result[request.itemID] = .notGenerated
+        }
+
+        return result
+    }
+
+    func enqueueGeneration(
+        projectID: UUID,
+        requests: [ProjectGenerationRequest],
+        replaceExisting: Bool,
+        now: Date = .now
+    ) throws {
+        guard !requests.isEmpty else { return }
+
+        let loaded = try loadProject(projectID: projectID)
+        let validItemIDs = Set(loaded.items.map(\.id))
+        var queue = loaded.queue
+
+        for request in requests {
+            guard validItemIDs.contains(request.itemID) else {
+                throw ProjectStoreError.invalidData(
+                    "Generation request item is not in the project."
+                )
+            }
+            guard ProjectDigest.isSHA256(request.generationKey) else {
+                throw ProjectStoreError.invalidData(
+                    "Generation request key must be SHA-256."
+                )
+            }
+
+            if !replaceExisting,
+               queue.jobs.contains(where: {
+                   $0.itemID == request.itemID
+                       && $0.generationKey == request.generationKey
+                       && ($0.state == .queued || $0.state == .generating)
+               }) {
+                continue
+            }
+
+            if replaceExisting {
+                queue.jobs.removeAll { $0.itemID == request.itemID }
+            } else {
+                queue.jobs.removeAll {
+                    $0.itemID == request.itemID
+                        && ($0.state == .queued || $0.state == .generating)
+                }
+            }
+
+            queue.jobs.append(
+                GenerationJobRecord(
+                    id: UUID(),
+                    projectID: projectID,
+                    itemID: request.itemID,
+                    operation: .generate,
+                    generationKey: request.generationKey,
+                    state: .queued,
+                    createdAt: now,
+                    updatedAt: now,
+                    attempt: 0,
+                    lastError: nil
+                )
+            )
+        }
+
+        try saveQueue(projectID: projectID, queue: queue)
+        try touchProject(projectID: projectID, at: now)
+    }
+
+    func clearGeneratedAudio(
+        projectID: UUID,
+        itemIDs: Set<UUID>,
+        now: Date = .now
+    ) throws {
+        guard !itemIDs.isEmpty else { return }
+
+        var project = try loadProjectMetadata(projectID: projectID)
+        let loaded = try loadProject(projectID: projectID)
+        let validItemIDs = Set(loaded.items.map(\.id))
+        guard itemIDs.isSubset(of: validItemIDs) else {
+            throw ProjectStoreError.invalidData(
+                "Cannot clear audio for an item outside the project."
+            )
+        }
+
+        var queue = loaded.queue
+        queue.jobs.removeAll { itemIDs.contains($0.itemID) }
+        try saveQueue(projectID: projectID, queue: queue)
+
+        let paths = ProjectPackagePaths(
+            packageURL: packageURL(for: projectID)
+        )
+        for itemID in itemIDs {
+            for url in [
+                paths.audioWAV(itemID),
+                paths.audioMetadata(itemID),
+            ] where fileManager.fileExists(atPath: url.path) {
+                do {
+                    try fileManager.removeItem(at: url)
+                } catch {
+                    throw ProjectStoreError.io(
+                        "Unable to clear generated audio: \(error)"
+                    )
+                }
+            }
+        }
+
+        if let currentItemID = project.playback?.currentItemID,
+           itemIDs.contains(currentItemID) {
+            project.playback?.audioPosition = nil
+        }
+        project.updatedAt = now
+        try writeProjectDocument(
+            project,
+            packageURL: packageURL(for: projectID)
+        )
     }
 
     func deleteProject(projectID: UUID) throws {
@@ -918,6 +1191,31 @@ actor ProjectStore {
             throw ProjectStoreError.invalidData(
                 "Project contentRevision does not match ordered content"
             )
+        }
+    }
+
+    private func touchProject(
+        projectID: UUID,
+        at date: Date
+    ) throws {
+        var project = try loadProjectMetadata(projectID: projectID)
+        project.updatedAt = date
+        try writeProjectDocument(
+            project,
+            packageURL: packageURL(for: projectID)
+        )
+    }
+
+    private func audioByteCount(at url: URL) -> Int64? {
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+        do {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            guard let size = values.fileSize else { return nil }
+            return Int64(size)
+        } catch {
+            return nil
         }
     }
 

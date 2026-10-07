@@ -176,7 +176,15 @@ struct LibraryView: View {
             if let entry = model.continueListening {
                 Section("Continue Listening") {
                     NavigationLink {
-                        ProjectDetailPlaceholderView(entry: entry)
+                        ProjectDetailView(
+                            projectID: entry.id,
+                            initialTitle: entry.snapshot.title,
+                            onProjectChanged: {
+                                Task {
+                                    await model.refresh()
+                                }
+                            }
+                        )
                     } label: {
                         ContinueListeningCard(entry: entry)
                     }
@@ -473,20 +481,6 @@ private struct LibraryProjectRow: View {
         case .document: "Document"
         case .paste: "Text"
         }
-    }
-}
-
-private struct ProjectDetailPlaceholderView: View {
-    let entry: LibraryModel.Entry
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(entry.snapshot.title, systemImage: "book.pages")
-        } description: {
-            Text("Project Detail arrives in Phase 4.")
-        }
-        .navigationTitle(entry.snapshot.title)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
