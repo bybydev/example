@@ -180,14 +180,14 @@ struct AppRootView: View {
           model.providers.errorMessage != nil
             || model.chats.errorMessage != nil
             || model.projects.errorMessage != nil
-            || model.mcp.errorMessage != nil
+            || model.mcp.shouldPresentError()
         },
         set: { presented in
           if !presented {
             model.providers.errorMessage = nil
             model.chats.errorMessage = nil
             model.projects.errorMessage = nil
-            model.mcp.errorMessage = nil
+            if model.mcp.shouldPresentError() { model.mcp.errorMessage = nil }
           }
         }
       )
@@ -196,14 +196,14 @@ struct AppRootView: View {
         model.providers.errorMessage = nil
         model.chats.errorMessage = nil
         model.projects.errorMessage = nil
-        model.mcp.errorMessage = nil
+        if model.mcp.shouldPresentError() { model.mcp.errorMessage = nil }
       }
     } message: {
       Text(
         model.chats.errorMessage
           ?? model.projects.errorMessage
           ?? model.providers.errorMessage
-          ?? model.mcp.errorMessage
+          ?? (model.mcp.shouldPresentError() ? model.mcp.errorMessage : nil)
           ?? "Unknown error"
       )
     }

@@ -667,6 +667,7 @@ private struct ConversationToolsView: View {
   let conversationID: ConversationID
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
+  @State private var errorPresenterID = UUID()
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
@@ -738,6 +739,7 @@ private struct ConversationToolsView: View {
       .foregroundStyle(theme.primaryForegroundColor)
       .background(AppThemeBackground(theme: theme))
       .navigationTitle("Tools")
+      .disabled(mcp.isBusy)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
@@ -745,6 +747,19 @@ private struct ConversationToolsView: View {
         }
       }
     }
+    .alert(
+      "MCP Error",
+      isPresented: Binding(
+        get: { mcp.shouldPresentError(in: errorPresenterID) },
+        set: { if !$0, mcp.shouldPresentError(in: errorPresenterID) { mcp.errorMessage = nil } }
+      )
+    ) {
+      Button("OK") { mcp.errorMessage = nil }
+    } message: {
+      Text(mcp.errorMessage ?? "Unknown error")
+    }
+    .onAppear { mcp.registerErrorPresenter(errorPresenterID) }
+    .onDisappear { mcp.unregisterErrorPresenter(errorPresenterID) }
   }
 
   @ViewBuilder

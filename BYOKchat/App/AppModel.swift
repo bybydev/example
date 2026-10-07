@@ -176,6 +176,24 @@ final class MCPManagementModel {
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
+  var warningMessage: String?
+
+  // The most recently presented MCP screen owns its alert. The root remains
+  // the fallback when no local presenter is visible.
+  private var errorPresenterIDs: [UUID] = []
+
+  func registerErrorPresenter(_ id: UUID) {
+    errorPresenterIDs.removeAll { $0 == id }
+    errorPresenterIDs.append(id)
+  }
+
+  func unregisterErrorPresenter(_ id: UUID) {
+    errorPresenterIDs.removeAll { $0 == id }
+  }
+
+  func shouldPresentError(in presenterID: UUID? = nil) -> Bool {
+    errorMessage != nil && errorPresenterIDs.last == presenterID
+  }
 
   private let runtime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
@@ -291,8 +309,15 @@ final class MCPManagementModel {
     credential: String?,
     additionalHeaders: [String: String],
     isEnabled: Bool
-  ) async -> Bool {
-    await performResult("MCP server saved and tools discovered") {
+  ) async -> MCPRemoteServer? {
+    guard !isBusy else { return nil }
+    isBusy = true
+    errorMessage = nil
+    statusMessage = nil
+    warningMessage = nil
+    defer { isBusy = false }
+
+    do {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
       let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
       guard let url = URL(string: normalizedEndpoint) else {
@@ -311,19 +336,53 @@ final class MCPManagementModel {
       server.additionalHeaders = additionalHeaders
       server.isEnabled = isEnabled
 
-      if existing == nil,
-        authenticationKind != .none,
+      try MCPWorkspaceStore.validateServer(server)
+      if authenticationKind != .none,
         credential?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
       {
-        throw MCPError.missingCredential
+        // A nil credential preserves an existing Keychain value; an explicit
+        // empty value removes it and cannot satisfy an authenticated server.
+        guard credential == nil, try await runtime.hasCredential(serverID: server.id) else {
+          throw MCPError.missingCredential
+        }
       }
 
       try await runtime.saveServer(server, credential: credential)
-      if server.isEnabled {
-        _ = try await runtime.refreshServer(server.id, force: true)
+      statusMessage = "MCP server saved"
+      do {
+        try await reloadSnapshot()
+      } catch {
+        warningMessage = "Server saved, but local state could not be fully refreshed: \(error.localizedDescription)"
       }
-      try await reloadSnapshot()
+      return server
+    } catch {
+      errorMessage = error.localizedDescription
+      return nil
     }
+  }
+
+  /// Called by the editor after requesting dismissal. Warnings stay in the
+  /// server list rather than attempting an alert during the sheet transition.
+  func discoverSavedServer(_ server: MCPRemoteServer) async {
+    guard server.isEnabled else { return }
+    isBusy = true
+    defer { isBusy = false }
+    do {
+      _ = try await runtime.refreshServer(server.id, force: true)
+      statusMessage = "MCP server saved and tools discovered"
+    } catch {
+      appendSaveWarning("Server saved, but tool discovery failed: \(error.localizedDescription)")
+    }
+    do {
+      try await reloadSnapshot()
+    } catch {
+      appendSaveWarning("Server saved, but local state could not be fully refreshed: \(error.localizedDescription)")
+    }
+  }
+
+  private func appendSaveWarning(_ message: String) {
+    guard warningMessage != message else { return }
+    warningMessage = warningMessage.map { "\($0)\n\(message)" } ?? message
   }
 
   func deleteServer(_ serverID: MCPServerID) async {
@@ -501,6 +560,9 @@ final class MCPManagementModel {
   }
 
   private func perform(_ success: String?, operation: () async throws -> Void) async {
+    errorMessage = nil
+    statusMessage = nil
+    warningMessage = nil
     isBusy = true
     defer { isBusy = false }
     do {
@@ -508,19 +570,6 @@ final class MCPManagementModel {
       statusMessage = success
     } catch {
       errorMessage = error.localizedDescription
-    }
-  }
-
-  private func performResult(_ success: String?, operation: () async throws -> Void) async -> Bool {
-    isBusy = true
-    defer { isBusy = false }
-    do {
-      try await operation()
-      statusMessage = success
-      return true
-    } catch {
-      errorMessage = error.localizedDescription
-      return false
     }
   }
 }

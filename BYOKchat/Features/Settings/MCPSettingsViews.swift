@@ -14,17 +14,34 @@ struct MCPServerListView: View {
   @State private var showAddServer = false
   @State private var showProUpsell = false
   @State private var pendingDelete: MCPRemoteServer?
+  @State private var errorPresenterID = UUID()
 
   var body: some View {
-    Group {
-      if model.servers.isEmpty {
-        ContentUnavailableView(
-          "No MCP Servers",
-          systemImage: "shippingbox.and.arrow.backward",
-          description: Text("Add a remote Streamable HTTP MCP endpoint to discover its tools.")
-        )
-      } else {
-        serverList
+    VStack(spacing: 0) {
+      if let warning = model.warningMessage {
+        HStack(alignment: .top, spacing: 12) {
+          Label(warning, systemImage: "exclamationmark.triangle")
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 0)
+          Button("Dismiss warning", systemImage: "xmark") {
+            model.warningMessage = nil
+          }
+          .labelStyle(.iconOnly)
+        }
+        .padding()
+        .background(theme.surfaceColor)
+      }
+      Group {
+        if model.servers.isEmpty {
+          ContentUnavailableView(
+            "No MCP Servers",
+            systemImage: "shippingbox.and.arrow.backward",
+            description: Text("Add a remote Streamable HTTP MCP endpoint to discover its tools.")
+          )
+        } else {
+          serverList
+        }
       }
     }
     .scrollContentBackground(.hidden)
@@ -51,6 +68,7 @@ struct MCPServerListView: View {
             showProUpsell = true
           }
         }
+        .disabled(model.isBusy)
       }
     }
     .sheet(isPresented: $showAddServer) {
@@ -64,14 +82,16 @@ struct MCPServerListView: View {
     .alert(
       "MCP Error",
       isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
+        get: { model.shouldPresentError(in: errorPresenterID) },
+        set: { if !$0, model.shouldPresentError(in: errorPresenterID) { model.errorMessage = nil } }
       )
     ) {
       Button("OK") { model.errorMessage = nil }
     } message: {
       Text(model.errorMessage ?? "Unknown error")
     }
+    .onAppear { model.registerErrorPresenter(errorPresenterID) }
+    .onDisappear { model.unregisterErrorPresenter(errorPresenterID) }
     .confirmationDialog(
       "Delete MCP server?",
       isPresented: Binding(
@@ -108,6 +128,7 @@ struct MCPServerListView: View {
       .listRowBackground(Color.clear)
     }
     .listStyle(.plain)
+    .disabled(model.isBusy)
     .listRowSeparatorTint(theme.borderColor)
   }
 
@@ -165,6 +186,7 @@ private struct MCPServerEditorView: View {
   @State private var additionalHeadersText: String
   @State private var isEnabled: Bool
   @State private var headerError: String?
+  @State private var errorPresenterID = UUID()
 
   init(model: MCPManagementModel, server: MCPRemoteServer?) {
     self.model = model
@@ -317,6 +339,19 @@ private struct MCPServerEditorView: View {
           .disabled(model.isBusy)
       }
     }
+    .alert(
+      "MCP Error",
+      isPresented: Binding(
+        get: { model.shouldPresentError(in: errorPresenterID) },
+        set: { if !$0, model.shouldPresentError(in: errorPresenterID) { model.errorMessage = nil } }
+      )
+    ) {
+      Button("OK") { model.errorMessage = nil }
+    } message: {
+      Text(model.errorMessage ?? "Unknown error")
+    }
+    .onAppear { model.registerErrorPresenter(errorPresenterID) }
+    .onDisappear { model.unregisterErrorPresenter(errorPresenterID) }
   }
 
   private func save() {
@@ -348,7 +383,10 @@ private struct MCPServerEditorView: View {
         additionalHeaders: headers,
         isEnabled: isEnabled
       )
-      if saved { dismiss() }
+      if let saved {
+        dismiss()
+        await model.discoverSavedServer(saved)
+      }
     }
   }
 

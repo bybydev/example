@@ -65,7 +65,23 @@ public actor MCPRemoteRuntime {
   public func saveServer(_ server: MCPRemoteServer, credential: String?) async throws {
     try MCPWorkspaceStore.validateServer(server)
     let previous = try? await workspace.server(id: server.id)
-    try await workspace.upsertServer(server)
+    let previousCredential: String?
+    if credential != nil {
+      previousCredential = try await vault.credential(serverID: server.id)
+    } else {
+      previousCredential = nil
+    }
+
+    let invalidatesConnection = previous?.endpoint != server.endpoint
+      || previous?.authentication != server.authentication
+      || previous?.additionalHeaders != server.additionalHeaders
+      || credential != nil
+    if invalidatesConnection {
+      connections.removeValue(forKey: server.id)
+    }
+
+    // Update Keychain first so a credential failure cannot leave a newly saved
+    // configuration behind. Restore it if the single workspace commit fails.
     if let credential {
       try await vault.setCredential(
         credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : credential,
@@ -73,13 +89,20 @@ public actor MCPRemoteRuntime {
       )
     }
 
-    if previous?.endpoint != server.endpoint
-      || previous?.authentication != server.authentication
-      || previous?.additionalHeaders != server.additionalHeaders
-      || credential != nil
-    {
-      connections.removeValue(forKey: server.id)
-      try await workspace.invalidateSnapshot(serverID: server.id)
+    do {
+      try await workspace.upsertServer(server, invalidateSnapshot: credential != nil)
+    } catch {
+      let configurationError = error
+      if credential != nil {
+        do {
+          try await vault.setCredential(previousCredential, serverID: server.id)
+        } catch {
+          throw MCPError.transport(
+            "MCP configuration was not saved and the previous Keychain credential could not be restored: \(error.localizedDescription)"
+          )
+        }
+      }
+      throw configurationError
     }
   }
 

@@ -602,6 +602,14 @@ private struct MCPElicitationCard: View {
     var text: [String: String] = [:]
     var bools: [String: Bool] = [:]
     for field in request.fields {
+      if field.kind == .string, !field.allowedValues.isEmpty {
+        if case .string(let value)? = field.defaultValue, field.allowedValues.contains(value) {
+          text[field.name] = value
+        } else {
+          text[field.name] = field.allowedValues.first
+        }
+        continue
+      }
       switch (field.kind, field.defaultValue) {
       case (.boolean, .bool(let value)): bools[field.name] = value
       case (.string, .string(let value)): text[field.name] = value
@@ -637,8 +645,16 @@ private struct MCPElicitationCard: View {
             Text("Complete the requested step in your browser, then return here.")
               .font(.caption)
               .foregroundStyle(theme.secondaryForegroundColor)
+            Text(url.host ?? url.absoluteString)
+              .font(.subheadline.weight(.semibold))
+            Text(url.absoluteString)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(3)
+              .truncationMode(.middle)
+              .textSelection(.enabled)
             Link(destination: url) {
-              Label("Open Link", systemImage: "arrow.up.right.square")
+              Label("Open \(url.host ?? url.absoluteString)", systemImage: "arrow.up.right.square")
             }
             .buttonStyle(.borderedProminent)
           }
@@ -696,7 +712,7 @@ private struct MCPElicitationCard: View {
           Picker(
             field.displayName,
             selection: Binding(
-              get: { textValues[field.name] ?? field.allowedValues.first ?? "" },
+              get: { textValues[field.name] ?? "" },
               set: { textValues[field.name] = $0 }
             )
           ) {
@@ -723,7 +739,13 @@ private struct MCPElicitationCard: View {
   private var canSubmit: Bool {
     guard request.mode == .form else { return request.url != nil }
     for field in request.fields {
-      let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      let storedValue = textValues[field.name] ?? ""
+      if field.kind == .string, !field.allowedValues.isEmpty,
+        !field.allowedValues.contains(storedValue)
+      {
+        return false
+      }
+      let raw = storedValue.trimmingCharacters(in: .whitespacesAndNewlines)
       if field.isRequired, field.kind != .boolean, raw.isEmpty { return false }
       if raw.isEmpty { continue }
       switch field.kind {
@@ -750,7 +772,9 @@ private struct MCPElicitationCard: View {
         if let value = Double(textValues[field.name] ?? ""), value.isFinite { values[field.name] = .number(value) }
       case .string:
         let value = textValues[field.name] ?? ""
-        if !value.isEmpty || field.isRequired { values[field.name] = .string(value) }
+        if !value.isEmpty || field.isRequired || !field.allowedValues.isEmpty {
+          values[field.name] = .string(value)
+        }
       case .stringArray:
         let value = (textValues[field.name] ?? "")
           .split(separator: ",")

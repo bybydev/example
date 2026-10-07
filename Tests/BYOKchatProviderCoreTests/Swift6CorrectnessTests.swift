@@ -42,7 +42,8 @@ private func correctnessAccount(baseURLOverride: URL? = nil) -> ResolvedProvider
   )
 }
 
-@Test func deepSeekThinkingOmitsIgnoredSamplingParameters() async throws {
+@Test(arguments: [ReasoningEffort.low, .high])
+func deepSeekThinkingOmitsIgnoredSamplingParameters(_ effort: ReasoningEffort) async throws {
   let transport = CorrectnessCaptureTransport()
   let adapter = OpenAICompatibleAdapter(
     definition: BuiltInProviders.deepSeek,
@@ -56,7 +57,7 @@ private func correctnessAccount(baseURLOverride: URL? = nil) -> ResolvedProvider
       options: .init(
         temperature: 0.4,
         topP: 0.8,
-        reasoning: .init(enabled: true, effort: .low)
+        reasoning: .init(enabled: true, effort: effort)
       )
     ),
     account: correctnessAccount()
@@ -72,7 +73,8 @@ private func correctnessAccount(baseURLOverride: URL? = nil) -> ResolvedProvider
 
   #expect(root["temperature"] == nil)
   #expect(root["top_p"] == nil)
-  #expect(root["reasoning_effort"] == .string("high"))
+  // A supported effort is encoded; an unsupported saved effort uses provider Default.
+  #expect(root["reasoning_effort"] == (effort == .high ? .string("high") : nil))
 }
 
 @Test func deepSeekNonThinkingKeepsSamplingParameters() async throws {

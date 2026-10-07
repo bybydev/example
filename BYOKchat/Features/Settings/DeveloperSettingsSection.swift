@@ -466,7 +466,7 @@ private extension MCPManagementModel {
     })
 
     let authenticationKind: MCPAuthenticationKind = credential == nil ? .none : .bearer
-    let succeeded = await saveServer(
+    let saved = await saveServer(
       existing: existing,
       name: SimulatorConfigurationConstants.mcpName,
       endpoint: endpoint.absoluteString,
@@ -476,14 +476,9 @@ private extension MCPManagementModel {
       additionalHeaders: [:],
       isEnabled: true
     )
-    guard succeeded else { return nil }
-
-    if let existing {
-      return existing.id
-    }
-    return servers.first(where: {
-      $0.name == SimulatorConfigurationConstants.mcpName && $0.endpoint == endpoint
-    })?.id
+    guard let saved else { return nil }
+    await discoverSavedServer(saved)
+    return saved.id
   }
 
   @MainActor

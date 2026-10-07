@@ -156,11 +156,8 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
   let astraRoot = try responseRoot(from: astraRequest)
   #expect(astraRoot["temperature"] == nil)
   #expect(astraRoot["top_p"] == nil)
-  guard case .object(let astraReasoning)? = astraRoot["reasoning"] else {
-    Issue.record("Expected Astra reasoning config")
-    return
-  }
-  #expect(astraReasoning["effort"] == .string("low"))
+  // Unsupported Off falls back to provider Default rather than an arbitrary effort.
+  #expect(astraRoot["reasoning"] == nil)
 
   let solNoneRequest = try #require(await transport.request(at: 1))
   let solNoneRoot = try responseRoot(from: solNoneRequest)

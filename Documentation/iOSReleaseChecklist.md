@@ -16,6 +16,8 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
 - [x] Privacy manifest declares UserDefaults and app-container file timestamp required-reason APIs.
 - [x] 1024x1024 App Store icon source is present.
 - [x] English App Store metadata and an App Review notes template are in the repo.
+- [x] MCP saving separates persistence from discovery; post-save warnings remain visible in the server list.
+- [x] MCP editor/Tools errors use a local presenter with root fallback, URL elicitation shows its destination, and enum selections initialize backing values.
 
 ## Must do on Mac before upload
 
@@ -39,6 +41,7 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
   - Restore Purchases works after reinstall/sign-out scenario
   - recurring subscription management link opens correctly
 - [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, 10 saved files, 2 free themes, basic analytics.
+- [ ] Complete the MCP smoke path below on the intended Release/TestFlight build; opening MCP settings alone is insufficient.
 - [ ] Archive Release and run Xcode **Validate App**. Resolve every validation/privacy-manifest warning before upload.
 - [ ] Upload the archive to App Store Connect/TestFlight and install that uploaded build once before submission.
 - [ ] Generate final App Store screenshots using `BYOKchatScreenshots` / `scripts/capture_app_store_screenshots.sh`; inspect the actual PNGs before upload.
@@ -77,3 +80,20 @@ Submit only when all of these are true:
 6. Final screenshots and metadata describe the same functionality as the submitted binary.
 
 After approval/review is complete, revoke the temporary review provider credential.
+
+## MCP release smoke path (issue #36)
+
+Code completion does not mark these checks as passed. Record results for the exact physical-iPhone release build before submission.
+
+- [ ] Add a valid remote MCP configuration while the endpoint is offline. Save dismisses the editor, the server remains visible, and discovery failure appears as a separate warning.
+- [ ] Restore endpoint availability and recover using Refresh Tools. Also confirm a disabled server saves without discovery.
+- [ ] Enable the server for a chat. Induce an auth/network failure and confirm the Tools sheet presents one error without a duplicate root alert.
+- [ ] Run an Ask-policy tool and choose **Allow Once**.
+- [ ] Run an Ask-policy tool and choose **Deny**.
+- [ ] Choose **Always Allow** and confirm the next call no longer prompts.
+- [ ] Relaunch and verify server configuration, credential access, chat exposure, and permissions persist.
+- [ ] Exercise a form with a required single-option enum, a valid default, and an invalid default. The visible selection matches the submitted value without requiring a change first.
+- [ ] Exercise URL elicitation. The destination is visible before opening; the displayed URL matches the link; Cancel / Decline / Continue work.
+- [ ] Cancel generation while awaiting an approval or elicitation and confirm the pending interaction clears.
+
+Validation results: **not run**. Replace this note with the build identifier, device, and results after completing the smoke path.

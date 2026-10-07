@@ -73,7 +73,8 @@ private func xAIRoot(from request: URLRequest) throws -> [String: JSONValue] {
   return root
 }
 
-@Test func xAIResponsesMapsReasoningToolsVisionUsageAndExactCost() async throws {
+@Test(arguments: [ReasoningEffort.xhigh, .max])
+func xAIResponsesMapsReasoningToolsVisionUsageAndExactCost(_ effort: ReasoningEffort) async throws {
   let response = Data(
     """
     {"id":"resp_xai","model":"grok-4.6","status":"completed","output":[{"id":"rs_xai","type":"reasoning","encrypted_content":"opaque-xai","summary":[{"type":"summary_text","text":"Checked."}]},{"id":"msg_xai","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":50},"output_tokens_details":{"reasoning_tokens":7},"cost_in_usd_ticks":37756000}}
@@ -105,7 +106,7 @@ private func xAIRoot(from request: URLRequest) throws -> [String: JSONValue] {
         temperature: 0.7,
         topP: 0.95,
         maxOutputTokens: 512,
-        reasoning: .init(enabled: true, effort: .max)
+        reasoning: .init(enabled: true, effort: effort)
       ),
       tools: [tool]
     ),
@@ -134,11 +135,16 @@ private func xAIRoot(from request: URLRequest) throws -> [String: JSONValue] {
   #expect(root["temperature"] == .number(0.7))
   #expect(root["top_p"] == .number(0.95))
 
-  guard case .object(let reasoning)? = root["reasoning"] else {
-    Issue.record("Missing xAI reasoning config")
-    return
+  if effort == .xhigh {
+    guard case .object(let reasoning)? = root["reasoning"] else {
+      Issue.record("Missing supported xAI reasoning config")
+      return
+    }
+    #expect(reasoning["effort"] == .string("xhigh"))
+  } else {
+    // Unsupported Max falls back to provider Default; it is not remapped to XHigh.
+    #expect(root["reasoning"] == nil)
   }
-  #expect(reasoning["effort"] == .string("xhigh"))
 
   guard case .array(let tools)? = root["tools"], case .object(let encodedTool) = tools.first else {
     Issue.record("Missing xAI function tool")
@@ -160,7 +166,7 @@ private func xAIRoot(from request: URLRequest) throws -> [String: JSONValue] {
   })
 }
 
-@Test func xAIReasoningOffRespectsMandatoryAndOptionalReasoningFamilies() async throws {
+@Test func xAIUnsupportedOffUsesProviderDefaultWhileOptionalOffIsEncoded() async throws {
   let responses = [
     Data("{\"id\":\"r1\",\"model\":\"grok-4.6\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}".utf8),
     Data("{\"id\":\"r2\",\"model\":\"grok-4.3\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}".utf8),
@@ -183,13 +189,12 @@ private func xAIRoot(from request: URLRequest) throws -> [String: JSONValue] {
 
   let mandatory = try xAIRoot(from: #require(await transport.request(at: 0)))
   let optional = try xAIRoot(from: #require(await transport.request(at: 1)))
-  guard case .object(let mandatoryReasoning)? = mandatory["reasoning"],
-    case .object(let optionalReasoning)? = optional["reasoning"]
-  else {
-    Issue.record("Expected xAI reasoning objects")
+  // Grok 4.6 does not offer Off: use provider Default without a reasoning override.
+  #expect(mandatory["reasoning"] == nil)
+  guard case .object(let optionalReasoning)? = optional["reasoning"] else {
+    Issue.record("Expected optional xAI Off config")
     return
   }
-  #expect(mandatoryReasoning["effort"] == .string("low"))
   #expect(optionalReasoning["effort"] == .string("none"))
 }
 
