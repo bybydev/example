@@ -266,6 +266,11 @@ final class ChatManagementModel {
   /// existing root navigation wait naturally without ever treating summaries
   /// as full message histories.
   func conversation(_ id: ConversationID) -> ChatConversation? {
+    // Navigation can keep the outgoing view alive while an unsent chat is
+    // being removed. Do not schedule another shard read for that retired ID.
+    guard !abandonedNewChatIDs.contains(id), !discardingConversationIDs.contains(id) else {
+      return nil
+    }
     if let hydrated = hydratedConversations[id] { return hydrated }
     guard conversations.contains(where: { $0.id == id }), !conversationLoadFailures.contains(id) else {
       return nil
@@ -286,6 +291,12 @@ final class ChatManagementModel {
   }
 
   func loadConversation(_ id: ConversationID) async {
+    // Recheck here too: conversation(_:) schedules an unstructured task, and
+    // ChatView also calls this directly. Either can arrive after Back retires
+    // the chat. Cleanup drains existing loads before deleting its shard.
+    guard hasConversation(id), !abandonedNewChatIDs.contains(id),
+      !discardingConversationIDs.contains(id)
+    else { return }
     if let task = loadingConversationTasks[id] {
       await task.value
       return
