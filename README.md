@@ -240,6 +240,25 @@ xcodebuild \
 
 For a physical iPhone, generate the project and build the `ReadAloud` scheme with automatic signing.
 
+## Project package foundation
+
+ReadAloud projects are app-internal `.readaloud` packages stored under
+Application Support in the ReadAloud Projects directory. Phase 1 defines the
+v1 Codable disk contract and `ProjectStore` for:
+
+- atomic package creation and JSON replacement;
+- lightweight Library snapshots from `project.json`;
+- full manifest/item/queue hydration;
+- stable lowercase UUID package/item filenames;
+- source, content, generation, playback, queue, and audio metadata validation;
+- explicit schema-version rejection/migration boundaries;
+- safe rename/settings/playback updates and project deletion.
+
+Normalized item text owns its SHA-256 content revision. The project content
+revision hashes ordered item identity/revisions plus hierarchy, while generation
+keys deterministically bind item revision, resolved voice/speed, Kokoro runtime
+revision, and synthesis configuration version.
+
 ## Current scope
 
 The original Kokoro prototype phases are complete. The repo is now planning the ReadAloud 1.0 product around durable projects, document import, structured reading, persistent/offline audio, queue/prefetch generation, background playback, AppFoundation integration, and production release infrastructure.
