@@ -1,11 +1,10 @@
-# XcodeGen output
-*.xcodeproj
+# XcodeGen owner-managed outputs
+*.xcodeproj/xcuserdata/
 
 # Xcode
 DerivedData/
 build/
 *.xcworkspace/xcuserdata/
-*.xcodeproj/xcuserdata/
 *.xcuserstate
 
 # macOS
@@ -14,7 +13,6 @@ build/
 # SwiftPM
 .build/
 .swiftpm/
-Package.resolved
 
 # Downloaded Kokoro assets
 Resources/Kokoro/*
