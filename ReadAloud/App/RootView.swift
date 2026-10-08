@@ -8,18 +8,8 @@ struct RootView: View {
     private var runtimeManager
 
     var body: some View {
-        TabView {
-            Tab("Library", systemImage: "books.vertical") {
-                NavigationStack {
-                    LibraryView()
-                }
-            }
-
-            Tab("Settings", systemImage: "gearshape") {
-                NavigationStack {
-                    SettingsView()
-                }
-            }
+        NavigationStack {
+            LibraryView()
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ProjectMiniPlayerHost()

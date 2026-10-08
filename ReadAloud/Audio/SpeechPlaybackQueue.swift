@@ -236,13 +236,11 @@ final class SpeechPlaybackQueue {
             ) { [weak self] notification in
                 let rawType =
                     notification.userInfo?[
-                        AVAudioSession
-                            .InterruptionTypeKey
+                        AVAudioSessionInterruptionTypeKey
                     ] as? UInt
                 let rawOptions =
                     notification.userInfo?[
-                        AVAudioSession
-                            .InterruptionOptionKey
+                        AVAudioSessionInterruptionOptionKey
                     ] as? UInt
                     ?? 0
 
@@ -267,8 +265,7 @@ final class SpeechPlaybackQueue {
             ) { [weak self] notification in
                 let rawReason =
                     notification.userInfo?[
-                        AVAudioSession
-                            .RouteChangeReasonKey
+                        AVAudioSessionRouteChangeReasonKey
                     ] as? UInt
 
                 Task { @MainActor [weak self] in

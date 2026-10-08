@@ -5,7 +5,9 @@ nonisolated struct PasteImportAdapter {
         text: String,
         suggestedTitle: String?
     ) throws -> NormalizedImportDocument {
+        try Task.checkCancellation()
         let normalized = ReadAloudContentNormalizer.normalizeSpokenText(text)
+        try Task.checkCancellation()
         guard !normalized.isEmpty else {
             throw ReadAloudImportError.emptyContent
         }

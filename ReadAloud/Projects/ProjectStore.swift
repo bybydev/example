@@ -1,4 +1,5 @@
 import Foundation
+import KokoroTTS
 
 nonisolated enum ProjectStoreError: Error, LocalizedError, Equatable, Sendable {
     case projectNotFound(UUID)
@@ -182,8 +183,18 @@ actor ProjectStore {
         items: [ProjectContentItem],
         queue: ProjectQueueDocument = ProjectQueueDocument(),
         retainedSource: ProjectRetainedSource? = nil,
-        retainedArtwork: ProjectRetainedArtwork? = nil
+        retainedArtwork: ProjectRetainedArtwork? = nil,
+        maximumProjectCount: Int? = nil
     ) throws {
+        try Task.checkCancellation()
+        if let maximumProjectCount {
+            let count = try catalog().projects.count
+            guard count < maximumProjectCount else {
+                throw ReadAloudAccessError.freeLibraryLimitReached(
+                    limit: maximumProjectCount
+                )
+            }
+        }
         try ProjectValidation.validate(project)
         try ProjectValidation.validate(manifest)
         try ProjectValidation.validate(queue)
@@ -197,6 +208,7 @@ actor ProjectStore {
             itemIDs: Set(items.map(\.id))
         )
 
+        try Task.checkCancellation()
         let finalURL = packageURL(for: project.id)
         guard !fileManager.fileExists(atPath: finalURL.path) else {
             throw ProjectStoreError.projectAlreadyExists(project.id)
@@ -217,6 +229,7 @@ actor ProjectStore {
                     paths: paths
                 )
             }
+            try Task.checkCancellation()
             try retainArtwork(
                 retainedArtwork,
                 project: project,
@@ -229,6 +242,7 @@ actor ProjectStore {
                 fileManager: fileManager
             )
             for item in items {
+                try Task.checkCancellation()
                 try ProjectAtomicWriter.write(
                     item,
                     to: paths.itemJSON(item.id),
@@ -248,10 +262,16 @@ actor ProjectStore {
                 temporaryDirectory: paths.tempDirectory,
                 fileManager: fileManager
             )
+            // The move is the commit point. Cancellation before it rolls back
+            // staging; cancellation after it must not delete a completed project.
+            try Task.checkCancellation()
             try fileManager.moveItem(at: stagingURL, to: finalURL)
         } catch {
             if fileManager.fileExists(atPath: stagingURL.path) {
                 try? fileManager.removeItem(at: stagingURL)
+            }
+            if error is CancellationError {
+                throw error
             }
             if let typed = error as? ProjectStoreError {
                 throw typed
@@ -1081,7 +1101,7 @@ actor ProjectStore {
                     destinationMetadata
             )
 
-            guard ProjectDigest.sha256(
+            guard try ProjectDigest.sha256(
                 fileAt: destinationWAV
             ) == metadata.audioRevision else {
                 throw ProjectStoreError.invalidData(

@@ -331,7 +331,9 @@ Developer-only controls must not leak into Release UI.
 
 ## 11. Info.plist and entitlements
 
-Use an explicit Info.plist in Resources for shipping configuration rather than accumulating every key in `project.yml`.
+Follow the modern Spokio iOS pattern: enable `GENERATE_INFOPLIST_FILE: YES` and retain `INFOPLIST_FILE: ReadAloud/Resources/Info.plist` as the app-specific input plist. Xcode generates standard bundle metadata from build settings and merges the explicit input plist.
+
+Keep bundle identifier, executable, name, and versions in build settings rather than duplicating their standard `CFBundle*` keys in the input plist. Keep ReadAloud-specific shipping configuration in the explicit plist rather than accumulating every key in `project.yml`.
 
 ReadAloud-specific requirements will include:
 

@@ -22,9 +22,34 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 
 ### Product smoke pass
 
+- Verify Library opens without a tab bar; use the top-right Settings button and
+  Back to return without losing the Library search or sort selection.
+- Verify the circular floating plus button has no visible Add label and, in empty,
+  populated, and search-result Library states, offers EPUB, PDF, Document, and Paste Text. It disables during import and
+  cancellation cleanup; scrolling can reveal the final row above the button.
+- Start playback, return to Library, and open Settings. Verify the mini-player
+  remains accessible and the floating Add button sits above it only in Library.
 - Import one EPUB.
 - Import one PDF.
 - Import/paste plain text.
+- For EPUB, PDF, documents, and Paste Text: verify a successful import closes
+  progress automatically, creates exactly one Library entry, and does not reopen
+  at “Finishing…”.
+- Exercise document formats: TXT/Markdown, SRT/VTT, RTF/HTML, DOCX/ODT/PPTX.
+- Cancel and swipe-dismiss during extraction and normalization; verify immediate
+  dismissal, no cancellation alert, no late progress reopening, and no published
+  partial project. Synchronous extraction may finish unwinding before Add enables.
+- Cancel during package staging; verify staging cleanup. If the atomic publish
+  already completed, verify the completed project remains in the Library.
+- Cancel the file picker; verify no error alert.
+- Import empty, unsupported, and malformed content; verify an error, no new project,
+  and that another import can start afterward.
+- Submit pasted text; verify its editor dismisses before progress appears.
+  Cancel/fail and reopen Paste Text to verify the draft is retained; successful
+  import clears the matching draft.
+- Try repeated Add actions while importing/cancelling; verify no overlapping jobs.
+- At the Free Library limit, verify all import paths reject a new project even
+  when the displayed Library count is stale.
 - Force-close and reopen; verify projects and progress remain.
 - Start streaming speech and verify first audio/play-pause/seek.
 - Generate one chapter offline and replay the finalized WAV.
@@ -36,6 +61,20 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 - Verify Free project limit and canonical Pro paywall.
 - Restore purchases in the Plan section.
 - Turn Pro simulation off before any production archive.
+
+### Appearance
+
+- On a fresh install, verify ReadAloud Dark is the default. Verify the picker
+  offers free ReadAloud Light and Dark themes and has no System option.
+- Select ReadAloud Light or Dark explicitly; verify it stays fixed across system
+  changes and relaunch, with both themes available on Free.
+- Upgrade an existing Midnight/Paper selection; verify it maps to ReadAloud
+  Dark/Light. Preserve other saved theme selections and entitlement behavior.
+- Inspect Library, Settings, project details, Reader, sheets, and the mini-player
+  in both appearances; check text, row surfaces, toolbar icons, and the floating
+  plus button for readable contrast.
+- Select a Pro theme, restore/purchase, and simulate expiry; verify the existing
+  access behavior and the ReadAloud Dark fallback.
 
 ### Accessibility / iPhone
 

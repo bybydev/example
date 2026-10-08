@@ -6,22 +6,18 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
     private let pdfImporter: PDFImportAdapter
     private let textImporter: TextDocumentImportAdapter
     private let pasteImporter: PasteImportAdapter
-    private let fileManager: FileManager
 
-    init(
-        projectStore: ProjectStore,
-        fileManager: FileManager = .default
-    ) {
+    init(projectStore: ProjectStore) {
         self.projectStore = projectStore
         self.epubImporter = EPUBImportAdapter()
         self.pdfImporter = PDFImportAdapter()
         self.textImporter = TextDocumentImportAdapter()
         self.pasteImporter = PasteImportAdapter()
-        self.fileManager = fileManager
     }
 
     func importSource(
         _ source: ReadAloudImportSource,
+        maximumProjectCount: Int? = nil,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)? = nil
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -36,12 +32,14 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         case .file(let url):
             return try await importFile(
                 url,
+                maximumProjectCount: maximumProjectCount,
                 progress: progress
             )
         case .pastedText(let text, let suggestedTitle):
             return try await importPaste(
                 text,
                 suggestedTitle: suggestedTitle,
+                maximumProjectCount: maximumProjectCount,
                 progress: progress
             )
         }
@@ -49,6 +47,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
 
     private func importFile(
         _ externalURL: URL,
+        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         let fileName = externalURL.lastPathComponent
@@ -62,6 +61,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             fileName: fileName
         )
 
+        let fileManager = FileManager.default
         let workspace = try makeWorkspace()
         defer { try? fileManager.removeItem(at: workspace) }
 
@@ -94,6 +94,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
 
         try Task.checkCancellation()
         let retainedRevision = try ProjectDigest.sha256(fileAt: localURL)
+        try Task.checkCancellation()
         let normalized = try await importer.importDocument(
             from: localURL,
             progress: progress
@@ -106,6 +107,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedExtension: fileExtension,
             retainedRevision: retainedRevision,
             retainedSource: .file(localURL),
+            maximumProjectCount: maximumProjectCount,
             progress: progress
         )
     }
@@ -113,6 +115,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
     private func importPaste(
         _ text: String,
         suggestedTitle: String?,
+        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -127,6 +130,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             text: text,
             suggestedTitle: suggestedTitle
         )
+        try Task.checkCancellation()
         let sourceData = Data(text.utf8)
 
         return try await persist(
@@ -135,6 +139,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedExtension: "txt",
             retainedRevision: ProjectDigest.sha256(sourceData),
             retainedSource: .data(sourceData),
+            maximumProjectCount: maximumProjectCount,
             progress: progress
         )
     }
@@ -162,6 +167,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         retainedExtension: String,
         retainedRevision: String,
         retainedSource: ProjectRetainedSource,
+        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -169,6 +175,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         let content = try ReadAloudContentNormalizer.makeContent(
             from: normalized.items
         )
+        try Task.checkCancellation()
         let projectID = UUID()
         let sourceID = UUID()
         let sourcePath = "source/\(ProjectPackagePaths.fileID(sourceID)).\(retainedExtension)"
@@ -202,6 +209,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             )
         )
 
+        try Task.checkCancellation()
         try await projectStore.createPackage(
             project: project,
             manifest: content.manifest,
@@ -209,7 +217,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedSource: retainedSource,
             retainedArtwork: normalized.artwork.map {
                 ProjectRetainedArtwork(data: $0.data)
-            }
+            },
+            maximumProjectCount: maximumProjectCount
         )
 
         let snapshot = ProjectSnapshot(project: project)
@@ -228,6 +237,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
     }
 
     private func makeWorkspace() throws -> URL {
+        let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory
             .appending(
                 path: "ReadAloudImport",

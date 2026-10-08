@@ -57,6 +57,7 @@ nonisolated enum ReadAloudContentNormalizer {
         manifest: ProjectContentManifest,
         items: [ProjectContentItem]
     ) {
+        try Task.checkCancellation()
         guard !normalizedItems.isEmpty else {
             throw ReadAloudImportError.emptyContent
         }
@@ -68,6 +69,7 @@ nonisolated enum ReadAloudContentNormalizer {
         var manifestEntries: [ContentManifestItem] = []
 
         for input in ordered {
+            try Task.checkCancellation()
             guard input.order >= 0,
                   seenOrders.insert(input.order).inserted,
                   seenIDs.insert(input.id).inserted else {
@@ -111,6 +113,7 @@ nonisolated enum ReadAloudContentNormalizer {
             throw ReadAloudImportError.emptyContent
         }
 
+        try Task.checkCancellation()
         let revision = try ProjectContentRevision.project(
             manifestItems: manifestEntries,
             items: items

@@ -53,6 +53,7 @@ struct ProjectReaderRuntimeHost: View {
                 )
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle(
             runtime?.project?.title ?? initialTitle
         )
@@ -154,6 +155,7 @@ struct ProjectReaderView: View {
                 )
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle(
             displayedState?.item.title
                 ?? runtime.project?.title
@@ -1192,7 +1194,7 @@ private struct ReaderChaptersSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 ForEach(filteredItems) { state in
                     Button {
                         onSelect(state.id)
@@ -1287,6 +1289,7 @@ private struct ReaderChaptersSheet: View {
                 text: $searchText,
                 prompt: "Search Chapters"
             )
+            .readAloudThemeSurface()
             .navigationTitle("Chapters")
             .navigationBarTitleDisplayMode(
                 .inline
@@ -1466,6 +1469,7 @@ private struct ReaderAppearanceSheet: View {
                     )
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle(
                 "Reader Appearance"
             )
@@ -1492,7 +1496,7 @@ private struct ReaderItemInfoSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 Section("Chapter") {
                     LabeledContent(
                         "Title",
@@ -1550,6 +1554,7 @@ private struct ReaderItemInfoSheet: View {
                     .font(.footnote)
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Chapter Info")
             .navigationBarTitleDisplayMode(
                 .inline

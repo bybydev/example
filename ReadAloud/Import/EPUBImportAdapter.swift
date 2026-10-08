@@ -6,6 +6,7 @@ nonisolated struct EPUBImportAdapter: ReadAloudDocumentImporting {
         from url: URL,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> NormalizedImportDocument {
+        try Task.checkCancellation()
         let parser = EPUBParser()
         let document = try await parser.parseAsync(
             fileURL: url,
@@ -21,6 +22,7 @@ nonisolated struct EPUBImportAdapter: ReadAloudDocumentImporting {
             )
         }
 
+        try Task.checkCancellation()
         progress?(
             ReadAloudImportProgress(
                 stage: .normalizing,
@@ -35,6 +37,7 @@ nonisolated struct EPUBImportAdapter: ReadAloudDocumentImporting {
         var itemIDs: [UUID] = []
         itemIDs.reserveCapacity(sections.count)
         for section in sections {
+            try Task.checkCancellation()
             let id = UUID()
             itemIDs.append(id)
             itemIDByPath[canonicalEPUBPath(section.sourcePath), default: id] = id
@@ -42,6 +45,7 @@ nonisolated struct EPUBImportAdapter: ReadAloudDocumentImporting {
         let parentPathByPath = tocParentPaths(document.tableOfContents)
 
         let items = try sections.enumerated().map { index, section in
+            try Task.checkCancellation()
             let text = ReadAloudContentNormalizer.normalizeSpokenText(
                 section.text
             )

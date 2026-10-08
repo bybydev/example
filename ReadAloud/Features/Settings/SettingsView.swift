@@ -104,7 +104,7 @@ struct SettingsView: View {
     #endif
 
     var body: some View {
-        List {
+        ReadAloudThemedList {
             ProPlanSettingsSection(
                 purchaseManager:
                     purchases,
@@ -213,6 +213,7 @@ struct SettingsView: View {
             }
             #endif
         }
+        .readAloudThemeSurface()
         .navigationTitle("Settings")
         .sheet(
             isPresented:

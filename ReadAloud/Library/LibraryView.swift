@@ -1,10 +1,12 @@
 import AppFoundation
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
     @Environment(PurchaseManager.self) private var purchases
+    @Environment(\.appFoundationTheme) private var theme
     @State private var model = LibraryModel()
     @State private var isFileImporterPresented = false
     @State private var allowedContentTypes: [UTType] = [.data]
@@ -15,7 +17,7 @@ struct LibraryView: View {
     @State private var deleteTarget: LibraryModel.Entry?
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
-    @State private var importTask: Task<Void, Never>?
+    @State private var pendingPasteImport: PasteDraft?
     @State private var paywallPresented = false
 
     var body: some View {
@@ -33,6 +35,7 @@ struct LibraryView: View {
                 libraryContent
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle("Library")
         .searchable(
             text: $model.searchText,
@@ -42,8 +45,39 @@ struct LibraryView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 sortMenu
-                addMenu
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if model.isImporting && model.importProgress == nil {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Cancelling import…")
+                            .font(.subheadline)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+                }
+
+                if model.didLoad {
+                    HStack {
+                        Spacer(minLength: 0)
+                        floatingAddMenu
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .onDisappear {
+            model.cancelImport()
         }
         .refreshable {
             await model.refresh()
@@ -59,20 +93,32 @@ struct LibraryView: View {
             case .success(let url):
                 startFileImport(url)
             case .failure(let error):
+                let cocoaError = error as NSError
+                guard !(error is CancellationError),
+                      !(cocoaError.domain == NSCocoaErrorDomain
+                        && cocoaError.code == NSUserCancelledError) else {
+                    return
+                }
                 model.errorMessage = error.localizedDescription
             }
         }
-        .sheet(isPresented: $isPastePresented) {
+        .sheet(
+            isPresented: $isPastePresented,
+            onDismiss: {
+                guard let draft = pendingPasteImport else { return }
+                pendingPasteImport = nil
+                startPasteImport(text: draft.text, title: draft.title)
+            }
+        ) {
             PasteTextSheet(
                 draft: $pasteDraft,
                 onCancel: {
+                    pendingPasteImport = nil
                     isPastePresented = false
                 },
                 onImport: {
-                    let text = pasteDraft.text
-                    let title = pasteDraft.title
+                    pendingPasteImport = pasteDraft
                     isPastePresented = false
-                    startPasteImport(text: text, title: title)
                 }
             )
         }
@@ -93,7 +139,7 @@ struct LibraryView: View {
                 get: { model.importProgress != nil },
                 set: { presented in
                     if !presented {
-                        importTask?.cancel()
+                        model.cancelImport()
                     }
                 }
             )
@@ -102,10 +148,9 @@ struct LibraryView: View {
                 ImportProgressSheet(
                     progress: progress,
                     onCancel: {
-                        importTask?.cancel()
+                        model.cancelImport()
                     }
                 )
-                .interactiveDismissDisabled()
             }
         }
         .alert(
@@ -190,7 +235,7 @@ struct LibraryView: View {
     }
 
     private var libraryContent: some View {
-        List {
+        ReadAloudThemedList {
             if let entry = model.continueListening {
                 Section("Continue Listening") {
                     NavigationLink {
@@ -277,13 +322,6 @@ struct LibraryView: View {
             Label("Your Library Is Empty", systemImage: "books.vertical")
         } description: {
             Text("Add a book, PDF, or document and listen completely on your device.")
-        } actions: {
-            Menu {
-                addMenuItems
-            } label: {
-                Label("Add a Document", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -306,13 +344,25 @@ struct LibraryView: View {
         .accessibilityLabel("Sort Library")
     }
 
-    private var addMenu: some View {
+    private var floatingAddMenu: some View {
         Menu {
             addMenuItems
         } label: {
             Image(systemName: "plus")
+                .foregroundStyle(
+                    theme.appearance.preferredColorScheme == .dark
+                        ? theme.backgroundColor : Color.white
+                )
+                .font(.title2.weight(.semibold))
+                .frame(width: 28, height: 28)
         }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
         .accessibilityLabel("Add to Library")
+        .accessibilityHint("Import a book, PDF, document, or pasted text")
+        .disabled(model.isImporting)
     }
 
     @ViewBuilder
@@ -346,7 +396,6 @@ struct LibraryView: View {
         Button {
             guard canCreateProject()
             else { return }
-            pasteDraft = PasteDraft()
             isPastePresented = true
         } label: {
             Label("Paste Text", systemImage: "doc.on.clipboard")
@@ -394,6 +443,8 @@ struct LibraryView: View {
     private func canCreateProject()
         -> Bool
     {
+        guard !model.isImporting else { return false }
+
         let allowed =
             ReadAloudAccessPolicy
                 .canCreateProject(
@@ -421,16 +472,13 @@ struct LibraryView: View {
     }
 
     private func startFileImport(_ url: URL) {
-        importTask?.cancel()
-        guard canCreateProject()
-        else { return }
+        guard canCreateProject() else { return }
 
-        importTask = Task {
+        Task {
             _ = await model.importFile(
                 url,
                 hasPro: purchases.hasPro
             )
-            importTask = nil
         }
     }
 
@@ -438,15 +486,15 @@ struct LibraryView: View {
         text: String,
         title: String
     ) {
-        importTask?.cancel()
-        importTask = Task {
-            _ = await model.importPaste(
+        guard canCreateProject() else { return }
+
+        Task {
+            let imported = await model.importPaste(
                 text: text,
                 suggestedTitle: title,
                 hasPro: purchases.hasPro
             )
-            importTask = nil
-            if model.errorMessage == nil {
+            if imported && pasteDraft.text == text && pasteDraft.title == title {
                 pasteDraft = PasteDraft()
             }
         }
@@ -553,6 +601,7 @@ private struct LibraryIssuesSheet: View {
                 }
                 .padding(.vertical, 3)
             }
+            .readAloudThemeSurface()
             .navigationTitle("Library Issues")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -570,7 +619,7 @@ private struct ProjectInfoSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 Section {
                     HStack(alignment: .top, spacing: 16) {
                         ProjectArtworkView(
@@ -616,6 +665,7 @@ private struct ProjectInfoSheet: View {
                     }
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Project Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -650,6 +700,7 @@ private struct PasteTextSheet: View {
                         .frame(minHeight: 240)
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Paste Text")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

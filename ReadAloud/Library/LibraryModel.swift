@@ -40,6 +40,12 @@ final class LibraryModel {
     var sortOption: SortOption = .recentlyUpdated
     var errorMessage: String?
 
+    private var importSessionID: UUID?
+    private var importWorker: Task<ReadAloudImportResult, Error>?
+    private var importCancellationRequested = false
+
+    var isImporting: Bool { importSessionID != nil }
+
     private let projectStore: ProjectStore?
     private let importer: ReadAloudImportCoordinator?
     private let initializationError: String?
@@ -157,50 +163,11 @@ final class LibraryModel {
         _ url: URL,
         hasPro: Bool
     ) async -> Bool {
-        do {
-            try ReadAloudAccessPolicy
-                .requireLibraryCapacity(
-                    existingProjectCount:
-                        entries.count,
-                    hasPro: hasPro
-                )
-        } catch {
-            errorMessage =
-                Self.message(for: error)
-            return false
-        }
-
-        guard let importer else {
-            errorMessage = initializationError ?? "Import is unavailable."
-            return false
-        }
-
-        importProgress = ReadAloudImportProgress(
-            stage: .preparing,
-            fractionCompleted: 0,
-            detail: url.lastPathComponent
+        await importSource(
+            .file(url),
+            detail: url.lastPathComponent,
+            hasPro: hasPro
         )
-
-        do {
-            _ = try await importer.importSource(
-                .file(url),
-                progress: { [weak self] value in
-                    Task { @MainActor in
-                        self?.importProgress = value
-                    }
-                }
-            )
-            importProgress = nil
-            await refresh()
-            return true
-        } catch is CancellationError {
-            importProgress = nil
-            return false
-        } catch {
-            importProgress = nil
-            errorMessage = Self.message(for: error)
-            return false
-        }
     }
 
     func importPaste(
@@ -208,16 +175,35 @@ final class LibraryModel {
         suggestedTitle: String?,
         hasPro: Bool
     ) async -> Bool {
+        await importSource(
+            .pastedText(text, suggestedTitle: suggestedTitle),
+            detail: "Pasted Text",
+            hasPro: hasPro
+        )
+    }
+
+    func cancelImport() {
+        guard isImporting else { return }
+        importCancellationRequested = true
+        importWorker?.cancel()
+        // Dismiss immediately, even if a synchronous parser is still unwinding.
+        importProgress = nil
+    }
+
+    private func importSource(
+        _ source: ReadAloudImportSource,
+        detail: String,
+        hasPro: Bool
+    ) async -> Bool {
+        guard !isImporting, !Task.isCancelled else { return false }
+
         do {
-            try ReadAloudAccessPolicy
-                .requireLibraryCapacity(
-                    existingProjectCount:
-                        entries.count,
-                    hasPro: hasPro
-                )
+            try ReadAloudAccessPolicy.requireLibraryCapacity(
+                existingProjectCount: entries.count,
+                hasPro: hasPro
+            )
         } catch {
-            errorMessage =
-                Self.message(for: error)
+            errorMessage = Self.message(for: error)
             return false
         }
 
@@ -226,35 +212,79 @@ final class LibraryModel {
             return false
         }
 
+        let sessionID = UUID()
+        importSessionID = sessionID
+        importCancellationRequested = false
+        errorMessage = nil
         importProgress = ReadAloudImportProgress(
             stage: .preparing,
             fractionCompleted: 0,
-            detail: "Pasted Text"
+            detail: detail
         )
 
-        do {
-            _ = try await importer.importSource(
-                .pastedText(
-                    text,
-                    suggestedTitle: suggestedTitle
-                ),
-                progress: { [weak self] value in
-                    Task { @MainActor in
-                        self?.importProgress = value
-                    }
-                }
+        let reportProgress: @Sendable (ReadAloudImportProgress) -> Void = {
+            [weak self] value in
+            Task { @MainActor [weak self] in
+                self?.receiveImportProgress(value, sessionID: sessionID)
+            }
+        }
+        // Parsing, source copying, and normalization must not inherit MainActor.
+        let worker = Task.detached(priority: .userInitiated) {
+            try await importer.importSource(
+                source,
+                maximumProjectCount: hasPro
+                    ? nil : ReadAloudAccessPolicy.freeProjectLimit,
+                progress: reportProgress
             )
-            importProgress = nil
+        }
+        importWorker = worker
+        defer { finishImport(sessionID: sessionID) }
+
+        do {
+            _ = try await withTaskCancellationHandler {
+                try await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            // A successful result means the atomic publish already committed.
+            // Keep it even when Cancel raced with the final move.
+            finishImport(sessionID: sessionID)
             await refresh()
             return true
-        } catch is CancellationError {
-            importProgress = nil
-            return false
         } catch {
-            importProgress = nil
-            errorMessage = Self.message(for: error)
+            let wasCancelled = importCancellationRequested
+                || worker.isCancelled
+                || Task.isCancelled
+                || (error is CancellationError)
+            finishImport(sessionID: sessionID)
+            if !wasCancelled {
+                errorMessage = Self.message(for: error)
+            }
             return false
         }
+    }
+
+    private func receiveImportProgress(
+        _ value: ReadAloudImportProgress,
+        sessionID: UUID
+    ) {
+        guard importSessionID == sessionID,
+              !importCancellationRequested,
+              importWorker?.isCancelled == false,
+              importProgress != nil,
+              value.stage != .finished else {
+            return
+        }
+        importProgress = value
+    }
+
+    private func finishImport(sessionID: UUID) {
+        guard importSessionID == sessionID else { return }
+        // Invalidate the session before any queued callback can run.
+        importSessionID = nil
+        importWorker = nil
+        importCancellationRequested = false
+        importProgress = nil
     }
 
     func sourceLabel(_ type: ProjectSourceType) -> String {

@@ -781,7 +781,7 @@ final class ProjectRuntime {
                 hasPro: hasPro
             )
 
-        let requests = itemStates.compactMap { entry in
+        let requests: [ProjectGenerationRequest] = itemStates.compactMap { entry -> ProjectGenerationRequest? in
             switch entry.generationStatus.state {
             case .readyOffline, .generating, .waiting:
                 return nil

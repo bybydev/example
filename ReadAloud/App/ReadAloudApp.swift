@@ -47,10 +47,8 @@ struct ReadAloudApp: App {
                             ReadAloudThemeCatalog
                                 .catalog,
                         stateStore:
-                            UserDefaultsThemeStateStore(
-                                storageKey:
-                                    "com.hoangbkit.readaloud.theme-state"
-                            ),
+                            ReadAloudThemeCatalog
+                                .makeStateStore(),
                         previewBehavior:
                             .disabled
                     )
@@ -60,6 +58,7 @@ struct ReadAloudApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .readAloudThemeSurface()
                 .environment(
                     purchaseManager
                 )

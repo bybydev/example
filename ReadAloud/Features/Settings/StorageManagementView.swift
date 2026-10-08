@@ -203,7 +203,7 @@ struct StorageManagementView: View {
         false
 
     var body: some View {
-        List {
+        ReadAloudThemedList {
             if model.isLoading
                 && !model.didLoad
             {
@@ -216,6 +216,7 @@ struct StorageManagementView: View {
                 maintenanceSection
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle("Storage")
         .task {
             await model.loadIfNeeded()
@@ -387,7 +388,7 @@ private struct ProjectStorageManagementView:
         false
 
     var body: some View {
-        List {
+        ReadAloudThemedList {
             if let storage =
                 model.breakdown(
                     projectID: projectID
@@ -443,6 +444,7 @@ private struct ProjectStorageManagementView:
                 )
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle(
             model.breakdown(
                 projectID: projectID

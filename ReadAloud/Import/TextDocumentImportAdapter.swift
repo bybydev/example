@@ -12,6 +12,7 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
         from url: URL,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> NormalizedImportDocument {
+        try Task.checkCancellation()
         progress?(
             ReadAloudImportProgress(
                 stage: .extracting,
@@ -24,12 +25,14 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
             priority: .userInitiated
         ) {
             try Task.checkCancellation()
-            return try extractor.extract(
+            let document = try extractor.extract(
                 from: url,
                 options: TextExtractionOptions(
                     startAccessingSecurityScopedResource: false
                 )
             )
+            try Task.checkCancellation()
+            return document
         }
 
         let document = try await withTaskCancellationHandler {
@@ -38,6 +41,7 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
             extractionTask.cancel()
         }
 
+        try Task.checkCancellation()
         progress?(
             ReadAloudImportProgress(
                 stage: .normalizing,
@@ -72,14 +76,16 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
     private func normalizedItems(
         _ document: ExtractedTextDocument
     ) throws -> [NormalizedImportItem] {
-        let meaningfulSegments = document.segments.filter {
-            !ReadAloudContentNormalizer.normalizeSpokenText($0.text).isEmpty
+        let meaningfulSegments = try document.segments.filter {
+            try Task.checkCancellation()
+            return !ReadAloudContentNormalizer.normalizeSpokenText($0.text).isEmpty
         }
 
         if !meaningfulSegments.isEmpty {
             return try meaningfulSegments.enumerated().map {
                 index,
                 segment in
+                try Task.checkCancellation()
                 let metadataTitle = segment.metadata["title"]
                     ?? segment.metadata["name"]
                 return NormalizedImportItem(
@@ -100,6 +106,7 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
             }
         }
 
+        try Task.checkCancellation()
         let text = ReadAloudContentNormalizer.normalizeSpokenText(
             document.text
         )

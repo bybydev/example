@@ -6,6 +6,7 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
         from url: URL,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> NormalizedImportDocument {
+        try Task.checkCancellation()
         let parser = PdfParser(
             configuration: PdfParserConfiguration(
                 extractCoverImage: true,
@@ -26,6 +27,7 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
             }
         )
 
+        try Task.checkCancellation()
         progress?(
             ReadAloudImportProgress(
                 stage: .normalizing,
@@ -38,6 +40,7 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
         items.reserveCapacity(chapters.count)
 
         for chapter in chapters {
+            try Task.checkCancellation()
             let text = ReadAloudContentNormalizer.normalizeSpokenText(
                 chapter.plainText
             )

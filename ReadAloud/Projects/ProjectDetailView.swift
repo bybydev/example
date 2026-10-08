@@ -43,6 +43,7 @@ struct ProjectDetailRuntimeHost: View {
                 )
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle(runtime?.project?.title ?? initialTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: projectID) {
@@ -137,6 +138,7 @@ struct ProjectDetailView: View {
                 )
             }
         }
+        .readAloudThemeSurface()
         .navigationTitle(model.project?.title ?? initialTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -287,7 +289,7 @@ struct ProjectDetailView: View {
     private func projectContent(
         _ project: ProjectDocument
     ) -> some View {
-        List {
+        ReadAloudThemedList {
             Section {
                 projectHeader(project)
                     .listRowInsets(
@@ -841,7 +843,7 @@ private struct ProjectItemRow: View {
             return isPaused ? "Paused" : "Playing"
         }
 
-        switch entry.generationStatus.state {
+        return switch entry.generationStatus.state {
         case .readyOffline: "Ready Offline"
         case .generating: "Generating"
         case .waiting: "Waiting"
@@ -857,7 +859,7 @@ private struct ProjectItemRow: View {
                 : "play.circle.fill"
         }
 
-        switch entry.generationStatus.state {
+        return switch entry.generationStatus.state {
         case .readyOffline: "checkmark.circle.fill"
         case .generating: "waveform"
         case .waiting: "clock"
@@ -877,7 +879,7 @@ private struct ProjectDetailInfoSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 Section("Project") {
                     LabeledContent("Title", value: project.title)
                     if let author = project.author {
@@ -917,6 +919,7 @@ private struct ProjectDetailInfoSheet: View {
                     }
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Project Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -935,7 +938,7 @@ private struct ProjectItemInfoSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 Section("Section") {
                     LabeledContent(
                         "Title",
@@ -990,6 +993,7 @@ private struct ProjectItemInfoSheet: View {
                     )
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Chapter Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1224,6 +1228,7 @@ private struct OfflineAudioSheet: View {
                     }
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Offline Audio")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(
@@ -1290,7 +1295,7 @@ private struct ProjectStorageSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            ReadAloudThemedList {
                 if let storage =
                     model.storageBreakdown
                 {
@@ -1368,6 +1373,7 @@ private struct ProjectStorageSheet: View {
                     )
                 }
             }
+            .readAloudThemeSurface()
             .navigationTitle("Storage")
             .navigationBarTitleDisplayMode(
                 .inline

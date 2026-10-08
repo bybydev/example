@@ -25,6 +25,13 @@ Library
       -> Reader
 ```
 
+The app uses one NavigationStack rooted in Library, with no tab bar. The top-right
+toolbar opens Settings beside the sort menu. A circular floating plus button at the lower
+right, with no visible text label, offers EPUB, PDF, document, and Paste Text
+imports in both empty and populated
+Library states. Its bottom safe-area inset reserves space in the list and keeps
+it above the root mini-player.
+
 A single mini-player follows active playback across Library and Settings.
 
 ## App root
@@ -38,7 +45,16 @@ ProjectRuntimeManager
 ```
 
 `PurchaseManager` is the only production entitlement source.
-`ThemeManager` applies the free/Pro theme catalog.
+`ThemeManager` applies the free/Pro theme catalog. ReadAloud Light and ReadAloud
+Dark are free, with ivory/teal surfaces and burnt-orange accents matching the app
+icon. ReadAloud Dark is the default and free fallback. The user chooses Light or
+Dark explicitly; there is no System option. The existing premium themes remain
+Pro.
+
+AppFoundation retains theme persistence, access, and color-scheme ownership.
+Themed lists and reader surfaces apply the palette beyond control tint.
+The existing state key is retained; old Midnight/Paper selections and committed
+bases migrate to ReadAloud Dark/Light without resetting other preferences.
 `ProjectRuntimeManager` owns reference-stable loaded project runtimes.
 
 Views receive these through the SwiftUI environment.
@@ -48,6 +64,17 @@ Views receive these through the SwiftUI environment.
 `LibraryModel` uses `ProjectStore.catalog()` to load lightweight project
 snapshots. The Library does not hydrate all chapter content just to render the
 shelf.
+
+`LibraryModel` owns one import worker and session at a time for EPUB, PDF,
+documents, and pasted text. The worker runs outside MainActor. Queued progress
+updates are accepted only for the active, non-cancelled session; terminal
+callbacks cannot reopen a completed import sheet.
+
+Cancel or swipe dismissal closes the progress sheet immediately and cancels
+the worker. The Library remains usable while any synchronous parser finishes
+unwinding, with new imports disabled until cleanup completes. Cancelled and
+failed pasted-text imports retain their draft. Paste import starts only after
+the editor sheet has dismissed.
 
 `ReadAloudImportCoordinator` normalizes all supported input into one durable
 project model:
@@ -70,7 +97,11 @@ hidden staging package
 
 The retained source is copied into the project package. The final package only
 becomes visible after its source, metadata, normalized content, queue, and
-optional artwork are committed successfully.
+optional artwork are committed successfully. Package creation checks cancellation
+during staging and immediately before its atomic publish. Cancellation before
+publish removes the staging package; an import already published remains a
+completed project. Free Library capacity is checked from the on-disk catalog
+within the same serialized package-creation operation.
 
 ## Durable project package
 
@@ -224,7 +255,7 @@ Free includes:
 - single-chapter offline generation
 - safe storage cleanup
 - project-level narration defaults
-- Midnight and Paper themes
+- ReadAloud Light and Dark themes
 
 Pro adds:
 
