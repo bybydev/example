@@ -300,6 +300,15 @@ extension OpenAICompatibleAdapter {
       metadata["generationID"] = value
     }
     if let value = decoded?.provider { metadata["provider"] = value }
+    if definition.behavior == .openRouter, let cost = decoded?.usage?.cost?.value {
+      metadata["openrouter.costUSD"] = ChatBilling.decimalString(cost)
+      // BYOK usage.cost is the OpenRouter account charge. Upstream provider
+      // billing has a separate scope; never silently call this a full total.
+      if decoded?.usage?.isBYOK == true { metadata[ChatBilling.reportedCostCompleteKey] = "false" }
+    }
+    if let tier = decoded?.serviceTier, !["default", "standard", "auto"].contains(tier) {
+      metadata[ChatBilling.unsupportedContextKey] = "service tier: " + tier
+    }
     return metadata
   }
 
@@ -321,4 +330,3 @@ extension OpenAICompatibleAdapter {
     }
   }
 }
-

@@ -24,7 +24,7 @@ BYOK telemetry
         +-- diagnostics
 ```
 
-Persisted `ChatMessage` billing metadata remains authoritative for historical token counts, request counts, tool-call counts, pricing snapshots, and cost. Telemetry supplements it with data such as time to first token, request duration, throughput, failure classification, tool timing, and MCP timing.
+Persisted `ChatMessage` usage and billing metadata describe the current saved chat history, including token counts, request counts, tool-call counts, and recorded cost snapshots. This is not a provider billing ledger: regeneration, editing earlier turns, and deleting chats can remove paid responses and reduce totals. Costs may be provider-reported, estimated, incomplete, or unavailable. Telemetry supplements it with data such as time to first token, request duration, throughput, failure classification, tool timing, and MCP timing.
 
 Clearing or losing telemetry therefore does not remove historical chat usage or spend.
 
@@ -146,7 +146,19 @@ The Analytics screen combines two sources without conflating them:
 
 Supported ranges include Today, 7 Days, 30 Days, Month, and All. Conversation-level drill-down uses the same accounting/telemetry split.
 
-If retained telemetry exceeds the bounded recent-event query, the UI explicitly states that performance/reliability values use only the latest query window. Usage and spend remain complete relative to persisted chat history.
+If retained telemetry exceeds the bounded recent-event query, the UI explicitly states that performance/reliability values use only the latest query window. Usage and spend remain available from persisted chat history; billing completeness is independent of telemetry retention.
+
+### Request billing and pricing
+
+`ChatRuntime` captures a pricing rule before each inference request and saves one receipt per attempted request in message metadata. It resolves cached model-API prices first, then the bundled direct-provider catalog, then unavailable pricing. Final complete reported cost overrides calculation. Mixed reported/calculated tool rounds retain both amounts and remain estimates. Missing usage survives aggregation because each receipt retains its own completeness; a failed/cancelled later request does not erase earlier paid rounds.
+
+The lightweight conversation index already preserves usage and metadata, including these receipts. Analytics does not need to load every chat shard or reprice old responses. Older calculated records are complete only when one request and both saved plain-token dimensions establish completeness; ambiguous old totals retain their recorded amounts with uncertainty.
+
+See [Model pricing](ModelPricing.md) for concrete coverage, units, source URLs, and supported billing contexts. Complete estimates are complete under the saved rule, not authoritative provider charges. Incomplete estimates use `~` and a partial label; only a provider-reported known subtotal can use `≥`.
+
+### Read outcomes and recovery
+
+The iOS dashboard uses `TelemetryRecorder.loadAnalytics`, which succeeds only when both the required event and statistics reads succeed. A successful empty read shows the healthy-empty state. Either failure, even before the recorder disables after three failures, shows unavailable performance data and hides performance/reliability details across the dashboard, conversation, and breakdowns. Retry resets session failure state and then reloads; resetting health alone does not count as recovery. Saved usage and spend remain visible.
 
 ## Diagnostics
 

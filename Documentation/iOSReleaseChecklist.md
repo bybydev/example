@@ -150,3 +150,26 @@ Projects validation results: **not run**. Replace this note with the build ident
 Implementation boundaries: no Projects architecture redesign or macOS UI changes. The coordinated server deletion commits Project cleanup first, then removes the credential and commits MCP deletion, restoring the credential if that commit fails. Stores remain separate persistence domains; a later-stage failure can leave already-committed Project cleanup in place, and the retained server allows idempotent retry. Existing exposed names and empty-configuration semantics are preserved.
 
 Deferred to iOS 1.0.1/later: empty Project MCP configuration normalization; earlier preset-limit/name validation UX; missing Project-file blob reconciliation; Sources preview/open. Separate explicit-empty chat-override semantics are also outside issue #44.
+
+
+## Analytics release smoke path (issue #46)
+
+Analytics uses remaining saved chat history, not a provider billing ledger. Regeneration, editing earlier turns, and deletion can reduce Spend and Monthly Budget totals. Free and Pro both disclose this. Budget warnings exclude other-app API usage and do not enforce provider limits.
+
+Code completion does not mark these checks as passed. Record the exact Release/TestFlight build and physical iPhone results before submission. No CI setup or dispatch is part of this issue.
+
+- [ ] Free monthly usage and Pro Today/7D/30D/Month/All remain gated correctly; history-mutation copy is visible in both and per-conversation details.
+- [ ] Regenerate, edit an earlier turn, and delete a chat; remaining-history totals follow the copy.
+- [ ] Compare complete reported cost, complete estimate, partial calculation, and unavailable cost in Analytics, Message Info, conversation details, and provider/model rows. Estimates never claim a guaranteed minimum.
+- [ ] Exercise missing input/output prices and usage, explicit zero prices/tokens, and a tool round with missing usage followed by a priced round. Known subtotals remain, and completeness does not recover from summing unknown usage as zero.
+- [ ] OpenRouter non-streaming and final streaming cost (including zero) override prices. Multiple tool rounds use final totals once; mixed reported/estimated rounds retain all known costs. BYOK fees remain scoped/incomplete without verified full upstream semantics.
+- [ ] xAI reported USD ticks remain preferred; native cache reads/writes, Anthropic write duration, Gemini thinking output/cache storage, OpenAI context tiers, and DeepSeek time buckets remain accurate or explicitly incomplete.
+- [ ] Offline catalog fallback, unknown exact IDs, invalid catalog data, and custom endpoints do not invent pricing. See [covered IDs and pricing rules](ModelPricing.md).
+- [ ] Edit a custom account endpoint/configuration after discovering prices: its cached rates disappear, model selections/capabilities remain, and old in-flight discovery cannot restore stale rates. Refresh discovers new rates; renaming retains them. Change the endpoint between tool rounds and verify the next round does not borrow the turn's original rates.
+- [ ] Cancel or fail the transport after a provider completion event: the observed usage/cost remains in Message Info, Analytics, and the lightweight index after relaunch. The completed request is not also counted as a failed provider request. Cancellation before completion remains incomplete/unknown.
+- [ ] Relaunch and inspect the lightweight index: numeric costs, completeness, source/version, and per-request rules remain stable after model/catalog price changes, without hydrating all chat shards.
+- [ ] Budget distinguishes no requests, all unknown costs, partial cost, and complete cost; incomplete costs below threshold show uncertainty rather than headroom. Partial/estimated threshold warnings identify the recorded subtotal/estimate. Budget remains current-calendar-month while another range is selected.
+- [ ] Successful empty and populated telemetry loads render correctly. Fail the events read and the statistics read separately; neither failure appears healthy empty or valid zero. Check disabled recorder, failed Retry, and successful Retry.
+- [ ] Telemetry failure keeps usage/spend usable, hides untrusted performance/reliability throughout, and exposes no raw storage error in ordinary Analytics.
+
+Analytics validation results: **not run on device**. Swift package regression tests are added but **not executed in the implementation workspace (Swift/Xcode unavailable)**. Replace these notes with actual results before release.

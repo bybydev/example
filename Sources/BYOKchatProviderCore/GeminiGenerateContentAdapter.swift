@@ -689,9 +689,10 @@ private struct GeminiUsage: Decodable {
   var normalized: ProviderUsage {
     ProviderUsage(
       inputTokens: promptTokenCount,
-      outputTokens: candidatesTokenCount,
-      cachedInputTokens: cachedContentTokenCount,
-      reasoningTokens: thoughtsTokenCount
+      outputTokens: candidatesTokenCount.map { $0 + (thoughtsTokenCount ?? 0) },
+      cachedInputTokens: cachedContentTokenCount ?? (promptTokenCount == nil ? nil : 0),
+      reasoningTokens: thoughtsTokenCount,
+      hasUnpricedCharges: (cachedContentTokenCount ?? 0) > 0 ? true : nil
     )
   }
 }

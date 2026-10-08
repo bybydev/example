@@ -229,9 +229,17 @@ public actor ProviderRuntime {
   @discardableResult
   public func refreshModels(accountID: ProviderAccountID) async throws -> [AccountModelRecord] {
     let resolved = try await accounts.resolvedAccount(id: accountID)
+    // Capture the configuration actually sent to discovery, rather than a
+    // separate workspace read that could precede an account edit.
+    let expectedAccount = ProviderAccount(
+      kind: resolved.kind, id: resolved.id, providerID: resolved.providerID, label: resolved.label,
+      chatCompletionsPath: resolved.chatCompletionsPath, modelsPath: resolved.modelsPath,
+      authChoice: resolved.authChoice, baseURLOverride: resolved.baseURLOverride,
+      additionalHeaders: resolved.additionalHeaders, metadata: resolved.metadata
+    )
     let adapter = makeAdapter(for: resolved)
     let models = try await adapter.listModels(account: resolved)
-    try await workspace.mergeModels(models, for: accountID)
+    try await workspace.mergeModels(models, for: accountID, expectedAccount: expectedAccount)
     return await workspace.modelRecords(for: accountID)
   }
 

@@ -6,6 +6,7 @@ struct ConversationAnalyticsView: View {
   let conversation: ChatConversation
   let range: UsageRange
   let telemetryEvents: [TelemetryEvent]
+  var telemetryAvailable: Bool = true
 
   private var messages: [ChatMessage] {
     let startDate = range.startDate(reference: .now)
@@ -49,14 +50,19 @@ struct ConversationAnalyticsView: View {
         Text("Usage")
           .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
-        if aggregate.hasPartialCost {
-          Text("Spend is partial because some responses do not have known pricing.")
-            .foregroundStyle(theme.secondaryForegroundColor)
-        }
+        Text(usageHistoryFootnote(aggregate))
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
       .listRowBackground(theme.surfaceColor)
 
-      if performance.providerRequestCount > 0 {
+      if !telemetryAvailable {
+        Section {
+          Text("Performance data is unavailable. Saved usage and spend remain available.")
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      if telemetryAvailable && performance.providerRequestCount > 0 {
         Section("Performance") {
           LabeledContent("Median TTFT", value: usageDuration(performance.medianTTFTMilliseconds))
           LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
@@ -77,7 +83,7 @@ struct ConversationAnalyticsView: View {
         .listRowBackground(theme.surfaceColor)
       }
 
-      if performance.toolCallCount > 0 || performance.mcpRequestCount > 0 {
+      if telemetryAvailable && (performance.toolCallCount > 0 || performance.mcpRequestCount > 0) {
         Section("Tools & MCP") {
           if performance.toolCallCount > 0 {
             LabeledContent("Tool calls", value: performance.toolCallCount.formatted())

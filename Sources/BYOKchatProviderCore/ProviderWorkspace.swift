@@ -137,6 +137,18 @@ public actor ProviderWorkspaceStore {
     var value = account
     value.updatedAt = .now
     if let index = state.accounts.firstIndex(where: { $0.id == value.id }) {
+      if !state.accounts[index].hasSamePricingContext(as: value) {
+        for modelIndex in state.modelRecords.indices
+        where state.modelRecords[modelIndex].accountID == value.id {
+          // Keep model selections and capabilities, but never reuse prices
+          // discovered from an endpoint/configuration the account no longer uses.
+          state.modelRecords[modelIndex].model.promptPricePerToken = nil
+          state.modelRecords[modelIndex].model.completionPricePerToken = nil
+          state.modelRecords[modelIndex].model.cachedInputPricePerToken = nil
+          state.modelRecords[modelIndex].model.cacheWritePricePerToken = nil
+          state.modelRecords[modelIndex].model.hasAdditionalPricingDimensions = nil
+        }
+      }
       state.accounts[index] = value
     } else {
       state.accounts.append(value)
@@ -268,8 +280,15 @@ public actor ProviderWorkspaceStore {
   }
 
   public func mergeModels(
-    _ models: [ProviderModel], for accountID: ProviderAccountID, at date: Date = .now
+    _ models: [ProviderModel], for accountID: ProviderAccountID, at date: Date = .now,
+    expectedAccount: ProviderAccount? = nil
   ) async throws {
+    if let expectedAccount {
+      let current = try account(id: accountID)
+      // Discovery may finish after the user edits the endpoint. Discard that
+      // old result rather than restoring the invalidated prices.
+      guard current.hasSamePricingContext(as: expectedAccount) else { return }
+    }
     var records = Dictionary(
       uniqueKeysWithValues: state.modelRecords.filter { $0.accountID == accountID }.map {
         ($0.model.id, $0)

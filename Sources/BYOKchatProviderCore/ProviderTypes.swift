@@ -165,14 +165,24 @@ public struct ProviderUsage: Codable, Sendable, Equatable {
   public var outputTokens: Int?
   public var cachedInputTokens: Int?
   public var reasoningTokens: Int?
+  /// Included in inputTokens; long writes are a subset of cacheWriteTokens.
+  public var cacheWriteTokens: Int?
+  public var longCacheWriteTokens: Int?
+  public var hasUnpricedCharges: Bool?
   public init(
     inputTokens: Int? = nil, outputTokens: Int? = nil, cachedInputTokens: Int? = nil,
-    reasoningTokens: Int? = nil
+    reasoningTokens: Int? = nil,
+    cacheWriteTokens: Int? = nil,
+    longCacheWriteTokens: Int? = nil,
+    hasUnpricedCharges: Bool? = nil
   ) {
     self.inputTokens = inputTokens
     self.outputTokens = outputTokens
     self.cachedInputTokens = cachedInputTokens
     self.reasoningTokens = reasoningTokens
+    self.cacheWriteTokens = cacheWriteTokens
+    self.longCacheWriteTokens = longCacheWriteTokens
+    self.hasUnpricedCharges = hasUnpricedCharges
   }
 }
 
@@ -247,6 +257,9 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
   public var capabilityEvidence: ModelCapabilityEvidence?
   public var promptPricePerToken: String?
   public var completionPricePerToken: String?
+  public var cachedInputPricePerToken: String?
+  public var cacheWritePricePerToken: String?
+  public var hasAdditionalPricingDimensions: Bool?
   /// Legacy field: no longer written, decoded-and-dropped so old persisted
   /// workspaces and exports still decode.
   private var isSeed: Bool?
@@ -263,7 +276,10 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     outputModalities: Set<String> = ["text"],
     promptPricePerToken: String? = nil,
     completionPricePerToken: String? = nil,
-    capabilityEvidence: ModelCapabilityEvidence? = nil
+    capabilityEvidence: ModelCapabilityEvidence? = nil,
+    cachedInputPricePerToken: String? = nil,
+    cacheWritePricePerToken: String? = nil,
+    hasAdditionalPricingDimensions: Bool? = nil
   ) {
     self.providerID = providerID
     self.id = id
@@ -276,6 +292,9 @@ public struct ProviderModel: Codable, Sendable, Hashable, Identifiable {
     self.outputModalities = outputModalities
     self.promptPricePerToken = promptPricePerToken
     self.completionPricePerToken = completionPricePerToken
+    self.cachedInputPricePerToken = cachedInputPricePerToken
+    self.cacheWritePricePerToken = cacheWritePricePerToken
+    self.hasAdditionalPricingDimensions = hasAdditionalPricingDimensions
     self.capabilityEvidence = capabilityEvidence
     self.isSeed = nil
   }
@@ -404,6 +423,18 @@ public struct ProviderAccount: Codable, Sendable, Identifiable, Equatable {
     self.isEnabled = isEnabled
     self.createdAt = createdAt
     self.updatedAt = updatedAt
+  }
+}
+
+extension ProviderAccount {
+  /// Discovery rates belong to the endpoint and request configuration that
+  /// produced them. Presentation-only edits do not change that context.
+  func hasSamePricingContext(as other: ProviderAccount) -> Bool {
+    id == other.id && kind == other.kind && providerID == other.providerID
+      && baseURLOverride == other.baseURLOverride
+      && chatCompletionsPath == other.chatCompletionsPath && modelsPath == other.modelsPath
+      && authChoice == other.authChoice && additionalHeaders == other.additionalHeaders
+      && metadata == other.metadata
   }
 }
 

@@ -19,6 +19,19 @@ public struct TelemetryRecorderHealth: Sendable, Equatable {
   }
 }
 
+/// A successful empty query differs from a failed/unavailable telemetry read.
+public enum TelemetryAnalyticsLoadResult: Sendable {
+  case loaded(events: [TelemetryEvent], statistics: TelemetryStoreStatistics)
+  case unavailable
+}
+
+protocol TelemetryAnalyticsReading: Sendable {
+  func recentEvents(limit: Int) async throws -> [TelemetryEvent]
+  func statistics() async throws -> TelemetryStoreStatistics
+}
+
+extension TelemetrySQLiteStore: TelemetryAnalyticsReading {}
+
 public actor TelemetryRecorder {
   public static let shared = TelemetryRecorder()
 
@@ -26,6 +39,7 @@ public actor TelemetryRecorder {
   private static let maximumConsecutiveFailures = 3
 
   private let store: TelemetrySQLiteStore
+  private let analyticsReader: any TelemetryAnalyticsReading
   private let deviceID: String
   private let sessionID: String
 
@@ -40,9 +54,19 @@ public actor TelemetryRecorder {
     deviceID: String = TelemetryRecorder.loadOrCreateDeviceID(),
     sessionID: String = UUID().uuidString.lowercased()
   ) {
-    store = TelemetrySQLiteStore(databaseURL: databaseURL, configuration: configuration)
+    let store = TelemetrySQLiteStore(databaseURL: databaseURL, configuration: configuration)
+    self.store = store
+    self.analyticsReader = store
     self.deviceID = deviceID
     self.sessionID = sessionID
+  }
+
+  // Internal injection keeps required-read failure cases deterministic.
+  init(store: TelemetrySQLiteStore, analyticsReader: any TelemetryAnalyticsReading) {
+    self.store = store
+    self.analyticsReader = analyticsReader
+    self.deviceID = "test-device"
+    self.sessionID = "test-session"
   }
 
   public func record(_ event: TelemetryEvent) async {
@@ -91,6 +115,20 @@ public actor TelemetryRecorder {
     } catch {
       markFailure(error)
       return .empty
+    }
+  }
+
+  public func loadAnalytics(limit: Int = 500) async -> TelemetryAnalyticsLoadResult {
+    guard !isDisabledForSession else { return .unavailable }
+    do {
+      let events = try await analyticsReader.recentEvents(limit: limit)
+      let statistics = try await analyticsReader.statistics()
+      // Neither read can mask failure of the other by resetting health.
+      markSuccess()
+      return .loaded(events: events, statistics: statistics)
+    } catch {
+      markFailure(error)
+      return .unavailable
     }
   }
 

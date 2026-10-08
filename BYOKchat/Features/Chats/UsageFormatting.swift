@@ -32,9 +32,10 @@ func usagePricePerMillion(_ perToken: Decimal) -> String {
 }
 
 func usageAggregateCostText(_ aggregate: ChatUsageAggregate) -> String {
+  guard aggregate.assistantMessageCount > 0 else { return "No requests" }
   guard aggregate.hasKnownCost else { return "Unavailable" }
-  let prefix = aggregate.hasPartialCost ? "≥" : "~"
-  return prefix + usageFormatUSD(aggregate.costUSD)
+  let prefix = aggregate.isLowerBound ? "≥" : (aggregate.hasEstimatedCost ? "~" : "")
+  return prefix + usageFormatUSD(aggregate.costUSD) + (aggregate.hasPartialCost ? " (partial)" : "")
 }
 
 func usageFormatUSD(_ cost: Decimal) -> String {
@@ -67,4 +68,14 @@ func usageRate(_ value: Double?) -> String {
 func usagePercent(_ value: Double?) -> String {
   guard let value, value.isFinite else { return "—" }
   return value.formatted(.percent.precision(.fractionLength(0...1)))
+}
+
+
+func usageHistoryFootnote(_ aggregate: ChatUsageAggregate) -> String {
+  let cost = aggregate.hasPartialCost
+    ? "Costs are incomplete: some requests lack usage, pricing, or supported billing details. Estimates may differ from provider charges. "
+    : "Calculated costs are estimates; provider-reported costs use the reported billing scope. "
+  let scope = aggregate.scopedProviderCostMessageCount > 0
+    ? "OpenRouter BYOK subtotals include its account charge; upstream provider spend is excluded. " : ""
+  return cost + scope + "Totals come from saved chat history. Regenerating, editing, or deleting messages can reduce them. API-key usage in other apps is excluded."
 }

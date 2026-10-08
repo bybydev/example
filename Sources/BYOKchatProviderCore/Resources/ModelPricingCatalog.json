@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-10-07",
+  "currency": "USD",
+  "units": "USD per 1000000 tokens",
+  "entries": [
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-6-astra"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "10",
+        "output": "50",
+        "cachedInput": "1",
+        "cacheWrite": "12.5"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-5.6-sol"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "4",
+        "output": "20",
+        "cachedInput": "0.4",
+        "cacheWrite": "5"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-sonnet-5"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.2",
+        "cacheWrite": "2.5",
+        "longCacheWrite": "4"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-opus-5"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "5",
+        "output": "25",
+        "cachedInput": "0.5",
+        "cacheWrite": "6.25",
+        "longCacheWrite": "10"
+      }
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-3.6-flash"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "0.75",
+        "output": "3.75",
+        "cachedInput": "0.075"
+      },
+      "validUntil": "2027-01-01",
+      "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "deepseek",
+      "modelIDs": [
+        "deepseek-v4-flash",
+        "deepseek-flash"
+      ],
+      "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "0.15",
+        "output": "0.6",
+        "cachedInput": "0.003"
+      },
+      "peakMultiplier": "2"
+    },
+    {
+      "provider": "deepseek",
+      "modelIDs": [
+        "deepseek-v4-pro"
+      ],
+      "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verifiedAt": "2026-10-07",
+      "rates": {
+        "input": "0.66",
+        "output": "1.98",
+        "cachedInput": "0.022"
+      },
+      "peakMultiplier": "2"
+    }
+  ]
+}

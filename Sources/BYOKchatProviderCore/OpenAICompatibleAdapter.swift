@@ -80,7 +80,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         outputModalities: Set(wire.architecture?.outputModalities ?? ["text"]),
         promptPricePerToken: wire.pricing?.prompt,
         completionPricePerToken: wire.pricing?.completion,
-        capabilityEvidence: evidence
+        capabilityEvidence: evidence,
+        cachedInputPricePerToken: wire.pricing?.cachedInput,
+        cacheWritePricePerToken: wire.pricing?.cacheWrite,
+        hasAdditionalPricingDimensions: wire.pricing?.hasAdditionalPricingDimensions
       )
     }
     return mergeModels(seed: definition.seedModels, discovered: discovered)
@@ -269,7 +272,18 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     }
     if let value = decoded.id { responseID = value }
     if let value = decoded.model { modelID = ModelID(rawValue: value) }
-    if let value = decoded.provider { metadata["provider"] = value }
+    var incomingMetadata = responseMetadata([:], decoded)
+    // Running usage/cost events are not receipts. Only the final usage
+    // event or a terminating choice can supply an authoritative total.
+    if decoded.usage != nil {
+      metadata.removeValue(forKey: "openrouter.costUSD")
+      metadata.removeValue(forKey: ChatBilling.reportedCostCompleteKey)
+    }
+    if !decoded.choices.isEmpty && !decoded.choices.contains(where: { $0.finishReason != nil }) {
+      incomingMetadata.removeValue(forKey: "openrouter.costUSD")
+      incomingMetadata.removeValue(forKey: ChatBilling.reportedCostCompleteKey)
+    }
+    metadata.merge(incomingMetadata) { _, new in new }
     if let value = decoded.usage?.normalized {
       usage = value
       continuation.yield(.usage(value))

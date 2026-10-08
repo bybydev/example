@@ -529,6 +529,9 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       metadata["requestID"] = requestID
     }
     if let responseID = object["id"]?.stringValue { metadata["responseID"] = responseID }
+    if let tier = object["service_tier"]?.stringValue, !["default", "standard", "auto"].contains(tier) {
+      metadata[ChatBilling.unsupportedContextKey] = "service tier: " + tier
+    }
 
     let providerContinuation: ProviderToolContinuation? = output.isEmpty
       ? nil
@@ -555,7 +558,8 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       inputTokens: usage["input_tokens"]?.intValue,
       outputTokens: usage["output_tokens"]?.intValue,
       cachedInputTokens: usage["input_tokens_details"]?.objectValue?["cached_tokens"]?.intValue,
-      reasoningTokens: usage["output_tokens_details"]?.objectValue?["reasoning_tokens"]?.intValue
+      reasoningTokens: usage["output_tokens_details"]?.objectValue?["reasoning_tokens"]?.intValue,
+      cacheWriteTokens: usage["input_tokens_details"]?.objectValue?["cache_write_tokens"]?.intValue
     )
   }
 

@@ -166,3 +166,79 @@ private func account(providerID: ProviderID) -> ResolvedProviderAccount {
   #expect(model.supportedParameters.contains("max_tokens"))
   #expect(model.supportedParameters.contains("reasoning"))
 }
+
+
+@Test(arguments: ["0", "0.0123", "\"invalid\""])
+func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throws {
+  let data = Data("""
+    {"id":"r","model":"openrouter/free","choices":[{"message":{"content":"OK"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":\(cost),"is_byok":false}}
+    """.utf8)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.openRouter, transport: MockTransport(data: data))
+  let response = try await adapter.generate(request: .init(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+    account: account(providerID: "openrouter"))
+  #expect(ChatBilling.providerReportedCost(from: response.metadata) == ChatBilling.decimal(cost))
+  #expect(response.text == "OK")
+}
+
+@Test func openRouterFinalStreamingCostReplacesRunningAmount() async throws {
+  let data = """
+    data: {"model":"openrouter/free","choices":[{"delta":{"content":"OK"}}],"usage":{"cost":0.002}}
+
+    data: {"model":"openrouter/free","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.01,"is_byok":false}}
+
+    data: [DONE]
+
+    """
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.openRouter,
+    transport: MockTransport(streamChunks: [Data(data.utf8)]))
+  var final: ProviderResponse?
+  for try await event in adapter.stream(request: .init(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+    account: account(providerID: "openrouter")) {
+    if case .completed(let value) = event { final = value }
+  }
+  let response = try #require(final)
+  #expect(ChatBilling.providerReportedCost(from: response.metadata) == Decimal(string: "0.01"))
+  #expect(response.usage?.outputTokens == 5)
+}
+
+@Test func openRouterBYOKFeeDoesNotClaimCompleteInferenceCost() async throws {
+  let data = Data(#"{"model":"openrouter/free","choices":[{"message":{"content":"OK"}}],"usage":{"cost":0.01,"is_byok":true,"cost_details":{"upstream_inference_cost":0.2}}}"#.utf8)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.openRouter, transport: MockTransport(data: data))
+  let response = try await adapter.generate(request: .init(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+    account: account(providerID: "openrouter"))
+  let receipt = ChatBilling.requestBilling(metadata: response.metadata, usage: response.usage, pricing: nil)
+  #expect(receipt.costUSD == "0.01" && !receipt.isComplete)
+}
+
+@Test func billingAmountDecodesTicksWithoutDoubleRounding() throws {
+  let amount = try JSONDecoder().decode(BillingAmountWire.self, from: Data("9007199254740993".utf8))
+  #expect(amount.value == Decimal(string: "9007199254740993"))
+}
+
+@Test func openRouterMissingFinalCostDoesNotRetainRunningCost() async throws {
+  let data = """
+    data: {"model":"openrouter/free","choices":[{"delta":{"content":"OK"}}],"usage":{"cost":0.002}}
+
+    data: {"model":"openrouter/free","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+    data: [DONE]
+
+    """
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.openRouter,
+    transport: MockTransport(streamChunks: [Data(data.utf8)]))
+  for try await event in adapter.stream(request: .init(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+    account: account(providerID: "openrouter")) {
+    if case .completed(let response) = event { #expect(ChatBilling.providerReportedCost(from: response.metadata) == nil) }
+  }
+}
+
+@Test func deepSeekCacheHitsAndUnsupportedModelFeesRemainVisible() throws {
+  let usage = try JSONDecoder().decode(UsageWire.self, from: Data(#"{"prompt_tokens":100,"completion_tokens":10,"prompt_cache_hit_tokens":20}"#.utf8)).normalized
+  #expect(usage.cachedInputTokens == 20)
+  let prices = try JSONDecoder().decode(PricingWire.self, from: Data(#"{"prompt":"0.000001","completion":"0.000002","request":"0.01"}"#.utf8))
+  #expect(prices.hasAdditionalPricingDimensions == true)
+  var pricing = ModelPricingSnapshot(source: "providerModelAPI", modelID: "m", rates: .init(input: "1", output: "2"))
+  pricing.hasAdditionalPricingDimensions = true
+  let receipt = ChatBilling.requestBilling(metadata: [:], usage: .init(inputTokens: 100, outputTokens: 10), pricing: pricing)
+  #expect(!receipt.isComplete && receipt.costUSD != nil)
+}

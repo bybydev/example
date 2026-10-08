@@ -82,11 +82,17 @@ struct ChatCompletionDeltaWire: Decodable {
 
 struct UsageWire: Decodable {
   var promptTokens: Int?
+  var promptCacheHitTokens: Int?
   var completionTokens: Int?
   var promptTokensDetails: PromptTokensDetailsWire?
   var completionTokensDetails: CompletionTokensDetailsWire?
+  var cost: BillingAmountWire?
+  var isBYOK: Bool?
   enum CodingKeys: String, CodingKey {
+    case cost
+    case isBYOK = "is_byok"
     case promptTokens = "prompt_tokens"
+    case promptCacheHitTokens = "prompt_cache_hit_tokens"
     case completionTokens = "completion_tokens"
     case promptTokensDetails = "prompt_tokens_details"
     case completionTokensDetails = "completion_tokens_details"
@@ -95,19 +101,35 @@ struct UsageWire: Decodable {
     .init(
       inputTokens: promptTokens,
       outputTokens: completionTokens,
-      cachedInputTokens: promptTokensDetails?.cachedTokens,
-      reasoningTokens: completionTokensDetails?.reasoningTokens
+      cachedInputTokens: promptTokensDetails?.cachedTokens ?? promptCacheHitTokens,
+      reasoningTokens: completionTokensDetails?.reasoningTokens,
+      cacheWriteTokens: promptTokensDetails?.cacheWriteTokens,
+      hasUnpricedCharges: (promptTokensDetails?.audioTokens ?? 0) > 0
+        || (completionTokensDetails?.audioTokens ?? 0) > 0
+        || (completionTokensDetails?.imageTokens ?? 0) > 0 ? true : nil
     )
   }
 }
 
 struct PromptTokensDetailsWire: Decodable {
   var cachedTokens: Int?
-  enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens" }
+  var cacheWriteTokens: Int?
+  var audioTokens: Int?
+  enum CodingKeys: String, CodingKey {
+    case cachedTokens = "cached_tokens"
+    case cacheWriteTokens = "cache_write_tokens"
+    case audioTokens = "audio_tokens"
+  }
 }
 struct CompletionTokensDetailsWire: Decodable {
   var reasoningTokens: Int?
-  enum CodingKeys: String, CodingKey { case reasoningTokens = "reasoning_tokens" }
+  var audioTokens: Int?
+  var imageTokens: Int?
+  enum CodingKeys: String, CodingKey {
+    case reasoningTokens = "reasoning_tokens"
+    case audioTokens = "audio_tokens"
+    case imageTokens = "image_tokens"
+  }
 }
 struct ProviderErrorWire: Decodable {
   var code: String?
@@ -118,6 +140,7 @@ struct ChatCompletionResponse: Decodable {
   var id: String?
   var model: String?
   var provider: String?
+  var serviceTier: String?
   var choices: [ChatCompletionChoiceWire]
   var usage: UsageWire?
   var error: ProviderErrorWire?
@@ -126,11 +149,15 @@ struct ChatCompletionResponse: Decodable {
     id = try c.decodeIfPresent(String.self, forKey: .id)
     model = try c.decodeIfPresent(String.self, forKey: .model)
     provider = try c.decodeIfPresent(String.self, forKey: .provider)
+    serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
     choices = try c.decodeIfPresent([ChatCompletionChoiceWire].self, forKey: .choices) ?? []
     usage = try c.decodeIfPresent(UsageWire.self, forKey: .usage)
     error = try c.decodeIfPresent(ProviderErrorWire.self, forKey: .error)
   }
-  private enum CodingKeys: String, CodingKey { case id, model, provider, choices, usage, error }
+  private enum CodingKeys: String, CodingKey {
+    case id, model, provider, choices, usage, error
+    case serviceTier = "service_tier"
+  }
 }
 
 typealias ChatCompletionChunk = ChatCompletionResponse
@@ -174,4 +201,35 @@ struct TopProviderWire: Decodable {
 struct PricingWire: Decodable {
   var prompt: String?
   var completion: String?
+  var cachedInput: String?
+  var cacheWrite: String?
+  var request: String?
+  var image: String?
+  var audio: String?
+  var webSearch: String?
+  var internalReasoning: String?
+  var hasAdditionalPricingDimensions: Bool? {
+    let extra = [request, image, audio, webSearch, internalReasoning].compactMap { $0 }
+    return extra.contains { (ChatBilling.decimal($0) ?? -1) != 0 } ? true : nil
+  }
+  enum CodingKeys: String, CodingKey {
+    case prompt, completion, request, image, audio
+    case webSearch = "web_search"
+    case internalReasoning = "internal_reasoning"
+    case cachedInput = "input_cache_read"
+    case cacheWrite = "input_cache_write"
+  }
+}
+
+/// Invalid cost values must not invalidate an otherwise usable chat response.
+struct BillingAmountWire: Decodable {
+  var value: Decimal?
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let string = try? container.decode(String.self) {
+      value = ChatBilling.decimal(string)
+    } else if let amount = try? container.decode(Decimal.self), !amount.isNaN, amount >= 0 {
+      value = amount
+    }
+  }
 }

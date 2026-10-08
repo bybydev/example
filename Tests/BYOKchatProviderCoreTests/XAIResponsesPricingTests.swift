@@ -59,3 +59,13 @@ private func xAIPricingAccount() -> ResolvedProviderAccount {
     apiKey: "xai-secret"
   )
 }
+
+
+@Test func xAIReportedCostPreservesIntegerTicksExactly() async throws {
+  let data = Data(#"{"id":"r","model":"grok-4.6","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1,"cost_in_usd_ticks":9007199254740993}}"#.utf8)
+  let adapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: XAIPricingTransport(payload: data))
+  let response = try await adapter.generate(request: .init(model: "grok-4.6", messages: [.init(role: .user, content: "Hi")]),
+    account: xAIPricingAccount())
+  #expect(response.metadata["xai.costInUSDTicks"] == "9007199254740993")
+  #expect(ChatBilling.providerReportedCost(from: response.metadata) == Decimal(string: "900719.9254740993"))
+}

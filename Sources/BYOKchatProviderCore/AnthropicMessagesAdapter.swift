@@ -640,7 +640,10 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       inputTokens: incoming.inputTokens ?? current?.inputTokens,
       outputTokens: incoming.outputTokens ?? current?.outputTokens,
       cachedInputTokens: incoming.cachedInputTokens ?? current?.cachedInputTokens,
-      reasoningTokens: incoming.reasoningTokens ?? current?.reasoningTokens
+      reasoningTokens: incoming.reasoningTokens ?? current?.reasoningTokens,
+      cacheWriteTokens: incoming.cacheWriteTokens ?? current?.cacheWriteTokens,
+      longCacheWriteTokens: incoming.longCacheWriteTokens ?? current?.longCacheWriteTokens,
+      hasUnpricedCharges: incoming.hasUnpricedCharges ?? current?.hasUnpricedCharges
     )
   }
 }
@@ -719,6 +722,8 @@ private struct AnthropicUsage: Decodable {
   var outputTokens: Int?
   var cacheCreationInputTokens: Int?
   var cacheReadInputTokens: Int?
+  var cacheCreation: AnthropicCacheCreation?
+  var serverToolUse: [String: Int]?
   var outputTokensDetails: AnthropicOutputTokenDetails?
 
   enum CodingKeys: String, CodingKey {
@@ -726,18 +731,28 @@ private struct AnthropicUsage: Decodable {
     case outputTokens = "output_tokens"
     case cacheCreationInputTokens = "cache_creation_input_tokens"
     case cacheReadInputTokens = "cache_read_input_tokens"
+    case cacheCreation = "cache_creation"
+    case serverToolUse = "server_tool_use"
     case outputTokensDetails = "output_tokens_details"
   }
 
   var normalized: ProviderUsage {
     let totalInput = (inputTokens ?? 0) + (cacheCreationInputTokens ?? 0) + (cacheReadInputTokens ?? 0)
     return ProviderUsage(
-      inputTokens: totalInput == 0 ? inputTokens : totalInput,
+      inputTokens: inputTokens == nil ? nil : totalInput,
       outputTokens: outputTokens,
-      cachedInputTokens: cacheReadInputTokens,
-      reasoningTokens: outputTokensDetails?.thinkingTokens
+      cachedInputTokens: cacheReadInputTokens ?? (inputTokens == nil ? nil : 0),
+      reasoningTokens: outputTokensDetails?.thinkingTokens,
+      cacheWriteTokens: cacheCreationInputTokens ?? (inputTokens == nil ? nil : 0),
+      longCacheWriteTokens: cacheCreation?.ephemeral1hInputTokens,
+      hasUnpricedCharges: serverToolUse?.values.contains(where: { $0 > 0 })
     )
   }
+}
+
+private struct AnthropicCacheCreation: Decodable {
+  var ephemeral1hInputTokens: Int?
+  enum CodingKeys: String, CodingKey { case ephemeral1hInputTokens = "ephemeral_1h_input_tokens" }
 }
 
 private struct AnthropicOutputTokenDetails: Decodable {

@@ -478,6 +478,20 @@ public actor ConversationStore {
     markConversationDirty(conversationID)
   }
 
+  /// Persist each attempted request before inference and its receipt before
+  /// executing tools, so later cancellation/failure retains paid rounds.
+  public func updateBillingMetadata(
+    conversationID: ConversationID, messageID: ChatMessageID,
+    metadata: [String: String], usage: ProviderUsage? = nil
+  ) async throws {
+    try await ensureConversationLoaded(conversationID)
+    try mutateMessage(conversationID: conversationID, messageID: messageID) { message in
+      message.metadata.merge(metadata) { _, new in new }
+      if let usage { message.usage = usage }
+    }
+    try await persist(conversationIDs: [conversationID])
+  }
+
   public func appendToolRound(
     conversationID: ConversationID,
     messageID: ChatMessageID,

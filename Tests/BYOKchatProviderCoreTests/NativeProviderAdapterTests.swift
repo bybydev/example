@@ -347,3 +347,27 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
   #expect(model.supportedParameters.contains("topP") == false)
   #expect(models.contains { $0.id == "embed-test" } == false)
 }
+
+
+@Test func anthropicCacheWriteDimensionsAndMissingInputSurviveNormalization() async throws {
+  let data = Data(#"{"model":"claude-sonnet-5","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_1h_input_tokens":10}}}"#.utf8)
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: NativeMockTransport(data: data))
+  let response = try await adapter.generate(request: .init(model: "claude-sonnet-5", messages: [.init(role: .user, content: "Hi")]), account: nativeAccount("anthropic"))
+  #expect(response.usage?.inputTokens == 150)
+  #expect(response.usage?.cachedInputTokens == 20)
+  #expect(response.usage?.cacheWriteTokens == 30)
+  #expect(response.usage?.longCacheWriteTokens == 10)
+  let missing = Data(#"{"model":"claude-sonnet-5","content":[{"type":"text","text":"OK"}],"usage":{"output_tokens":10}}"#.utf8)
+  let missingAdapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: NativeMockTransport(data: missing))
+  let partial = try await missingAdapter.generate(request: .init(model: "claude-sonnet-5", messages: [.init(role: .user, content: "Hi")]), account: nativeAccount("anthropic"))
+  #expect(partial.usage?.inputTokens == nil)
+}
+
+@Test func geminiBillsThinkingAsOutputAndMarksCacheStorageUnpriced() async throws {
+  let data = Data(#"{"modelVersion":"gemini-3.6-flash","candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"thoughtsTokenCount":20,"cachedContentTokenCount":5}}"#.utf8)
+  let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: NativeMockTransport(data: data))
+  let response = try await adapter.generate(request: .init(model: "gemini-3.6-flash", messages: [.init(role: .user, content: "Hi")]), account: nativeAccount("gemini"))
+  #expect(response.usage?.outputTokens == 30)
+  #expect(response.usage?.reasoningTokens == 20)
+  #expect(response.usage?.hasUnpricedCharges == true)
+}

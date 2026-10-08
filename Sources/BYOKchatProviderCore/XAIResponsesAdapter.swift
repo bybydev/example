@@ -80,7 +80,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       decodeJSON(response.data),
       account: account,
       fallbackModel: validated.model,
-      headers: response.headers
+      headers: response.headers,
+      reportedTicks: reportedCostTicks(from: response.data, streaming: false)
     )
   }
 
@@ -578,7 +579,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     _ root: JSONValue,
     account: ResolvedProviderAccount,
     fallbackModel: ModelID,
-    headers: [String: String]
+    headers: [String: String],
+    reportedTicks: Decimal?
   ) throws -> ProviderResponse {
     guard case .object(let object) = root else { throw ProviderError.invalidResponse }
 
@@ -652,12 +654,9 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       metadata["requestID"] = requestID
     }
     if let responseID = stringValue(object["id"]) { metadata["responseID"] = responseID }
-    if let usageObject = object["usage"]?.objectValue,
-      let ticks = numberValue(usageObject["cost_in_usd_ticks"])
-    {
-      metadata["xai.costInUSDTicks"] = String(format: "%.0f", ticks)
-      metadata["costUSD"] = NSDecimalNumber(value: ticks)
-        .dividing(by: NSDecimalNumber(value: 10_000_000_000)).stringValue
+    if let ticks = reportedTicks {
+      metadata["xai.costInUSDTicks"] = ChatBilling.decimalString(ticks)
+      metadata["costUSD"] = ChatBilling.decimalString(ticks / 10_000_000_000)
     }
 
     let providerContinuation: ProviderToolContinuation? = output.isEmpty
@@ -739,7 +738,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         responseObject,
         account: account,
         fallbackModel: fallbackModel,
-        headers: headers
+        headers: headers,
+        reportedTicks: reportedCostTicks(from: data, streaming: true)
       )
       if let usage = parsed.usage { continuation.yield(.usage(usage)) }
       finalResponse = parsed
@@ -759,6 +759,14 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     default:
       break
     }
+  }
+
+  private func reportedCostTicks(from data: Data, streaming: Bool) -> Decimal? {
+    let decoder = JSONDecoder.provider
+    if streaming {
+      return (try? decoder.decode(XAICostEvent.self, from: data))?.response?.usage?.ticks?.value
+    }
+    return (try? decoder.decode(XAICostResponse.self, from: data))?.usage?.ticks?.value
   }
 
   // MARK: - JSON helpers
@@ -789,4 +797,15 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       .dividing(by: NSDecimalNumber(value: 10_000_000_000))
       .stringValue
   }
+}
+
+private struct XAICostEvent: Decodable {
+  var response: XAICostResponse?
+}
+private struct XAICostResponse: Decodable {
+  var usage: XAICostUsage?
+}
+private struct XAICostUsage: Decodable {
+  var ticks: BillingAmountWire?
+  enum CodingKeys: String, CodingKey { case ticks = "cost_in_usd_ticks" }
 }

@@ -21,7 +21,8 @@ let package = Package(
     .target(
       name: "BYOKchatProviderCore",
       dependencies: ["CSQLite"],
-      path: "Sources/BYOKchatProviderCore"
+      path: "Sources/BYOKchatProviderCore",
+      resources: [.process("Resources")]
     ),
     .testTarget(
       name: "BYOKchatProviderCoreTests",

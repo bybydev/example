@@ -17,6 +17,8 @@ struct UsageDashboardView: View {
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
   @State private var hasLoadedTelemetry = false
+  @State private var telemetryUnavailable = false
+  @State private var isLoadingTelemetry = false
   @State private var showProUpsell = false
 
   init(
@@ -64,7 +66,18 @@ struct UsageDashboardView: View {
       usageSummarySection
 
       if purchaseManager.hasPro {
-        if hasPerformanceData {
+        if telemetryUnavailable {
+          Section {
+            ContentUnavailableView(
+              "Performance Data Unavailable",
+              systemImage: "exclamationmark.triangle",
+              description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
+            )
+            Button("Retry") { Task { await loadTelemetry(retry: true) } }
+              .disabled(isLoadingTelemetry)
+          }
+          .listRowBackground(theme.surfaceColor)
+        } else if hasPerformanceData {
           performanceSection
           reliabilitySection
           if !failureBreakdown.isEmpty {
@@ -87,7 +100,8 @@ struct UsageDashboardView: View {
               ConversationAnalyticsView(
                 conversation: conversation,
                 range: range,
-                telemetryEvents: filteredTelemetryEvents
+                telemetryEvents: filteredTelemetryEvents,
+                telemetryAvailable: !telemetryUnavailable
               )
             } label: {
               conversationSummaryLabel(conversation)
@@ -117,7 +131,11 @@ struct UsageDashboardView: View {
         monthlyBudgetSection
 
         Section {
-          LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
+          if telemetryUnavailable {
+            LabeledContent("Telemetry", value: "Unavailable")
+          } else {
+            LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
+          }
           if telemetryStatistics.databaseBytes > 0 {
             LabeledContent(
               "Local database",
@@ -198,16 +216,8 @@ struct UsageDashboardView: View {
       Text(purchaseManager.hasPro ? "Usage" : "Basic Usage · This Month")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
-      if filteredAggregate.hasPartialCost {
-        Text("Spend is partial because some models did not expose pricing. Usage and spend are reconstructed from persisted assistant messages.")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      } else if purchaseManager.hasPro {
-        Text("Usage and spend come from persisted chat history. Only requests made by BYOKchat are included.")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      } else {
-        Text("Basic analytics includes monthly spend, requests, input tokens, and output tokens.")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
+      Text(usageHistoryFootnote(filteredAggregate))
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -319,18 +329,26 @@ struct UsageDashboardView: View {
       }
 
       if monthlyBudgetUSD > 0 {
-        ProgressView(value: budgetProgress)
         LabeledContent("This month", value: usageAggregateCostText(currentMonthAggregate))
-        if budgetWarningReached {
-          Label("Budget warning threshold reached", systemImage: "exclamationmark.triangle.fill")
-            .foregroundStyle(.orange)
+        if currentMonthAggregate.assistantMessageCount == 0 {
+          Text("No saved requests this month.")
+        } else if !currentMonthAggregate.hasKnownCost {
+          Label("Budget status unavailable: request costs are unknown.", systemImage: "questionmark.circle")
+        } else {
+          if !currentMonthAggregate.hasPartialCost { ProgressView(value: budgetProgress) }
+          if budgetWarningReached {
+            Label(budgetWarningText, systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+          } else if currentMonthAggregate.hasPartialCost {
+            Label("Budget status uncertain: incomplete costs may already exceed the threshold; estimates may differ in either direction.", systemImage: "questionmark.circle")
+          }
         }
       }
     } header: {
       Text("Monthly budget")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
-      Text("The budget is a local BYOKchat warning. It does not include API-key usage from other apps and does not change provider-side spending limits.")
+      Text("The monthly budget warns about saved chat history; it is not a billing ledger. Regenerating, editing, or deleting messages can reduce totals. It excludes API-key usage in other apps and does not change provider spending limits.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
@@ -345,6 +363,7 @@ struct UsageDashboardView: View {
   }
 
   private var filteredTelemetryEvents: [TelemetryEvent] {
+    guard !telemetryUnavailable else { return [] }
     let startDate = range.startDate(reference: .now)
     return telemetryEvents.filter { event in
       guard event.dataClass == .analytics else { return false }
@@ -484,6 +503,18 @@ struct UsageDashboardView: View {
     return spent >= monthlyBudgetUSD * budgetWarningFraction
   }
 
+  private var budgetWarningText: String {
+    let aggregate = currentMonthAggregate
+    if aggregate.hasPartialCost {
+      return aggregate.hasEstimatedCost
+        ? "Partial estimate reached the warning threshold"
+        : "Known subtotal reached the warning threshold"
+    }
+    return aggregate.hasEstimatedCost
+      ? "Estimated spend reached the warning threshold"
+      : "Reported spend reached the warning threshold"
+  }
+
   private var telemetryFootnote: String {
     if telemetryStatistics.eventCount > telemetryEvents.count {
       let queryLimit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
@@ -499,14 +530,22 @@ struct UsageDashboardView: View {
       .joined(separator: " ")
   }
 
-  private func loadTelemetry() async {
+  private func loadTelemetry(retry: Bool = false) async {
+    guard !isLoadingTelemetry else { return }
+    isLoadingTelemetry = true
+    defer { isLoadingTelemetry = false }
     let recorder = model.telemetryRecorder
-    let events = await recorder.recentEvents(
-      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
-    )
-    let statistics = await recorder.statistics()
-    telemetryEvents = events
-    telemetryStatistics = statistics
+    if retry { await recorder.retryAfterFailure() }
+    switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
+    case .loaded(let events, let statistics):
+      telemetryEvents = events
+      telemetryStatistics = statistics
+      telemetryUnavailable = false
+    case .unavailable:
+      telemetryEvents = []
+      telemetryStatistics = .empty
+      telemetryUnavailable = true
+    }
     hasLoadedTelemetry = true
   }
 }

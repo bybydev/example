@@ -27,18 +27,19 @@ struct MessageInfoView: View {
         }
         .listRowBackground(theme.surfaceColor)
 
-        if let usage = message.usage {
+        if message.role == .assistant {
+          let usage = message.usage
           Section {
-            if let value = usage.inputTokens {
+            if let value = usage?.inputTokens {
               LabeledContent("Input", value: usageTokenCount(value))
             }
-            if let value = usage.cachedInputTokens, value > 0 {
+            if let value = usage?.cachedInputTokens, value > 0 {
               LabeledContent("Cached input", value: usageTokenCount(value))
             }
-            if let value = usage.outputTokens {
+            if let value = usage?.outputTokens {
               LabeledContent("Output", value: usageTokenCount(value))
             }
-            if let value = usage.reasoningTokens, value > 0 {
+            if let value = usage?.reasoningTokens, value > 0 {
               LabeledContent("Reasoning", value: usageTokenCount(value))
             }
 
@@ -53,19 +54,26 @@ struct MessageInfoView: View {
           .listRowBackground(theme.surfaceColor)
         }
 
-        if billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
+        if billing.requests.contains(where: { $0.pricing != nil }) || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
           Section {
+            if !billing.requests.isEmpty {
+              LabeledContent("Saved request snapshots", value: billing.requests.count.formatted())
+            }
+            if let snapshot = billing.requests.first?.pricing {
+              LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
+              if let version = snapshot.version { LabeledContent("Version", value: version) }
+            }
             if let price = billing.inputPricePerToken {
-              LabeledContent("Input / 1M", value: usagePricePerMillion(price))
+              LabeledContent("First request input / 1M", value: usagePricePerMillion(price))
             }
             if let price = billing.outputPricePerToken {
-              LabeledContent("Output / 1M", value: usagePricePerMillion(price))
+              LabeledContent("First request output / 1M", value: usagePricePerMillion(price))
             }
           } header: {
             Text("Pricing snapshot")
               .foregroundStyle(theme.secondaryForegroundColor)
           } footer: {
-            Text("The price snapshot is stored with this message so later model price changes do not rewrite historical spend.")
+            Text("Prices and billing rules are stored per request. The rates shown are for the first request; tool rounds may differ. Later price changes do not rewrite saved spend.")
               .foregroundStyle(theme.secondaryForegroundColor)
           }
           .listRowBackground(theme.surfaceColor)
@@ -111,18 +119,24 @@ struct MessageInfoView: View {
 
   private var costValue: String {
     guard let cost = billing.costUSD else { return "Unavailable" }
-    let prefix = billing.accuracy == .calculated ? "~" : ""
-    return prefix + usageFormatUSD(cost)
+    let prefix = billing.isLowerBound ? "≥" : (billing.accuracy == .calculated ? "~" : "")
+    return prefix + usageFormatUSD(cost) + (billing.isComplete ? "" : " (partial)")
   }
 
   private var costFootnote: String {
+    if billing.requests.contains(where: { $0.missingDimensions.contains("provider billing scope") }) {
+      return "Includes the reported OpenRouter account charge. Upstream provider cost is excluded, so total inference spend is incomplete."
+    }
+    if !billing.isComplete {
+      return "Cost is incomplete or unavailable because some requests lack usage, pricing, or supported billing details. A partial estimate is not a guaranteed minimum."
+    }
     switch billing.accuracy {
     case .providerReported:
-      "Cost was reported by the provider for this request."
+      return "Cost was reported by the provider for the saved requests."
     case .calculated:
-      "Estimated from the token usage and model pricing snapshot recorded when this response completed."
+      return "Estimated from usage and the prices and billing rules saved for each request."
     case .unavailable:
-      "Token usage is available, but this model did not expose pricing to BYOKchat."
+      return "Cost is unavailable for the saved requests."
     }
   }
 }

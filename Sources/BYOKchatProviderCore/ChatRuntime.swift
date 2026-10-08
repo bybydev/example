@@ -237,10 +237,13 @@ public actor ChatRuntime {
       telemetry.turnStarted(turn, operation: operationName)
 
       let conversation = try await conversations.conversation(id: conversationID)
-      let modelRecord = await providerWorkspace.modelRecords(for: conversation.accountID, includeHidden: true)
-        .first { $0.model.id == conversation.modelID }
-      let model = modelRecord?.model
-      let account = try await providerWorkspace.account(id: conversation.accountID)
+      let providerState = await providerWorkspace.snapshot()
+      guard let account = providerState.accounts.first(where: { $0.id == conversation.accountID }) else {
+        throw ProviderError.accountNotFound(conversation.accountID)
+      }
+      let model = providerState.modelRecords.first {
+        $0.accountID == conversation.accountID && $0.model.id == conversation.modelID
+      }?.model
       let capabilities = ModelCapabilityResolver.resolve(kind: account.kind, modelID: conversation.modelID, model: model)
       let contextWindowKind = capabilities.contextWindowKind
       var effectiveOptions = conversation.options
@@ -283,8 +286,7 @@ public actor ChatRuntime {
       try await hydrateAttachments(into: &requestMessages)
       var continuationMessages: [ProviderMessage] = []
       var accumulatedUsage: ProviderUsage?
-      var accumulatedProviderCostUSD = Decimal.zero
-      var providerCostReportCount = 0
+      var billingRequests: [ChatRequestBilling] = []
       var toolRoundCount = 0
       var totalToolCallCount = 0
 
@@ -316,17 +318,37 @@ public actor ChatRuntime {
           toolCount: request.tools.count
         )
 
+        let pricingDate = Date.now
+        // A tool round can resume after an account edit. Read account and
+        // discovery prices together for every request, rather than reuse the
+        // turn's original cached model rates.
+        let pricingState = await providerWorkspace.snapshot()
+        guard let pricingAccount = pricingState.accounts.first(where: { $0.id == conversation.accountID }) else {
+          throw ProviderError.accountNotFound(conversation.accountID)
+        }
+        let pricingModel = pricingState.modelRecords.first {
+          $0.accountID == conversation.accountID && $0.model.id == conversation.modelID
+        }?.model
+        let pricing = ModelPriceResolver.resolve(
+          account: pricingAccount, modelID: conversation.modelID, model: pricingModel, at: pricingDate
+        )
+        billingRequests.append(ChatBilling.requestBilling(metadata: [:], usage: nil, pricing: pricing))
+        billingRequests[billingRequests.count - 1].requestedAt = pricingDate
+        try await conversations.updateBillingMetadata(
+          conversationID: conversationID, messageID: turn.assistantMessage.id,
+          metadata: ChatBilling.metadata(existing: [:], requests: billingRequests, toolCallCount: totalToolCallCount)
+        )
+        var finalResponse: ProviderResponse?
+        var completedStepUsage: ProviderUsage?
         do {
           let stream = try await providerRuntime.stream(
             request: request,
             accountID: conversation.accountID
           )
-          var finalResponse: ProviderResponse?
-
           for try await event in stream {
-            try Task.checkCancellation()
             switch event {
             case .textDelta(let value):
+              try Task.checkCancellation()
               visibleText += value
               continuation.yield(.textDelta(messageID: turn.assistantMessage.id, value: value))
               if firstTokenMilliseconds == nil, !value.isEmpty {
@@ -342,6 +364,7 @@ public actor ChatRuntime {
                 )
               }
             case .reasoningDelta(let value):
+              try Task.checkCancellation()
               reasoningText += value
               continuation.yield(.reasoningDelta(messageID: turn.assistantMessage.id, value: value))
               if firstTokenMilliseconds == nil, !value.isEmpty {
@@ -357,13 +380,58 @@ public actor ChatRuntime {
                 )
               }
             case .usage(let value):
+              try Task.checkCancellation()
               stepUsage = value
               visibleUsage = addingUsage(accumulatedUsage, value)
               if let visibleUsage {
                 continuation.yield(.usage(messageID: turn.assistantMessage.id, value: visibleUsage))
               }
             case .completed(let value):
-              finalResponse = value
+              guard finalResponse == nil else { continue }
+              var completedResponse = value
+              if completedResponse.text.isEmpty { completedResponse.text = visibleText }
+              if completedResponse.reasoning.isEmpty { completedResponse.reasoning = reasoningText }
+              completedStepUsage = completedResponse.usage ?? stepUsage
+              let completedAt = Date.now
+              // A request straddling a rate boundary is only a partial estimate.
+              if pricing?.coversRequest(startedAt: pricingDate, endedAt: completedAt) == false {
+                completedStepUsage?.hasUnpricedCharges = true
+              }
+              let currentAccount = try? await providerWorkspace.account(id: conversation.accountID)
+              billingRequests[billingRequests.count - 1] = ChatBilling.requestBilling(
+                metadata: completedResponse.metadata, usage: completedStepUsage, pricing: pricing,
+                modelMatches: completedResponse.modelID == conversation.modelID
+                  && currentAccount?.hasSamePricingContext(as: pricingAccount) == true
+              )
+              billingRequests[billingRequests.count - 1].requestedAt = pricingDate
+              billingRequests[billingRequests.count - 1].completedAt = completedAt
+              totalToolCallCount += completedResponse.toolCalls.count
+              visibleText = completedResponse.text
+              reasoningText = completedResponse.reasoning
+              visibleUsage = addingUsage(accumulatedUsage, completedStepUsage)
+              activeStates[conversationID] = ActiveGenerationState(
+                assistantID: turn.assistantMessage.id,
+                content: visibleText, reasoning: reasoningText, usage: visibleUsage
+              )
+              // Completion is a paid receipt even when cancellation or a
+              // transport error follows. Save it before either can escape.
+              try await conversations.updateBillingMetadata(
+                conversationID: conversationID, messageID: turn.assistantMessage.id,
+                metadata: ChatBilling.metadata(existing: [:], requests: billingRequests, toolCallCount: totalToolCallCount),
+                usage: visibleUsage
+              )
+              finalResponse = completedResponse
+              telemetry.providerRequestCompleted(
+                conversation: conversation,
+                messageID: turn.assistantMessage.id,
+                requestIndex: requestIndex,
+                response: completedResponse,
+                usage: completedStepUsage,
+                durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
+                  requestStartedAt.duration(to: requestClock.now)
+                ),
+                timeToFirstTokenMilliseconds: firstTokenMilliseconds
+              )
             }
 
             activeStates[conversationID] = ActiveGenerationState(
@@ -372,6 +440,7 @@ public actor ChatRuntime {
               reasoning: reasoningText,
               usage: visibleUsage
             )
+            try Task.checkCancellation()
 
             if lastPersist.duration(to: requestClock.now) >= partialPersistenceInterval {
               try await conversations.updateStreamingMessage(
@@ -391,37 +460,20 @@ public actor ChatRuntime {
           }
           response = finalResponse
         } catch {
-          telemetry.providerRequestFailed(
-            conversation: conversation,
-            messageID: turn.assistantMessage.id,
-            requestIndex: requestIndex,
-            error: error,
-            durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
-              requestStartedAt.duration(to: requestClock.now)
-            ),
-            timeToFirstTokenMilliseconds: firstTokenMilliseconds
-          )
+          if finalResponse == nil {
+            telemetry.providerRequestFailed(
+              conversation: conversation,
+              messageID: turn.assistantMessage.id,
+              requestIndex: requestIndex,
+              error: error,
+              durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
+                requestStartedAt.duration(to: requestClock.now)
+              ),
+              timeToFirstTokenMilliseconds: firstTokenMilliseconds
+            )
+          }
           throw error
         }
-
-        if response.text.isEmpty { response.text = visibleText }
-        if response.reasoning.isEmpty { response.reasoning = reasoningText }
-        let completedStepUsage = response.usage ?? stepUsage
-        if let providerCost = ChatBilling.providerReportedCost(from: response.metadata) {
-          accumulatedProviderCostUSD += providerCost
-          providerCostReportCount += 1
-        }
-        telemetry.providerRequestCompleted(
-          conversation: conversation,
-          messageID: turn.assistantMessage.id,
-          requestIndex: requestIndex,
-          response: response,
-          usage: completedStepUsage,
-          durationMilliseconds: ChatRuntimeTelemetry.milliseconds(
-            requestStartedAt.duration(to: requestClock.now)
-          ),
-          timeToFirstTokenMilliseconds: firstTokenMilliseconds
-        )
 
         if !response.toolCalls.isEmpty {
           guard toolRoundCount < maxToolRounds else {
@@ -435,7 +487,6 @@ public actor ChatRuntime {
             )
           }
 
-          totalToolCallCount += response.toolCalls.count
           continuation.yield(
             .toolCallsStarted(
               messageID: turn.assistantMessage.id,
@@ -522,17 +573,8 @@ public actor ChatRuntime {
         }
 
         response.usage = addingUsage(accumulatedUsage, completedStepUsage)
-        let modelRequestCount = toolRoundCount + 1
-        response.metadata = ChatBilling.replacingProviderReportedCost(
-          in: response.metadata,
-          with: providerCostReportCount == modelRequestCount ? accumulatedProviderCostUSD : nil
-        )
         response.metadata = ChatBilling.metadata(
-          existing: response.metadata,
-          usage: response.usage,
-          model: model,
-          modelRequestCount: modelRequestCount,
-          toolCallCount: totalToolCallCount
+          existing: response.metadata, requests: billingRequests, toolCallCount: totalToolCallCount
         )
         let completed = try await conversations.completeMessage(
           conversationID: conversationID,
@@ -643,7 +685,11 @@ public actor ChatRuntime {
       inputTokens: adding(lhs?.inputTokens, rhs?.inputTokens),
       outputTokens: adding(lhs?.outputTokens, rhs?.outputTokens),
       cachedInputTokens: adding(lhs?.cachedInputTokens, rhs?.cachedInputTokens),
-      reasoningTokens: adding(lhs?.reasoningTokens, rhs?.reasoningTokens)
+      reasoningTokens: adding(lhs?.reasoningTokens, rhs?.reasoningTokens),
+      cacheWriteTokens: adding(lhs?.cacheWriteTokens, rhs?.cacheWriteTokens),
+      longCacheWriteTokens: adding(lhs?.longCacheWriteTokens, rhs?.longCacheWriteTokens),
+      hasUnpricedCharges: lhs?.hasUnpricedCharges == true || rhs?.hasUnpricedCharges == true
+        ? true : (lhs?.hasUnpricedCharges ?? rhs?.hasUnpricedCharges)
     )
   }
 
