@@ -28,12 +28,10 @@ struct ConnectionEditorView: View {
   // Create-mode state
   @State private var selectedKind: ProviderKind
   @State private var customName = ""
-  @State private var customBaseURL = ""
   @State private var customAuth: AuthenticationChoice = .bearer
   @State private var customHeaderName = "X-API-Key"
   @State private var customChatPath = "/chat/completions"
   @State private var customModelsPath = "/models"
-  @State private var showNewProviderSection = false
 
   // Shared field state
   @State private var label = ""
@@ -44,7 +42,12 @@ struct ConnectionEditorView: View {
   @State private var httpReferer = ""
   @State private var selectedModelID: ModelID?
   @State private var manualModelID = ""
-  @State private var discoveredModels: [ProviderModel] = []
+  @State private var discoveredModels: [ProviderModel]? = nil
+  @State private var manualModels: [ProviderModel] = []
+  /// Staged until the editor's Done; Cancel leaves persisted models intact.
+  @State private var removedManualModelIDs: Set<ModelID> = []
+  @State private var discoveryTask: Task<Void, Never>?
+  @State private var discoveryID: UUID?
   @State private var isDiscoveryRunning = false
   @State private var discoveryWarning: String?
   @State private var showDelete = false
@@ -53,7 +56,6 @@ struct ConnectionEditorView: View {
   @State private var isDirty = false
   @State private var isRevealingCredential = false
   @State private var revealedCredential: String?
-  @State private var showModelPicker = false
   /// False until the user edits the name field; while false, the name
   /// pre-fills/updates with the provider-named suggestion.
   @State private var didEditName = false
@@ -79,8 +81,10 @@ struct ConnectionEditorView: View {
       _selectedModelID = State(initialValue: existing.defaultModelID)
       _appTitle = State(initialValue: existing.metadata["appTitle"] ?? "")
       _httpReferer = State(initialValue: existing.metadata["httpReferer"] ?? "")
-    } else if let initialKind, initialKind != .openAICompatible {
-      _baseURL = State(initialValue: initialKind.defaultEndpoint?.absoluteString ?? "")
+    } else {
+      let initial = initialKind ?? .anthropic
+      _baseURL = State(initialValue: initial.defaultEndpoint?.absoluteString ?? "")
+      _selectedModelID = State(initialValue: initial.seedModels.first?.id)
     }
   }
 
@@ -94,21 +98,21 @@ struct ConnectionEditorView: View {
   /// mode it is built from the typed custom-provider fields.
   private var draftDefinition: ProviderDefinition {
     if let existing { return existing.definition }
-    let endpoint = URL(string: customBaseURL.trimmingCharacters(in: .whitespaces))
+    let endpoint = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))
     let auth: ProviderAuthentication =
       switch customAuth {
       case .bearer: .bearer
-      case .header: .header(name: customHeaderName.trimmingCharacters(in: .whitespaces))
+      case .header: .header(name: customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines))
       case .none: .none
       }
-    let chatPath = customChatPath.trimmingCharacters(in: .whitespaces)
-    let modelsPath = customModelsPath.trimmingCharacters(in: .whitespaces)
+    let chatPath = customChatPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    let modelsPath = customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
     return kind.definition(
       providerID: kind.defaultProviderID ?? "custom",
       displayName: customName,
       baseURLOverride: endpoint,
       chatPath: chatPath,
-      modelsPath: modelsPath,
+      modelsPath: modelsPath.isEmpty ? nil : modelsPath,
       authentication: auth,
       seedModelIDs: []
     )
@@ -129,25 +133,29 @@ struct ConnectionEditorView: View {
 
   private var canSave: Bool {
     if isCustom && isCreate {
-      guard !customName.trimmingCharacters(in: .whitespaces).isEmpty,
-        URL(string: customBaseURL.trimmingCharacters(in: .whitespaces)) != nil
+      guard !customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
       else { return false }
-      if customAuth == .header, customHeaderName.trimmingCharacters(in: .whitespaces).isEmpty {
+      if customAuth == .header, customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         return false
       }
     }
-    if requiresCredential && isCreate, credential.trimmingCharacters(in: .whitespaces).isEmpty {
+    if requiresCredential && isCreate, credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return false
     }
     // Name: the field is pre-filled, so it is normally non-empty. Custom
     // providers must have a typed server name to suggest from.
-    if label.trimmingCharacters(in: .whitespaces).isEmpty,
+    if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       suggestedName.isEmpty
     {
       return false
     }
-    return selectedModelID != nil
-      || !manualModelID.trimmingCharacters(in: .whitespaces).isEmpty
+    if !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+    guard let selectedModelID else {
+      // Allow removing the final manual model from an existing connection.
+      return existing != nil && !removedManualModelIDs.isEmpty && modelRecords.isEmpty
+    }
+    return modelRecords.contains { $0.model.id == selectedModelID }
   }
 
   var body: some View {
@@ -207,12 +215,6 @@ struct ConnectionEditorView: View {
       }
       Button("Cancel", role: .cancel) {}
     }
-    .sheet(isPresented: $showModelPicker) {
-      ConnectionModelPickerView(
-        records: pickerRecords,
-        selection: $selectedModelID
-      )
-    }
     .onAppear {
       if !isDirty, baseURL.isEmpty, let existing {
         baseURL = existing.baseURLOverride?.absoluteString ?? ""
@@ -233,10 +235,12 @@ struct ConnectionEditorView: View {
       label = suggestedName
     }
     .onChange(of: customName) { _, _ in
-      // Custom server name typed while the name still tracks.
       guard isCreate, !didEditName, kind == .openAICompatible else { return }
       label = suggestedName
     }
+    .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
+    .onDisappear { cancelDiscovery() }
+    .disabled(isSaving)
   }
 
   // MARK: - Sections
@@ -270,15 +274,16 @@ struct ConnectionEditorView: View {
         Text("OpenAI-compatible…").tag(ProviderKind.openAICompatible)
       }
       .onChange(of: selectedKind) { _, newValue in
-        if newValue != .openAICompatible {
-          baseURL = newValue.defaultEndpoint?.absoluteString ?? ""
-          showNewProviderSection = false
-        } else {
-          baseURL = ""
-        }
-        // Reset name tracking so the suggestion re-fills for the new
-        // provider (no user text to preserve — the field was tracking).
-        if !didEditName { label = "" }
+        invalidateDiscovery()
+        baseURL = newValue.defaultEndpoint?.absoluteString ?? ""
+        credential = ""
+        headersText = ""
+        appTitle = ""
+        httpReferer = ""
+        manualModelID = ""
+        manualModels = []
+        selectedModelID = newValue.seedModels.first?.id
+        if !didEditName { label = suggestedName }
         isDirty = true
       }
     } header: {
@@ -296,11 +301,11 @@ struct ConnectionEditorView: View {
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .onChange(of: customName) { _, _ in isDirty = true }
-      TextField("https://example.com/v1", text: $customBaseURL)
+      TextField("https://example.com/v1", text: $baseURL)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .keyboardType(.URL)
-        .onChange(of: customBaseURL) { _, _ in isDirty = true }
+        .onChange(of: baseURL) { _, _ in isDirty = true }
       Picker("Authentication", selection: $customAuth) {
         ForEach(AuthenticationChoice.allCases) { choice in
           Text(choice.title).tag(choice)
@@ -425,7 +430,7 @@ struct ConnectionEditorView: View {
 
   private var modelSection: some View {
     Section {
-      if kind != .nvidia && (isCreate ? customModelsPathIsValid : true) {
+      if draftDefinition.modelsPath != nil {
         Button {
           fetchModels()
         } label: {
@@ -433,7 +438,7 @@ struct ConnectionEditorView: View {
             Label("Fetch Models", systemImage: "arrow.clockwise")
             Spacer()
             if isDiscoveryRunning { ProgressView().controlSize(.small) }
-            if !discoveredModels.isEmpty {
+            if let discoveredModels {
               Text("\(discoveredModels.count)").foregroundStyle(theme.secondaryForegroundColor)
             }
           }
@@ -442,6 +447,13 @@ struct ConnectionEditorView: View {
       }
 
       modelSelectionRow
+      TextField("Or enter a model ID", text: $manualModelID)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .onChange(of: manualModelID) { _, _ in isDirty = true }
+      if !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Button("Use Model ID") { selectManualModel() }
+      }
 
       if let warning = discoveryWarning {
         Label(warning, systemImage: "exclamationmark.triangle")
@@ -451,36 +463,42 @@ struct ConnectionEditorView: View {
     } header: {
       Text("Models")
     } footer: {
-      Text("New chats start with the default model you pick here.")
+      Text("Choose a default or enter its exact model ID. Fetch previews models; Save or Done keeps your changes.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var customModelsPathIsValid: Bool {
-    !customModelsPath.trimmingCharacters(in: .whitespaces).isEmpty || isCustom == false
+  private var keyAvailableForDiscovery: Bool {
+    !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasStoredCredential
   }
 
-  private var keyAvailableForDiscovery: Bool {
-    isCreate ? !credential.trimmingCharacters(in: .whitespaces).isEmpty : true
+  private var modelSelection: Binding<ModelID?> {
+    Binding(
+      get: { selectedModelID },
+      set: {
+        selectedModelID = $0
+        manualModelID = ""
+        isDirty = true
+      }
+    )
   }
 
   @ViewBuilder
   private var modelSelectionRow: some View {
     let records = modelRecords
     if records.isEmpty {
-      TextField("Model ID", text: $manualModelID)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .onChange(of: manualModelID) { _, _ in isDirty = true }
-      Text("Fetch models or enter a model ID manually.")
+      Text("Fetch models or enter a model ID below.")
         .font(.caption)
         .foregroundStyle(theme.secondaryForegroundColor)
-    } else if isPushModelPicker {
-      // Large catalogs (OpenRouter): push to a searchable picker; tapping a
-      // model selects it and pops back.
+    } else {
       NavigationLink {
-        ConnectionModelPickerView(records: pickerRecords, selection: $selectedModelID)
+        ConnectionModelPickerView(
+          records: records,
+          selection: modelSelection,
+          removedManualModelIDs: $removedManualModelIDs,
+          onRemoveManual: stageManualRemoval
+        )
       } label: {
         LabeledContent("Default model") {
           VStack(alignment: .trailing, spacing: 2) {
@@ -489,86 +507,96 @@ struct ConnectionEditorView: View {
               .lineLimit(1)
             Text("\(records.count) available")
               .font(.caption2)
-              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
         }
       }
-    } else {
-      Picker("Default model", selection: $selectedModelID) {
-        ForEach(records) { record in
-          Text(record.model.displayName).tag(Optional(record.model.id))
-        }
-        if let current = selectedModelID, !records.contains(where: { $0.model.id == current }) {
-          Text(current.rawValue).tag(Optional(current))
-        }
-      }
     }
-  }
-
-  /// Push navigation for kinds whose catalogs are too large for a menu —
-  /// OpenRouter aggregates every upstream provider's models.
-  private var isPushModelPicker: Bool {
-    kind == .openRouter
   }
 
   private var selectedModelTitle: String {
-    let records = modelRecords
-    if let selectedModelID,
-      let match = records.first(where: { $0.model.id == selectedModelID })
-    {
-      return match.model.displayName
-    }
-    return "Choose model"
-  }
-
-  /// The records the picker page browses (discovered + stored + manual).
-  private var pickerRecords: [AccountModelRecord] {
-    modelRecords
+    let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !typed.isEmpty { return typed }
+    return modelRecords.first { $0.model.id == selectedModelID }?.model.displayName
+      ?? "Choose model"
   }
 
   private var modelRecords: [AccountModelRecord] {
-    var records: [AccountModelRecord] = []
-    if let existing {
-      records = model.models(for: existing.id).filter(\.isAvailable)
+    let stored = existing.map { model.models(for: $0.id, includeHidden: true) } ?? []
+    var records: [ModelID: AccountModelRecord] = [:]
+    let catalog = discoveredModels ?? (isCreate ? kind.seedModels : [])
+    for record in stored where discoveredModels == nil || record.isManual {
+      records[record.model.id] = record
     }
-    let discovered = discoveredModels.map {
-      AccountModelRecord(
-        accountID: existing?.id ?? "",
-        model: $0, isManual: false, isAvailable: true)
+    for value in catalog {
+      var record = stored.first { $0.model.id == value.id }
+        ?? AccountModelRecord(accountID: existing?.id ?? "", model: value)
+      record.model = value
+      record.isAvailable = true
+      records[value.id] = record
     }
-    let known = Set(records.map(\.model.id))
-    records.append(contentsOf: discovered.filter { !known.contains($0.model.id) })
-    let manual = manualModelID.trimmingCharacters(in: .whitespaces)
-    if !manual.isEmpty {
-      let manualID = ModelID(rawValue: manual)
-      if !records.contains(where: { $0.model.id == manualID }) {
-        records.append(
-          AccountModelRecord(
-            accountID: existing?.id ?? "",
-            model: ProviderModel(
-              providerID: existing?.providerID ?? kind.defaultProviderID ?? "",
-              id: manualID, displayName: manual),
-            isManual: true, isAvailable: true))
+    for value in manualModels {
+      if var record = records[value.id] {
+        record.isAvailable = true
+        record.isHidden = false
+        records[value.id] = record
+      } else {
+        records[value.id] = AccountModelRecord(
+          accountID: existing?.id ?? "", model: value, isManual: true)
       }
     }
-    return records
+    return records.values.filter {
+      $0.isAvailable && !$0.isHidden && !removedManualModelIDs.contains($0.model.id)
+    }.sorted {
+      if $0.isFavorite != $1.isFavorite { return $0.isFavorite }
+      return $0.model.displayName.localizedCaseInsensitiveCompare($1.model.displayName)
+        == .orderedAscending
+    }
+  }
+
+  private func selectManualModel() {
+    let value = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    let id = ModelID(rawValue: value)
+    removedManualModelIDs.remove(id)
+    if !manualModels.contains(where: { $0.id == id }) {
+      manualModels.append(ProviderModel(
+        providerID: existing?.providerID ?? kind.defaultProviderID ?? "custom",
+        id: id, displayName: value))
+    }
+    selectedModelID = id
+    manualModelID = ""
+    isDirty = true
+  }
+
+  private func stageManualRemoval(_ id: ModelID) {
+    let inDraft = manualModels.contains { $0.id == id }
+    let storedManual = existing.map { account in
+      model.models(for: account.id, includeHidden: true).contains {
+        $0.model.id == id && $0.isManual
+      }
+    } ?? false
+    guard inDraft || storedManual else { return }
+    manualModels.removeAll { $0.id == id }
+    if storedManual { removedManualModelIDs.insert(id) }
+    if selectedModelID == id { selectedModelID = modelRecords.first?.model.id }
+    isDirty = true
   }
 
   private var advancedSection: some View {
     Section {
       DisclosureGroup("Advanced") {
         VStack(alignment: .leading, spacing: 10) {
-          Text("Endpoint Override")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(theme.secondaryForegroundColor)
-          TextField(
-            endpointPlaceholder,
-            text: $baseURL
-          )
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .keyboardType(.URL)
-          .onChange(of: baseURL) { _, _ in isDirty = true }
+          if !(isCreate && isCustom) {
+            Text("Endpoint Override")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(theme.secondaryForegroundColor)
+            TextField(endpointPlaceholder, text: $baseURL)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .keyboardType(.URL)
+              .onChange(of: baseURL) { _, _ in isDirty = true }
+          }
 
           if kind.extraCredentialFields.contains(.appTitle) {
             Text("OpenRouter App Title")
@@ -695,56 +723,112 @@ struct ConnectionEditorView: View {
 
   // MARK: - Actions
 
-  private func fetchModels() {
-    isDiscoveryRunning = true
-    discoveryWarning = nil
-    Task { @MainActor in
-      defer { isDiscoveryRunning = false }
-      if let existing {
-        guard await model.refreshModelsResult(accountID: existing.id) else {
-          discoveryWarning = model.errorMessage ?? "Model discovery failed."
-          model.errorMessage = nil
-          return
-        }
-        autoSelectFirstModelIfNeeded()
-      } else {
-        guard let endpoint = URL(string: baseURL.trimmingCharacters(in: .whitespaces)) else {
-          discoveryWarning = "Enter a valid endpoint to fetch models."
-          return
-        }
-        let definition = draftDefinition
-        let resolved = ResolvedProviderAccount(
-          kind: kind,
-          id: "",
-          providerID: definition.id,
-          label: label.isEmpty ? model.autoName(for: kind, customBase: customName) : label,
-          apiKey: credential.isEmpty ? nil : credential,
-          baseURLOverride: endpoint,
-          additionalHeaders: (try? parseHeadersStrict(headersText)) ?? [:],
-          metadata: [:],
-          chatCompletionsPath: isCustom ? customChatPath : nil,
-          modelsPath: isCustom ? customModelsPath : nil,
-          authChoice: isCustom ? draftDefinition.authentication : nil,
-          seedModelIDs: []
-        )
-        do {
-          discoveredModels = try await model.previewModels(for: resolved)
-          autoSelectFirstModelIfNeeded()
-        } catch {
-          discoveryWarning =
-            "Model discovery failed. Enter a model ID manually to continue."
-        }
-      }
-    }
+  /// Raw form values identify the exact discovery request without storing keys
+  /// outside this view. Changes cancel the request and invalidate its rates.
+  private struct DiscoveryInput: Equatable {
+    let kind: ProviderKind
+    let endpoint: String
+    let credential: String
+    let headers: String
+    let appTitle: String
+    let referer: String
+    let chatPath: String
+    let modelsPath: String
+    let auth: AuthenticationChoice
+    let headerName: String
   }
 
-  /// After a successful fetch, preselect the first available model unless
-  /// the user already picked one (or typed a manual ID).
-  private func autoSelectFirstModelIfNeeded() {
-    guard selectedModelID == nil,
-      manualModelID.trimmingCharacters(in: .whitespaces).isEmpty
-    else { return }
-    selectedModelID = modelRecords.first?.model.id
+  private var discoveryInput: DiscoveryInput {
+    DiscoveryInput(
+      kind: kind, endpoint: baseURL, credential: credential, headers: headersText,
+      appTitle: appTitle, referer: httpReferer, chatPath: customChatPath,
+      modelsPath: customModelsPath, auth: customAuth, headerName: customHeaderName)
+  }
+
+  private var draftMetadata: [String: String] {
+    var metadata = existing?.metadata ?? [:]
+    if kind.extraCredentialFields.contains(.appTitle) {
+      let title = appTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      let referer = httpReferer.trimmingCharacters(in: .whitespacesAndNewlines)
+      metadata["appTitle"] = title.isEmpty ? nil : title
+      metadata["httpReferer"] = referer.isEmpty ? nil : referer
+    }
+    return metadata
+  }
+
+  private func cancelDiscovery() {
+    discoveryTask?.cancel()
+    discoveryTask = nil
+    discoveryID = nil
+    isDiscoveryRunning = false
+  }
+
+  private func invalidateDiscovery() {
+    cancelDiscovery()
+    discoveredModels = nil
+    discoveryWarning = nil
+  }
+
+  private func fetchModels() {
+    let endpointText = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let endpoint: URL?
+    if endpointText.isEmpty {
+      endpoint = kind.defaultEndpoint
+    } else {
+      endpoint = URL(string: endpointText)
+    }
+    guard let endpoint else {
+      discoveryWarning = "Enter a valid endpoint to fetch models."
+      return
+    }
+    let headers: [String: String]
+    do {
+      headers = try parseHeadersStrict(headersText)
+    } catch {
+      discoveryWarning = error.localizedDescription
+      return
+    }
+    let input = discoveryInput
+    let requestID = UUID()
+    let definition = draftDefinition
+    let resolved = ResolvedProviderAccount(
+      kind: kind, id: existing?.id ?? "", providerID: existing?.providerID ?? definition.id,
+      label: label.isEmpty ? suggestedName : label,
+      apiKey: credential.isEmpty ? nil : credential,
+      baseURLOverride: endpoint, additionalHeaders: headers, metadata: draftMetadata,
+      chatCompletionsPath: existing?.chatCompletionsPath
+        ?? (isCustom ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil),
+      modelsPath: existing?.modelsPath
+        ?? (isCustom ? draftDefinition.modelsPath : nil),
+      authChoice: isCustom ? definition.authentication : nil,
+      seedModelIDs: existing?.seedModelIDs ?? [])
+    discoveryTask?.cancel()
+    discoveryID = requestID
+    isDiscoveryRunning = true
+    discoveryWarning = nil
+    discoveryTask = Task { @MainActor in
+      defer {
+        if discoveryID == requestID {
+          isDiscoveryRunning = false
+          discoveryTask = nil
+        }
+      }
+      do {
+        let models = try await model.previewModels(
+          for: resolved, storedCredentialAccountID: existing?.id)
+        guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
+        discoveredModels = models
+        if !modelRecords.contains(where: { $0.model.id == selectedModelID }) {
+          selectedModelID = modelRecords.first?.model.id
+        }
+        if models.isEmpty {
+          discoveryWarning = "No models returned. Enter a model ID manually to continue."
+        }
+      } catch {
+        guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
+        discoveryWarning = "Model discovery failed: \(error.localizedDescription) Enter a model ID manually to continue."
+      }
+    }
   }
 
   private func cancel() {
@@ -766,26 +850,19 @@ struct ConnectionEditorView: View {
       return
     }
 
-    var metadata: [String: String] = existing?.metadata ?? [:]
-    if kind.extraCredentialFields.contains(.appTitle) {
-      let title = appTitle.trimmingCharacters(in: .whitespaces)
-      let referer = httpReferer.trimmingCharacters(in: .whitespaces)
-      if title.isEmpty { metadata.removeValue(forKey: "appTitle") } else {
-        metadata["appTitle"] = title
-      }
-      if referer.isEmpty { metadata.removeValue(forKey: "httpReferer") } else {
-        metadata["httpReferer"] = referer
-      }
-    }
-
-    let resolvedModelID: ModelID? = selectedModelID ?? {
-      let manual = manualModelID.trimmingCharacters(in: .whitespaces)
-      return manual.isEmpty ? nil : ModelID(rawValue: manual)
-    }()
+    let metadata = draftMetadata
+    let typedModel = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedModelID = typedModel.isEmpty ? selectedModelID : ModelID(rawValue: typedModel)
+    let preview = discoveredModels
+    let manualIDs = manualModels.map { $0.id.rawValue } + (typedModel.isEmpty ? [] : [typedModel])
+    // Capture values before suspension; invalidate the outstanding preview.
+    discoveryTask?.cancel()
+    discoveryID = nil
+    isDiscoveryRunning = false
 
     // Single name path: the field is pre-filled with the suggestion, so
     // whatever is here (or a fallback recompute if somehow cleared) saves.
-    let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
+    let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
     let finalLabel = trimmedLabel.isEmpty
       ? model.autoName(for: kind, customBase: customName)
       : trimmedLabel
@@ -795,18 +872,20 @@ struct ConnectionEditorView: View {
     Task { @MainActor in
       defer { isSaving = false }
       if let existing {
-        guard let resolvedModelID else { return }
+        guard resolvedModelID != nil || !removedManualModelIDs.isEmpty else { return }
         guard await model.updateAccount(
           accountID: existing.id,
           label: finalLabel,
           newCredential: credential.isEmpty ? nil : credential,
           baseURLString: baseURL,
           headers: parsedHeaders,
-          metadata: metadata
+          metadata: metadata,
+          defaultModelID: resolvedModelID,
+          clearDefaultModel: resolvedModelID == nil,
+          discoveredModels: preview,
+          manualModelIDs: manualIDs,
+          removedManualModelIDs: removedManualModelIDs
         ) else { return }
-        if existing.defaultModelID != resolvedModelID {
-          await model.setDefaultModel(resolvedModelID, accountID: existing.id)
-        }
       } else {
         let created = await model.createConnection(
           kind: kind,
@@ -817,10 +896,12 @@ struct ConnectionEditorView: View {
           headers: parsedHeaders,
           metadata: metadata,
           chatCompletionsPath: isCustom
-            ? customChatPath.trimmingCharacters(in: .whitespaces) : nil,
-          modelsPath: isCustom ? customModelsPath.trimmingCharacters(in: .whitespaces) : nil,
+            ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+          modelsPath: isCustom ? draftDefinition.modelsPath : nil,
           authChoice: isCustom ? draftDefinition.authentication : nil,
-          seedModelIDs: []
+          seedModelIDs: [],
+          discoveredModels: preview,
+          manualModelIDs: manualIDs
         )
         guard created != nil else { return }
       }
@@ -846,12 +927,13 @@ struct ConnectionEditorView: View {
   }
 }
 
-/// Full-page, searchable model picker used for large catalogs (OpenRouter)
-/// and reachable from the inline menu path via the same component. Tap a row
-/// to select and dismiss; favorites sort first.
+/// Searchable picker for every provider. Tap selects and pops back to the
+/// editor; only the editor's Save/Done persists the selection.
 struct ConnectionModelPickerView: View {
   let records: [AccountModelRecord]
   @Binding var selection: ModelID?
+  @Binding var removedManualModelIDs: Set<ModelID>
+  let onRemoveManual: (ModelID) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
@@ -859,9 +941,10 @@ struct ConnectionModelPickerView: View {
 
   private var filtered: [AccountModelRecord] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let visibleRecords = records.filter { !removedManualModelIDs.contains($0.model.id) }
     let base = query.isEmpty
-      ? records
-      : records.filter {
+      ? visibleRecords
+      : visibleRecords.filter {
         $0.model.displayName.localizedCaseInsensitiveContains(query)
           || $0.model.id.rawValue.localizedCaseInsensitiveContains(query)
       }
@@ -923,6 +1006,20 @@ struct ConnectionModelPickerView: View {
           }
           .buttonStyle(.plain)
           .listRowBackground(theme.surfaceColor)
+          .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if record.isManual {
+              Button("Remove", systemImage: "trash", role: .destructive) {
+                onRemoveManual(record.model.id)
+              }
+            }
+          }
+          .contextMenu {
+            if record.isManual {
+              Button("Remove Custom Model", systemImage: "trash", role: .destructive) {
+                onRemoveManual(record.model.id)
+              }
+            }
+          }
         }
       }
     }
@@ -932,5 +1029,12 @@ struct ConnectionModelPickerView: View {
     .navigationTitle("Choose Model")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $searchText, prompt: "Search models")
+    .safeAreaInset(edge: .bottom) {
+      Text("Swipe left on a manually added model to remove it. Changes save with Done.")
+        .font(.caption2)
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+    }
   }
 }

@@ -242,7 +242,7 @@ public extension ProviderKind {
     case .deepSeek:
       [
         .init(
-          providerID: "deepseek", id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
+          providerID: "deepseek", id: "deepseek-flash", displayName: "DeepSeek Flash",
           contextWindow: 1_000_000, maxOutputTokens: 384_000,
           supportedParameters: [
             "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",

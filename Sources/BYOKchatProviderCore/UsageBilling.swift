@@ -267,9 +267,14 @@ extension ChatBilling {
         isComplete: complete, pricing: pricing, usage: usage,
         missingDimensions: complete ? [] : ["provider billing scope"])
     }
-    guard let usage, let pricing, modelMatches, metadata[unsupportedContextKey] == nil else {
+    var unavailableReasons: [String] = []
+    if usage == nil { unavailableReasons.append("request usage") }
+    if pricing == nil { unavailableReasons.append("supported model pricing") }
+    if !modelMatches { unavailableReasons.append("matching model and account configuration") }
+    if metadata[unsupportedContextKey] != nil { unavailableReasons.append("supported billing context") }
+    guard let usage, let pricing, unavailableReasons.isEmpty else {
       return .init(costUSD: nil, accuracy: .unavailable, isComplete: false,
-        pricing: pricing, usage: usage, missingDimensions: ["usage, pricing, or billing context"])
+        pricing: pricing, usage: usage, missingDimensions: unavailableReasons)
     }
     let rates = pricing.rates(for: usage)
     var missing: [String] = []

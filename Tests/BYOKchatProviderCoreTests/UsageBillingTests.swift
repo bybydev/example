@@ -223,7 +223,7 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   let date = try #require(ISO8601DateFormatter().date(from: "2026-10-07T02:00:00Z"))
   let account = ProviderAccount(kind: .deepSeek, id: "d", providerID: "deepseek", label: "D")
   let peak = try #require(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: date))
-  #expect(peak.rates.input == "0.3" && peak.version == "2026-10-07:peak")
+  #expect(peak.rates.input == "0.3" && peak.version == "2026-10-08:peak")
   #expect(peak.timeRule != nil)
   let offPeakDate = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: offPeakDate)?.rates.input == "0.15")

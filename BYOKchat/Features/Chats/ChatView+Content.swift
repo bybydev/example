@@ -948,7 +948,11 @@ extension ChatView {
       return "No connection configured"
     case .ready:
       let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
-      return "\(account.label) · \(modelName)"
+      guard let id = defaultModelID else { return "\(account.label) · \(modelName)" }
+      let control = providers.capabilities(accountID: account.id, modelID: id).reasoning
+      let reasoningDetail = control.label(for: targetReasoning)
+      return [account.label, modelName, reasoningDetail]
+        .filter { !$0.isEmpty }.joined(separator: " · ")
     }
   }
 
@@ -956,12 +960,8 @@ extension ChatView {
   var emptyStateContent: some View {
     switch readiness {
     case .ready:
-      VStack(spacing: 16) {
-        Text("Opening your chat")
-          .font(.title2.weight(.semibold))
-        Button("Open Chat", action: onReadyForConversation)
-          .buttonStyle(.borderedProminent)
-      }
+      ProgressView()
+        .accessibilityLabel("Opening chat")
     case .noConnection, .missingCredential, .noModel:
       setupContent
     }

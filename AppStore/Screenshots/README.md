@@ -14,7 +14,7 @@ The screenshot launch mode is deterministic and isolated:
 
 After regenerating the project with XcodeGen and committing the generated Xcode project/package resolution files, Xcode Cloud needs no custom setup scripts, environment variables, secrets, or fixture files.
 
-Use the shared `BYOKchatScreenshots` scheme and run the `BYOKchatUITests` test target. The target launches the app with screenshot mode enabled, seeds the fixture state automatically, navigates the real UI, and keeps each capture as an XCTest screenshot attachment in the Xcode Cloud test results.
+Use the shared `BYOKchat` scheme. Its Test action includes both `BYOKchatTests` and `BYOKchatUITests`; Xcode Cloud can run both from this one scheme. The screenshot tests belong to `BYOKchatUITests`. The target launches the app with screenshot mode enabled, seeds the fixture state automatically, navigates the real UI, and keeps each capture as an XCTest screenshot attachment in the Xcode Cloud test results.
 
 Current captures:
 
@@ -42,4 +42,4 @@ SCREENSHOT_DESTINATION='platform=iOS Simulator,name=iPhone 17 Pro' \
   scripts/capture_app_store_screenshots.sh
 ```
 
-`project.yml` is the source of truth for the UI-test target and screenshot scheme. Regenerate the Xcode project with XcodeGen rather than editing the generated project by hand.
+`project.yml` is the source of truth for the UI-test target and main iOS scheme. Regenerate the Xcode project with XcodeGen rather than editing the generated project by hand.

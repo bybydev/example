@@ -46,7 +46,7 @@ public enum BuiltInProviders {
     authentication: .bearer,
     seedModels: [
       .init(
-        providerID: deepSeekID, id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
+        providerID: deepSeekID, id: "deepseek-flash", displayName: "DeepSeek Flash",
         contextWindow: 1_000_000, maxOutputTokens: 384_000,
         supportedParameters: [
           "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",

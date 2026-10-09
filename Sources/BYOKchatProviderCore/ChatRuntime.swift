@@ -400,7 +400,10 @@ public actor ChatRuntime {
               let currentAccount = try? await providerWorkspace.account(id: conversation.accountID)
               billingRequests[billingRequests.count - 1] = ChatBilling.requestBilling(
                 metadata: completedResponse.metadata, usage: completedStepUsage, pricing: pricing,
-                modelMatches: completedResponse.modelID == conversation.modelID
+                modelMatches: ModelPriceResolver.responseModelMatches(
+                  account: pricingAccount, requestedModelID: conversation.modelID,
+                  responseModelID: completedResponse.modelID
+                )
                   && currentAccount?.hasSamePricingContext(as: pricingAccount) == true
               )
               billingRequests[billingRequests.count - 1].requestedAt = pricingDate

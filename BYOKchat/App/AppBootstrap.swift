@@ -10,7 +10,10 @@ final class AppBootstrapController {
   private(set) var state: AppBootstrapState = .loading(.preparingStorage)
   private var didStart = false
 
-  func start(model: AppModel) async {
+  func start(
+    model: AppModel,
+    selectInitialConversation: @MainActor (ConversationID?) -> Void = { _ in }
+  ) async {
     guard !didStart else { return }
     didStart = true
 
@@ -64,6 +67,20 @@ final class AppBootstrapController {
       await model.sweepOrphanFiles()
       model.enableOrphanSweeps()
 
+      state = .loading(.preparingChat)
+      var initialConversationID: ConversationID?
+      if let account = model.providers.resolvedDefaultAccount, model.providers.isReady(account) {
+        guard let id = await model.chats.newChat(projectID: nil) else {
+          throw AppBootstrapError.modelLoad(
+            stage: .preparingChat,
+            message: model.chats.errorMessage ?? "Could not open a new chat. Please try again."
+          )
+        }
+        initialConversationID = id
+      }
+      // Commit the root destination before publishing ready. The main view
+      // must never render a setup/open-chat fallback for a usable connection.
+      selectInitialConversation(initialConversationID)
       state = .ready
     } catch {
       state = .failed(AppBootstrapFailure(stage: currentStage, error: error))
@@ -88,6 +105,7 @@ enum AppBootstrapStage: String, Sendable {
   case loadingTools = "Loading tools"
   case loadingChats = "Loading chats"
   case reconciling = "Checking references"
+  case preparingChat = "Preparing chat"
 }
 
 enum AppBootstrapState: Sendable {
@@ -113,7 +131,7 @@ struct AppBootstrapFailure: Sendable, Equatable {
     switch stage {
     case .preparingStorage:
       "Couldn't Prepare Your Data"
-    case .loadingProviders, .loadingProjects, .loadingTools, .loadingChats, .reconciling:
+    case .loadingProviders, .loadingProjects, .loadingTools, .loadingChats, .reconciling, .preparingChat:
       "Couldn't Start BYOKchat"
     }
   }

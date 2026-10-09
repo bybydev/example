@@ -35,6 +35,20 @@
                ReferencedContainer = "container:BYOKchat.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5A693DFCCE5247397BA3B80F"
+               BuildableName = "BYOKchatUITests.xctest"
+               BlueprintName = "BYOKchatUITests"
+               ReferencedContainer = "container:BYOKchat.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -61,6 +75,17 @@
                BlueprintIdentifier = "DD50D49662FCE73D5ED7892F"
                BuildableName = "BYOKchatTests.xctest"
                BlueprintName = "BYOKchatTests"
+               ReferencedContainer = "container:BYOKchat.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5A693DFCCE5247397BA3B80F"
+               BuildableName = "BYOKchatUITests.xctest"
+               BlueprintName = "BYOKchatUITests"
                ReferencedContainer = "container:BYOKchat.xcodeproj">
             </BuildableReference>
          </TestableReference>

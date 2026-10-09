@@ -10,6 +10,16 @@ final class ProviderManagementModel {
   /// every UI fallback aligned with the account ChatManagementModel will use.
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
+  private(set) var lastModelRefreshByAccount: [ProviderAccountID: Date] = [:]
+  @ObservationIgnored private var catalogRefreshTasks: [ProviderAccountID: Task<Void, Error>] = [:]
+  @ObservationIgnored private var catalogRefreshFailures: [ProviderAccountID: Date] = [:]
+
+  enum CatalogRefreshResult: Equatable {
+    case refreshed, current, throttled, unsupported
+  }
+
+  static let catalogRefreshInterval: TimeInterval = 24 * 60 * 60
+  static let catalogRetryInterval: TimeInterval = 15 * 60
   private(set) var credentialAccountIDs: Set<ProviderAccountID> = []
   private(set) var defaultAccountID: ProviderAccountID?
   var isBusy = false
@@ -82,13 +92,17 @@ final class ProviderManagementModel {
     chatCompletionsPath: String? = nil,
     modelsPath: String? = nil,
     authChoice: ProviderAuthentication? = nil,
-    seedModelIDs: [String]? = nil
+    seedModelIDs: [String]? = nil,
+    discoveredModels: [ProviderModel]? = nil,
+    manualModelIDs: [String] = []
   ) async -> ProviderAccountID? {
     isBusy = true
     errorMessage = nil
     defer { isBusy = false }
+    var createdAccountID: ProviderAccountID?
     do {
       let override = try optionalURL(baseURL)
+      let trimmedModel = defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
       let account = try await accountManager.createAccount(
         kind: kind,
         label: label,
@@ -100,28 +114,22 @@ final class ProviderManagementModel {
         baseURLOverride: override,
         additionalHeaders: headers,
         metadata: metadata,
-        defaultModelID: defaultModel.isEmpty ? nil : ModelID(rawValue: defaultModel)
+        defaultModelID: trimmedModel.isEmpty ? nil : ModelID(rawValue: trimmedModel)
       )
-      if !kind.seedModels.isEmpty {
-        try await workspace.mergeModels(kind.seedModels, for: account.id)
-      }
-      if let defaultModelID = account.defaultModelID,
-        !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
-          $0.model.id == defaultModelID
-        })
-      {
-        try await workspace.addManualModel(
-          ProviderModel(
-            providerID: account.providerID,
-            id: defaultModelID,
-            displayName: defaultModelID.rawValue
-          ),
-          for: account.id
-        )
-      }
+      createdAccountID = account.id
+      try await saveModels(
+        for: account, defaultModelID: account.defaultModelID,
+        discoveredModels: discoveredModels ?? kind.seedModels,
+        manualModelIDs: manualModelIDs,
+        markRefreshed: discoveredModels != nil
+      )
       try await reloadSnapshot()
       return account.id
     } catch {
+      if let createdAccountID {
+        _ = try? await accountManager.deleteAccount(createdAccountID)
+        try? await reloadSnapshot()
+      }
       errorMessage = error.localizedDescription
       return nil
     }
@@ -186,7 +194,12 @@ final class ProviderManagementModel {
     newCredential: String? = nil,
     baseURLString: String? = nil,
     headers: [String: String]? = nil,
-    metadata: [String: String]? = nil
+    metadata: [String: String]? = nil,
+    defaultModelID: ModelID? = nil,
+    clearDefaultModel: Bool = false,
+    discoveredModels: [ProviderModel]? = nil,
+    manualModelIDs: [String] = [],
+    removedManualModelIDs: Set<ModelID> = []
   ) async -> Bool {
     await performResult() {
       var updated = try await workspace.account(id: accountID)
@@ -202,9 +215,21 @@ final class ProviderManagementModel {
       }
       if let headers { updated.additionalHeaders = headers }
       if let metadata { updated.metadata = metadata }
+      if clearDefaultModel { updated.defaultModelID = nil }
+      else if let defaultModelID { updated.defaultModelID = defaultModelID }
       try await accountManager.updateAccount(updated)
       if let newCredential, !newCredential.isEmpty {
         try await accountManager.setCredential(newCredential, accountID: accountID)
+      }
+      if defaultModelID != nil || discoveredModels != nil || !manualModelIDs.isEmpty {
+        try await saveModels(
+          for: updated, defaultModelID: updated.defaultModelID,
+          discoveredModels: discoveredModels, manualModelIDs: manualModelIDs,
+          markRefreshed: discoveredModels != nil
+        )
+      }
+      if !removedManualModelIDs.isEmpty {
+        try await workspace.removeManualModels(removedManualModelIDs, for: accountID)
       }
       try await reloadSnapshot()
     }
@@ -280,10 +305,61 @@ final class ProviderManagementModel {
     }
   }
 
-  /// Preview-only model discovery against an unsaved account (create mode).
-  /// Reads nothing from the workspace and persists nothing.
-  func previewModels(for account: ResolvedProviderAccount) async throws -> [ProviderModel] {
-    try await runtime.listModels(account: account)
+  /// Discovery uses the editor's endpoint/headers/auth draft in either mode.
+  /// Only the unchanged credential comes from storage; preview never writes.
+  func previewModels(
+    for account: ResolvedProviderAccount,
+    storedCredentialAccountID: ProviderAccountID? = nil
+  ) async throws -> [ProviderModel] {
+    var resolved = account
+    try ProviderRegistry.validate(resolved.definition)
+    if resolved.definition.authentication != .none {
+      if resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+        let storedCredentialAccountID {
+        resolved.apiKey = try await accountManager.resolvedAccount(id: storedCredentialAccountID).apiKey
+      }
+      guard resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        throw ProviderError.missingCredential(resolved.providerID)
+      }
+    }
+    return try await runtime.listModels(account: resolved)
+  }
+
+  private func saveModels(
+    for account: ProviderAccount,
+    defaultModelID: ModelID?,
+    discoveredModels: [ProviderModel]?,
+    manualModelIDs: [String],
+    markRefreshed: Bool = false
+  ) async throws {
+    if let discoveredModels {
+      let remapped = discoveredModels.map { model in
+        var value = model
+        value.providerID = account.providerID
+        return value
+      }
+      _ = try await workspace.mergeModels(
+        remapped, for: account.id, expectedAccount: account, markRefreshed: markRefreshed
+      )
+    }
+    let explicitManualIDs = Set(manualModelIDs.map {
+      ModelID(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+    }.filter { !$0.rawValue.isEmpty })
+    var manualIDs = explicitManualIDs
+    if let defaultModelID { manualIDs.insert(defaultModelID) }
+    for id in manualIDs {
+      let record = await workspace.modelRecords(for: account.id, includeHidden: true)
+        .first { $0.model.id == id }
+      if record?.isAvailable != true || explicitManualIDs.contains(id) {
+        try await workspace.addManualModel(
+          record?.model ?? ProviderModel(providerID: account.providerID, id: id, displayName: id.rawValue),
+          for: account.id
+        )
+      }
+      if record?.isHidden == true {
+        try await workspace.setHidden(false, modelID: id, accountID: account.id)
+      }
+    }
   }
 
   /// Reveal flow: returns the stored credential so the editor can show it on
@@ -293,11 +369,71 @@ final class ProviderManagementModel {
     (try? await accountManager.resolvedAccount(id: accountID))?.apiKey
   }
 
+  /// Cached-first picker refresh. No global spinner/alert and at most one fetch per account.
+  func refreshCatalog(
+    accountID: ProviderAccountID, force: Bool = false, now: Date = .now
+  ) async throws -> CatalogRefreshResult {
+    guard let account = accounts.first(where: { $0.id == accountID }) else {
+      throw ProviderError.accountNotFound(accountID)
+    }
+    guard account.definition.modelsPath != nil else { return .unsupported }
+    if let existing = catalogRefreshTasks[accountID] {
+      try await existing.value
+      return .refreshed
+    }
+    if !force {
+      if let last = lastModelRefreshByAccount[accountID],
+         now.timeIntervalSince(last) < Self.catalogRefreshInterval { return .current }
+      if let failed = catalogRefreshFailures[accountID],
+         now.timeIntervalSince(failed) < Self.catalogRetryInterval { return .throttled }
+    }
+    let task = Task { @MainActor in
+      _ = try await runtime.refreshModels(accountID: accountID)
+      try await reloadSnapshot()
+    }
+    catalogRefreshTasks[accountID] = task
+    defer { catalogRefreshTasks[accountID] = nil }
+    do {
+      try await task.value
+      catalogRefreshFailures[accountID] = nil
+      return .refreshed
+    } catch {
+      catalogRefreshFailures[accountID] = now
+      throw error
+    }
+  }
+
   func refreshModelsResult(accountID: ProviderAccountID) async -> Bool {
     await performResult() {
       _ = try await runtime.refreshModels(accountID: accountID)
       try await reloadSnapshot()
     }
+  }
+
+  /// Model selection may stage an exact ID not yet reported by discovery.
+  /// Persist only on Done; never change the connection's default model.
+  func ensureSelectableModel(_ modelID: ModelID, for accountID: ProviderAccountID) async throws {
+    guard !modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw ProviderError.invalidModel
+    }
+    let existing = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
+    if existing?.isAvailable == true && existing?.isHidden == false { return }
+    let account = try await workspace.account(id: accountID)
+    try await workspace.addManualModel(
+      existing?.model ?? ProviderModel(
+        providerID: account.providerID, id: modelID, displayName: modelID.rawValue),
+      for: accountID
+    )
+    if existing?.isHidden == true {
+      try await workspace.setHidden(false, modelID: modelID, accountID: accountID)
+    }
+    try await reloadSnapshot()
+  }
+
+  /// Picker deletion never touches existing chats or their history.
+  func removeManualModels(_ ids: Set<ModelID>, for accountID: ProviderAccountID) async throws {
+    try await workspace.removeManualModels(ids, for: accountID)
+    try await reloadSnapshot()
   }
 
   func addManualModel(_ modelID: String, accountID: ProviderAccountID) async -> Bool {
@@ -349,19 +485,33 @@ final class ProviderManagementModel {
   /// default is not rewritten here and stale defaults are not repaired.
   /// Resolution falls back in memory via `workspace.resolvedDefaultAccountID`.
   private func reloadSnapshot() async throws {
-    definitions = await registry.allDefinitions()
+    let registeredDefinitions = await registry.allDefinitions()
     let loadedAccounts = await workspace.allAccounts()
+    // New compatible accounts are self-contained and need no legacy custom
+    // definition. Include their derived definitions in presentation/readiness.
+    var definitionsByID = Dictionary(uniqueKeysWithValues: registeredDefinitions.map { ($0.id, $0) })
+    for account in loadedAccounts where definitionsByID[account.providerID] == nil {
+      definitionsByID[account.providerID] = account.definition
+    }
+    definitions = definitionsByID.values.sorted {
+      $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+    }
 
     var modelValues: [ProviderAccountID: [AccountModelRecord]] = [:]
+    var refreshDates: [ProviderAccountID: Date] = [:]
     var credentialValues: Set<ProviderAccountID> = []
     for account in loadedAccounts {
       modelValues[account.id] = await workspace.modelRecords(for: account.id, includeHidden: true)
+      if let date = await workspace.lastModelRefreshAt(for: account.id) {
+        refreshDates[account.id] = date
+      }
       if try await accountManager.hasCredential(accountID: account.id) {
         credentialValues.insert(account.id)
       }
     }
 
     modelsByAccount = modelValues
+    lastModelRefreshByAccount = refreshDates
     credentialAccountIDs = credentialValues
 
     // Plain-value inputs instead of closures: the resolver runs on the

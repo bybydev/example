@@ -54,7 +54,7 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
 - [ ] Complete the Projects smoke path below on the intended Release/TestFlight build; creating a Project alone is insufficient.
 - [ ] Archive Release and run Xcode **Validate App**. Resolve every validation/privacy-manifest warning before upload.
 - [ ] Upload the archive to App Store Connect/TestFlight and install that uploaded build once before submission.
-- [ ] Generate final App Store screenshots using `BYOKchatScreenshots` / `scripts/capture_app_store_screenshots.sh`; inspect the actual PNGs before upload.
+- [ ] Generate final App Store screenshots using the `BYOKchat` scheme / `scripts/capture_app_store_screenshots.sh`; inspect the actual PNGs before upload.
 
 ## Must do in App Store Connect
 
@@ -152,6 +152,28 @@ Implementation boundaries: no Projects architecture redesign or macOS UI changes
 Deferred to iOS 1.0.1/later: empty Project MCP configuration normalization; earlier preset-limit/name validation UX; missing Project-file blob reconciliation; Sources preview/open. Separate explicit-empty chat-override semantics are also outside issue #44.
 
 
+## Provider model editor
+
+- [ ] Add a built-in connection from the generic Add flow: suggested models are visible immediately and Fetch uses the default endpoint.
+- [ ] Type a complete model ID character by character, edit/delete it, then Save directly or use Use Model ID. Repeat with a populated catalog and NVIDIA.
+- [ ] Open the searchable picker for DeepSeek, OpenAI, OpenRouter, and a compatible server; select a model and return without losing fetched results.
+- [ ] Create an OpenRouter connection after Fetch, Save, and relaunch: all fetched models, context/capability metadata, and model pricing survive.
+- [ ] Create a compatible connection using only the main endpoint field. Verify bearer/header/no-auth modes, optional empty models path, and private-network HTTP.
+- [ ] Edit an endpoint, replacement key, headers, or OpenRouter metadata before Fetch: requests use the form values. Leaving the key unchanged uses Keychain.
+- [ ] Fetch in edit mode, then Cancel or swipe-dismiss: stored account, credential, model list, and default remain unchanged.
+- [ ] Change provider/configuration while discovery runs: old results never repopulate the new draft. Switching provider clears the old key/model selection.
+- [ ] Failed or empty discovery leaves manual input usable; malformed headers are shown before discovery.
+- [ ] Save an edited model catalog/default and relaunch: favorites/hidden flags and manual models survive refresh; models omitted from a potentially partial API list remain available in the cached catalog.
+- [ ] A hidden/unavailable saved default requires an explicit valid selection or manual ID before Done; saving that choice makes it usable for new chats.
+- [ ] Saving failure stays in the editor with an error; retry creates no duplicate connection.
+
+## Clean new-chat launch
+
+- [ ] Cold-launch with a ready saved connection: the launch background transitions directly to the hydrated new-chat composer, with no "Open Chat" or provider-setup screen in between.
+- [ ] Cold-launch without a usable connection: show the appropriate connection/model setup state after loading finishes; do not create an invalid chat.
+- [ ] Fail initial chat persistence: present startup recovery/Retry instead of a stuck opening screen. Retry uses the existing unsent-chat recovery path.
+- [ ] Repeated New Chat taps, switching from Library/Providers, and project New Chat open one session without flashing the setup CTA or adding empty chats to history.
+
 ## Analytics release smoke path (issue #46)
 
 Analytics uses remaining saved chat history, not a provider billing ledger. Regeneration, editing earlier turns, and deletion can reduce Spend and Monthly Budget totals. Free and Pro both disclose this. Budget warnings exclude other-app API usage and do not enforce provider limits.
@@ -165,6 +187,8 @@ Code completion does not mark these checks as passed. Record the exact Release/T
 - [ ] OpenRouter non-streaming and final streaming cost (including zero) override prices. Multiple tool rounds use final totals once; mixed reported/estimated rounds retain all known costs. BYOK fees remain scoped/incomplete without verified full upstream semantics.
 - [ ] xAI reported USD ticks remain preferred; native cache reads/writes, Anthropic write duration, Gemini thinking output/cache storage, OpenAI context tiers, and DeepSeek time buckets remain accurate or explicitly incomplete.
 - [ ] Offline catalog fallback, unknown exact IDs, invalid catalog data, and custom endpoints do not invent pricing. See [covered IDs and pricing rules](ModelPricing.md).
+- [ ] Generate a new direct DeepSeek Flash response using the default endpoint and `/v1`: legacy `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` requests may return `deepseek-flash` without losing estimated cost. A genuine Flash-to-Pro change stays unavailable. Inspect the saved source, verification date, and official pricing link in Message Info; relaunch preserves the amount in the lightweight index. Older missing snapshots are not retroactively priced.
+- [ ] For new unavailable receipts, Message Info explains missing supported pricing, missing request usage, changed model/account configuration, or an unsupported billing mode instead of only a generic unavailable explanation.
 - [ ] Edit a custom account endpoint/configuration after discovering prices: its cached rates disappear, model selections/capabilities remain, and old in-flight discovery cannot restore stale rates. Refresh discovers new rates; renaming retains them. Change the endpoint between tool rounds and verify the next round does not borrow the turn's original rates.
 - [ ] Cancel or fail the transport after a provider completion event: the observed usage/cost remains in Message Info, Analytics, and the lightweight index after relaunch. The completed request is not also counted as a failed provider request. Cancellation before completion remains incomplete/unknown.
 - [ ] Relaunch and inspect the lightweight index: numeric costs, completeness, source/version, and per-request rules remain stable after model/catalog price changes, without hydrating all chat shards.
@@ -173,3 +197,22 @@ Code completion does not mark these checks as passed. Record the exact Release/T
 - [ ] Telemetry failure keeps usage/spend usable, hides untrusted performance/reliability throughout, and exposes no raw storage error in ordinary Analytics.
 
 Analytics validation results: **not run on device**. Swift package regression tests are added but **not executed in the implementation workspace (Swift/Xcode unavailable)**. Replace these notes with actual results before release.
+
+## Composer target label polish (PR #49)
+- [ ] Verify iOS composer shows “DS V4.1 Flash” instead of the long “DeepSeek-V4.1-Flash · Default…” label, including after changing model and reasoning in the picker.
+- [ ] Verify provider defaults omit the effort suffix, explicit Medium/High/Off still show succinctly, model families from OpenRouter remain identifiable, and custom providers use compact initials when needed.
+- [ ] VoiceOver announces full provider/account, unabridged model name and reasoning even when the visual chip is shortened.
+
+## Manual model removal (PR #49)
+- [ ] Add a custom ID in Provider Settings; swipe left or long-press the model in Choose Model to remove it. Cancel must preserve it; Done must remove it across relaunch.
+- [ ] Delete a saved custom ID from composer in both flat (≤5) and pushed (6+) layouts. Cancel discards deletion; Done commits. Deleting the selected model requires a replacement model for a chat.
+- [ ] Enter a brand-new model ID in composer, then use Clear entered ID before Done; it must not persist or leave a stale selection.
+- [ ] Removing the provider's only manual default in Connection Settings clears its default and allows reconfiguration. Catalog-only models cannot be deleted through this action.
+- [ ] Confirm existing chats retaining a deleted model ID do not lose history; removing the default updates the connection's fallback without silently rewriting chat targets.
+
+## Composer model picker (issue #50)
+- [ ] For 0–5 models, select inline and confirm reasoning stays directly below the model list.
+- [ ] For 6+ models, tap **anywhere** on the selected-model row (title, empty middle, far trailing edge). The pushed searchable list opens on the **first tap** even with 400+ cached models; Back preserves selection. Switch providers and recheck the threshold.
+- [ ] Enter an exact model ID absent from provider discovery, cancel to discard, then Done to persist and select it. Confirm it appears in Provider Settings after relaunch.
+- [ ] Open an old connection with saved models while offline; keep cached choices available. Retry manual refresh, then verify newly discovered models appear without navigating to settings.
+- [ ] Verify favorites, hidden states, manual IDs, previous selection, and reasoning survive discovery failures and partial lists without duplicate global alerts.

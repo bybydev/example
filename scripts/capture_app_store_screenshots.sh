@@ -21,7 +21,7 @@ xcodegen generate
 
 xcodebuild \
   -project BYOKchat.xcodeproj \
-  -scheme BYOKchatScreenshots \
+  -scheme BYOKchat \
   -destination "${DESTINATION}" \
   -resultBundlePath "${RESULT_BUNDLE}" \
   -only-testing:BYOKchatUITests/BYOKchatScreenshotTests \

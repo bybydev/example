@@ -5,7 +5,20 @@ import BYOKchatProviderCore
 
 @Suite("Composer target labels")
 struct ComposerTargetLabelFormatterTests {
-  @Test("Omits provider for recognizable DeepSeek family")
+  @Test("Hyphenated DeepSeek model ID shows its family and version, not Default")
+  func deepSeekHyphenated() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.deepSeekID,
+      providerName: "DeepSeek",
+      modelName: "DeepSeek-V4.1-Flash",
+      modelID: "deepseek-v4.1-flash",
+      supportedParameters: ["thinking", "reasoning_effort"],
+      reasoning: nil
+    )
+    #expect(label == "DS V4.1 Flash")
+  }
+
+  @Test("Keeps explicit effort on the compressed DeepSeek label")
   func deepSeekLabel() {
     let label = ComposerTargetLabelFormatter.make(
       providerID: BuiltInProviders.deepSeekID,
@@ -15,8 +28,7 @@ struct ComposerTargetLabelFormatterTests {
       supportedParameters: ["thinking", "reasoning_effort"],
       reasoning: .init(enabled: true, effort: .high)
     )
-
-    #expect(label == "V4 Flash · High")
+    #expect(label == "DS V4 Flash · High")
   }
 
   @Test("Keeps Gemini family name while dropping redundant provider metadata")
@@ -29,11 +41,10 @@ struct ComposerTargetLabelFormatterTests {
       supportedParameters: ["thinking"],
       reasoning: .init(enabled: true, maxTokens: 1_024)
     )
-
-    #expect(label == "Gemini 2.5 Pro · 1024 tokens")
+    #expect(label == "Gemini 2.5 Pro · 1K")
   }
 
-  @Test("Uses model family instead of Anthropic provider name")
+  @Test("Direct Anthropic abbreviates the Claude family but preserves Sonnet")
   func claudeLabel() {
     let label = ComposerTargetLabelFormatter.make(
       providerID: BuiltInProviders.anthropicID,
@@ -43,8 +54,33 @@ struct ComposerTargetLabelFormatterTests {
       supportedParameters: ["thinking", "effort"],
       reasoning: .init(enabled: true, effort: .high)
     )
-
     #expect(label == "Sonnet 5 · High")
+  }
+
+  @Test("OpenRouter keeps the model's real vendor instead of an unhelpful router prefix")
+  func aggregatorVendorLabel() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.openRouterID,
+      providerName: "OpenRouter",
+      modelName: "anthropic/claude-sonnet-4.5",
+      modelID: "anthropic/claude-sonnet-4.5",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "Claude Sonnet 4.5")
+  }
+
+  @Test("OpenRouter DeepSeek models preserve the model vendor rather than using DS")
+  func aggregatorDeepSeekLabel() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.openRouterID,
+      providerName: "OpenRouter",
+      modelName: "deepseek/deepseek-v4.1-flash",
+      modelID: "deepseek/deepseek-v4.1-flash",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "DeepSeek V4.1 Flash")
   }
 
   @Test("Adds provider shorthand when model family is ambiguous")
@@ -57,20 +93,64 @@ struct ComposerTargetLabelFormatterTests {
       supportedParameters: ["reasoning"],
       reasoning: nil
     )
-
     #expect(label == "OR · Nova 3.1")
   }
 
-  @Test("Provider Default is distinct from explicit Off")
+  @Test("Custom provider metadata is replaced by initials")
+  func customProviderLabel() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: "my-custom-provider",
+      providerName: "My Lab",
+      modelName: "My Lab - Aster 2",
+      modelID: "aster-2",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "ML · Aster 2")
+  }
+
+  @Test("Only explicit reasoning options occupy composer width")
   func providerDefaultAndOffLabels() {
     func label(_ options: ReasoningOptions?) -> String {
-      ComposerTargetLabelFormatter.make(providerID: "openai", providerName: "OpenAI",
-        modelName: "GPT-5.6 Sol", modelID: "gpt-5.6-sol", supportedParameters: ["reasoning"],
-        reasoning: options)
+      ComposerTargetLabelFormatter.make(
+        providerID: BuiltInProviders.openAIID,
+        providerName: "OpenAI",
+        modelName: "GPT-5.6 Sol",
+        modelID: "gpt-5.6-sol",
+        supportedParameters: ["reasoning"],
+        reasoning: options
+      )
     }
-    #expect(label(nil).hasSuffix("Default (Medium)"))
-    #expect(label(.init(enabled: false)).hasSuffix("Off"))
-    #expect(label(.init(enabled: true, effort: .xhigh)).hasSuffix("Extra High"))
+    #expect(label(nil) == "GPT-5.6 Sol")
+    #expect(label(.init(enabled: false)) == "GPT-5.6 Sol · Off")
+    #expect(label(.init(enabled: true, effort: .medium)) == "GPT-5.6 Sol · Med")
+    #expect(label(.init(enabled: true, effort: .xhigh)) == "GPT-5.6 Sol · X-High")
+  }
+
+  @Test("OpenAI o-series model names are recognized without provider repetition")
+  func oSeriesModelLabel() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.openAIID,
+      providerName: "OpenAI",
+      modelName: "o4-mini",
+      modelID: "o4-mini",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "o4 Mini")
+  }
+
+  @Test("Unknown vendor prefix isn't guessed from a substring")
+  func unknownModelNameKeepsProvider() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: "private-endpoint",
+      providerName: "Private Endpoint",
+      modelName: "supergptish-large",
+      modelID: "supergptish-large",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "PE · supergptish large")
   }
 }
 

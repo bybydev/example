@@ -62,6 +62,10 @@ struct MessageInfoView: View {
             if let snapshot = billing.requests.first?.pricing {
               LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
               if let version = snapshot.version { LabeledContent("Version", value: version) }
+              if let verified = snapshot.verifiedAt { LabeledContent("Verified", value: verified) }
+              if let sourceURL = snapshot.sourceURL, let url = URL(string: sourceURL), url.scheme == "https" {
+                Link("Official pricing", destination: url)
+              }
             }
             if let price = billing.inputPricePerToken {
               LabeledContent("First request input / 1M", value: usagePricePerMillion(price))
@@ -128,6 +132,23 @@ struct MessageInfoView: View {
       return "Includes the reported OpenRouter account charge. Upstream provider cost is excluded, so total inference spend is incomplete."
     }
     if !billing.isComplete {
+      let missing = Set(billing.requests.flatMap(\.missingDimensions))
+      var reasons: [String] = []
+      if missing.contains("supported model pricing") {
+        reasons.append("No supported price was available for the saved model and connection. Official catalog rates cover only listed model IDs and supported direct-provider endpoints.")
+      }
+      if missing.contains("matching model and account configuration") {
+        reasons.append("The returned model differed from the requested model, or the connection changed during the request.")
+      }
+      if missing.contains("request usage") {
+        reasons.append("The provider did not supply request usage.")
+      }
+      if missing.contains("supported billing context") {
+        reasons.append("The provider used a billing mode that the saved pricing rule does not support.")
+      }
+      if !reasons.isEmpty {
+        return reasons.joined(separator: " ") + " Saved costs are estimates and may differ from provider charges."
+      }
       return "Cost is incomplete or unavailable because some requests lack usage, pricing, or supported billing details. A partial estimate is not a guaranteed minimum."
     }
     switch billing.accuracy {

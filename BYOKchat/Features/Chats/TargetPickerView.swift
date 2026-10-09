@@ -2,8 +2,8 @@ import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
-/// The shared target picker: account strip + searchable model list + effort
-/// segments, staged in place and committed in one write.
+/// Shared model target picker with adaptive inline/pushed model selection,
+/// cached-first discovery and reasoning controls on the parent screen.
 ///
 /// Used in three contexts per the redesign:
 /// - Composer chip (fresh + existing chats): full surface, commit via closure
@@ -29,8 +29,13 @@ struct TargetPickerView: View {
   @State private var accountID: ProviderAccountID
   @State private var modelID: ModelID?
   @State private var reasoning: ReasoningOptions?
-  @State private var searchText = ""
   @State private var isCommitting = false
+  @State private var showingManualModelPrompt = false
+  @State private var manualModelID = ""
+  @State private var removedManualModelIDs: Set<ModelID> = []
+  @State private var refreshAccountID: ProviderAccountID?
+  @State private var refreshMessage: String?
+  @State private var commitError: String?
 
   init(
     providers: ProviderManagementModel,
@@ -110,7 +115,26 @@ struct TargetPickerView: View {
       .onChange(of: reasoningControl) { _, control in reasoning = control.normalize(reasoning) }
       .navigationTitle("Model")
       .navigationBarTitleDisplayMode(.inline)
-      .searchable(text: $searchText, prompt: "Search models")
+      .onChange(of: modelID) { _, _ in reasoning = reasoningControl.normalize(reasoning) }
+      .task(id: accountID) { await refreshCatalog(for: accountID, force: false) }
+      .alert("Enter Model ID", isPresented: $showingManualModelPrompt) {
+        TextField("Exact model ID", text: $manualModelID)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        Button("Cancel", role: .cancel) { manualModelID = "" }
+        Button("Use Model") { stageManualModelID() }
+          .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      } message: {
+        Text("Select a model that is not yet listed by your provider.")
+      }
+      .alert("Model Error", isPresented: Binding(
+        get: { commitError != nil },
+        set: { if !$0 { commitError = nil } }
+      )) {
+        Button("OK") { commitError = nil }
+      } message: {
+        Text(commitError ?? "Unable to save model.")
+      }
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { dismiss() }
@@ -191,77 +215,175 @@ struct TargetPickerView: View {
     return account.label
   }
 
+  private var records: [AccountModelRecord] {
+    // Use the rows users actually see, without filtering based on discovery age.
+    providers.models(for: accountID).filter { !removedManualModelIDs.contains($0.model.id) }
+  }
+
+  private var selectedModelTitle: String {
+    selectedRecord?.model.displayName ?? modelID?.rawValue ?? "Choose Model"
+  }
+
   private var modelListSection: some View {
-    Section("Model") {
-      if records.isEmpty {
-        ContentUnavailableView.search(text: searchText)
-          .listRowBackground(Color.clear)
+    Section {
+      if TargetPickerLayout.showsInlineModels(count: records.count) {
+        if let modelID,
+           !records.contains(where: { $0.model.id == modelID }) {
+          // A newly typed ID is staged, but has not been written to storage yet.
+          HStack {
+            Label(modelID.rawValue, systemImage: "checkmark")
+              .foregroundStyle(theme.primaryForegroundColor)
+            Spacer()
+            Button("Clear entered ID", systemImage: "xmark.circle.fill") {
+              clearUnlistedSelection()
+            }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+        if records.isEmpty {
+          Text("No saved models yet. Refresh or enter an exact model ID.")
+            .font(.footnote)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        } else {
+          ForEach(records) { record in
+            Button {
+              guard record.isAvailable else { return }
+              modelID = record.model.id
+            } label: {
+              TargetModelRow(record: record, selected: record.model.id == modelID)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!record.isAvailable)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              if record.isManual {
+                Button("Remove", systemImage: "trash", role: .destructive) {
+                  stageManualRemoval(record.model.id)
+                }
+              }
+            }
+            .contextMenu {
+              if record.isManual {
+                Button("Remove Custom Model", systemImage: "trash", role: .destructive) {
+                  stageManualRemoval(record.model.id)
+                }
+              }
+            }
+          }
+        }
+        Button("Enter Model ID", systemImage: "plus") { showManualPrompt() }
       } else {
-        ForEach(records) { record in
-          modelRow(record)
+        // Use a real navigation row instead of a plain Button with a Spacer.
+        // A plain-styled Button only hit-tests its rendered children; the blank
+        // middle of a wide row otherwise requires repeated, precisely placed taps.
+        NavigationLink {
+          TargetModelChoiceList(
+            records: providers.models(for: accountID),
+            selectedModelID: $modelID,
+            removedManualModelIDs: $removedManualModelIDs,
+            onRemoveManual: stageManualRemoval
+          )
+        } label: {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(selectedModelTitle)
+              .foregroundStyle(theme.primaryForegroundColor)
+            Text("\(records.count) saved models")
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+          .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+          .contentShape(Rectangle())
+        }
+        if let modelID, !records.contains(where: { $0.model.id == modelID }) {
+          Button("Clear entered ID", systemImage: "xmark.circle") {
+            clearUnlistedSelection()
+          }
         }
       }
+    } header: {
+      HStack {
+        Text("Model")
+        Spacer()
+        if selectedAccount?.definition.modelsPath != nil {
+          Button {
+            Task { await refreshCatalog(for: accountID, force: true) }
+          } label: {
+            if refreshAccountID == accountID {
+              ProgressView().controlSize(.mini)
+            } else {
+              Label("Refresh", systemImage: "arrow.clockwise")
+            }
+          }
+          .disabled(refreshAccountID == accountID)
+          .font(.caption)
+        }
+      }
+    } footer: {
+      VStack(alignment: .leading, spacing: 3) {
+        if let refreshed = providers.lastModelRefreshByAccount[accountID] {
+          Text("Catalog checked \(refreshed.formatted(date: .abbreviated, time: .shortened))")
+        } else {
+          Text("Showing saved models; catalog has not been refreshed yet.")
+        }
+        if let refreshMessage { Text(refreshMessage) }
+        if records.contains(where: { $0.isManual }) {
+          Text("Swipe left or long-press a custom model to remove it. Done saves changes.")
+        }
+        if modelID == nil && !removedManualModelIDs.isEmpty {
+          Text("Choose another model before Done, or remove the last model in Provider Settings.")
+        }
+      }
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var records: [AccountModelRecord] {
-    var values = providers.models(for: accountID, includeHidden: true)
-    let query = searchText.trimmingCharacters(in: .whitespaces)
-    if !query.isEmpty {
-      values = values.filter {
-        $0.model.displayName.localizedCaseInsensitiveContains(query)
-          || $0.model.id.rawValue.localizedCaseInsensitiveContains(query)
-      }
-    }
-    return values
+  private func clearUnlistedSelection() {
+    modelID = records.first(where: { $0.isAvailable })?.model.id
   }
 
-  @ViewBuilder
-  private func modelRow(_ record: AccountModelRecord) -> some View {
-    let isSelected = record.model.id == modelID
-    Button {
-      // Stages the selection only — the sheet stays open so provider, model,
-      // and reasoning can all be adjusted before Done applies everything.
-      guard record.isAvailable, !record.isHidden else { return }
-      modelID = record.model.id
-    } label: {
-      HStack(alignment: .top, spacing: 10) {
-        VStack(alignment: .leading, spacing: 5) {
-          HStack(spacing: 6) {
-            Text(record.model.displayName)
-              .font(.body.weight(.medium))
-              .foregroundStyle(theme.primaryForegroundColor)
-            if isSelected {
-              Image(systemName: "checkmark")
-                .foregroundStyle(.tint)
-            }
-          }
-          Text(record.model.id.rawValue)
-            .font(.caption.monospaced())
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .lineLimit(2)
-          HStack(spacing: 8) {
-            if let context = record.model.contextWindow {
-              Text("\(context.formatted(.number.notation(.compactName))) ctx")
-            }
-            if record.model.inputModalities.contains("image") {
-              Label("Vision", systemImage: "photo")
-            }
-            if record.model.inputModalities.contains("file") {
-              Label("Files", systemImage: "doc")
-            }
-          }
-          .font(.caption2)
-          .foregroundStyle(theme.secondaryForegroundColor)
-        }
-        Spacer(minLength: 8)
-      }
-      .contentShape(Rectangle())
-      .opacity(record.isAvailable ? 1 : 0.45)
+  private func stageManualRemoval(_ id: ModelID) {
+    guard providers.models(for: accountID, includeHidden: true).contains(where: {
+      $0.model.id == id && $0.isManual
+    }) else { return }
+    removedManualModelIDs.insert(id)
+    if modelID == id { modelID = records.first(where: { $0.isAvailable })?.model.id }
+  }
+
+  private func showManualPrompt() {
+    manualModelID = ""
+    showingManualModelPrompt = true
+  }
+
+  private func stageManualModelID() {
+    let exactID = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !exactID.isEmpty else { return }
+    let selected = ModelID(rawValue: exactID)
+    removedManualModelIDs.remove(selected)
+    modelID = selected
+    manualModelID = ""
+  }
+
+  private func refreshCatalog(for requestedAccount: ProviderAccountID, force: Bool) async {
+    refreshAccountID = requestedAccount
+    if accountID == requestedAccount { refreshMessage = nil }
+    defer {
+      if refreshAccountID == requestedAccount { refreshAccountID = nil }
     }
-    .buttonStyle(.plain)
-    .disabled(!record.isAvailable || record.isHidden)
+    do {
+      let result = try await providers.refreshCatalog(accountID: requestedAccount, force: force)
+      guard accountID == requestedAccount else { return }
+      switch result {
+      case .refreshed: refreshMessage = "Model list updated."
+      case .unsupported: refreshMessage = "This provider does not offer model discovery. Enter an exact model ID instead."
+      case .current, .throttled: break
+      }
+    } catch {
+      guard accountID == requestedAccount else { return }
+      refreshMessage = "Could not refresh models: \(error.localizedDescription). Saved models are still available."
+    }
   }
 
   private var reasoningSection: some View {
@@ -302,42 +424,191 @@ struct TargetPickerView: View {
   private func selectAccount(_ account: ProviderAccount) {
     guard account.id != accountID else { return }
     accountID = account.id
+    removedManualModelIDs.removeAll()
     modelID =
       account.defaultModelID
       ?? providers.models(for: account.id).first(where: \.isAvailable)?.model.id
     reasoning = reasoningControl.normalize(reasoning)
   }
 
-  /// Commit happens only on Done: whatever is staged at that moment
-  /// (account, model, effort) is applied once, then the sheet dismisses.
+  /// Done is the only persistence boundary for a manually entered ID.
   private func commit() {
     guard !isCommitting, reasoningError == nil, let account = selectedAccount, let modelID else { return }
     isCommitting = true
+    commitError = nil
     let reasoning = reasoningControl.normalize(reasoning)
-
-    switch mode {
-    case .stage(let commit):
-      commit(NewChatTargetSelection(accountID: account.id, modelID: modelID, reasoning: reasoning))
-      dismiss()
-    case .existingChat(let conversation, let chats):
-      var options = conversation.options
-      if account.providerID != BuiltInProviders.openRouterID {
-        options.openRouterRouting = nil
-      }
-      options.reasoning = reasoning
-      Task { @MainActor in
-        if await chats.updateTarget(
-          conversationID: conversation.id,
-          account: account,
-          modelID: modelID,
-          systemPrompt: conversation.systemPrompt,
-          options: options
-        ) {
+    Task { @MainActor in
+      do {
+        try await providers.ensureSelectableModel(modelID, for: account.id)
+        switch mode {
+        case .stage(let commit):
+          try await providers.removeManualModels(removedManualModelIDs, for: account.id)
+          commit(NewChatTargetSelection(accountID: account.id, modelID: modelID, reasoning: reasoning))
           dismiss()
-        } else {
-          isCommitting = false
+        case .existingChat(let conversation, let chats):
+          var options = conversation.options
+          if account.providerID != BuiltInProviders.openRouterID {
+            options.openRouterRouting = nil
+          }
+          options.reasoning = reasoning
+          if await chats.updateTarget(
+            conversationID: conversation.id,
+            account: account,
+            modelID: modelID,
+            systemPrompt: conversation.systemPrompt,
+            options: options
+          ) {
+            try await providers.removeManualModels(removedManualModelIDs, for: account.id)
+            dismiss()
+          } else {
+            commitError = "Unable to update this chat's model."
+          }
+        }
+      } catch {
+        commitError = error.localizedDescription
+      }
+      isCommitting = false
+    }
+  }
+}
+
+/// UI layout only: model freshness and provider availability do not affect this threshold.
+enum TargetPickerLayout {
+  static func showsInlineModels(count: Int) -> Bool { count <= 5 }
+}
+
+private struct TargetModelRow: View {
+  let record: AccountModelRecord
+  let selected: Bool
+
+  @Environment(\.appFoundationTheme) private var theme
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(spacing: 6) {
+          Text(record.model.displayName)
+            .font(.body.weight(.medium))
+            .foregroundStyle(theme.primaryForegroundColor)
+          if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+        }
+        Text(record.model.id.rawValue)
+          .font(.caption.monospaced())
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .lineLimit(2)
+        HStack(spacing: 8) {
+          if let context = record.model.contextWindow {
+            Text("\(context.formatted(.number.notation(.compactName))) ctx")
+          }
+          if record.model.inputModalities.contains("image") {
+            Label("Vision", systemImage: "photo")
+          }
+          if record.model.inputModalities.contains("file") {
+            Label("Files", systemImage: "doc")
+          }
+        }
+        .font(.caption2)
+        .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      Spacer(minLength: 8)
+    }
+    .contentShape(Rectangle())
+    .opacity(record.isAvailable ? 1 : 0.45)
+  }
+}
+
+/// Pushed within the picker NavigationStack; selecting a model pops back to reasoning.
+private struct TargetModelChoiceList: View {
+  let records: [AccountModelRecord]
+  @Binding var selectedModelID: ModelID?
+  @Binding var removedManualModelIDs: Set<ModelID>
+  let onRemoveManual: (ModelID) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var searchText = ""
+  @State private var showingManualModelPrompt = false
+  @State private var manualModelID = ""
+
+  private var filtered: [AccountModelRecord] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let visible = records.filter { !removedManualModelIDs.contains($0.model.id) }
+    guard !query.isEmpty else { return visible }
+    return visible.filter {
+      $0.model.displayName.localizedCaseInsensitiveContains(query)
+        || $0.model.id.rawValue.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  var body: some View {
+    List {
+      if filtered.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+      } else {
+        ForEach(filtered) { record in
+          Button {
+            guard record.isAvailable else { return }
+            selectedModelID = record.model.id
+            dismiss()
+          } label: {
+            TargetModelRow(record: record, selected: record.model.id == selectedModelID)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .disabled(!record.isAvailable)
+          .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if record.isManual {
+              Button("Remove", systemImage: "trash", role: .destructive) {
+                onRemoveManual(record.model.id)
+              }
+            }
+          }
+          .contextMenu {
+            if record.isManual {
+              Button("Remove Custom Model", systemImage: "trash", role: .destructive) {
+                onRemoveManual(record.model.id)
+              }
+            }
+          }
         }
       }
+      Button("Enter Model ID", systemImage: "plus") {
+        manualModelID = ""
+        showingManualModelPrompt = true
+      }
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Choose Model")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search models")
+    .safeAreaInset(edge: .bottom) {
+      if filtered.contains(where: { $0.isManual }) {
+        Text("Swipe left or long-press a custom model to remove it. Done saves changes.")
+          .font(.caption2)
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 6)
+      }
+    }
+    .alert("Enter Model ID", isPresented: $showingManualModelPrompt) {
+      TextField("Exact model ID", text: $manualModelID)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+      Button("Cancel", role: .cancel) { manualModelID = "" }
+      Button("Use Model") {
+        let exactID = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !exactID.isEmpty else { return }
+        let id = ModelID(rawValue: exactID)
+        removedManualModelIDs.remove(id)
+        selectedModelID = id
+        dismiss()
+      }
+      .disabled(manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    } message: {
+      Text("Select a model that is not yet listed by your provider.")
     }
   }
 }

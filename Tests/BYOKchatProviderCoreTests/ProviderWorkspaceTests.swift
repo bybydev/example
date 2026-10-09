@@ -150,7 +150,7 @@ final class ProviderWorkspaceTests: XCTestCase {
     }
   }
 
-  func testModelRefreshPreservesFavoritesManualModelsAndMarksMissingModelsUnavailable() async throws
+  func testModelRefreshPreservesFavoritesManualModelsAndOlderCatalogEntries() async throws
   {
     let (workspace, manager, _) = try await makeEnvironment()
     let account = try await manager.createAccount(
@@ -172,9 +172,78 @@ final class ProviderWorkspaceTests: XCTestCase {
 
     let records = await workspace.modelRecords(for: account.id, includeHidden: true)
     XCTAssertEqual(records.first(where: { $0.model.id == first.id })?.isFavorite, true)
-    XCTAssertEqual(records.first(where: { $0.model.id == second.id })?.isAvailable, false)
+    XCTAssertEqual(records.first(where: { $0.model.id == second.id })?.isAvailable, true)
     XCTAssertEqual(records.first(where: { $0.model.id == manual.id })?.isManual, true)
     XCTAssertEqual(records.first(where: { $0.model.id == manual.id })?.isAvailable, true)
+  }
+
+  func testModelRefreshTimestampPersistsAndInvalidatesOnConnectionChange() async throws {
+    let persistence = InMemoryProviderWorkspacePersistence()
+    let workspace = ProviderWorkspaceStore(persistence: persistence)
+    try await workspace.load()
+    let account = ProviderAccount(kind: .deepSeek, label: "Saved")
+    try await workspace.upsertAccount(account)
+    let initialRefresh = await workspace.lastModelRefreshAt(for: account.id)
+    XCTAssertNil(initialRefresh)
+    let model = ProviderModel(providerID: account.providerID, id: "new-model", displayName: "New Model")
+    let checkedAt = Date(timeIntervalSince1970: 1_780_000_000)
+    try await workspace.mergeModels([model], for: account.id, at: checkedAt, markRefreshed: true)
+    let reloaded = ProviderWorkspaceStore(persistence: persistence)
+    try await reloaded.load()
+    let reloadedRefresh = await reloaded.lastModelRefreshAt(for: account.id)
+    XCTAssertEqual(reloadedRefresh, checkedAt)
+
+    var changed = account
+    changed.baseURLOverride = URL(string: "https://example.org/v1")
+    try await reloaded.upsertAccount(changed)
+    let invalidatedRefresh = await reloaded.lastModelRefreshAt(for: account.id)
+    XCTAssertNil(invalidatedRefresh)
+    let staleApplied = try await reloaded.mergeModels(
+      [model], for: account.id, expectedAccount: account, markRefreshed: true
+    )
+    XCTAssertFalse(staleApplied)
+    let staleRefresh = await reloaded.lastModelRefreshAt(for: account.id)
+    XCTAssertNil(staleRefresh)
+  }
+
+  func testDeletingManualModelPreservesOtherModelsAndUpdatesDefault() async throws {
+    let (workspace, manager, _) = try await makeEnvironment()
+    let account = try await manager.createAccount(
+      kind: .deepSeek, label: "Saved", credential: "key", defaultModelID: "manual-a"
+    )
+    let discovered = ProviderModel(providerID: account.providerID, id: "catalog", displayName: "Catalog")
+    let manual = ProviderModel(providerID: account.providerID, id: "manual-a", displayName: "Manual A")
+    try await workspace.mergeModels([discovered], for: account.id)
+    try await workspace.addManualModel(manual, for: account.id)
+    try await workspace.setFavorite(true, modelID: discovered.id, accountID: account.id)
+    try await workspace.removeManualModels([manual.id], for: account.id)
+    let models = await workspace.modelRecords(for: account.id)
+    XCTAssertFalse(models.contains { $0.model.id == manual.id })
+    XCTAssertEqual(models.first(where: { $0.model.id == discovered.id })?.isFavorite, true)
+    let changedAccount = try await workspace.account(id: account.id)
+    XCTAssertEqual(changedAccount.defaultModelID, discovered.id)
+    do {
+      try await workspace.removeManualModels([discovered.id], for: account.id)
+      XCTFail("Catalog-only entries must not be removable as manual models")
+    } catch ProviderError.invalidRequest {
+      // Expected.
+    }
+    let afterInvalidRemoval = await workspace.modelRecords(for: account.id)
+    XCTAssertEqual(afterInvalidRemoval.count, 1)
+  }
+
+  func testRemovingOnlyManualDefaultClearsConnectionDefault() async throws {
+    let (workspace, manager, _) = try await makeEnvironment()
+    let account = try await manager.createAccount(
+      kind: .deepSeek, label: "Saved", credential: "key", defaultModelID: "manual-only"
+    )
+    let manual = ProviderModel(providerID: account.providerID, id: "manual-only", displayName: "Only")
+    try await workspace.addManualModel(manual, for: account.id)
+    try await workspace.removeManualModels([manual.id], for: account.id)
+    let changed = try await workspace.account(id: account.id)
+    XCTAssertNil(changed.defaultModelID)
+    let remaining = await workspace.modelRecords(for: account.id)
+    XCTAssertTrue(remaining.isEmpty)
   }
 
   func testNoAuthCustomProviderCanResolveWithoutCredential() async throws {

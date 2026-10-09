@@ -239,7 +239,17 @@ public actor ProviderRuntime {
     )
     let adapter = makeAdapter(for: resolved)
     let models = try await adapter.listModels(account: resolved)
-    try await workspace.mergeModels(models, for: accountID, expectedAccount: expectedAccount)
+    // A credential may be replaced while discovery is in flight. Never accept
+    // results from an obsolete key, even when endpoint settings are unchanged.
+    let currentAccount = try await accounts.resolvedAccount(id: accountID)
+    guard currentAccount.apiKey == resolved.apiKey else {
+      throw ProviderError.invalidRequest("Connection credentials changed during model discovery.")
+    }
+    guard try await workspace.mergeModels(
+      models, for: accountID, expectedAccount: expectedAccount, markRefreshed: true
+    ) else {
+      throw ProviderError.invalidRequest("Connection changed during model discovery.")
+    }
     return await workspace.modelRecords(for: accountID)
   }
 

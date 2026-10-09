@@ -156,13 +156,8 @@ public enum ModelPriceResolver {
 
     // Direct-provider catalog rates must never leak into proxies, regional
     // endpoints, or arbitrary compatible accounts with a matching model name.
-    guard account.kind != .openAICompatible, account.providerID == account.kind.defaultProviderID,
-      let endpoint = account.kind.defaultEndpoint,
-      sameEndpoint(account.baseURLOverride ?? endpoint, endpoint),
-      let catalog = ModelPricingCatalog.bundled,
-      let entry = catalog.entries.first(where: {
-        $0.provider == account.providerID.rawValue && $0.modelIDs.contains(modelID.rawValue)
-      })
+    guard let catalog = ModelPricingCatalog.bundled,
+      let entry = catalogEntry(account: account, modelID: modelID, catalog: catalog)
     else { return nil }
     let day = utcDay(date)
     if let expiry = entry.validUntil, day >= expiry { return nil }
@@ -189,6 +184,44 @@ public enum ModelPriceResolver {
     )
   }
 
+  /// A provider may return the canonical ID for a requested legacy alias.
+  /// Accept only explicitly verified aliases in the same direct-provider
+  /// catalog entry; a real model change must still invalidate calculation.
+  public static func responseModelMatches(
+    account: ProviderAccount, requestedModelID: ModelID, responseModelID: ModelID
+  ) -> Bool {
+    if requestedModelID == responseModelID { return true }
+    guard let catalog = ModelPricingCatalog.bundled,
+      let entry = catalogEntry(account: account, modelID: requestedModelID, catalog: catalog)
+    else { return false }
+    return entry.modelIDs.contains(responseModelID.rawValue)
+  }
+
+  private static func catalogEntry(
+    account: ProviderAccount, modelID: ModelID, catalog: ModelPricingCatalog
+  ) -> ModelPricingCatalog.Entry? {
+    guard account.kind != .openAICompatible,
+      account.providerID == account.kind.defaultProviderID,
+      let endpoint = account.kind.defaultEndpoint
+    else { return nil }
+    let configured = account.baseURLOverride ?? endpoint
+    // DeepSeek also accepts the OpenAI-compatible /v1 base URL spelling.
+    // Normalize that exact path only, keeping host/auth/query checks strict.
+    var normalized = configured
+    if account.kind == .deepSeek, configured.path == "/v1" || configured.path == "/v1/" {
+      guard var components = URLComponents(url: configured, resolvingAgainstBaseURL: false) else {
+        return nil
+      }
+      components.path = ""
+      guard let url = components.url else { return nil }
+      normalized = url
+    }
+    guard sameEndpoint(normalized, endpoint) else { return nil }
+    return catalog.entries.first {
+      $0.provider == account.providerID.rawValue && $0.modelIDs.contains(modelID.rawValue)
+    }
+  }
+
   private static func perMillion(_ value: String?) -> String? {
     ChatBilling.decimal(value).map { ChatBilling.decimalString($0 * 1_000_000) }
   }
@@ -196,7 +229,7 @@ public enum ModelPriceResolver {
   private static func sameEndpoint(_ lhs: URL, _ rhs: URL) -> Bool {
     lhs.scheme?.lowercased() == rhs.scheme?.lowercased()
       && lhs.host?.lowercased() == rhs.host?.lowercased()
-      && lhs.port == rhs.port && lhs.user == nil && lhs.password == nil
+      && (lhs.port ?? 443) == (rhs.port ?? 443) && lhs.user == nil && lhs.password == nil
       && lhs.query == nil && lhs.fragment == nil
       && lhs.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         == rhs.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

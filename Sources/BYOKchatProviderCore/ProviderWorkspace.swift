@@ -36,6 +36,8 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
   public var modelRecords: [AccountModelRecord]
   public var defaultAccountID: ProviderAccountID?
   public var providerDefaultAccountIDs: [String: String]
+  /// Optional so schema-v2 workspaces created before catalog timestamps decode unchanged.
+  public var lastSuccessfulModelRefreshAt: [String: Date]?
 
   public init(
     schemaVersion: Int = Self.currentSchemaVersion,
@@ -43,7 +45,8 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     accounts: [ProviderAccount] = [],
     modelRecords: [AccountModelRecord] = [],
     defaultAccountID: ProviderAccountID? = nil,
-    providerDefaultAccountIDs: [String: String] = [:]
+    providerDefaultAccountIDs: [String: String] = [:],
+    lastSuccessfulModelRefreshAt: [String: Date]? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.customProviders = customProviders
@@ -51,6 +54,7 @@ public struct ProviderWorkspaceState: Codable, Sendable, Equatable {
     self.modelRecords = modelRecords
     self.defaultAccountID = defaultAccountID
     self.providerDefaultAccountIDs = providerDefaultAccountIDs
+    self.lastSuccessfulModelRefreshAt = lastSuccessfulModelRefreshAt
   }
 }
 
@@ -111,6 +115,10 @@ public actor ProviderWorkspaceStore {
 
   public func snapshot() -> ProviderWorkspaceState { state }
 
+  public func lastModelRefreshAt(for accountID: ProviderAccountID) -> Date? {
+    state.lastSuccessfulModelRefreshAt?[accountID.rawValue]
+  }
+
   public func allAccounts() -> [ProviderAccount] {
     state.accounts.sorted { lhs, rhs in
       if lhs.providerID == rhs.providerID {
@@ -138,6 +146,7 @@ public actor ProviderWorkspaceStore {
     value.updatedAt = .now
     if let index = state.accounts.firstIndex(where: { $0.id == value.id }) {
       if !state.accounts[index].hasSamePricingContext(as: value) {
+        state.lastSuccessfulModelRefreshAt?[value.id.rawValue] = nil
         for modelIndex in state.modelRecords.indices
         where state.modelRecords[modelIndex].accountID == value.id {
           // Keep model selections and capabilities, but never reuse prices
@@ -165,6 +174,7 @@ public actor ProviderWorkspaceStore {
     var candidate = state
     candidate.accounts.removeAll { $0.id == id }
     candidate.modelRecords.removeAll { $0.accountID == id }
+    candidate.lastSuccessfulModelRefreshAt?[id.rawValue] = nil
     if candidate.defaultAccountID == id { candidate.defaultAccountID = candidate.accounts.first?.id }
     if candidate.providerDefaultAccountIDs[account.providerID.rawValue] == id.rawValue {
       candidate.providerDefaultAccountIDs[account.providerID.rawValue] =
@@ -279,21 +289,23 @@ public actor ProviderWorkspaceStore {
       }
   }
 
+  /// Merges a catalog without removing older models: provider list endpoints may be partial.
+  /// Only a confirmed remote discovery advances freshness; seeded/manual models do not.
+  @discardableResult
   public func mergeModels(
     _ models: [ProviderModel], for accountID: ProviderAccountID, at date: Date = .now,
-    expectedAccount: ProviderAccount? = nil
-  ) async throws {
+    expectedAccount: ProviderAccount? = nil, markRefreshed: Bool = false
+  ) async throws -> Bool {
     if let expectedAccount {
       let current = try account(id: accountID)
       // Discovery may finish after the user edits the endpoint. Discard that
       // old result rather than restoring the invalidated prices.
-      guard current.hasSamePricingContext(as: expectedAccount) else { return }
+      guard current.hasSamePricingContext(as: expectedAccount) else { return false }
     }
     var records = Dictionary(
       uniqueKeysWithValues: state.modelRecords.filter { $0.accountID == accountID }.map {
         ($0.model.id, $0)
       })
-    let discoveredIDs = Set(models.map(\.id))
     for model in models {
       if var existing = records[model.id] {
         existing.model = mergeModel(existing.model, model)
@@ -304,13 +316,15 @@ public actor ProviderWorkspaceStore {
           accountID: accountID, model: model, isManual: false, isAvailable: true)
       }
     }
-    for (id, var record) in records where !record.isManual && !discoveredIDs.contains(id) {
-      record.isAvailable = false
-      records[id] = record
-    }
+    // Absence from discovery is not proof a model is retired or inaccessible.
     state.modelRecords.removeAll { $0.accountID == accountID }
     state.modelRecords.append(contentsOf: records.values)
+    if markRefreshed {
+      if state.lastSuccessfulModelRefreshAt == nil { state.lastSuccessfulModelRefreshAt = [:] }
+      state.lastSuccessfulModelRefreshAt?[accountID.rawValue] = date
+    }
     try await persist()
+    return true
   }
 
   public func addManualModel(_ model: ProviderModel, for accountID: ProviderAccountID) async throws
@@ -326,6 +340,42 @@ public actor ProviderWorkspaceStore {
       state.modelRecords.append(.init(accountID: accountID, model: model, isManual: true))
     }
     try await persist()
+  }
+
+  /// Remove user-added IDs only; chat history stores its target IDs separately.
+  public func removeManualModels(_ ids: Set<ModelID>, for accountID: ProviderAccountID)
+    async throws
+  {
+    guard !ids.isEmpty else { return }
+    var candidate = state
+    guard let accountIndex = candidate.accounts.firstIndex(where: { $0.id == accountID }) else {
+      throw ProviderError.accountNotFound(accountID)
+    }
+    let stored = candidate.modelRecords.filter { $0.accountID == accountID }
+    for id in ids {
+      guard let record = stored.first(where: { $0.model.id == id }) else {
+        throw ProviderError.modelUnavailable
+      }
+      guard record.isManual else {
+        throw ProviderError.invalidRequest("Only manually added models can be removed.")
+      }
+    }
+    candidate.modelRecords.removeAll {
+      $0.accountID == accountID && ids.contains($0.model.id)
+    }
+    if let currentDefault = candidate.accounts[accountIndex].defaultModelID,
+       ids.contains(currentDefault) {
+      // Removing the connection's default selects a remaining model, if any.
+      candidate.accounts[accountIndex].defaultModelID = candidate.modelRecords
+        .filter { $0.accountID == accountID && $0.isAvailable && !$0.isHidden }
+        .sorted {
+          $0.model.displayName.localizedCaseInsensitiveCompare($1.model.displayName)
+            == .orderedAscending
+        }
+        .first?.model.id
+      candidate.accounts[accountIndex].updatedAt = .now
+    }
+    try await commit(candidate)
   }
 
   public func setFavorite(_ favorite: Bool, modelID: ModelID, accountID: ProviderAccountID)

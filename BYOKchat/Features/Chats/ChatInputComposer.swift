@@ -130,6 +130,9 @@ struct ChatComposer: View {
       ?? account?.label
       ?? conversation.providerID.rawValue
 
+    let capabilities = providers.capabilities(
+      accountID: conversation.accountID, modelID: conversation.modelID
+    )
     targetSummary = ComposerTargetLabelFormatter.make(
       providerID: conversation.providerID,
       providerName: providerName,
@@ -137,9 +140,14 @@ struct ChatComposer: View {
       modelID: conversation.modelID.rawValue,
       supportedParameters: model?.supportedParameters ?? [],
       reasoning: conversation.options.reasoning,
-      capabilities: providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
+      capabilities: capabilities
     )
-    targetDetails = "\(account?.label ?? providerName) · \(model?.displayName ?? conversation.modelID.rawValue)"
+    let reasoningDetail = capabilities.reasoning.label(for: conversation.options.reasoning)
+    targetDetails = [
+      account?.label ?? providerName,
+      model?.displayName ?? conversation.modelID.rawValue,
+      reasoningDetail,
+    ].filter { !$0.isEmpty }.joined(separator: " · ")
     openTarget = openChatSettings
     self.pickPhoto = pickPhoto
     self.pickFile = pickFile
@@ -489,9 +497,12 @@ private struct ChatComposerContentHeightKey: PreferenceKey {
 }
 
 enum ComposerTargetLabelFormatter {
+  /// Families worth showing in the chip without an extra provider abbreviation.
+  /// Only match the beginning of the model name, not an arbitrary substring.
   private static let recognizableFamilies = [
-    "gpt", "claude", "sonnet", "opus", "haiku", "gemini", "deepseek", "qwen",
-    "llama", "mistral", "grok", "kimi", "nemotron", "phi", "command r", "minimax",
+    "gpt", "o1", "o3", "o4", "claude", "sonnet", "opus", "haiku",
+    "gemini", "deepseek", "qwen", "llama", "mistral", "grok", "kimi",
+    "nemotron", "phi", "command r", "minimax",
   ]
 
   static func make(
@@ -506,81 +517,152 @@ enum ComposerTargetLabelFormatter {
     let source = modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? modelID
       : modelName
-    let compactModel = compactModelName(source, providerName: providerName)
-    let recognitionSource = (source + " " + modelID).lowercased()
-    let isRecognizable = recognizableFamilies.contains { recognitionSource.contains($0) }
-
-    var parts: [String] = []
-    if !isRecognizable {
-      parts.append(shortProviderName(providerID: providerID, displayName: providerName))
+    let model = compactModelName(source, providerID: providerID, providerName: providerName)
+    let modelLabel: String
+    if providerID == BuiltInProviders.deepSeekID,
+       model != "DeepSeek" && !model.lowercased().hasPrefix("deepseek ") {
+      // The stripped "V4.1 Flash" alone isn't identifiable: "DS" is compact
+      // and preserves who made the model, even when the API returns hyphenated IDs.
+      modelLabel = "DS \(model)"
+    } else if isRecognizable(model) {
+      // GPT, Claude, Gemini, Llama, etc. already identify the model family.
+      modelLabel = model
+    } else {
+      let provider = shortProviderName(providerID: providerID, displayName: providerName)
+      modelLabel = provider.isEmpty ? model : "\(provider) · \(model)"
     }
-    parts.append(compactModel)
 
     let control = capabilities?.reasoning ?? ModelCapabilityResolver.resolve(
       kind: ProviderKind.allCases.first { $0.defaultProviderID == providerID } ?? .openAICompatible,
       modelID: ModelID(rawValue: modelID)
     ).reasoning
-    let label = control.label(for: reasoning)
-    if !label.isEmpty { parts.append(label) }
-
-    return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    let effort = reasoningLabel(reasoning, control: control)
+    return effort.isEmpty ? modelLabel : "\(modelLabel) · \(effort)"
   }
 
-  private static func compactModelName(_ rawValue: String, providerName: String) -> String {
-    var value = rawValue
-      .replacingOccurrences(of: "_", with: " ")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+  private static func compactModelName(
+    _ value: String, providerID: ProviderID, providerName: String
+  ) -> String {
+    var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    value = collapseWhitespace(value)
-
-    let providerIsModelFamily = recognizableFamilies.contains {
-      providerName.lowercased().contains($0)
-    }
-    if !providerIsModelFamily,
-      value.lowercased().hasPrefix(providerName.lowercased() + " ")
-    {
-      value = String(value.dropFirst(providerName.count))
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+    // Some catalogs expose "vendor/model-id" as the display name itself.
+    // The vendor is still represented by the actual model family below.
+    if !text.contains(where: \.isWhitespace), text.contains("/") {
+      text = String(text.split(separator: "/").last ?? Substring(text))
     }
 
-    let removableVendorPrefixes = [
-      "OpenAI",
-      "Anthropic",
-      "Google DeepMind",
-      "Google",
-      "Meta AI",
-      "Meta",
-      "Alibaba",
-      "NVIDIA",
-    ]
+    // Normalize model-ID separators but preserve the familiar "GPT-5.x" spelling.
+    text = text.replacingOccurrences(of: "_", with: " ")
+    if text.lowercased().hasPrefix("gpt-") {
+      text = "GPT-" + String(text.dropFirst(4)).replacingOccurrences(of: "-", with: " ")
+    } else {
+      text = text.replacingOccurrences(of: "-", with: " ")
+    }
+    text = collapseWhitespace(text)
 
-    for prefix in removableVendorPrefixes {
-      if value.lowercased().hasPrefix(prefix.lowercased() + " ") {
-        value = String(value.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    // Strip vendor metadata, not the distinctive model family. On OpenRouter,
+    // for example, "Claude" or "DeepSeek" must remain in the visible name.
+    for prefix in [
+      "Google DeepMind", "Meta AI", "OpenAI", "Anthropic", "Google",
+      "Meta", "Alibaba", "NVIDIA",
+    ] {
+      if let stripped = removingPrefix(text, prefix) {
+        text = stripped
         break
       }
     }
+    if providerID == BuiltInProviders.deepSeekID,
+       let stripped = removingPrefix(text, "DeepSeek") {
+      text = stripped
+    } else if providerID == BuiltInProviders.anthropicID,
+              let stripped = removingPrefix(text, "Claude") {
+      text = stripped
+    }
 
-    let lower = value.lowercased()
-    if lower.hasPrefix("claude ") {
-      value = String(value.dropFirst("Claude ".count))
-    } else if lower.hasPrefix("deepseek ") {
-      let remainder = String(value.dropFirst("DeepSeek ".count))
-      let remainderLower = remainder.lowercased()
-      if remainderLower.hasPrefix("v")
-        || remainderLower.hasPrefix("r")
-        || remainderLower.hasPrefix("coder")
-        || remainderLower.hasPrefix("reasoner")
-      {
-        value = remainder
+    // Custom endpoints may repeat the configured provider label in the model.
+    if !isRecognizable(providerName),
+       let stripped = removingPrefix(text, providerName) {
+      text = stripped
+    }
+
+    text = canonicalizeFamilyWords(text)
+    return collapseWhitespace(text).isEmpty ? value : collapseWhitespace(text)
+  }
+
+  private static func canonicalizeFamilyWords(_ value: String) -> String {
+    // Discovered IDs are often lowercased and hyphenated; apply canonical case
+    // only to known family tokens, leaving version numbers and suffixes intact.
+    let familyNames: [String: String] = [
+      "claude": "Claude", "sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku",
+      "gemini": "Gemini", "deepseek": "DeepSeek", "gpt": "GPT", "qwen": "Qwen",
+      "llama": "Llama", "mistral": "Mistral", "grok": "Grok",
+      "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
+      "flash": "Flash", "pro": "Pro", "mini": "Mini", "nano": "Nano",
+      "turbo": "Turbo", "lite": "Lite", "preview": "Preview",
+      "instruct": "Instruct", "reasoner": "Reasoner", "coder": "Coder",
+      "chat": "Chat", "thinking": "Thinking", "sol": "Sol",
+    ]
+    return value.split(separator: " ").map { piece in
+      let token = String(piece)
+      if let styled = familyNames[token.lowercased()] { return styled }
+      if token.first?.lowercased() == "v", token.dropFirst().first?.isNumber == true {
+        return "V" + String(token.dropFirst())
+      }
+      return token
+    }.joined(separator: " ")
+  }
+
+  private static func removingPrefix(_ value: String, _ prefix: String) -> String? {
+    guard !prefix.isEmpty, value.lowercased().hasPrefix(prefix.lowercased()) else { return nil }
+    let suffix = String(value.dropFirst(prefix.count))
+    guard let first = suffix.first, first.isWhitespace || first == ":" else { return nil }
+    let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: ": "))
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private static func isRecognizable(_ model: String) -> Bool {
+    let lower = model.lowercased()
+    return recognizableFamilies.contains { family in
+      guard lower.hasPrefix(family) else { return false }
+      let remainder = lower.dropFirst(family.count)
+      return remainder.isEmpty || remainder.first?.isWhitespace == true
+        || remainder.first == "-" || remainder.first?.isNumber == true
+    }
+  }
+
+  /// Defaults are deliberately absent: they do not need precious composer
+  /// width. Explicit Off/effort/budget still distinguish actual user choices.
+  private static func reasoningLabel(
+    _ reasoning: ReasoningOptions?, control: ModelReasoningControl
+  ) -> String {
+    guard let reasoning, let options = control.normalize(reasoning) else { return "" }
+    if options.enabled == false { return "Off" }
+
+    var parts: [String] = []
+    if let effort = options.effort {
+      switch effort {
+      case .minimal: parts.append("Min")
+      case .low: parts.append("Low")
+      case .medium: parts.append("Med")
+      case .high: parts.append("High")
+      case .xhigh: parts.append("X-High")
+      case .max: parts.append("Max")
       }
     }
-
-    value = collapseWhitespace(value)
-    if value.isEmpty {
-      return rawValue.split(separator: "/").last.map(String.init) ?? rawValue
+    if let tokens = options.maxTokens {
+      parts.append(tokens == -1 ? "Auto" : compactBudget(tokens))
     }
-    return value
+    if parts.isEmpty { return "On" }
+    return parts.joined(separator: " · ")
+  }
+
+  private static func compactBudget(_ tokens: Int) -> String {
+    guard tokens >= 1_000 else { return "\(tokens)" }
+    if tokens % 1_000 == 0 { return "\(tokens / 1_000)K" }
+    let kilo = Double(tokens) / 1_000
+    if kilo < 1.05 { return "1K" }
+    return String(format: "%.1fK", kilo)
   }
 
   private static func shortProviderName(providerID: ProviderID, displayName: String) -> String {
@@ -607,4 +689,3 @@ enum ComposerTargetLabelFormatter {
     value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 }
-

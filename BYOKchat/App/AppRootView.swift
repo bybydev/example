@@ -75,7 +75,9 @@ struct AppRootView: View {
       }
     }
     .task {
-      await bootstrap.start(model: model)
+      await bootstrap.start(model: model) { initialConversationID in
+        selectedConversationID = initialConversationID
+      }
     }
     .task {
       await purchases.prepare()
@@ -332,6 +334,10 @@ struct AppRootView: View {
               openSidebar: openSidebar
             )
           }
+        } else if isCreatingNewChat {
+          ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Opening chat")
         } else {
           // Connection setup only. A ready target opens a real conversation.
           ChatView(

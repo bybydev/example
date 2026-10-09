@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-10-07",
+  "version": "2026-10-08",
   "currency": "USD",
   "units": "USD per 1000000 tokens",
   "entries": [
@@ -87,10 +87,11 @@
       "provider": "deepseek",
       "modelIDs": [
         "deepseek-v4-flash",
-        "deepseek-flash"
+        "deepseek-flash",
+        "deepseek-v4-flash-vision-exp"
       ],
       "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verifiedAt": "2026-10-07",
+      "verifiedAt": "2026-10-08",
       "rates": {
         "input": "0.15",
         "output": "0.6",

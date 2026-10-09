@@ -185,12 +185,15 @@ schemes:
         BYOKchat: all
         BYOKchatTests:
           - test
+        BYOKchatUITests:
+          - test
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - name: BYOKchatTests
+        - name: BYOKchatUITests
     profile:
       config: Release
     analyze:
@@ -223,19 +226,3 @@ schemes:
       shared: true
       orderHint: 1
 
-  BYOKchatScreenshots:
-    build:
-      targets:
-        BYOKchat:
-          - run
-          - test
-          - archive
-        BYOKchatUITests:
-          - test
-    test:
-      config: Debug
-      targets:
-        - name: BYOKchatUITests
-    management:
-      shared: true
-      orderHint: 2
