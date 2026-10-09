@@ -101,13 +101,21 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 
 ### Archive / submission
 
-The GitHub **Release** workflow may be used first to create an unsigned mycli
-archive for the selected branch, configuration, and fixture/real model set.
+The GitHub **Release** workflow creates an unsigned mycli archive for the
+selected branch and configuration (Debug or Release). **Every build bundles
+Kokoro ONNX INT8, both G2P assets and all three voice styles.** There is
+no fixture/real selector and no user-facing model download.
 
 The canonical App Store submission path remains manual/local using project.yml
-plus mycli/Xcode with verified real resources.
+plus mycli/Xcode, with the same verified ONNX resources.
 
-- Stage verified production Kokoro resources, not fixture resources.
+- On a local build machine, run `python3 scripts/onnx-assets.py download`
+  and `bash scripts/stage-onnx-resources-for-build.sh` before generating/archiving.
+- Verify the archived `ReadAloud.app/ONNX` folder contains all six pinned
+  resources (use `python3 scripts/onnx-assets.py verify --root <app>/ONNX`).
+- Verify the production archive contains no Core ML packages or model selector.
+- Install offline and confirm Listen, resume, and the Settings speech test never
+  request a model download or network connection.
 - Generate the Xcode project from project.yml if the owner-managed project needs regeneration.
 - Archive the ReadAloud iOS Release scheme with automatic signing.
 - Verify the archive bundle ID is com.hoangbkit.readaloud.
@@ -124,3 +132,16 @@ plus mycli/Xcode with verified real resources.
 - Automatic storage quotas/eviction/cloud sync.
 - Additional migration versions beyond the current explicit v1 boundary.
 - Fast CI / Full CI implementation. The manual Release artifact workflow is implemented; App Store upload remains intentionally outside GitHub Actions.
+
+
+## Listen safety verification — pending
+
+- [ ] Run the scenarios in LISTEN_SAFETY.md on a physical supported iPhone with
+  real models, in both Debug and Release.
+- [ ] Capture peak memory through first synthesis, long chapter completion,
+  cached replay, seek/resume, and repeated project switching.
+- [ ] Confirm memory warnings stop work with a recoverable error and preserve
+  source progress; retry after cleanup succeeds without duplicate model loads.
+- [ ] Confirm malformed/oversized input or audio yields an error, not a trap.
+
+These items have not been executed by the implementation pass. No CI was triggered.

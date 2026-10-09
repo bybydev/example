@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import KokoroTTS
 
 @MainActor
 final class SpeechPlaybackQueue {
@@ -42,6 +41,7 @@ final class SpeechPlaybackQueue {
     private var playerNode = AVAudioPlayerNode()
 
     private var pendingDurations: [UUID: Double] = [:]
+    private var pendingFiles: [UUID: AVAudioFile] = [:]
     private var depthWaiters: [DepthWaiter] = []
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private var generation = 0
@@ -101,10 +101,7 @@ final class SpeechPlaybackQueue {
     }
 
     func enqueue(_ audio: KokoroAudio) throws {
-        guard !audio.samples.isEmpty else {
-            throw PlaybackError.invalidBuffer
-        }
-
+        try ReadAloudSafety.validate(audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
         let buffer = try audio.makePCMBuffer()
         try ensureEngineReady(for: buffer.format)
 
@@ -116,20 +113,53 @@ final class SpeechPlaybackQueue {
 
         playerNode.scheduleBuffer(
             buffer,
-            completionCallbackType: .dataPlayedBack
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.didFinish(
-                    itemID: itemID,
-                    generation: itemGeneration
-                )
-            }
-        }
+            completionCallbackType: .dataPlayedBack,
+            completionHandler: Self.makeCompletionHandler(
+                queue: self, itemID: itemID, generation: itemGeneration
+            )
+        )
 
         if !isPaused && !playerNode.isPlaying {
             playerNode.play()
         }
 
+        notifySnapshotChange()
+    }
+
+    func enqueueFile(at url: URL, startSeconds: Double) throws {
+        let file = try AVAudioFile(forReading: url)
+        let rate = file.processingFormat.sampleRate
+        guard startSeconds.isFinite, startSeconds >= 0,
+              rate == Double(ProjectWAVCodec.requiredSampleRate),
+              file.processingFormat.channelCount == 1,
+              file.length > 0,
+              file.length <= AVAudioFramePosition(UInt32.max) else {
+            throw PlaybackError.invalidBuffer
+        }
+        let framePosition = min(Double(file.length), startSeconds * rate)
+        guard framePosition.isFinite, framePosition < Double(file.length) else {
+            throw PlaybackError.invalidBuffer
+        }
+        let start = AVAudioFramePosition(framePosition.rounded(.down))
+        let remaining = file.length - start
+        guard remaining > 0, remaining <= AVAudioFramePosition(UInt32.max) else {
+            throw PlaybackError.invalidBuffer
+        }
+        try ensureEngineReady(for: file.processingFormat)
+        let itemID = UUID()
+        let itemGeneration = generation
+        let duration = Double(remaining) / rate
+        pendingFiles[itemID] = file
+        pendingDurations[itemID] = duration
+        queuedDurationSeconds += duration
+        playerNode.scheduleSegment(
+            file, startingFrame: start, frameCount: AVAudioFrameCount(remaining),
+            at: nil, completionCallbackType: .dataPlayedBack,
+            completionHandler: Self.makeCompletionHandler(
+                queue: self, itemID: itemID, generation: itemGeneration
+            )
+        )
+        if !isPaused && !playerNode.isPlaying { playerNode.play() }
         notifySnapshotChange()
     }
 
@@ -145,6 +175,19 @@ final class SpeechPlaybackQueue {
                     continuation: continuation
                 )
             )
+        }
+    }
+
+    // AVAudioPlayerNode invokes completions on its own queue, not MainActor.
+    // Hop only after entering a nonisolated callback; retain generation checks
+    // in didFinish so stopped/replaced playback cannot consume current buffers.
+    private nonisolated static func makeCompletionHandler(
+        queue: SpeechPlaybackQueue, itemID: UUID, generation: Int
+    ) -> @Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void {
+        { [weak queue] _ in
+            Task { @MainActor [weak queue] in
+                queue?.didFinish(itemID: itemID, generation: generation)
+            }
         }
     }
 
@@ -167,14 +210,16 @@ final class SpeechPlaybackQueue {
         notifySnapshotChange()
     }
 
-    func resume() {
+    func resume() throws {
         guard isPaused else { return }
 
         #if os(iOS)
-        try? AVAudioSession.sharedInstance()
-            .setActive(true)
+        try AVAudioSession.sharedInstance().setActive(true)
         #endif
 
+        if !pendingDurations.isEmpty && !audioEngine.isRunning {
+            try audioEngine.start()
+        }
         isPaused = false
         if !pendingDurations.isEmpty
             && !playerNode.isPlaying
@@ -190,6 +235,7 @@ final class SpeechPlaybackQueue {
         playerNode.stop()
 
         pendingDurations.removeAll()
+        pendingFiles.removeAll()
         queuedDurationSeconds = 0
 
         resumeDepthWaiters()
@@ -299,6 +345,7 @@ final class SpeechPlaybackQueue {
         playerNode.stop()
 
         pendingDurations.removeAll()
+        pendingFiles.removeAll()
         queuedDurationSeconds = 0
         resumeDepthWaiters()
         resumeDrainWaiters()
@@ -419,6 +466,7 @@ final class SpeechPlaybackQueue {
             return
         }
 
+        pendingFiles.removeValue(forKey: itemID)
         queuedDurationSeconds = max(
             0,
             queuedDurationSeconds - duration
@@ -463,3 +511,4 @@ final class SpeechPlaybackQueue {
         }
     }
 }
+

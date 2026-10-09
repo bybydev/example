@@ -129,6 +129,18 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
             }
 
+            Section {
+                NavigationLink {
+                    ONNXModelSettingsView()
+                } label: {
+                    Label("Kokoro ONNX INT8", systemImage: "cpu")
+                }
+            } header: {
+                Text("Speech Engine")
+            } footer: {
+                Text("ReadAloud includes its ONNX speech model, pronunciation assets and voices. All listening works offline, without downloads.")
+            }
+
             narrationDefaultsSection
             playbackSection
             generationSection

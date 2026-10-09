@@ -1,6 +1,5 @@
 import Foundation
 import JobQueue
-import KokoroTTS
 
 @MainActor
 extension ProjectRuntime {
@@ -30,10 +29,7 @@ extension ProjectRuntime {
                 )
         }
 
-        let paragraphs =
-            ReaderTextLayout.paragraphs(
-                in: state.item.text
-            )
+        let paragraphs = cachedReaderParagraphs(for: state.item)
         guard !paragraphs.isEmpty else {
             throw ProjectStoreError
                 .invalidData(
@@ -42,18 +38,22 @@ extension ProjectRuntime {
         }
 
         guard let voice =
-                KokoroEngine.Voice.all
+                SpeechVoice.all
                     .first(where: {
                         $0.id
                             == state.resolved
                                 .voiceID
                     })
         else {
-            throw KokoroEngine
-                .EngineError
+            throw SpeechEngineError
                 .unsupportedVoice(
                     state.resolved.voiceID
                 )
+        }
+
+        let selectedEngine = pipeline.engineKind
+        guard selectedEngine == ReadAloudPreferences.speechEngine else {
+            throw CancellationError()
         }
 
         let runtimeRevision =
@@ -69,7 +69,7 @@ extension ProjectRuntime {
                 paragraphIndex,
                 paragraph
             ) in paragraphs.enumerated() {
-                try requireGenerationCanRun()
+                try requireGenerationCanRun(expectedEngine: selectedEngine)
 
                 let cacheKey =
                     try ParagraphCacheIdentity
@@ -131,7 +131,7 @@ extension ProjectRuntime {
                     var sampleRate: Int?
 
                     for chunk in chunks {
-                        try requireGenerationCanRun()
+                        try requireGenerationCanRun(expectedEngine: selectedEngine)
 
                         let result =
                             try await pipeline
@@ -164,10 +164,8 @@ extension ProjectRuntime {
 
                         sampleRate =
                             result.audio.sampleRate
-                        samples.append(
-                            contentsOf:
-                                result.audio.samples
-                        )
+                        try requireGenerationCanRun()
+                        try ReadAloudSafety.append(result.audio, to: &samples)
                     }
 
                     guard let sampleRate,
@@ -226,7 +224,7 @@ extension ProjectRuntime {
                 )
             }
 
-            try requireGenerationCanRun()
+            try requireGenerationCanRun(expectedEngine: selectedEngine)
 
             guard try await
                 finalizeItemIfComplete(
@@ -247,8 +245,7 @@ extension ProjectRuntime {
                 fractionCompleted: 1,
                 message: "Ready Offline"
             )
-        } catch KokoroEngine
-            .EngineError.cancelled
+        } catch SpeechEngineError.cancelled
         {
             throw CancellationError()
         } catch is CancellationError {
@@ -266,7 +263,7 @@ extension ProjectRuntime {
                     state: .generating,
                     incrementAttempt: true
                 )
-            try await refresh()
+            try await refreshGenerationState()
         } catch {
             lastErrorMessage =
                 Self.message(for: error)
@@ -282,7 +279,7 @@ extension ProjectRuntime {
                     jobID: jobID,
                     state: .queued
                 )
-            try await refresh()
+            try await refreshGenerationState()
         } catch {
             lastErrorMessage =
                 Self.message(for: error)
@@ -298,7 +295,7 @@ extension ProjectRuntime {
                     jobID: jobID,
                     state: .completed
                 )
-            try await refresh()
+            try await refreshGenerationState()
         } catch {
             lastErrorMessage =
                 Self.message(for: error)
@@ -316,7 +313,7 @@ extension ProjectRuntime {
                     state: .failed,
                     errorMessage: message
                 )
-            try await refresh()
+            try await refreshGenerationState()
         } catch {
             lastErrorMessage =
                 Self.message(for: error)
@@ -327,6 +324,7 @@ extension ProjectRuntime {
         itemIDs: Set<UUID>,
         regenerate: Bool
     ) async throws {
+        try prepareExplicitWork()
         if itemIDs.count > 1 {
             try ReadAloudAccessPolicy
                 .requirePro(
@@ -371,7 +369,7 @@ extension ProjectRuntime {
                 replaceExisting:
                     regenerate
             )
-        try await refresh()
+        try await refreshGenerationState()
     }
 
     func enqueueAllGeneration()
@@ -407,6 +405,7 @@ extension ProjectRuntime {
     func retryGeneration(
         itemIDs: Set<UUID>
     ) async throws {
+        try prepareExplicitWork()
         _ = try await persistence
             .removeGenerationJobs(
                 itemIDs: itemIDs,
@@ -446,6 +445,7 @@ extension ProjectRuntime {
     func clearCacheAndRegenerate(
         itemIDs: Set<UUID>
     ) async throws {
+        try prepareExplicitWork()
         try ReadAloudAccessPolicy
             .requirePro(
                 .advancedRegeneration,
@@ -511,12 +511,32 @@ extension ProjectRuntime {
         try await refresh()
     }
 
+    func schedulePlaybackPrefetch() {
+        guard hasPro, ReadAloudPreferences.prefetchCount > 0,
+              !readerPauseRequested, !synthesisSuspendedForMemoryPressure,
+              prefetchTask == nil, let operationID = playbackOperationID,
+              let itemID = activity.activeItemID,
+              !prefetchScheduledItemIDs.contains(itemID) else { return }
+        let requestID = UUID()
+        prefetchTaskID = requestID
+        prefetchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.prefetchTaskID == requestID {
+                    self.prefetchTask = nil
+                    self.prefetchTaskID = nil
+                }
+            }
+            guard !Task.isCancelled, self.playbackOperationID == operationID,
+                  self.activity.activeItemID == itemID else { return }
+            await self.schedulePrefetch(after: itemID)
+        }
+    }
+
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard hasPro else {
-            return
-        }
+        guard !Task.isCancelled, hasPro, !synthesisSuspendedForMemoryPressure else { return }
 
         let prefetchCount =
             ReadAloudPreferences
@@ -534,10 +554,6 @@ extension ProjectRuntime {
             return
         }
 
-        prefetchScheduledItemIDs.insert(
-            itemID
-        )
-
         let upperBound =
             min(
                 itemStates.count,
@@ -548,6 +564,7 @@ extension ProjectRuntime {
         guard currentIndex + 1
                 < upperBound
         else {
+            prefetchScheduledItemIDs.insert(itemID)
             return
         }
 
@@ -579,6 +596,7 @@ extension ProjectRuntime {
             }
 
         guard !requests.isEmpty else {
+            prefetchScheduledItemIDs.insert(itemID)
             return
         }
 
@@ -589,21 +607,25 @@ extension ProjectRuntime {
                     replaceExisting:
                         false
                 )
-            try await refresh()
+            prefetchScheduledItemIDs.insert(itemID)
+            try await refreshGenerationState()
+        } catch is CancellationError {
+            return
         } catch {
             lastErrorMessage =
                 Self.message(for: error)
         }
     }
 
-    private func requireGenerationCanRun()
-        throws
-    {
+    private func requireGenerationCanRun(
+        expectedEngine: SpeechEngineKind? = nil
+    ) throws {
         try Task.checkCancellation()
-
-        guard !blocksQueuedGeneration
-        else {
+        guard !blocksQueuedGeneration,
+              pipeline.engineKind == ReadAloudPreferences.speechEngine,
+              expectedEngine == nil || pipeline.engineKind == expectedEngine else {
             throw CancellationError()
         }
     }
 }
+

@@ -1,7 +1,6 @@
 name: Release
 
-# Manual mycli artifact workflow.
-# Builds exactly the branch/ref selected in the GitHub Actions UI.
+# Manually build the selected branch, always including offline ONNX resources.
 on:
   workflow_dispatch:
     inputs:
@@ -13,14 +12,6 @@ on:
         options:
           - Debug
           - Release
-      resources:
-        description: Kokoro models
-        required: true
-        default: fixture
-        type: choice
-        options:
-          - fixture
-          - real
 
 permissions:
   contents: write
@@ -31,7 +22,7 @@ concurrency:
 
 jobs:
   release:
-    name: Build iOS ${{ inputs.configuration }} · ${{ inputs.resources }}
+    name: Build iOS ${{ inputs.configuration }} · bundled ONNX INT8
     runs-on: macos-26
     timeout-minutes: 90
 
@@ -43,88 +34,28 @@ jobs:
           fetch-depth: 0
 
       - name: Show selection and toolchain
-        shell: bash
         run: |
           set -euo pipefail
-          echo "Ref:           ${{ github.ref }}"
+          echo "Ref: ${{ github.ref }}"
           echo "Configuration: ${{ inputs.configuration }}"
-          echo "Resources:     ${{ inputs.resources }}"
-          echo "Commit:        $(git rev-parse HEAD)"
-          sw_vers
-          uname -m
+          echo "Commit: $(git rev-parse HEAD)"
           xcodebuild -version
           swift --version
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Resolve resource mode
-        id: resources
-        shell: bash
-        env:
-          SELECTED_RESOURCES: ${{ inputs.resources }}
-        run: |
-          set -euo pipefail
-          case "$SELECTED_RESOURCES" in
-            fixture)
-              echo "mode=fixture" >> "$GITHUB_OUTPUT"
-              ;;
-            real)
-              echo "mode=production" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "error: unsupported resources selection: $SELECTED_RESOURCES" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Cache fixture resources
-        if: ${{ inputs.resources == 'fixture' }}
-        id: fixture-cache
+      - name: Cache pinned ONNX resources
         uses: actions/cache@v4
         with:
-          path: |
-            testfixtures/kokoro
-            .cache/kokoro-fixtures
-          key: readaloud-kokoro-fixture-${{ hashFiles('scripts/kokoro-fixture-pins.sh', 'scripts/download-kokoro-fixture.sh', 'scripts/validate-kokoro-assets-for-build.sh') }}
+          path: Resources/ONNX
+          key: readaloud-onnx-v1-${{ hashFiles('scripts/onnx-assets.json', 'scripts/onnx-assets.py') }}
 
-      - name: Cache real resources
-        if: ${{ inputs.resources == 'real' }}
-        id: real-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            Resources/Kokoro
-            .cache/kokoro-downloads
-          key: readaloud-kokoro-real-${{ hashFiles('scripts/kokoro-pins.sh', 'scripts/kokoro-checksums.sha256', 'scripts/download-kokoro-assets.sh', 'scripts/validate-kokoro-assets-for-build.sh') }}
+      - name: Download missing ONNX assets on build runner
+        run: python3 scripts/onnx-assets.py download
 
-      - name: Download fixture resources
-        if: ${{ inputs.resources == 'fixture' && steps.fixture-cache.outputs.cache-hit != 'true' }}
-        run: bash scripts/download-kokoro-fixture.sh
-
-      - name: Download real resources
-        if: ${{ inputs.resources == 'real' && steps.real-cache.outputs.cache-hit != 'true' }}
-        run: bash scripts/bootstrap.sh
-
-      - name: Validate selected resources
-        shell: bash
-        env:
-          RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
-        run: |
-          set -euo pipefail
-          if [[ "$RESOURCE_MODE" == "fixture" ]]; then
-            bash scripts/validate-kokoro-assets-for-build.sh               --mode fixture               --root testfixtures/kokoro
-          else
-            bash scripts/validate-kokoro-assets-for-build.sh               --mode production               --root Resources/Kokoro
-          fi
-
-      - name: Stage selected resources
-        shell: bash
-        env:
-          READALOUD_KOKORO_RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
-        run: |
-          set -euo pipefail
-          bash scripts/stage-kokoro-resources-for-build.sh
+      - name: Validate and stage offline ONNX assets
+        run: bash scripts/stage-onnx-resources-for-build.sh
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
@@ -133,111 +64,82 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ReadAloud-SourcePackages
-          key: readaloud-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'ReadAloud.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: readaloud-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml') }}
 
       - name: Set build release tag
         id: release
-        shell: bash
         run: |
           set -euo pipefail
-          tag="mycli-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          tag="mycli-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Build release: $tag"
 
       - name: Archive unsigned iOS app
-        shell: bash
         env:
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
-          RESOURCE_MODE: ${{ steps.resources.outputs.mode }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-
           SOURCE_PACKAGES="$RUNNER_TEMP/ReadAloud-SourcePackages"
           IOS_DERIVED="$RUNNER_TEMP/ReadAloud-iOS-$BUILD_CONFIGURATION"
           IOS_ARCHIVE="$RUNNER_TEMP/ReadAloud-$BUILD_CONFIGURATION.xcarchive"
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
-
           mkdir -p "$ARTIFACTS"
 
-          READALOUD_KOKORO_RESOURCE_MODE="$RESOURCE_MODE"           xcodebuild             -project ReadAloud.xcodeproj             -scheme ReadAloud             -configuration "$BUILD_CONFIGURATION"             -sdk iphoneos             -destination "generic/platform=iOS"             -derivedDataPath "$IOS_DERIVED"             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES"             -archivePath "$IOS_ARCHIVE"             -skipMacroValidation             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             archive
+          xcodebuild \
+            -project ReadAloud.xcodeproj \
+            -scheme ReadAloud \
+            -configuration "$BUILD_CONFIGURATION" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$IOS_DERIVED" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -archivePath "$IOS_ARCHIVE" \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            archive
 
           test -d "$IOS_ARCHIVE"
-
-          IOS_APP_COUNT="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
-          if [[ "$IOS_APP_COUNT" != "1" ]]; then
-            echo "error: expected exactly one iOS app in archive, found $IOS_APP_COUNT" >&2
+          APPLICATIONS="$IOS_ARCHIVE/Products/Applications"
+          IOS_APP_COUNT="$(find "$APPLICATIONS" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d ' ')"
+          if [[ "$IOS_APP_COUNT" != 1 ]]; then
+            echo "error: expected exactly one archived app, found $IOS_APP_COUNT" >&2
+            exit 1
+          fi
+          IOS_APP="$(find "$APPLICATIONS" -maxdepth 1 -type d -name '*.app' -print)"
+          IOS_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist")"
+          if [[ "$IOS_BUNDLE_ID" != "com.hoangbkit.readaloud" ]]; then
+            echo "error: unexpected bundle identifier: $IOS_BUNDLE_ID" >&2
             exit 1
           fi
 
-          IOS_APP="$(find "$IOS_ARCHIVE/Products/Applications" -maxdepth 1 -type d -name '*.app' -print)"
-          IOS_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist")"
-
-          echo "Bundle ID: $IOS_BUNDLE_ID"
-          [[ "$IOS_BUNDLE_ID" == "com.hoangbkit.readaloud" ]] || {
-            echo "error: unexpected iOS bundle identifier: $IOS_BUNDLE_ID" >&2
+          # Verify the actual archived app, not just the build workspace.
+          python3 scripts/onnx-assets.py verify --root "$IOS_APP/ONNX"
+          test -f "$IOS_APP/ONNX/ONNXAssetManifest.json"
+          if find "$IOS_APP" -name '*.mlmodelc' -o -name '*.mlpackage' | grep -q .; then
+            echo "error: unexpected Core ML model packaged in ONNX-only archive" >&2
             exit 1
-          }
+          fi
 
-          MODE_FILE="$IOS_APP/Kokoro/ReadAloudResourceMode.json"
-          MANIFEST="$IOS_APP/Kokoro/KokoroRuntimeManifest.json"
-          test -f "$MODE_FILE"
-          test -f "$MANIFEST"
-
-          python3 - "$MODE_FILE" "$MANIFEST" "$RESOURCE_MODE" <<'PY'
-          import json
-          import sys
-
-          mode_path, manifest_path, expected = sys.argv[1:4]
-
-          with open(mode_path, "r", encoding="utf-8") as handle:
-              mode = json.load(handle).get("mode")
-          if mode != expected:
-              raise SystemExit(
-                  f"error: archived resource mode mismatch: {mode!r} != {expected!r}"
-              )
-
-          with open(manifest_path, "r", encoding="utf-8") as handle:
-              manifest = json.load(handle)
-
-          if expected == "fixture":
-              if manifest.get("bundle_profile") != "fixture-executable-v1":
-                  raise SystemExit("error: fixture archive has unexpected Kokoro profile")
-              if not isinstance(manifest.get("synthetic_fixture"), dict):
-                  raise SystemExit("error: fixture archive is missing synthetic fixture identity")
-          else:
-              if manifest.get("bundle_profile") != "custom":
-                  raise SystemExit("error: real archive has unexpected Kokoro profile")
-              if manifest.get("synthetic_fixture") is not None:
-                  raise SystemExit("error: real archive contains synthetic fixture metadata")
-              if manifest.get("hf_provenance_verified") is not True:
-                  raise SystemExit("error: real archive does not contain verified production provenance")
-
-          print(f"Archived Kokoro resources verified: {expected}")
-          PY
-
-          CONFIGURATION_LOWER="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
-          ARTIFACT="$ARTIFACTS/ReadAloud-iOS-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
-
-          ditto -c -k --sequesterRsrc --keepParent             "$IOS_ARCHIVE"             "$ARTIFACT"
-
+          lower="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+          ARTIFACT="$ARTIFACTS/ReadAloud-iOS-$lower-unsigned-$RELEASE_TAG.xcarchive.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$IOS_ARCHIVE" "$ARTIFACT"
           echo "Artifact: $ARTIFACT"
           rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
 
       - name: Verify release archive
-        shell: bash
         env:
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-
-          CONFIGURATION_LOWER="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
-          ARTIFACT="artifacts/ReadAloud-iOS-$CONFIGURATION_LOWER-unsigned-${{ steps.release.outputs.tag }}.xcarchive.zip"
-
-          test -f "$ARTIFACT"
-          ls -lh "$ARTIFACT"
-
-          bytes="$(stat -f%z "$ARTIFACT")"
+          lower="$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+          asset="artifacts/ReadAloud-iOS-$lower-unsigned-$RELEASE_TAG.xcarchive.zip"
+          test -f "$asset"
+          ls -lh "$asset"
+          bytes="$(stat -f%z "$asset")"
           if (( bytes >= 2147483648 )); then
             echo "error: archive exceeds GitHub Release's 2 GB asset limit" >&2
             exit 1
@@ -249,16 +151,17 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
-          BUILD_RESOURCES: ${{ inputs.resources }}
-        shell: bash
         run: |
           set -euo pipefail
-
-          gh release create "$RELEASE_TAG"             artifacts/*.xcarchive.zip             --target "$RELEASE_SHA"             --title "$RELEASE_TAG · $BUILD_CONFIGURATION · $BUILD_RESOURCES"             --prerelease             --notes "ReadAloud iOS unsigned mycli artifact.
+          gh release create "$RELEASE_TAG" artifacts/*.xcarchive.zip \
+            --target "$RELEASE_SHA" \
+            --title "$RELEASE_TAG · $BUILD_CONFIGURATION · ONNX INT8 bundled" \
+            --prerelease \
+            --notes "ReadAloud iOS unsigned mycli artifact.
 
           Configuration: $BUILD_CONFIGURATION
-          Kokoro resources: $BUILD_RESOURCES
+          Speech backend: ONNX Runtime CPU INT8 only
+          Offline assets: Kokoro INT8, Misaki G2P ONNX + lexicon, 3 voices
+          Asset download required on device: No
           Source ref: ${{ github.ref }}
-          Source commit: $RELEASE_SHA
-
-          Fixture artifacts are development-only and must never be uploaded to App Store Connect."
+          Source commit: $RELEASE_SHA"

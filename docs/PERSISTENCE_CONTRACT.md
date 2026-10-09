@@ -489,3 +489,18 @@ Importing the same source again creates a new project.
 This avoids hidden item-ID remapping and cache invalidation semantics in 1.0.
 
 A future "Replace Source" or "Re-import" feature must define reconciliation as a separate contract.
+
+
+## Bounded Listen processing (configuration 2)
+
+The source text and source bookmark remain authoritative when oversized paragraphs
+are split for Reader/synthesis. New ranges are measured in the original UTF-16
+text; stored content revisions and item IDs do not change. Configuration 2 makes
+old derived paragraph/final audio incompatible rather than accepting audio with
+an outdated source timeline. Existing source bookmarks fall back to the new
+containing slice; exact seconds require matching generation/audio revisions.
+
+Final WAV assembly is temporary and file-backed. Failed or cancelled assembly
+removes its own temporary file, and the existing pair transaction remains
+responsible for commit/rollback. Safe admission failures never delete a project,
+its source, or its previous final-audio pair.

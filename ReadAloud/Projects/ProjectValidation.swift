@@ -110,6 +110,7 @@ nonisolated enum ProjectValidation {
     }
 
     static func validate(_ item: ProjectContentItem) throws {
+        try ReadAloudSafety.validateReaderText(item.text)
         try requireCurrentSchema(
             item.schemaVersion,
             relativePath: ProjectPackagePaths.relativeItemPath(item.id)
@@ -445,3 +446,4 @@ nonisolated enum ProjectValidation {
         }
     }
 }
+

@@ -14,21 +14,13 @@ build/
 .build/
 .swiftpm/
 
-# Downloaded production Kokoro assets
-Resources/Kokoro/*
-!Resources/Kokoro/.gitkeep
+# ONNX models are downloaded by the build machine, not kept in Git.
+Resources/ONNX/*
+!Resources/ONNX/.gitkeep
+!Resources/ONNX/THIRD_PARTY_NOTICES.txt
+!Resources/ONNX/LICENSE-APACHE-2.0.txt
+!Resources/ONNX/LICENSE-MIT-PHONEMIZER.txt
 
-# Downloaded executable Kokoro fixture
-testfixtures/kokoro/*
-!testfixtures/kokoro/.gitkeep
-
-# Generated build resource staging
-.build-resources/Kokoro/*
-!.build-resources/Kokoro/.gitkeep
-
-# Pinned upstream Kokoro SDK checkout
-Vendor/kokoro-coreml/
-
-# Resumable Kokoro download caches
-.cache/kokoro-downloads/
-.cache/kokoro-fixtures/
+# Staged resources copied into the generated iOS app bundle.
+.build-resources/ONNX/*
+!.build-resources/ONNX/.gitkeep

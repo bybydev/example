@@ -19,6 +19,7 @@ nonisolated enum ProjectDigest {
 
             var digest = SHA256()
             while true {
+                try Task.checkCancellation()
                 let data = try handle.read(upToCount: 1_048_576) ?? Data()
                 if data.isEmpty { break }
                 digest.update(data: data)
@@ -27,6 +28,8 @@ nonisolated enum ProjectDigest {
             return digest.finalize()
                 .map { String(format: "%02x", $0) }
                 .joined()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ProjectStoreError.io(String(describing: error))
         }
@@ -217,3 +220,4 @@ nonisolated enum ProjectGenerationKey {
         data.append(0x0A)
     }
 }
+

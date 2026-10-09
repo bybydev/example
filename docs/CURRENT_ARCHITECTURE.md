@@ -13,7 +13,7 @@ ReadAloud 1.0 is:
 - iOS 26+
 - local-first and offline-capable
 - a durable personal document listening library
-- backed by on-device Kokoro Core ML speech synthesis
+- backed by bundled, fully offline Kokoro ONNX INT8 speech synthesis
 - internally named ReadAloud with bundle ID `com.hoangbkit.readaloud`
 - commercially wrapped by AppFoundation
 
@@ -32,7 +32,8 @@ imports in both empty and populated
 Library states. Its bottom safe-area inset reserves space in the list and keeps
 it above the root mini-player.
 
-A single mini-player follows active playback across Library and Settings.
+A single mini-player follows the listening session across Library and Settings,
+including retry and replay while its runtime remains loaded.
 
 ## App root
 
@@ -183,7 +184,7 @@ The low-latency path is:
 ```text
 normalized text
   -> SpeechChunkScheduler
-  -> KokoroEngine
+  -> SpeechSynthesisEngine (ONNX INT8 only, shared actor)
   -> SpeechPlaybackQueue
   -> AVAudioEngine / AVAudioPlayerNode
 ```
@@ -208,6 +209,27 @@ The same runtime drives:
 - Lock Screen / Control Center commands
 
 There is no separate system-media playback model.
+
+The Reader and mini-player share themed card surfaces and transport components.
+Controls follow the playing chapter while the Reader can browse another chapter;
+an explicit action starts the chapter on screen. Voice and speed sheets capture
+the player chapter when opened. Transport targets are at least 44 points, with
+VoiceOver labels and an adjustable scrubber.
+
+Saved audio exposes elapsed/remaining time and exact scrubbing. Live synthesis
+exposes chapter source position and passage seeking; skip seconds are approximate
+and stay within the current chapter. Dragging commits once on release and is
+discarded if the chapter, time mode, or preparation state changes. Views own only
+the temporary drag value, not playback work.
+
+The runtime owns an optional session sleep timer (5/15/30/45/60 minutes or end of
+chapter). It survives Reader dismissal and seeks, pauses at its deadline, and is
+cleared on explicit Stop, shutdown, completion, or failure. It is not persisted
+across process restarts. End-of-chapter takes precedence over automatic chapter
+continuation. The mini-player sheet captures its runtime and has an explicit Done
+action. ImageIO downsampling bounds displayed cover thumbnails to 512 pixels.
+
+See AUDIO_PLAYER_REVIEW.md for source findings and pending device review.
 
 ## Generation queue
 
@@ -303,14 +325,14 @@ do not regenerate or resolve them unless explicitly requested.
 Kokoro resources have two explicit modes:
 
 - production: verified real assets, shipping eligible
-- fixture: deterministic executable fixture, development only
+- Kokoro ONNX INT8 + ONNX G2P + vocabulary + three voices: bundled in every archive
 
 The canonical App Store submission path is manual/local using Xcode/mycli and
 the steps in `RELEASE_CHECKLIST.md`.
 
 The manual GitHub Release workflow is implemented for disposable mycli artifacts.
 It builds the exact selected ref and lets the user choose Debug/Release and
-fixture/real Kokoro resources. It publishes one unsigned iOS `.xcarchive`
+fully verified bundled ONNX resources. It publishes one unsigned iOS `.xcarchive`
 prerelease and never uploads to App Store Connect.
 
 ## Maintenance source of truth
@@ -324,3 +346,34 @@ Use these documents in this order:
 5. `IMPLEMENTATION_PLAN.md`, `PRE_IMPLEMENTATION.md`,
    `IOS_APP_BASELINE.md`, and root `PLAN.md` — historical implementation
    context
+
+
+## Listen safety (synthesis configuration 2)
+
+Start/Continue Listening opens the Reader; synthesis starts from its Play control.
+Both paths need separate resource bounds. Reader layout uses source-preserving,
+UTF-16 ranges and slices at newline/word boundaries, with a 600-unit hard limit.
+One layout is cached per runtime instead of rebuilding the chapter on every
+playback update. Extremely large sections, project JSON, or malformed grapheme
+clusters fail admission without changing the source package.
+
+All project pipelines share one Kokoro engine. Its explicit operation gate covers
+SDK load/inference/unload across suspension points, so cancelled/replaced work
+cannot load a second model set. Synthesis source chunks are bounded to 100 UTF-16
+units and 3/7-second source targets in ONNX mode. Finite
+sample/rate/count checks run before buffering, PCM conversion, or WAV encoding.
+
+Final WAV assembly writes one bounded paragraph at a time to a temporary file.
+The existing final-audio transaction still verifies hashes, duration, identity,
+and metadata, but copies files instead of materializing chapter PCM. Final audio
+playback uses AVAudioFile and scheduleSegment, including exact resume and seeks.
+
+A memory warning stops playback, suspends generation/prefetch, releases layout
+caches and the shared model set, and retains the durable source bookmark. A user
+Listen/Generate action can resume work after cleanup and memory admission pass.
+The available-memory check is advisory; bounded processing is the primary guard.
+
+Configuration 2 deliberately invalidates configuration-1 derived audio/cache
+compatibility because paragraph boundaries and speech chunking changed. Project
+schema, IDs, retained source, normalized text, and source bookmarks stay unchanged.
+See LISTEN_SAFETY.md for evidence, remaining verification, and device scenarios.

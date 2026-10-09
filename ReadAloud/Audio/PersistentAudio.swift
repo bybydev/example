@@ -1,9 +1,8 @@
 import Foundation
-import KokoroTTS
 
 nonisolated struct ProjectFinalAudioAsset: Sendable {
     let metadata: GeneratedAudioMetadata
-    let wavData: Data
+    let wavURL: URL
 }
 
 nonisolated struct ParagraphCacheMetadata: Codable, Equatable, Sendable {
@@ -119,13 +118,14 @@ nonisolated enum ProjectWAVCodec {
         }
 
         let bytesPerSample = 2
-        let dataByteCount = samples.count * bytesPerSample
-        guard dataByteCount <= Int(UInt32.max) - 36 else {
+        guard samples.count <= (Int(UInt32.max) - 36) / bytesPerSample,
+              samples.allSatisfy(\.isFinite) else {
             throw ProjectStoreError.invalidData(
                 "Generated audio is too large for a WAV file."
             )
         }
 
+        let dataByteCount = samples.count * bytesPerSample
         var data = Data()
         data.reserveCapacity(44 + dataByteCount)
 
@@ -181,6 +181,9 @@ nonisolated enum ProjectWAVCodec {
     static func decode(
         _ data: Data
     ) throws -> KokoroAudio {
+        guard data.count <= 44 + ReadAloudSafety.maximumParagraphSamples * 2 else {
+            throw ProjectStoreError.invalidData("Cached audio exceeds safe paragraph limits.")
+        }
         let bytes = [UInt8](data)
         guard bytes.count >= 44,
               ascii(bytes, 0, 4) == "RIFF",
@@ -293,6 +296,63 @@ nonisolated enum ProjectWAVCodec {
         )
     }
 
+    struct FileInfo: Sendable {
+        let sampleCount: Int
+        var durationSeconds: Double {
+            Double(sampleCount) / Double(requiredSampleRate)
+        }
+    }
+
+    static func inspect(fileAt url: URL) throws -> FileInfo {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let fileSize = try handle.seekToEnd()
+        try handle.seek(toOffset: 0)
+        let bytes = [UInt8](try handle.read(upToCount: 44) ?? Data())
+        guard bytes.count == 44,
+              ascii(bytes, 0, 4) == "RIFF",
+              ascii(bytes, 8, 4) == "WAVE",
+              ascii(bytes, 12, 4) == "fmt ",
+              readUInt32(bytes, 16) == 16,
+              readUInt16(bytes, 20) == 1,
+              readUInt16(bytes, 22) == 1,
+              readUInt32(bytes, 24) == UInt32(requiredSampleRate),
+              readUInt32(bytes, 28) == UInt32(requiredSampleRate * 2),
+              readUInt16(bytes, 32) == 2,
+              readUInt16(bytes, 34) == 16,
+              ascii(bytes, 36, 4) == "data" else {
+            throw ProjectStoreError.invalidData("Final audio has an invalid WAV header.")
+        }
+        let byteCount = UInt64(readUInt32(bytes, 40))
+        guard byteCount > 0, byteCount % 2 == 0,
+              fileSize == byteCount + 44,
+              UInt64(readUInt32(bytes, 4)) == byteCount + 36 else {
+            throw ProjectStoreError.invalidData("Final audio has invalid WAV bounds.")
+        }
+        return FileInfo(sampleCount: Int(byteCount / 2))
+    }
+
+    static func header(sampleCount: Int) throws -> Data {
+        guard sampleCount >= 0,
+              sampleCount <= (Int(UInt32.max) - 36) / 2 else {
+            throw ProjectStoreError.invalidData("Generated audio exceeds WAV file limits.")
+        }
+        let size = UInt32(sampleCount * 2)
+        var data = Data("RIFF".utf8)
+        appendUInt32(36 + size, to: &data)
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        appendUInt32(16, to: &data)
+        appendUInt16(1, to: &data)
+        appendUInt16(1, to: &data)
+        appendUInt32(UInt32(requiredSampleRate), to: &data)
+        appendUInt32(UInt32(requiredSampleRate * 2), to: &data)
+        appendUInt16(2, to: &data)
+        appendUInt16(16, to: &data)
+        data.append(contentsOf: "data".utf8)
+        appendUInt32(size, to: &data)
+        return data
+    }
+
     private static func appendUInt16(
         _ value: UInt16,
         to data: inout Data
@@ -358,3 +418,4 @@ nonisolated enum ProjectWAVCodec {
         ) ?? ""
     }
 }
+

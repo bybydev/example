@@ -29,6 +29,7 @@ final class ProjectSystemMediaController {
     private var artworkURL: URL?
     private var artwork:
         MPMediaItemArtwork?
+    private var artworkTask: Task<Void, Never>?
 
     private init() {
         installRemoteCommands()
@@ -79,6 +80,7 @@ final class ProjectSystemMediaController {
                     state.item.title,
                 MPNowPlayingInfoPropertyPlaybackRate:
                     runtime.isPlaybackPaused
+                    || runtime.activity.queuedAudioBuffers == 0
                     ? 0.0
                     : 1.0,
                 MPNowPlayingInfoPropertyDefaultPlaybackRate:
@@ -158,6 +160,7 @@ final class ProjectSystemMediaController {
             MPNowPlayingInfoCenter.default()
         center.nowPlayingInfo = nil
         center.playbackState = .stopped
+        resetArtwork()
 
         updateCommandAvailability(nil)
     }
@@ -172,8 +175,6 @@ final class ProjectSystemMediaController {
 
         clear(runtime)
         self.runtime = nil
-        artwork = nil
-        artworkURL = nil
     }
 
     private func installRemoteCommands() {
@@ -215,29 +216,7 @@ final class ProjectSystemMediaController {
         let seekToken =
             center
                 .changePlaybackPositionCommand
-                .addTarget { event in
-                    guard let event =
-                            event
-                            as? MPChangePlaybackPositionCommandEvent
-                    else {
-                        return .commandFailed
-                    }
-
-                    let position =
-                        event.positionTime
-
-                    Task { @MainActor in
-                        ProjectSystemMediaController
-                            .shared
-                            .perform(
-                                .seek(
-                                    position
-                                )
-                            )
-                    }
-
-                    return .success
-                }
+                .addTarget(handler: Self.makeSeekHandler())
 
         commandTargets.append(
             (
@@ -255,14 +234,7 @@ final class ProjectSystemMediaController {
         action: RemoteAction
     ) {
         let token =
-            command.addTarget { _ in
-                Task { @MainActor in
-                    ProjectSystemMediaController
-                        .shared
-                        .perform(action)
-                }
-                return .success
-            }
+            command.addTarget(handler: Self.makeCommandHandler(action: action))
 
         commandTargets.append(
             (command, token)
@@ -416,13 +388,13 @@ final class ProjectSystemMediaController {
         center.playCommand.isEnabled =
             hasPlayableItem
         center.pauseCommand.isEnabled =
-            isActive
+            isActive && !runtime.isPlaybackPaused
         center.togglePlayPauseCommand
             .isEnabled = hasPlayableItem
         center.skipForwardCommand
-            .isEnabled = isActive
+            .isEnabled = runtime.canSkipPlayback
         center.skipBackwardCommand
-            .isEnabled = isActive
+            .isEnabled = runtime.canSkipPlayback
 
         let itemID =
             runtime.activity
@@ -464,37 +436,71 @@ final class ProjectSystemMediaController {
         guard let url =
                 runtime.artworkURL
         else {
-            artwork = nil
-            artworkURL = nil
+            resetArtwork()
             return nil
         }
 
-        if artworkURL == url,
-           let artwork {
+        // nil also means a request is in flight or the cover was rejected.
+        // Repeated playback events must not decode/retry the same image.
+        if artworkURL == url {
             return artwork
         }
 
-        guard let image =
-                UIImage(
-                    contentsOfFile:
-                        url.path
-                )
-        else {
-            artwork = nil
-            artworkURL = url
-            return nil
-        }
-
-        let mediaArtwork =
-            MPMediaItemArtwork(
-                boundsSize:
-                    image.size
-            ) { _ in
-                image
-            }
-
+        resetArtwork()
         artworkURL = url
-        artwork = mediaArtwork
-        return mediaArtwork
+        artworkTask = Task { @MainActor [weak self, weak runtime] in
+            let data = await ProjectArtworkThumbnail.load(at: url, maximumPixelSize: 512)
+            guard !Task.isCancelled, let self, let runtime,
+                  self.runtime === runtime, self.artworkURL == url,
+                  runtime.activity.hasActivePlaybackWork else { return }
+            self.artworkTask = nil
+            guard let data, let image = UIImage(data: data) else { return }
+            self.artwork = Self.makeArtwork(image: image)
+            self.publish(runtime)
+        }
+        // Publish transport state immediately; artwork is optional and follows
+        // asynchronously once a bounded thumbnail is ready.
+        return nil
+    }
+
+    private func resetArtwork() {
+        artworkTask?.cancel()
+        artworkTask = nil
+        artwork = nil
+        artworkURL = nil
+    }
+
+    // Objective-C system callbacks may run off the main queue. Creating their
+    // closures in an explicitly nonisolated context avoids inheriting this
+    // controller's MainActor and trapping before the callback body executes.
+    private nonisolated static func makeArtwork(image: UIImage) -> MPMediaItemArtwork {
+        let handler: @Sendable (CGSize) -> UIImage = { _ in image }
+        return MPMediaItemArtwork(boundsSize: image.size, requestHandler: handler)
+    }
+
+    private nonisolated static func makeCommandHandler(
+        action: RemoteAction
+    ) -> @Sendable (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        { _ in
+            Task { @MainActor in
+                ProjectSystemMediaController.shared.perform(action)
+            }
+            return .success
+        }
+    }
+
+    private nonisolated static func makeSeekHandler()
+        -> @Sendable (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        { event in
+            guard let seek = event as? MPChangePlaybackPositionCommandEvent else {
+                return .commandFailed
+            }
+            let position = seek.positionTime
+            Task { @MainActor in
+                ProjectSystemMediaController.shared.perform(.seek(position))
+            }
+            return .success
+        }
     }
 }
+

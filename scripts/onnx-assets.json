@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "kokoro_revision": "468588286ebb2dd77c25b9771e5d165896538cce",
+  "g2p_revision": "main",
+  "resources": [
+    {
+      "path": "KokoroONNX/model_quantized.onnx",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/onnx/model_quantized.onnx",
+      "min_bytes": 90000000,
+      "sha256": "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478"
+    },
+    {
+      "path": "ONNXG2P/misaki-en_us-g2p.onnx",
+      "url": "https://huggingface.co/nekwo/misaki-en-us-g2p-onnx/resolve/main/misaki-en_us-g2p.onnx",
+      "size": 3438244,
+      "sha256": "757759c3e3ccb0bf59c379b1671c9834a27543ceaefd6846850823633b9665a1"
+    },
+    {
+      "path": "ONNXG2P/misaki-en_us-g2p.json",
+      "url": "https://huggingface.co/nekwo/misaki-en-us-g2p-onnx/resolve/main/misaki-en_us-g2p.json",
+      "size": 5724857,
+      "sha256": "8a8e3350713b0a00102425a5d5bd6b58b34854c74a3e8d837589f55212c51658"
+    },
+    {
+      "path": "KokoroONNX/af_heart.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_heart.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_bella.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_bella.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_michael.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_michael.bin",
+      "size": 522240
+    }
+  ]
+}

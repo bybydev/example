@@ -36,12 +36,12 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
     }
 
     func commitGeneratedAudio(
-        wavData: Data,
+        wavURL: URL,
         metadata: GeneratedAudioMetadata
     ) async throws {
         try await store.commitGeneratedAudio(
             projectID: projectID,
-            wavData: wavData,
+            wavURL: wavURL,
             metadata: metadata
         )
     }
@@ -151,4 +151,11 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
             requests: requests
         )
     }
+
+    func generationState(
+        requests: [ProjectGenerationStatusRequest]
+    ) async throws -> (queue: ProjectQueueDocument, statuses: [UUID: ProjectItemGenerationStatus]) {
+        try await store.generationState(projectID: projectID, requests: requests)
+    }
 }
+

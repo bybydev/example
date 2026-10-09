@@ -29,7 +29,7 @@ These rules apply to work in the ReadAloud repository.
 - reuse sibling packages and proven Spokio/AppFoundation patterns instead of duplicating solved infrastructure
 - follow `docs/IOS_APP_BASELINE.md` for generic iOS app setup before inventing ReadAloud-specific infrastructure
 - keep ReadAloud-specific integration code in this repo
-- keep generic Kokoro runtime fixture/model infrastructure in KokoroCoreML
+- keep ONNX model, G2P and voice assets bundled via scripts/onnx-assets.py
 - preserve the internal engineering name `ReadAloud` even if the public app brand changes
 
 ## CI and release automation
@@ -42,7 +42,7 @@ workflow. It must build the exact selected GitHub ref and expose two independent
 choices:
 
 - configuration: Debug or Release
-- Kokoro resources: fixture or real
+- Kokoro ONNX INT8 + G2P assets: always bundled (no fixture mode)
 
 The workflow publishes one unsigned iOS `.xcarchive` prerelease under the
 `mycli-build-*` namespace. It does not upload to App Store Connect.

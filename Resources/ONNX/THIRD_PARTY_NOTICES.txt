@@ -1,0 +1,21 @@
+ReadAloud — bundled offline speech models
+
+Kokoro ONNX INT8 model + voice styles
+  Source: https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX
+  Revision: 468588286ebb2dd77c25b9771e5d165896538cce
+  License: Apache License 2.0
+  Original Kokoro authors and ONNX community contributors.
+
+Misaki US English G2P ONNX model and dictionary
+  Source: https://huggingface.co/nekwo/misaki-en-us-g2p-onnx
+  Original BART G2P: PeterReid/graphemes_to_phonemes_en_us
+  Dictionary and tokenizer: hexgrad/misaki
+  Kokoro phoneme vocabulary: hexgrad/Kokoro-82M
+  License: Apache License 2.0
+
+ReadAloud's Swift ONNX phonemizer logic is adapted in part from:
+  https://github.com/ArcadiaLabsLLC/hermes-agent/blob/main/agent_runtime/speech_phonemize.py
+  MIT License.
+
+Full license terms: https://www.apache.org/licenses/LICENSE-2.0
+The model files are redistributed without modification.

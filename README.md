@@ -3,7 +3,7 @@
 ReadAloud is a local-first, offline document-to-speech reader for iPhone.
 
 It imports EPUBs, PDFs, supported documents, and pasted text into durable
-`.readaloud` projects, then reads them with on-device Kokoro Core ML speech.
+`.readaloud` projects, then reads them with on-device Kokoro ONNX INT8 speech, bundled for fully offline listening.
 
 ## Product status
 
@@ -102,51 +102,52 @@ Each runtime owns:
 Reader, mini-player, background audio, Now Playing, and system remote commands
 all observe the same runtime.
 
-## Speech pipeline
+## Speech engine — ONNX only
+
+ReadAloud uses **Kokoro ONNX INT8** as its sole speech backend, including
+streaming, generation queue, sample playback and the DEBUG reader. Core ML,
+KokoroCoreML, and the legacy fixture workflow are removed.
+
+The app includes all six verified, offline runtime resources:
+
+- Kokoro INT8 speech model (about 92.4 MB)
+- Misaki G2P ONNX model (about 3.4 MB)
+- English G2P dictionary/vocabulary (about 5.7 MB)
+- Heart, Bella and Michael voice styles (about 0.5 MB each)
+
+There are **no user downloads or first-play downloads**. The app accesses the
+models from its signed bundle. Settings > Kokoro ONNX INT8 shows bundled
+readiness and provides an offline real-text speech test.
 
 ```text
-normalized text
+Reader / generation queue
   -> SpeechChunkScheduler
-  -> KokoroEngine
+  -> KokoroONNXEngine (shared actor)
+     -> ONNX English text normalization + Misaki lexicon
+     -> CPU ONNX BART for unknown words
+     -> bundled Kokoro phoneme vocabulary
+     -> CPU ONNX Kokoro INT8
+  -> 24 kHz mono PCM
   -> SpeechPlaybackQueue
   -> AVAudioEngine / AVAudioPlayerNode
 ```
 
-ReadAloud uses the `KokoroTTS` product from KokoroCoreML 1.1.0.
+See `docs/TTS_ENGINES.md` for implementation details and compatibility keys.
 
-Production resources are checksum/provenance verified. Development can use the
-released executable fixture profile without downloading the full production
-model set.
+## Build-time ONNX resources
 
-## Kokoro resources
-
-Prepare production assets:
+Developers/build runners download and verify models **before** compiling:
 
 ```bash
-bash scripts/bootstrap.sh
+python3 scripts/onnx-assets.py download
+bash scripts/stage-onnx-resources-for-build.sh
+xcodegen generate --spec project.yml
 ```
 
-Or download/verify explicitly:
-
-```bash
-bash scripts/download-kokoro-assets.sh
-bash scripts/verify-kokoro-assets.sh
-```
-
-Prepare the executable fixture:
-
-```bash
-bash scripts/download-kokoro-fixture.sh
-```
-
-Production is the default resource mode. Development can explicitly stage the
-fixture with:
-
-```bash
-READALOUD_KOKORO_RESOURCE_MODE=fixture xcodebuild ...
-```
-
-Fixture resources are development-only and must never ship to App Store Connect.
+The six source URLs and pinned hashes are in `scripts/onnx-assets.json`.
+Large binaries are ignored by Git. The Release workflow always stages and
+verifies the ONNX bundle, regardless of Debug or Release configuration,
+and verifies the archived app's resources before publishing.
 
 ## Project generation
 
@@ -199,13 +200,13 @@ ReadAloud Pro adds:
 Marketing version: **1.0**
 
 The canonical App Store shipping path is manual/local using Xcode/mycli and
-`docs/RELEASE_CHECKLIST.md`.
+`docs/RELEASE_CHECKLIST.md`. Build-time resource verification is mandatory.
 
 The manual GitHub **Release** workflow creates disposable unsigned iOS archives
 for mycli. In the Actions UI, select:
 
 - **Configuration:** Debug or Release
-- **Kokoro models:** fixture or real
+- **Speech resources:** Always the complete bundled ONNX model and G2P assets
 
 The workflow always builds the selected branch/ref and publishes one
 `mycli-build-*` prerelease. It does not upload to App Store Connect.

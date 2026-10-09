@@ -1,5 +1,4 @@
 import Foundation
-import KokoroTTS
 
 @MainActor
 extension ProjectRuntime {
@@ -57,6 +56,7 @@ extension ProjectRuntime {
         itemID: UUID,
         fromOffsetUTF16 explicitOffset: Int? = nil
     ) throws {
+        try prepareExplicitWork()
         guard let state =
                 itemState(itemID)
         else {
@@ -116,10 +116,14 @@ extension ProjectRuntime {
 
         readerPauseRequested = false
         pipeline.resume()
-
-        if playbackTask != nil {
-            activity.playbackState =
-                .playing
+        // A failed session restart must stay failed. Pipeline events publish
+        // the audible state; preparation can still be in progress here.
+        if case .failed = pipeline.state {
+            let failure = activity.playbackState
+            let itemID = playerItemID
+            stopPlayback()
+            playerItemID = itemID
+            activity.playbackState = failure
         }
 
         ProjectSystemMediaController
@@ -155,12 +159,14 @@ extension ProjectRuntime {
     func seekPlayback(
         by seconds: Double
     ) throws {
-        guard seconds != 0,
+        guard seconds.isFinite, seconds != 0,
               let currentItemID =
                 activity.activeItemID
         else {
             return
         }
+
+        try prepareExplicitWork()
 
         if let asset = finalAudioAsset,
            asset.metadata.itemID
@@ -212,7 +218,7 @@ extension ProjectRuntime {
         }
 
         let timeline =
-            readerTimeline()
+            readerTimeline(itemID: currentItemID)
         guard !timeline.isEmpty,
               let currentIndex =
                 timeline.firstIndex(
@@ -280,8 +286,8 @@ extension ProjectRuntime {
     func seekPlayback(
         to positionSeconds: Double
     ) throws {
-        guard let currentItemID =
-                activity.activeItemID,
+        guard positionSeconds.isFinite,
+              let currentItemID = activity.activeItemID,
               let asset =
                 finalAudioAsset,
               asset.metadata.itemID
@@ -289,6 +295,8 @@ extension ProjectRuntime {
         else {
             return
         }
+
+        try prepareExplicitWork()
 
         let shouldRemainPaused =
             isPlaybackPaused
@@ -348,12 +356,7 @@ extension ProjectRuntime {
            let state =
                 itemState(itemID)
         {
-            let paragraphs =
-                ReaderTextLayout
-                    .paragraphs(
-                        in:
-                            state.item.text
-                    )
+            let paragraphs = cachedReaderParagraphs(for: state.item)
             let position =
                 min(
                     asset.metadata
@@ -430,12 +433,11 @@ extension ProjectRuntime {
             return
         }
 
-        try play(
-            itemID:
+        try changePlayerChapter(
+            to:
                 itemStates[
                     nextIndex
-                ].id,
-            fromOffsetUTF16: 0
+                ].id
         )
     }
 
@@ -460,12 +462,11 @@ extension ProjectRuntime {
             return
         }
 
-        try play(
-            itemID:
+        try changePlayerChapter(
+            to:
                 itemStates[
                     previousIndex
-                ].id,
-            fromOffsetUTF16: 0
+                ].id
         )
     }
 
@@ -478,10 +479,7 @@ extension ProjectRuntime {
             return []
         }
 
-        return ReaderTextLayout
-            .paragraphs(
-                in: state.item.text
-            )
+        return cachedReaderParagraphs(for: state.item)
     }
 
     private func startReaderPlayback(
@@ -490,11 +488,15 @@ extension ProjectRuntime {
         exactStartSeconds: Double?,
         allowsExactAudioResume: Bool
     ) {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchTaskID = nil
         playbackOperationID = nil
         readerPauseRequested = false
         playbackTask?.cancel()
         playbackTask = nil
         pipeline.stop()
+        playerItemID = itemID
         finalAudioAsset = nil
         finalAudioPlaybackOriginSeconds = 0
         queueController.setPlaybackActive(
@@ -507,6 +509,7 @@ extension ProjectRuntime {
             operationID
         activity.activeItemID =
             itemID
+        activity.playbackState = .loading
 
         playbackTask =
             Task {
@@ -545,6 +548,9 @@ extension ProjectRuntime {
                     }
                 )
         else {
+            playbackTask = nil
+            playbackOperationID = nil
+            queueController.setPlaybackActive(false)
             activity.playbackState =
                 .failed(
                     "Reader item is unavailable."
@@ -566,6 +572,8 @@ extension ProjectRuntime {
                     initialIndex + 1
                 )
 
+            let playbackItemIDs = itemStates.map(\.id)
+            var reachedProjectEnd = false
             for itemIndex
                 in initialIndex
                     ..< playbackEndIndex {
@@ -575,20 +583,13 @@ extension ProjectRuntime {
 
                 guard let state =
                         itemState(
-                            itemStates[
-                                itemIndex
-                            ].id
+                            playbackItemIDs[itemIndex]
                         )
                 else {
                     continue
                 }
 
-                let paragraphs =
-                    ReaderTextLayout
-                        .paragraphs(
-                            in:
-                                state.item.text
-                        )
+                let paragraphs = cachedReaderParagraphs(for: state.item)
                 guard !paragraphs.isEmpty
                 else {
                     continue
@@ -599,10 +600,6 @@ extension ProjectRuntime {
                         == initialIndex
                     ? initialOffsetUTF16
                     : 0
-
-                await schedulePrefetch(
-                    after: state.id
-                )
 
                 let request =
                     generationStatusRequest(
@@ -634,6 +631,7 @@ extension ProjectRuntime {
                                     && allowsExactAudioResume
                         )
 
+                    try requirePlaybackOperation(operationID)
                     try await playFinalAudio(
                         asset: asset,
                         itemState: state,
@@ -671,7 +669,7 @@ extension ProjectRuntime {
                             try requirePlaybackOperation(
                                 operationID
                             )
-                            try await refresh()
+                            try await refreshGenerationState()
                             try requirePlaybackOperation(
                                 operationID
                             )
@@ -685,6 +683,8 @@ extension ProjectRuntime {
                             )
                     }
                 }
+                reachedProjectEnd = itemIndex == playbackItemIDs.count - 1
+                if stopsAtChapterEnd { break }
             }
 
             try requirePlaybackOperation(
@@ -696,10 +696,7 @@ extension ProjectRuntime {
             finalAudioPositionSeconds = 0
             finalAudioPlaybackOriginSeconds = 0
             activity.itemProgress = 1
-
-            let reachedProjectEnd =
-                playbackEndIndex
-                    == itemStates.count
+            clearSleepTimer()
 
             if reachedProjectEnd {
                 activity.projectProgress = 1
@@ -743,6 +740,7 @@ extension ProjectRuntime {
                 return
             }
 
+            clearSleepTimer()
             playbackTask = nil
             playbackOperationID = nil
             readerPauseRequested = false
@@ -783,7 +781,7 @@ extension ProjectRuntime {
                 )
 
         guard let voice =
-            KokoroEngine.Voice.all
+            SpeechVoice.all
                 .first(
                     where: {
                         $0.id
@@ -793,8 +791,7 @@ extension ProjectRuntime {
                     }
                 )
         else {
-            throw KokoroEngine
-                .EngineError
+            throw SpeechEngineError
                 .unsupportedVoice(
                     itemState
                         .resolved
@@ -881,6 +878,8 @@ extension ProjectRuntime {
                                 .sourceRange
                     )
             {
+                try requirePlaybackOperation(operationID)
+                try await waitWhileReaderPaused(operationID)
                 do {
                     try await pipeline.play(
                         audio:
@@ -931,11 +930,7 @@ extension ProjectRuntime {
                                 audio.sampleRate
                         }
 
-                        capturedSamples
-                            .append(
-                                contentsOf:
-                                    audio.samples
-                            )
+                        try ReadAloudSafety.append(audio, to: &capturedSamples)
                     }
                 )
             } catch ReadAloudPipeline
@@ -1014,155 +1009,144 @@ extension ProjectRuntime {
             [ReaderParagraph],
         runtimeRevision: String
     ) async throws -> Bool {
-        var samples: [Float] = []
-        var segments:
-            [AudioSegmentMetadata] = []
+        try Task.checkCancellation()
+        let writer = try ProjectWAVFileWriter(directory: cacheCoordinator.temporaryDirectory)
+        do {
+            var segments:
+                [AudioSegmentMetadata] = []
 
-        for (
-            paragraphIndex,
-            paragraph
-        ) in paragraphs.enumerated() {
-            let cacheKey =
-                try ParagraphCacheIdentity
-                    .key(
-                        itemID:
-                            itemState.id,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        resolved:
-                            itemState.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion
-                    )
+            for (
+                paragraphIndex,
+                paragraph
+            ) in paragraphs.enumerated() {
+                try Task.checkCancellation()
+                guard !synthesisSuspendedForMemoryPressure else { throw CancellationError() }
+                let cacheKey =
+                    try ParagraphCacheIdentity
+                        .key(
+                            itemID:
+                                itemState.id,
+                            paragraphIndex:
+                                paragraphIndex,
+                            paragraphText:
+                                paragraph.text,
+                            resolved:
+                                itemState.resolved,
+                            runtimeRevision:
+                                runtimeRevision,
+                            synthesisConfigVersion:
+                                ReadAloudNarrationCatalog
+                                    .synthesisConfigVersion
+                        )
 
-            guard let cached =
-                try await cacheCoordinator
-                    .loadParagraph(
-                        cacheKey:
-                            cacheKey,
-                        itemID:
-                            itemState.id,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        generationKey:
-                            itemState
-                                .generationKey,
-                        resolved:
-                            itemState.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion,
+                guard let cached =
+                    try await cacheCoordinator
+                        .loadParagraph(
+                            cacheKey:
+                                cacheKey,
+                            itemID:
+                                itemState.id,
+                            paragraphIndex:
+                                paragraphIndex,
+                            paragraphText:
+                                paragraph.text,
+                            generationKey:
+                                itemState
+                                    .generationKey,
+                            resolved:
+                                itemState.resolved,
+                            runtimeRevision:
+                                runtimeRevision,
+                            synthesisConfigVersion:
+                                ReadAloudNarrationCatalog
+                                    .synthesisConfigVersion,
+                            sourceRange:
+                                paragraph
+                                    .sourceRange
+                        )
+                else {
+                    await writer.discard()
+                    return false
+                }
+
+                let span = try await writer.append(samples: cached.audio.samples)
+                let startSample = span.start
+                let endSample = span.end
+
+                segments.append(
+                    AudioSegmentMetadata(
                         sourceRange:
                             paragraph
-                                .sourceRange
+                                .sourceRange,
+                        startSeconds:
+                            Double(
+                                startSample
+                            )
+                            / Double(
+                                ProjectWAVCodec
+                                    .requiredSampleRate
+                            ),
+                        endSeconds:
+                            Double(
+                                endSample
+                            )
+                            / Double(
+                                ProjectWAVCodec
+                                    .requiredSampleRate
+                            )
                     )
-            else {
-                return false
+                )
             }
 
-            let startSample =
-                samples.count
-            samples.append(
-                contentsOf:
-                    cached.audio.samples
-            )
-            let endSample =
-                samples.count
+            guard !segments.isEmpty else {
+                await writer.discard()
+                return false
+            }
+            let file = try await writer.finish()
+            let audioRevision = file.revision
+            let duration = Double(file.samples) / Double(ProjectWAVCodec.requiredSampleRate)
 
-            segments.append(
-                AudioSegmentMetadata(
-                    sourceRange:
-                        paragraph
-                            .sourceRange,
-                    startSeconds:
-                        Double(
-                            startSample
-                        )
-                        / Double(
-                            ProjectWAVCodec
-                                .requiredSampleRate
-                        ),
-                    endSeconds:
-                        Double(
-                            endSample
-                        )
-                        / Double(
-                            ProjectWAVCodec
-                                .requiredSampleRate
-                        )
+            let metadata =
+                GeneratedAudioMetadata(
+                    itemID:
+                        itemState.id,
+                    generationKey:
+                        itemState
+                            .generationKey,
+                    audioRevision:
+                        audioRevision,
+                    contentRevision:
+                        itemState.item
+                            .contentRevision,
+                    voiceID:
+                        itemState.resolved
+                            .voiceID,
+                    speed:
+                        itemState.resolved
+                            .speed,
+                    runtimeRevision:
+                        runtimeRevision,
+                    synthesisConfigVersion:
+                        ReadAloudNarrationCatalog
+                            .synthesisConfigVersion,
+                    durationSeconds:
+                        duration,
+                    segments:
+                        segments
                 )
-            )
-        }
 
-        guard !samples.isEmpty,
-              !segments.isEmpty
-        else {
-            return false
-        }
-
-        let wavData =
-            try ProjectWAVCodec
-                .encode(
-                    samples: samples,
-                    sampleRate:
-                        ProjectWAVCodec
-                            .requiredSampleRate
+            try await persistence
+                .commitGeneratedAudio(
+                    wavURL: file.url,
+                    metadata: metadata
                 )
-        let audioRevision =
-            ProjectDigest
-                .sha256(wavData)
-        let duration =
-            Double(samples.count)
-            / Double(
-                ProjectWAVCodec
-                    .requiredSampleRate
-            )
 
-        let metadata =
-            GeneratedAudioMetadata(
-                itemID:
-                    itemState.id,
-                generationKey:
-                    itemState
-                        .generationKey,
-                audioRevision:
-                    audioRevision,
-                contentRevision:
-                    itemState.item
-                        .contentRevision,
-                voiceID:
-                    itemState.resolved
-                        .voiceID,
-                speed:
-                    itemState.resolved
-                        .speed,
-                runtimeRevision:
-                    runtimeRevision,
-                synthesisConfigVersion:
-                    ReadAloudNarrationCatalog
-                        .synthesisConfigVersion,
-                durationSeconds:
-                    duration,
-                segments:
-                    segments
-            )
-
-        try await persistence
-            .commitGeneratedAudio(
-                wavData: wavData,
-                metadata: metadata
-            )
-
-        return true
+            await writer.discard()
+            return true
+        } catch {
+            await writer.discard()
+            throw error
+        }
     }
 
     private func playFinalAudio(
@@ -1174,67 +1158,13 @@ extension ProjectRuntime {
         startSeconds: Double,
         operationID: UUID
     ) async throws {
-        let audio =
-            try ProjectWAVCodec
-                .decode(
-                    asset.wavData
-                )
-        let duration =
-            asset.metadata
-                .durationSeconds
-        let clampedStart =
-            min(
-                duration,
-                max(
-                    0,
-                    startSeconds
-                )
-            )
-
-        if clampedStart
-            >= duration {
-            return
+        let duration = asset.metadata.durationSeconds
+        guard startSeconds.isFinite, duration.isFinite, duration > 0 else {
+            throw ProjectStoreError.invalidData("Saved playback position is invalid.")
         }
-
-        let startSample =
-            min(
-                audio.samples.count,
-                max(
-                    0,
-                    Int(
-                        (
-                            clampedStart
-                            * Double(
-                                audio.sampleRate
-                            )
-                        )
-                        .rounded(.down)
-                    )
-                )
-            )
-
-        guard startSample
-            < audio.samples.count
-        else {
-            return
-        }
-
-        let actualStart =
-            Double(startSample)
-            / Double(
-                audio.sampleRate
-            )
-        let sliced =
-            KokoroAudio(
-                samples:
-                    Array(
-                        audio.samples[
-                            startSample...
-                        ]
-                    ),
-                sampleRate:
-                    audio.sampleRate
-            )
+        let clampedStart = min(duration, max(0, startSeconds))
+        if clampedStart >= duration { return }
+        let actualStart = clampedStart
 
         finalAudioAsset = asset
         finalAudioPositionSeconds =
@@ -1368,8 +1298,9 @@ extension ProjectRuntime {
         }
 
         do {
-            try await pipeline.play(
-                audio: sliced,
+            try await pipeline.playFile(
+                at: asset.wavURL,
+                startSeconds: actualStart,
                 continuous: true
             )
         } catch ReadAloudPipeline
@@ -1496,6 +1427,7 @@ extension ProjectRuntime {
 
         project?.playback =
             playback
+        playerItemID = itemState.id
         activity.activeItemID =
             itemState.id
         activity.currentParagraphRange =
@@ -1683,8 +1615,7 @@ extension ProjectRuntime {
         let itemLength =
             max(
                 1,
-                itemState.item
-                    .text.utf16.count
+                playerTextLength(for: itemState.item)
             )
         let itemProgress =
             min(
@@ -1741,6 +1672,7 @@ extension ProjectRuntime {
 
         project?.playback =
             playback
+        playerItemID = itemState.id
         activity.activeItemID =
             itemState.id
         activity.currentParagraphRange =
@@ -1763,52 +1695,7 @@ extension ProjectRuntime {
         itemID: UUID,
         offsetUTF16: Int
     ) -> Double {
-        let totalLength =
-            itemStates.reduce(0) {
-                $0 + max(
-                    1,
-                    $1.item
-                        .text.utf16.count
-                )
-            }
-        guard totalLength > 0
-        else {
-            return 0
-        }
-
-        var consumed = 0
-        for state in itemStates {
-            let length =
-                max(
-                    1,
-                    state.item
-                        .text.utf16.count
-                )
-
-            if state.id == itemID {
-                consumed += min(
-                    max(
-                        offsetUTF16,
-                        0
-                    ),
-                    length
-                )
-                break
-            }
-
-            consumed += length
-        }
-
-        return min(
-            1,
-            max(
-                0,
-                Double(consumed)
-                    / Double(
-                        totalLength
-                    )
-            )
-        )
+        readingProgressIndex.progress(itemID: itemID, offsetUTF16: offsetUTF16)
     }
 
     private func waitWhileReaderPaused(
@@ -1829,40 +1716,15 @@ extension ProjectRuntime {
         )
     }
 
-    private func readerTimeline()
-        -> [ReaderTimedPlaybackPosition]
-    {
-        var timeline:
-            [ReaderTimedPlaybackPosition] =
-                []
-
-        for state in itemStates {
-            for paragraph
-                in ReaderTextLayout
-                    .paragraphs(
-                        in:
-                            state.item.text
-                    )
-            {
-                timeline.append(
-                    ReaderTimedPlaybackPosition(
-                        itemID:
-                            state.id,
-                        paragraph:
-                            paragraph,
-                        durationSeconds:
-                            paragraph
-                                .estimatedDurationSeconds(
-                                    speed:
-                                        state.resolved
-                                            .speed
-                                )
-                    )
-                )
-            }
+    private func readerTimeline(itemID: UUID) -> [ReaderTimedPlaybackPosition] {
+        guard let state = itemState(itemID) else { return [] }
+        return cachedReaderParagraphs(for: state.item).map { paragraph in
+            ReaderTimedPlaybackPosition(
+                itemID: state.id,
+                paragraph: paragraph,
+                durationSeconds: paragraph.estimatedDurationSeconds(speed: state.resolved.speed)
+            )
         }
-
-        return timeline
     }
 
     private func requirePlaybackOperation(
@@ -1883,3 +1745,4 @@ private nonisolated struct ReaderTimedPlaybackPosition {
     let paragraph: ReaderParagraph
     let durationSeconds: Double
 }
+

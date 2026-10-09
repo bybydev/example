@@ -87,6 +87,11 @@ final class ProjectRuntime {
     private(set) var itemStates: [ProjectRuntimeItemState] = []
     private(set) var artworkURL: URL?
     var activity = ProjectRuntimeActivity()
+    // Keeps retry/replay available after the audio queue has stopped.
+    var playerItemID: UUID?
+    var sleepTimerDeadline: Date?
+    var stopsAtChapterEnd = false
+    @ObservationIgnored var sleepTimerTask: Task<Void, Never>?
     private(set) var isLoading = false
     private(set) var didLoad = false
     var revision: UInt64 = 0
@@ -95,6 +100,13 @@ final class ProjectRuntime {
     @ObservationIgnored let pipeline: ReadAloudPipeline
     @ObservationIgnored let hasProAccess:
         @MainActor () -> Bool
+    @ObservationIgnored var synthesisSuspendedForMemoryPressure = false
+    @ObservationIgnored var isReleasingSpeechMemory = false
+    @ObservationIgnored var readingProgressIndex = ProjectReadingProgressIndex()
+    @ObservationIgnored private var readerLayoutCache:
+        (itemID: UUID, contentRevision: String, paragraphs: [ReaderParagraph])?
+    @ObservationIgnored private var playerTextLengthCache:
+        (itemID: UUID, contentRevision: String, length: Int)?
     @ObservationIgnored var playbackTask: Task<Void, Never>?
     @ObservationIgnored var playbackOperationID: UUID?
     @ObservationIgnored var readerPauseRequested = false
@@ -104,6 +116,9 @@ final class ProjectRuntime {
     @ObservationIgnored var finalAudioPlaybackOriginSeconds = 0.0
     @ObservationIgnored var shouldResumeAfterInterruption = false
     @ObservationIgnored var prefetchScheduledItemIDs = Set<UUID>()
+    @ObservationIgnored var prefetchTask: Task<Void, Never>?
+    @ObservationIgnored var prefetchTaskID: UUID?
+    @ObservationIgnored private var generationStateRefreshID: UUID?
     @ObservationIgnored private var didRecoverGenerationQueue = false
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
 
@@ -140,6 +155,7 @@ final class ProjectRuntime {
     }
 
     var blocksQueuedGeneration: Bool {
+        if synthesisSuspendedForMemoryPressure { return true }
         guard activity
             .hasActivePlaybackWork
         else {
@@ -201,6 +217,7 @@ final class ProjectRuntime {
 
     func refresh() async throws {
         refreshGeneration &+= 1
+        generationStateRefreshID = nil
         let generation = refreshGeneration
         isLoading = true
 
@@ -216,6 +233,8 @@ final class ProjectRuntime {
             }
 
             try Task.checkCancellation()
+
+            let readingProgress = try await ProjectReadingProgressIndex.make(in: loaded.items)
 
             let runtimeRevision =
                 try ReadAloudSynthesisContract.runtimeRevision()
@@ -259,7 +278,7 @@ final class ProjectRuntime {
                 )
             }
 
-            let statuses = try await persistence.generationStatuses(
+            let generationState = try await persistence.generationState(
                 requests: requests
             )
             try Task.checkCancellation()
@@ -270,6 +289,8 @@ final class ProjectRuntime {
 
             project = loaded.project
             manifest = loaded.manifest
+            readingProgressIndex = readingProgress
+            generationStateRefreshID = nil
             activity.projectProgress =
                 loaded.project.playback?.projectProgress ?? 0
             itemStates = prepared.map {
@@ -278,10 +299,10 @@ final class ProjectRuntime {
                     resolved: $0.resolved,
                     generationKey: $0.generationKey,
                     generationStatus:
-                        statuses[$0.item.id] ?? .notGenerated
+                        generationState.statuses[$0.item.id] ?? .notGenerated
                 )
             }
-            queueController.publish(loaded.queue)
+            queueController.publish(generationState.queue)
             activity.waitingGenerationJobs =
                 queueController.waitingCount
             activity.generatingJobs =
@@ -308,16 +329,54 @@ final class ProjectRuntime {
         }
     }
 
+    // Queue-only changes must not retain a second decoded copy of a long EPUB
+    // while models are loading or speech is running. Keep content/settings and
+    // the live playback bookmark owned by the existing runtime.
+    func refreshGenerationState() async throws {
+        guard didLoad else { return }
+        let contentGeneration = refreshGeneration
+        let requestID = UUID()
+        generationStateRefreshID = requestID
+        let requests = itemStates.map {
+            ProjectGenerationStatusRequest(
+                itemID: $0.id, generationKey: $0.generationKey,
+                contentRevision: $0.item.contentRevision,
+                voiceID: $0.resolved.voiceID, speed: $0.resolved.speed
+            )
+        }
+        let loaded = try await persistence.generationState(requests: requests)
+        try Task.checkCancellation()
+        guard contentGeneration == refreshGeneration,
+              generationStateRefreshID == requestID else { return }
+        itemStates = itemStates.map {
+            ProjectRuntimeItemState(
+                item: $0.item, resolved: $0.resolved, generationKey: $0.generationKey,
+                generationStatus: loaded.statuses[$0.id] ?? .notGenerated
+            )
+        }
+        queueController.publish(loaded.queue)
+        activity.waitingGenerationJobs = queueController.waitingCount
+        activity.generatingJobs = queueController.generatingCount
+        activity.failedGenerationJobs = queueController.failedCount
+        revision &+= 1
+    }
+
     func refreshForExternalPreferencesChange()
         async
     {
+        let selectedEngine = ReadAloudPreferences.speechEngine
+        let engineChanged = pipeline.engineKind != selectedEngine
+
         guard let project else {
+            if engineChanged {
+                await pipeline.selectEngine(selectedEngine)
+            }
             try? await refresh()
             return
         }
 
         var affectedItemIDs =
-            Set<UUID>()
+            engineChanged ? Set(itemStates.map(\.id)) : Set<UUID>()
 
         for state in itemStates {
             do {
@@ -372,6 +431,14 @@ final class ProjectRuntime {
                 .setPlaybackActive(true)
         }
 
+        if engineChanged {
+            // Stop running durable generation before unloading the model.
+            // Old finalized assets remain on disk; changed generation keys
+            // make them incompatible without deleting user data.
+            queueController.shutdown()
+            await pipeline.selectEngine(selectedEngine)
+        }
+
         do {
             if !affectedItemIDs.isEmpty {
                 _ = try await persistence
@@ -387,11 +454,16 @@ final class ProjectRuntime {
             }
 
             try await refresh()
+            if engineChanged {
+                try queueController.configure(runtime: self)
+            }
         } catch {
             lastErrorMessage =
                 Self.message(
                     for: error
                 )
+            // Do not restart old durable jobs if refresh/invalidation failed.
+            // They must never synthesize ONNX audio under a Core ML cache key.
         }
     }
 
@@ -756,6 +828,7 @@ final class ProjectRuntime {
         itemID: UUID,
         regenerate: Bool
     ) async throws {
+        try prepareExplicitWork()
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -775,6 +848,7 @@ final class ProjectRuntime {
     }
 
     func enqueueRemainingGeneration() async throws {
+        try prepareExplicitWork()
         try ReadAloudAccessPolicy
             .requirePro(
                 .bulkGeneration,
@@ -880,7 +954,54 @@ final class ProjectRuntime {
         itemStates.first { $0.id == itemID }
     }
 
+    func prepareExplicitWork() throws {
+        guard !isReleasingSpeechMemory else {
+            throw ProjectStoreError.invalidData("Speech resources are being released. Try listening again in a moment.")
+        }
+        try ReadAloudSafety.requireMemoryHeadroom()
+        synthesisSuspendedForMemoryPressure = false
+        queueController.setPlaybackActive(blocksQueuedGeneration)
+    }
+
+    func suspendForMemoryPressure() {
+        synthesisSuspendedForMemoryPressure = true
+        isReleasingSpeechMemory = true
+        let hadWork = isBackgroundWorkActive
+        stopPlayback()
+        readerLayoutCache = nil
+        queueController.setPlaybackActive(true)
+        if hadWork {
+            let message = "Listening stopped because the device is low on memory. Your progress is saved. Try again after memory is available."
+            activity.playbackState = .failed(message)
+            lastErrorMessage = message
+        }
+    }
+
+    func cachedReaderParagraphs(for item: ProjectContentItem) -> [ReaderParagraph] {
+        if let cached = readerLayoutCache, cached.itemID == item.id,
+           cached.contentRevision == item.contentRevision {
+            return cached.paragraphs
+        }
+        let paragraphs = ReaderTextLayout.paragraphs(in: item.text)
+        readerLayoutCache = (item.id, item.contentRevision, paragraphs)
+        return paragraphs
+    }
+
+    func playerTextLength(for item: ProjectContentItem) -> Int {
+        if let length = readingProgressIndex.lengths[item.id] { return length }
+        if let cached = playerTextLengthCache, cached.itemID == item.id,
+           cached.contentRevision == item.contentRevision { return cached.length }
+        let length = item.text.utf16.count
+        playerTextLengthCache = (item.id, item.contentRevision, length)
+        return length
+    }
+
     func stopPlayback() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchTaskID = nil
+        clearSleepTimer()
+        playerItemID = nil
         playbackOperationID = nil
         readerPauseRequested = false
         playbackTask?.cancel()
@@ -898,6 +1019,12 @@ final class ProjectRuntime {
     }
 
     func shutdown() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchTaskID = nil
+        generationStateRefreshID = nil
+        clearSleepTimer()
+        playerItemID = nil
         refreshGeneration &+= 1
         isLoading = false
         playbackOperationID = nil
@@ -958,14 +1085,13 @@ final class ProjectRuntime {
             ProjectSystemMediaController
                 .shared
                 .publish(self)
+            if queuedBuffers > 0 { schedulePlaybackPrefetch() }
         case .stopped:
             activity.playbackState = .idle
             activity.activeItemID = nil
             activity.queuedAudioBuffers = 0
             activity.queuedAudioDurationSeconds = 0
-            queueController.setPlaybackActive(
-                false
-            )
+            queueController.setPlaybackActive(blocksQueuedGeneration)
             ProjectSystemMediaController
                 .shared
                 .clear(self)
@@ -1097,3 +1223,4 @@ final class ProjectRuntime {
         return String(describing: error)
     }
 }
+

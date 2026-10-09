@@ -31,193 +31,108 @@ struct RootView: View {
 }
 
 private struct ProjectMiniPlayerHost: View {
-    @Environment(ProjectRuntimeManager.self)
-    private var runtimeManager
-
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
     @State private var readerPresented = false
+    @State private var readerRuntime: ProjectRuntime?
+    @State private var errorMessage: String?
 
     var body: some View {
         Group {
-            if let runtime =
-                    runtimeManager.playbackRuntime,
-               runtimeManager.readerProjectID
-                != runtime.id
-            {
-                VStack(spacing: 6) {
-                    HStack(spacing: 12) {
+            if let runtime = runtimeManager.playerRuntime,
+               runtimeManager.readerProjectID != runtime.id,
+               let itemID = runtime.playerControlItemID() {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
                         Button {
-                            runtimeManager
-                                .makeActive(runtime)
+                            readerRuntime = runtime
+                            runtimeManager.makeActive(runtime)
                             readerPresented = true
                         } label: {
                             HStack(spacing: 10) {
-                                Image(
-                                    systemName:
-                                        "waveform"
+                                ProjectArtworkView(
+                                    url: runtime.artworkURL,
+                                    sourceType: runtime.project?.source.type ?? .paste,
+                                    width: 32, height: 40
                                 )
-                                .foregroundStyle(
-                                    .secondary
-                                )
-
-                                VStack(
-                                    alignment: .leading,
-                                    spacing: 2
-                                ) {
-                                    Text(
-                                        runtime.project?
-                                            .title
-                                            ?? "ReadAloud"
-                                    )
-                                    .font(
-                                        .subheadline
-                                            .weight(
-                                                .semibold
-                                            )
-                                    )
-                                    .lineLimit(1)
-
-                                    Text(
-                                        miniPlayerSubtitle(
-                                            runtime
-                                        )
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(
-                                        .secondary
-                                    )
-                                    .lineLimit(1)
+                                .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(runtime.project?.title ?? "ReadAloud")
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(runtime.itemState(itemID)?.item.title ?? "Chapter")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
                                 }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                             }
-                            .contentShape(
-                                Rectangle()
-                            )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityHint("Opens the audio player and Reader.")
 
-                        Spacer(minLength: 8)
-
-                        Button {
-                            if runtime
-                                .isPlaybackPaused
-                            {
-                                runtime
-                                    .resumePlayback()
-                            } else {
-                                runtime
-                                    .pausePlayback()
-                            }
-                        } label: {
-                            Image(
-                                systemName:
-                                    runtime
-                                        .isPlaybackPaused
-                                    ? "play.fill"
-                                    : "pause.fill"
-                            )
-                            .frame(
-                                width: 34,
-                                height: 34
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(
-                            runtime
-                                .isPlaybackPaused
-                            ? "Resume"
-                            : "Pause"
+                        ProjectPlayerPlayButton(
+                            runtime: runtime, itemID: itemID, diameter: 44,
+                            onError: { errorMessage = $0 }
                         )
+
+                        Button { runtime.stopPlayback() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop and close player")
                     }
 
-                    ProgressView(
-                        value:
-                            runtime.activity
-                                .itemProgress
-                    )
-                    .accessibilityLabel(
-                        "Chapter playback progress"
-                    )
-                    .accessibilityValue(
-                        Text(
-                            runtime.activity
-                                .itemProgress,
-                            format:
-                                .percent.precision(
-                                    .fractionLength(0)
-                                )
-                        )
-                    )
+                    HStack(spacing: 8) {
+                        if runtime.isPlayerPreparing {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Text(runtime.playerStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        ProgressView(value: runtime.playerProgress(for: itemID))
+                            .accessibilityLabel("Chapter playback progress")
+                            .accessibilityValue(runtime.playerProgress(for: itemID)
+                                .formatted(.percent.precision(.fractionLength(0))))
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(.regularMaterial)
+                .projectPlayerCard()
             }
         }
-        .sheet(
-            isPresented: $readerPresented
-        ) {
-            if let runtime =
-                runtimeManager.playbackRuntime
-                    ?? runtimeManager
-                        .activeRuntime
-            {
+        .sheet(isPresented: $readerPresented, onDismiss: { readerRuntime = nil }) {
+            if let runtime = readerRuntime {
                 NavigationStack {
                     ProjectReaderView(
                         runtime: runtime,
-                        initialItemID:
-                            runtime.activity
-                                .activeItemID
-                            ?? runtime
-                                .continueItemID
+                        initialItemID: runtime.playerControlItemID() ?? runtime.continueItemID
                     )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { readerPresented = false }
+                        }
+                    }
                 }
             }
         }
-    }
-
-    private func miniPlayerSubtitle(
-        _ runtime: ProjectRuntime
-    ) -> String {
-        let itemTitle =
-            runtime.activity
-                .activeItemID
-                .flatMap {
-                    runtime.itemState($0)?
-                        .item.title
-                }
-                ?? runtime.currentItemID
-                    .flatMap {
-                        runtime.itemState($0)?
-                            .item.title
-                    }
-
-        let status: String =
-            switch runtime
-                .activity
-                .playbackState
-            {
-            case .idle:
-                "Idle"
-            case .loading:
-                "Loading…"
-            case .warmingUp:
-                "Preparing…"
-            case .synthesizing(
-                let current,
-                let total
-            ):
-                "Preparing \(current) of \(total)…"
-            case .playing:
-                "Playing"
-            case .paused:
-                "Paused"
-            case .finished:
-                "Finished"
-            case .failed:
-                "Needs attention"
+        .onChange(of: runtimeManager.loadedRuntimeIDs) { _, ids in
+            if let runtime = readerRuntime, !ids.contains(runtime.id) {
+                readerPresented = false
             }
-
-        return itemTitle.map {
-            "\($0) · \(status)"
-        } ?? status
+        }
+        .alert("Playback Unavailable", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 }

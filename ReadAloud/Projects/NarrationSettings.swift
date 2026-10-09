@@ -25,7 +25,7 @@ nonisolated enum ReadAloudNarrationCatalog {
         ReadAloudPreferences
             .defaultSpeed
     }
-    static let synthesisConfigVersion = 1
+    static let synthesisConfigVersion = 3
 
     static func voiceName(_ id: String) -> String {
         voices.first(where: { $0.id == id })?.name ?? id
@@ -124,34 +124,8 @@ nonisolated enum NarrationSettingsResolver {
 }
 
 nonisolated enum ReadAloudSynthesisContract {
-    private struct RuntimeManifest: Decodable {
-        let sdkCommit: String
-
-        enum CodingKeys: String, CodingKey {
-            case sdkCommit = "sdk_commit"
-        }
-    }
-
     static func runtimeRevision() throws -> String {
-        do {
-            let data = try Data(contentsOf: KokoroResources.manifestURL())
-            let manifest = try JSONDecoder().decode(
-                RuntimeManifest.self,
-                from: data
-            )
-            guard !manifest.sdkCommit.isEmpty else {
-                throw ProjectStoreError.invalidData(
-                    "Kokoro runtime revision is missing."
-                )
-            }
-            return manifest.sdkCommit
-        } catch let error as ProjectStoreError {
-            throw error
-        } catch {
-            throw ProjectStoreError.io(
-                "Unable to read Kokoro runtime identity: \(error)"
-            )
-        }
+        SpeechEngineKind.onnxINT8.runtimeRevisionOverride
     }
 
     static func generationKey(
@@ -182,3 +156,4 @@ nonisolated enum ReadAloudSynthesisContract {
         )
     }
 }
+

@@ -34,6 +34,7 @@ final class ProjectRuntimeManager {
     func activate(
         projectID: UUID
     ) async throws -> ProjectRuntime {
+        closeIdleRuntimes(keeping: projectID)
         if let loading = loadingTasks[projectID] {
             let runtime = try await loading.value
             activeRuntime = runtime
@@ -111,6 +112,12 @@ final class ProjectRuntimeManager {
         }
     }
 
+    var hasActiveAudioWork: Bool {
+        runtimes.values.contains {
+            $0.isPlaybackActive || $0.isBackgroundWorkActive
+        }
+    }
+
     var playbackRuntime: ProjectRuntime? {
         if let activeRuntime,
            activeRuntime.isPlaybackActive
@@ -123,6 +130,14 @@ final class ProjectRuntimeManager {
                 $0.isPlaybackActive
             }
         )
+    }
+
+    var playerRuntime: ProjectRuntime? {
+        if let playing = playbackRuntime { return playing }
+        if let activeRuntime, activeRuntime.playerItemID != nil {
+            return activeRuntime
+        }
+        return runtimes.values.first { $0.playerItemID != nil }
     }
 
     func runtimeIfLoaded(
@@ -201,6 +216,7 @@ final class ProjectRuntimeManager {
             runtime.id != projectID
                 && runtime.id != readerProjectID
                 && !runtime.isBackgroundWorkActive
+                && loadingTasks[runtime.id] == nil
         }
 
         for runtime in removable {
@@ -225,6 +241,16 @@ final class ProjectRuntimeManager {
         for runtime in playing {
             await runtime
                 .persistPlaybackCheckpoint()
+        }
+    }
+
+    func handleMemoryPressure() {
+        let loaded = Array(runtimes.values)
+        for runtime in loaded { runtime.suspendForMemoryPressure() }
+        closeIdleRuntimes(keeping: activeRuntime?.id)
+        Task { @MainActor in
+            await KokoroONNXEngine.shared.unload()
+            for runtime in loaded { runtime.isReleasingSpeechMemory = false }
         }
     }
 
@@ -261,3 +287,4 @@ final class ProjectRuntimeManager {
         return String(describing: error)
     }
 }
+

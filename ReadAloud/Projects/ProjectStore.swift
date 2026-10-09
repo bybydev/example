@@ -1,5 +1,4 @@
 import Foundation
-import KokoroTTS
 
 nonisolated enum ProjectStoreError: Error, LocalizedError, Equatable, Sendable {
     case projectNotFound(UUID)
@@ -496,6 +495,7 @@ actor ProjectStore {
     }
 
     func loadProject(projectID: UUID) throws -> LoadedProject {
+        try ReadAloudSafety.requireMemoryHeadroom()
         let packageURL = try existingPackageURL(for: projectID)
         let paths = ProjectPackagePaths(packageURL: packageURL)
 
@@ -512,10 +512,23 @@ actor ProjectStore {
         )
         try ProjectValidation.validate(manifest)
 
+        guard manifest.items.count <= 20_000 else {
+            throw ProjectStoreError.invalidData("This project has too many sections to open safely.")
+        }
+        var contentBytes = 0
+        for entry in manifest.items {
+            let size = try paths.itemJSON(entry.id).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= ReadAloudSafety.maximumDocumentBytes,
+                  contentBytes <= ReadAloudSafety.maximumProjectBytes - size else {
+                throw ProjectStoreError.invalidData("This project is too large to open safely on this device. The original project is preserved.")
+            }
+            contentBytes += size
+        }
         var items: [ProjectContentItem] = []
         items.reserveCapacity(manifest.items.count)
 
         for entry in manifest.items.sorted(by: { $0.order < $1.order }) {
+            try Task.checkCancellation()
             let item: ProjectContentItem = try readDocument(
                 ProjectContentItem.self,
                 at: paths.itemJSON(entry.id),
@@ -922,23 +935,13 @@ actor ProjectStore {
                 return nil
             }
 
-            let wavData =
-                try Data(contentsOf: wavURL)
-            guard ProjectDigest.sha256(
-                wavData
-            ) == metadata.audioRevision else {
+            try Task.checkCancellation()
+            guard try ProjectDigest.sha256(fileAt: wavURL) == metadata.audioRevision else {
                 return nil
             }
-
-            let audio =
-                try ProjectWAVCodec.decode(
-                    wavData
-                )
-            let duration =
-                Double(audio.samples.count)
-                / Double(audio.sampleRate)
-            let tolerance =
-                1.0 / Double(audio.sampleRate)
+            let info = try ProjectWAVCodec.inspect(fileAt: wavURL)
+            let duration = info.durationSeconds
+            let tolerance = 1.0 / Double(ProjectWAVCodec.requiredSampleRate)
 
             guard abs(
                 metadata.durationSeconds
@@ -949,8 +952,10 @@ actor ProjectStore {
 
             return ProjectFinalAudioAsset(
                 metadata: metadata,
-                wavData: wavData
+                wavURL: wavURL
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return nil
         }
@@ -958,7 +963,7 @@ actor ProjectStore {
 
     func commitGeneratedAudio(
         projectID: UUID,
-        wavData: Data,
+        wavURL: URL,
         metadata: GeneratedAudioMetadata,
         now: Date = .now
     ) throws {
@@ -975,23 +980,13 @@ actor ProjectStore {
             in: paths
         )
 
-        guard ProjectDigest.sha256(
-            wavData
-        ) == metadata.audioRevision else {
-            throw ProjectStoreError.invalidData(
-                "Final WAV bytes do not match audioRevision."
-            )
+        try Task.checkCancellation()
+        guard try ProjectDigest.sha256(fileAt: wavURL) == metadata.audioRevision else {
+            throw ProjectStoreError.invalidData("Final WAV bytes do not match audioRevision.")
         }
-
-        let audio =
-            try ProjectWAVCodec.decode(
-                wavData
-            )
-        let duration =
-            Double(audio.samples.count)
-            / Double(audio.sampleRate)
-        let tolerance =
-            1.0 / Double(audio.sampleRate)
+        let info = try ProjectWAVCodec.inspect(fileAt: wavURL)
+        let duration = info.durationSeconds
+        let tolerance = 1.0 / Double(ProjectWAVCodec.requiredSampleRate)
 
         guard abs(
             metadata.durationSeconds
@@ -1064,10 +1059,8 @@ actor ProjectStore {
             )
 
         do {
-            try wavData.write(
-                to: stagedWAV,
-                options: .atomic
-            )
+            try fileManager.copyItem(at: wavURL, to: stagedWAV)
+            try Task.checkCancellation()
             let metadataData =
                 try ProjectJSONCodec.encode(
                     metadata
@@ -1197,6 +1190,15 @@ actor ProjectStore {
         projectID: UUID,
         requests: [ProjectGenerationStatusRequest]
     ) throws -> [UUID: ProjectItemGenerationStatus] {
+        try generationState(projectID: projectID, requests: requests).statuses
+    }
+
+    // Queue/status changes do not require hydrating the source and every
+    // chapter again while the Reader and speech engine retain the open book.
+    func generationState(
+        projectID: UUID,
+        requests: [ProjectGenerationStatusRequest]
+    ) throws -> (queue: ProjectQueueDocument, statuses: [UUID: ProjectItemGenerationStatus]) {
         let paths =
             try pathsForExistingProject(
                 projectID
@@ -1380,7 +1382,7 @@ actor ProjectStore {
             ] = .notGenerated
         }
 
-        return result
+        return (queue, result)
     }
 
     @discardableResult
@@ -1502,9 +1504,10 @@ actor ProjectStore {
     ) throws {
         guard !requests.isEmpty else { return }
 
-        let loaded = try loadProject(projectID: projectID)
-        let validItemIDs = Set(loaded.items.map(\.id))
-        var queue = loaded.queue
+        let paths = try pathsForExistingProject(projectID)
+        let manifest = try loadContentManifest(paths: paths)
+        let validItemIDs = Set(manifest.items.map(\.id))
+        var queue = try loadQueue(projectID: projectID)
 
         for request in requests {
             guard validItemIDs.contains(request.itemID) else {
@@ -2023,6 +2026,10 @@ actor ProjectStore {
     ) throws -> T {
         let data: Data
         do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= ReadAloudSafety.maximumDocumentBytes else {
+                throw ProjectStoreError.invalidData("Project document exceeds safe loading limits.")
+            }
             data = try Data(contentsOf: url)
         } catch {
             throw ProjectStoreError.corruptDocument(
@@ -2368,3 +2375,4 @@ actor ProjectStore {
         return String(describing: error)
     }
 }
+

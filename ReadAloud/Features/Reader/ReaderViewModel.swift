@@ -6,7 +6,7 @@ import Observation
 @Observable
 final class ReaderViewModel {
     var text = ReaderSample.all.first?.text ?? ""
-    var selectedVoiceID = KokoroEngine.Voice.heart.id
+    var selectedVoiceID = SpeechVoice.heart.id
     var selectedSpeed: Float = 1.0
     var metrics = PerformanceMetrics()
     var eventLog: [String] = []
@@ -29,8 +29,8 @@ final class ReaderViewModel {
         }
     }
 
-    var voices: [KokoroEngine.Voice] {
-        KokoroEngine.Voice.all
+    var voices: [SpeechVoice] {
+        SpeechVoice.all
     }
 
     var samples: [ReaderSample] {
@@ -140,7 +140,7 @@ final class ReaderViewModel {
         appendEvent("Loaded sample: \(sample.title)")
     }
 
-    private var selectedVoice: KokoroEngine.Voice {
+    private var selectedVoice: SpeechVoice {
         voices.first { $0.id == selectedVoiceID } ?? .heart
     }
 

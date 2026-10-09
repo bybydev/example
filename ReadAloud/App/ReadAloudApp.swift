@@ -1,5 +1,6 @@
 import AppFoundation
 import SwiftUI
+import UIKit
 
 @main
 @MainActor
@@ -76,6 +77,11 @@ struct ReadAloudApp: App {
                     purchaseManager:
                         purchaseManager
                 )
+                .onReceive(NotificationCenter.default.publisher(
+                    for: UIApplication.didReceiveMemoryWarningNotification
+                )) { _ in
+                    runtimeManager.handleMemoryPressure()
+                }
                 .onChange(
                     of:
                         purchaseManager
@@ -89,3 +95,4 @@ struct ReadAloudApp: App {
         }
     }
 }
+

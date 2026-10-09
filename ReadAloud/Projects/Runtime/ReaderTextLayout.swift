@@ -1,5 +1,44 @@
 import Foundation
 
+// Build once off the main actor. Publishing a passage must not rescan all text
+// in a long book for every Now Playing/highlight/progress update.
+nonisolated struct ProjectReadingProgressIndex: Sendable {
+    var lengths: [UUID: Int] = [:]
+    var prefixes: [UUID: Int] = [:]
+    var totalLength = 0
+
+    static func make(in items: [ProjectContentItem]) async throws -> Self {
+        let task = Task.detached(priority: .userInitiated) {
+            var result = Self()
+            for item in items.sorted(by: { $0.order < $1.order }) {
+                try Task.checkCancellation()
+                let length = item.text.utf16.count
+                result.lengths[item.id] = length
+                result.prefixes[item.id] = result.totalLength
+                let (total, overflow) = result.totalLength.addingReportingOverflow(max(1, length))
+                guard !overflow else {
+                    throw ProjectStoreError.invalidData("This book exceeds safe reading progress limits.")
+                }
+                result.totalLength = total
+            }
+            try Task.checkCancellation()
+            return result
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func progress(itemID: UUID, offsetUTF16: Int) -> Double {
+        guard totalLength > 0, let prefix = prefixes[itemID],
+              let length = lengths[itemID] else { return 0 }
+        let consumed = prefix + min(max(0, offsetUTF16), max(1, length))
+        return min(1, max(0, Double(consumed) / Double(totalLength)))
+    }
+}
+
 nonisolated struct ReaderParagraph: Identifiable, Equatable, Sendable {
     let index: Int
     let text: String
@@ -30,104 +69,64 @@ nonisolated struct ReaderParagraph: Identifiable, Equatable, Sendable {
 }
 
 nonisolated enum ReaderTextLayout {
-    static func paragraphs(
-        in text: String
-    ) -> [ReaderParagraph] {
-        let nsText = text as NSString
-        let length = nsText.length
-        guard length > 0 else { return [] }
+    static func paragraphs(in text: String) -> [ReaderParagraph] {
+        // Preserve exact source UTF-16 offsets while grouping *whole*
+        // sentences into a bounded reader paragraph. Never cut at an
+        // arbitrary whitespace threshold in the middle of a sentence.
+        let pieces = SpeechTextSegmentation.ranges(
+            in: text,
+            maximumUTF16: ReadAloudSafety.maximumParagraphUTF16
+        )
+        var result: [ReaderParagraph] = []
+        var paragraphStart = text.startIndex
+        var paragraphEnd = text.startIndex
+        var startUTF16 = 0
+        var endUTF16 = 0
 
-        var paragraphs: [ReaderParagraph] = []
-        var cursor = 0
-
-        while cursor < length {
-            while cursor < length,
-                  isNewline(at: cursor, in: nsText) {
-                cursor += 1
-            }
-
-            guard cursor < length else { break }
-
-            let start = cursor
-            var end = cursor
-
-            while end < length {
-                if isParagraphBreak(
-                    at: end,
-                    in: nsText
-                ) {
-                    break
-                }
-                end += 1
-            }
-
-            let rawRange = NSRange(
-                location: start,
-                length: end - start
-            )
-            let raw = nsText.substring(
-                with: rawRange
-            )
-            let trimmed = raw.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-
-            if !trimmed.isEmpty {
-                let leadingLength =
-                    raw.utf16.count
-                    - raw.drop {
-                        $0.isWhitespace
-                    }.utf16.count
-                let trailingLength =
-                    raw.reversed().prefix {
-                        $0.isWhitespace
-                    }.count
-                let rangeStart =
-                    start + leadingLength
-                let rangeEnd =
-                    max(
-                        rangeStart,
-                        end - trailingLength
-                    )
-
-                paragraphs.append(
-                    ReaderParagraph(
-                        index: paragraphs.count,
-                        text: trimmed,
-                        sourceRange: AudioSourceRange(
-                            startUTF16: rangeStart,
-                            endUTF16: rangeEnd
-                        )
-                    )
+        func flush() {
+            guard paragraphEnd > paragraphStart else { return }
+            let raw = text[paragraphStart..<paragraphEnd]
+            let leading = raw.prefix(while: { $0.isWhitespace }).utf16.count
+            let trimmed = String(raw)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            result.append(ReaderParagraph(
+                index: result.count,
+                text: trimmed,
+                sourceRange: AudioSourceRange(
+                    startUTF16: startUTF16 + leading,
+                    endUTF16: startUTF16 + leading + trimmed.utf16.count
                 )
-            }
-
-            cursor = end
-            while cursor < length,
-                  isNewline(at: cursor, in: nsText) {
-                cursor += 1
-            }
+            ))
         }
 
-        if paragraphs.isEmpty {
-            let trimmed = text.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-            if !trimmed.isEmpty {
-                paragraphs.append(
-                    ReaderParagraph(
-                        index: 0,
-                        text: trimmed,
-                        sourceRange: AudioSourceRange(
-                            startUTF16: 0,
-                            endUTF16: length
-                        )
-                    )
-                )
+        for piece in pieces {
+            let pieceLength = text[piece].utf16.count
+            let wouldOverflow = endUTF16 - startUTF16 + pieceLength
+                > ReadAloudSafety.maximumParagraphUTF16
+
+            if paragraphEnd > paragraphStart && wouldOverflow {
+                flush()
+                paragraphStart = piece.lowerBound
+                startUTF16 = endUTF16
+            }
+            if paragraphEnd == paragraphStart {
+                paragraphStart = piece.lowerBound
+                startUTF16 = endUTF16
+            }
+            paragraphEnd = piece.upperBound
+            endUTF16 += pieceLength
+
+            // Actual line/paragraph boundaries take precedence over
+            // opportunistic packing of neighboring short sentences.
+            if text[piece].contains(where: { $0.isNewline }) {
+                flush()
+                paragraphStart = paragraphEnd
+                startUTF16 = endUTF16
             }
         }
-
-        return paragraphs
+        flush()
+        return result
     }
 
     static func paragraphIndex(
@@ -152,38 +151,4 @@ nonisolated enum ReaderTextLayout {
         return paragraphs.count - 1
     }
 
-    private static func isParagraphBreak(
-        at index: Int,
-        in text: NSString
-    ) -> Bool {
-        guard isNewline(at: index, in: text) else {
-            return false
-        }
-
-        var cursor = index + 1
-        while cursor < text.length {
-            let scalar = text.character(at: cursor)
-            if scalar == 10 || scalar == 13 {
-                return true
-            }
-            if scalar == 32 || scalar == 9 {
-                cursor += 1
-                continue
-            }
-            return false
-        }
-
-        return false
-    }
-
-    private static func isNewline(
-        at index: Int,
-        in text: NSString
-    ) -> Bool {
-        guard index < text.length else {
-            return false
-        }
-        let scalar = text.character(at: index)
-        return scalar == 10 || scalar == 13
-    }
 }

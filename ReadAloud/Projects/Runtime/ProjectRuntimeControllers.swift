@@ -1,6 +1,5 @@
 import Foundation
 import JobQueue
-import KokoroTTS
 import Observation
 
 @Observable
@@ -431,8 +430,11 @@ actor ProjectCacheCoordinator {
         }
 
         do {
-            let metadataData =
-                try Data(contentsOf: metadataURL)
+            let metadataSize = try metadataURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard metadataSize <= 64 * 1_024 else {
+                throw ProjectStoreError.invalidData("Paragraph cache metadata exceeds safe loading limits.")
+            }
+            let metadataData = try Data(contentsOf: metadataURL)
             let metadata =
                 try ProjectJSONCodec.decode(
                     ParagraphCacheMetadata.self,
@@ -460,8 +462,11 @@ actor ProjectCacheCoordinator {
                     sourceRange
             )
 
-            let wavData =
-                try Data(contentsOf: wavURL)
+            let byteCount = try wavURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard byteCount <= 44 + ReadAloudSafety.maximumParagraphSamples * 2 else {
+                throw ProjectStoreError.invalidData("Paragraph cache exceeds safe loading limits.")
+            }
+            let wavData = try Data(contentsOf: wavURL)
             guard ProjectDigest.sha256(
                 wavData
             ) == metadata.audioRevision else {
@@ -507,6 +512,7 @@ actor ProjectCacheCoordinator {
         sourceRange: AudioSourceRange,
         audio: KokoroAudio
     ) throws -> CachedParagraphAudio {
+        try ReadAloudSafety.validate(audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
         guard audio.sampleRate
                 == ProjectWAVCodec.requiredSampleRate,
               !audio.samples.isEmpty else {
@@ -769,3 +775,4 @@ actor ProjectCacheCoordinator {
         )
     }
 }
+

@@ -26,12 +26,12 @@ packages:
   TextExtractor:
     url: https://github.com/hoangbkit/TextExtractor.git
     exactVersion: 1.1.0
-  KokoroCoreML:
-    url: https://github.com/hoangbkit/KokoroCoreML.git
-    branch: master
   JobQueue:
     url: https://github.com/hoangbkit/JobQueue.git
     exactVersion: 1.0.0
+  onnxruntime:
+    url: https://github.com/microsoft/onnxruntime-swift-package-manager.git
+    exactVersion: 1.24.2
 
 fileGroups:
   - README.md
@@ -41,7 +41,6 @@ fileGroups:
   - AppStore
   - docs
   - scripts
-  - testfixtures
 
 settings:
   base:
@@ -62,13 +61,13 @@ targets:
       Release: Config/Release.xcconfig
     sources:
       - path: ReadAloud
-      - path: .build-resources/Kokoro
+      - path: .build-resources/ONNX
         type: folder
         buildPhase: resources
     preBuildScripts:
-      - name: Stage Kokoro Resources
+      - name: Verify and Stage ONNX Resources
         script: |
-          bash "$SRCROOT/scripts/stage-kokoro-resources-for-build.sh"
+          bash "$SRCROOT/scripts/stage-onnx-resources-for-build.sh"
         basedOnDependencyAnalysis: false
     dependencies:
       - package: AppFoundation
@@ -79,10 +78,10 @@ targets:
         product: PDFKitAudio
       - package: TextExtractor
         product: TextExtractor
-      - package: KokoroCoreML
-        product: KokoroTTS
       - package: JobQueue
         product: JobQueue
+      - package: onnxruntime
+        product: onnxruntime
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.readaloud
@@ -120,3 +119,4 @@ schemes:
       revealArchiveInOrganizer: true
     management:
       shared: true
+

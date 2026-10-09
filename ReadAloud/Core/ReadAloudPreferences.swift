@@ -23,6 +23,9 @@ nonisolated enum ReadAloudPreferences {
     static let supportedPrefetchCounts =
         [0, 1, 2]
 
+    // Ignore any persisted experimental Core ML selection from old builds.
+    static var speechEngine: SpeechEngineKind { .onnxINT8 }
+
     static var defaultVoiceID: String {
         let value =
             UserDefaults.standard

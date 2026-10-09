@@ -106,6 +106,7 @@ struct ProjectReaderView: View {
     @State private var chaptersPresented = false
     @State private var voicePresented = false
     @State private var speedPresented = false
+    @State private var narrationItemID: UUID?
     @State private var appearancePresented = false
     @State private var infoPresented = false
     @State private var errorMessage: String?
@@ -202,10 +203,10 @@ struct ProjectReaderView: View {
         .sheet(
             isPresented: $voicePresented
         ) {
-            if let displayedItemID {
+            if let narrationItemID {
                 ItemVoicePicker(
                     model: settingsModel,
-                    itemID: displayedItemID,
+                    itemID: narrationItemID,
                     onChanged: {
                         handleNarrationChange()
                     }
@@ -215,10 +216,10 @@ struct ProjectReaderView: View {
         .sheet(
             isPresented: $speedPresented
         ) {
-            if let displayedItemID {
+            if let narrationItemID {
                 ItemSpeedPicker(
                     model: settingsModel,
-                    itemID: displayedItemID,
+                    itemID: narrationItemID,
                     onChanged: {
                         handleNarrationChange()
                     }
@@ -490,154 +491,125 @@ struct ProjectReaderView: View {
 
     private var readerControls: some View {
         VStack(spacing: 10) {
-            HStack {
-                Text(controlTitle)
-                    .font(
-                        .subheadline.weight(
-                            .semibold
-                        )
+            if let state = controlState {
+                HStack(spacing: 12) {
+                    ProjectArtworkView(
+                        url: runtime.artworkURL,
+                        sourceType: runtime.project?.source.type ?? .paste,
+                        width: 36, height: 44
                     )
-                    .lineLimit(1)
+                    .accessibilityHidden(true)
 
-                Spacer()
-
-                Text(
-                    controlProgress,
-                    format:
-                        .percent.precision(
-                            .fractionLength(0)
-                        )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            ProgressView(
-                value: controlProgress
-            )
-            .accessibilityLabel(
-                "Chapter playback progress"
-            )
-            .accessibilityValue(
-                Text(
-                    controlProgress,
-                    format:
-                        .percent.precision(
-                            .fractionLength(0)
-                        )
-                )
-            )
-
-            if let playbackStatusText {
-                Text(playbackStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(
-                        maxWidth: .infinity,
-                        alignment: .leading
-                    )
-            }
-
-            HStack(spacing: 34) {
-                Button {
-                    seek(
-                        by: -Double(
-                            ReadAloudPreferences
-                                .skipInterval
-                        )
-                    )
-                } label: {
-                    Image(
-                        systemName:
-                            "gobackward.\(ReadAloudPreferences.skipInterval)"
-                    )
-                    .font(.title2)
-                }
-                .disabled(
-                    runtime.activity
-                        .activeItemID
-                        != displayedItemID
-                        || !runtime.isPlaybackActive
-                )
-                .accessibilityLabel(
-                    "Seek backward \(ReadAloudPreferences.skipInterval) seconds"
-                )
-
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(
-                        systemName:
-                            playPauseSystemImage
-                    )
-                    .font(
-                        .system(
-                            size: 32,
-                            weight: .semibold
-                        )
-                    )
-                    .frame(
-                        width: 52,
-                        height: 44
-                    )
-                }
-                .accessibilityLabel(
-                    playPauseAccessibilityLabel
-                )
-
-                Button {
-                    seek(
-                        by: Double(
-                            ReadAloudPreferences
-                                .skipInterval
-                        )
-                    )
-                } label: {
-                    Image(
-                        systemName:
-                            "goforward.\(ReadAloudPreferences.skipInterval)"
-                    )
-                    .font(.title2)
-                }
-                .disabled(
-                    runtime.activity
-                        .activeItemID
-                        != displayedItemID
-                        || !runtime.isPlaybackActive
-                )
-                .accessibilityLabel(
-                    "Seek forward \(ReadAloudPreferences.skipInterval) seconds"
-                )
-            }
-
-            HStack(spacing: 18) {
-                Button {
-                    voicePresented = true
-                } label: {
-                    Label(
-                        currentVoiceLabel,
-                        systemImage: "waveform"
-                    )
+                    Button { followPlayer() } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(state.item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            HStack(spacing: 6) {
+                                if runtime.isPlayerPreparing {
+                                    ProgressView().controlSize(.mini)
+                                }
+                                Text(runtime.playerStatus)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows the chapter and passage in the player.")
                 }
 
-                Spacer()
+                ProjectPlayerScrubber(
+                    runtime: runtime, itemID: state.id,
+                    onError: { errorMessage = $0 },
+                    onSeek: { followPlayer() }
+                )
 
-                Button {
-                    speedPresented = true
-                } label: {
-                    Label(
-                        currentSpeedLabel,
-                        systemImage:
-                            "speedometer"
+                HStack(spacing: 0) {
+                    chapterTransportButton(forward: false, itemID: state.id)
+                    Spacer(minLength: 0)
+                    ProjectPlayerSkipButton(
+                        forward: false,
+                        approximate: runtime.playerDuration(for: state.id) == nil,
+                        enabled: runtime.canSkipPlayback
+                    ) { seek(by: -Double(ReadAloudPreferences.skipInterval)) }
+                    Spacer(minLength: 0)
+                    ProjectPlayerPlayButton(
+                        runtime: runtime, itemID: state.id,
+                        onError: { errorMessage = $0 }
                     )
+                    Spacer(minLength: 0)
+                    ProjectPlayerSkipButton(
+                        forward: true,
+                        approximate: runtime.playerDuration(for: state.id) == nil,
+                        enabled: runtime.canSkipPlayback
+                    ) { seek(by: Double(ReadAloudPreferences.skipInterval)) }
+                    Spacer(minLength: 0)
+                    chapterTransportButton(forward: true, itemID: state.id)
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        narrationItemID = state.id
+                        voicePresented = true
+                    } label: {
+                        Label(currentVoiceLabel, systemImage: "waveform")
+                            .lineLimit(1)
+                            .frame(minHeight: 44)
+                    }
+                    .accessibilityLabel("Voice, \(currentVoiceLabel)")
+                    Spacer(minLength: 8)
+                    Button {
+                        narrationItemID = state.id
+                        speedPresented = true
+                    } label: {
+                        Label(currentSpeedLabel, systemImage: "speedometer")
+                            .frame(minHeight: 44)
+                    }
+                    .accessibilityLabel("Narration speed, \(currentSpeedLabel)")
+                    Spacer(minLength: 0)
+                    ProjectPlayerSleepTimer(runtime: runtime)
+                }
+                .font(.subheadline)
+                .buttonStyle(.plain)
+
+                if let displayedItemID, displayedItemID != state.id {
+                    Button {
+                        do {
+                            try runtime.play(itemID: displayedItemID)
+                            followPlayer()
+                        } catch { errorMessage = Self.message(for: error) }
+                    } label: {
+                        Label("Listen to the chapter on screen", systemImage: "play.circle")
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
                 }
             }
-            .font(.subheadline)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-        .background(.regularMaterial)
+        .projectPlayerCard()
+    }
+
+    private func chapterTransportButton(forward: Bool, itemID: UUID) -> some View {
+        let targetID = runtime.adjacentPlayerItem(to: itemID, delta: forward ? 1 : -1)
+        return Button {
+            guard let targetID else { return }
+            do {
+                try runtime.changePlayerChapter(to: targetID)
+                followPlayer()
+            } catch { errorMessage = Self.message(for: error) }
+        } label: {
+            Image(systemName: forward ? "forward.end.fill" : "backward.end.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(targetID == nil)
+        .accessibilityLabel(forward ? "Next chapter" : "Previous chapter")
     }
 
     private var moreMenu: some View {
@@ -740,125 +712,13 @@ struct ProjectReaderView: View {
         )
     }
 
-    private var controlState:
-        ProjectRuntimeItemState?
-    {
-        displayedState
-    }
-
-    private var controlTitle: String {
-        controlState?.item.title
-            ?? "Reader"
-    }
-
-    private var controlProgress: Double {
-        if runtime.activity.activeItemID
-            == controlState?.id,
-           runtime.isPlaybackActive
-        {
-            return runtime.activity.itemProgress
-        }
-
-        guard let state = controlState,
-              runtime.project?.playback?
-                .currentItemID == state.id,
-              runtime.project?.playback?
-                .contentBookmark?
-                .contentRevision
-                == state.item.contentRevision
-        else {
-            return 0
-        }
-
-        let length = max(
-            1,
-            state.item.text.utf16.count
-        )
-        let offset =
-            runtime.project?.playback?
-                .contentBookmark?
-                .textOffsetUTF16
-            ?? 0
-        return min(
-            1,
-            max(
-                0,
-                Double(offset)
-                    / Double(length)
-            )
-        )
-    }
-
-    private var playPauseSystemImage:
-        String
-    {
-        guard runtime.isPlaybackActive,
-              runtime.activity.activeItemID
-                == displayedItemID
-        else {
-            return "play.fill"
-        }
-        return runtime.isPlaybackPaused
-            ? "play.fill"
-            : "pause.fill"
-    }
-
-    private var playPauseAccessibilityLabel:
-        String
-    {
-        guard runtime.isPlaybackActive,
-              runtime.activity.activeItemID
-                == displayedItemID
-        else {
-            return "Play"
-        }
-        return runtime.isPlaybackPaused
-            ? "Resume"
-            : "Pause"
-    }
-
-    private var playbackStatusText: String? {
-        if runtime.isPlaybackActive,
-           runtime.activity.activeItemID
-            != displayedItemID,
-           let activeItemID =
-            runtime.activity.activeItemID,
-           let active =
-            runtime.itemState(activeItemID) {
-            return "Playback continues in \(active.item.title)."
-        }
-
-        if case .failed(let message) =
-            runtime.activity.playbackState {
-            return message
-        }
-
-        guard runtime.activity.activeItemID
-                == displayedItemID
-        else {
-            return nil
-        }
-
-        switch runtime.activity.playbackState {
-        case .idle, .finished:
-            return nil
-        case .loading:
-            return "Loading voice models…"
-        case .warmingUp:
-            return "Preparing speech…"
-        case .synthesizing(let current, let total):
-            return "Preparing audio \(current) of \(total)…"
-        case .playing:
-            return "Playing"
-        case .paused:
-            return "Paused"
-        case .failed(let message):
-            return message
-        }
+    private var controlState: ProjectRuntimeItemState? {
+        runtime.playerControlItemID(fallback: displayedItemID)
+            .flatMap { runtime.itemState($0) }
     }
 
     private var currentVoiceLabel: String {
-        guard let state = displayedState
+        guard let state = controlState
         else {
             return "Voice"
         }
@@ -869,7 +729,7 @@ struct ProjectReaderView: View {
     }
 
     private var currentSpeedLabel: String {
-        guard let state = displayedState
+        guard let state = controlState
         else {
             return "Speed"
         }
@@ -1070,32 +930,12 @@ struct ProjectReaderView: View {
         ].id
     }
 
-    private func togglePlayback() {
-        do {
-            guard let displayedItemID else {
-                return
-            }
-
-            if runtime.isPlaybackActive,
-               runtime.activity.activeItemID
-                    == displayedItemID {
-                if runtime.isPlaybackPaused {
-                    runtime.resumePlayback()
-                } else {
-                    runtime.pausePlayback()
-                }
-                return
-            }
-
-            try runtime.play(
-                itemID: displayedItemID
-            )
-            followsPlaybackContext = true
-            followsParagraph = true
-        } catch {
-            errorMessage =
-                Self.message(for: error)
+    private func followPlayer() {
+        if let itemID = runtime.playerControlItemID(fallback: displayedItemID) {
+            displayedItemID = itemID
         }
+        followsPlaybackContext = true
+        followsParagraph = true
     }
 
     private func seek(by seconds: Double) {
@@ -1103,8 +943,7 @@ struct ProjectReaderView: View {
             try runtime.seekPlayback(
                 by: seconds
             )
-            followsPlaybackContext = true
-            followsParagraph = true
+            followPlayer()
         } catch {
             errorMessage =
                 Self.message(for: error)
@@ -1161,9 +1000,14 @@ struct ProjectReaderView: View {
 
     private func handleNarrationChange() {
         if runtime.activity.activeItemID
-            == displayedItemID
+            == narrationItemID
         {
             runtime.stopPlayback()
+        }
+        if let narrationItemID {
+            displayedItemID = narrationItemID
+            followsPlaybackContext = true
+            followsParagraph = true
         }
     }
 
@@ -1572,3 +1416,4 @@ private struct ReaderItemInfoSheet: View {
         }
     }
 }
+
