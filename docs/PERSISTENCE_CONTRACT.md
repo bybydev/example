@@ -22,7 +22,7 @@ The Swift type layout may evolve, but on-disk semantics must remain compatible t
 ├── queue/
 │   └── jobs.json
 ├── cache/
-│   ├── paragraphs/
+│   ├── chunks/
 │   └── artwork/
 ├── audio/
 │   ├── <item-id>.wav
@@ -360,28 +360,37 @@ Rules:
 - source ranges are half-open; times must be finite, ordered, non-overlapping, and within the final duration.
 - capture actual emitted sample offsets during streaming/assembly and convert them to seconds at the stored sample rate; do not estimate timing from text length.
 - segment mappings support regeneration resume and reliable chunk/paragraph highlighting; word-level alignment is not required.
-- paragraph-cache reuse must preserve or reconstruct each reused segment's timing/source mapping.
+- chunk-cache reuse must preserve each chunk's source mapping and use its actual emitted sample count for the finalized timeline.
 - do not replace a known-good compatible asset until a replacement generation commits successfully.
 
 ---
 
-## Paragraph cache
+## Shared chunk cache
 
-Suggested key inputs:
+Chunks are the common unit of ONNX synthesis, streaming playback, queued offline
+generation, and final chapter WAV assembly. The key is a hash over:
 
 ```
 itemID
-+ paragraph locator/index
-+ normalized paragraph text revision
-+ resolved voice
-+ canonical speed
-+ runtime revision
-+ synthesis config version
++ chunk index and UTF-16 source range
++ chunk text revision + item generation identity
++ resolved voice and canonical speed
++ runtime revision + synthesis config version
 ```
 
-The cache implementation may choose a hashed filename.
+Each `cache/chunks/<key>.wav` is paired with validated JSON metadata containing
+`schemaVersion` (required by `ProjectJSONCodec.decode`),
+the owner item, source range, sample count, and WAV SHA-256. Entries are rebuildable
+derived data, independent of final chapter WAVs. In-flight identical syntheses
+coalesce; foreground playback and offline jobs use the same key. Clearing a
+compatible cache removes only derived chunk audio.
 
-Cache entries are derived data and may always be deleted/rebuilt without affecting source/project correctness.
+The playback source bookmark follows the currently audible chunk's start UTF-16
+offset, not the furthest generated chunk. The finalized WAV timeline contains
+a distinct sample-derived segment per chunk; exact seconds are valid only while
+the audio revision remains compatible. Synthesis config version 4 invalidates
+old paragraph-derived cache/final-audio identities without modifying the source,
+project UUID, item UUIDs, or source bookmark.
 
 ---
 

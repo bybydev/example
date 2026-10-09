@@ -210,29 +210,13 @@ extension ProjectRuntime {
             return
         }
 
-        guard let currentRange =
-                activity
-                    .currentParagraphRange
-        else {
-            return
-        }
-
-        let timeline =
-            readerTimeline(itemID: currentItemID)
+        guard let currentRange = activity.currentChunkRange else { return }
+        let timeline = readerTimeline(itemID: currentItemID)
         guard !timeline.isEmpty,
-              let currentIndex =
-                timeline.firstIndex(
-                    where: {
-                        $0.itemID
-                            == currentItemID
-                            && $0.paragraph
-                                .sourceRange
-                                == currentRange
-                    }
-                )
-        else {
-            return
-        }
+              let currentIndex = timeline.firstIndex(where: {
+                  $0.itemID == currentItemID
+                      && $0.chunk.sourceRange == currentRange
+              }) else { return }
 
         var remaining =
             abs(seconds)
@@ -270,7 +254,7 @@ extension ProjectRuntime {
         startReaderPlayback(
             itemID: target.itemID,
             offsetUTF16:
-                target.paragraph
+                target.chunk
                     .sourceRange
                     .startUTF16,
             exactStartSeconds: nil,
@@ -493,6 +477,10 @@ extension ProjectRuntime {
         prefetchTaskID = nil
         playbackOperationID = nil
         readerPauseRequested = false
+        chunkBookmarkTask?.cancel()
+        chunkBookmarkTask = nil
+        activity.currentChunkRange = nil
+        activity.currentChunkIndex = nil
         playbackTask?.cancel()
         playbackTask = nil
         pipeline.stop()
@@ -757,10 +745,8 @@ extension ProjectRuntime {
     }
 
     private func streamItem(
-        itemState:
-            ProjectRuntimeItemState,
-        paragraphs:
-            [ReaderParagraph],
+        itemState: ProjectRuntimeItemState,
+        paragraphs: [ReaderParagraph],
         startOffsetUTF16: Int,
         runtimeRevision: String,
         operationID: UUID
@@ -768,379 +754,185 @@ extension ProjectRuntime {
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
         finalAudioPlaybackOriginSeconds = 0
-        queueController.setPlaybackActive(
-            true
+        queueController.setPlaybackActive(true)
+
+        let chunks = SpeechChunkScheduler().chunks(
+            for: itemState.item.text, speed: Float(itemState.resolved.speed)
         )
-
-        let startParagraphIndex =
-            ReaderTextLayout
-                .paragraphIndex(
-                    forUTF16Offset:
-                        startOffsetUTF16,
-                    in: paragraphs
-                )
-
-        guard let voice =
-            SpeechVoice.all
-                .first(
-                    where: {
-                        $0.id
-                            == itemState
-                                .resolved
-                                .voiceID
-                    }
-                )
-        else {
-            throw SpeechEngineError
-                .unsupportedVoice(
-                    itemState
-                        .resolved
-                        .voiceID
-                )
+        guard !chunks.isEmpty else { return }
+        let startIndex = chunks.firstIndex {
+            startOffsetUTF16 < $0.sourceRange.endUTF16
+        } ?? (chunks.count - 1)
+        guard let voice = SpeechVoice.all.first(where: {
+            $0.id == itemState.resolved.voiceID
+        }) else {
+            throw SpeechEngineError.unsupportedVoice(itemState.resolved.voiceID)
         }
 
-        for paragraphIndex
-            in startParagraphIndex
-                ..< paragraphs.count {
-            try requirePlaybackOperation(
-                operationID
+        let lookahead = ChunkReadAhead(startIndex: startIndex, maxAhead: 20)
+        let requests: [ChunkAudioRequest] = chunks.enumerated().map { index, chunk in
+            ChunkAudioRequest(
+                itemID: itemState.id,
+                index: index, chunk: chunk,
+                generationKey: itemState.generationKey,
+                resolved: itemState.resolved,
+                runtimeRevision: runtimeRevision,
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
             )
+        }
+        let engine = pipeline.engine
 
-            let paragraph =
-                paragraphs[
-                    paragraphIndex
-                ]
-
-            try await waitWhileReaderPaused(
-                operationID
-            )
-            try await publishReaderPosition(
-                itemState:
-                    itemState,
-                paragraph:
-                    paragraph,
-                paragraphIndex:
-                    paragraphIndex,
-                paragraphCount:
-                    paragraphs.count,
-                operationID:
-                    operationID
-            )
-
-            try requirePlaybackOperation(
-                operationID
-            )
-            try await waitWhileReaderPaused(
-                operationID
-            )
-
-            let cacheKey =
-                try ParagraphCacheIdentity
-                    .key(
-                        itemID:
-                            itemState.id,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        resolved:
-                            itemState.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion
-                    )
-
-            if let cached =
-                try await cacheCoordinator
-                    .loadParagraph(
-                        cacheKey:
-                            cacheKey,
-                        itemID:
-                            itemState.id,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        generationKey:
-                            itemState
-                                .generationKey,
-                        resolved:
-                            itemState.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion,
-                        sourceRange:
-                            paragraph
-                                .sourceRange
-                    )
-            {
-                try requirePlaybackOperation(operationID)
-                try await waitWhileReaderPaused(operationID)
-                do {
-                    try await pipeline.play(
-                        audio:
-                            cached.audio,
-                        continuous: true
-                    )
-                } catch ReadAloudPipeline
-                    .PipelineError
-                    .cancelled {
-                    try requirePlaybackOperation(
-                        operationID
-                    )
-                    throw CancellationError()
+        // Producer: fill the bounded, disk-backed window without waiting for
+        // paragraph playback to drain. Playback does not own ONNX inference.
+        let producer = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                for index in startIndex..<requests.count {
+                    try self.requirePlaybackOperation(operationID)
+                    try await lookahead.awaitCapacity(for: index)
+                    try self.requirePlaybackOperation(operationID)
+                    let request = requests[index]
+                    _ = try await self.chunkCache.audio(for: request) {
+                        try await engine.load()
+                        let result = try await engine.synthesize(
+                            text: request.chunk.text, voice: voice,
+                            speed: Float(itemState.resolved.speed),
+                            maxChunkSeconds: request.chunk.maxChunkSeconds
+                        )
+                        return result.audio
+                    }
+                    try self.requirePlaybackOperation(operationID)
+                    await lookahead.markReady(index)
                 }
-                continue
-            }
-
-            var capturedSamples:
-                [Float] = []
-            var capturedSampleRate:
-                Int?
-            var incompatibleRate =
-                false
-
-            do {
-                try await pipeline.read(
-                    text:
-                        paragraph.text,
-                    voice: voice,
-                    speed:
-                        Float(
-                            itemState
-                                .resolved
-                                .speed
-                        ),
-                    continuous: true,
-                    onAudio: {
-                        audio in
-                        if let current =
-                            capturedSampleRate,
-                           current
-                            != audio.sampleRate
-                        {
-                            incompatibleRate =
-                                true
-                        } else {
-                            capturedSampleRate =
-                                audio.sampleRate
-                        }
-
-                        try ReadAloudSafety.append(audio, to: &capturedSamples)
-                    }
-                )
-            } catch ReadAloudPipeline
-                .PipelineError
-                .cancelled {
-                try requirePlaybackOperation(
-                    operationID
-                )
-                throw CancellationError()
-            }
-
-            guard !incompatibleRate,
-                  let sampleRate =
-                    capturedSampleRate,
-                  sampleRate
-                    == ProjectWAVCodec
-                        .requiredSampleRate,
-                  !capturedSamples
-                    .isEmpty
-            else {
-                throw ProjectStoreError
-                    .invalidData(
-                        "Kokoro paragraph output was not consistent 24 kHz audio."
-                    )
-            }
-
-            try requirePlaybackOperation(
-                operationID
-            )
-
-            do {
-                _ = try await cacheCoordinator
-                    .storeParagraph(
-                        cacheKey:
-                            cacheKey,
-                        itemID:
-                            itemState.id,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        generationKey:
-                            itemState
-                                .generationKey,
-                        resolved:
-                            itemState.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion,
-                        sourceRange:
-                            paragraph
-                                .sourceRange,
-                        audio:
-                            KokoroAudio(
-                                samples:
-                                    capturedSamples,
-                                sampleRate:
-                                    sampleRate
-                            )
-                    )
             } catch {
-                lastErrorMessage =
-                    Self.message(
-                        for: error
-                    )
+                await lookahead.fail(error)
             }
         }
+        defer { producer.cancel() }
+
+        try await pipeline.playChunkStream(
+            count: requests.count - startIndex,
+            loadAudio: { [cache = chunkCache] offset in
+                let index = startIndex + offset
+                try await lookahead.awaitReady(index)
+                guard let audio = try await cache.load(requests[index]) else {
+                    throw ProjectStoreError.invalidData(
+                        "Prepared chunk audio is unavailable. Restart playback to retry."
+                    )
+                }
+                return audio
+            },
+            onChunkStarted: { [weak self] offset in
+                guard let self, self.playbackOperationID == operationID else { return }
+                let index = startIndex + offset
+                let chunk = chunks[index]
+                let paragraphIndex = ReaderTextLayout.paragraphIndex(
+                    forUTF16Offset: chunk.sourceRange.startUTF16, in: paragraphs
+                )
+                // Highlight immediately when audio actually starts, not when
+                // the producer has synthesized it.
+                self.activity.currentChunkRange = chunk.sourceRange
+                self.activity.currentChunkIndex = index
+                self.activity.currentParagraphRange = paragraphs[paragraphIndex].sourceRange
+                self.activity.currentParagraphIndex = paragraphIndex
+                self.activity.paragraphCount = paragraphs.count
+                self.activity.activeItemID = itemState.id
+                self.activity.itemProgress = Double(chunk.sourceRange.startUTF16)
+                    / Double(max(1, self.playerTextLength(for: itemState.item)))
+                let projectProgress = self.readingProgressIndex.progress(
+                    itemID: itemState.id,
+                    offsetUTF16: chunk.sourceRange.startUTF16
+                )
+                self.activity.projectProgress = projectProgress
+                // Keep the in-memory resume bookmark equal to the audible
+                // chunk even before the serialized disk write completes.
+                self.project?.playback = ProjectPlaybackState(
+                    currentItemID: itemState.id,
+                    contentBookmark: ProjectContentBookmark(
+                        contentRevision: itemState.item.contentRevision,
+                        textOffsetUTF16: chunk.sourceRange.startUTF16
+                    ),
+                    audioPosition: nil,
+                    projectProgress: projectProgress,
+                    lastPlayedAt: .now
+                )
+                self.revision &+= 1
+                let previous = self.chunkBookmarkTask
+                self.chunkBookmarkTask = Task { @MainActor [weak self] in
+                    await lookahead.markAudible(index)
+                    await previous?.value
+                    guard let self, self.playbackOperationID == operationID,
+                          self.activity.activeItemID == itemState.id,
+                          self.activity.currentChunkIndex == index else { return }
+                    try? await self.publishReaderPosition(
+                        itemState: itemState,
+                        paragraph: paragraphs[paragraphIndex],
+                        paragraphIndex: paragraphIndex,
+                        paragraphCount: paragraphs.count,
+                        operationID: operationID,
+                        sourceRange: chunk.sourceRange
+                    )
+                }
+            }
+        )
+        // Flush the last audible bookmark before transitioning chapters.
+        await chunkBookmarkTask?.value
+        try requirePlaybackOperation(operationID)
     }
 
     func finalizeItemIfComplete(
-        itemState:
-            ProjectRuntimeItemState,
-        paragraphs:
-            [ReaderParagraph],
+        itemState: ProjectRuntimeItemState,
+        paragraphs: [ReaderParagraph],
         runtimeRevision: String
     ) async throws -> Bool {
         try Task.checkCancellation()
+        let chunks = SpeechChunkScheduler().chunks(
+            for: itemState.item.text, speed: Float(itemState.resolved.speed)
+        )
+        guard !chunks.isEmpty else { return false }
+
         let writer = try ProjectWAVFileWriter(directory: cacheCoordinator.temporaryDirectory)
         do {
-            var segments:
-                [AudioSegmentMetadata] = []
-
-            for (
-                paragraphIndex,
-                paragraph
-            ) in paragraphs.enumerated() {
+            var segments: [AudioSegmentMetadata] = []
+            for (index, chunk) in chunks.enumerated() {
                 try Task.checkCancellation()
-                guard !synthesisSuspendedForMemoryPressure else { throw CancellationError() }
-                let cacheKey =
-                    try ParagraphCacheIdentity
-                        .key(
-                            itemID:
-                                itemState.id,
-                            paragraphIndex:
-                                paragraphIndex,
-                            paragraphText:
-                                paragraph.text,
-                            resolved:
-                                itemState.resolved,
-                            runtimeRevision:
-                                runtimeRevision,
-                            synthesisConfigVersion:
-                                ReadAloudNarrationCatalog
-                                    .synthesisConfigVersion
-                        )
-
-                guard let cached =
-                    try await cacheCoordinator
-                        .loadParagraph(
-                            cacheKey:
-                                cacheKey,
-                            itemID:
-                                itemState.id,
-                            paragraphIndex:
-                                paragraphIndex,
-                            paragraphText:
-                                paragraph.text,
-                            generationKey:
-                                itemState
-                                    .generationKey,
-                            resolved:
-                                itemState.resolved,
-                            runtimeRevision:
-                                runtimeRevision,
-                            synthesisConfigVersion:
-                                ReadAloudNarrationCatalog
-                                    .synthesisConfigVersion,
-                            sourceRange:
-                                paragraph
-                                    .sourceRange
-                        )
-                else {
+                guard !synthesisSuspendedForMemoryPressure else {
+                    throw CancellationError()
+                }
+                let request = ChunkAudioRequest(
+                    itemID: itemState.id, index: index, chunk: chunk,
+                    generationKey: itemState.generationKey,
+                    resolved: itemState.resolved,
+                    runtimeRevision: runtimeRevision,
+                    synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
+                )
+                guard let cached = try await chunkCache.load(request) else {
                     await writer.discard()
                     return false
                 }
-
-                let span = try await writer.append(samples: cached.audio.samples)
-                let startSample = span.start
-                let endSample = span.end
-
-                segments.append(
-                    AudioSegmentMetadata(
-                        sourceRange:
-                            paragraph
-                                .sourceRange,
-                        startSeconds:
-                            Double(
-                                startSample
-                            )
-                            / Double(
-                                ProjectWAVCodec
-                                    .requiredSampleRate
-                            ),
-                        endSeconds:
-                            Double(
-                                endSample
-                            )
-                            / Double(
-                                ProjectWAVCodec
-                                    .requiredSampleRate
-                            )
-                    )
-                )
-            }
-
-            guard !segments.isEmpty else {
-                await writer.discard()
-                return false
+                let span = try await writer.append(samples: cached.samples)
+                segments.append(AudioSegmentMetadata(
+                    sourceRange: chunk.sourceRange,
+                    startSeconds: Double(span.start) / Double(ProjectWAVCodec.requiredSampleRate),
+                    endSeconds: Double(span.end) / Double(ProjectWAVCodec.requiredSampleRate)
+                ))
             }
             let file = try await writer.finish()
-            let audioRevision = file.revision
-            let duration = Double(file.samples) / Double(ProjectWAVCodec.requiredSampleRate)
-
-            let metadata =
-                GeneratedAudioMetadata(
-                    itemID:
-                        itemState.id,
-                    generationKey:
-                        itemState
-                            .generationKey,
-                    audioRevision:
-                        audioRevision,
-                    contentRevision:
-                        itemState.item
-                            .contentRevision,
-                    voiceID:
-                        itemState.resolved
-                            .voiceID,
-                    speed:
-                        itemState.resolved
-                            .speed,
-                    runtimeRevision:
-                        runtimeRevision,
-                    synthesisConfigVersion:
-                        ReadAloudNarrationCatalog
-                            .synthesisConfigVersion,
-                    durationSeconds:
-                        duration,
-                    segments:
-                        segments
-                )
-
-            try await persistence
-                .commitGeneratedAudio(
-                    wavURL: file.url,
-                    metadata: metadata
-                )
-
+            let metadata = GeneratedAudioMetadata(
+                itemID: itemState.id,
+                generationKey: itemState.generationKey,
+                audioRevision: file.revision,
+                contentRevision: itemState.item.contentRevision,
+                voiceID: itemState.resolved.voiceID,
+                speed: itemState.resolved.speed,
+                runtimeRevision: runtimeRevision,
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion,
+                durationSeconds: Double(file.samples) / Double(ProjectWAVCodec.requiredSampleRate),
+                segments: segments
+            )
+            try await persistence.commitGeneratedAudio(
+                wavURL: file.url, metadata: metadata
+            )
             await writer.discard()
             return true
         } catch {
@@ -1430,10 +1222,12 @@ extension ProjectRuntime {
         playerItemID = itemState.id
         activity.activeItemID =
             itemState.id
-        activity.currentParagraphRange =
-            segment.sourceRange
-        activity.currentParagraphIndex =
-            paragraphIndex
+        activity.currentParagraphRange = paragraphs[paragraphIndex].sourceRange
+        activity.currentParagraphIndex = paragraphIndex
+        activity.currentChunkRange = segment.sourceRange
+        activity.currentChunkIndex = asset.metadata.segments.firstIndex(where: {
+            $0.sourceRange == segment.sourceRange
+        })
         activity.paragraphCount =
             paragraphs.count
         activity.itemProgress =
@@ -1610,8 +1404,10 @@ extension ProjectRuntime {
             ReaderParagraph,
         paragraphIndex: Int,
         paragraphCount: Int,
-        operationID: UUID
+        operationID: UUID,
+        sourceRange: AudioSourceRange? = nil
     ) async throws {
+        let audibleRange = sourceRange ?? paragraph.sourceRange
         let itemLength =
             max(
                 1,
@@ -1623,9 +1419,7 @@ extension ProjectRuntime {
                 max(
                     0,
                     Double(
-                        paragraph
-                            .sourceRange
-                            .startUTF16
+                        audibleRange.startUTF16
                     )
                     / Double(
                         itemLength
@@ -1637,9 +1431,7 @@ extension ProjectRuntime {
                 itemID:
                     itemState.id,
                 offsetUTF16:
-                    paragraph
-                        .sourceRange
-                        .startUTF16
+                    audibleRange.startUTF16
             )
 
         let playback =
@@ -1651,10 +1443,7 @@ extension ProjectRuntime {
                         contentRevision:
                             itemState.item
                                 .contentRevision,
-                        textOffsetUTF16:
-                            paragraph
-                                .sourceRange
-                                .startUTF16
+                        textOffsetUTF16: audibleRange.startUTF16
                     ),
                 audioPosition: nil,
                 projectProgress:
@@ -1662,6 +1451,8 @@ extension ProjectRuntime {
                 lastPlayedAt: .now
             )
 
+        try requirePlaybackOperation(operationID)
+        guard activity.currentChunkRange == audibleRange else { return }
         try await persistence
             .updatePlayback(
                 playback
@@ -1670,13 +1461,13 @@ extension ProjectRuntime {
             operationID
         )
 
-        project?.playback =
-            playback
+        guard activity.currentChunkRange == audibleRange else { return }
+        project?.playback = playback
         playerItemID = itemState.id
         activity.activeItemID =
             itemState.id
-        activity.currentParagraphRange =
-            paragraph.sourceRange
+        activity.currentParagraphRange = paragraph.sourceRange
+        activity.currentChunkRange = audibleRange
         activity.currentParagraphIndex =
             paragraphIndex
         activity.paragraphCount =
@@ -1718,11 +1509,13 @@ extension ProjectRuntime {
 
     private func readerTimeline(itemID: UUID) -> [ReaderTimedPlaybackPosition] {
         guard let state = itemState(itemID) else { return [] }
-        return cachedReaderParagraphs(for: state.item).map { paragraph in
+        return SpeechChunkScheduler().chunks(
+            for: state.item.text, speed: Float(state.resolved.speed)
+        ).map { chunk in
             ReaderTimedPlaybackPosition(
                 itemID: state.id,
-                paragraph: paragraph,
-                durationSeconds: paragraph.estimatedDurationSeconds(speed: state.resolved.speed)
+                chunk: chunk,
+                durationSeconds: chunk.estimatedDurationSeconds
             )
         }
     }
@@ -1742,7 +1535,7 @@ extension ProjectRuntime {
 
 private nonisolated struct ReaderTimedPlaybackPosition {
     let itemID: UUID
-    let paragraph: ReaderParagraph
+    let chunk: SpeechChunk
     let durationSeconds: Double
 }
 

@@ -25,7 +25,7 @@ nonisolated enum ReadAloudNarrationCatalog {
         ReadAloudPreferences
             .defaultSpeed
     }
-    static let synthesisConfigVersion = 3
+    static let synthesisConfigVersion = 4
 
     static func voiceName(_ id: String) -> String {
         voices.first(where: { $0.id == id })?.name ?? id

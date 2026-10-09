@@ -40,6 +40,37 @@ nonisolated enum SpeechTextSegmentation {
         return result
     }
 
+    /// Prefer punctuation boundaries inside otherwise lengthy sentences,
+    /// while coalescing short fragments into speakable clauses.
+    static func clauseRanges(
+        in text: String,
+        within range: Range<String.Index>
+    ) -> [Range<String.Index>] {
+        var result: [Range<String.Index>] = []
+        var start = range.lowerBound
+        var cursor = start
+        var count = 0
+        while cursor < range.upperBound {
+            let character = text[cursor]
+            count += String(character).utf16.count
+            let next = text.index(after: cursor)
+            if ",;:—–".contains(character),
+               count >= 28 {
+                let remaining = text[next..<range.upperBound].utf16.count
+                if remaining == 0 || remaining >= 24 {
+                    result.append(start..<next)
+                    start = next
+                    count = 0
+                }
+            }
+            cursor = next
+        }
+        if start < range.upperBound {
+            result.append(start..<range.upperBound)
+        }
+        return result
+    }
+
     /// A last-resort model-token overflow split. Prefer the most natural
     /// boundary near the center; never drop words or split a word silently.
     static func splitForModelBudget(_ text: String) -> (String, String)? {

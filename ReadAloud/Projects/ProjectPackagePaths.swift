@@ -35,6 +35,10 @@ nonisolated struct ProjectPackagePaths: Sendable {
         packageURL.appending(path: "cache", directoryHint: .isDirectory)
     }
 
+    var chunkCacheDirectory: URL {
+        cacheDirectory.appending(path: "chunks", directoryHint: .isDirectory)
+    }
+
     var paragraphCacheDirectory: URL {
         cacheDirectory.appending(path: "paragraphs", directoryHint: .isDirectory)
     }

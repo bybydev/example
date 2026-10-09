@@ -185,24 +185,345 @@ private struct PlayerScrubberContent: View {
     }
 }
 
+/// Compact player: artwork is the only transport button. The remainder of
+/// the surface is reserved for the parent expand/collapse button.
+struct ProjectPlayerCoverButton: View {
+    let runtime: ProjectRuntime
+    let itemID: UUID
+    let onError: (String) -> Void
+
+    var body: some View {
+        Button {
+            do { try runtime.togglePlayer(itemID: itemID) }
+            catch { onError(error.localizedDescription) }
+        } label: {
+            ZStack {
+                ProjectArtworkView(
+                    url: runtime.artworkURL,
+                    sourceType: runtime.project?.source.type ?? .paste,
+                    width: 40, height: 48
+                )
+
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.black.opacity(0.48))
+                    .frame(width: 40, height: 48)
+
+                if runtime.isPlayerPreparing && !runtime.isPlaybackPaused {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName:
+                        runtime.isPlaybackActive && !runtime.isPlaybackPaused
+                        ? "pause.fill" : "play.fill"
+                    )
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+                }
+            }
+            .frame(width: 48, height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(runtime.playerActionLabel)
+        .accessibilityHint("Controls playback without expanding or collapsing the player.")
+    }
+}
+
+struct ProjectPlayerCompactContent: View {
+    let runtime: ProjectRuntime
+    let itemID: UUID
+    let onError: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 8) {
+                ProjectPlayerCoverButton(
+                    runtime: runtime,
+                    itemID: itemID,
+                    onError: onError
+                )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtime.project?.title ?? "ReadAloud")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Only the overlay on the cover owns an action in compact mode.
+                // Let taps on labels and empty space reach the surface button.
+                .allowsHitTesting(false)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.secondary.opacity(0.18))
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: geometry.size.width * CGFloat(
+                                min(1, max(0, runtime.playerProgress(for: itemID)))
+                            ))
+                    }
+                }
+                .frame(height: 2)
+                .accessibilityLabel("Chapter playback progress")
+                .accessibilityValue(
+                    runtime.playerProgress(for: itemID)
+                        .formatted(.percent.precision(.fractionLength(0)))
+                )
+                // This is a passive indicator, not a hard-to-use mini scrubber.
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var subtitle: String {
+        if runtime.isPlayerPreparing { return runtime.playerStatus }
+        if case .failed = runtime.activity.playbackState {
+            return runtime.playerStatus
+        }
+        return runtime.itemState(itemID)?.item.title ?? "Chapter"
+    }
+}
+
+/// Full controls are shared between the Reader and Library players. Their
+/// actions own their hit regions; taps elsewhere belong to the background
+/// expand/collapse surface.
+struct ProjectPlayerExpandedContent: View {
+    let runtime: ProjectRuntime
+    let itemID: UUID
+    let onError: (String) -> Void
+    let onSeek: () -> Void
+    let onChapterChanged: () -> Void
+    let onVoice: () -> Void
+    let onSpeed: () -> Void
+    var onOpenReader: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                ProjectArtworkView(
+                    url: runtime.artworkURL,
+                    sourceType: runtime.project?.source.type ?? .paste,
+                    width: 36, height: 44
+                )
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtime.project?.title ?? "ReadAloud")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(runtime.itemState(itemID)?.item.title ?? "Chapter")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if runtime.isPlayerPreparing {
+                        Text(runtime.playerStatus)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .allowsHitTesting(false)
+
+                Menu {
+                    if let onOpenReader {
+                        Button("Open Reader", systemImage: "book") {
+                            onOpenReader()
+                        }
+                    }
+                    Button("Stop Playback", systemImage: "stop.fill", role: .destructive) {
+                        runtime.stopPlayback()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Player actions")
+            }
+
+            ProjectPlayerScrubber(
+                runtime: runtime, itemID: itemID,
+                onError: onError, onSeek: onSeek
+            )
+
+            HStack(spacing: 0) {
+                chapterButton(forward: false)
+                Spacer(minLength: 0)
+                ProjectPlayerSkipButton(
+                    forward: false,
+                    approximate: runtime.playerDuration(for: itemID) == nil,
+                    enabled: runtime.canSkipPlayback
+                ) {
+                    seek(by: -Double(ReadAloudPreferences.skipInterval))
+                }
+                Spacer(minLength: 0)
+                ProjectPlayerPlayButton(
+                    runtime: runtime, itemID: itemID,
+                    onError: onError
+                )
+                Spacer(minLength: 0)
+                ProjectPlayerSkipButton(
+                    forward: true,
+                    approximate: runtime.playerDuration(for: itemID) == nil,
+                    enabled: runtime.canSkipPlayback
+                ) {
+                    seek(by: Double(ReadAloudPreferences.skipInterval))
+                }
+                Spacer(minLength: 0)
+                chapterButton(forward: true)
+            }
+
+            HStack(spacing: 12) {
+                Button(action: onVoice) {
+                    Label(
+                        ReadAloudNarrationCatalog.voiceName(
+                            runtime.itemState(itemID)?.resolved.voiceID ?? ""
+                        ),
+                        systemImage: "waveform"
+                    )
+                    .lineLimit(1)
+                    .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Change narration voice")
+                Spacer(minLength: 4)
+                Button(action: onSpeed) {
+                    Label(
+                        (runtime.itemState(itemID)?.resolved.speed ?? 1)
+                            .formatted(.number.precision(.fractionLength(1))) + "×",
+                        systemImage: "speedometer"
+                    )
+                    .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Change narration speed")
+                Spacer(minLength: 0)
+                ProjectPlayerSleepTimer(runtime: runtime)
+            }
+            .font(.subheadline)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func seek(by seconds: Double) {
+        do {
+            try runtime.seekPlayback(by: seconds)
+            onSeek()
+        } catch {
+            onError(error.localizedDescription)
+        }
+    }
+
+    private func chapterButton(forward: Bool) -> some View {
+        let targetID = runtime.adjacentPlayerItem(
+            to: itemID, delta: forward ? 1 : -1
+        )
+        return Button {
+            guard let targetID else { return }
+            do {
+                try runtime.changePlayerChapter(to: targetID)
+                onChapterChanged()
+            } catch {
+                onError(error.localizedDescription)
+            }
+        } label: {
+            Image(systemName:
+                forward ? "forward.end.fill" : "backward.end.fill"
+            )
+            .font(.system(size: 17, weight: .semibold))
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(targetID == nil)
+        .accessibilityLabel(forward ? "Next chapter" : "Previous chapter")
+    }
+}
+
+/// The toggle button is BEHIND the contents, never a parent onTapGesture.
+/// Therefore all visible transport buttons, menus and the scrubber receive
+/// their own gestures exclusively. Background also catches empty card space.
+struct ProjectPlayerExpandableCard<Compact: View, Expanded: View>: View {
+    @Binding var isExpanded: Bool
+    private let compact: () -> Compact
+    private let expanded: () -> Expanded
+
+    init(
+        isExpanded: Binding<Bool>,
+        @ViewBuilder compact: @escaping () -> Compact,
+        @ViewBuilder expanded: @escaping () -> Expanded
+    ) {
+        _isExpanded = isExpanded
+        self.compact = compact
+        self.expanded = expanded
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Group {
+                if isExpanded {
+                    expanded()
+                } else {
+                    compact()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .background {
+                toggleButton
+            }
+            .projectPlayerCard(compact: !isExpanded)
+        }
+        .frame(maxWidth: .infinity)
+        // Consume the outer margin too; it must not activate Reader rows
+        // behind the safe-area-inset player.
+        .background { toggleButton.accessibilityHidden(true) }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var toggleButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            Rectangle()
+                .fill(.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isExpanded ? "Collapse audio player" : "Expand audio player")
+        .accessibilityHint("Changes the player size without affecting playback.")
+    }
+}
+
 private struct ProjectPlayerCard: ViewModifier {
     @Environment(\.appFoundationTheme) private var theme
+    var compact = false
 
     func body(content: Content) -> some View {
         content
             .foregroundStyle(theme.primaryForegroundColor)
-            .padding(16)
-            .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 24))
+            .padding(.horizontal, compact ? 8 : 16)
+            .padding(.vertical, compact ? 4 : 16)
+            .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: compact ? 18 : 24))
             .overlay {
-                RoundedRectangle(cornerRadius: 24)
+                RoundedRectangle(cornerRadius: compact ? 18 : 24)
                     .strokeBorder(theme.primaryForegroundColor.opacity(0.12), lineWidth: 1)
             }
             .shadow(color: theme.primaryForegroundColor.opacity(0.10), radius: 14, y: 5)
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, compact ? 3 : 8)
     }
 }
 
 extension View {
-    func projectPlayerCard() -> some View { modifier(ProjectPlayerCard()) }
+    func projectPlayerCard(compact: Bool = false) -> some View {
+        modifier(ProjectPlayerCard(compact: compact))
+    }
 }

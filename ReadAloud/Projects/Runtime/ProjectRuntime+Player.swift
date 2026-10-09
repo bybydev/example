@@ -48,7 +48,7 @@ extension ProjectRuntime {
 
     var canSkipPlayback: Bool {
         isPlaybackActive && !isPlayerPreparing
-            && (finalAudioAsset != nil || activity.currentParagraphRange != nil)
+            && (finalAudioAsset != nil || activity.currentChunkRange != nil)
     }
 
     func playerDuration(for itemID: UUID) -> Double? {
@@ -123,12 +123,16 @@ extension ProjectRuntime {
             try seekPlayback(to: fraction * duration)
             return
         }
-        let paragraphs = cachedReaderParagraphs(for: state.item)
-        guard !paragraphs.isEmpty else { return }
+        let chunks = SpeechChunkScheduler().chunks(
+            for: state.item.text, speed: Float(state.resolved.speed)
+        )
+        guard !chunks.isEmpty else { return }
         let offset = Int(fraction * Double(playerTextLength(for: state.item)))
-        let index = ReaderTextLayout.paragraphIndex(forUTF16Offset: offset, in: paragraphs)
+        let index = chunks.firstIndex(where: {
+            offset < $0.sourceRange.endUTF16
+        }) ?? (chunks.count - 1)
         let wasPaused = isPlaybackActive && isPlaybackPaused
-        try play(itemID: itemID, fromOffsetUTF16: paragraphs[index].sourceRange.startUTF16)
+        try play(itemID: itemID, fromOffsetUTF16: chunks[index].sourceRange.startUTF16)
         if wasPaused { pausePlayback() }
     }
 }

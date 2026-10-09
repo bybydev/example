@@ -42,6 +42,9 @@ final class SpeechPlaybackQueue {
 
     private var pendingDurations: [UUID: Double] = [:]
     private var pendingFiles: [UUID: AVAudioFile] = [:]
+    private var pendingOrder: [UUID] = []
+    private var onStart: [UUID: @MainActor () -> Void] = [:]
+    private var announcedStart = Set<UUID>()
     private var depthWaiters: [DepthWaiter] = []
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private var generation = 0
@@ -100,7 +103,7 @@ final class SpeechPlaybackQueue {
         #endif
     }
 
-    func enqueue(_ audio: KokoroAudio) throws {
+    func enqueue(_ audio: KokoroAudio, onPlaybackStart: (@MainActor () -> Void)? = nil) throws {
         try ReadAloudSafety.validate(audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
         let buffer = try audio.makePCMBuffer()
         try ensureEngineReady(for: buffer.format)
@@ -110,6 +113,9 @@ final class SpeechPlaybackQueue {
 
         pendingDurations[itemID] = audio.durationSeconds
         queuedDurationSeconds += audio.durationSeconds
+        let beginsNow = pendingOrder.isEmpty
+        pendingOrder.append(itemID)
+        if let onPlaybackStart { onStart[itemID] = onPlaybackStart }
 
         playerNode.scheduleBuffer(
             buffer,
@@ -122,6 +128,7 @@ final class SpeechPlaybackQueue {
         if !isPaused && !playerNode.isPlaying {
             playerNode.play()
         }
+        if beginsNow { announceStart(itemID) }
 
         notifySnapshotChange()
     }
@@ -226,6 +233,7 @@ final class SpeechPlaybackQueue {
         {
             playerNode.play()
         }
+        if let first = pendingOrder.first { announceStart(first) }
         notifySnapshotChange()
     }
 
@@ -236,6 +244,9 @@ final class SpeechPlaybackQueue {
 
         pendingDurations.removeAll()
         pendingFiles.removeAll()
+        pendingOrder.removeAll()
+        onStart.removeAll()
+        announcedStart.removeAll()
         queuedDurationSeconds = 0
 
         resumeDepthWaiters()
@@ -346,6 +357,9 @@ final class SpeechPlaybackQueue {
 
         pendingDurations.removeAll()
         pendingFiles.removeAll()
+        pendingOrder.removeAll()
+        onStart.removeAll()
+        announcedStart.removeAll()
         queuedDurationSeconds = 0
         resumeDepthWaiters()
         resumeDrainWaiters()
@@ -467,6 +481,13 @@ final class SpeechPlaybackQueue {
         }
 
         pendingFiles.removeValue(forKey: itemID)
+        onStart.removeValue(forKey: itemID)
+        announcedStart.remove(itemID)
+        let wasFirst = pendingOrder.first == itemID
+        pendingOrder.removeAll { $0 == itemID }
+        if wasFirst, let next = pendingOrder.first {
+            announceStart(next)
+        }
         queuedDurationSeconds = max(
             0,
             queuedDurationSeconds - duration
@@ -478,6 +499,13 @@ final class SpeechPlaybackQueue {
         if pendingDurations.isEmpty {
             resumeDrainWaiters()
         }
+    }
+
+    private func announceStart(_ itemID: UUID) {
+        guard !isPaused, !announcedStart.contains(itemID),
+              playerNode.isPlaying else { return }
+        announcedStart.insert(itemID)
+        onStart[itemID]?()
     }
 
     private func notifySnapshotChange() {

@@ -32,8 +32,13 @@ struct RootView: View {
 
 private struct ProjectMiniPlayerHost: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @State private var isPlayerExpanded = false
     @State private var readerPresented = false
     @State private var readerRuntime: ProjectRuntime?
+    @State private var voicePresented = false
+    @State private var speedPresented = false
+    @State private var narrationItemID: UUID?
+    @State private var settingsModel: ProjectDetailModel?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -41,69 +46,30 @@ private struct ProjectMiniPlayerHost: View {
             if let runtime = runtimeManager.playerRuntime,
                runtimeManager.readerProjectID != runtime.id,
                let itemID = runtime.playerControlItemID() {
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        Button {
-                            readerRuntime = runtime
-                            runtimeManager.makeActive(runtime)
-                            readerPresented = true
-                        } label: {
-                            HStack(spacing: 10) {
-                                ProjectArtworkView(
-                                    url: runtime.artworkURL,
-                                    sourceType: runtime.project?.source.type ?? .paste,
-                                    width: 32, height: 40
-                                )
-                                .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(runtime.project?.title ?? "ReadAloud")
-                                        .font(.subheadline.weight(.semibold))
-                                        .lineLimit(1)
-                                    Text(runtime.itemState(itemID)?.item.title ?? "Chapter")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            }
-                            .contentShape(Rectangle())
+                ProjectPlayerExpandableCard(isExpanded: $isPlayerExpanded) {
+                    ProjectPlayerCompactContent(
+                        runtime: runtime,
+                        itemID: itemID,
+                        onError: { errorMessage = $0 }
+                    )
+                } expanded: {
+                    ProjectPlayerExpandedContent(
+                        runtime: runtime,
+                        itemID: itemID,
+                        onError: { errorMessage = $0 },
+                        onSeek: {},
+                        onChapterChanged: {},
+                        onVoice: {
+                            openNarrationPicker(runtime: runtime, itemID: itemID, voice: true)
+                        },
+                        onSpeed: {
+                            openNarrationPicker(runtime: runtime, itemID: itemID, voice: false)
+                        },
+                        onOpenReader: {
+                            openReader(runtime)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Opens the audio player and Reader.")
-
-                        ProjectPlayerPlayButton(
-                            runtime: runtime, itemID: itemID, diameter: 44,
-                            onError: { errorMessage = $0 }
-                        )
-
-                        Button { runtime.stopPlayback() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Stop and close player")
-                    }
-
-                    HStack(spacing: 8) {
-                        if runtime.isPlayerPreparing {
-                            ProgressView().controlSize(.mini)
-                        }
-                        Text(runtime.playerStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        ProgressView(value: runtime.playerProgress(for: itemID))
-                            .accessibilityLabel("Chapter playback progress")
-                            .accessibilityValue(runtime.playerProgress(for: itemID)
-                                .formatted(.percent.precision(.fractionLength(0))))
-                    }
+                    )
                 }
-                .projectPlayerCard()
             }
         }
         .sheet(isPresented: $readerPresented, onDismiss: { readerRuntime = nil }) {
@@ -121,6 +87,24 @@ private struct ProjectMiniPlayerHost: View {
                 }
             }
         }
+        .sheet(isPresented: $voicePresented) {
+            if let settingsModel, let narrationItemID {
+                ItemVoicePicker(
+                    model: settingsModel,
+                    itemID: narrationItemID,
+                    onChanged: { narrationChanged() }
+                )
+            }
+        }
+        .sheet(isPresented: $speedPresented) {
+            if let settingsModel, let narrationItemID {
+                ItemSpeedPicker(
+                    model: settingsModel,
+                    itemID: narrationItemID,
+                    onChanged: { narrationChanged() }
+                )
+            }
+        }
         .onChange(of: runtimeManager.loadedRuntimeIDs) { _, ids in
             if let runtime = readerRuntime, !ids.contains(runtime.id) {
                 readerPresented = false
@@ -134,5 +118,32 @@ private struct ProjectMiniPlayerHost: View {
         } message: {
             Text(errorMessage ?? "")
         }
+    }
+
+    private func openReader(_ runtime: ProjectRuntime) {
+        readerRuntime = runtime
+        runtimeManager.makeActive(runtime)
+        readerPresented = true
+    }
+
+    private func openNarrationPicker(
+        runtime: ProjectRuntime,
+        itemID: UUID,
+        voice: Bool
+    ) {
+        narrationItemID = itemID
+        settingsModel = ProjectDetailModel(runtime: runtime)
+        if voice {
+            voicePresented = true
+        } else {
+            speedPresented = true
+        }
+    }
+
+    private func narrationChanged() {
+        guard let itemID = narrationItemID,
+              let runtime = runtimeManager.playerRuntime,
+              runtime.activity.activeItemID == itemID else { return }
+        runtime.stopPlayback()
     }
 }

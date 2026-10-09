@@ -24,7 +24,7 @@ The app includes:
 - structured chapters/sections;
 - retained original source;
 - on-device streaming speech;
-- paragraph cache and finalized offline WAV audio;
+- shared chunk cache and finalized offline WAV audio;
 - durable generation queue and prefetch;
 - saved reading/listening position;
 - background playback and system media controls;
@@ -73,7 +73,7 @@ Projects are stored under Application Support as:
 │   └── items/
 ├── queue/jobs.json
 ├── cache/
-│   ├── paragraphs/
+│   ├── chunks/
 │   └── artwork/
 ├── audio/
 ├── assets/
@@ -95,7 +95,7 @@ Each runtime owns:
 - hydrated project/item state;
 - streaming synthesis/playback;
 - durable generation queue execution;
-- paragraph cache;
+- source-mapped shared chunk cache;
 - persistence bridge;
 - playback/generation activity.
 

@@ -1,25 +1,23 @@
 # App icon
 
-ReadAloud uses a sculpted ivory open book with thick layered pages, a petrol-teal cover, and raised burnt-orange sound arcs on a deep teal background. Soft highlights and shadows give the emblem depth. Its reading-first silhouette and teal–ivory–orange palette distinguish it from Spokio’s violet waveform identity.
+Riidr uses two closed books and a small stack of ivory document sheets, with copper-orange headphones laid diagonally across the top. The headphone band lies across the paper and the earcups rest together near the front-right edge, giving the composition a natural placement. Deep petrol teal, warm ivory, and burnt orange preserve the app's existing theme palette. Sculpted volume, soft highlights, and contact shadows give the icon depth.
 
 ## Assets and configuration
 
 - Artwork: `ReadAloud/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png` — 1024 × 1024 opaque RGB PNG, square with no baked-in corner mask.
 - The iOS universal 1024 icon entry lets the asset compiler produce the required device sizes.
-- `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` on the ReadAloud target. The existing `ReadAloud` source directory includes the asset catalog. Keep XcodeGen as the project source of truth.
+- `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` on the ReadAloud target. The existing ReadAloud source directory includes the asset catalog. Keep XcodeGen as the project source of truth.
 - Replace the PNG at the same path when updating the artwork; keep its dimensions and opaque background. Inspect the icon on a device before release.
+- The icon does not require theme, asset-catalog configuration, or generated project changes.
 
 ## Artwork source
 
-Created with the built-in image-generation tool using the earlier teal book design as the edit target, then exported to the required 1024 × 1024 RGB PNG for the asset catalog.
+The owner selected the revised books/documents/headphones design for PR #40. Created with the built-in image-generation tool, then resized from the selected square artwork to 1024 × 1024 using Lanczos resampling and exported as an opaque RGB PNG.
 
-Prompt:
+Design brief:
 
-> Use case: style-transfer.
-> Asset type: production iOS app icon for ReadAloud.
-> Input image: edit target, the supplied ReadAloud book icon.
-> Primary request: transform this flat icon into a premium sculpted 3D app icon with unmistakable physical depth.
-> Preserve the deep petrol-teal, warm ivory, and burnt-orange color identity; preserve the open book as the dominant emblem, two orange sound arcs at its upper right, square opaque full-bleed composition, and clear small-size readability.
-> Make the book a beautiful dimensional object: thick layered ivory pages, gently curved top surfaces, smoothly rounded bevels, a deep central spine, a visible dark-teal book cover below the pages, and a softly curled lower-right page corner. Use satin ceramic-like page surfaces with realistic controlled highlights, soft ambient occlusion between layers, and convincing cast shadows on the background. The two orange sound arcs should be thick rounded raised objects, subtly reflective, with their own gentle shadows. Light from the upper left. Keep front-facing composition with only slight perspective.
-> Background: full-bleed rich deep petrol teal with a restrained subtle luminous gradient and soft lighting falloff, all four square edges filled. Keep the emblem around 68% of the square and optically centered with room for iOS corner masking.
-> Constraints: do not keep the flat vector appearance; add real sculptural volume. No purple or lavender, no waveform bars, no extra objects, no letters, no printed page text, no watermark, no frame, no baked-in rounded outside corners, no mockup. Output one finished opaque square 1024x1024 artwork.
+> Keep the deep teal background, warm ivory paper, and copper-orange accent palette. Arrange two closed books and document sheets in a compact horizontal stack. Lay the headphones diagonally across the top as a person would set them down after listening: a sideways headband arc across the sheets, with both earcups resting together near the front-right edge. Use an elevated three-quarter view, convincing contact shadows, tactile sculpted depth, and generous safe margins. No floating headphones, upright arch, printed text, border, watermark, or baked-in outer corner rounding.
+
+## Validation
+
+The exported artwork is 1024 × 1024 RGB PNG with no alpha channel. The existing AppIcon asset-catalog filename and universal iOS entry are preserved. No builds, tests, CI, package resolution, or XcodeGen regeneration were performed.

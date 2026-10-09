@@ -10,243 +10,71 @@ extension ProjectRuntime {
         progress: JobProgressReporter
     ) async throws {
         try requireGenerationCanRun()
-
-        guard let state =
-                itemState(itemID)
-        else {
-            throw ProjectStoreError
-                .invalidData(
-                    "Queued generation item is unavailable."
-                )
+        guard let state = itemState(itemID) else {
+            throw ProjectStoreError.invalidData("Queued generation item is unavailable.")
         }
-
-        guard state.generationKey
-                == generationKey
-        else {
-            throw ProjectStoreError
-                .invalidData(
-                    "Queued generation is stale because narration settings changed."
-                )
+        guard state.generationKey == generationKey else {
+            throw ProjectStoreError.invalidData(
+                "Queued generation is stale because narration settings changed."
+            )
         }
-
-        let paragraphs = cachedReaderParagraphs(for: state.item)
-        guard !paragraphs.isEmpty else {
-            throw ProjectStoreError
-                .invalidData(
-                    "Queued generation item has no readable text."
-                )
+        let chunks = SpeechChunkScheduler().chunks(
+            for: state.item.text, speed: Float(state.resolved.speed)
+        )
+        guard !chunks.isEmpty else {
+            throw ProjectStoreError.invalidData("Queued generation has no readable text.")
         }
-
-        guard let voice =
-                SpeechVoice.all
-                    .first(where: {
-                        $0.id
-                            == state.resolved
-                                .voiceID
-                    })
-        else {
-            throw SpeechEngineError
-                .unsupportedVoice(
-                    state.resolved.voiceID
-                )
+        guard let voice = SpeechVoice.all.first(where: {
+            $0.id == state.resolved.voiceID
+        }) else {
+            throw SpeechEngineError.unsupportedVoice(state.resolved.voiceID)
         }
-
         let selectedEngine = pipeline.engineKind
         guard selectedEngine == ReadAloudPreferences.speechEngine else {
             throw CancellationError()
         }
-
-        let runtimeRevision =
-            try ReadAloudSynthesisContract
-                .runtimeRevision()
-        let scheduler =
-            SpeechChunkScheduler()
+        let engine = pipeline.engine
+        let runtimeRevision = try ReadAloudSynthesisContract.runtimeRevision()
 
         do {
-            try await pipeline.engine.load()
-
-            for (
-                paragraphIndex,
-                paragraph
-            ) in paragraphs.enumerated() {
+            for (index, chunk) in chunks.enumerated() {
                 try requireGenerationCanRun(expectedEngine: selectedEngine)
-
-                let cacheKey =
-                    try ParagraphCacheIdentity
-                        .key(
-                            itemID: itemID,
-                            paragraphIndex:
-                                paragraphIndex,
-                            paragraphText:
-                                paragraph.text,
-                            resolved:
-                                state.resolved,
-                            runtimeRevision:
-                                runtimeRevision,
-                            synthesisConfigVersion:
-                                ReadAloudNarrationCatalog
-                                    .synthesisConfigVersion
-                        )
-
-                if try await cacheCoordinator
-                    .loadParagraph(
-                        cacheKey: cacheKey,
-                        itemID: itemID,
-                        paragraphIndex:
-                            paragraphIndex,
-                        paragraphText:
-                            paragraph.text,
-                        generationKey:
-                            generationKey,
-                        resolved:
-                            state.resolved,
-                        runtimeRevision:
-                            runtimeRevision,
-                        synthesisConfigVersion:
-                            ReadAloudNarrationCatalog
-                                .synthesisConfigVersion,
-                        sourceRange:
-                            paragraph.sourceRange
-                    ) == nil
-                {
-                    let chunks =
-                        scheduler.chunks(
-                            for:
-                                paragraph.text,
-                            speed:
-                                Float(
-                                    state.resolved
-                                        .speed
-                                )
-                        )
-
-                    guard !chunks.isEmpty else {
-                        throw ProjectStoreError
-                            .invalidData(
-                                "Paragraph generation produced no speech chunks."
-                            )
-                    }
-
-                    var samples: [Float] = []
-                    var sampleRate: Int?
-
-                    for chunk in chunks {
-                        try requireGenerationCanRun(expectedEngine: selectedEngine)
-
-                        let result =
-                            try await pipeline
-                                .engine
-                                .synthesize(
-                                    text:
-                                        chunk.text,
-                                    voice: voice,
-                                    speed:
-                                        Float(
-                                            state.resolved
-                                                .speed
-                                        ),
-                                    maxChunkSeconds:
-                                        chunk
-                                            .maxChunkSeconds
-                                )
-
-                        if let current =
-                            sampleRate,
-                           current
-                            != result.audio
-                                .sampleRate
-                        {
-                            throw ProjectStoreError
-                                .invalidData(
-                                    "Queued generation produced inconsistent sample rates."
-                                )
-                        }
-
-                        sampleRate =
-                            result.audio.sampleRate
-                        try requireGenerationCanRun()
-                        try ReadAloudSafety.append(result.audio, to: &samples)
-                    }
-
-                    guard let sampleRate,
-                          sampleRate
-                            == ProjectWAVCodec
-                                .requiredSampleRate,
-                          !samples.isEmpty
-                    else {
-                        throw ProjectStoreError
-                            .invalidData(
-                                "Queued generation did not produce valid 24 kHz audio."
-                            )
-                    }
-
-                    _ = try await cacheCoordinator
-                        .storeParagraph(
-                            cacheKey:
-                                cacheKey,
-                            itemID:
-                                itemID,
-                            paragraphIndex:
-                                paragraphIndex,
-                            paragraphText:
-                                paragraph.text,
-                            generationKey:
-                                generationKey,
-                            resolved:
-                                state.resolved,
-                            runtimeRevision:
-                                runtimeRevision,
-                            synthesisConfigVersion:
-                                ReadAloudNarrationCatalog
-                                    .synthesisConfigVersion,
-                            sourceRange:
-                                paragraph.sourceRange,
-                            audio:
-                                KokoroAudio(
-                                    samples:
-                                        samples,
-                                    sampleRate:
-                                        sampleRate
-                                )
-                        )
-                }
-
-                await progress.report(
-                    fractionCompleted:
-                        Double(
-                            paragraphIndex + 1
-                        )
-                        / Double(
-                            paragraphs.count
-                        ),
-                    message:
-                        "Preparing \(paragraphIndex + 1) of \(paragraphs.count)"
+                let request = ChunkAudioRequest(
+                    itemID: itemID, index: index, chunk: chunk,
+                    generationKey: generationKey,
+                    resolved: state.resolved,
+                    runtimeRevision: runtimeRevision,
+                    synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
                 )
-            }
-
-            try requireGenerationCanRun(expectedEngine: selectedEngine)
-
-            guard try await
-                finalizeItemIfComplete(
-                    itemState: state,
-                    paragraphs:
-                        paragraphs,
-                    runtimeRevision:
-                        runtimeRevision
-                )
-            else {
-                throw ProjectStoreError
-                    .invalidData(
-                        "Queued generation could not finalize the complete item."
+                // Foreground listening and offline generation share this
+                // persistent cache and the same coalesced in-flight synthesis.
+                _ = try await chunkCache.audio(for: request) {
+                    try await engine.load()
+                    let result = try await engine.synthesize(
+                        text: chunk.text, voice: voice,
+                        speed: Float(state.resolved.speed),
+                        maxChunkSeconds: chunk.maxChunkSeconds
                     )
+                    return result.audio
+                }
+                try requireGenerationCanRun(expectedEngine: selectedEngine)
+                await progress.report(
+                    fractionCompleted: Double(index + 1) / Double(chunks.count),
+                    message: "Preparing chunk \(index + 1) of \(chunks.count)"
+                )
             }
 
-            await progress.report(
-                fractionCompleted: 1,
-                message: "Ready Offline"
-            )
-        } catch SpeechEngineError.cancelled
-        {
+            guard try await finalizeItemIfComplete(
+                itemState: state,
+                paragraphs: cachedReaderParagraphs(for: state.item),
+                runtimeRevision: runtimeRevision
+            ) else {
+                throw ProjectStoreError.invalidData(
+                    "Queued generation could not finalize the complete item."
+                )
+            }
+            await progress.report(fractionCompleted: 1, message: "Ready Offline")
+        } catch SpeechEngineError.cancelled {
             throw CancellationError()
         } catch is CancellationError {
             throw CancellationError()
@@ -499,10 +327,9 @@ extension ProjectRuntime {
             .clearGeneratedAudio(
                 itemIDs: itemIDs
             )
-        try await cacheCoordinator
-            .clearParagraphCache(
-                itemIDs: itemIDs
-            )
+        try await chunkCache.clear(itemIDs: itemIDs)
+        // Discard old, unused paragraph caches from pre-chunk builds.
+        try await cacheCoordinator.clearParagraphCache(itemIDs: itemIDs)
         try await persistence
             .enqueueGeneration(
                 requests,

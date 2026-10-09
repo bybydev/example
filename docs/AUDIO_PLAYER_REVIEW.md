@@ -63,3 +63,36 @@ Before release, review on an iPhone with real Kokoro resources:
 
 The implementation is not a claim of perfection or a guarantee against OS process
 termination. Visual quality and real audio behavior require this device review.
+
+
+## Compact / expanded player (PR #40 follow-up)
+
+Reader and Library use `ProjectPlayerExpandableCard` with the same player
+content. Compact is the initial state and takes approximately 65–70 pt,
+depending on the active theme, system font scaling and safe-area inset.
+
+- **Compact:** cover artwork has one overlaid Play/Pause button (or an in-place
+  loading spinner). One-line book title, chapter subtitle, passive thin progress
+  line. No skips, stop, voice/speed/sleep row, or miniature scrubber.
+- **Tap anywhere else inside the player:** expand in place. Tap a
+  non-actionable region in the expanded card to collapse it. Progress indicator
+  in compact mode is passive and taps expand; expanded slider owns scrubbing.
+- **Expanded:** keeps the complete seek slider, 15-second skip,
+  previous/next chapter, central Play/Pause, voice, speed and sleep timer.
+  Stop is under the player's actions menu; outside Reader, the same menu
+  includes Open Reader.
+- **Gesture ownership:** the expand/collapse control is a transparent button
+  *behind* the contents, not an `.onTapGesture` on an ancestor. Transport
+  buttons, menus and the slider are independent foreground controls; their
+  actions never also expand/collapse. A second transparent surface covers card
+  margins inside the safe-area inset so taps are consumed instead of leaking
+  to content beneath the player.
+- Player starts compact when opening Reader. Expansion state persists during
+  chapter changes in the same presentation. No audio-runtime or persistence
+  semantics were altered by this UI follow-up.
+
+**Device verification still required:** hit-test the artwork, title, progress,
+rounded corners, transparent card margin, slider and every action at compact
+widths; verify tapping expanded empty space collapses without activating
+Reader text behind it, including while scrolling Reader content. Verify
+loading/failure/paused states, VoiceOver, Dynamic Type, and both themes.

@@ -28,6 +28,8 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
     var queuedAudioDurationSeconds: Double
     var currentParagraphRange: AudioSourceRange?
     var currentParagraphIndex: Int?
+    var currentChunkRange: AudioSourceRange?
+    var currentChunkIndex: Int?
     var paragraphCount: Int
     var itemProgress: Double
     var projectProgress: Double
@@ -42,6 +44,8 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
         queuedAudioDurationSeconds: Double = 0,
         currentParagraphRange: AudioSourceRange? = nil,
         currentParagraphIndex: Int? = nil,
+        currentChunkRange: AudioSourceRange? = nil,
+        currentChunkIndex: Int? = nil,
         paragraphCount: Int = 0,
         itemProgress: Double = 0,
         projectProgress: Double = 0,
@@ -55,6 +59,8 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
         self.queuedAudioDurationSeconds = queuedAudioDurationSeconds
         self.currentParagraphRange = currentParagraphRange
         self.currentParagraphIndex = currentParagraphIndex
+        self.currentChunkRange = currentChunkRange
+        self.currentChunkIndex = currentChunkIndex
         self.paragraphCount = paragraphCount
         self.itemProgress = itemProgress
         self.projectProgress = projectProgress
@@ -81,6 +87,7 @@ final class ProjectRuntime {
     let persistence: ProjectRuntimePersistenceBridge
     let queueController: ProjectQueueController
     let cacheCoordinator: ProjectCacheCoordinator
+    let chunkCache: SharedChunkAudioCache
 
     var project: ProjectDocument?
     private(set) var manifest: ProjectContentManifest?
@@ -108,6 +115,7 @@ final class ProjectRuntime {
     @ObservationIgnored private var playerTextLengthCache:
         (itemID: UUID, contentRevision: String, length: Int)?
     @ObservationIgnored var playbackTask: Task<Void, Never>?
+    @ObservationIgnored var chunkBookmarkTask: Task<Void, Never>?
     @ObservationIgnored var playbackOperationID: UUID?
     @ObservationIgnored var readerPauseRequested = false
     @ObservationIgnored var finalAudioAsset:
@@ -138,6 +146,9 @@ final class ProjectRuntime {
         self.pipeline = pipeline
         self.queueController = ProjectQueueController()
         self.cacheCoordinator = ProjectCacheCoordinator(
+            packageURL: packageURL.standardizedFileURL
+        )
+        self.chunkCache = SharedChunkAudioCache(
             packageURL: packageURL.standardizedFileURL
         )
 
@@ -921,6 +932,12 @@ final class ProjectRuntime {
     func clearTemporaryCache()
         async throws
     {
+        // Chunk WAVs are the producer/consumer handoff. Stop the session
+        // cleanly before removing the files that queued playback expects.
+        if isPlaybackActive {
+            await persistPlaybackCheckpoint()
+            stopPlayback()
+        }
         queueController
             .setPlaybackActive(true)
 
@@ -931,8 +948,9 @@ final class ProjectRuntime {
                 )
         }
 
-        try await cacheCoordinator
-            .clearAllParagraphCache()
+        // Remove both the current chunk cache and any legacy paragraph cache.
+        try await chunkCache.clearAll()
+        try await cacheCoordinator.clearAllParagraphCache()
     }
 
     func rename(to title: String) async throws {
@@ -997,6 +1015,9 @@ final class ProjectRuntime {
     }
 
     func stopPlayback() {
+        let pendingBookmarkWrite = chunkBookmarkTask
+        let audibleCheckpoint = project?.playback
+        let hadPlayback = playbackTask != nil
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchTaskID = nil
@@ -1004,6 +1025,8 @@ final class ProjectRuntime {
         playerItemID = nil
         playbackOperationID = nil
         readerPauseRequested = false
+        chunkBookmarkTask?.cancel()
+        chunkBookmarkTask = nil
         playbackTask?.cancel()
         playbackTask = nil
         pipeline.stop()
@@ -1014,8 +1037,26 @@ final class ProjectRuntime {
         activity.activeItemID = nil
         activity.currentParagraphRange = nil
         activity.currentParagraphIndex = nil
+        activity.currentChunkRange = nil
+        activity.currentChunkIndex = nil
         activity.paragraphCount = 0
         activity.itemProgress = 0
+
+        // Stop is synchronous, but a chunk-start write may still be in flight.
+        // Commit the last audible in-memory bookmark only if this session was
+        // not replaced by a new playback operation.
+        if hadPlayback, let audibleCheckpoint {
+            Task { @MainActor [weak self] in
+                await pendingBookmarkWrite?.value
+                guard let self, self.playbackOperationID == nil,
+                      self.project?.playback?.currentItemID
+                        == audibleCheckpoint.currentItemID,
+                      self.project?.playback?.contentBookmark?.textOffsetUTF16
+                        == audibleCheckpoint.contentBookmark?.textOffsetUTF16
+                else { return }
+                try? await self.persistence.updatePlayback(audibleCheckpoint)
+            }
+        }
     }
 
     func shutdown() {

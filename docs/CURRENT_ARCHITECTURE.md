@@ -117,7 +117,7 @@ Each project lives under Application Support as:
 │   └── items/
 ├── queue/jobs.json
 ├── cache/
-│   ├── paragraphs/
+│   ├── chunks/
 │   └── artwork/
 ├── audio/
 ├── assets/
@@ -192,7 +192,7 @@ normalized text
 The persistent path reuses the same synthesis/cache logic:
 
 ```text
-paragraph cache
+chunk cache
   -> finalized 24 kHz mono WAV
   -> generated-audio metadata + source timeline
 ```
@@ -243,7 +243,7 @@ Important rules:
 - foreground streaming gets speech-model priority
 - compatible finalized playback can allow Pro background generation while
   listening
-- partial paragraph cache is reusable
+- partial chunk cache is reusable
 - replacing finalized audio preserves the previous known-good pair until the
   new pair commits
 - background synthesis is opportunistic; it is not kept alive artificially
@@ -261,7 +261,7 @@ Storage categories are measured from the real project package:
 
 `ProjectStorageUsageSection` is the shared presentation of that breakdown.
 
-Clear Temporary Cache removes only rebuildable paragraph cache.
+Clear Temporary Cache removes rebuildable chunk cache (and any legacy paragraph cache).
 Clear Generated Audio preserves source/project data and the content bookmark.
 Delete Project is the operation that removes the complete package.
 
@@ -377,3 +377,35 @@ Configuration 2 deliberately invalidates configuration-1 derived audio/cache
 compatibility because paragraph boundaries and speech chunking changed. Project
 schema, IDs, retained source, normalized text, and source bookmarks stay unchanged.
 See LISTEN_SAFETY.md for evidence, remaining verification, and device scenarios.
+
+
+## Chunk-first streaming (synthesis configuration 4)
+
+The reader keeps its existing <=600 UTF-16 layout paragraphs for display and
+scrolling, but the speech scheduler emits short, source-mapped chunks. It prefers
+natural clause punctuation within sentences, then bounded words/graphemes for
+unusually long phrases. All three consumers use the identical chunk identity:
+foreground streaming, background offline generation, and final-WAV assembly.
+
+`SharedChunkAudioCache` stores independently validated chunk WAV/JSON pairs
+under `cache/chunks/`; the cache key covers item/chunk identity, source range,
+generation key, voice/speed, ONNX runtime revision and synthesis version.
+Concurrent identical requests share one in-flight inference. Old paragraph cache
+files are never used for new synthesis; Clear Temporary Cache removes them.
+
+The foreground producer synthesizes as quickly as useful with a hard **20
+completed chunks ahead of the audible chunk**; this is distinct from the
+player's existing two-PCM-buffer queue. Ahead-of-playback chunks live on disk,
+not as 20 decoded Float arrays in memory. The producer runs through reader
+paragraph boundaries without awaiting paragraph-audio drains. Foreground
+listening blocks opportunistic JobQueue synthesis; the shared cache still
+supports offline regeneration/reuse when that queue is permitted to run.
+
+The currently **audible** chunk drives the Reader highlight, live chunk-bounded
+scrub/skip, and content bookmark. The final chapter WAV stores source/sample
+segments per chunk for exact saved-file seeking and highlighting. The
+generation version change invalidates incompatible legacy derived audio
+without changing original source content, project IDs, or project schema.
+
+Settings configuration for lookahead depth is deferred. No user-facing controls
+for eager generation are added by this change.

@@ -198,6 +198,59 @@ final class ReadAloudPipeline {
         }
     }
 
+    /// Playback consumes already-synthesized shared-cache chunks. Synthesis
+    /// runs independently and may be up to 20 chunks ahead; the player still
+    /// schedules only two decoded buffers at a time.
+    func playChunkStream(
+        count: Int,
+        continuous: Bool = true,
+        loadAudio: @escaping @MainActor (Int) async throws -> KokoroAudio,
+        onChunkStarted: @escaping @MainActor (Int) -> Void
+    ) async throws {
+        resetActiveOperation(stopPlayback: !continuous)
+        let operationID = UUID()
+        activeOperationID = operationID
+        setState(.loading)
+        do {
+            try playback.prepare()
+            try await withTaskCancellationHandler {
+                for index in 0..<count {
+                    try requireActiveOperation(operationID)
+                    await playback.waitUntilQueueDepthBelow(maxQueuedBuffers)
+                    try requireActiveOperation(operationID)
+                    let audio = try await loadAudio(index)
+                    try requireActiveOperation(operationID)
+                    try ReadAloudSafety.validate(
+                        audio, maximumSamples: ReadAloudSafety.maximumBufferSamples
+                    )
+                    try playback.enqueue(audio, onPlaybackStart: {
+                        onChunkStarted(index)
+                    })
+                    if index == 0 { setState(isPaused ? .paused : .playing) }
+                }
+                await playback.waitUntilDrained()
+                try requireActiveOperation(operationID)
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    guard self?.activeOperationID == operationID else { return }
+                    self?.stop()
+                }
+            }
+            activeOperationID = nil
+            if !continuous {
+                playback.stop()
+                setState(.finished)
+            }
+        } catch {
+            if activeOperationID == operationID {
+                playback.stop()
+                activeOperationID = nil
+                setState(.failed(Self.message(for: error)))
+            }
+            throw error
+        }
+    }
+
     func play(
         audio: KokoroAudio,
         continuous: Bool = false

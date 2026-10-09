@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>ReadAloud</string>
+    <string>Riidr</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>UIBackgroundModes</key>

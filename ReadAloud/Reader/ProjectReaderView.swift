@@ -103,6 +103,7 @@ struct ProjectReaderView: View {
     @State private var displayedItemID: UUID?
     @State private var followsPlaybackContext = true
     @State private var followsParagraph = true
+    @State private var isPlayerExpanded = false
     @State private var chaptersPresented = false
     @State private var voicePresented = false
     @State private var speedPresented = false
@@ -300,7 +301,7 @@ struct ProjectReaderView: View {
 
                     ForEach(paragraphs) {
                         paragraph in
-                        Text(paragraph.text)
+                        highlightedText(paragraph, itemID: state.id)
                             .font(
                                 .system(
                                     size: readerFontSize
@@ -490,126 +491,53 @@ struct ProjectReaderView: View {
     }
 
     private var readerControls: some View {
-        VStack(spacing: 10) {
+        Group {
             if let state = controlState {
-                HStack(spacing: 12) {
-                    ProjectArtworkView(
-                        url: runtime.artworkURL,
-                        sourceType: runtime.project?.source.type ?? .paste,
-                        width: 36, height: 44
-                    )
-                    .accessibilityHidden(true)
-
-                    Button { followPlayer() } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(state.item.title)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(2)
-                            HStack(spacing: 6) {
-                                if runtime.isPlayerPreparing {
-                                    ProgressView().controlSize(.mini)
-                                }
-                                Text(runtime.playerStatus)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(3)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Shows the chapter and passage in the player.")
-                }
-
-                ProjectPlayerScrubber(
-                    runtime: runtime, itemID: state.id,
-                    onError: { errorMessage = $0 },
-                    onSeek: { followPlayer() }
-                )
-
-                HStack(spacing: 0) {
-                    chapterTransportButton(forward: false, itemID: state.id)
-                    Spacer(minLength: 0)
-                    ProjectPlayerSkipButton(
-                        forward: false,
-                        approximate: runtime.playerDuration(for: state.id) == nil,
-                        enabled: runtime.canSkipPlayback
-                    ) { seek(by: -Double(ReadAloudPreferences.skipInterval)) }
-                    Spacer(minLength: 0)
-                    ProjectPlayerPlayButton(
-                        runtime: runtime, itemID: state.id,
+                ProjectPlayerExpandableCard(isExpanded: $isPlayerExpanded) {
+                    ProjectPlayerCompactContent(
+                        runtime: runtime,
+                        itemID: state.id,
                         onError: { errorMessage = $0 }
                     )
-                    Spacer(minLength: 0)
-                    ProjectPlayerSkipButton(
-                        forward: true,
-                        approximate: runtime.playerDuration(for: state.id) == nil,
-                        enabled: runtime.canSkipPlayback
-                    ) { seek(by: Double(ReadAloudPreferences.skipInterval)) }
-                    Spacer(minLength: 0)
-                    chapterTransportButton(forward: true, itemID: state.id)
-                }
+                } expanded: {
+                    VStack(spacing: 10) {
+                        ProjectPlayerExpandedContent(
+                            runtime: runtime,
+                            itemID: state.id,
+                            onError: { errorMessage = $0 },
+                            onSeek: { followPlayer() },
+                            onChapterChanged: { followPlayer() },
+                            onVoice: {
+                                narrationItemID = state.id
+                                voicePresented = true
+                            },
+                            onSpeed: {
+                                narrationItemID = state.id
+                                speedPresented = true
+                            }
+                        )
 
-                HStack(spacing: 12) {
-                    Button {
-                        narrationItemID = state.id
-                        voicePresented = true
-                    } label: {
-                        Label(currentVoiceLabel, systemImage: "waveform")
-                            .lineLimit(1)
-                            .frame(minHeight: 44)
-                    }
-                    .accessibilityLabel("Voice, \(currentVoiceLabel)")
-                    Spacer(minLength: 8)
-                    Button {
-                        narrationItemID = state.id
-                        speedPresented = true
-                    } label: {
-                        Label(currentSpeedLabel, systemImage: "speedometer")
-                            .frame(minHeight: 44)
-                    }
-                    .accessibilityLabel("Narration speed, \(currentSpeedLabel)")
-                    Spacer(minLength: 0)
-                    ProjectPlayerSleepTimer(runtime: runtime)
-                }
-                .font(.subheadline)
-                .buttonStyle(.plain)
-
-                if let displayedItemID, displayedItemID != state.id {
-                    Button {
-                        do {
-                            try runtime.play(itemID: displayedItemID)
-                            followPlayer()
-                        } catch { errorMessage = Self.message(for: error) }
-                    } label: {
-                        Label("Listen to the chapter on screen", systemImage: "play.circle")
-                            .font(.subheadline)
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                        if let displayedItemID, displayedItemID != state.id {
+                            Button {
+                                do {
+                                    try runtime.play(itemID: displayedItemID)
+                                    followPlayer()
+                                } catch {
+                                    errorMessage = Self.message(for: error)
+                                }
+                            } label: {
+                                Label(
+                                    "Listen to the chapter on screen",
+                                    systemImage: "play.circle"
+                                )
+                                .font(.subheadline)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                            }
+                        }
                     }
                 }
             }
         }
-        .projectPlayerCard()
-    }
-
-    private func chapterTransportButton(forward: Bool, itemID: UUID) -> some View {
-        let targetID = runtime.adjacentPlayerItem(to: itemID, delta: forward ? 1 : -1)
-        return Button {
-            guard let targetID else { return }
-            do {
-                try runtime.changePlayerChapter(to: targetID)
-                followPlayer()
-            } catch { errorMessage = Self.message(for: error) }
-        } label: {
-            Image(systemName: forward ? "forward.end.fill" : "backward.end.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(targetID == nil)
-        .accessibilityLabel(forward ? "Next chapter" : "Previous chapter")
     }
 
     private var moreMenu: some View {
@@ -832,6 +760,37 @@ struct ProjectReaderView: View {
             forUTF16Offset: offset,
             in: paragraphs
         )
+    }
+
+    /// Highlight the actual audible source chunk within the layout paragraph.
+    /// This does not depend on which chunk ONNX is generating ahead.
+    private func highlightedText(
+        _ paragraph: ReaderParagraph,
+        itemID: UUID
+    ) -> Text {
+        guard runtime.isPlaybackActive,
+              runtime.activity.activeItemID == itemID,
+              let range = runtime.activity.currentChunkRange else {
+            return Text(paragraph.text)
+        }
+        let start = max(range.startUTF16, paragraph.sourceRange.startUTF16)
+        let end = min(range.endUTF16, paragraph.sourceRange.endUTF16)
+        guard end > start else { return Text(paragraph.text) }
+
+        let ns = paragraph.text as NSString
+        let localStart = start - paragraph.sourceRange.startUTF16
+        let localEnd = end - paragraph.sourceRange.startUTF16
+        guard localStart >= 0, localEnd <= ns.length else {
+            return Text(paragraph.text)
+        }
+        let prefix = ns.substring(to: localStart)
+        let current = ns.substring(with: NSRange(
+            location: localStart, length: localEnd - localStart
+        ))
+        let suffix = ns.substring(from: localEnd)
+        return Text(prefix)
+            + Text(current).bold().foregroundColor(.accentColor)
+            + Text(suffix)
     }
 
     private func isCurrent(
