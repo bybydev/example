@@ -1700,7 +1700,7 @@
 			repositoryURL = "https://github.com/hoangbkit/AppFoundation";
 			requirement = {
 				kind = exactVersion;
-				version = 1.4.0;
+				version = 1.6.4;
 			};
 		};
 		DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {

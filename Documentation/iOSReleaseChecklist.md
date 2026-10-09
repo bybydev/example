@@ -174,13 +174,31 @@ Deferred to iOS 1.0.1/later: empty Project MCP configuration normalization; earl
 - [ ] Fail initial chat persistence: present startup recovery/Retry instead of a stuck opening screen. Retry uses the existing unsent-chat recovery path.
 - [ ] Repeated New Chat taps, switching from Library/Providers, and project New Chat open one session without flashing the setup CTA or adding empty chats to history.
 
+## AppFoundation 1.6.4 migration smoke path (PR #51)
+
+The iOS target uses AppFoundation 1.6.4. XcodeGen's `project.yml`, the generated Xcode project, and SwiftPM's resolved revision must agree. Offline verified entitlement caching is intentionally **not enabled**; this migration retains the existing live StoreKit policy.
+
+- [ ] Cold-launch Free with a previously selected Pro-only theme: show the committed Free theme while entitlements are checking, and remain Free after confirmation without a Pro-theme flash.
+- [ ] Cold-launch with an active monthly, yearly, or lifetime Pro purchase: entitlement resolves to Pro and the saved Pro theme becomes available without manual relaunch. Check this after temporarily failing product-catalog loading.
+- [ ] Downgrade/expire Pro, force-quit, relaunch repeatedly, and verify the Free theme persists; restoring Pro restores the remembered Pro preference. Selecting an explicit Free theme while expired keeps that preference after renewal.
+- [ ] Exercise a Pro theme preview, purchase while previewing, cancel purchase, and expire a preview across relaunches; verify theme promotion/rollback and countdown behave correctly.
+- [ ] In Settings, open the Pro plan section, restore purchases, change subscription management, and verify monthly/yearly/lifetime product types, introductory offer copy (if eligible), pending purchase state, and the main paywall's **analytics history** wording.
+- [ ] Toggle simulated purchases in Debug Developer Tools, grant and revoke simulated Pro, restart the app, and verify themes and historical analytics match effective entitlement without stale access.
+- [ ] Build and exercise the iOS target with Xcode 26 / Swift 6.2; verify the AppFoundation dependency resolves to tag `1.6.4`. Neither the macOS MacAppFoundation dependency nor macOS views are changed by this migration.
+
+AppFoundation migration validation results: **source/API compatibility reviewed; build, tests, and physical-iPhone smoke checks not run**.
+
 ## Analytics release smoke path (issue #46)
 
 Analytics uses remaining saved chat history, not a provider billing ledger. Regeneration, editing earlier turns, and deletion can reduce Spend and Monthly Budget totals. Free and Pro both disclose this. Budget warnings exclude other-app API usage and do not enforce provider limits.
 
 Code completion does not mark these checks as passed. Record the exact Release/TestFlight build and physical iPhone results before submission. No CI setup or dispatch is part of this issue.
 
-- [ ] Free monthly usage and Pro Today/7D/30D/Month/All remain gated correctly; history-mutation copy is visible in both and per-conversation details.
+- [ ] Free can select Today and access **all** analytics sections (usage, performance, reliability, errors, provider/model breakdowns, conversation details, budget and local telemetry) for today's data. Each 7D/30D/Month/All range button shows an inline lock icon (not a separate upgrade banner); tapping **each** locked button opens the historical-analytics Pro upsell without revealing older values. VoiceOver announces that each is locked and requires BYOK Pro.
+- [ ] Pro can select Today/7D/30D/Month/All with the same analytics features; the old Basic/Advanced distinction is absent from the dashboard and paywall comparison.
+- [ ] Downgrade from Pro while a historical range or per-conversation detail is open: visible aggregates and details immediately clamp to Today. Restoring Pro allows historical selection again without deleting saved data.
+- [ ] Free budget controls evaluate today's portion only and clearly disclose that the month is incomplete; Pro uses the full current-calendar-month total regardless of the selected display range. Telemetry counts, performance and breakdowns respect the accessible date range.
+- [ ] History-mutation copy is visible in Free/Pro analytics and per-conversation details.
 - [ ] Regenerate, edit an earlier turn, and delete a chat; remaining-history totals follow the copy.
 - [ ] Compare complete reported cost, complete estimate, partial calculation, and unavailable cost in Analytics, Message Info, conversation details, and provider/model rows. Estimates never claim a guaranteed minimum.
 - [ ] Exercise missing input/output prices and usage, explicit zero prices/tokens, and a tool round with missing usage followed by a priced round. Known subtotals remain, and completeness does not recover from summing unknown usage as zero.

@@ -17,7 +17,7 @@ enum BYOKProFeature: String, Sendable {
       message: message,
       symbolName: symbolName,
       comparisonTitle: "Free vs Pro",
-      comparisonSubtitle: "Your existing data stays available if Pro expires.",
+      comparisonSubtitle: "Saved data is preserved if Pro expires; access to Pro-only features and historical analytics is locked.",
       rows: BYOKProAccess.comparisonRows,
       unlockButtonTitle: "Unlock BYOK Pro",
       stayFreeButtonTitle: "Stay Free",
@@ -36,7 +36,7 @@ enum BYOKProFeature: String, Sendable {
     case .mcpServers:
       "Free includes 1 MCP server"
     case .analytics:
-      "Unlock advanced analytics"
+      "Unlock analytics history"
     case .libraryItems:
       "Free includes \(BYOKProPolicy.freeLibraryItemLimit) saved files"
     }
@@ -53,7 +53,7 @@ enum BYOKProFeature: String, Sendable {
     case .mcpServers:
       "Keep your existing server, or upgrade to connect unlimited MCP servers."
     case .analytics:
-      "Basic monthly usage stays free. Pro adds performance, reliability, breakdowns, budgets, and deeper insights."
+      "Every analytics feature is free for today. Upgrade to Pro to explore your usage, performance, reliability, breakdowns, and budgets across earlier dates."
     case .libraryItems:
       "Keep your existing files, or upgrade to save unlimited files."
     }
@@ -88,7 +88,7 @@ enum BYOKProAccess {
       freeValue: String(BYOKProPolicy.freeLibraryItemLimit),
       proValue: "Unlimited"
     ),
-    LimitReachedComparisonRow(feature: "Usage analytics", freeValue: "Basic", proValue: "Advanced"),
+    LimitReachedComparisonRow(feature: "Usage analytics", freeValue: "Today", proValue: "All date ranges"),
   ]
 
   static func canCreateProviderAccount(currentCount: Int, hasPro: Bool) -> Bool {

@@ -53,7 +53,7 @@ final class BYOKPurchaseStore {
   static let paywallConfiguration = FoundationPaywallConfiguration(
     badge: "BYOK PRO",
     title: "Upgrade to BYOK Pro",
-    subtitle: "Unlock all themes, unlimited configurations, and advanced local usage analytics.",
+    subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
     features: [
       FoundationPaywallFeature(
         id: "themes",
@@ -80,10 +80,10 @@ final class BYOKPurchaseStore {
         message: "Connect unlimited remote MCP servers instead of the single free server."
       ),
       FoundationPaywallFeature(
-        id: "advanced-analytics",
+        id: "analytics-history",
         systemImage: "chart.bar.xaxis",
-        title: "Advanced usage analytics",
-        message: "Add performance, reliability, provider/model breakdowns, budgets, and deeper insights."
+        title: "Full analytics history",
+        message: "All analytics features are free for today. Pro unlocks 7-day, 30-day, monthly, and all-time history."
       ),
     ],
     highlightedProductID: yearlyProductID,

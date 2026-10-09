@@ -8,8 +8,14 @@ struct ConversationAnalyticsView: View {
   let telemetryEvents: [TelemetryEvent]
   var telemetryAvailable: Bool = true
 
+  @Environment(PurchaseManager.self) private var purchaseManager
+
+  private var accessibleRange: UsageRange {
+    range.accessible(hasPro: purchaseManager.hasPro)
+  }
+
   private var messages: [ChatMessage] {
-    let startDate = range.startDate(reference: .now)
+    let startDate = accessibleRange.startDate(reference: .now)
     return conversation.messages.filter { message in
       guard message.role == .assistant else { return false }
       guard let startDate else { return true }
@@ -22,8 +28,13 @@ struct ConversationAnalyticsView: View {
   }
 
   private var performance: TelemetryPerformanceAggregate {
-    TelemetryAnalytics.aggregate(
-      events: telemetryEvents.filter { $0.conversationID == conversation.id }
+    let startDate = accessibleRange.startDate(reference: .now)
+    return TelemetryAnalytics.aggregate(
+      events: telemetryEvents.filter { event in
+        guard event.conversationID == conversation.id, event.dataClass == .analytics else { return false }
+        guard let startDate else { return true }
+        return event.timestamp >= startDate
+      }
     )
   }
 
@@ -32,7 +43,7 @@ struct ConversationAnalyticsView: View {
   var body: some View {
     List {
       Section {
-        LabeledContent("Range", value: range.label)
+        LabeledContent("Range", value: accessibleRange.label)
         LabeledContent("Spend", value: usageAggregateCostText(aggregate))
         LabeledContent("Model requests", value: aggregate.modelRequestCount.formatted())
         LabeledContent("Input", value: usageCompactTokens(aggregate.inputTokens))

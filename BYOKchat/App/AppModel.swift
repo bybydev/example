@@ -57,10 +57,11 @@ final class AppModel {
 
     let preferences = AppPreferencesModel(defaults: storageEnvironment.makeUserDefaults())
     self.preferences = preferences
+    // Preserve the committed Free theme while StoreKit resolves entitlement.
+    // The purchase-aware binding in BYOKchatApp authorizes Pro selections.
     themeManager = ThemeManager(
       catalog: BYOKchatThemes.catalog,
-      stateStore: UserDefaultsThemeStateStore(storageKey: "byokchat.themeState.v1"),
-      hasPro: false
+      stateStore: UserDefaultsThemeStateStore(storageKey: "byokchat.themeState.v1")
     )
 
     let providerModel = ProviderManagementModel(

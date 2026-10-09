@@ -11,8 +11,13 @@ struct BYOKchatApp: App {
     #if DEBUG
     BYOKScreenshotFixtures.prepareIfNeeded()
     #endif
-    _model = State(initialValue: AppModel())
-    purchases = BYOKPurchaseStore()
+    let appModel = AppModel()
+    let purchaseStore = BYOKPurchaseStore()
+    // Bind before preparing StoreKit so verified access and theme persistence
+    // stay in sync even when the root view is not mounted yet.
+    appModel.themeManager.bind(to: purchaseStore.manager)
+    _model = State(initialValue: appModel)
+    purchases = purchaseStore
   }
 
   var body: some Scene {
@@ -23,7 +28,7 @@ struct BYOKchatApp: App {
         restartApp: { model = AppModel() }
       )
       .id(ObjectIdentifier(model))
-      .appFoundationTheme(model.themeManager)
+      .appFoundationTheme(model.themeManager, purchaseManager: purchases.manager)
       .environment(model)
       .environment(purchases.manager)
     }

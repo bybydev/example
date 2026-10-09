@@ -36,6 +36,7 @@ struct TargetPickerView: View {
   @State private var refreshAccountID: ProviderAccountID?
   @State private var refreshMessage: String?
   @State private var commitError: String?
+  @FocusState private var isTokenBudgetFocused: Bool
 
   init(
     providers: ProviderManagementModel,
@@ -136,6 +137,11 @@ struct TargetPickerView: View {
         Text(commitError ?? "Unable to save model.")
       }
       .toolbar {
+        if isTokenBudgetFocused {
+          ToolbarItem(placement: .keyboard) {
+            Button("Done") { isTokenBudgetFocused = false }
+          }
+        }
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { dismiss() }
         }
@@ -408,6 +414,7 @@ struct TargetPickerView: View {
           }
         ), format: .number)
         .keyboardType(.numbersAndPunctuation)
+        .focused($isTokenBudgetFocused)
         Text(budget.allowsAutomatic ? "Use -1 for automatic thinking." : "Minimum \(budget.minimum) tokens.")
           .font(.caption)
           .foregroundStyle(theme.secondaryForegroundColor)

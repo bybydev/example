@@ -17,6 +17,15 @@ enum UsageRange: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
+  /// Analytics capabilities are identical for Free and Pro; only historical
+  /// date ranges require Pro. Always use the accessible range for calculations,
+  /// even if a stale UI selection outlives a subscription.
+  var requiresPro: Bool { self != .today }
+
+  func accessible(hasPro: Bool) -> UsageRange {
+    hasPro ? self : .today
+  }
+
   var label: String {
     switch self {
     case .today: "Today"

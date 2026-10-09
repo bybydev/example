@@ -12,7 +12,7 @@ packages:
     path: .
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation
-    exactVersion: 1.4.0
+    exactVersion: 1.6.4
   MacAppFoundation:
     url: https://github.com/hoangbkit/MacAppFoundation
     exactVersion: 1.5.0
@@ -39,7 +39,7 @@ targets:
     info:
       path: BYOKchat/Resources/Info.plist
       properties:
-        CFBundleDisplayName: BYOKchat
+        CFBundleDisplayName: BYOK Chat
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: BYOKchat uses your local network to connect to AI providers you configure on nearby devices.
         NSAppTransportSecurity:

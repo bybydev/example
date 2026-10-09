@@ -80,11 +80,10 @@ struct AppRootView: View {
       }
     }
     .task {
+      // Also bind a newly recreated AppModel before StoreKit preparation.
+      // Binding is idempotent; unresolved checks must not be treated as Free.
+      model.themeManager.bind(to: purchases.manager)
       await purchases.prepare()
-      model.themeManager.synchronizeProAccess(purchases.hasPro)
-    }
-    .onChange(of: purchases.manager.hasPro) { _, hasPro in
-      model.themeManager.synchronizeProAccess(hasPro)
     }
   }
 

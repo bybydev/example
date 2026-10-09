@@ -13,13 +13,14 @@ struct UsageDashboardView: View {
   @Environment(\.appFoundationTheme) private var theme
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
-  @State private var range: UsageRange = .month
+  @State private var range: UsageRange = .today
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
   @State private var hasLoadedTelemetry = false
   @State private var telemetryUnavailable = false
   @State private var isLoadingTelemetry = false
   @State private var showProUpsell = false
+  @FocusState private var isBudgetFieldFocused: Bool
 
   init(
     conversations: [ChatConversation],
@@ -51,111 +52,109 @@ struct UsageDashboardView: View {
 
   private var dashboard: some View {
     List {
-      if purchaseManager.hasPro {
-        Section {
-          Picker("Range", selection: $range) {
-            ForEach(UsageRange.allCases) { value in
-              Text(value.label).tag(value)
-            }
+      Section {
+        HStack(spacing: 3) {
+          ForEach(UsageRange.allCases) { value in
+            rangeButton(for: value)
           }
-          .pickerStyle(.segmented)
         }
-        .listRowBackground(theme.surfaceColor)
+        .padding(4)
+        .background(theme.backgroundColor.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Analytics date range")
       }
+      .listRowBackground(theme.surfaceColor)
 
       usageSummarySection
 
-      if purchaseManager.hasPro {
-        if telemetryUnavailable {
-          Section {
-            ContentUnavailableView(
-              "Performance Data Unavailable",
-              systemImage: "exclamationmark.triangle",
-              description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
-            )
-            Button("Retry") { Task { await loadTelemetry(retry: true) } }
-              .disabled(isLoadingTelemetry)
-          }
-          .listRowBackground(theme.surfaceColor)
-        } else if hasPerformanceData {
-          performanceSection
-          reliabilitySection
-          if !failureBreakdown.isEmpty {
-            failureSection
-          }
-        } else if hasLoadedTelemetry {
-          Section {
-            ContentUnavailableView(
-              "No Performance Data Yet",
-              systemImage: "waveform.path.ecg",
-              description: Text("Send a few messages to start collecting local performance metrics.")
-            )
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
-        if let conversation = currentConversation {
-          Section("This conversation") {
-            NavigationLink {
-              ConversationAnalyticsView(
-                conversation: conversation,
-                range: range,
-                telemetryEvents: filteredTelemetryEvents,
-                telemetryAvailable: !telemetryUnavailable
-              )
-            } label: {
-              conversationSummaryLabel(conversation)
-            }
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
-        if !providerBreakdown.isEmpty {
-          Section("Providers") {
-            ForEach(providerBreakdown) { row in
-              UsageBreakdownRowView(row: row)
-            }
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
-        if !modelBreakdown.isEmpty {
-          Section("Models") {
-            ForEach(modelBreakdown) { row in
-              UsageBreakdownRowView(row: row)
-            }
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
-        monthlyBudgetSection
-
+      if telemetryUnavailable {
         Section {
-          if telemetryUnavailable {
-            LabeledContent("Telemetry", value: "Unavailable")
-          } else {
-            LabeledContent("Telemetry events", value: telemetryStatistics.analyticsEventCount.formatted())
-          }
-          if telemetryStatistics.databaseBytes > 0 {
-            LabeledContent(
-              "Local database",
-              value: ByteCountFormatter.string(
-                fromByteCount: telemetryStatistics.databaseBytes,
-                countStyle: .file
-              )
-            )
-          }
-        } header: {
-          Text("Local analytics")
-            .foregroundStyle(theme.secondaryForegroundColor)
-        } footer: {
-          Text(telemetryFootnote)
-            .foregroundStyle(theme.secondaryForegroundColor)
+          ContentUnavailableView(
+            "Performance Data Unavailable",
+            systemImage: "exclamationmark.triangle",
+            description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
+          )
+          Button("Retry") { Task { await loadTelemetry(retry: true) } }
+            .disabled(isLoadingTelemetry)
         }
         .listRowBackground(theme.surfaceColor)
-      } else {
-        advancedUpsellSection
+      } else if hasPerformanceData {
+        performanceSection
+        reliabilitySection
+        if !failureBreakdown.isEmpty {
+          failureSection
+        }
+      } else if hasLoadedTelemetry {
+        Section {
+          ContentUnavailableView(
+            "No Performance Data Yet",
+            systemImage: "waveform.path.ecg",
+            description: Text("Send a few messages to start collecting local performance metrics.")
+          )
+        }
+        .listRowBackground(theme.surfaceColor)
       }
+
+      if let conversation = currentConversation {
+        Section("This conversation") {
+          NavigationLink {
+            ConversationAnalyticsView(
+              conversation: conversation,
+              range: accessibleRange,
+              telemetryEvents: filteredTelemetryEvents,
+              telemetryAvailable: !telemetryUnavailable
+            )
+          } label: {
+            conversationSummaryLabel(conversation)
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      if !providerBreakdown.isEmpty {
+        Section("Providers") {
+          ForEach(providerBreakdown) { row in
+            UsageBreakdownRowView(row: row)
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      if !modelBreakdown.isEmpty {
+        Section("Models") {
+          ForEach(modelBreakdown) { row in
+            UsageBreakdownRowView(row: row)
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      monthlyBudgetSection
+
+      Section {
+        if telemetryUnavailable {
+          LabeledContent("Telemetry", value: "Unavailable")
+        } else {
+          LabeledContent("Telemetry events", value: filteredTelemetryEvents.count.formatted())
+        }
+        if telemetryStatistics.databaseBytes > 0 {
+          LabeledContent(
+            "Local database",
+            value: ByteCountFormatter.string(
+              fromByteCount: telemetryStatistics.databaseBytes,
+              countStyle: .file
+            )
+          )
+        }
+      } header: {
+        Text("Local analytics")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      } footer: {
+        Text(telemetryFootnote)
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
     }
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
@@ -163,6 +162,11 @@ struct UsageDashboardView: View {
     .navigationTitle("Analytics")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      if isBudgetFieldFocused {
+        ToolbarItem(placement: .keyboard) {
+          Button("Done") { isBudgetFieldFocused = false }
+        }
+      }
       if openSidebar != nil {
         ToolbarItem(placement: .cancellationAction) {
           Button("Open Sidebar", systemImage: "text.alignleft") { openSidebar?() }
@@ -176,25 +180,69 @@ struct UsageDashboardView: View {
       }
     }
     .task {
-      if purchaseManager.hasPro {
-        await loadTelemetry()
-      }
+      await loadTelemetry()
     }
     .onChange(of: purchaseManager.hasPro) { _, hasPro in
-      if hasPro {
-        Task { await loadTelemetry() }
-      } else {
-        range = .month
-      }
+      if !hasPro { range = .today }
     }
     .refreshable {
-      if purchaseManager.hasPro {
-        await loadTelemetry()
-      }
+      await loadTelemetry()
     }
     .sheet(isPresented: $showProUpsell) {
       BYOKProUpsellFlow(feature: .analytics)
     }
+  }
+
+  /// This value, not the raw picker state, drives all aggregates and details.
+  /// It prevents stale selections from exposing history after Pro expires.
+  private var accessibleRange: UsageRange {
+    range.accessible(hasPro: purchaseManager.hasPro)
+  }
+
+  /// Use real buttons rather than a segmented Picker so each locked range
+  /// reliably displays its lock symbol and remains an actionable upgrade entry.
+  private func rangeButton(for value: UsageRange) -> some View {
+    let locked = value.requiresPro && !purchaseManager.hasPro
+    let selected = accessibleRange == value
+
+    return Button {
+      if locked {
+        showProUpsell = true
+      } else {
+        range = value
+      }
+    } label: {
+      HStack(spacing: 3) {
+        Text(value.label)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+        if locked {
+          Image(systemName: "lock.fill")
+            .font(.system(size: 9, weight: .semibold))
+            .accessibilityHidden(true)
+        }
+      }
+      .font(.caption.weight(selected ? .semibold : .medium))
+      .foregroundStyle(selected ? theme.primaryForegroundColor : theme.secondaryForegroundColor)
+      .frame(maxWidth: .infinity, minHeight: 44)
+      .background {
+        if selected {
+          RoundedRectangle(cornerRadius: 9)
+            .fill(theme.elevatedSurfaceColor)
+            .overlay {
+              RoundedRectangle(cornerRadius: 9)
+                .stroke(theme.borderColor.opacity(0.65), lineWidth: 0.5)
+            }
+        }
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(locked ? "\(value.label), locked, requires BYOK Pro" : value.label)
+    .accessibilityHint(locked
+      ? "Open BYOK Pro to unlock historical analytics."
+      : "Show analytics for \(value.label).")
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
   private var usageSummarySection: some View {
@@ -203,42 +251,20 @@ struct UsageDashboardView: View {
       LabeledContent("Model requests", value: filteredAggregate.modelRequestCount.formatted())
       LabeledContent("Input", value: usageCompactTokens(filteredAggregate.inputTokens))
       LabeledContent("Output", value: usageCompactTokens(filteredAggregate.outputTokens))
-      if purchaseManager.hasPro, filteredAggregate.cachedInputTokens > 0 {
+      if filteredAggregate.cachedInputTokens > 0 {
         LabeledContent("Cached input", value: usageCompactTokens(filteredAggregate.cachedInputTokens))
       }
-      if purchaseManager.hasPro, filteredAggregate.reasoningTokens > 0 {
+      if filteredAggregate.reasoningTokens > 0 {
         LabeledContent("Reasoning", value: usageCompactTokens(filteredAggregate.reasoningTokens))
       }
-      if purchaseManager.hasPro, filteredAggregate.toolCallCount > 0 {
+      if filteredAggregate.toolCallCount > 0 {
         LabeledContent("Tool calls", value: filteredAggregate.toolCallCount.formatted())
       }
     } header: {
-      Text(purchaseManager.hasPro ? "Usage" : "Basic Usage · This Month")
+      Text("Usage · \(accessibleRange.label)")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       Text(usageHistoryFootnote(filteredAggregate))
-        .foregroundStyle(theme.secondaryForegroundColor)
-    }
-    .listRowBackground(theme.surfaceColor)
-  }
-
-  private var advancedUpsellSection: some View {
-    Section {
-      Button {
-        showProUpsell = true
-      } label: {
-        VStack(alignment: .leading, spacing: 6) {
-          Label("Advanced Analytics", systemImage: "crown.fill")
-            .font(.body.weight(.semibold))
-          Text("Unlock time ranges, TTFT and speed, reliability, errors, provider/model breakdowns, per-chat details, and monthly budgets.")
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 4)
-      }
-    } footer: {
-      Text("Upgrade to Pro for deeper local analytics. Your chat content and provider credentials remain private.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
@@ -317,6 +343,7 @@ struct UsageDashboardView: View {
           .foregroundStyle(theme.secondaryForegroundColor)
         TextField("0", value: $monthlyBudgetUSD, format: .number.precision(.fractionLength(0...2)))
           .keyboardType(.decimalPad)
+          .focused($isBudgetFieldFocused)
           .multilineTextAlignment(.trailing)
           .frame(maxWidth: 100)
       }
@@ -329,17 +356,17 @@ struct UsageDashboardView: View {
       }
 
       if monthlyBudgetUSD > 0 {
-        LabeledContent("This month", value: usageAggregateCostText(currentMonthAggregate))
-        if currentMonthAggregate.assistantMessageCount == 0 {
-          Text("No saved requests this month.")
-        } else if !currentMonthAggregate.hasKnownCost {
+        LabeledContent(purchaseManager.hasPro ? "This month" : "Today only", value: usageAggregateCostText(budgetAggregate))
+        if budgetAggregate.assistantMessageCount == 0 {
+          Text(purchaseManager.hasPro ? "No saved requests this month." : "No saved requests today.")
+        } else if !budgetAggregate.hasKnownCost {
           Label("Budget status unavailable: request costs are unknown.", systemImage: "questionmark.circle")
         } else {
-          if !currentMonthAggregate.hasPartialCost { ProgressView(value: budgetProgress) }
+          if !budgetAggregate.hasPartialCost { ProgressView(value: budgetProgress) }
           if budgetWarningReached {
             Label(budgetWarningText, systemImage: "exclamationmark.triangle.fill")
               .foregroundStyle(.orange)
-          } else if currentMonthAggregate.hasPartialCost {
+          } else if budgetAggregate.hasPartialCost {
             Label("Budget status uncertain: incomplete costs may already exceed the threshold; estimates may differ in either direction.", systemImage: "questionmark.circle")
           }
         }
@@ -348,14 +375,16 @@ struct UsageDashboardView: View {
       Text("Monthly budget")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
-      Text("The monthly budget warns about saved chat history; it is not a billing ledger. Regenerating, editing, or deleting messages can reduce totals. It excludes API-key usage in other apps and does not change provider spending limits.")
+      Text(purchaseManager.hasPro
+        ? "The monthly budget warns about saved chat history; it is not a billing ledger. Regenerating, editing, or deleting messages can reduce totals. It excludes API-key usage in other apps and does not change provider spending limits."
+        : "Free evaluates this monthly threshold using today's saved usage only. Earlier days are excluded, so warnings may underestimate monthly spending. Upgrade to Pro for a complete month. This does not change provider spending limits.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
   private var filteredMessages: [ChatMessage] {
-    messages(since: range.startDate(reference: .now))
+    messages(since: accessibleRange.startDate(reference: .now))
   }
 
   private var filteredAggregate: ChatUsageAggregate {
@@ -364,7 +393,7 @@ struct UsageDashboardView: View {
 
   private var filteredTelemetryEvents: [TelemetryEvent] {
     guard !telemetryUnavailable else { return [] }
-    let startDate = range.startDate(reference: .now)
+    let startDate = accessibleRange.startDate(reference: .now)
     return telemetryEvents.filter { event in
       guard event.dataClass == .analytics else { return false }
       guard let startDate else { return true }
@@ -389,8 +418,11 @@ struct UsageDashboardView: View {
     return conversations.first(where: { $0.id == currentConversationID })
   }
 
-  private var currentMonthAggregate: ChatUsageAggregate {
-    ChatBilling.aggregate(messages: messages(since: UsageRange.month.startDate(reference: .now)))
+  /// Budget thresholds remain monthly. Without Pro, only today's portion of
+  /// the month can be evaluated; never read or display earlier days.
+  private var budgetAggregate: ChatUsageAggregate {
+    let budgetRange: UsageRange = purchaseManager.hasPro ? .month : .today
+    return ChatBilling.aggregate(messages: messages(since: budgetRange.startDate(reference: .now)))
   }
 
   private var providerBreakdown: [UsageBreakdown] {
@@ -457,7 +489,7 @@ struct UsageDashboardView: View {
   }
 
   private func conversationSummaryLabel(_ conversation: ChatConversation) -> some View {
-    let startDate = range.startDate(reference: .now)
+    let startDate = accessibleRange.startDate(reference: .now)
     let messages = conversation.messages.filter { message in
       guard message.role == .assistant else { return false }
       guard let startDate else { return true }
@@ -493,18 +525,18 @@ struct UsageDashboardView: View {
 
   private var budgetProgress: Double {
     guard monthlyBudgetUSD > 0 else { return 0 }
-    let spent = NSDecimalNumber(decimal: currentMonthAggregate.costUSD).doubleValue
+    let spent = NSDecimalNumber(decimal: budgetAggregate.costUSD).doubleValue
     return min(max(spent / monthlyBudgetUSD, 0), 1)
   }
 
   private var budgetWarningReached: Bool {
     guard monthlyBudgetUSD > 0 else { return false }
-    let spent = NSDecimalNumber(decimal: currentMonthAggregate.costUSD).doubleValue
+    let spent = NSDecimalNumber(decimal: budgetAggregate.costUSD).doubleValue
     return spent >= monthlyBudgetUSD * budgetWarningFraction
   }
 
   private var budgetWarningText: String {
-    let aggregate = currentMonthAggregate
+    let aggregate = budgetAggregate
     if aggregate.hasPartialCost {
       return aggregate.hasEstimatedCost
         ? "Partial estimate reached the warning threshold"
@@ -516,6 +548,9 @@ struct UsageDashboardView: View {
   }
 
   private var telemetryFootnote: String {
+    if !purchaseManager.hasPro {
+      return "Only today's local telemetry is shown. Historical ranges require Pro. Events are retained on device for up to 30 days by default, and saved chat usage is retained with your messages."
+    }
     if telemetryStatistics.eventCount > telemetryEvents.count {
       let queryLimit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
       return "Performance and reliability use the latest \(queryLimit) local telemetry events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
