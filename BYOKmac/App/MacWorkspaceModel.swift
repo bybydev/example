@@ -66,14 +66,6 @@ final class MacWorkspaceModel {
     )
   }
 
-  func isLibraryEntryRestricted(_ id: LibraryEntryID) -> Bool {
-    restrictions.isLibraryEntryRestricted(
-      id,
-      currentIDs: libraryEntries.map(\.id),
-      entitlement: MacProAccess.entitlementAccess
-    )
-  }
-
   func projectFiles(projectID: ProjectID?) -> [ProjectFile] {
     guard let projectID, !isProjectRestricted(projectID) else { return [] }
     return project(projectID)?.projectFiles ?? []
@@ -106,12 +98,6 @@ final class MacWorkspaceModel {
   }
 
   func attachment(for entry: LibraryEntry) async -> ChatAttachment? {
-    if isLibraryEntryRestricted(entry.id) {
-      errorMessage = MacProAccess.restoredResourceBlockedMessage("Library file")
-      MacProAccess.requestUpgrade(.libraryItems)
-      return nil
-    }
-
     guard let data = await libraryStore.data(for: entry), !data.isEmpty else {
       errorMessage = "The file '\(entry.filename)' could not be loaded."
       return nil
@@ -158,6 +144,7 @@ final class MacWorkspaceModel {
         promptPresets: promptPresets,
         toolPresets: toolPresets
       )
+      MacAppAnalytics.track(.projectCreated)
       return value.id
     }
   }
@@ -301,19 +288,12 @@ final class MacWorkspaceModel {
 
   func addLibraryAttachments(_ attachments: [ChatAttachment]) async -> Bool {
     guard !attachments.isEmpty else { return true }
-    let allowed = MacProAccess.requireLibraryCapacity(
-      currentCount: libraryEntries.count,
-      additions: attachments.count
-    )
-    guard allowed == attachments.count else {
-      errorMessage = MacProAccess.blockedMessage(
-        freeMessage: "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
-      )
-      return false
-    }
-
     return await performResult("Added to Library", referencesChanged: true) {
-      _ = try await libraryStore.addAttachments(attachments, source: .manual)
+      let existingIDs = Set(await libraryStore.entries().map(\.id))
+      let savedEntries = try await libraryStore.addAttachments(attachments, source: .manual)
+      for entry in savedEntries where !existingIDs.contains(entry.id) {
+        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      }
     }
   }
 
@@ -322,24 +302,18 @@ final class MacWorkspaceModel {
     conversationID: ConversationID,
     messageID: ChatMessageID
   ) async -> Bool {
-    let isAlreadyListed = libraryEntries.contains { $0.id.rawValue == attachment.id }
-    if !isAlreadyListed,
-      MacProAccess.requireLibraryCapacity(currentCount: libraryEntries.count) != 1
-    {
-      errorMessage = MacProAccess.blockedMessage(
-        freeMessage: "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
-      )
-      return false
-    }
-
     return await performResult("Saved to Library", referencesChanged: true) {
-      _ = try await libraryStore.ensureListed(
+      let existingIDs = Set(await libraryStore.entries().map(\.id))
+      let entry = try await libraryStore.ensureListed(
         fileID: attachment.id,
         filename: attachment.filename,
         mimeType: attachment.mimeType,
         byteCount: attachment.byteCount,
         source: .chat(conversationID: conversationID, messageID: messageID)
       )
+      if !existingIDs.contains(entry.id) {
+        MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      }
     }
   }
 
@@ -351,12 +325,6 @@ final class MacWorkspaceModel {
   ) async -> Bool {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return false }
-    guard MacProAccess.requireLibraryCapacity(currentCount: libraryEntries.count) == 1 else {
-      errorMessage = MacProAccess.blockedMessage(
-        freeMessage: "Free includes \(MacProAccess.freeLibraryItemLimit) saved files. Upgrade to BYOK Pro to save more."
-      )
-      return false
-    }
 
     let parts = Calendar.current.dateComponents([.year, .month, .day], from: createdAt)
     let date = String(
@@ -366,12 +334,13 @@ final class MacWorkspaceModel {
       parts.day ?? 0
     )
     return await performResult("Saved to Library", referencesChanged: true) {
-      _ = try await libraryStore.add(
+      let entry = try await libraryStore.add(
         filename: "Response-\(date).md",
         mimeType: "text/markdown",
         data: Data(trimmed.utf8),
         source: .chat(conversationID: conversationID, messageID: messageID)
       )
+      MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
     }
   }
 

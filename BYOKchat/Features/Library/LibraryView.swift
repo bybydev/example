@@ -15,7 +15,7 @@ struct LibraryView: View {
   var openSourceChat: (LibraryEntry) -> Void = { _ in }
 
   @Environment(\.appFoundationTheme) private var theme
-  @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(BYOKToastCenter.self) private var toastCenter
   @State private var viewerEntry: LibraryEntry?
   @State private var viewerImage: UIImage?
   @State private var viewerShareData: Data?
@@ -32,7 +32,6 @@ struct LibraryView: View {
   @State private var isInSelectMode = false
   @State private var selectedEntryIDs: Set<LibraryEntryID> = []
   @State private var sharePayload: LibrarySharePayload?
-  @State private var showProUpsell = false
 
   private enum KindFilter: String, CaseIterable, Identifiable {
     case all = "All"
@@ -204,9 +203,6 @@ struct LibraryView: View {
     .sheet(item: $sharePayload) { payload in
       ActivityShareSheet(items: [Self.shareURL(for: payload)])
         .ignoresSafeArea()
-    }
-    .sheet(isPresented: $showProUpsell) {
-      BYOKProUpsellFlow(feature: .libraryItems)
     }
     .alert(
       "Library Error",
@@ -486,8 +482,17 @@ struct LibraryView: View {
     Task { @MainActor in
       guard let data = await library.data(for: entry),
         let image = UIImage(data: data)
-      else { return }
-      UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+      else {
+        library.errorMessage = "This image could not be read."
+        return
+      }
+      do {
+        try await LibraryPhotoWriter.save(image)
+        toastCenter.success("Saved to Photos")
+      } catch {
+        toastCenter.dismiss()
+        library.errorMessage = error.localizedDescription
+      }
     }
   }
 
@@ -503,14 +508,6 @@ struct LibraryView: View {
       let stamp = Self.importStamp()
       var batchIndex = 0
       for item in items {
-        // Free tier: fill the remaining slots, then surface the upsell once.
-        guard BYOKProAccess.canCreateLibraryItem(
-          currentCount: library.entries.count,
-          hasPro: purchaseManager.hasPro
-        ) else {
-          showProUpsell = true
-          break
-        }
         do {
           guard let data = try await item.loadTransferable(type: Data.self),
             let jpeg = Self.normalizedJPEG(from: data)
@@ -520,7 +517,6 @@ struct LibraryView: View {
             filename: Self.importFilename(stamp: stamp, index: batchIndex),
             mimeType: "image/jpeg",
             data: jpeg,
-            hasPro: purchaseManager.hasPro,
             onError: handleSaveError
           )
         } catch {
@@ -537,14 +533,6 @@ struct LibraryView: View {
     case .success(let urls):
       Task { @MainActor in
         for url in urls {
-          // Free tier: fill the remaining slots, then surface the upsell once.
-          guard BYOKProAccess.canCreateLibraryItem(
-            currentCount: library.entries.count,
-            hasPro: purchaseManager.hasPro
-          ) else {
-            showProUpsell = true
-            break
-          }
           do {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -563,7 +551,6 @@ struct LibraryView: View {
                 filename: url.deletingPathExtension().lastPathComponent + ".jpg",
                 mimeType: "image/jpeg",
                 data: jpeg,
-                hasPro: purchaseManager.hasPro,
                 onError: handleSaveError
               )
             } else {
@@ -571,7 +558,6 @@ struct LibraryView: View {
                 filename: url.lastPathComponent,
                 mimeType: type.preferredMIMEType ?? "application/octet-stream",
                 data: data,
-                hasPro: purchaseManager.hasPro,
                 onError: handleSaveError
               )
             }
@@ -584,11 +570,7 @@ struct LibraryView: View {
   }
 
   private func handleSaveError(_ error: Error) {
-    if error is LibraryCapacityError {
-      showProUpsell = true
-    } else {
-      library.errorMessage = error.localizedDescription
-    }
+    library.errorMessage = error.localizedDescription
   }
 
   /// Matches the chat composer's pick pipeline: images become JPEG so every
@@ -685,5 +667,44 @@ enum LibraryDateGrouper {
       }
     }
     return buckets.map { Section(title: $0.title, entries: $0.entries) }
+  }
+}
+
+/// Retained across the UIKit completion callback so success is shown only
+/// after Photos finishes writing, and denied access/storage failures surface.
+@MainActor
+private final class LibraryPhotoWriter: NSObject {
+  private var continuation: CheckedContinuation<Void, any Error>?
+
+  static func save(_ image: UIImage) async throws {
+    let writer = LibraryPhotoWriter()
+    defer { withExtendedLifetime(writer) {} }
+    try await writer.write(image)
+  }
+
+  private func write(_ image: UIImage) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+      self.continuation = continuation
+      UIImageWriteToSavedPhotosAlbum(
+        image,
+        self,
+        #selector(didSave(_:didFinishSavingWithError:contextInfo:)),
+        nil
+      )
+    }
+  }
+
+  @objc private func didSave(
+    _ image: UIImage,
+    didFinishSavingWithError error: NSError?,
+    contextInfo: UnsafeMutableRawPointer?
+  ) {
+    guard let continuation else { return }
+    self.continuation = nil
+    if let error {
+      continuation.resume(throwing: error)
+    } else {
+      continuation.resume()
+    }
   }
 }

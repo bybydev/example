@@ -20,6 +20,7 @@ struct UsageDashboardView: View {
   @State private var telemetryUnavailable = false
   @State private var isLoadingTelemetry = false
   @State private var showProUpsell = false
+  @State private var didTrackOpening = false
   @FocusState private var isBudgetFieldFocused: Bool
 
   init(
@@ -52,19 +53,6 @@ struct UsageDashboardView: View {
 
   private var dashboard: some View {
     List {
-      Section {
-        HStack(spacing: 3) {
-          ForEach(UsageRange.allCases) { value in
-            rangeButton(for: value)
-          }
-        }
-        .padding(4)
-        .background(theme.backgroundColor.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Analytics date range")
-      }
-      .listRowBackground(theme.surfaceColor)
-
       usageSummarySection
 
       if telemetryUnavailable {
@@ -157,11 +145,17 @@ struct UsageDashboardView: View {
 
     }
     .scrollContentBackground(.hidden)
+    .refreshable {
+      await loadTelemetry()
+    }
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
     .navigationTitle("Analytics")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        analyticsRangeMenu
+      }
       if isBudgetFieldFocused {
         ToolbarItem(placement: .keyboard) {
           Button("Done") { isBudgetFieldFocused = false }
@@ -180,13 +174,14 @@ struct UsageDashboardView: View {
       }
     }
     .task {
+      if !didTrackOpening {
+        didTrackOpening = true
+        BYOKAppAnalytics.track(.featureOpened, dimension: .analytics)
+      }
       await loadTelemetry()
     }
     .onChange(of: purchaseManager.hasPro) { _, hasPro in
       if !hasPro { range = .today }
-    }
-    .refreshable {
-      await loadTelemetry()
     }
     .sheet(isPresented: $showProUpsell) {
       BYOKProUpsellFlow(feature: .analytics)
@@ -199,45 +194,40 @@ struct UsageDashboardView: View {
     range.accessible(hasPro: purchaseManager.hasPro)
   }
 
-  /// Use real buttons rather than a segmented Picker so each locked range
-  /// reliably displays its lock symbol and remains an actionable upgrade entry.
-  private func rangeButton(for value: UsageRange) -> some View {
+  private var analyticsRangeMenu: some View {
+    Menu {
+      ForEach(UsageRange.allCases) { value in
+        rangeMenuButton(for: value)
+      }
+    } label: {
+      Text(accessibleRange.label)
+    }
+    .menuIndicator(.hidden)
+    .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
+    .accessibilityHint("Choose the analytics date range.")
+  }
+
+  /// Locked ranges remain actionable upgrade entries in the native menu.
+  private func rangeMenuButton(for value: UsageRange) -> some View {
     let locked = value.requiresPro && !purchaseManager.hasPro
     let selected = accessibleRange == value
 
     return Button {
       if locked {
         showProUpsell = true
-      } else {
+      } else if accessibleRange != value {
         range = value
+        BYOKAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: value))
       }
     } label: {
-      HStack(spacing: 3) {
+      if locked {
+        Label(value.label, systemImage: "lock.fill")
+      } else if selected {
+        Label(value.label, systemImage: "checkmark")
+      } else {
         Text(value.label)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
-        if locked {
-          Image(systemName: "lock.fill")
-            .font(.system(size: 9, weight: .semibold))
-            .accessibilityHidden(true)
-        }
       }
-      .font(.caption.weight(selected ? .semibold : .medium))
-      .foregroundStyle(selected ? theme.primaryForegroundColor : theme.secondaryForegroundColor)
-      .frame(maxWidth: .infinity, minHeight: 44)
-      .background {
-        if selected {
-          RoundedRectangle(cornerRadius: 9)
-            .fill(theme.elevatedSurfaceColor)
-            .overlay {
-              RoundedRectangle(cornerRadius: 9)
-                .stroke(theme.borderColor.opacity(0.65), lineWidth: 0.5)
-            }
-        }
-      }
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
     .accessibilityLabel(locked ? "\(value.label), locked, requires BYOK Pro" : value.label)
     .accessibilityHint(locked
       ? "Open BYOK Pro to unlock historical analytics."

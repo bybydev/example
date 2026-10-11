@@ -505,6 +505,9 @@ private struct MacBYOKOnboardingView: View {
   }
 
   private func completeOnboarding() {
+    if !onboarding.isCompleted {
+      MacAppAnalytics.track(.onboardingCompleted)
+    }
     onboarding.complete()
     openWindow(id: BYOKmacWindowID.main)
     dismissWindow(id: BYOKmacWindowID.onboarding)

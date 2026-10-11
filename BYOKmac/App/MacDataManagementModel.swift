@@ -13,7 +13,6 @@ final class MacDataManagementModel {
   private let service: ProjectAwareDataPortabilityService
   private let providerWorkspace: ProviderWorkspaceStore
   private let projectWorkspace: ProjectWorkspaceStore
-  private let libraryStore: LibraryStore
   private let conversations: ConversationStore
   private let accountManager: ProviderAccountManager
   private let mcpRuntime: MCPRemoteRuntime
@@ -29,7 +28,6 @@ final class MacDataManagementModel {
     service = services.dataPortability
     providerWorkspace = services.providerWorkspace
     projectWorkspace = services.projectWorkspace
-    libraryStore = services.libraryStore
     conversations = services.conversationStore
     accountManager = services.accountManager
     mcpRuntime = services.mcpRuntime
@@ -259,13 +257,11 @@ final class MacDataManagementModel {
     let providers = await providerWorkspace.snapshot()
     let projects = await projectWorkspace.snapshot()
     let mcp = await mcpWorkspace.snapshot()
-    let library = await libraryStore.entries()
 
     return MacProResourceSnapshot(
       providerAccountIDs: providers.accounts.map { $0.id.rawValue },
       projectIDs: projects.projects.map { $0.id.rawValue },
-      mcpServerIDs: mcp.servers.map { $0.id.rawValue },
-      libraryEntryIDs: library.map { $0.id.rawValue }
+      mcpServerIDs: mcp.servers.map { $0.id.rawValue }
     )
   }
 

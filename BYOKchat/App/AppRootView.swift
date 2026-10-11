@@ -42,6 +42,7 @@ struct AppRootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
   @State private var bootstrap = AppBootstrapController()
+  @State private var toastCenter = BYOKToastCenter()
   /// Pushed screens layered above the main content (project details, pushed
   /// project chats).
   @State private var navigationPath: [AppRoute] = []
@@ -74,6 +75,7 @@ struct AppRootView: View {
         AppStartupFailureView(failure: failure, restartApp: restartApp)
       }
     }
+    .byokToastOverlay(toastCenter)
     .task {
       await bootstrap.start(model: model) { initialConversationID in
         selectedConversationID = initialConversationID
@@ -101,7 +103,6 @@ struct AppRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .offset(x: isSidebarPresented ? drawerWidth : 0)
             .allowsHitTesting(!isSidebarPresented)
-            .simultaneousGesture(openSidebarGesture, including: .all)
             .overlay {
               if isSidebarPresented {
                 Color.black.opacity(0.12)
@@ -178,7 +179,9 @@ struct AppRootView: View {
       )
     ) {
       BYOKOnboardingView {
+        guard !hasCompletedOnboarding else { return }
         hasCompletedOnboarding = true
+        BYOKAppAnalytics.track(.onboardingCompleted)
       }
       .appFoundationTheme(model.themeManager)
       .interactiveDismissDisabled()
@@ -351,6 +354,8 @@ struct AppRootView: View {
           )
         }
       }
+      // Keep the drawer gesture on top-level content; pushed screens own Back.
+      .simultaneousGesture(openSidebarGesture, including: .all)
       // Project rows in the main-screen projects list push their detail onto
       // the root stack; the detail's new-chat composer pushes on top of it so
       // back returns to the project instead of swapping the main screen.
@@ -531,6 +536,13 @@ struct AppRootView: View {
     openedChatFromProject = false
     activeScreen = screen
     closeSidebar()
+    switch screen {
+    case .providers: BYOKAppAnalytics.track(.featureOpened, dimension: .providers)
+    case .library: BYOKAppAnalytics.track(.featureOpened, dimension: .library)
+    case .projects: BYOKAppAnalytics.track(.featureOpened, dimension: .projects)
+    case .plugins: BYOKAppAnalytics.track(.featureOpened, dimension: .mcp)
+    case .usage: break // The dashboard also records openings from chat sheets.
+    }
   }
 
   /// Back chevron on a project chat: swap the chat for its project's screen.
@@ -593,5 +605,6 @@ struct AppRootView: View {
   private func openSettings() {
     closeSidebar()
     isSettingsPresented = true
+    BYOKAppAnalytics.track(.featureOpened, dimension: .settings)
   }
 }

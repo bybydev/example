@@ -5,6 +5,24 @@ import Testing
 
 @Suite("Library store transactions")
 struct LibraryStoreTransactionTests {
+  @Test("Library saves have no default entry-count cap")
+  func savesBeyondFormerFreeLimit() async throws {
+    let store = LibraryStore(
+      persistence: InMemoryLibraryWorkspacePersistence(),
+      blobs: InMemoryAttachmentBlobStore()
+    )
+    try await store.load()
+    for index in 1...12 {
+      _ = try await store.add(
+        filename: "file-\(index).txt",
+        mimeType: "text/plain",
+        data: Data("payload".utf8)
+      )
+    }
+
+    #expect(await store.entries().count == 12)
+  }
+
   @Test("Failed add does not publish an unpersisted Library entry")
   func failedAddKeepsCommittedState() async throws {
     let persistence = ToggleFailureLibraryPersistence()

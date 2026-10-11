@@ -1,13 +1,13 @@
 import Foundation
 
-/// A creation limit, distinct from a storage failure so the app can offer Pro.
+/// An optional store-level creation limit, distinct from a storage failure.
 public enum LibraryCapacityError: LocalizedError, Sendable {
   case limitReached(Int)
 
   public var errorDescription: String? {
     switch self {
     case .limitReached(let limit):
-      "Free includes \(limit) saved files. Upgrade to BYOK Pro to save more."
+      "This Library allows up to \(limit) saved files."
     }
   }
 }

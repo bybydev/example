@@ -36,7 +36,7 @@ Purchases, paywalls, Pro entitlement, shared themes, restore, Plan settings, Deb
 
 - Startup loads conversation summaries before full shards.
 - Full conversations remain lazy until selected.
-- Free Analytics hydrates persisted conversation history only; Pro Analytics also loads bounded local telemetry when its surface opens.
+- Analytics hydrates persisted conversation history and bounded local telemetry when its surface opens for both Free and Pro.
 - Sidebar search is debounced and store-backed.
 - Provider stream deltas are presentation-coalesced rather than published for every token fragment.
 - Transcript construction uses `LazyVStack`.
@@ -51,9 +51,9 @@ Purchases, paywalls, Pro entitlement, shared themes, restore, Plan settings, Deb
 - `PurchaseManager` is the production entitlement source of truth and is prepared/refreshed through `managesPurchases`.
 - The app owns the BYOK Pro paywall window and Plan settings tab while MacAppFoundation owns StoreKit purchase/restore behavior.
 - Free theme access is MAF-owned: GitHub Dark Dimmed and GitHub Light are Free; System and the other ten built-in themes require Pro.
-- Other Free limits match iOS: 1 provider connection, 1 project, 1 MCP server, and 10 saved Library files.
-- Existing provider connections, projects, MCP servers, and Library files remain accessible/editable after entitlement loss; creation beyond the free limits is gated.
-- Advanced Analytics is Pro; free users retain basic monthly spend/request/input/output analytics.
+- Other Free limits match iOS: 1 provider connection, 1 project, and 1 MCP server. Saved Library files are unlimited for everyone.
+- Existing provider connections, projects, and MCP servers remain accessible/editable after entitlement loss; creation beyond their free limits is gated. Library files remain unlimited and accessible regardless of entitlement.
+- All analytics features are free for Today; Pro unlocks every date range.
 - Debug builds expose MacAppFoundation purchase simulation and Developer Tools without replacing Release StoreKit behavior.
 
 ## Analytics
@@ -62,9 +62,10 @@ Purchases, paywalls, Pro entitlement, shared themes, restore, Plan settings, Deb
 - `.managesAnalytics(analytics)` is attached to the Mac scenes, including the Pro paywall, so lifecycle/session telemetry and bounded MAF commerce-funnel events share the same client.
 - Product telemetry remains separate from BYOKchat's user-facing local usage analytics and must not include prompts, message text, filenames, credentials, receipts, transaction IDs, or arbitrary error text.
 - App failures use MAF `trackError` with stable error codes/components across startup, chat, provider/MCP/workspace, attachments, Library/projects, data portability, and export/diagnostic boundaries; raw `Error` descriptions are never uploaded.
-- Free: Month only, with spend, model requests, input tokens, and output tokens reconstructed from persisted messages.
+- Free: Today only, with every analytics feature available.
 - Pro: Today, 7D, 30D, Month, and All ranges through the shared `UsageAnalytics` filtering model.
-- Pro adds cached/reasoning/tool totals, TTFT, duration, speed, reliability, failures, provider/model breakdowns, per-conversation analytics, local telemetry statistics, and monthly budgets.
+- Both plans include cached/reasoning/tool totals, TTFT, duration, speed, reliability, failures, provider/model breakdowns, per-conversation analytics, local telemetry statistics, and monthly budget controls. Free budget evaluation uses today's usage only; historical usage is excluded.
+- The text toolbar menu shows locks on Pro ranges. Selecting a locked range opens the existing Pro flow; entitlement loss immediately clamps all aggregates and details to Today.
 - Clearing telemetry does not erase message-history usage/spend.
 - Monthly budget warnings remain local advisory thresholds only.
 
@@ -107,11 +108,11 @@ Exercise these workflows together before distribution because they cross the mos
 5. project defaults/reference files → new project chat;
 6. Library attach/save/export;
 7. MCP discovery → chat tool enablement → approval/elicitation → persisted tool result;
-8. free Analytics monthly summary → Pro upgrade → advanced ranges/breakdowns/budget;
+8. free Analytics full Today metrics → locked range → Pro upgrade → all ranges → entitlement loss clamps overview/details/budget to Today;
 9. stop, retry/regenerate, edit-and-resend, interrupted-response recovery;
 10. single conversation deletion and bulk conversation deletion;
 11. full backup export/import and merge/replace restore;
 12. credential deletion and safe full reset/recovery-folder reveal;
-13. free limits for theme/provider/project/MCP/Library creation, then simulated Pro unlock;
+13. free limits for theme/provider/project/MCP creation and Analytics ranges, then simulated Pro unlock; Library stays unlimited;
 14. purchase, restore, lifetime/subscription entitlement refresh, and foreground refresh;
 15. keyboard-only navigation and VoiceOver/Reduce Motion pass.

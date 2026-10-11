@@ -186,8 +186,10 @@ struct ConnectionEditorView: View {
     .navigationTitle(isCreate ? "Add Connection" : "Edit Connection")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        Button("Cancel") { cancel() }
+      if isCreate {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { cancel() }
+        }
       }
       ToolbarItem(placement: .confirmationAction) {
         Button(isCreate ? "Save" : "Done") { save() }

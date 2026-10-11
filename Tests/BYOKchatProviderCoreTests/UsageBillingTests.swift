@@ -240,3 +240,59 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(!pricing.coversRequest(startedAt: start, endedAt: end))
   #expect(pricing.coversRequest(startedAt: start, endedAt: start.addingTimeInterval(60)))
 }
+
+@Test("Free analytics excludes history from overview and conversation detail after downgrade")
+func analyticsRangesClampHistoryAfterEntitlementLoss() {
+  let reference = Date(timeIntervalSince1970: 1_800_000_000)
+  let today = Calendar.current.startOfDay(for: reference).addingTimeInterval(60)
+  let yesterday = today.addingTimeInterval(-86_400)
+  let conversation = ChatConversation(
+    providerID: "provider",
+    accountID: "account",
+    modelID: "model",
+    messages: [
+      ChatMessage(
+        role: .assistant,
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        status: .complete,
+        usage: ProviderUsage(inputTokens: 900, outputTokens: 90)
+      ),
+      ChatMessage(
+        role: .assistant,
+        createdAt: today,
+        updatedAt: today,
+        status: .complete,
+        usage: ProviderUsage(inputTokens: 100, outputTokens: 10)
+      ),
+    ]
+  )
+
+  for selectedRange in UsageAnalyticsRange.allCases {
+    let range = selectedRange.accessible(hasPro: false)
+    let overview = UsageAnalytics.snapshot(
+      conversations: [conversation],
+      telemetryEvents: [],
+      range: range,
+      reference: reference
+    )
+    let detail = UsageAnalytics.conversationSnapshot(
+      conversation: conversation,
+      telemetryEvents: [],
+      range: range,
+      reference: reference
+    )
+    #expect(overview.aggregate.inputTokens == 100)
+    #expect(detail.aggregate.inputTokens == 100)
+    #expect(selectedRange.accessible(hasPro: true) == selectedRange)
+    #expect(selectedRange.requiresPro == (selectedRange != .today))
+  }
+
+  let pro = UsageAnalytics.snapshot(
+    conversations: [conversation],
+    telemetryEvents: [],
+    range: UsageAnalyticsRange.all.accessible(hasPro: true),
+    reference: reference
+  )
+  #expect(pro.aggregate.inputTokens == 1_000)
+}

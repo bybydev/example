@@ -116,8 +116,8 @@ public enum BuiltInProviders {
     seedModels: [
       .init(
         providerID: anthropicID,
-        id: "claude-sonnet-5",
-        displayName: "Claude Sonnet 5",
+        id: "claude-sonnet-5-5",
+        displayName: "Claude Sonnet 5.5",
         contextWindow: 1_000_000,
         contextWindowKind: .inputOnly,
         maxOutputTokens: 128_000,
@@ -126,8 +126,8 @@ public enum BuiltInProviders {
       ),
       .init(
         providerID: anthropicID,
-        id: "claude-opus-5",
-        displayName: "Claude Opus 5",
+        id: "claude-opus-5-5",
+        displayName: "Claude Opus 5.5",
         contextWindow: 1_000_000,
         contextWindowKind: .inputOnly,
         maxOutputTokens: 128_000,
@@ -151,8 +151,8 @@ public enum BuiltInProviders {
     seedModels: [
       .init(
         providerID: geminiID,
-        id: "gemini-3.6-flash",
-        displayName: "Gemini 3.6 Flash",
+        id: "gemini-3.8-flash",
+        displayName: "Gemini 3.8 Flash",
         contextWindow: 1_048_576,
         contextWindowKind: .inputOnly,
         maxOutputTokens: 65_536,

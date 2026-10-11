@@ -41,6 +41,7 @@ targets:
       properties:
         CFBundleDisplayName: BYOK Chat
         ITSAppUsesNonExemptEncryption: false
+        NSPhotoLibraryAddUsageDescription: BYOK Chat saves images to your photo library when you choose Save Image.
         NSLocalNetworkUsageDescription: BYOKchat uses your local network to connect to AI providers you configure on nearby devices.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -83,6 +84,8 @@ targets:
         buildPhase: resources
     info:
       path: BYOKmac/Resources/Info.plist
+      properties:
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat

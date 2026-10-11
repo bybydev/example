@@ -21,6 +21,7 @@ struct SettingsView: View {
   @State private var confirmDeleteCredentials = false
   @State private var showThemeUpsell = false
   @State private var showPaywall = false
+  @State private var toastCenter = BYOKToastCenter()
 
   private enum ImportKind {
     case backup
@@ -29,6 +30,22 @@ struct SettingsView: View {
 
   var body: some View {
     failureAlertView
+      .byokToastOverlay(toastCenter)
+      .onAppear {
+        model.dataPortability.statusMessage = nil
+      }
+      .onChange(of: model.dataPortability.statusMessage) { _, message in
+        guard let message else { return }
+        model.dataPortability.statusMessage = nil
+        guard model.dataPortability.errorMessage == nil else { return }
+        toastCenter.success(message)
+      }
+      .onChange(of: model.dataPortability.errorMessage) { _, message in
+        if message != nil { toastCenter.dismiss() }
+      }
+      .onDisappear {
+        toastCenter.dismiss()
+      }
       .sheet(isPresented: $showThemeUpsell) {
         BYOKProUpsellFlow(feature: .themes)
       }
@@ -184,43 +201,56 @@ struct SettingsView: View {
           importKind = .providers
           showImportStrategy = true
         }
-      } header: {
-        Text("Data Portability")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      } footer: {
-        Text("Backups and connection configuration never include API keys or secret headers.")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
-      .listRowBackground(theme.surfaceColor)
 
-      TelemetrySettingsSection()
-        .listRowBackground(theme.surfaceColor)
-
-      Section("Destructive Actions") {
         Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
           confirmDeleteConversations = true
         }
         Button("Delete All Credentials", systemImage: "key.slash", role: .destructive) {
           confirmDeleteCredentials = true
         }
+
+        if model.dataPortability.isBusy {
+          HStack(spacing: 10) {
+            ProgressView()
+            Text("Working…")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+      } header: {
+        Text("Data Management")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      } footer: {
+        Text("Backups and connection configuration never include API keys or secret headers.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .disabled(model.dataPortability.isBusy)
+      .listRowBackground(theme.surfaceColor)
+
+      Section("Support") {
+        Link(destination: URL(string: "https://byok.pro/support")!) {
+          Label("Help & Support", systemImage: "questionmark.circle")
+        }
+        Link(destination: URL(string: "https://byok.pro/contact")!) {
+          Label("Contact Us", systemImage: "envelope")
+        }
+        NavigationLink {
+          TelemetryDiagnosticsView()
+        } label: {
+          Label("Diagnostics & Logs", systemImage: "waveform.path.ecg")
+        }
       }
       .listRowBackground(theme.surfaceColor)
 
-      if let status = model.dataPortability.statusMessage {
-        Section("Last Data Operation") {
-          Text(status)
-            .font(.footnote)
-            .foregroundStyle(theme.secondaryForegroundColor)
-        }
-        .listRowBackground(theme.surfaceColor)
-      }
-
       Section("About") {
-        LabeledContent("Storage", value: "Local on this iPhone")
-        LabeledContent("Credentials", value: "Keychain")
-        Text("Requests go directly through the connection or remote MCP endpoint selected by the app.")
-          .font(.footnote)
-          .foregroundStyle(theme.secondaryForegroundColor)
+        Link(destination: URL(string: "https://byok.pro")!) {
+          Label("Website", systemImage: "globe")
+        }
+        Link(destination: URL(string: "https://byok.pro/privacy")!) {
+          Label("Privacy Policy", systemImage: "hand.raised")
+        }
+        Link(destination: URL(string: "https://byok.pro/terms")!) {
+          Label("Terms of Use", systemImage: "doc.text")
+        }
       }
       .listRowBackground(theme.surfaceColor)
 
@@ -280,7 +310,10 @@ struct SettingsView: View {
   }
 
   private func handleExportResult(_ result: Result<URL, any Error>) {
-    if case .failure(let error) = result {
+    switch result {
+    case .success:
+      toastCenter.success("Export completed.")
+    case .failure(let error):
       model.dataPortability.errorMessage = error.localizedDescription
     }
   }

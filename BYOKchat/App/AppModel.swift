@@ -390,6 +390,9 @@ final class MCPManagementModel {
       }
 
       try await runtime.saveServer(server, credential: credential)
+      if existing == nil {
+        BYOKAppAnalytics.track(.mcpServerCreated)
+      }
       statusMessage = "MCP server saved"
       do {
         try await reloadSnapshot()
@@ -412,7 +415,9 @@ final class MCPManagementModel {
     do {
       _ = try await runtime.refreshServer(server.id, force: true)
       statusMessage = "MCP server saved and tools discovered"
+      BYOKAppAnalytics.track(.mcpDiscoverySucceeded)
     } catch {
+      BYOKAppAnalytics.track(.mcpDiscoveryFailed)
       appendSaveWarning("Server saved, but tool discovery failed: \(error.localizedDescription)")
     }
     do {

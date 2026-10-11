@@ -1,3 +1,4 @@
+import BYOKchatProviderCore
 import SwiftUI
 
 @MainActor
@@ -6,6 +7,17 @@ final class MacUtilitySheetCoordinator {
   var destination: MacUtilitySheetDestination?
 
   func present(_ destination: MacUtilitySheetDestination) {
+    if self.destination != destination {
+      let dimension: MacAppAnalytics.Dimension
+      switch destination {
+      case .providers: dimension = .providers
+      case .library: dimension = .library
+      case .projects: dimension = .projects
+      case .mcpServers: dimension = .mcp
+      case .analytics: dimension = .analytics
+      }
+      MacAppAnalytics.track(.featureOpened, dimension: dimension)
+    }
     self.destination = destination
   }
 

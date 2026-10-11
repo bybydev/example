@@ -10,14 +10,14 @@ struct ResponseImageSaveSheet: View {
   let conversationID: ConversationID
   let messageID: ChatMessageID
   let library: LibraryManagementModel
+  var onSaved: (Int) -> Void = { _ in }
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
-  @Environment(PurchaseManager.self) private var purchaseManager
   @State private var selected: Set<String> = []
   @State private var isSaving = false
+  @State private var savedCount = 0
   @State private var errorMessage: String?
-  @State private var showLibraryUpsell = false
   @State private var didInitializeSelection = false
 
   var body: some View {
@@ -74,9 +74,6 @@ struct ResponseImageSaveSheet: View {
     }
     .presentationDragIndicator(.visible)
     .interactiveDismissDisabled(isSaving)
-    .sheet(isPresented: $showLibraryUpsell) {
-      BYOKProUpsellFlow(feature: .libraryItems)
-    }
     .alert("Library Error", isPresented: Binding(
       get: { errorMessage != nil },
       set: { if !$0 { errorMessage = nil } }
@@ -108,18 +105,8 @@ struct ResponseImageSaveSheet: View {
 
     let wanted = selected
     var failures: [String] = []
-    var reachedCapacity = false
     for (index, candidate) in candidates.enumerated()
     where wanted.contains(candidate.id) {
-      // The free tier caps total saved files; stop at the cap instead of
-      // failing mid-download.
-      guard BYOKProAccess.canCreateLibraryItem(
-        currentCount: library.entries.count,
-        hasPro: purchaseManager.hasPro
-      ) else {
-        reachedCapacity = true
-        break
-      }
       guard
         let data = await ResponseImageScanner.fetchData(
           for: candidate.source,
@@ -139,29 +126,20 @@ struct ResponseImageSaveSheet: View {
         mimeType: mimeType,
         data: data,
         source: .chat(conversationID: conversationID, messageID: messageID),
-        hasPro: purchaseManager.hasPro,
         onError: { error in
-          if error is LibraryCapacityError {
-            reachedCapacity = true
-          } else {
-            failures.append("\(candidate.label): \(error.localizedDescription)")
-          }
+          failures.append("\(candidate.label): \(error.localizedDescription)")
         }
       )
       // Keep only unsaved selections for retry, without duplicating successes.
-      if added != nil { selected.remove(candidate.id) }
-      if reachedCapacity { break }
+      if added != nil {
+        selected.remove(candidate.id)
+        savedCount += 1
+      }
     }
     if !failures.isEmpty {
-      if reachedCapacity {
-        failures.append(
-          LibraryCapacityError.limitReached(BYOKProPolicy.freeLibraryItemLimit).localizedDescription
-        )
-      }
       errorMessage = failures.joined(separator: "\n")
-    } else if reachedCapacity {
-      showLibraryUpsell = true
     } else {
+      onSaved(savedCount)
       dismiss()
     }
   }

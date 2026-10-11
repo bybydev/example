@@ -214,12 +214,17 @@ final class MacMCPModel {
       }
 
       try await commitServerConfiguration(server, credential: credential)
+      if existing == nil {
+        MacAppAnalytics.track(.mcpServerCreated)
+      }
 
       var warnings: [String] = []
       if server.isEnabled {
         do {
           _ = try await runtime.refreshServer(server.id, force: true)
+          MacAppAnalytics.track(.mcpDiscoverySucceeded)
         } catch {
+          MacAppAnalytics.track(.mcpDiscoveryFailed)
           warnings.append("Tool discovery failed: \(error.localizedDescription)")
         }
       }

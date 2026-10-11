@@ -221,7 +221,7 @@ struct MacRichMessageView: View {
   private var contextActions: some View {
     if !message.content.isEmpty {
       Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
-        copyToPasteboard(message.content)
+        copyToPasteboard(message.content, dimension: .message)
         copied = true
         Task { @MainActor in
           try? await Task.sleep(for: .seconds(1.2))
@@ -232,7 +232,7 @@ struct MacRichMessageView: View {
 
     if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       Button("Copy Reasoning", systemImage: "brain") {
-        copyToPasteboard(message.reasoning)
+        copyToPasteboard(message.reasoning, dimension: .reasoning)
       }
     }
 
@@ -351,9 +351,11 @@ struct MacRichMessageView: View {
     }
   }
 
-  private func copyToPasteboard(_ value: String) {
+  private func copyToPasteboard(_ value: String, dimension: MacAppAnalytics.Dimension) {
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
+    if NSPasteboard.general.setString(value, forType: .string) {
+      MacAppAnalytics.track(.contentCopied, dimension: dimension)
+    }
   }
 
   private func exportMessage() {

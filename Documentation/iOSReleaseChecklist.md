@@ -48,7 +48,7 @@ This is the release boundary after the shared layer freeze. Do not reopen macOS/
   - purchase grants Pro immediately
   - Restore Purchases works after reinstall/sign-out scenario
   - recurring subscription management link opens correctly
-- [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, saved files per `BYOKProPolicy.freeLibraryItemLimit`, 2 free themes, basic analytics.
+- [ ] Test the free limits: 1 connection, 1 project, 1 MCP server, Midnight as the only free theme, and Today-only analytics with all metrics.
 - [ ] Complete the MCP smoke path below on the intended Release/TestFlight build; opening MCP settings alone is insufficient.
 - [ ] Complete the Library smoke path below on the intended Release/TestFlight build; opening Library alone is insufficient.
 - [ ] Complete the Projects smoke path below on the intended Release/TestFlight build; creating a Project alone is insufficient.
@@ -117,8 +117,8 @@ Code completion does not mark these checks as passed. Record results for the exa
 - [ ] With existing composer attachments, reject an entire selected batch that exceeds 8 attachments, 20 MB per item, or 40 MB total. Confirm no selected originals are loaded for a rejected batch, and a valid batch appends normally.
 - [ ] Save a sent attachment to Library and an assistant response as Markdown. Induce missing-blob/storage failures and confirm one Chat-owned Library alert; dismissing it leaves unrelated errors untouched.
 - [ ] Save remote and embedded response images. Induce fetch/storage failures and confirm one local Save Images alert, with unsaved selections retained for retry and successful saves excluded from retry.
-- [ ] At the current `BYOKProPolicy.freeLibraryItemLimit`, a new attachment save opens the Pro upsell. Repeat saving an already-listed attachment: no duplicate entry or upsell. With one Free slot remaining, overlap saves and confirm only one new entry is committed.
-- [ ] Verify Pro saves are unrestricted by item count; after entitlement loss, existing entries still open, preview, share, and attach.
+- [ ] With Free access, import and save more than 10 Library files through photos, file imports, chat attachments, responses, and Save Images. No Pro upsell appears. Repeat saving an already-listed attachment and overlap saves: no duplicate Library entry.
+- [ ] Verify Library saves are unrestricted by item count regardless of entitlement; existing entries still open, preview, share, and attach.
 - [ ] Open Library with entries from many chats and verify source labels/search match current chat titles without loading chat shards. Deleted source chats fall back to Chat; Open Source Chat keeps its existing behavior.
 - [ ] Delete a Library entry still referenced by a chat and confirm the chat attachment remains available.
 - [ ] Delete the final owner and confirm orphan cleanup eventually removes the blob.
@@ -178,6 +178,7 @@ Deferred to iOS 1.0.1/later: empty Project MCP configuration normalization; earl
 
 The iOS target uses AppFoundation 1.6.4. XcodeGen's `project.yml`, the generated Xcode project, and SwiftPM's resolved revision must agree. Offline verified entitlement caching is intentionally **not enabled**; this migration retains the existing live StoreKit policy.
 
+- [ ] Fresh-install with no theme preference: Midnight is selected. Confirm Paper and every other theme show Pro access; Free users previously using Paper fall back to Midnight once entitlement is resolved.
 - [ ] Cold-launch Free with a previously selected Pro-only theme: show the committed Free theme while entitlements are checking, and remain Free after confirmation without a Pro-theme flash.
 - [ ] Cold-launch with an active monthly, yearly, or lifetime Pro purchase: entitlement resolves to Pro and the saved Pro theme becomes available without manual relaunch. Check this after temporarily failing product-catalog loading.
 - [ ] Downgrade/expire Pro, force-quit, relaunch repeatedly, and verify the Free theme persists; restoring Pro restores the remembered Pro preference. Selecting an explicit Free theme while expired keeps that preference after renewal.

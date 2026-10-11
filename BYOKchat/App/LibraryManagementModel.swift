@@ -15,6 +15,7 @@ final class LibraryManagementModel {
   var onFileReferencesChanged: (() -> Void)?
 
   private let store: LibraryStore
+  private var analyticsRecordedEntryIDs: Set<LibraryEntryID> = []
 
   init(store: LibraryStore) {
     self.store = store
@@ -44,34 +45,44 @@ final class LibraryManagementModel {
     mimeType: String,
     data: Data,
     source: LibraryEntrySource = .manual,
-    hasPro: Bool,
     onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning(onError: onError) {
+    let existingIDs = Set(await store.entries().map(\.id))
+    let entry = await performReturning(onError: onError) {
       try await self.store.add(
         filename: filename,
         mimeType: mimeType,
         data: data,
-        source: source,
-        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
+        source: source
       )
     }
+    if let entry, !existingIDs.contains(entry.id),
+      analyticsRecordedEntryIDs.insert(entry.id).inserted
+    {
+      BYOKAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+    }
+    return entry
   }
 
   @discardableResult
   func addAttachment(
     _ attachment: ChatAttachment,
     source: LibraryEntrySource,
-    hasPro: Bool,
     onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning(onError: onError) {
+    let existingIDs = Set(await store.entries().map(\.id))
+    let entry = await performReturning(onError: onError) {
       try await self.store.addAttachment(
         attachment,
-        source: source,
-        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
+        source: source
       )
     }
+    if let entry, !existingIDs.contains(entry.id),
+      analyticsRecordedEntryIDs.insert(entry.id).inserted
+    {
+      BYOKAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+    }
+    return entry
   }
 
   func rename(_ id: LibraryEntryID, filename: String) async {
@@ -94,19 +105,24 @@ final class LibraryManagementModel {
     mimeType: String,
     byteCount: Int,
     source: LibraryEntrySource,
-    hasPro: Bool,
     onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    await performReturning(onError: onError) {
+    let existingIDs = Set(await store.entries().map(\.id))
+    let entry = await performReturning(onError: onError) {
       try await self.store.ensureListed(
         fileID: fileID,
         filename: filename,
         mimeType: mimeType,
         byteCount: byteCount,
-        source: source,
-        maximumEntryCount: hasPro ? nil : BYOKProPolicy.freeLibraryItemLimit
+        source: source
       )
     }
+    if let entry, !existingIDs.contains(entry.id),
+      analyticsRecordedEntryIDs.insert(entry.id).inserted
+    {
+      BYOKAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+    }
+    return entry
   }
 
   /// Bytes for previews/viewer/share. nil when the blob is missing.

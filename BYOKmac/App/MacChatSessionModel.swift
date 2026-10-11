@@ -609,9 +609,12 @@ final class MacChatSessionModel {
 
     let runtime = self.runtime
     let accumulator = streamAccumulator
+    let initialDimension = MacAppAnalytics.Dimension.provider(summary(conversationID)?.providerID)
     generationTasks[conversationID] = Task.detached(priority: .userInitiated) { [weak self] in
       guard let self else { return }
       var didStartTurn = false
+      var didRecordAnalyticsOutcome = false
+      var analyticsDimension = initialDimension
 
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
@@ -636,7 +639,30 @@ final class MacChatSessionModel {
         }
 
         for try await event in stream {
-          if case .turnStarted = event { didStartTurn = true }
+          if case .turnStarted(let turn) = event, !didStartTurn {
+            didStartTurn = true
+            analyticsDimension = MacAppAnalytics.Dimension.provider(turn.assistantMessage.providerID)
+            await self.trackAcceptedTurn(action, dimension: analyticsDimension)
+          }
+
+          // A terminal runtime event can be followed by a thrown error.
+          // Keep outcome ownership in this consumer so every turn counts once.
+          if !didRecordAnalyticsOutcome {
+            switch event {
+            case .completed(let message):
+              didRecordAnalyticsOutcome = true
+              await MacAppAnalytics.track(.chatTurnCompleted, dimension: .provider(message.providerID))
+              await MacAppAnalytics.trackFirstResponse()
+            case .cancelled(let message):
+              didRecordAnalyticsOutcome = true
+              await MacAppAnalytics.track(.chatTurnCancelled, dimension: .provider(message.providerID))
+            case .failed(let message):
+              didRecordAnalyticsOutcome = true
+              await MacAppAnalytics.track(.chatTurnFailed, dimension: .provider(message.providerID))
+            default:
+              break
+            }
+          }
 
           switch event {
           case .textDelta(let messageID, let value):
@@ -656,12 +682,23 @@ final class MacChatSessionModel {
           }
         }
       } catch is CancellationError {
+        if didStartTurn, !didRecordAnalyticsOutcome {
+          didRecordAnalyticsOutcome = true
+          await MacAppAnalytics.track(.chatTurnCancelled, dimension: analyticsDimension)
+        }
         await self.handleGenerationCancellation(
           conversationID: conversationID,
           action: action,
           didStartTurn: didStartTurn
         )
       } catch {
+        if !didRecordAnalyticsOutcome {
+          didRecordAnalyticsOutcome = true
+          await MacAppAnalytics.track(
+            didStartTurn ? .chatTurnFailed : .chatPreparationFailed,
+            dimension: analyticsDimension
+          )
+        }
         await self.handleGenerationFailure(
           error,
           conversationID: conversationID,
@@ -670,7 +707,34 @@ final class MacChatSessionModel {
         )
       }
 
+      // Cancellation may end the stream without delivering its terminal event.
+      if didStartTurn, !didRecordAnalyticsOutcome {
+        await MacAppAnalytics.track(
+          Task.isCancelled ? .chatTurnCancelled : .chatTurnFailed,
+          dimension: analyticsDimension
+        )
+      }
       await self.finishGeneration(conversationID)
+    }
+  }
+
+  private func trackAcceptedTurn(
+    _ action: GenerationAction,
+    dimension: MacAppAnalytics.Dimension
+  ) {
+    MacAppAnalytics.track(.chatTurnStarted, dimension: dimension)
+    switch action {
+    case .send(_, let attachments):
+      MacAppAnalytics.track(.messageSent)
+      if !attachments.isEmpty {
+        let category: MacAppAnalytics.Dimension = attachments.allSatisfy({ $0.isImage })
+          ? .image : (attachments.contains(where: { $0.isImage }) ? .mixed : .file)
+        MacAppAnalytics.track(.attachmentSent, dimension: category)
+      }
+    case .edit:
+      MacAppAnalytics.track(.messageEdited)
+    case .regenerate:
+      MacAppAnalytics.track(.responseRegenerated)
     }
   }
 
@@ -730,6 +794,7 @@ final class MacChatSessionModel {
       advanceStreamRevision(for: conversationID)
 
     case .toolRound(let messageID, _):
+      MacAppAnalytics.track(.toolRoundCompleted)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       await flushStreamPresentation(messageID, conversationID: conversationID)
       livePresentations.removeValue(forKey: messageID)?.cancelPendingRenders()

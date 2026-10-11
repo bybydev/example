@@ -407,7 +407,9 @@ struct MacHighlightedCodeBlock: View {
 
   private func copyCode() {
     NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(content, forType: .string)
+    if NSPasteboard.general.setString(content, forType: .string) {
+      MacAppAnalytics.track(.contentCopied, dimension: .code)
+    }
     copied = true
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(1.2))
@@ -521,7 +523,9 @@ private struct MacFullScreenCodeView: View {
         .help("Share code")
         Button("Copy", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(content, forType: .string)
+          if NSPasteboard.general.setString(content, forType: .string) {
+            MacAppAnalytics.track(.contentCopied, dimension: .code)
+          }
         }
         .labelStyle(.iconOnly)
         Button("Done") { dismiss() }
@@ -583,7 +587,9 @@ struct MacMermaidAnswerView: View {
         .labelStyle(.iconOnly)
         Button("Copy", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(source, forType: .string)
+          if NSPasteboard.general.setString(source, forType: .string) {
+            MacAppAnalytics.track(.contentCopied, dimension: .diagram)
+          }
         }
         .labelStyle(.iconOnly)
       }
@@ -658,7 +664,9 @@ private struct MacFullScreenMermaidView: View {
         }
         Button("Copy", systemImage: "doc.on.doc") {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(source, forType: .string)
+          if NSPasteboard.general.setString(source, forType: .string) {
+            MacAppAnalytics.track(.contentCopied, dimension: .diagram)
+          }
         }
         .labelStyle(.iconOnly)
         Button("Done") { dismiss() }

@@ -24,7 +24,6 @@ public enum BYOKProPolicy: Sendable {
   public static let freeProviderAccountLimit = 1
   public static let freeProjectLimit = 1
   public static let freeMCPServerLimit = 1
-  public static let freeLibraryItemLimit = 10
 
   public static func canUseTheme(at index: Int, hasPro: Bool) -> Bool {
     hasPro || (index >= 0 && index < freeThemeCount)
@@ -42,12 +41,4 @@ public enum BYOKProPolicy: Sendable {
     hasPro || currentCount < freeMCPServerLimit
   }
 
-  public static func canCreateLibraryItem(currentCount: Int, hasPro: Bool) -> Bool {
-    hasPro || currentCount < freeLibraryItemLimit
-  }
-
-  public static func remainingLibraryCapacity(currentCount: Int, hasPro: Bool) -> Int? {
-    guard !hasPro else { return nil }
-    return max(0, freeLibraryItemLimit - currentCount)
-  }
 }

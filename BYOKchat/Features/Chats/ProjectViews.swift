@@ -47,16 +47,25 @@ struct ProjectIconView: View {
 struct ConversationProjectMenu: View {
   let conversationID: ConversationID
   let projects: ProjectManagementModel
+  @Environment(BYOKToastCenter.self) private var toastCenter
 
   var body: some View {
     if let current = projects.project(for: conversationID) {
       Button("Remove from \(current.name)", systemImage: "folder.badge.minus") {
-        Task { await projects.removeConversation(conversationID) }
+        Task {
+          if await projects.removeConversation(conversationID) {
+            toastCenter.success("Removed from \(current.name)")
+          }
+        }
       }
       Menu("Move to Project…", systemImage: "folder.badge.plus") {
         ForEach(projects.projects.filter { $0.id != current.id }) { project in
           Button(project.name) {
-            Task { await projects.assignConversation(conversationID, to: project.id) }
+            Task {
+              if await projects.assignConversation(conversationID, to: project.id) {
+                toastCenter.success("Moved to \(project.name)")
+              }
+            }
           }
         }
       }
@@ -66,7 +75,11 @@ struct ConversationProjectMenu: View {
       Menu("Add to Project…", systemImage: "folder.badge.plus") {
         ForEach(projects.projects) { project in
           Button(project.name) {
-            Task { await projects.assignConversation(conversationID, to: project.id) }
+            Task {
+              if await projects.assignConversation(conversationID, to: project.id) {
+                toastCenter.success("Moved to \(project.name)")
+              }
+            }
           }
         }
       }

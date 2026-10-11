@@ -28,11 +28,7 @@ struct ReasoningSheet: View {
           Button("Close") { dismiss() }
         }
         ToolbarItem(placement: .primaryAction) {
-          Button("Copy", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = reasoning
-          }
-          .labelStyle(.iconOnly)
-          .accessibilityLabel("Copy reasoning")
+          CopyButton(text: reasoning, accessibilityTitle: "Copy reasoning", size: .toolbar, analyticsDimension: .reasoning)
         }
       }
     }

@@ -208,3 +208,41 @@ Permanent regression suites cover:
 - MCP transport and tool lifecycle instrumentation without arguments, results, credentials, endpoints, or response bodies leaking into telemetry
 
 These tests are organized by responsibility rather than by implementation milestone so they remain useful as the telemetry system evolves.
+
+## Shared product analytics
+
+The iOS app also uses AppFoundation 1.6.4 for first-party product counters. One app-scoped client is shared between lifecycle tracking, the automatic Pro paywall funnel, and the typed `BYOKAppAnalytics` app events. It uses the Mac app’s app ID `byokchat`, runtime bundle identifier as app key, and server `https://analytics.133043.xyz`, with a one-minute upload interval on iOS. AppFoundation reports the platform as iOS.
+
+Both apps use the canonical `BYOKProductAnalyticsEvent` and `BYOKProductAnalyticsDimension` types in `Sources/BYOKchatProviderCore/BYOKProductAnalytics.swift`. `BYOKAppAnalytics` and `MacAppAnalytics` alias those types; event strings are never declared separately by platform. Mac uses its existing MacAppFoundation client and five-minute upload interval. The same 24 product event names and fixed dimension values are emitted for corresponding actions on both platforms.
+
+These events describe product adoption and outcomes. They do not upload the local SQLite telemetry database, chat usage receipts, prompts, responses, reasoning, attachment contents, resource IDs, provider/model IDs, custom names, URLs, credentials, or raw errors. Dimensions are fixed enum values only. Built-in provider kinds are mapped to a bounded brand token; every custom connection maps to `custom`. The SDK adds its existing bounded installation/session/runtime context.
+
+| Event | Trigger | Dimension |
+| --- | --- | --- |
+| `onboarding_completed` | Onboarding changes incomplete to complete; replay does not count | None |
+| `connection_created` | New provider account and model configuration successfully saved | Built-in provider kind or `custom` |
+| `connection_test_succeeded`, `connection_test_failed` | Explicit saved-account connection test returns its outcome | Provider kind or `custom` |
+| `chat_turn_started` | Runtime starts an accepted, persisted turn | Provider kind or `custom` |
+| `message_sent` | A new user message reaches that accepted turn | None |
+| `message_edited`, `response_regenerated` | Edit/resend or regeneration reaches an accepted turn | None |
+| `attachment_sent` | An accepted new message contains attachments | `image`, `file`, or `mixed` |
+| `chat_turn_completed`, `chat_turn_failed`, `chat_turn_cancelled` | Final generation outcome; recorded once, including throw/cancellation fallbacks | Provider kind or `custom` |
+| `chat_preparation_failed` | Generation throws before a turn starts | Provider kind or `custom` |
+| `first_response_completed` | First successful persisted response observed by this instrumentation | None; once using an installation-local UserDefaults flag |
+| `tool_round_completed` | A tool round is recorded by the runtime, regardless of individual tool outcomes | None |
+| `project_created` | Project creation succeeds | None |
+| `library_item_saved` | A new Library entry is successfully saved | `image` or `file` |
+| `mcp_server_created` | A new MCP server configuration is successfully saved | None |
+| `mcp_discovery_succeeded`, `mcp_discovery_failed` | Post-save MCP discovery returns its outcome | None |
+| `content_copied` | App copy action writes to the clipboard (iOS shared button; Mac message/reasoning, code, and diagram actions) | `message`, `code`, `diagram`, or `reasoning` |
+| `feature_opened` | Explicit feature navigation; iOS also records chat-sheet Analytics openings | `providers`, `library`, `projects`, `mcp`, `analytics`, or `settings` |
+| `analytics_range_selected` | An unlocked date range actually changes | `today`, `7d`, `30d`, `month`, or `all` |
+| `upgrade_requested` | A Pro feature upsell is first presented | `themes`, `providers`, `projects`, `mcp`, or `analytics_history` |
+
+Mac hooks record the same accepted-turn, terminal-outcome, resource-save, and post-save discovery boundaries as iOS. Mac workspace mutations are serialized by their existing busy guard; an existing Library entry does not count as a new save. Mac navigation records utility-sheet transitions and Settings appearances. Mac upsells record the feature gate request or explicit locked-feature upgrade button.
+
+A failed attempt to create or save a resource is never counted as a successful creation/save. Repeated `ensureListed` calls for an existing Library entry do not count as new saves, and concurrent completions for the same entry are deduplicated within the model. An inline terminal chat event followed by a thrown error counts once. Opening a blank chat without sending is not a chat-start or activation event.
+
+App events are queued serially and submitted asynchronously so event recording does not block user actions. Tracking errors are absorbed. SDK day/count/retention limits still apply. In Debug builds, iOS XCTest hosts and screenshot-fixture runs disable the analytics client and event/activation bookkeeping. Mac XCTest hosts skip these product events and activation bookkeeping; the existing Mac SDK lifecycle/error configuration is preserved.
+
+The 12 common purchase/restore/paywall event names already match between AppFoundation 1.6.4 and MacAppFoundation 1.5.0. MacAppFoundation additionally owns Mac-only offer-code events. Session/install accounting and these commerce events remain owned by AppFoundation and MacAppFoundation; the app does not duplicate those events. The existing in-app Analytics screen continues to derive usage and performance from local chat/telemetry stores.

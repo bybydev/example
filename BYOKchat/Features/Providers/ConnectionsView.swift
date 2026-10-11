@@ -17,24 +17,9 @@ struct ProvidersView: View {
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
-  @State private var editorMode: EditorMode?
+  @State private var showAddConnection = false
   @State private var showProUpsell = false
-  @State private var didAutoPresentSetup = false
-
-  /// Which editor presentation is active. Create mode is distinguished from a
-  /// repair deep-link (prefilled kind + focused field).
-  enum EditorMode: Identifiable {
-    case create(kind: ProviderKind?, focus: ConnectionEditorView.FocusRequest?)
-    case edit(accountID: ProviderAccountID)
-
-    var id: String {
-      switch self {
-      case .create(let kind, let focus):
-        "create-\(kind.map { $0.rawValue } ?? "any")-\(focus.map { "\($0)" } ?? "none")"
-      case .edit(let id): "edit-\(id.rawValue)"
-      }
-    }
-  }
+  @State private var didHandleInitialSetup = false
 
   init(
     model: ProviderManagementModel,
@@ -76,31 +61,20 @@ struct ProvidersView: View {
       if model.definitions.isEmpty {
         await model.load()
       }
+      // Automatic setup is for an initially empty list, not deleting the last
+      // account while an existing connection editor is being popped.
+      if !model.accounts.isEmpty { didHandleInitialSetup = true }
       autoPresentSetupIfNeeded()
     }
     .onChange(of: model.accounts.count) { _, _ in
       autoPresentSetupIfNeeded()
     }
-    .sheet(item: $editorMode) { mode in
+    .sheet(isPresented: $showAddConnection) {
       NavigationStack {
-        switch mode {
-        case .create(let kind, let focus):
-          ConnectionEditorView(
-            model: model,
-            existing: nil,
-            initialKind: kind,
-            focus: focus,
-            onFinished: finishConnectionSetup
-          )
-        case .edit(let accountID):
-          ConnectionEditorView(
-            model: model,
-            existing: model.accounts.first { $0.id == accountID },
-            initialKind: nil,
-            focus: nil,
-            onFinished: nil
-          )
-        }
+        ConnectionEditorView(
+          model: model,
+          onFinished: finishConnectionSetup
+        )
       }
       .presentationDragIndicator(.visible)
     }
@@ -125,21 +99,23 @@ struct ProvidersView: View {
       ForEach(model.accounts) { account in
         connectionLink(account)
       }
-      .listRowBackground(theme.surfaceColor)
+      .listRowBackground(Color.clear)
+      .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+      .listRowSeparatorTint(theme.borderColor)
     }
-    .listStyle(.insetGrouped)
+    .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .refreshable { await model.load() }
   }
 
   @ViewBuilder
   private func connectionLink(_ account: ProviderAccount) -> some View {
-    Button {
-      editorMode = .edit(accountID: account.id)
+    NavigationLink {
+      ConnectionEditorView(model: model, existing: account)
     } label: {
       ProviderRow(model: model, account: account)
     }
-    .buttonStyle(.plain)
+    .accessibilityHint("Edit connection.")
   }
 
   private var emptyState: some View {
@@ -156,16 +132,16 @@ struct ProvidersView: View {
   private func autoPresentSetupIfNeeded() {
     guard onConnectionReady != nil,
       model.accounts.isEmpty,
-      !didAutoPresentSetup,
-      editorMode == nil
+      !didHandleInitialSetup,
+      !showAddConnection
     else { return }
-    didAutoPresentSetup = true
+    didHandleInitialSetup = true
     addConnection()
   }
 
   private func finishConnectionSetup() {
     guard onConnectionReady != nil else { return }
-    editorMode = nil
+    showAddConnection = false
     Task { @MainActor in
       await Task.yield()
       dismiss()
@@ -177,7 +153,7 @@ struct ProvidersView: View {
       currentCount: model.accounts.count,
       hasPro: purchaseManager.hasPro
     ) {
-      editorMode = .create(kind: nil, focus: nil)
+      showAddConnection = true
     } else {
       showProUpsell = true
     }
@@ -215,9 +191,16 @@ private struct ProviderRow: View {
     HStack(spacing: 14) {
       ConnectionProviderMark(definition: provider, size: 44)
       VStack(alignment: .leading, spacing: 4) {
-        Text(rowTitle)
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(theme.primaryForegroundColor)
+        HStack(spacing: 7) {
+          Text(rowTitle)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .lineLimit(1)
+          Circle()
+            .fill(status.isReady ? theme.accentColor : Color.secondary)
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+        }
         HStack(spacing: 5) {
           if status.isReady, let modelID = account.defaultModelID {
             Text(modelDisplayName(model: model, accountID: account.id, modelID: modelID))
@@ -230,11 +213,10 @@ private struct ProviderRow: View {
         .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer(minLength: 8)
-      Circle()
-        .fill(status.isReady ? theme.accentColor : Color.secondary)
-        .frame(width: 7, height: 7)
     }
     .padding(.vertical, 2)
     .contentShape(Rectangle())
+    .accessibilityElement(children: .combine)
+    .accessibilityValue(status.isReady ? "Ready" : "")
   }
 }

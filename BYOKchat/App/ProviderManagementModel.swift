@@ -124,6 +124,7 @@ final class ProviderManagementModel {
         markRefreshed: discoveredModels != nil
       )
       try await reloadSnapshot()
+      BYOKAppAnalytics.track(.connectionCreated, dimension: .init(providerKind: kind))
       return account.id
     } catch {
       if let createdAccountID {
@@ -300,9 +301,15 @@ final class ProviderManagementModel {
   }
 
   func testConnectionResult(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
-    await performResult() {
+    let kind = accounts.first(where: { $0.id == accountID })?.kind ?? .openAICompatible
+    let succeeded = await performResult() {
       try await runtime.testConnection(accountID: accountID, modelID: modelID)
     }
+    BYOKAppAnalytics.track(
+      succeeded ? .connectionTestSucceeded : .connectionTestFailed,
+      dimension: .init(providerKind: kind)
+    )
+    return succeeded
   }
 
   /// Discovery uses the editor's endpoint/headers/auth draft in either mode.

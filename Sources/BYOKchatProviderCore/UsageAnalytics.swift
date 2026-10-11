@@ -9,6 +9,14 @@ public enum UsageAnalyticsRange: String, CaseIterable, Hashable, Identifiable, S
 
   public var id: String { rawValue }
 
+  /// All metrics are free for Today; historical ranges require Pro.
+  public var requiresPro: Bool { self != .today }
+
+  /// Clamp stale selections when an entitlement changes.
+  public func accessible(hasPro: Bool) -> UsageAnalyticsRange {
+    hasPro ? self : .today
+  }
+
   public var label: String {
     switch self {
     case .today: "Today"

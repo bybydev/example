@@ -1,3 +1,4 @@
+import AppFoundation
 import Foundation
 import Testing
 
@@ -27,17 +28,65 @@ struct BYOKProAccessTests {
   }
 
   @MainActor
-  @Test("Only Paper and Midnight are free themes")
+  @Test("Midnight is the only free theme and the default")
   func freeThemes() {
-    #expect(BYOKchatThemes.catalog.freeThemes.map(\.id) == ["paper", "midnight"])
-    #expect(BYOKchatThemes.catalog.proThemes.count == 8)
+    #expect(BYOKchatThemes.catalog.freeThemes.map(\.id) == ["midnight"])
+    #expect(BYOKchatThemes.catalog.proThemes.count == 9)
+    #expect(BYOKchatThemes.catalog.fallbackThemeID == "midnight")
+    #expect(BYOKProAccess.freeThemeCount == 1)
+  }
+
+  @MainActor
+  @Test("Theme defaults and saved Paper selections respect the new Free access")
+  func midnightDefaultAndPaperAccess() {
+    let suite = "BYOKProAccessTests.midnight.\(UUID().uuidString)"
+    defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+    let store = UserDefaultsThemeStateStore(storageKey: "theme", suiteName: suite)
+    let fresh = ThemeManager(
+      catalog: BYOKchatThemes.catalog,
+      stateStore: store,
+      hasPro: false,
+      previewBehavior: .disabled
+    )
+    #expect(fresh.effectiveTheme.id == "midnight")
+
+    for hasPro in [false, true] {
+      store.save(ThemeStoredState(
+        selectedThemeID: "paper",
+        lastKnownHasPro: hasPro,
+        committedThemeID: "paper"
+      ))
+      let themes = ThemeManager(
+        catalog: BYOKchatThemes.catalog,
+        stateStore: store,
+        hasPro: hasPro,
+        previewBehavior: .disabled
+      )
+      #expect(themes.effectiveTheme.id == (hasPro ? "paper" : "midnight"))
+    }
   }
 
   @Test("Feature comparison reflects analytics history entitlement")
   func comparisonRows() {
-    #expect(BYOKProAccess.comparisonRows.count == 6)
-    #expect(BYOKProAccess.comparisonRows.map(\.freeValue) == ["2", "1", "1", "1", "10", "Today"])
-    #expect(BYOKProAccess.comparisonRows.map(\.proValue) == ["All themes", "Unlimited", "Unlimited", "Unlimited", "Unlimited", "All date ranges"])
+    #expect(BYOKProAccess.comparisonRows.count == 5)
+    #expect(BYOKProAccess.comparisonRows.map(\.freeValue) == ["1", "1", "1", "Today", "Midnight"])
+    #expect(BYOKProAccess.comparisonRows.map(\.proValue) == ["Unlimited", "Unlimited", "Unlimited", "All date ranges", "All themes"])
+  }
+
+  @MainActor
+  @Test("Purchase manager provides all five features to Compare Plans and other Pro surfaces")
+  func sharedPurchaseFeatureCatalog() {
+    let manager = BYOKPurchaseStore().manager
+    #expect(manager.features == BYOKProAccess.features)
+    #expect(manager.features.map(\.id) == [
+      "provider-accounts", "projects", "mcp-servers", "analytics-history", "themes",
+    ])
+    #expect(manager.features.map(\.freeValue) == ["1", "1", "1", "Today", "Midnight"])
+    #expect(manager.features.map(\.proValue) == [
+      "Unlimited", "Unlimited", "Unlimited", "All date ranges", "All themes",
+    ])
+    #expect(BYOKPurchaseStore.paywallConfiguration.features.isEmpty)
+    #expect(BYOKProFeature.projects.upsellConfiguration.rows.isEmpty)
   }
 
   @Test("Free analytics always resolves to today even with a stale historical selection")
@@ -61,7 +110,9 @@ struct BYOKProAccessTests {
   @MainActor
   @Test("AppFoundation 1.6.4 preserves simulated subscription and lifetime product types")
   func simulatedPurchasePlanTypes() {
-    let products = BYOKPurchaseStore.makeScreenshotPreviewManager().products
+    let manager = BYOKPurchaseStore.makeScreenshotPreviewManager()
+    #expect(manager.features == BYOKProAccess.features)
+    let products = manager.products
     #expect(products.count == 3)
     #expect(products.first(where: { $0.id == BYOKPurchaseStore.monthlyProductID })?.type == .autoRenewable)
     #expect(products.first(where: { $0.id == BYOKPurchaseStore.yearlyProductID })?.type == .autoRenewable)

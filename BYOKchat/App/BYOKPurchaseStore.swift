@@ -12,6 +12,12 @@ final class BYOKPurchaseStore {
   static let simulatedModeKey = "byokchat.developer.simulatedPurchases"
   #endif
 
+  static let purchaseConfiguration = PurchaseConfiguration(
+    productIDs: BYOKProCatalog.productIDs,
+    preferredProductID: BYOKProCatalog.preferredProductID,
+    features: BYOKProAccess.features
+  )
+
   let manager: PurchaseManager
 
   init() {
@@ -22,10 +28,7 @@ final class BYOKPurchaseStore {
     #endif
 
     manager = PurchaseManager(
-      configuration: PurchaseConfiguration(
-        productIDs: BYOKProCatalog.productIDs,
-        preferredProductID: BYOKProCatalog.preferredProductID
-      ),
+      configuration: Self.purchaseConfiguration,
       simulated: startsSimulated,
       simulatedProducts: Self.simulatedProducts,
       simulatedPersistenceKey: "byokchat.simulatedPurchases"
@@ -41,10 +44,7 @@ final class BYOKPurchaseStore {
   #if DEBUG
   static func makeScreenshotPreviewManager() -> PurchaseManager {
     PurchaseManager.screenshotPreview(
-      configuration: PurchaseConfiguration(
-        productIDs: BYOKProCatalog.productIDs,
-        preferredProductID: BYOKProCatalog.preferredProductID
-      ),
+      configuration: Self.purchaseConfiguration,
       products: simulatedProducts
     )
   }
@@ -54,38 +54,6 @@ final class BYOKPurchaseStore {
     badge: "BYOK PRO",
     title: "Upgrade to BYOK Pro",
     subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
-    features: [
-      FoundationPaywallFeature(
-        id: "themes",
-        systemImage: "paintpalette.fill",
-        title: "All themes",
-        message: "Free includes 2 themes. Pro unlocks the complete theme collection."
-      ),
-      FoundationPaywallFeature(
-        id: "provider-accounts",
-        systemImage: "key.horizontal.fill",
-        title: "Unlimited provider accounts",
-        message: "Connect as many provider accounts as you need instead of the single free account."
-      ),
-      FoundationPaywallFeature(
-        id: "projects",
-        systemImage: "folder.fill",
-        title: "Unlimited projects",
-        message: "Organize chats, files, prompts, models, and tools across unlimited projects."
-      ),
-      FoundationPaywallFeature(
-        id: "mcp-servers",
-        systemImage: "shippingbox.fill",
-        title: "Unlimited MCP servers",
-        message: "Connect unlimited remote MCP servers instead of the single free server."
-      ),
-      FoundationPaywallFeature(
-        id: "analytics-history",
-        systemImage: "chart.bar.xaxis",
-        title: "Full analytics history",
-        message: "All analytics features are free for today. Pro unlocks 7-day, 30-day, monthly, and all-time history."
-      ),
-    ],
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
     privacyURL: URL(string: "https://byok.pro/privacy")!,

@@ -81,7 +81,6 @@ struct ChatView: View {
   @State var showFileImporter = false
   @State var showLibraryPicker = false
   @State var libraryErrorMessage: String?
-  @State var showLibraryUpsell = false
 
   init(
     subject: ChatSubject,
@@ -178,9 +177,6 @@ struct ChatView: View {
       }
       .presentationDragIndicator(.visible)
     }
-    .sheet(isPresented: $showLibraryUpsell) {
-      BYOKProUpsellFlow(feature: .libraryItems)
-    }
     .alert("Library Error", isPresented: Binding(
       get: { libraryErrorMessage != nil },
       set: { if !$0 { libraryErrorMessage = nil } }
@@ -194,11 +190,7 @@ struct ChatView: View {
   /// Message actions report only to this chat; root and LibraryView errors
   /// remain untouched. Save Images owns its errors while its sheet is active.
   func handleLibraryError(_ error: Error) {
-    if error is LibraryCapacityError {
-      showLibraryUpsell = true
-    } else {
-      libraryErrorMessage = error.localizedDescription
-    }
+    libraryErrorMessage = error.localizedDescription
   }
 
   /// The persisted-conversation surface. Everything here assumes the store

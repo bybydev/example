@@ -1,5 +1,6 @@
 import BYOKchatProviderCore
 import Foundation
+import MacAppFoundation
 import Observation
 import SwiftUI
 
@@ -72,12 +73,28 @@ enum MacAnalyticsWorkspaceSection: String, CaseIterable, Identifiable {
 
 struct MacAnalyticsView: View {
   @State private var analytics: MacAnalyticsModel
-  @State private var range: UsageAnalyticsRange = .month
+  @State private var range: UsageAnalyticsRange = .today
   @State private var section: MacAnalyticsWorkspaceSection = .overview
   @State private var selectedConversationID: String?
   @State private var conversationSearchText = ""
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
+
+  @Environment(PurchaseManager.self) private var purchaseManager
+
+  /// Every aggregate uses this range, including stale selections after downgrade.
+  private var accessibleRange: UsageAnalyticsRange {
+    range.accessible(hasPro: purchaseManager.hasPro)
+  }
+
+  private var filteredTelemetryEvents: [TelemetryEvent] {
+    let startDate = accessibleRange.startDate(reference: .now)
+    return analytics.telemetryEvents.filter { event in
+      guard event.dataClass == .analytics else { return false }
+      guard let startDate else { return true }
+      return event.timestamp >= startDate
+    }
+  }
 
   init(services: BYOKCoreServices) {
     _analytics = State(initialValue: MacAnalyticsModel(services: services))
@@ -118,6 +135,13 @@ struct MacAnalyticsView: View {
     .frame(minWidth: 920, minHeight: 620)
     .background(MacDesignTokens.Colors.canvas)
     .task { await analytics.load() }
+    .onChange(of: range) { oldRange, newRange in
+      guard oldRange != newRange else { return }
+      MacAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: accessibleRange))
+    }
+    .onChange(of: purchaseManager.hasPro) { _, hasPro in
+      if !hasPro { range = .today }
+    }
     .onChange(of: analytics.conversations.map(\.id.rawValue)) { _, ids in
       if let selectedConversationID, !ids.contains(selectedConversationID) {
         self.selectedConversationID = nil
@@ -149,15 +173,16 @@ struct MacAnalyticsView: View {
 
       Spacer()
 
-      Picker("Range", selection: $range) {
+      Menu {
         ForEach(UsageAnalyticsRange.allCases) { value in
-          Text(value.label).tag(value)
+          rangeMenuButton(for: value)
         }
+      } label: {
+        Text(accessibleRange.label)
       }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .frame(width: 320)
-      .accessibilityLabel("Analytics range")
+      .menuIndicator(.hidden)
+      .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
+      .accessibilityHint("Choose the analytics date range.")
 
       Button {
         Task { await analytics.load() }
@@ -171,6 +196,28 @@ struct MacAnalyticsView: View {
     .background(MacDesignTokens.Colors.surface.opacity(0.45))
   }
 
+  private func rangeMenuButton(for value: UsageAnalyticsRange) -> some View {
+    let locked = value.requiresPro && !purchaseManager.hasPro
+    let selected = accessibleRange == value
+
+    return Button {
+      if locked {
+        MacProAccess.requestUpgrade(.analytics)
+      } else {
+        range = value
+      }
+    } label: {
+      if locked {
+        Label(value.label, systemImage: "lock.fill")
+      } else if selected {
+        Label(value.label, systemImage: "checkmark")
+      } else {
+        Text(value.label)
+      }
+    }
+    .disabled(locked && purchaseManager.entitlementState == .checking)
+  }
+
   private var loadingView: some View {
     VStack(spacing: 12) {
       ProgressView()
@@ -182,14 +229,14 @@ struct MacAnalyticsView: View {
   }
 
   private var overview: some View {
-    let snapshot = analytics.snapshot(range: range)
-    let month = analytics.snapshot(range: .month)
+    let snapshot = analytics.snapshot(range: accessibleRange)
+    let budget = analytics.snapshot(range: UsageAnalyticsRange.month.accessible(hasPro: purchaseManager.hasPro))
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         analyticsHeading(
           title: "Usage",
-          subtitle: "Local usage and spend for \(range.label.lowercased())."
+          subtitle: "Local usage and spend for \(accessibleRange.label.lowercased())."
         )
 
         MacAnalyticsMetricGrid(
@@ -243,7 +290,7 @@ struct MacAnalyticsView: View {
             }
           }
 
-          budgetCard(month.aggregate)
+          budgetCard(budget.aggregate)
           localAnalyticsCard
         }
       }
@@ -302,7 +349,7 @@ struct MacAnalyticsView: View {
   }
 
   private func conversationCard(_ conversation: ChatConversation) -> some View {
-    let snapshot = analytics.conversationSnapshot(conversation, range: range)
+    let snapshot = analytics.conversationSnapshot(conversation, range: accessibleRange)
     let totalTokens = snapshot.aggregate.inputTokens + snapshot.aggregate.outputTokens
     let title = conversation.title.isEmpty ? "New Chat" : conversation.title
 
@@ -357,14 +404,14 @@ struct MacAnalyticsView: View {
   }
 
   private func conversationDetail(_ conversation: ChatConversation) -> some View {
-    let snapshot = analytics.conversationSnapshot(conversation, range: range)
+    let snapshot = analytics.conversationSnapshot(conversation, range: accessibleRange)
     let title = conversation.title.isEmpty ? "New Chat" : conversation.title
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         analyticsHeading(
           title: title,
-          subtitle: "Conversation analytics · \(range.label) · updated \(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))"
+          subtitle: "Conversation analytics · \(accessibleRange.label) · updated \(conversation.updatedAt.formatted(date: .abbreviated, time: .shortened))"
         )
 
         MacAnalyticsMetricGrid(
@@ -503,7 +550,7 @@ struct MacAnalyticsView: View {
 
         if monthlyBudgetUSD > 0 {
           ProgressView(value: budgetProgress(aggregate))
-          MacAnalyticsLabeledRow("This Month", value: macUsageAggregateCost(aggregate))
+          MacAnalyticsLabeledRow(purchaseManager.hasPro ? "This Month" : "Today Only", value: macUsageAggregateCost(aggregate))
           if budgetWarningReached(aggregate) {
             Label("Budget warning threshold reached", systemImage: "exclamationmark.triangle.fill")
               .foregroundStyle(.orange)
@@ -511,7 +558,9 @@ struct MacAnalyticsView: View {
           }
         }
 
-        Text("This local warning does not change provider-side spending limits or include API-key usage from other apps.")
+        Text(purchaseManager.hasPro
+          ? "This local warning does not change provider-side spending limits or include API-key usage from other apps."
+          : "Free evaluates this monthly threshold using today's saved usage only. Earlier days are excluded, so warnings may underestimate monthly spending. Pro includes the complete month. This does not change provider spending limits.")
           .font(.caption)
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -522,7 +571,7 @@ struct MacAnalyticsView: View {
   private var localAnalyticsCard: some View {
     MacAnalyticsSection(title: "Local Analytics", symbol: "internaldrive") {
       VStack(spacing: 9) {
-        MacAnalyticsLabeledRow("Telemetry Events", value: analytics.statistics.analyticsEventCount.formatted())
+        MacAnalyticsLabeledRow("Telemetry Events", value: filteredTelemetryEvents.count.formatted())
         if analytics.statistics.databaseBytes > 0 {
           MacAnalyticsLabeledRow(
             "Local Database",
@@ -552,6 +601,9 @@ struct MacAnalyticsView: View {
   }
 
   private var telemetryFootnote: String {
+    if !purchaseManager.hasPro {
+      return "Only today's local telemetry is shown. Historical ranges require Pro. Events are retained on device for up to 30 days by default; saved usage remains with your conversations."
+    }
     if analytics.statistics.eventCount > analytics.telemetryEvents.count {
       let limit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
       return "Performance and reliability use the latest \(limit) local telemetry events. Usage and spend are reconstructed from persisted conversation history and remain available if telemetry is cleared."

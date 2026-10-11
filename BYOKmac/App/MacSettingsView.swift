@@ -1,3 +1,4 @@
+import BYOKchatProviderCore
 import MacAppFoundation
 import SwiftUI
 
@@ -25,7 +26,10 @@ struct MacSettingsView: View {
     .frame(minWidth: 900, idealWidth: 940, minHeight: 620, idealHeight: 660)
     .background(MacDesignTokens.Colors.canvas)
     .groupBoxStyle(MacSettingsGroupBoxStyle())
-    .onAppear(perform: consumeRouterRequest)
+    .onAppear {
+      consumeRouterRequest()
+      MacAppAnalytics.track(.featureOpened, dimension: .settings)
+    }
     .onChange(of: settingsRouter.requestID) { _, _ in
       consumeRouterRequest()
     }
@@ -127,7 +131,10 @@ struct MacSettingsView: View {
         themeStore: model.themeStore,
         purchaseManager: purchaseManager,
         variant: .compact,
-        onUpgrade: { openWindow(id: MacWindowID.proPaywall) }
+        onUpgrade: {
+          MacAppAnalytics.track(.upgradeRequested, dimension: .themes)
+          openWindow(id: MacWindowID.proPaywall)
+        }
       )
     case .connections:
       MacConnectionSettingsView(model: model)

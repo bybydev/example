@@ -18,7 +18,6 @@ struct BYOKProPolicyTests {
     #expect(BYOKProPolicy.freeProviderAccountLimit == 1)
     #expect(BYOKProPolicy.freeProjectLimit == 1)
     #expect(BYOKProPolicy.freeMCPServerLimit == 1)
-    #expect(BYOKProPolicy.freeLibraryItemLimit == 10)
   }
 
   @Test("Creation becomes unlimited with Pro")
@@ -26,18 +25,9 @@ struct BYOKProPolicyTests {
     #expect(!BYOKProPolicy.canCreateProviderAccount(currentCount: 1, hasPro: false))
     #expect(!BYOKProPolicy.canCreateProject(currentCount: 1, hasPro: false))
     #expect(!BYOKProPolicy.canCreateMCPServer(currentCount: 1, hasPro: false))
-    #expect(!BYOKProPolicy.canCreateLibraryItem(currentCount: 10, hasPro: false))
 
     #expect(BYOKProPolicy.canCreateProviderAccount(currentCount: 100, hasPro: true))
     #expect(BYOKProPolicy.canCreateProject(currentCount: 100, hasPro: true))
     #expect(BYOKProPolicy.canCreateMCPServer(currentCount: 100, hasPro: true))
-    #expect(BYOKProPolicy.canCreateLibraryItem(currentCount: 100, hasPro: true))
-  }
-
-  @Test("Library capacity is bounded only for Free")
-  func libraryCapacity() {
-    #expect(BYOKProPolicy.remainingLibraryCapacity(currentCount: 7, hasPro: false) == 3)
-    #expect(BYOKProPolicy.remainingLibraryCapacity(currentCount: 10, hasPro: false) == 0)
-    #expect(BYOKProPolicy.remainingLibraryCapacity(currentCount: 100, hasPro: true) == nil)
   }
 }

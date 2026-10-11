@@ -200,6 +200,7 @@ final class MacProviderModel {
       MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       errorMessage = "Connection was saved, but the provider list could not refresh: \(error.localizedDescription)"
     }
+    MacAppAnalytics.track(.connectionCreated, dimension: .init(providerKind: kind))
     return account.id
   }
 
@@ -377,7 +378,7 @@ final class MacProviderModel {
 
   func testConnection(accountID: ProviderAccountID, modelID: ModelID?) async -> Bool {
     guard requireProviderAccess(accountID) else { return false }
-    return await performResult {
+    let succeeded = await performResult {
       let selectedModelID: ModelID
       if let modelID {
         guard models(for: accountID).contains(where: { $0.model.id == modelID && $0.isAvailable }) else {
@@ -391,6 +392,11 @@ final class MacProviderModel {
       }
       try await runtime.testConnection(accountID: accountID, modelID: selectedModelID)
     }
+    MacAppAnalytics.track(
+      succeeded ? .connectionTestSucceeded : .connectionTestFailed,
+      dimension: .init(providerKind: account(accountID)?.kind ?? .openAICompatible)
+    )
+    return succeeded
   }
 
   func revealCredential(accountID: ProviderAccountID) async -> String? {

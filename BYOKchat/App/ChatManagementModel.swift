@@ -727,6 +727,7 @@ final class ChatManagementModel {
       guard let self else { return }
       var didReceiveInlineFailure = false
       var reportedPersistence = false
+      var didRecordAnalyticsOutcome = false
       let previousUserCount = conversations.first(where: { $0.id == conversationID })?
         .messages.filter { $0.role == .user }.count ?? 0
       defer {
@@ -770,6 +771,46 @@ final class ChatManagementModel {
             reportedPersistence = true
             finishSendPreparation(conversationID, committed: true, action: action)
             onMessagePersisted?(true)
+            if case .turnStarted(let turn) = event {
+              BYOKAppAnalytics.track(
+                .chatTurnStarted, dimension: .provider(turn.assistantMessage.providerID)
+              )
+            }
+            switch action {
+            case .send(_, let attachments):
+              BYOKAppAnalytics.track(.messageSent)
+              if !attachments.isEmpty {
+                let dimension: BYOKAppAnalytics.Dimension = attachments.allSatisfy({ $0.isImage })
+                  ? .image : (attachments.contains(where: { $0.isImage }) ? .mixed : .file)
+                BYOKAppAnalytics.track(.attachmentSent, dimension: dimension)
+              }
+            case .edit:
+              BYOKAppAnalytics.track(.messageEdited)
+            case .regenerate:
+              BYOKAppAnalytics.track(.responseRegenerated)
+            }
+          }
+          // Some terminal runtime events are followed by a thrown error.
+          // Count the outcome here once, with catch blocks only as a fallback.
+          switch event {
+          case .completed(let message):
+            if !didRecordAnalyticsOutcome {
+              didRecordAnalyticsOutcome = true
+              BYOKAppAnalytics.track(.chatTurnCompleted, dimension: .provider(message.providerID))
+              BYOKAppAnalytics.trackFirstResponse()
+            }
+          case .cancelled(let message):
+            if !didRecordAnalyticsOutcome {
+              didRecordAnalyticsOutcome = true
+              BYOKAppAnalytics.track(.chatTurnCancelled, dimension: .provider(message.providerID))
+            }
+          case .failed(let message):
+            if !didRecordAnalyticsOutcome {
+              didRecordAnalyticsOutcome = true
+              BYOKAppAnalytics.track(.chatTurnFailed, dimension: .provider(message.providerID))
+            }
+          default:
+            break
           }
           if case .failed = event {
             didReceiveInlineFailure = true
@@ -777,12 +818,33 @@ final class ChatManagementModel {
           await handle(event, conversationID: conversationID)
         }
       } catch is CancellationError {
+        if !didRecordAnalyticsOutcome, reportedPersistence {
+          didRecordAnalyticsOutcome = true
+          BYOKAppAnalytics.track(
+            .chatTurnCancelled, dimension: .provider(conversation(conversationID)?.providerID)
+          )
+        }
         try? await reloadSnapshot()
       } catch {
+        if !didRecordAnalyticsOutcome {
+          didRecordAnalyticsOutcome = true
+          BYOKAppAnalytics.track(
+            reportedPersistence ? .chatTurnFailed : .chatPreparationFailed,
+            dimension: .provider(conversation(conversationID)?.providerID)
+          )
+        }
         if !didReceiveInlineFailure {
           errorMessage = error.localizedDescription
         }
         try? await reloadSnapshot()
+      }
+      // A cancelled AsyncThrowingStream may end without throwing or draining
+      // its terminal event; still record one outcome for an accepted turn.
+      if reportedPersistence, !didRecordAnalyticsOutcome {
+        BYOKAppAnalytics.track(
+          Task.isCancelled ? .chatTurnCancelled : .chatTurnFailed,
+          dimension: .provider(conversation(conversationID)?.providerID)
+        )
       }
       if !reportedPersistence {
         // The shard may have committed even if the index write failed. Read it
@@ -840,6 +902,7 @@ final class ChatManagementModel {
       activeToolCallsByConversation[conversationID] = calls
       advanceStreamRevision(for: conversationID)
     case .toolRound(let messageID, _):
+      BYOKAppAnalytics.track(.toolRoundCompleted)
       await flushStreamPresentation(messageID, conversationID: conversationID)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       let live = LiveMessage()

@@ -9,7 +9,7 @@ enum BYOKchatThemes {
     id: "paper",
     title: "Paper",
     symbolName: "doc.text",
-    access: .free,
+    access: .pro,
     appearance: ThemeAppearance(
       background: ThemeColor(hex: 0xF7F3EA),
       gradientStart: ThemeColor(hex: 0xFFFDF8),
@@ -218,17 +218,17 @@ enum BYOKchatThemes {
 
   static let catalog = ThemeCatalog(
     themes: [
+      midnight,
       paper,
       githubLight,
       sakura,
       sage,
       solarizedLight,
       githubDarkDimmed,
-      midnight,
       nordic,
       aubergine,
       ember,
     ],
-    fallbackThemeID: paper.id
+    fallbackThemeID: midnight.id
   )
 }

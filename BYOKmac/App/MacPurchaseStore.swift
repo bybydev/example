@@ -54,7 +54,6 @@ struct MacProResourceSnapshot: Sendable, Equatable {
   var providerAccountIDs: [String] = []
   var projectIDs: [String] = []
   var mcpServerIDs: [String] = []
-  var libraryEntryIDs: [String] = []
 }
 
 /// Tracks only resources introduced by a Free full-backup restore that exceed
@@ -70,7 +69,6 @@ final class MacProResourceRestrictions {
     static let providers = "providers"
     static let projects = "projects"
     static let mcp = "mcp"
-    static let library = "library"
   }
 
   private let defaults: UserDefaults
@@ -82,10 +80,12 @@ final class MacProResourceRestrictions {
   ) {
     self.defaults = defaults
     self.keyPrefix = keyPrefix
+    // Saved files are free; discard restriction state from older versions.
+    defaults.removeObject(forKey: key("library"))
   }
 
   func clear() {
-    for suffix in [Suffix.providers, Suffix.projects, Suffix.mcp, Suffix.library] {
+    for suffix in [Suffix.providers, Suffix.projects, Suffix.mcp] {
       defaults.removeObject(forKey: key(suffix))
     }
   }
@@ -106,7 +106,6 @@ final class MacProResourceRestrictions {
       write(after.providerAccountIDs, suffix: Suffix.providers)
       write(after.projectIDs, suffix: Suffix.projects)
       write(after.mcpServerIDs, suffix: Suffix.mcp)
-      write(after.libraryEntryIDs, suffix: Suffix.library)
 
     case .keepExisting:
       appendNewCandidates(
@@ -123,11 +122,6 @@ final class MacProResourceRestrictions {
         before: before.mcpServerIDs,
         after: after.mcpServerIDs,
         suffix: Suffix.mcp
-      )
-      appendNewCandidates(
-        before: before.libraryEntryIDs,
-        after: after.libraryEntryIDs,
-        suffix: Suffix.library
       )
     }
   }
@@ -170,20 +164,6 @@ final class MacProResourceRestrictions {
       currentIDs: currentIDs.map(\.rawValue),
       candidates: read(Suffix.mcp),
       freeLimit: BYOKProPolicy.freeMCPServerLimit,
-      entitlement: entitlement
-    )
-  }
-
-  func isLibraryEntryRestricted(
-    _ id: LibraryEntryID,
-    currentIDs: [LibraryEntryID],
-    entitlement: MacProEntitlementAccess
-  ) -> Bool {
-    isRestricted(
-      id.rawValue,
-      currentIDs: currentIDs.map(\.rawValue),
-      candidates: read(Suffix.library),
-      freeLimit: BYOKProPolicy.freeLibraryItemLimit,
       entitlement: entitlement
     )
   }
@@ -281,20 +261,12 @@ enum MacPurchaseStore {
       proValue: "Unlimited"
     ),
     PurchaseFeature(
-      id: "library-items",
-      systemImage: "books.vertical.fill",
-      title: "Unlimited saved files",
-      message: "Keep using existing files and save more than the 10-file free limit.",
-      freeValue: "10 files",
-      proValue: "Unlimited"
-    ),
-    PurchaseFeature(
-      id: "advanced-analytics",
+      id: "analytics-history",
       systemImage: "chart.bar.xaxis",
-      title: "Advanced usage analytics",
-      message: "Add performance, reliability, provider/model breakdowns, budgets, and deeper insights.",
-      freeValue: "Basic",
-      proValue: "Advanced"
+      title: "Full analytics history",
+      message: "All analytics features are free for today. Pro unlocks 7-day, 30-day, monthly, and all-time history.",
+      freeValue: "Today",
+      proValue: "All date ranges"
     ),
   ]
 
@@ -348,7 +320,7 @@ enum MacPurchaseStore {
 
   static let paywallConfiguration = ProPaywallConfiguration(
     title: "BYOK Pro",
-    subtitle: "Unlock every theme, unlimited configurations, saved files, and advanced local analytics.",
+    subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
     termsURL: URL(string: "https://byok.pro/terms")!,
@@ -385,7 +357,6 @@ enum MacProFeature: String, Sendable {
   case providerAccounts
   case projects
   case mcpServers
-  case libraryItems
   case analytics
 }
 
@@ -400,6 +371,14 @@ final class MacProGateCenter {
   private init() {}
 
   func request(_ feature: MacProFeature) {
+    let dimension: MacAppAnalytics.Dimension
+    switch feature {
+    case .providerAccounts: dimension = .providers
+    case .projects: dimension = .projects
+    case .mcpServers: dimension = .mcp
+    case .analytics: dimension = .analyticsHistory
+    }
+    MacAppAnalytics.track(.upgradeRequested, dimension: dimension)
     self.feature = feature
     requestID &+= 1
   }
@@ -410,7 +389,6 @@ enum MacProAccess {
   static let freeProviderAccountLimit = BYOKProPolicy.freeProviderAccountLimit
   static let freeProjectLimit = BYOKProPolicy.freeProjectLimit
   static let freeMCPServerLimit = BYOKProPolicy.freeMCPServerLimit
-  static let freeLibraryItemLimit = BYOKProPolicy.freeLibraryItemLimit
 
   static var entitlementAccess: MacProEntitlementAccess {
     switch MacPurchaseStore.manager.entitlementState {
@@ -436,14 +414,6 @@ enum MacProAccess {
 
   static func canCreateMCPServer(currentCount: Int, hasPro: Bool) -> Bool {
     BYOKProPolicy.canCreateMCPServer(currentCount: currentCount, hasPro: hasPro)
-  }
-
-  static func remainingLibraryCapacity(currentCount: Int, hasPro: Bool) -> Int? {
-    BYOKProPolicy.remainingLibraryCapacity(currentCount: currentCount, hasPro: hasPro)
-  }
-
-  static func canCreateLibraryItem(currentCount: Int, hasPro: Bool) -> Bool {
-    BYOKProPolicy.canCreateLibraryItem(currentCount: currentCount, hasPro: hasPro)
   }
 
   static func providerAccountCapacityDecision(
@@ -517,28 +487,6 @@ enum MacProAccess {
       decision: mcpServerCapacityDecision(currentCount: currentCount),
       feature: .mcpServers
     )
-  }
-
-  static func requireLibraryCapacity(currentCount: Int, additions: Int = 1) -> Int {
-    guard additions > 0 else { return 0 }
-
-    switch entitlementAccess {
-    case .pro:
-      return additions
-    case .checking:
-      let remaining = max(0, freeLibraryItemLimit - currentCount)
-      return min(additions, remaining)
-    case .free:
-      let remaining = max(0, freeLibraryItemLimit - currentCount)
-      guard remaining > 0 else {
-        MacProGateCenter.shared.request(.libraryItems)
-        return 0
-      }
-      if additions > remaining {
-        MacProGateCenter.shared.request(.libraryItems)
-      }
-      return min(additions, remaining)
-    }
   }
 
   static func requestUpgrade(_ feature: MacProFeature) {

@@ -378,11 +378,12 @@ struct ChatMessageView: View {
   let copy: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
-  @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(BYOKToastCenter.self) private var toastCenter
   @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
   @State private var showSourcesSheet = false
   @State private var showImageSaveSheet = false
+  @State private var pendingSavedImageCount = 0
 
   private var imageCandidates: [ResponseImageCandidate] {
     guard library != nil, conversationID != nil, !message.content.isEmpty else { return [] }
@@ -459,15 +460,15 @@ struct ChatMessageView: View {
     return { attachment in
       guard let conversationID, let library else { return }
       Task {
-        _ = await library.ensureListed(
+        let saved = await library.ensureListed(
           fileID: attachment.id,
           filename: attachment.filename,
           mimeType: attachment.mimeType,
           byteCount: attachment.byteCount,
           source: .chat(conversationID: conversationID, messageID: message.id),
-          hasPro: purchaseManager.hasPro,
           onError: onLibraryError
         )
+        if saved != nil { toastCenter.success("Saved to Library") }
       }
     }
   }
@@ -498,26 +499,24 @@ struct ChatMessageView: View {
     .sheet(isPresented: $showSourcesSheet) {
       AnswerSourcesSheet(sources: messageSources)
     }
-    .sheet(isPresented: $showImageSaveSheet) {
+    .sheet(isPresented: $showImageSaveSheet, onDismiss: {
+      guard pendingSavedImageCount > 0 else { return }
+      let count = pendingSavedImageCount
+      pendingSavedImageCount = 0
+      toastCenter.success(count == 1 ? "Image saved to Library" : "\(count) images saved to Library")
+    }) {
       if let conversationID, let library {
         ResponseImageSaveSheet(
           candidates: imageCandidates,
           conversationID: conversationID,
           messageID: message.id,
-          library: library
+          library: library,
+          onSaved: { pendingSavedImageCount = $0 }
         )
       }
     }
   }
 
-  /// Library saves count against the free tier; at the cap the upsell flow
-  /// replaces the save instead of silently failing.
-  private func canSaveToLibrary(_ library: LibraryManagementModel) -> Bool {
-    BYOKProAccess.canCreateLibraryItem(
-      currentCount: library.entries.count,
-      hasPro: purchaseManager.hasPro
-    )
-  }
 
   /// Links extracted from the answer body. They stay tappable inline in the
   /// markdown; this list is the consolidated index behind the More menu.
@@ -528,8 +527,7 @@ struct ChatMessageView: View {
 
   private var assistantActions: some View {
     HStack(spacing: 4) {
-      actionButton("Copy", systemImage: "doc.on.doc", action: copy)
-        .disabled(message.content.isEmpty)
+      CopyButton(text: message.content, alignment: .leading)
 
       actionButton("Retry", systemImage: "arrow.clockwise", action: regenerate)
         .disabled(!canRegenerate)
@@ -581,7 +579,7 @@ struct ChatMessageView: View {
           let parts = Calendar.current.dateComponents([.year, .month, .day], from: message.createdAt)
           let name =
             "Response-\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0).md"
-          _ = await library.addAttachment(
+          let saved = await library.addAttachment(
             ChatAttachment(
               kind: .file,
               filename: name,
@@ -589,19 +587,15 @@ struct ChatMessageView: View {
               data: Data(message.content.utf8)
             ),
             source: .chat(conversationID: conversationID, messageID: message.id),
-            hasPro: purchaseManager.hasPro,
             onError: onLibraryError
           )
+          if saved != nil { toastCenter.success("Saved to Library") }
         }
       }
       .disabled(message.content.isEmpty)
 
       if !imageCandidates.isEmpty {
         Button("Save Images…", systemImage: "photo.on.rectangle") {
-          guard canSaveToLibrary(library) else {
-            onLibraryError?(LibraryCapacityError.limitReached(BYOKProPolicy.freeLibraryItemLimit))
-            return
-          }
           showImageSaveSheet = true
         }
       }

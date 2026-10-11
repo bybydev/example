@@ -49,7 +49,7 @@ Startup prepares and loads, in order:
 7. project/conversation reconciliation and orphan-file cleanup;
 8. telemetry maintenance and diagnostics surfaces.
 
-Full conversation shards remain lazy until selected. Pro Analytics intentionally uses the shared `ConversationStore.allConversations()` full-corpus path only when the Analytics surface opens, while free Analytics loads persisted conversation history without loading the advanced telemetry surface.
+Full conversation shards remain lazy until selected. Analytics uses the shared `ConversationStore.allConversations()` full-corpus path and bounded local telemetry only when its surface opens, for both Free and Pro.
 
 Startup recovery can move a damaged workspace aside and start fresh while keeping the previous workspace discoverable in Finder. Full reset uses the stronger data-management path that also handles credentials and telemetry cleanup.
 
@@ -124,7 +124,7 @@ Project instructions become the new chat system prompt, falling back to the app 
 
 Library uses the shared blob store and supports browsing, previewing, importing, exporting, sharing, renaming, deleting, attaching items to chat, and saving chat responses/attachments back to Library without unnecessary blob duplication.
 
-BYOK Pro policy matches iOS: free users can create one project and save up to ten Library files. Existing projects and saved files remain accessible/editable if Pro expires; only creation beyond the free limits is blocked.
+BYOK Pro policy matches iOS: free users can create one project and save unlimited Library files. Existing projects remain accessible/editable if Pro expires; project creation beyond the free limit is blocked. Saving, importing, restoring, and reusing Library files never require Pro.
 
 ## MCP and tools
 
@@ -170,8 +170,8 @@ Free/Pro resource limits mirror iOS, while macOS theme access is defined by the 
 - 1 provider connection free, unlimited with Pro;
 - 1 project free, unlimited with Pro;
 - 1 MCP server free, unlimited with Pro;
-- 10 saved Library files free, unlimited with Pro;
-- basic monthly Analytics free, advanced Analytics with Pro.
+- unlimited saved Library files for everyone;
+- every Analytics feature free for Today; Pro unlocks 7D, 30D, Month, and All date ranges.
 
 Creation is gated at the model boundary so every entry point observes the same rule. Existing user-created data remains accessible by default after entitlement loss.
 
@@ -197,7 +197,7 @@ Usage and performance analytics are shared runtime capabilities rather than a Ma
 - provider and model breakdowns;
 - per-conversation usage/performance snapshots.
 
-Free users receive the same basic iOS policy: current-month spend, model requests, input tokens, and output tokens reconstructed from persisted chat history. BYOK Pro unlocks selectable ranges, cached/reasoning/tool totals, performance/reliability, failures, provider/model and per-conversation breakdowns, local telemetry statistics, and monthly budget controls.
+Free and Pro users receive the same analytics capabilities: usage, cached/reasoning/tool totals, performance/reliability, failures, provider/model and per-conversation breakdowns, local telemetry statistics, and monthly budget controls. Free access is restricted to Today; Pro unlocks 7D, 30D, Month, and All. Every calculation clamps stale range selections after entitlement loss. Free budget evaluation uses today's usage only and explains that earlier spending is excluded.
 
 ## Data and diagnostics
 

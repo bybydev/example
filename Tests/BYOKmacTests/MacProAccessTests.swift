@@ -40,15 +40,6 @@ struct MacProAccessTests {
     #expect(MacProAccess.canCreateMCPServer(currentCount: 10, hasPro: true))
   }
 
-  @Test("Free Library has ten saved-file slots")
-  func libraryLimit() {
-    #expect(MacProAccess.canCreateLibraryItem(currentCount: 9, hasPro: false))
-    #expect(!MacProAccess.canCreateLibraryItem(currentCount: 10, hasPro: false))
-    #expect(MacProAccess.remainingLibraryCapacity(currentCount: 7, hasPro: false) == 3)
-    #expect(MacProAccess.remainingLibraryCapacity(currentCount: 10, hasPro: false) == 0)
-    #expect(MacProAccess.remainingLibraryCapacity(currentCount: 100, hasPro: true) == nil)
-  }
-
   @Test("Entitlement checking blocks gated creation without treating the user as Free")
   func checkingDecision() {
     #expect(
@@ -117,15 +108,13 @@ struct MacProAccessTests {
     let project2 = ProjectID(rawValue: "project-2")
     let server1 = MCPServerID(rawValue: "server-1")
     let server2 = MCPServerID(rawValue: "server-2")
-    let libraryIDs = (1...11).map { "library-\($0)" }
 
     restrictions.recordFullBackupImport(
       before: MacProResourceSnapshot(),
       after: MacProResourceSnapshot(
         providerAccountIDs: [p1.rawValue, p2.rawValue],
         projectIDs: [project1.rawValue, project2.rawValue],
-        mcpServerIDs: [server1.rawValue, server2.rawValue],
-        libraryEntryIDs: libraryIDs
+        mcpServerIDs: [server1.rawValue, server2.rawValue]
       ),
       strategy: .replaceExisting,
       entitlement: .free
@@ -138,14 +127,24 @@ struct MacProAccessTests {
     #expect(!restrictions.isMCPServerRestricted(server1, currentIDs: [server1, server2], entitlement: .free))
     #expect(restrictions.isMCPServerRestricted(server2, currentIDs: [server1, server2], entitlement: .free))
 
-    let typedLibraryIDs = libraryIDs.map { LibraryEntryID(rawValue: $0) }
-    #expect(!restrictions.isLibraryEntryRestricted(typedLibraryIDs[9], currentIDs: typedLibraryIDs, entitlement: .free))
-    #expect(restrictions.isLibraryEntryRestricted(typedLibraryIDs[10], currentIDs: typedLibraryIDs, entitlement: .free))
-
     // Deleting the first restored provider frees the one Free slot for the next
     // restored candidate without deleting or rewriting the backup-restored data.
     #expect(!restrictions.isProviderRestricted(p2, currentIDs: [p2], entitlement: .free))
     #expect(!restrictions.isProjectRestricted(project2, currentIDs: [project2], entitlement: .pro))
+  }
+
+  @Test("Old saved-file restrictions are cleared without unlocking other Pro resources")
+  func clearsLegacyLibraryRestrictions() {
+    let suite = "MacProAccessTests.legacyLibrary.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(["saved-file"], forKey: "test.library")
+    defaults.set(["provider"], forKey: "test.providers")
+
+    _ = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
+
+    #expect(defaults.object(forKey: "test.library") == nil)
+    #expect(defaults.stringArray(forKey: "test.providers") == ["provider"])
   }
 
   @Test("Merge restore never locks resources that existed before import")

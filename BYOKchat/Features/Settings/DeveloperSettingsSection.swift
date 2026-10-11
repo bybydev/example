@@ -3,22 +3,6 @@ import BYOKchatProviderCore
 import Foundation
 import SwiftUI
 
-struct TelemetrySettingsSection: View {
-  var body: some View {
-    Section {
-      NavigationLink {
-        TelemetryDiagnosticsView()
-      } label: {
-        Label("Diagnostics & Logs", systemImage: "waveform.path.ecg")
-      }
-    } header: {
-      Text("Diagnostics")
-    } footer: {
-      Text("Telemetry stays on this device, is bounded and disposable, and never contains prompts, responses, credentials, or tool payloads by default.")
-    }
-  }
-}
-
 #if DEBUG
 struct BYOKDeveloperToolsView: View {
   let purchases: BYOKPurchaseStore

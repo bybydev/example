@@ -201,12 +201,12 @@ public extension ProviderKind {
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
         .init(
-          providerID: "openai", id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra",
+          providerID: "openai", id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol",
           contextWindow: 1_050_000, maxOutputTokens: 128_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
         .init(
-          providerID: "openai", id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna",
+          providerID: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna",
           contextWindow: 1_050_000, maxOutputTokens: 128_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
@@ -234,7 +234,7 @@ public extension ProviderKind {
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
         .init(
-          providerID: "xai", id: "grok-4.3", displayName: "Grok 4.3",
+          providerID: "xai", id: "grok-4.7", displayName: "Grok 4.7",
           contextWindow: 1_000_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
@@ -280,12 +280,12 @@ public extension ProviderKind {
     case .anthropic:
       [
         .init(
-          providerID: "anthropic", id: "claude-sonnet-5", displayName: "Claude Sonnet 5",
+          providerID: "anthropic", id: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5",
           contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
           supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
           inputModalities: ["text", "image", "file"]),
         .init(
-          providerID: "anthropic", id: "claude-opus-5", displayName: "Claude Opus 5",
+          providerID: "anthropic", id: "claude-opus-5-5", displayName: "Claude Opus 5.5",
           contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
           supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
           inputModalities: ["text", "image", "file"]),
@@ -293,7 +293,7 @@ public extension ProviderKind {
     case .gemini:
       [
         .init(
-          providerID: "gemini", id: "gemini-3.6-flash", displayName: "Gemini 3.6 Flash",
+          providerID: "gemini", id: "gemini-3.8-flash", displayName: "Gemini 3.8 Flash",
           contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
           inputModalities: ["text", "image", "file"]),

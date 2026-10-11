@@ -125,6 +125,9 @@ final class ProjectManagementModel {
       createdID = project.id
       await reloadSnapshot()
     }
+    if succeeded, createdID != nil {
+      BYOKAppAnalytics.track(.projectCreated)
+    }
     return succeeded ? createdID : nil
   }
 
