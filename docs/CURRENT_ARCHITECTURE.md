@@ -101,8 +101,8 @@ becomes visible after its source, metadata, normalized content, queue, and
 optional artwork are committed successfully. Package creation checks cancellation
 during staging and immediately before its atomic publish. Cancellation before
 publish removes the staging package; an import already published remains a
-completed project. Free Library capacity is checked from the on-disk catalog
-within the same serialized package-creation operation.
+completed project. Project creation has no Free/Pro count limit. The serialized package store
+still validates each import and performs an atomic publish.
 
 ## Durable project package
 
@@ -167,17 +167,32 @@ Library operations synchronize loaded runtimes when project metadata changes.
 Effective narration is resolved as:
 
 ```text
-item custom (Pro)
+item custom
   -> project default
       -> app default
 ```
 
 Voice and speed inherit independently.
 
+The shared synthesis-speed sheet adapts Spokio iOS's 0.5×–2.0× slider
+(0.1× steps, ± buttons and 0.5×/1×/1.5×/2× presets) for app,
+project and chapter defaults. Project and chapter pickers preserve their
+respective inheritance modes; chapter overrides are free, but a selected voice
+still requires its own voice entitlement. Edits are
+staged locally and saved once on Done to avoid repeated synthesis cache
+invalidation while dragging. Existing saved narration data is retained.
+
 Saved premium selections are not destroyed when Pro expires. Their effective
 behavior falls back to the allowed Free configuration until entitlement returns.
 
 ## Speech and playback
+
+The pronunciation fallback mode applies to text-level G2P failures, not
+model/resource failures: Adaptive (default) spells bounded Latin words after
+dictionary/BART failure and skips otherwise unreadable tokens; Skip omits
+unpronounceable tokens; Stop with Error reports the token and aborts speech.
+An all-unreadable source chunk becomes 100 ms of silence in Adaptive/Skip,
+preserving playback progress. Changing modes changes generation/cache identity.
 
 The low-latency path is:
 
@@ -241,8 +256,8 @@ Important rules:
 
 - stale `generating` intent recovers to retryable queued work on cold load
 - foreground streaming gets speech-model priority
-- compatible finalized playback can allow Pro background generation while
-  listening
+- compatible finalized playback can allow background generation while
+  listening whenever the user enables it
 - partial chunk cache is reusable
 - replacing finalized audio preserves the previous known-good pair until the
   new pair commits
@@ -267,31 +282,21 @@ Delete Project is the operation that removes the complete package.
 
 ## Free and Pro
 
-`ReadAloudAccessPolicy` centralizes product access.
+Only **Kokoro voices and extra themes** are Pro-locked.
 
-Free includes:
+Free includes unlimited projects, imports, reading/playback, offline generation
+(including selected, remaining, and all chapters), prefetch, generate while
+listening, full regeneration and project/chapter narration overrides.
 
-- up to 3 projects
-- Heart voice
-- normal Reader/streaming playback
-- single-chapter offline generation
-- safe storage cleanup
-- project-level narration defaults
-- ReadAloud Light and Dark themes
+- **Voices:** Heart (`af_heart`) is Free. The other 27 English voice styles
+  require Pro. All voices may be previewed or favorited regardless of purchase;
+  applying a Pro voice requires verified entitlement. Saved premium voice
+  preferences are preserved and fall back to Heart when Pro is inactive.
+- **Themes:** ReadAloud Light/Dark are Free. Additional themes remain Pro-gated
+  through the AppFoundation theme catalog.
 
-Pro adds:
-
-- unlimited projects
-- all bundled voices
-- per-chapter narration overrides
-- bulk generation
-- automatic prefetch
-- generate while listening
-- advanced regeneration
-- premium themes
-
-Views may present the paywall, but domain/runtime code also defends gated
-operations so access rules do not depend on a specific UI path.
+No other feature uses a Free/Pro entitlement check in the Library, offline
+generation, regeneration, reader, or narration-speed controls.
 
 ## Preferences
 
@@ -299,6 +304,7 @@ operations so access rules do not depend on a specific UI path.
 
 - default voice
 - default speed
+- pronunciation fallback (Adaptive by default, Skip, Stop with Error)
 - skip interval
 - continue to next chapter
 - prefetch count
@@ -325,7 +331,7 @@ do not regenerate or resolve them unless explicitly requested.
 Kokoro resources have two explicit modes:
 
 - production: verified real assets, shipping eligible
-- Kokoro ONNX INT8 + ONNX G2P + vocabulary + three voices: bundled in every archive
+- Kokoro ONNX INT8 + English ONNX G2P + vocabulary + all 28 English voice styles: bundled in every archive
 
 The canonical App Store submission path is manual/local using Xcode/mycli and
 the steps in `RELEASE_CHECKLIST.md`.

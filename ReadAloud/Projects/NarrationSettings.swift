@@ -1,18 +1,25 @@
 import Foundation
 
-nonisolated struct NarrationVoice: Identifiable, Equatable, Hashable, Sendable {
-    let id: String
-    let name: String
-}
-
 nonisolated enum ReadAloudNarrationCatalog {
-    static let voices: [NarrationVoice] = [
-        NarrationVoice(id: "af_heart", name: "Heart"),
-        NarrationVoice(id: "af_bella", name: "Bella"),
-        NarrationVoice(id: "am_michael", name: "Michael"),
-    ]
+    static let voices: [SpeechVoice] = SpeechVoice.all
 
-    static let synthesisSpeeds: [Double] = [0.8, 1.0, 1.2]
+    /// The same 0.5×–2.0×, 0.1-step range as Spokio iOS.
+    static let speedRange: ClosedRange<Double> = 0.5...2.0
+    static let speedStep = 0.1
+    static let speedPresets: [Double] = [0.5, 1.0, 1.5, 2.0]
+    static let synthesisSpeeds: [Double] = (5...20).map { Double($0) / 10 }
+
+    static func isSupportedSpeed(_ value: Double) -> Bool {
+        guard value.isFinite, speedRange.contains(value) else { return false }
+        let tenths = value * 10
+        return abs(tenths - tenths.rounded()) < 0.000_001
+    }
+
+    static func roundedSpeed(_ value: Double) -> Double {
+        guard value.isFinite else { return 1.0 }
+        let bounded = min(max(value, speedRange.lowerBound), speedRange.upperBound)
+        return (bounded * 10).rounded() / 10
+    }
     static let freeDefaultVoiceID =
         "af_heart"
 
@@ -25,7 +32,7 @@ nonisolated enum ReadAloudNarrationCatalog {
         ReadAloudPreferences
             .defaultSpeed
     }
-    static let synthesisConfigVersion = 4
+    static let synthesisConfigVersion = 5
 
     static func voiceName(_ id: String) -> String {
         voices.first(where: { $0.id == id })?.name ?? id
@@ -72,10 +79,6 @@ nonisolated enum NarrationSettingsResolver {
                 hasPro: hasPro
             )
 
-        guard hasPro else {
-            return projectResolved
-        }
-
         let voiceID: String
         switch item.voice.mode {
         case .inherit:
@@ -94,7 +97,7 @@ nonisolated enum NarrationSettingsResolver {
                 ReadAloudAccessPolicy
                     .effectiveVoiceID(
                         custom,
-                        hasPro: true
+                        hasPro: hasPro
                     )
         }
 
@@ -149,7 +152,9 @@ nonisolated enum ReadAloudSynthesisContract {
                 contentRevision: item.contentRevision,
                 resolvedVoiceID: resolved.voiceID,
                 canonicalSpeed: resolved.speed,
-                kokoroRuntimeRevision: runtimeRevision,
+                // Different modes can synthesize different audio for identical text.
+                kokoroRuntimeRevision: runtimeRevision + "-g2p-"
+                    + ReadAloudPreferences.pronunciationFallbackMode.rawValue,
                 synthesisConfigVersion:
                     ReadAloudNarrationCatalog.synthesisConfigVersion
             )

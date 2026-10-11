@@ -21,12 +21,15 @@ nonisolated struct KokoroTextProcessor {
         self.vocab = vocab
     }
 
-    func phonemize(_ text: String) throws -> KokoroPhonemeResult {
+    func phonemize(
+        _ text: String,
+        mode: PronunciationFallbackMode
+    ) throws -> KokoroPhonemeResult {
         let normalized = Self.normalizeWhitespace(text)
         guard !normalized.isEmpty else {
             throw SpeechEngineError.synthesisFailed("Empty speech text.")
         }
-        return try phonemizer.phonemize(normalized)
+        return try phonemizer.phonemize(normalized, mode: mode)
     }
 
     func tokenization(forPhonemes phonemes: String)

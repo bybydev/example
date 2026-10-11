@@ -23,6 +23,9 @@ struct SettingsView: View {
     )
     private var defaultSpeed = 1.0
 
+    @AppStorage(ReadAloudPreferences.Key.pronunciationFallbackMode)
+    private var pronunciationMode = PronunciationFallbackMode.adaptive.rawValue
+
     @AppStorage(
         ReadAloudPreferences
             .Key.skipInterval
@@ -51,6 +54,8 @@ struct SettingsView: View {
 
     @State private var
         paywallPresented = false
+    @State private var defaultVoicePickerPresented = false
+    @State private var defaultSpeedPickerPresented = false
 
     private var version: String {
         let version =
@@ -135,10 +140,18 @@ struct SettingsView: View {
                 } label: {
                     Label("Kokoro ONNX INT8", systemImage: "cpu")
                 }
+
+                Picker("Unknown Words", selection: $pronunciationMode) {
+                    ForEach(PronunciationFallbackMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
             } header: {
                 Text("Speech Engine")
             } footer: {
-                Text("ReadAloud includes its ONNX speech model, pronunciation assets and voices. All listening works offline, without downloads.")
+                Text(PronunciationFallbackMode(rawValue: pronunciationMode)?.explanation
+                    ?? PronunciationFallbackMode.adaptive.explanation)
+                Text("Only pronunciation problems use this mode. Model errors still stop playback. Speech assets are bundled for offline use.")
             }
 
             narrationDefaultsSection
@@ -233,6 +246,27 @@ struct SettingsView: View {
         ) {
             ReadAloudProPaywall()
         }
+        .sheet(isPresented: $defaultVoicePickerPresented) {
+            ReadAloudVoicesPickerView(
+                selectedVoiceID: defaultVoiceID,
+                inheritTitle: nil,
+                inheritDetail: nil
+            ) { voiceID in
+                guard let voiceID else { return false }
+                defaultVoiceID = voiceID
+                return true
+            }
+        }
+        .sheet(isPresented: $defaultSpeedPickerPresented) {
+            ReadAloudSpeedPickerView(speed: defaultSpeed) { speed in
+                guard let speed else { return false }
+                defaultSpeed = speed
+                return true
+            }
+        }
+        .onChange(of: pronunciationMode) { _, _ in
+            refreshLoadedProjects()
+        }
         .onChange(
             of: defaultVoiceID
         ) { _, _ in
@@ -259,46 +293,37 @@ struct SettingsView: View {
         some View
     {
         Section {
-            Picker(
-                "Default Voice",
-                selection:
-                    defaultVoiceBinding
-            ) {
-                ForEach(
-                    ReadAloudNarrationCatalog
-                        .voices
-                ) { voice in
-                    HStack {
-                        Text(voice.name)
-                        if !ReadAloudAccessPolicy
-                            .freeVoiceIDs
-                            .contains(
-                                voice.id
-                            )
-                        {
-                            Text("Pro")
-                        }
-                    }
-                    .tag(voice.id)
+            Button {
+                defaultVoicePickerPresented = true
+            } label: {
+                HStack {
+                    Text("Default Voice")
+                    Spacer()
+                    Text(ReadAloudNarrationCatalog.voiceName(defaultVoiceID))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            Picker(
-                "Default Speed",
-                selection:
-                    $defaultSpeed
-            ) {
-                ForEach(
-                    ReadAloudNarrationCatalog
-                        .synthesisSpeeds,
-                    id: \.self
-                ) { speed in
-                    Text(
-                        speedLabel(speed)
-                    )
-                    .tag(speed)
+            Button {
+                defaultSpeedPickerPresented = true
+            } label: {
+                HStack {
+                    Text("Default Speed")
+                    Spacer()
+                    Text(ReadAloudSpeedPickerView.speedLabel(defaultSpeed))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         } header: {
             Text("ReadAloud Defaults")
         } footer: {
@@ -349,128 +374,19 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var generationSection:
-        some View
-    {
+    private var generationSection: some View {
         Section {
-            if purchases.hasPro {
-                Picker(
-                    "Prefetch",
-                    selection:
-                        $prefetchCount
-                ) {
-                    Text("Off").tag(0)
-                    Text("Next Chapter")
-                        .tag(1)
-                    Text("Next 2 Chapters")
-                        .tag(2)
-                }
-
-                Toggle(
-                    "Generate While Listening",
-                    isOn:
-                        $generateWhileListening
-                )
-            } else {
-                Button {
-                    paywallPresented = true
-                } label: {
-                    proPreferenceRow(
-                        title: "Automatic Prefetch",
-                        detail:
-                            "Generate upcoming chapters"
-                    )
-                }
-
-                Button {
-                    paywallPresented = true
-                } label: {
-                    proPreferenceRow(
-                        title:
-                            "Generate While Listening",
-                        detail:
-                            "Use idle model time during offline playback"
-                    )
-                }
+            Picker("Prefetch", selection: $prefetchCount) {
+                Text("Off").tag(0)
+                Text("Next Chapter").tag(1)
+                Text("Next 2 Chapters").tag(2)
             }
+            Toggle("Generate While Listening", isOn: $generateWhileListening)
         } header: {
             Text("Generation")
         } footer: {
-            Text(
-                purchases.hasPro
-                ? "Queued generation yields whenever foreground streaming needs the speech model."
-                : "Single-chapter offline generation remains available on Free."
-            )
+            Text("Queued generation yields whenever foreground streaming needs the speech model.")
         }
-    }
-
-    private var defaultVoiceBinding:
-        Binding<String>
-    {
-        Binding(
-            get: {
-                defaultVoiceID
-            },
-            set: { value in
-                guard ReadAloudAccessPolicy
-                    .canUseVoice(
-                        value,
-                        hasPro:
-                            purchases.hasPro
-                    )
-                else {
-                    paywallPresented = true
-                    return
-                }
-
-                defaultVoiceID = value
-            }
-        )
-    }
-
-    private func proPreferenceRow(
-        title: String,
-        detail: String
-    ) -> some View {
-        HStack {
-            VStack(
-                alignment: .leading,
-                spacing: 2
-            ) {
-                Text(title)
-                    .foregroundStyle(
-                        .primary
-                    )
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(
-                        .secondary
-                    )
-            }
-
-            Spacer()
-
-            Text("Pro")
-                .font(
-                    .caption.weight(
-                        .semibold
-                    )
-                )
-                .foregroundStyle(
-                    .secondary
-                )
-        }
-    }
-
-    private func speedLabel(
-        _ speed: Double
-    ) -> String {
-        speed.formatted(
-            .number.precision(
-                .fractionLength(1)
-            )
-        ) + "×"
     }
 
     private func refreshLoadedProjects() {

@@ -2,462 +2,109 @@ import AppFoundation
 import SwiftUI
 
 struct ProjectVoicePicker: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(PurchaseManager.self) private var purchases
-    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Project Voice") {
-                    selectionRow(
-                        title: "App Default",
-                        detail: ReadAloudNarrationCatalog.voiceName(
-                            ReadAloudAccessPolicy
-                                .effectiveVoiceID(
-                                    ReadAloudNarrationCatalog
-                                        .appDefaultVoiceID,
-                                    hasPro:
-                                        purchases.hasPro
-                                )
-                        ),
-                        selected: model.project?.settings.voiceID == nil
-                    ) {
-                        update(nil)
-                    }
-
-                    ForEach(ReadAloudNarrationCatalog.voices) { voice in
-                        selectionRow(
-                            title: voice.name,
-                            detail:
-                                ReadAloudAccessPolicy
-                                    .freeVoiceIDs
-                                    .contains(
-                                        voice.id
-                                    )
-                                ? nil
-                                : "Pro",
-                            selected:
-                                model.project?.settings.voiceID == voice.id
-                        ) {
-                            update(voice.id)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Voice")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .sheet(
-                isPresented: $paywallPresented
-            ) {
-                ReadAloudProPaywall()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func selectionRow(
-        title: String,
-        detail: String?,
-        selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(.primary)
-                    if let detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
-    }
-
-    private func update(_ voiceID: String?) {
-        if let voiceID,
-           !ReadAloudAccessPolicy
-            .canUseVoice(
-                voiceID,
-                hasPro: purchases.hasPro
+        ReadAloudVoicesPickerView(
+            selectedVoiceID: model.project?.settings.voiceID,
+            inheritTitle: "App Default",
+            inheritDetail: ReadAloudNarrationCatalog.voiceName(
+                ReadAloudAccessPolicy.effectiveVoiceID(
+                    ReadAloudNarrationCatalog.appDefaultVoiceID,
+                    hasPro: model.runtime.hasPro
+                )
             )
-        {
-            paywallPresented = true
-            return
-        }
-
-        Task {
-            if await model.setProjectVoice(voiceID) {
-                onChanged()
-            }
+        ) { voiceID in
+            let changed = await model.setProjectVoice(voiceID)
+            if changed { onChanged() }
+            return changed
         }
     }
 }
 
 struct ProjectSpeedPicker: View {
-    @Environment(\.dismiss) private var dismiss
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Narration Speed") {
-                    speedRow(
-                        title: "App Default",
-                        speed: ReadAloudNarrationCatalog.appDefaultSpeed,
-                        selected: model.project?.settings.speed == nil
-                    ) {
-                        update(nil)
-                    }
-
-                    ForEach(
-                        ReadAloudNarrationCatalog.synthesisSpeeds,
-                        id: \.self
-                    ) { speed in
-                        speedRow(
-                            title: speedLabel(speed),
-                            speed: nil,
-                            selected: model.project?.settings.speed == speed
-                        ) {
-                            update(speed)
-                        }
-                    }
-                }
-
-                Section {
-                    Text("This is synthesis speed. Changing it makes existing generated audio incompatible until it is regenerated.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("Narration Speed")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+        ReadAloudSpeedPickerView(
+            speed: model.project?.settings.speed,
+            inheritTitle: "App Default",
+            inheritedSpeed: ReadAloudNarrationCatalog.appDefaultSpeed
+        ) { speed in
+            let changed = await model.setProjectSpeed(speed)
+            if changed { onChanged() }
+            return changed
         }
-    }
-
-    @ViewBuilder
-    private func speedRow(
-        title: String,
-        speed: Double?,
-        selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(.primary)
-                    if let speed {
-                        Text(speedLabel(speed))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
-    }
-
-    private func update(_ speed: Double?) {
-        Task {
-            if await model.setProjectSpeed(speed) {
-                onChanged()
-            }
-        }
-    }
-
-    private func speedLabel(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(1))) + "×"
     }
 }
 
 struct ItemVoicePicker: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(PurchaseManager.self) private var purchases
-    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let itemID: UUID
     let onChanged: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                if let entry = model.itemEntry(itemID) {
-                    Section("Use") {
-                        selectionRow(
-                            title: "Project Default",
-                            detail: ReadAloudNarrationCatalog.voiceName(
-                                model.resolvedProjectSettings.voiceID
-                            ),
-                            selected: entry.item.settings.voice.mode == .inherit
-                        ) {
-                            setMode(.inherit)
-                        }
-
-                        let remembered =
-                            entry.item.settings.voice.customValue
-                                ?? entry.resolved.voiceID
-                        selectionRow(
-                            title: "Custom",
-                            detail:
-                                ReadAloudNarrationCatalog.voiceName(remembered),
-                            selected: entry.item.settings.voice.mode == .custom
-                        ) {
-                            setMode(.custom)
-                        }
-                    }
-
-                    Section("Custom Voice") {
-                        ForEach(ReadAloudNarrationCatalog.voices) { voice in
-                            selectionRow(
-                                title: voice.name,
-                                detail: nil,
-                                selected:
-                                    entry.item.settings.voice.mode == .custom
-                                    && entry.item.settings.voice.customValue
-                                        == voice.id
-                            ) {
-                                setVoice(voice.id)
-                            }
-                        }
-                    }
+        if let entry = model.itemEntry(itemID) {
+            ReadAloudVoicesPickerView(
+                selectedVoiceID: entry.item.settings.voice.mode == .inherit
+                    ? nil : entry.item.settings.voice.customValue,
+                inheritTitle: "Project Default",
+                inheritDetail: ReadAloudNarrationCatalog.voiceName(
+                    model.resolvedProjectSettings.voiceID
+                )
+            ) { voiceID in
+                let changed: Bool
+                if let voiceID {
+                    changed = await model.setItemVoice(
+                        itemID: itemID, voiceID: voiceID
+                    )
+                } else {
+                    changed = await model.setItemVoiceMode(
+                        itemID: itemID, mode: .inherit
+                    )
                 }
+                if changed { onChanged() }
+                return changed
             }
-            .navigationTitle("Voice")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .sheet(
-                isPresented: $paywallPresented
-            ) {
-                ReadAloudProPaywall()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func selectionRow(
-        title: String,
-        detail: String?,
-        selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(.primary)
-                    if let detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
-    }
-
-    private func setMode(_ mode: ItemSettingMode) {
-        if mode == .custom,
-           !purchases.hasPro
-        {
-            paywallPresented = true
-            return
-        }
-
-        Task {
-            if await model.setItemVoiceMode(
-                itemID: itemID,
-                mode: mode
-            ) {
-                onChanged()
-            }
-        }
-    }
-
-    private func setVoice(_ voiceID: String) {
-        guard purchases.hasPro else {
-            paywallPresented = true
-            return
-        }
-
-        Task {
-            if await model.setItemVoice(
-                itemID: itemID,
-                voiceID: voiceID
-            ) {
-                onChanged()
-            }
+        } else {
+            ContentUnavailableView(
+                "Chapter Unavailable",
+                systemImage: "exclamationmark.triangle"
+            )
         }
     }
 }
 
 struct ItemSpeedPicker: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(PurchaseManager.self) private var purchases
-    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let itemID: UUID
     let onChanged: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                if let entry = model.itemEntry(itemID) {
-                    Section("Use") {
-                        selectionRow(
-                            title: "Project Default",
-                            detail: speedLabel(
-                                model.resolvedProjectSettings.speed
-                            ),
-                            selected: entry.item.settings.speed.mode == .inherit
-                        ) {
-                            setMode(.inherit)
-                        }
-
-                        let remembered =
-                            entry.item.settings.speed.customValue
-                                ?? entry.resolved.speed
-                        selectionRow(
-                            title: "Custom",
-                            detail: speedLabel(remembered),
-                            selected: entry.item.settings.speed.mode == .custom
-                        ) {
-                            setMode(.custom)
-                        }
-                    }
-
-                    Section("Custom Speed") {
-                        ForEach(
-                            ReadAloudNarrationCatalog.synthesisSpeeds,
-                            id: \.self
-                        ) { speed in
-                            selectionRow(
-                                title: speedLabel(speed),
-                                detail: nil,
-                                selected:
-                                    entry.item.settings.speed.mode == .custom
-                                    && entry.item.settings.speed.customValue
-                                        == speed
-                            ) {
-                                setSpeed(speed)
-                            }
-                        }
-                    }
-
-                    Section {
-                        Text("This changes Kokoro synthesis speed, not a separate playback-rate control.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+        if let entry = model.itemEntry(itemID) {
+            ReadAloudSpeedPickerView(
+                speed: entry.item.settings.speed.mode == .custom
+                    ? entry.item.settings.speed.customValue : nil,
+                customDraftSpeed: entry.item.settings.speed.customValue,
+                inheritTitle: "Project Default",
+                inheritedSpeed: model.resolvedProjectSettings.speed
+            ) { speed in
+                let changed: Bool
+                if let speed {
+                    changed = await model.setItemSpeed(itemID: itemID, speed: speed)
+                } else {
+                    changed = await model.setItemSpeedMode(itemID: itemID, mode: .inherit)
                 }
+                if changed { onChanged() }
+                return changed
             }
-            .navigationTitle("Narration Speed")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .sheet(
-                isPresented: $paywallPresented
-            ) {
-                ReadAloudProPaywall()
-            }
+        } else {
+            ContentUnavailableView(
+                "Chapter Unavailable",
+                systemImage: "exclamationmark.triangle"
+            )
         }
-    }
-
-    @ViewBuilder
-    private func selectionRow(
-        title: String,
-        detail: String?,
-        selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(.primary)
-                    if let detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
-    }
-
-    private func setMode(_ mode: ItemSettingMode) {
-        if mode == .custom,
-           !purchases.hasPro
-        {
-            paywallPresented = true
-            return
-        }
-
-        Task {
-            if await model.setItemSpeedMode(
-                itemID: itemID,
-                mode: mode
-            ) {
-                onChanged()
-            }
-        }
-    }
-
-    private func setSpeed(_ speed: Double) {
-        guard purchases.hasPro else {
-            paywallPresented = true
-            return
-        }
-
-        Task {
-            if await model.setItemSpeed(
-                itemID: itemID,
-                speed: speed
-            ) {
-                onChanged()
-            }
-        }
-    }
-
-    private func speedLabel(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(1))) + "×"
     }
 }

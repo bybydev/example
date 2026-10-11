@@ -18,7 +18,7 @@ DEFAULT_ROOT = ROOT / "Resources" / "ONNX"
 
 def assets():
     spec = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if spec.get("schema_version") != 1 or len(spec.get("resources", [])) != 6:
+    if spec.get("schema_version") != 1 or len(spec.get("resources", [])) != 31:
         raise RuntimeError("Unexpected ONNX asset manifest")
     found = set()
     for item in spec["resources"]:

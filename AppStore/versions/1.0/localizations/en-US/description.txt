@@ -22,10 +22,10 @@ PRIVATE BY DESIGN
 ReadAloud is local-first. Your imported documents, normalized text, generated audio, reading progress, and settings stay on your device. No account is required and document text is not sent to a remote speech service.
 
 FREE TO START
-Free includes up to three Library projects, the Heart voice, normal reading and streaming playback, single-chapter offline generation, storage cleanup, and two themes.
+Free includes unlimited Library projects, streaming and offline playback, per-chapter narration speeds, bulk generation, prefetch, generate while listening, advanced regeneration, the Heart voice, and ReadAloud Light/Dark themes.
 
 READALOUD PRO
-Pro unlocks an unlimited Library, all bundled voices, per-chapter narration overrides, bulk offline generation, automatic prefetch, generate-while-listening, advanced regeneration controls, and premium themes.
+Pro unlocks the other 27 English Kokoro voices and additional app themes.
 
 Terms of use:
 https://github.com/hoangbkit/ReadAloud/blob/master/docs/TERMS.md

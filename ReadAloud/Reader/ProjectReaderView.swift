@@ -789,7 +789,7 @@ struct ProjectReaderView: View {
         ))
         let suffix = ns.substring(from: localEnd)
         return Text(prefix)
-            + Text(current).bold().foregroundColor(.accentColor)
+            + Text(current).foregroundColor(.accentColor)
             + Text(suffix)
     }
 
@@ -986,9 +986,7 @@ struct ProjectReaderView: View {
 
 private struct ReaderChaptersSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(PurchaseManager.self) private var purchases
     @State private var searchText = ""
-    @State private var paywallPresented = false
 
     let runtime: ProjectRuntime
     let selectedItemID: UUID?
@@ -1061,12 +1059,6 @@ private struct ReaderChaptersSheet: View {
 
                 Section {
                     Button {
-                        guard purchases.hasPro
-                        else {
-                            paywallPresented = true
-                            return
-                        }
-
                         Task {
                             do {
                                 try await runtime
@@ -1097,12 +1089,6 @@ private struct ReaderChaptersSheet: View {
             .navigationBarTitleDisplayMode(
                 .inline
             )
-            .sheet(
-                isPresented:
-                    $paywallPresented
-            ) {
-                ReadAloudProPaywall()
-            }
             .toolbar {
                 ToolbarItem(
                     placement:

@@ -1,11 +1,39 @@
 import Foundation
 
+/// Applies only to recoverable pronunciation failures, never ONNX inference errors.
+nonisolated enum PronunciationFallbackMode: String, CaseIterable, Identifiable, Sendable {
+    case adaptive
+    case skip
+    case stopWithError
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .adaptive: "Adaptive"
+        case .skip: "Skip"
+        case .stopWithError: "Stop with Error"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .adaptive:
+            "Spell unpronounceable English words where possible; skip unsupported tokens."
+        case .skip:
+            "Skip tokens that cannot be pronounced, then continue listening."
+        case .stopWithError:
+            "Stop listening or generation and show an error for an unpronounceable token."
+        }
+    }
+}
+
 nonisolated enum ReadAloudPreferences {
     enum Key {
         static let defaultVoiceID =
             "com.hoangbkit.readaloud.default-voice"
         static let defaultSpeed =
             "com.hoangbkit.readaloud.default-speed"
+        static let pronunciationFallbackMode =
+            "com.hoangbkit.readaloud.pronunciation-fallback-mode"
         static let skipInterval =
             "com.hoangbkit.readaloud.skip-interval"
         static let continueToNextChapter =
@@ -16,6 +44,13 @@ nonisolated enum ReadAloudPreferences {
             "com.hoangbkit.readaloud.generate-while-listening"
         static let analyticsEnabled =
             "com.hoangbkit.readaloud.analytics-enabled"
+    }
+
+    static var pronunciationFallbackMode: PronunciationFallbackMode {
+        guard let raw = UserDefaults.standard.string(
+            forKey: Key.pronunciationFallbackMode
+        ) else { return .adaptive }
+        return PronunciationFallbackMode(rawValue: raw) ?? .adaptive
     }
 
     static let supportedSkipIntervals =
@@ -63,8 +98,7 @@ nonisolated enum ReadAloudPreferences {
                     Key.defaultSpeed
             )
         guard ReadAloudNarrationCatalog
-            .synthesisSpeeds
-            .contains(value)
+            .isSupportedSpeed(value)
         else {
             return 1.0
         }

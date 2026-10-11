@@ -48,17 +48,38 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
   Cancel/fail and reopen Paste Text to verify the draft is retained; successful
   import clears the matching draft.
 - Try repeated Add actions while importing/cancelling; verify no overlapping jobs.
-- At the Free Library limit, verify all import paths reject a new project even
-  when the displayed Library count is stale.
+- With Pro disabled, import more than three projects using EPUB, PDF, documents,
+  and Paste Text; verify all are allowed and durable.
 - Force-close and reopen; verify projects and progress remain.
 - Start streaming speech and verify first audio/play-pause/seek.
 - Generate one chapter offline and replay the finalized WAV.
 - Change voice/speed and verify incompatible exact audio position is invalidated safely.
+- With the compact and expanded players, verify buffered audio is shown as
+  separate subtle accent-colored source ranges, including disconnected cached
+  chunks after seeking. Unavailable and still-generating chunks must remain
+  neutral; played progress overlays the buffer ranges. Fully validated offline
+  chapters fill the buffer track; ensure scrubbing and VoiceOver remain usable.
+- Change Settings > Speech Engine > Unknown Words between Adaptive (default),
+  Skip and Stop with Error; confirm selection persists after relaunch.
+- Force recoverable bad tokens (e.g. unsupported script and >60-char word):
+  Adaptive tries bounded letter-name fallback; Skip omits failed tokens; Stop
+  reports the specific word. Original source and progress must remain intact.
+- Verify an entirely unreadable chunk advances without an empty WAV in
+  Adaptive/Skip, and changing modes invalidates incompatible chunk/final audio.
+  Actual ONNX model failures must remain errors in every mode.
+- Verify Speed in Settings / project / chapter: 0.5×–2× at 0.1× increments,
+  −/+ controls and four presets. Cancel must preserve the previous speed; Done
+  applies once, and inherited project/chapter speeds retain their source.
+  Free users may choose custom chapter speeds without a paywall.
 - Background the app and verify Lock Screen / Control Center play-pause and seek.
 - Interrupt playback (phone/audio route) and verify pause/recovery behavior.
 - Clear Temporary Cache; verify source/final audio remain.
 - Clear Generated Audio; verify source and reading bookmark remain.
-- Verify Free project limit and canonical Pro paywall.
+- On Free, verify bulk Generate Selected/Remaining/All, prefetch,
+  Generate While Listening, and Clear Cache & Regenerate work without a paywall.
+- Verify the Pro paywall advertises only extra voices and themes.
+- On Free, confirm Heart can be selected as a project or chapter voice while
+  the other 27 voices require Pro. Theme locking must remain unchanged.
 - Restore purchases in the Plan section.
 - Turn Pro simulation off before any production archive.
 
@@ -103,7 +124,7 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 
 The GitHub **Release** workflow creates an unsigned mycli archive for the
 selected branch and configuration (Debug or Release). **Every build bundles
-Kokoro ONNX INT8, both G2P assets and all three voice styles.** There is
+Kokoro ONNX INT8, both G2P assets and all 28 English voice styles.** There is
 no fixture/real selector and no user-facing model download.
 
 The canonical App Store submission path remains manual/local using project.yml
@@ -111,7 +132,7 @@ plus mycli/Xcode, with the same verified ONNX resources.
 
 - On a local build machine, run `python3 scripts/onnx-assets.py download`
   and `bash scripts/stage-onnx-resources-for-build.sh` before generating/archiving.
-- Verify the archived `ReadAloud.app/ONNX` folder contains all six pinned
+- Verify the archived `ReadAloud.app/ONNX` folder contains all 31 pinned
   resources (use `python3 scripts/onnx-assets.py verify --root <app>/ONNX`).
 - Verify the production archive contains no Core ML packages or model selector.
 - Install offline and confirm Listen, resume, and the Settings speech test never

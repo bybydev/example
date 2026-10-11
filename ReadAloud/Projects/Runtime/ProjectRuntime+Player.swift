@@ -1,5 +1,11 @@
 import Foundation
 
+/// Normalized chapter positions that have finished, reusable audio.
+nonisolated struct PlayerBufferedRange: Equatable, Sendable {
+    let start: Double
+    let end: Double
+}
+
 @MainActor
 extension ProjectRuntime {
     func clearSleepTimer() {
@@ -73,6 +79,68 @@ extension ProjectRuntime {
               bookmark.contentRevision == state.item.contentRevision else { return 0 }
         return min(1, max(0, Double(bookmark.textOffsetUTF16)
             / Double(max(1, playerTextLength(for: state.item)))))
+    }
+
+    /// One identity shared by compact and expanded views. A narration or
+    /// pronunciation change invalidates previously generated chunk keys.
+    func playerBufferIdentity(for itemID: UUID) -> String {
+        "\(id.uuidString)/\(itemID.uuidString)/"
+            + (itemState(itemID)?.generationKey ?? "unloaded")
+    }
+
+    /// The live scrubber is on a source-text axis, not a guessed audio-time
+    /// axis. Each finished chunk occupies exactly its original UTF-16 range.
+    /// A validated fully generated chapter fills the entire track instead.
+    func playerBufferedRanges(for itemID: UUID) async -> [PlayerBufferedRange] {
+        guard let state = itemState(itemID) else { return [] }
+        let key = state.generationKey
+        if let asset = finalAudioAsset,
+           asset.metadata.itemID == itemID,
+           asset.metadata.generationKey == key {
+            return [PlayerBufferedRange(start: 0, end: 1)]
+        }
+        // .readyOffline is issued only for matching, checksum-validated final
+        // audio in ProjectStore's generation status reconciliation.
+        if state.generationStatus.state == .readyOffline {
+            return [PlayerBufferedRange(start: 0, end: 1)]
+        }
+
+        let length = playerTextLength(for: state.item)
+        guard length > 0,
+              let runtimeRevision = try? ReadAloudSynthesisContract.runtimeRevision()
+        else { return [] }
+        let chunks = SpeechChunkScheduler().chunks(
+            for: state.item.text, speed: Float(state.resolved.speed)
+        )
+        guard !chunks.isEmpty else { return [] }
+        let requests = chunks.enumerated().map { index, chunk in
+            ChunkAudioRequest(
+                itemID: itemID, index: index, chunk: chunk,
+                generationKey: key, resolved: state.resolved,
+                runtimeRevision: runtimeRevision,
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
+            )
+        }
+        let ready = await chunkCache.cachedSourceRanges(for: requests)
+        // Settings may refresh the runtime while the cache actor is queried.
+        guard !Task.isCancelled,
+              itemState(itemID)?.generationKey == key else { return [] }
+
+        var ranges: [PlayerBufferedRange] = []
+        ranges.reserveCapacity(ready.count)
+        for source in ready.sorted(by: { $0.startUTF16 < $1.startUTF16 }) {
+            let start = min(1, max(0, Double(source.startUTF16) / Double(length)))
+            let end = min(1, max(0, Double(source.endUTF16) / Double(length)))
+            guard end > start else { continue }
+            if let last = ranges.last, start <= last.end {
+                ranges[ranges.count - 1] = PlayerBufferedRange(
+                    start: last.start, end: max(last.end, end)
+                )
+            } else {
+                ranges.append(PlayerBufferedRange(start: start, end: end))
+            }
+        }
+        return ranges
     }
 
     var playerStatus: String {

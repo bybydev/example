@@ -33,9 +33,7 @@ generation compatibility identity remains engine/model/G2P-specific.
 | `KokoroONNX/model_quantized.onnx` | 92.4 MB | Quantized Kokoro speech |
 | `ONNXG2P/misaki-en_us-g2p.onnx` | 3.4 MB | Unknown-word pronunciation |
 | `ONNXG2P/misaki-en_us-g2p.json` | 5.7 MB | Lexicon + vocab |
-| `KokoroONNX/af_heart.bin` | 0.5 MB | Heart |
-| `KokoroONNX/af_bella.bin` | 0.5 MB | Bella |
-| `KokoroONNX/am_michael.bin` | 0.5 MB | Michael |
+| `KokoroONNX/<voice-id>.bin` | ~14.6 MB total | All 28 English Kokoro v1.0 voice styles (20 US, 8 UK); Heart default |
 
 The app looks up these files inside `Bundle.main.resourceURL/ONNX` and never
 uses `URLSession` to fetch speech resources. Missing/invalid bundle assets
@@ -50,7 +48,7 @@ bash scripts/stage-onnx-resources-for-build.sh
 xcodegen generate --spec project.yml
 ```
 
-`scripts/onnx-assets.json` pins all six source paths and source revisions.
+`scripts/onnx-assets.json` pins all 31 resource paths and source revisions.
 The Kokoro INT8 model, Misaki G2P model and dictionary use exact SHA-256
 verification. Voice styles are downloaded from the immutable pinned Kokoro
 revision and validated against the exact 510 × 256 × 4 byte matrix size.
@@ -65,6 +63,7 @@ Model downloads occur exclusively on the build machine, not user devices.
 
 ## Safety and known limitations
 
+- The voice catalog includes only American and British English voices. English G2P is used for every voice.
 - The MLX-backed BART fallback is removed from the ONNX runtime path.
 - Unknown words use the CPU ONNX BART model, with bounded autoregressive
   decoding and an autorelease pool per synchronous inference step.

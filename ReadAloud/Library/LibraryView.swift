@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
-    @Environment(PurchaseManager.self) private var purchases
     @Environment(\.appFoundationTheme) private var theme
     @State private var model = LibraryModel()
     @State private var isFileImporterPresented = false
@@ -18,7 +17,6 @@ struct LibraryView: View {
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
     @State private var pendingPasteImport: PasteDraft?
-    @State private var paywallPresented = false
 
     var body: some View {
         @Bindable var model = model
@@ -121,12 +119,6 @@ struct LibraryView: View {
                     isPastePresented = false
                 }
             )
-        }
-        .sheet(
-            isPresented:
-                $paywallPresented
-        ) {
-            ReadAloudProPaywall()
         }
         .sheet(item: $infoTarget) { entry in
             ProjectInfoSheet(entry: entry)
@@ -440,25 +432,8 @@ struct LibraryView: View {
         return resolved.isEmpty ? [.data] : resolved
     }
 
-    private func canCreateProject()
-        -> Bool
-    {
-        guard !model.isImporting else { return false }
-
-        let allowed =
-            ReadAloudAccessPolicy
-                .canCreateProject(
-                    existingProjectCount:
-                        model.entries.count,
-                    hasPro:
-                        purchases.hasPro
-                )
-
-        if !allowed {
-            paywallPresented = true
-        }
-
-        return allowed
+    private func canCreateProject() -> Bool {
+        !model.isImporting
     }
 
     private func presentFileImporter(types: [UTType]) {
@@ -475,10 +450,7 @@ struct LibraryView: View {
         guard canCreateProject() else { return }
 
         Task {
-            _ = await model.importFile(
-                url,
-                hasPro: purchases.hasPro
-            )
+            _ = await model.importFile(url)
         }
     }
 
@@ -491,8 +463,7 @@ struct LibraryView: View {
         Task {
             let imported = await model.importPaste(
                 text: text,
-                suggestedTitle: title,
-                hasPro: purchases.hasPro
+                suggestedTitle: title
             )
             if imported && pasteDraft.text == text && pasteDraft.title == title {
                 pasteDraft = PasteDraft()

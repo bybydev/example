@@ -27,13 +27,138 @@
       "size": 522240
     },
     {
+      "path": "KokoroONNX/af_alloy.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_alloy.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_aoede.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_aoede.bin",
+      "size": 522240
+    },
+    {
       "path": "KokoroONNX/af_bella.bin",
       "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_bella.bin",
       "size": 522240
     },
     {
+      "path": "KokoroONNX/af_jessica.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_jessica.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_kore.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_kore.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_nicole.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_nicole.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_nova.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_nova.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_river.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_river.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_sarah.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_sarah.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/af_sky.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/af_sky.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_adam.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_adam.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_echo.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_echo.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_eric.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_eric.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_fenrir.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_fenrir.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_liam.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_liam.bin",
+      "size": 522240
+    },
+    {
       "path": "KokoroONNX/am_michael.bin",
       "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_michael.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_onyx.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_onyx.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_puck.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_puck.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/am_santa.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/am_santa.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bf_alice.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bf_alice.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bf_emma.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bf_emma.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bf_isabella.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bf_isabella.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bf_lily.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bf_lily.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bm_daniel.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bm_daniel.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bm_fable.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bm_fable.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bm_george.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bm_george.bin",
+      "size": 522240
+    },
+    {
+      "path": "KokoroONNX/bm_lewis.bin",
+      "url": "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/468588286ebb2dd77c25b9771e5d165896538cce/voices/bm_lewis.bin",
       "size": 522240
     }
   ]

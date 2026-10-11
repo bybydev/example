@@ -153,14 +153,6 @@ extension ProjectRuntime {
         regenerate: Bool
     ) async throws {
         try prepareExplicitWork()
-        if itemIDs.count > 1 {
-            try ReadAloudAccessPolicy
-                .requirePro(
-                    .bulkGeneration,
-                    hasPro: hasPro
-                )
-        }
-
         let requests =
             itemStates.compactMap {
                 state
@@ -203,12 +195,6 @@ extension ProjectRuntime {
     func enqueueAllGeneration()
         async throws
     {
-        try ReadAloudAccessPolicy
-            .requirePro(
-                .bulkGeneration,
-                hasPro: hasPro
-            )
-
         try await enqueueSelectedGeneration(
             itemIDs:
                 Set(itemStates.map(\.id)),
@@ -274,12 +260,6 @@ extension ProjectRuntime {
         itemIDs: Set<UUID>
     ) async throws {
         try prepareExplicitWork()
-        try ReadAloudAccessPolicy
-            .requirePro(
-                .advancedRegeneration,
-                hasPro: hasPro
-            )
-
         guard !itemIDs.isEmpty else {
             return
         }
@@ -339,7 +319,7 @@ extension ProjectRuntime {
     }
 
     func schedulePlaybackPrefetch() {
-        guard hasPro, ReadAloudPreferences.prefetchCount > 0,
+        guard ReadAloudPreferences.prefetchCount > 0,
               !readerPauseRequested, !synthesisSuspendedForMemoryPressure,
               prefetchTask == nil, let operationID = playbackOperationID,
               let itemID = activity.activeItemID,
@@ -363,7 +343,7 @@ extension ProjectRuntime {
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard !Task.isCancelled, hasPro, !synthesisSuspendedForMemoryPressure else { return }
+        guard !Task.isCancelled, !synthesisSuspendedForMemoryPressure else { return }
 
         let prefetchCount =
             ReadAloudPreferences

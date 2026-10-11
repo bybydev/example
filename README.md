@@ -108,15 +108,15 @@ ReadAloud uses **Kokoro ONNX INT8** as its sole speech backend, including
 streaming, generation queue, sample playback and the DEBUG reader. Core ML,
 KokoroCoreML, and the legacy fixture workflow are removed.
 
-The app includes all six verified, offline runtime resources:
+The app includes 31 verified, offline runtime resources:
 
 - Kokoro INT8 speech model (about 92.4 MB)
 - Misaki G2P ONNX model (about 3.4 MB)
 - English G2P dictionary/vocabulary (about 5.7 MB)
-- Heart, Bella and Michael voice styles (about 0.5 MB each)
+- All 28 English Kokoro v1.0 voice styles (20 American and 8 British, about 0.5 MB each; Heart by default)
 
 There are **no user downloads or first-play downloads**. The app accesses the
-models from its signed bundle. Settings > Kokoro ONNX INT8 shows bundled
+models from its signed bundle. All voice styles use the bundled English-language G2P. Settings > Kokoro ONNX INT8 shows bundled
 readiness and provides an offline real-text speech test.
 
 ```text
@@ -144,7 +144,7 @@ bash scripts/stage-onnx-resources-for-build.sh
 xcodegen generate --spec project.yml
 ```
 
-The six source URLs and pinned hashes are in `scripts/onnx-assets.json`.
+The 31 source URLs and pinned resource checks are in `scripts/onnx-assets.json`.
 Large binaries are ignored by Git. The Release workflow always stages and
 verifies the ONNX bundle, regardless of Debug or Release configuration,
 and verifies the archived app's resources before publishing.
@@ -173,27 +173,20 @@ tools. It is not part of the Release product.
 
 ## Free / Pro
 
-Free includes:
+Free includes unlimited projects, importing, streaming and offline listening,
+per-chapter voice/speed customization (subject to voice entitlement), bulk
+generation, automatic prefetch, generate while listening, and cache regeneration.
 
-- up to 3 projects;
-- Heart voice;
-- normal Reader and streaming playback;
-- single-chapter offline generation;
-- storage cleanup;
-- Midnight and Paper themes.
+Only **voices and themes** are gated for Pro:
+- **Voices:** Heart is free; Pro unlocks the other 27 English Kokoro voices.
+- **Themes:** ReadAloud Light and Dark are free; Pro unlocks the extra themes.
 
-ReadAloud Pro adds:
+Voice entitlement is enforced when choosing and using a voice, including
+per-chapter overrides. Project limits, custom chapter speed, generation and
+prefetch are not Pro features.
 
-- unlimited projects;
-- all bundled voices;
-- per-chapter narration overrides;
-- bulk generation;
-- automatic prefetch;
-- generate while listening;
-- advanced regeneration;
-- premium themes.
-
-`ReadAloudAccessPolicy` is the central access contract.
+`ReadAloudAccessPolicy` is the central voice access contract.
+Theme entitlements are handled by AppFoundation.
 
 ## Release
 

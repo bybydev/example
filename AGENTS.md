@@ -32,6 +32,25 @@ These rules apply to work in the ReadAloud repository.
 - keep ONNX model, G2P and voice assets bundled via scripts/onnx-assets.py
 - preserve the internal engineering name `ReadAloud` even if the public app brand changes
 
+## Monetization and entitlement decisions
+
+**Never invent, infer, extend, or silently preserve a paywall restriction as a product decision.** The product owner must explicitly approve **what is Free and what requires Pro**. Existing code, old plans/docs, paywall copy, feature flags, framework defaults, sibling apps (including Spokio), and previous assistant implementations are **not** evidence of approval.
+
+Current **explicitly approved** Riidrr access boundaries:
+
+- **Voices:** Heart (`af_heart`) is Free. The other 27 bundled English Kokoro voices require Pro. Voice selection at app, project, and chapter levels is allowed, but applying a Pro voice still requires Pro.
+- **Themes:** ReadAloud Light and Dark are Free. Additional themes require Pro.
+- **Everything else is Free for now**, including unlimited Library projects/imports, chapter-level voice and speed customization, bulk/selected/all offline generation, automatic prefetch, generate while listening, and clear-cache/advanced regeneration.
+
+Non-negotiable implementation rules:
+
+- Do not add, change, or reintroduce a Pro gate, Free limit, paywall entry point, locked badge, entitlement fallback, or Free/Pro marketing claim **without explicit owner approval for that exact boundary**.
+- Copying or adapting UI/features from Spokio or another app **does not authorize copying its monetization or restrictions**. Reuse UI and behavior independently from access rules.
+- If a task touches an existing restriction, **flag it as existing behavior, not an approved requirement**. Do not assume it should remain or be expanded. Ask for an explicit decision when the intended access is unclear; do not quietly choose a paywall rule.
+- Implement approved access rules consistently in UI, runtime/domain enforcement, settings, paywall comparisons, App Store copy, and release checks. Do not unlock a button while leaving the same operation blocked deeper in the runtime.
+- Keep purchase infrastructure available, but gate **only** the expressly approved features. New functionality defaults to Free unless the owner explicitly decides otherwise.
+- Before completing a PR with entitlement-related changes, statically audit every added or modified `hasPro`, `requirePro`, access-policy, locked-label, and paywall path against the approved list. State the exact gates retained or changed.
+
 ## CI and release automation
 
 The canonical App Store shipping path remains manual/local using Xcode/mycli and

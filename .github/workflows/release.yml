@@ -161,7 +161,7 @@ jobs:
 
           Configuration: $BUILD_CONFIGURATION
           Speech backend: ONNX Runtime CPU INT8 only
-          Offline assets: Kokoro INT8, Misaki G2P ONNX + lexicon, 3 voices
+          Offline assets: Kokoro INT8, Misaki G2P ONNX + lexicon, 28 English voices
           Asset download required on device: No
           Source ref: ${{ github.ref }}
           Source commit: $RELEASE_SHA"

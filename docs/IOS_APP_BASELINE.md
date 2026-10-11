@@ -229,7 +229,10 @@ Use:
 
 Do not persist a separate production `hasPro` flag as entitlement truth.
 
-The exact ReadAloud product mix and gating remain a later product decision.
+Current release decision: lock only Kokoro voice selection (Heart is Free)
+and extra themes. Projects, offline generation, speed overrides, prefetch and
+regeneration are all available on Free. Future monetization changes require
+explicit approval.
 
 ---
 

@@ -52,6 +52,68 @@ struct ProjectPlayerSkipButton: View {
     }
 }
 
+/// One normalized timeline for both player sizes. Each distinct chunk cache
+/// interval is drawn at its actual chapter position, never as a leading fill.
+private struct PlayerBufferedTrack: View {
+    let runtime: ProjectRuntime
+    let itemID: UUID
+    let progress: Double
+    let barHeight: CGFloat
+    var showsThumb = false
+
+    @State private var ranges: [PlayerBufferedRange] = []
+
+    private var identity: String {
+        runtime.playerBufferIdentity(for: itemID)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(0, geometry.size.width)
+            let played = CGFloat(min(1, max(0, progress)))
+
+            ZStack(alignment: .leading) {
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.secondary.opacity(0.18))
+                    ForEach(Array(ranges.enumerated()), id: \.offset) { entry in
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.27))
+                            .frame(width: width * CGFloat(entry.element.end - entry.element.start))
+                            .offset(x: width * CGFloat(entry.element.start))
+                    }
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: width * played)
+                }
+                .frame(height: barHeight)
+                .clipShape(Capsule())
+
+                if showsThumb {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 19, height: 19)
+                        .shadow(color: .black.opacity(0.16), radius: 2, y: 1)
+                        .offset(x: min(max(0, width * played - 9.5), max(0, width - 19)))
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .allowsHitTesting(false)
+        .task(id: identity) {
+            ranges = []
+            while !Task.isCancelled {
+                let updated = await runtime.playerBufferedRanges(for: itemID)
+                guard !Task.isCancelled else { return }
+                if ranges != updated { ranges = updated }
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { return }
+            }
+        }
+        .onChange(of: identity) { _, _ in ranges = [] }
+    }
+}
+
 struct ProjectPlayerScrubber: View {
     let runtime: ProjectRuntime
     let itemID: UUID
@@ -61,6 +123,7 @@ struct ProjectPlayerScrubber: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             PlayerScrubberContent(
+                runtime: runtime,
                 itemID: itemID,
                 progress: runtime.playerProgress(for: itemID),
                 duration: runtime.playerDuration(for: itemID),
@@ -108,6 +171,7 @@ struct ProjectPlayerSleepTimer: View {
 }
 
 private struct PlayerScrubberContent: View {
+    let runtime: ProjectRuntime
     let itemID: UUID
     let progress: Double
     let duration: Double?
@@ -123,38 +187,52 @@ private struct PlayerScrubberContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Slider(value: Binding(
-                get: { value },
-                set: { newValue in
-                    draggedProgress = newValue
+            ZStack {
+                PlayerBufferedTrack(
+                    runtime: runtime,
+                    itemID: itemID,
+                    progress: value,
+                    barHeight: 4,
+                    showsThumb: true
+                )
+                .padding(.horizontal, 12)
+
+                Slider(value: Binding(
+                    get: { value },
+                    set: { newValue in
+                        draggedProgress = newValue
+                    }
+                ), in: 0...1, onEditingChanged: { editing in
+                    if editing {
+                        draggedProgress = progress
+                        dragItemID = itemID
+                        dragDuration = duration
+                        isDragging = true
+                    } else {
+                        let target = draggedProgress
+                        let canCommit = isDragging && dragItemID == itemID
+                            && dragDuration == duration && enabled
+                        isDragging = false
+                        if canCommit { onSeek(target) }
+                    }
+                })
+                .disabled(!enabled)
+                .accessibilityLabel(duration == nil ? "Chapter position" : "Playback position")
+                .accessibilityValue(duration.map { Self.time(value * $0) }
+                    ?? value.formatted(.percent.precision(.fractionLength(0))))
+                .accessibilityHint(duration == nil ? "Jumps to the nearest passage." : "Seeks within this chapter.")
+                .accessibilityAdjustableAction { direction in
+                    guard enabled else { return }
+                    switch direction {
+                    case .increment: onSeek(min(1, progress + 0.05))
+                    case .decrement: onSeek(max(0, progress - 0.05))
+                    @unknown default: break
+                    }
                 }
-            ), in: 0...1, onEditingChanged: { editing in
-                if editing {
-                    draggedProgress = progress
-                    dragItemID = itemID
-                    dragDuration = duration
-                    isDragging = true
-                } else {
-                    let target = draggedProgress
-                    let canCommit = isDragging && dragItemID == itemID
-                        && dragDuration == duration && enabled
-                    isDragging = false
-                    if canCommit { onSeek(target) }
-                }
-            })
-            .disabled(!enabled)
-            .accessibilityLabel(duration == nil ? "Chapter position" : "Playback position")
-            .accessibilityValue(duration.map { Self.time(value * $0) }
-                ?? value.formatted(.percent.precision(.fractionLength(0))))
-            .accessibilityHint(duration == nil ? "Jumps to the nearest passage." : "Seeks within this chapter.")
-            .accessibilityAdjustableAction { direction in
-                guard enabled else { return }
-                switch direction {
-                case .increment: onSeek(min(1, progress + 0.05))
-                case .decrement: onSeek(max(0, progress - 0.05))
-                @unknown default: break
-                }
+                // Retain the native seek and VoiceOver behavior.
+                .opacity(0.02)
             }
+            .frame(height: 36)
 
             HStack {
                 if let duration {
@@ -260,16 +338,12 @@ struct ProjectPlayerCompactContent: View {
             }
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.secondary.opacity(0.18))
-                        Capsule()
-                            .fill(Color.accentColor)
-                            .frame(width: geometry.size.width * CGFloat(
-                                min(1, max(0, runtime.playerProgress(for: itemID)))
-                            ))
-                    }
-                }
+                PlayerBufferedTrack(
+                    runtime: runtime,
+                    itemID: itemID,
+                    progress: runtime.playerProgress(for: itemID),
+                    barHeight: 2
+                )
                 .frame(height: 2)
                 .accessibilityLabel("Chapter playback progress")
                 .accessibilityValue(
@@ -327,6 +401,12 @@ struct ProjectPlayerExpandedContent: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                    } else if case .failed = runtime.activity.playbackState {
+                        Text(runtime.playerStatus)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                            .accessibilityLabel("Playback error: \(runtime.playerStatus)")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -623,13 +623,13 @@ Use AppFoundation's paywall rather than designing a ReadAloud-specific purchase 
 
 Entry points should occur at meaningful product boundaries, not randomly.
 
-Potential gated actions:
+Only gated actions in the current release:
 
-- exceeding free Library limit
-- advanced voices
-- offline generation
-- bulk generation
-- advanced per-item customization
+- choosing a Pro Kokoro voice (app, project, or chapter level)
+- choosing a premium theme
+
+Library count, offline generation, bulk generation, speed customization,
+prefetch, and regeneration are not gated.
 
 If an action is gated:
 

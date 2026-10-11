@@ -322,24 +322,16 @@ Final event naming should follow existing analytics conventions.
 
 ## Pro strategy
 
-The exact paywall boundary should be reviewed before implementation is finalized.
+For this release, **only voices and themes are Pro-gated**.
 
-Likely Pro candidates:
+- Free: Heart voice and ReadAloud Light/Dark; all reading, project, speed,
+  generation, prefetch, and regeneration functionality.
+- Pro: the other 27 English voices and additional themes.
 
-- higher/unlimited project count
-- advanced voices
-- full persistent/offline generation
-- bulk generation
-- per-item voice/speed overrides
-- advanced storage/generation controls
-
-Principles:
-
-- free mode must demonstrate the real product
-- do not gate basic comprehension of the app
-- avoid scattering paywall checks through random views
-- centralize entitlement decisions
-- use AppFoundation's existing purchase infrastructure
+Per-chapter voice overrides are free as a feature; applying a premium voice
+still requires Pro. Keep entitlements centralized and retain AppFoundation's
+purchase/restore stack. Do not introduce new limits without an explicit product
+decision.
 
 ---
 

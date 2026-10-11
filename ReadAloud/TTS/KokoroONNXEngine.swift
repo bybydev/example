@@ -111,12 +111,14 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         let clock = ContinuousClock()
         let start = clock.now
         var samples: [Float] = []
+        // Keep recursive subfragments on the same policy for this inference.
+        let pronunciationMode = ReadAloudPreferences.pronunciationFallbackMode
 
         do {
             try synthesizeFragments(
                 text: text, speed: speed, processor: processor,
                 voiceData: voiceData, session: session,
-                into: &samples, depth: 0
+                mode: pronunciationMode, into: &samples, depth: 0
             )
             try Task.checkCancellation()
             guard !samples.isEmpty else { throw BenchmarkAudioError.emptyAudio }
@@ -169,12 +171,22 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         processor: KokoroTextProcessor,
         voiceData: Data,
         session: ORTSession,
+        mode: PronunciationFallbackMode,
         into samples: inout [Float],
         depth: Int
     ) throws {
         try Task.checkCancellation()
         let normalized = KokoroTextProcessor.normalizeWhitespace(text)
-        let phonemes = try processor.phonemize(normalized)
+        let phonemes = try processor.phonemize(normalized, mode: mode)
+        if mode != .stopWithError,
+           !phonemes.phonemes.contains(where: { $0.isLetter }) {
+            // Keep audio/source alignment without caching an empty ONNX result.
+            // 100 ms of silence advances a wholly unreadable chunk.
+            guard samples.count <= ReadAloudSafety.maximumParagraphSamples - 2_400
+            else { throw BenchmarkAudioError.outputInvalid }
+            samples.append(contentsOf: repeatElement(Float.zero, count: 2_400))
+            return
+        }
         let tokenization = processor.tokenization(
             forPhonemes: phonemes.phonemes
         )
@@ -199,12 +211,12 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
             try synthesizeFragments(
                 text: pair.0, speed: speed, processor: processor,
                 voiceData: voiceData, session: session,
-                into: &samples, depth: depth + 1
+                mode: mode, into: &samples, depth: depth + 1
             )
             try synthesizeFragments(
                 text: pair.1, speed: speed, processor: processor,
                 voiceData: voiceData, session: session,
-                into: &samples, depth: depth + 1
+                mode: mode, into: &samples, depth: depth + 1
             )
             return
         }

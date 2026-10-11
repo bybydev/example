@@ -160,25 +160,21 @@ final class LibraryModel {
     }
 
     func importFile(
-        _ url: URL,
-        hasPro: Bool
+        _ url: URL
     ) async -> Bool {
         await importSource(
             .file(url),
-            detail: url.lastPathComponent,
-            hasPro: hasPro
+            detail: url.lastPathComponent
         )
     }
 
     func importPaste(
         text: String,
-        suggestedTitle: String?,
-        hasPro: Bool
+        suggestedTitle: String?
     ) async -> Bool {
         await importSource(
             .pastedText(text, suggestedTitle: suggestedTitle),
-            detail: "Pasted Text",
-            hasPro: hasPro
+            detail: "Pasted Text"
         )
     }
 
@@ -192,20 +188,9 @@ final class LibraryModel {
 
     private func importSource(
         _ source: ReadAloudImportSource,
-        detail: String,
-        hasPro: Bool
+        detail: String
     ) async -> Bool {
         guard !isImporting, !Task.isCancelled else { return false }
-
-        do {
-            try ReadAloudAccessPolicy.requireLibraryCapacity(
-                existingProjectCount: entries.count,
-                hasPro: hasPro
-            )
-        } catch {
-            errorMessage = Self.message(for: error)
-            return false
-        }
 
         guard let importer else {
             errorMessage = initializationError ?? "Import is unavailable."
@@ -232,8 +217,6 @@ final class LibraryModel {
         let worker = Task.detached(priority: .userInitiated) {
             try await importer.importSource(
                 source,
-                maximumProjectCount: hasPro
-                    ? nil : ReadAloudAccessPolicy.freeProjectLimit,
                 progress: reportProgress
             )
         }

@@ -177,8 +177,7 @@ final class ProjectRuntime {
             return true
         }
 
-        return !hasPro
-            || !ReadAloudPreferences
+        return !ReadAloudPreferences
                 .generateWhileListening
     }
 
@@ -530,6 +529,11 @@ final class ProjectRuntime {
     }
 
     func updateProjectSpeed(_ speed: Double?) async throws {
+        if let speed, !ReadAloudNarrationCatalog.isSupportedSpeed(speed) {
+            throw ProjectStoreError.invalidData(
+                "Synthesis speed must be between 0.5× and 2.0× in steps of 0.1."
+            )
+        }
         guard let project else {
             throw ProjectStoreError.projectNotFound(id)
         }
@@ -564,14 +568,6 @@ final class ProjectRuntime {
         itemID: UUID,
         mode: ItemSettingMode
     ) async throws {
-        if mode == .custom {
-            try ReadAloudAccessPolicy
-                .requirePro(
-                    .itemNarrationOverrides,
-                    hasPro: hasPro
-                )
-        }
-
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -610,11 +606,6 @@ final class ProjectRuntime {
         itemID: UUID,
         voiceID: String
     ) async throws {
-        try ReadAloudAccessPolicy
-            .requirePro(
-                .itemNarrationOverrides,
-                hasPro: hasPro
-            )
 
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
@@ -662,14 +653,6 @@ final class ProjectRuntime {
         itemID: UUID,
         mode: ItemSettingMode
     ) async throws {
-        if mode == .custom {
-            try ReadAloudAccessPolicy
-                .requirePro(
-                    .itemNarrationOverrides,
-                    hasPro: hasPro
-                )
-        }
-
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
@@ -708,11 +691,11 @@ final class ProjectRuntime {
         itemID: UUID,
         speed: Double
     ) async throws {
-        try ReadAloudAccessPolicy
-            .requirePro(
-                .itemNarrationOverrides,
-                hasPro: hasPro
+        guard ReadAloudNarrationCatalog.isSupportedSpeed(speed) else {
+            throw ProjectStoreError.invalidData(
+                "Synthesis speed must be between 0.5× and 2.0× in steps of 0.1."
             )
+        }
 
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
@@ -860,12 +843,6 @@ final class ProjectRuntime {
 
     func enqueueRemainingGeneration() async throws {
         try prepareExplicitWork()
-        try ReadAloudAccessPolicy
-            .requirePro(
-                .bulkGeneration,
-                hasPro: hasPro
-            )
-
         let requests: [ProjectGenerationRequest] = itemStates.compactMap { entry -> ProjectGenerationRequest? in
             switch entry.generationStatus.state {
             case .readyOffline, .generating, .waiting:

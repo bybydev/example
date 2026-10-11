@@ -90,7 +90,6 @@ struct ProjectDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
-    @Environment(PurchaseManager.self) private var purchases
     @State private var model: ProjectDetailModel
     @State private var projectVoicePresented = false
     @State private var projectSpeedPresented = false
@@ -104,7 +103,6 @@ struct ProjectDetailView: View {
     @State private var renamePresented = false
     @State private var renameText = ""
     @State private var deletePresented = false
-    @State private var paywallPresented = false
 
     let initialTitle: String
     let onProjectChanged: () -> Void
@@ -221,12 +219,6 @@ struct ProjectDetailView: View {
                 model: model,
                 onChanged: notifyProjectChanged
             )
-        }
-        .sheet(
-            isPresented:
-                $paywallPresented
-        ) {
-            ReadAloudProPaywall()
         }
         .alert(
             "Rename Project",
@@ -603,15 +595,9 @@ struct ProjectDetailView: View {
             }
 
             Button {
-                requirePro(
-                    .bulkGeneration
-                ) {
-                    Task {
-                        if await model
-                            .queueRemaining()
-                        {
-                            notifyProjectChanged()
-                        }
+                Task {
+                    if await model.queueRemaining() {
+                        notifyProjectChanged()
                     }
                 }
             } label: {
@@ -622,15 +608,9 @@ struct ProjectDetailView: View {
             }
 
             Button {
-                requirePro(
-                    .bulkGeneration
-                ) {
-                    Task {
-                        if await model
-                            .queueAll()
-                        {
-                            notifyProjectChanged()
-                        }
+                Task {
+                    if await model.queueAll() {
+                        notifyProjectChanged()
                     }
                 }
             } label: {
@@ -717,34 +697,11 @@ struct ProjectDetailView: View {
     private func clearCacheAndRegenerate(
         _ entry: ProjectDetailModel.ItemEntry
     ) {
-        requirePro(
-            .advancedRegeneration
-        ) {
-            Task {
-                if await model
-                    .clearCacheAndRegenerate(
-                        itemIDs: [
-                            entry.id,
-                        ]
-                    )
-                {
-                    notifyProjectChanged()
-                }
+        Task {
+            if await model.clearCacheAndRegenerate(itemIDs: [entry.id]) {
+                notifyProjectChanged()
             }
         }
-    }
-
-    private func requirePro(
-        _ feature:
-            ReadAloudProFeature,
-        action: () -> Void
-    ) {
-        guard purchases.hasPro else {
-            paywallPresented = true
-            return
-        }
-
-        action()
     }
 
     private func notifyProjectChanged() {
@@ -1017,9 +974,7 @@ private struct ProjectItemInfoSheet: View {
 
 private struct OfflineAudioSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(PurchaseManager.self) private var purchases
     @State private var selection = Set<UUID>()
-    @State private var paywallPresented = false
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
@@ -1163,14 +1118,6 @@ private struct OfflineAudioSheet: View {
                         Button {
                             let selected =
                                 selection
-                            if selected.count > 1,
-                               !purchases.hasPro
-                            {
-                                paywallPresented =
-                                    true
-                                return
-                            }
-
                             Task {
                                 if await model
                                     .queueSelected(
@@ -1192,12 +1139,6 @@ private struct OfflineAudioSheet: View {
                     }
 
                     Button {
-                        guard purchases.hasPro
-                        else {
-                            paywallPresented = true
-                            return
-                        }
-
                         Task {
                             if await model
                                 .queueRemaining()
@@ -1231,12 +1172,6 @@ private struct OfflineAudioSheet: View {
             .readAloudThemeSurface()
             .navigationTitle("Offline Audio")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(
-                isPresented:
-                    $paywallPresented
-            ) {
-                ReadAloudProPaywall()
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     EditButton()
@@ -1252,11 +1187,6 @@ private struct OfflineAudioSheet: View {
     private func advancedRegenerate(
         _ itemID: UUID
     ) {
-        guard purchases.hasPro else {
-            paywallPresented = true
-            return
-        }
-
         Task {
             if await model
                 .clearCacheAndRegenerate(

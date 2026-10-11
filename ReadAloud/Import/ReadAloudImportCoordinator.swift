@@ -17,7 +17,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
 
     func importSource(
         _ source: ReadAloudImportSource,
-        maximumProjectCount: Int? = nil,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)? = nil
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -32,14 +31,12 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         case .file(let url):
             return try await importFile(
                 url,
-                maximumProjectCount: maximumProjectCount,
                 progress: progress
             )
         case .pastedText(let text, let suggestedTitle):
             return try await importPaste(
                 text,
                 suggestedTitle: suggestedTitle,
-                maximumProjectCount: maximumProjectCount,
                 progress: progress
             )
         }
@@ -47,7 +44,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
 
     private func importFile(
         _ externalURL: URL,
-        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         let fileName = externalURL.lastPathComponent
@@ -107,7 +103,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedExtension: fileExtension,
             retainedRevision: retainedRevision,
             retainedSource: .file(localURL),
-            maximumProjectCount: maximumProjectCount,
             progress: progress
         )
     }
@@ -115,7 +110,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
     private func importPaste(
         _ text: String,
         suggestedTitle: String?,
-        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -139,7 +133,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedExtension: "txt",
             retainedRevision: ProjectDigest.sha256(sourceData),
             retainedSource: .data(sourceData),
-            maximumProjectCount: maximumProjectCount,
             progress: progress
         )
     }
@@ -167,7 +160,6 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         retainedExtension: String,
         retainedRevision: String,
         retainedSource: ProjectRetainedSource,
-        maximumProjectCount: Int?,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
@@ -217,8 +209,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedSource: retainedSource,
             retainedArtwork: normalized.artwork.map {
                 ProjectRetainedArtwork(data: $0.data)
-            },
-            maximumProjectCount: maximumProjectCount
+            }
         )
 
         let snapshot = ProjectSnapshot(project: project)

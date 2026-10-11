@@ -182,18 +182,9 @@ actor ProjectStore {
         items: [ProjectContentItem],
         queue: ProjectQueueDocument = ProjectQueueDocument(),
         retainedSource: ProjectRetainedSource? = nil,
-        retainedArtwork: ProjectRetainedArtwork? = nil,
-        maximumProjectCount: Int? = nil
+        retainedArtwork: ProjectRetainedArtwork? = nil
     ) throws {
         try Task.checkCancellation()
-        if let maximumProjectCount {
-            let count = try catalog().projects.count
-            guard count < maximumProjectCount else {
-                throw ReadAloudAccessError.freeLibraryLimitReached(
-                    limit: maximumProjectCount
-                )
-            }
-        }
         try ProjectValidation.validate(project)
         try ProjectValidation.validate(manifest)
         try ProjectValidation.validate(queue)

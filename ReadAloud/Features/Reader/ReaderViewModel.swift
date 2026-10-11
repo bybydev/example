@@ -19,7 +19,7 @@ final class ReaderViewModel {
     @ObservationIgnored
     private var actionTask: Task<Void, Never>?
 
-    let speedOptions: [Float] = [0.8, 1.0, 1.2]
+    let speedOptions: [Float] = ReadAloudNarrationCatalog.synthesisSpeeds.map(Float.init)
 
     init() {
         metrics.thermalState = PerformanceMetrics.currentThermalState

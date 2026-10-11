@@ -10,6 +10,7 @@ nonisolated final class ONNXG2PPhonemizer {
         case unsupportedCharacter(UInt32)
         case missingPronunciation
         case invalidNumber
+        case tokenFailure(String, String)
 
         var errorDescription: String? {
             switch self {
@@ -23,6 +24,8 @@ nonisolated final class ONNXG2PPhonemizer {
                 "The ONNX pronunciation model could not resolve a word."
             case .invalidNumber:
                 "This ONNX voice cannot safely normalize a number."
+            case .tokenFailure(let token, let reason):
+                "Cannot pronounce ‘\(token)’: \(reason)"
             }
         }
     }
@@ -65,9 +68,12 @@ nonisolated final class ONNXG2PPhonemizer {
         )
     }
 
-    /// Covers every word or fails. We deliberately do not return the silent
-    /// unknown-word marker ("❓") or drop speech-bearing tokens.
-    func phonemize(_ text: String) throws -> KokoroPhonemeResult {
+    /// Adaptive/Skip recover individual bad tokens; strict mode retains the
+    /// previous fail-fast contract. Never conceal ONNX infrastructure errors.
+    func phonemize(
+        _ text: String,
+        mode: PronunciationFallbackMode = .stopWithError
+    ) throws -> KokoroPhonemeResult {
         try Task.checkCancellation()
         // EPUB dialogue commonly uses curly single quotes. Distinguish those
         // standalone marks from contractions before passing words to G2P.
@@ -76,7 +82,10 @@ nonisolated final class ONNXG2PPhonemizer {
         let matches = tokenizer.matches(
             in: source, range: NSRange(location: 0, length: ns.length)
         )
-        guard !matches.isEmpty else { throw Error.unsupportedText }
+        guard !matches.isEmpty else {
+            if mode == .stopWithError { throw Error.unsupportedText }
+            return KokoroPhonemeResult(phonemes: "", droppedTokens: 0)
+        }
         let tokens = matches.map { ns.substring(with: $0.range) }
 
         var output = ""
@@ -99,38 +108,50 @@ nonisolated final class ONNXG2PPhonemizer {
             }
 
             let spokenText: String
-            if token.first?.isNumber == true {
-                spokenText = try Self.spellNumber(token)
-            } else if token == "&" {
-                spokenText = "and"
-            } else if token == "%" {
-                spokenText = "percent"
-            } else if token == "+" {
-                spokenText = "plus"
-            } else if token == "=" {
-                spokenText = "equals"
-            } else if token == "@" {
-                spokenText = "at"
-            } else if token == "$" {
-                spokenText = "dollars"
-            } else if token == "#" {
-                spokenText = "number"
-            } else if token == "/" {
-                spokenText = "slash"
-            } else if token == "-" || token == "–" {
-                output += "—"
+            do {
+                if token.first?.isNumber == true {
+                    spokenText = try Self.spellNumber(token)
+                } else if token == "&" {
+                    spokenText = "and"
+                } else if token == "%" {
+                    spokenText = "percent"
+                } else if token == "+" {
+                    spokenText = "plus"
+                } else if token == "=" {
+                    spokenText = "equals"
+                } else if token == "@" {
+                    spokenText = "at"
+                } else if token == "$" {
+                    spokenText = "dollars"
+                } else if token == "#" {
+                    spokenText = "number"
+                } else if token == "/" {
+                    spokenText = "slash"
+                } else if token == "-" || token == "–" {
+                    output += "—"
+                    previousWasWord = false
+                    continue
+                } else {
+                    spokenText = token
+                }
+            } catch {
+                guard Self.isRecoverable(error) else { throw error }
+                if mode == .stopWithError {
+                    throw Error.tokenFailure(token, Self.reason(error))
+                }
+                appendSkipBoundary(to: &output)
                 previousWasWord = false
                 continue
-            } else {
-                spokenText = token
             }
 
             let next = tokens.dropFirst(index + 1).first { next in
                 next.first?.isLetter == true
             }
-            let pronunciation = try phrase(spokenText, following: next)
-            guard !pronunciation.isEmpty else {
-                throw Error.missingPronunciation
+            let pronunciation = try phrase(spokenText, following: next, mode: mode)
+            guard let pronunciation, !pronunciation.isEmpty else {
+                appendSkipBoundary(to: &output)
+                previousWasWord = false
+                continue
             }
             if previousWasWord && !output.isEmpty {
                 output += " "
@@ -145,12 +166,18 @@ nonisolated final class ONNXG2PPhonemizer {
         }
 
         guard output.contains(where: { $0.isLetter }) else {
-            throw Error.missingPronunciation
+            guard mode != .stopWithError else { throw Error.missingPronunciation }
+            // Deliberate all-unreadable marker. Engine produces bounded silence.
+            return KokoroPhonemeResult(phonemes: "", droppedTokens: 0)
         }
         return KokoroPhonemeResult(phonemes: output, droppedTokens: 0)
     }
 
-    private func phrase(_ source: String, following: String?) throws -> String {
+    private func phrase(
+        _ source: String,
+        following: String?,
+        mode: PronunciationFallbackMode
+    ) throws -> String? {
         let words = source.split(separator: " ").map(String.init)
         guard !words.isEmpty else { throw Error.missingPronunciation }
         var results: [String] = []
@@ -158,9 +185,92 @@ nonisolated final class ONNXG2PPhonemizer {
             try Task.checkCancellation()
             let next = words.indices.contains(index + 1)
                 ? words[index + 1] : following
-            results.append(try pronounce(word, following: next))
+            do {
+                let pronunciation = try pronounce(word, following: next)
+                guard isSupported(pronunciation) else { throw Error.missingPronunciation }
+                results.append(pronunciation)
+            } catch {
+                guard Self.isRecoverable(error) else { throw error }
+                if mode == .stopWithError {
+                    throw Error.tokenFailure(word, Self.reason(error))
+                }
+                if mode == .adaptive, let spelled = spellLatinWord(word) {
+                    results.append(spelled)
+                }
+                // Skip is intentional; retain all surrounding valid words.
+            }
         }
-        return results.joined(separator: " ")
+        return results.isEmpty ? nil : results.joined(separator: " ")
+    }
+
+    private func isSupported(_ phonemes: String) -> Bool {
+        !phonemes.isEmpty
+            && phonemes.contains(where: { $0.isLetter })
+            && phonemes.allSatisfy { vocabulary[String($0)] != nil }
+    }
+
+    private func appendSkipBoundary(to output: inout String) {
+        guard output.contains(where: { $0.isLetter }),
+              let last = output.last,
+              !Self.punctuation.contains(last) else { return }
+        // Pause at the gap, rather than concatenating words across the skipped token.
+        output += ","
+    }
+
+    private static func reason(_ error: Swift.Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+    }
+
+    private static func isRecoverable(_ error: Swift.Error) -> Bool {
+        if error is CancellationError { return false }
+        if let error = error as? Error {
+            switch error {
+            case .unsupportedText, .unsupportedCharacter,
+                 .missingPronunciation, .invalidNumber: return true
+            case .invalidMetadata, .tokenFailure: return false
+            }
+        }
+        if let error = error as? ONNXG2PBART.Error {
+            switch error {
+            case .inputTooLong, .invalidPhonemes: return true
+            case .invalidMetadata, .incompatibleModelSignature,
+                 .invalidOutput: return false
+            }
+        }
+        return false
+    }
+
+    /// No recursive BART retries. Known letter names or Kokoro IPA literals
+    /// are accepted only when they are in the exact bundled vocabulary.
+    private func spellLatinWord(_ word: String) -> String? {
+        let folded = word.folding(
+            options: [.diacriticInsensitive, .widthInsensitive],
+            locale: Locale(identifier: "en_US")
+        )
+        let letters = folded.uppercased().filter { $0 != "'" }
+        guard !letters.isEmpty, letters.count <= 32,
+              letters.allSatisfy({ $0 >= "A" && $0 <= "Z" }) else {
+            return nil
+        }
+
+        let names: [Character: String] = [
+            "A": "ˈA", "B": "bˈi", "C": "sˈi", "D": "dˈi",
+            "E": "ˈi", "F": "ˈɛf", "G": "dʒˈi", "H": "ˈAʧ",
+            "I": "ˈI", "J": "dʒˈA", "K": "kˈA", "L": "ˈɛl",
+            "M": "ˈɛm", "N": "ˈɛn", "O": "ˈO", "P": "pˈi",
+            "Q": "kjˈu", "R": "ˈɑɹ", "S": "ˈɛs", "T": "tˈi",
+            "U": "ˈu", "V": "vˈi", "W": "dˈʌbəlju", "X": "ˈɛks",
+            "Y": "wˈI", "Z": "zˈi"
+        ]
+        var parts: [String] = []
+        for letter in letters {
+            let key = String(letter)
+            let candidates = [names[letter], lookup(key)]
+            guard let sound = candidates.compactMap({ $0 }).first(where: isSupported)
+            else { return nil }
+            parts.append(sound)
+        }
+        return parts.joined(separator: " ")
     }
 
     private func pronounce(_ source: String, following: String?) throws -> String {

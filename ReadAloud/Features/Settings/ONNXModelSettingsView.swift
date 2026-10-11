@@ -19,6 +19,16 @@ struct ONNXModelSettingsView: View {
         ONNXResource.allCases.allSatisfy { statuses[$0] == .ready }
     }
 
+    private var readyVoiceCount: Int {
+        SpeechVoice.all.filter { statuses[.voiceStyle($0.id)] == .ready }.count
+    }
+
+    private var unavailableVoices: [ONNXResource] {
+        SpeechVoice.all.map { ONNXResource.voiceStyle($0.id) }.filter {
+            statuses[$0] == .missing || statuses[$0] == .invalid
+        }
+    }
+
     var body: some View {
         ReadAloudThemedList {
             Section {
@@ -31,7 +41,7 @@ struct ONNXModelSettingsView: View {
                     )
                     .foregroundStyle(ready ? Color.primary : Color.red)
                 }
-                ForEach(ONNXResource.allCases) { item in
+                ForEach(ONNXResource.coreResources) { item in
                     HStack {
                         Text(item.name)
                         Spacer()
@@ -48,6 +58,20 @@ struct ONNXModelSettingsView: View {
                         }
                     }
                 }
+                HStack {
+                    Text("Kokoro Voices")
+                    Spacer()
+                    Text("\(readyVoiceCount)/\(SpeechVoice.all.count) bundled")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(unavailableVoices) { item in
+                    HStack {
+                        Text(item.name)
+                        Spacer()
+                        Text(statuses[item] == .missing ? "Missing" : "Invalid")
+                            .foregroundStyle(.red)
+                    }
+                }
             } header: {
                 Text("Kokoro ONNX INT8")
             } footer: {
@@ -57,7 +81,7 @@ struct ONNXModelSettingsView: View {
             Section {
                 Picker("Voice", selection: $voiceID) {
                     ForEach(SpeechVoice.all) { voice in
-                        Text(voice.name).tag(voice.id)
+                        Text("\(voice.name) · \(voice.locale)").tag(voice.id)
                     }
                 }
                 TextField("Test text", text: $testText, axis: .vertical)
@@ -77,7 +101,7 @@ struct ONNXModelSettingsView: View {
             } header: {
                 Text("Offline Speech Test")
             } footer: {
-                Text("Runs the full ONNX G2P and Kokoro synthesis path. Stop other playback and generation before testing.")
+                Text("Runs the English ONNX G2P and Kokoro synthesis path. Stop other playback and generation before testing.")
             }
 
             if let message {

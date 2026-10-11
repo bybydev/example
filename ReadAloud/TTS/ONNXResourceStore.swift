@@ -2,18 +2,26 @@ import CryptoKit
 import Foundation
 
 /// Immutable, offline resources supplied with every ReadAloud build.
-nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
-    case kokoroModel, g2pModel, g2pLexicon, heart, bella, michael
+nonisolated enum ONNXResource: Hashable, Identifiable, Sendable {
+    case kokoroModel, g2pModel, g2pLexicon
+    case voiceStyle(String)
 
-    var id: String { rawValue }
+    static let coreResources: [ONNXResource] = [.kokoroModel, .g2pModel, .g2pLexicon]
+    static var allCases: [ONNXResource] {
+        coreResources + SpeechVoice.all.map { .voiceStyle($0.id) }
+    }
+
+    var id: String {
+        switch self {
+        case .kokoroModel: "kokoroModel"
+        case .g2pModel: "g2pModel"
+        case .g2pLexicon: "g2pLexicon"
+        case .voiceStyle(let id): "voice-\(id)"
+        }
+    }
 
     static func voice(_ id: String) -> ONNXResource? {
-        switch id {
-        case "af_heart": .heart
-        case "af_bella": .bella
-        case "am_michael": .michael
-        default: nil
-        }
+        SpeechVoice.all.contains(where: { $0.id == id }) ? .voiceStyle(id) : nil
     }
 
     var name: String {
@@ -21,9 +29,8 @@ nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
         case .kokoroModel: "Kokoro INT8 Model"
         case .g2pModel: "G2P ONNX Model"
         case .g2pLexicon: "G2P Dictionary"
-        case .heart: "Voice · Heart"
-        case .bella: "Voice · Bella"
-        case .michael: "Voice · Michael"
+        case .voiceStyle(let id):
+            "Voice · \(SpeechVoice.all.first(where: { $0.id == id })?.name ?? id)"
         }
     }
 
@@ -32,9 +39,7 @@ nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
         case .kokoroModel: "model_quantized.onnx"
         case .g2pModel: "misaki-en_us-g2p.onnx"
         case .g2pLexicon: "misaki-en_us-g2p.json"
-        case .heart: "af_heart.bin"
-        case .bella: "af_bella.bin"
-        case .michael: "am_michael.bin"
+        case .voiceStyle(let id): "\(id).bin"
         }
     }
 
@@ -43,7 +48,7 @@ nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
         case .kokoroModel: nil // Exact digest guards the model.
         case .g2pModel: 3_438_244
         case .g2pLexicon: 5_724_857
-        case .heart, .bella, .michael: 510 * 256 * 4
+        case .voiceStyle: 510 * 256 * 4
         }
     }
 
@@ -52,7 +57,7 @@ nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
         case .kokoroModel: 90_000_000
         case .g2pModel: 3_438_244
         case .g2pLexicon: 5_724_857
-        case .heart, .bella, .michael: 510 * 256 * 4
+        case .voiceStyle: 510 * 256 * 4
         }
     }
 
@@ -64,7 +69,7 @@ nonisolated enum ONNXResource: String, CaseIterable, Identifiable, Sendable {
             "757759c3e3ccb0bf59c379b1671c9834a27543ceaefd6846850823633b9665a1"
         case .g2pLexicon:
             "8a8e3350713b0a00102425a5d5bd6b58b34854c74a3e8d837589f55212c51658"
-        case .heart, .bella, .michael: nil
+        case .voiceStyle: nil
         }
     }
 
