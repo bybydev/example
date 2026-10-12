@@ -526,15 +526,19 @@ struct ChatMessageView: View {
   }
 
   private var assistantActions: some View {
-    HStack(spacing: 4) {
-      CopyButton(text: message.content, alignment: .leading)
+    HStack(spacing: 2) {
+      CopyButton(text: message.content, size: .messageAction, alignment: .leading)
 
       actionButton("Retry", systemImage: "arrow.clockwise", action: regenerate)
         .disabled(!canRegenerate)
 
       ShareLink(item: message.content) {
         Image(systemName: "square.and.arrow.up")
-          .frame(width: 38, height: 38)
+          .frame(
+            width: CopyButton.Size.messageAction.width,
+            height: CopyButton.Size.messageAction.height,
+            alignment: .leading
+          )
           .contentShape(Rectangle())
       }
       .disabled(message.content.isEmpty)
@@ -557,7 +561,11 @@ struct ChatMessageView: View {
         libraryActions
       } label: {
         Image(systemName: "ellipsis")
-          .frame(width: 38, height: 38)
+          .frame(
+            width: CopyButton.Size.messageAction.width,
+            height: CopyButton.Size.messageAction.height,
+            alignment: .leading
+          )
           .contentShape(Rectangle())
       }
       .accessibilityLabel("More")
@@ -669,11 +677,16 @@ struct ChatMessageView: View {
     systemImage: String,
     action: @escaping () -> Void
   ) -> some View {
-    Button(title, systemImage: systemImage, action: action)
-      .labelStyle(.iconOnly)
-      .frame(width: 38, height: 38)
-      .contentShape(Rectangle())
-      .accessibilityLabel(title)
+    Button(action: action) {
+      Image(systemName: systemImage)
+        .frame(
+          width: CopyButton.Size.messageAction.width,
+          height: CopyButton.Size.messageAction.height,
+          alignment: .leading
+        )
+        .contentShape(Rectangle())
+    }
+    .accessibilityLabel(title)
   }
 
   @ViewBuilder

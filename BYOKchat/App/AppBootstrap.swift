@@ -55,17 +55,16 @@ final class AppBootstrapController {
       // Stores are fully loaded. Only records explicitly owned by the iOS
       // new-chat lifecycle are eligible; persisted user messages always survive.
       await model.chats.recoverUnsentNewChats()
+      try Self.throwIfModelFailed(model.chats.errorMessage, stage: .reconciling)
       await model.projects.reconcile(conversations: model.chats.conversations)
       try Self.throwIfModelFailed(model.projects.errorMessage, stage: .reconciling)
       await model.mcp.reloadFromStorage()
       try Self.throwIfModelFailed(model.mcp.errorMessage, stage: .reconciling)
 
-      // Self-healing GC pass: removes bytes orphaned by any missed decrement.
-      // Runs while every store is loaded; mutation-hooked sweeps only arm
-      // afterwards (hook firings during the loading stages above see
-      // half-empty stores and would delete live blobs).
-      await model.sweepOrphanFiles()
-      model.enableOrphanSweeps()
+      // Sweep only at startup, after all reference-owning stores have loaded
+      // and before chat preparation or interactive file writes can begin.
+      // Live saves may have blobs whose references have not committed yet.
+      await model.sweepOrphanFilesAtStartup()
 
       state = .loading(.preparingChat)
       var initialConversationID: ConversationID?

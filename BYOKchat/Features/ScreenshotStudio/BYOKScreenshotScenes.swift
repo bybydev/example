@@ -12,7 +12,8 @@ struct BYOKScreenshotChatScene: View {
       eyebrow: "NATIVE AI CHAT",
       title: "Chat with\nany model",
       subtitle: "Streaming answers, reasoning, files, and tools in one native workspace.",
-      symbol: "bubble.left.and.text.bubble.right.fill"
+      symbol: "bubble.left.and.text.bubble.right.fill",
+      composition: .focus
     ) {
       BYOKStudioChatFixture(settings: settings)
     }
@@ -29,7 +30,8 @@ struct BYOKScreenshotProvidersScene: View {
       eyebrow: "BRING YOUR OWN KEYS",
       title: "Your providers.\nYour API keys.",
       subtitle: "Connect leading AI providers, private endpoints, and your own OpenAI-compatible servers.",
-      symbol: "key.horizontal.fill"
+      symbol: "key.horizontal.fill",
+      composition: .hero
     ) {
       BYOKStudioProvidersFixture(settings: settings)
     }
@@ -46,7 +48,8 @@ struct BYOKScreenshotMCPScene: View {
       eyebrow: "REMOTE MCP",
       title: "Give every chat\npowerful tools",
       subtitle: "Connect remote MCP servers and decide exactly what each tool is allowed to do.",
-      symbol: "shippingbox.fill"
+      symbol: "shippingbox.fill",
+      composition: .splitLeading
     ) {
       BYOKStudioMCPFixture(settings: settings)
     }
@@ -63,7 +66,8 @@ struct BYOKScreenshotProjectsScene: View {
       eyebrow: "PROJECT WORKSPACES",
       title: "Keep every\nworkspace organized",
       subtitle: "Group chats by project with their own prompts, files, models, and tools.",
-      symbol: "folder.fill"
+      symbol: "folder.fill",
+      composition: .splitTrailing
     ) {
       BYOKStudioProjectsFixture(settings: settings)
     }
@@ -80,7 +84,8 @@ struct BYOKScreenshotAnalyticsScene: View {
       eyebrow: "LOCAL ANALYTICS",
       title: "Know what every\nrequest costs",
       subtitle: "Track tokens, spend, speed, reliability, and provider performance — all locally.",
-      symbol: "chart.bar.xaxis"
+      symbol: "chart.bar.xaxis",
+      composition: .hero
     ) {
       BYOKStudioAnalyticsFixture(settings: settings)
     }
@@ -104,7 +109,7 @@ private struct BYOKStudioChatFixture: View {
               .background(settings.theme.accentColor.opacity(0.12), in: Circle())
 
             VStack(alignment: .leading, spacing: 3) {
-              Text("Claude Sonnet 4")
+              Text("Claude Sonnet 5")
                 .font(.headline)
               Text("Anthropic · Personal")
                 .font(.caption)
@@ -174,7 +179,7 @@ private struct BYOKStudioChatFixture: View {
           HStack(spacing: 12) {
             Image(systemName: "plus")
               .foregroundStyle(settings.theme.secondaryForegroundColor)
-            Text("Message Claude Sonnet 4")
+            Text("Message Claude Sonnet 5")
               .font(.subheadline)
               .foregroundStyle(settings.theme.secondaryForegroundColor)
             Spacer()
@@ -218,13 +223,13 @@ private struct BYOKStudioProvidersFixture: View {
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "OpenRouter",
-            detail: "240+ models",
+            detail: "Multi-model access",
             symbol: "bolt.horizontal.fill"
           )
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "Anthropic",
-            detail: "Claude Sonnet 4",
+            detail: "Claude Sonnet 5",
             symbol: "sparkles"
           )
         }
@@ -233,13 +238,13 @@ private struct BYOKStudioProvidersFixture: View {
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "Gemini",
-            detail: "Gemini 2.5 Pro",
+            detail: "Gemini 3.6 Flash",
             symbol: "diamond.fill"
           )
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "Local Server",
-            detail: "192.168.1.42",
+            detail: "Compatible endpoint",
             symbol: "network"
           )
         }
@@ -253,7 +258,7 @@ private struct BYOKStudioProvidersFixture: View {
               Text("Default model")
                 .font(.caption.bold())
                 .foregroundStyle(settings.theme.secondaryForegroundColor)
-              Text("Claude Sonnet 4 · Anthropic")
+              Text("Claude Sonnet 5 · Anthropic")
                 .font(.headline)
             }
             Spacer()
@@ -426,7 +431,7 @@ private struct BYOKStudioProjectsFixture: View {
               .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 7) {
-              BYOKStudioChip(theme: settings.theme, text: "Sonnet 4", symbol: "sparkles")
+              BYOKStudioChip(theme: settings.theme, text: "Sonnet 5", symbol: "sparkles")
               BYOKStudioChip(theme: settings.theme, text: "3 MCP", symbol: "shippingbox.fill")
               BYOKStudioChip(theme: settings.theme, text: "6 files", symbol: "paperclip")
             }

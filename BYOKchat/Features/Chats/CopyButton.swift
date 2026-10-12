@@ -7,12 +7,14 @@ import UIKit
 struct CopyButton: View {
   enum Size {
     case regular
+    case messageAction
     case compact
     case toolbar
 
     var width: CGFloat? {
       switch self {
       case .regular: 38
+      case .messageAction: 30
       case .compact: 34
       case .toolbar: nil
       }
@@ -21,6 +23,7 @@ struct CopyButton: View {
     var height: CGFloat? {
       switch self {
       case .regular: 38
+      case .messageAction: 38
       case .compact: 30
       case .toolbar: nil
       }

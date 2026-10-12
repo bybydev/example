@@ -376,7 +376,8 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
             .object([
               "name": .string(tool.name),
               "description": .string(tool.description),
-              "parameters": tool.inputSchema,
+              // Preserve JSON Schema keywords such as additionalProperties.
+              "parametersJsonSchema": tool.inputSchema,
             ])
           })
         ])

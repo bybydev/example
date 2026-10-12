@@ -28,7 +28,6 @@ final class BYOKScreenshotStudioSettings {
 @MainActor
 struct BYOKScreenshotStudioView: View {
   @State private var settings = BYOKScreenshotStudioSettings()
-  @State private var screenshotPurchases = BYOKPurchaseStore.makeScreenshotPreviewManager()
 
   var body: some View {
     ScreenshotStudio(
@@ -49,9 +48,10 @@ struct BYOKScreenshotStudioView: View {
     .tint(settings.theme.accentColor)
   }
 
-  private func makeCatalog() -> ScreenshotCatalog {
+  // Internal for catalogue regression tests; Screenshot Studio remains Debug-only.
+  func makeCatalog() -> ScreenshotCatalog {
     ScreenshotCatalog(
-      appName: "BYOK",
+      appName: "BYOKchat",
       presets: [.iPhone69Portrait, .iPhone65Portrait],
       locales: [.english],
       defaultPresetID: ScreenshotDevicePreset.iPhone69Portrait.id,
@@ -79,16 +79,6 @@ struct BYOKScreenshotStudioView: View {
       }
 
       ScreenshotDefinition(
-        id: "analytics",
-        title: "Usage Analytics",
-        filename: "Know what every request costs"
-      ) {
-        lockedAppearance {
-          BYOKScreenshotAnalyticsScene(settings: settings)
-        }
-      }
-
-      ScreenshotDefinition(
         id: "mcp",
         title: "MCP Tools",
         filename: "Give every chat powerful tools"
@@ -109,16 +99,23 @@ struct BYOKScreenshotStudioView: View {
       }
 
       ScreenshotDefinition(
+        id: "analytics",
+        title: "Usage Analytics",
+        filename: "Know what every request costs"
+      ) {
+        lockedAppearance {
+          BYOKScreenshotAnalyticsScene(settings: settings)
+        }
+      }
+
+      ScreenshotDefinition(
         id: "pro",
         title: "BYOK Pro",
         filename: "Unlock BYOK Pro"
       ) {
-        ProPaywallScreenshotTemplate(
-          purchases: screenshotPurchases,
-          configuration: BYOKPurchaseStore.paywallConfiguration,
-          selectedProductID: BYOKPurchaseStore.yearlyProductID
-        )
-        .environment(\.appFoundationTheme, settings.theme)
+        // Do not allocate StoreKit/preview purchase state when the Studio opens.
+        // AppFoundation's real paywall is constructed only if this scene is selected.
+        BYOKScreenshotPaywallScene(theme: settings.theme)
       }
     }
   }
@@ -135,6 +132,31 @@ struct BYOKScreenshotStudioView: View {
   }
 }
 
+/// Screenshot-only adapter for AppFoundation's production paywall.
+///
+/// The five product scenes are pure fixture views with no app environment,
+/// navigation, mutations, or runtime model. The paywall is the sole explicit
+/// exception: AppFoundation needs an isolated simulated PurchaseManager.
+/// Keeping it in this child means opening Studio never creates that manager.
+@MainActor
+private struct BYOKScreenshotPaywallScene: View {
+  let theme: AppTheme
+  @State private var purchases = BYOKPurchaseStore.makeScreenshotPreviewManager()
+
+  var body: some View {
+    ProPaywallScreenshotTemplate(
+      purchases: purchases,
+      configuration: BYOKPurchaseStore.paywallConfiguration,
+      selectedProductID: BYOKPurchaseStore.yearlyProductID
+    )
+    .environment(\.appFoundationTheme, theme)
+    .environment(
+      \.colorScheme,
+      theme.appearance.preferredColorScheme == .light ? .light : .dark
+    )
+  }
+}
+
 @MainActor
 private struct BYOKSelectedScreenshotControls: View {
   let context: ScreenshotStudioControlContext
@@ -145,8 +167,8 @@ private struct BYOKSelectedScreenshotControls: View {
       LabeledContent(
         "Composition",
         value: context.selectedScreenshotID == "pro"
-          ? "Full-canvas paywall"
-          : "AppFoundation HeroScreenshotTemplate"
+          ? "Full-canvas real paywall"
+          : "AppFoundation responsive template"
       )
       LabeledContent("Device frame", value: "None")
     }
@@ -194,12 +216,20 @@ private struct BYOKScreenshotConfigurationControls: View {
   }
 }
 
+enum BYOKScreenshotComposition {
+  case hero
+  case focus
+  case splitLeading
+  case splitTrailing
+}
+
 struct BYOKScreenshotCanvas<Feature: View>: View {
   let settings: BYOKScreenshotStudioSettings
   let eyebrow: String
   let title: String
   let subtitle: String
   let symbol: String
+  let composition: BYOKScreenshotComposition
   private let feature: Feature
 
   init(
@@ -208,6 +238,7 @@ struct BYOKScreenshotCanvas<Feature: View>: View {
     title: String,
     subtitle: String,
     symbol: String,
+    composition: BYOKScreenshotComposition = .hero,
     @ViewBuilder feature: () -> Feature
   ) {
     self.settings = settings
@@ -215,44 +246,108 @@ struct BYOKScreenshotCanvas<Feature: View>: View {
     self.title = title
     self.subtitle = subtitle
     self.symbol = symbol
+    self.composition = composition
     self.feature = feature()
   }
 
+  // AppFoundation owns margins, visual scale, and responsive export geometry.
+  // Reuse its different compositions so the five shots form a campaign,
+  // rather than repeating one identical hero layout five times.
+  @ViewBuilder
   var body: some View {
-    let theme = settings.theme
-
-    HeroScreenshotTemplate {
-      ScreenshotBackground(
-        style: settings.backgroundStyle,
-        colors: settings.backgroundColors,
-        intensity: settings.backgroundIntensity
-      ) {
-        BYOKStudioBackgroundDecoration(theme: theme)
+    switch composition {
+    case .hero:
+      HeroScreenshotTemplate {
+        background
+      } brand: {
+        brand
+      } message: {
+        message
+      } visual: {
+        visual
+      } footer: {
+        footer
       }
-    } brand: {
-      ScreenshotTemplateBrand(appName: "BYOK", foreground: theme.primaryForegroundColor) {
-        BYOKScreenshotBrandIcon(theme: theme)
+    case .focus:
+      DeviceFocusScreenshotTemplate {
+        background
+      } brand: {
+        brand
+      } message: {
+        message
+      } visual: {
+        visual
+      } footer: {
+        footer
       }
-    } message: {
-      ScreenshotTemplateMessage(
-        title: title,
-        subtitle: subtitle,
-        foreground: theme.primaryForegroundColor,
-        secondaryForeground: theme.secondaryForegroundColor,
-        alignment: .leading
-      )
-    } visual: {
-      feature
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .clipped()
-    } footer: {
-      ScreenshotTemplateFooter(
-        eyebrow,
-        systemImage: symbol,
-        tint: theme.accentColor,
-        foreground: theme.primaryForegroundColor.opacity(0.86)
-      )
+    case .splitLeading:
+      SplitFeatureScreenshotTemplate(side: .leading) {
+        background
+      } brand: {
+        brand
+      } message: {
+        message
+      } visual: {
+        visual
+      } footer: {
+        footer
+      }
+    case .splitTrailing:
+      SplitFeatureScreenshotTemplate(side: .trailing) {
+        background
+      } brand: {
+        brand
+      } message: {
+        message
+      } visual: {
+        visual
+      } footer: {
+        footer
+      }
     }
+  }
+
+  private var background: some View {
+    ScreenshotBackground(
+      style: settings.backgroundStyle,
+      colors: settings.backgroundColors,
+      intensity: settings.backgroundIntensity
+    ) {
+      BYOKStudioBackgroundDecoration(theme: settings.theme)
+    }
+  }
+
+  // App Store captions communicate the product; don't repeat the app name
+  // above every headline. Retain the approved sculpted Midnight icon.
+  private var brand: some View {
+    BYOKScreenshotBrandIcon(theme: settings.theme)
+      .frame(width: 32, height: 32)
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  private var message: some View {
+    ScreenshotTemplateMessage(
+      title: title,
+      subtitle: subtitle,
+      foreground: settings.theme.primaryForegroundColor,
+      secondaryForeground: settings.theme.secondaryForegroundColor,
+      alignment: .leading
+    )
+  }
+
+  private var visual: some View {
+    feature
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+      .clipped()
+  }
+
+  private var footer: some View {
+    ScreenshotTemplateFooter(
+      eyebrow,
+      systemImage: symbol,
+      tint: settings.theme.accentColor,
+      foreground: settings.theme.primaryForegroundColor.opacity(0.86)
+    )
   }
 }
 

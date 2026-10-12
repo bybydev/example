@@ -99,6 +99,30 @@ final class BYOKchatScreenshotTests: XCTestCase {
     capture("08_Paywall")
   }
 
+  /// Regression: Screenshot Studio renders its default Chat preview immediately
+  /// on navigation. A missing screenshot environment or a heavyweight interactive
+  /// chat component used to terminate the app before the Studio appeared.
+  func test09ScreenshotStudioOpens() throws {
+    openSettings()
+
+    let developerTools = app.staticTexts["Developer Tools"]
+    XCTAssertTrue(developerTools.waitForExistence(timeout: 8))
+    developerTools.tap()
+
+    let screenshotStudio = app.staticTexts["Screenshot Studio"]
+    XCTAssertTrue(screenshotStudio.waitForExistence(timeout: 8))
+    screenshotStudio.tap()
+
+    // Waiting for a studio-owned action also ensures its first live preview
+    // has been mounted, not just that navigation started.
+    XCTAssertTrue(app.navigationBars["Screenshot Studio"].waitForExistence(timeout: 12))
+    XCTAssertTrue(
+      app.buttons["Export Selected PNG"].waitForExistence(timeout: 12),
+      "Default Screenshot Studio preview should mount without terminating BYOKchat"
+    )
+    XCTAssertTrue(app.buttons["Export All Registered PNGs"].exists)
+  }
+
   private func waitForHome() {
     XCTAssertTrue(app.staticTexts["How can I help?"].waitForExistence(timeout: 12))
 

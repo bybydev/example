@@ -281,6 +281,8 @@ import Testing
     return
   }
   #expect(declaration["name"] == .string(call.name))
+  #expect(declaration["parametersJsonSchema"] == weatherTool().inputSchema)
+  #expect(declaration["parameters"] == nil)
 
   guard case .array(let contents)? = body["contents"], contents.count == 3,
     case .object(let modelContent) = contents[1],
@@ -431,6 +433,7 @@ private func weatherTool() -> ChatToolDefinition {
         "city": .object(["type": .string("string")])
       ]),
       "required": .array([.string("city")]),
+      "additionalProperties": .bool(false),
     ])
   )
 }

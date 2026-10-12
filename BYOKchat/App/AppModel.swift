@@ -19,16 +19,11 @@ final class AppModel {
   let telemetryRecorder: TelemetryRecorder
   let startupCompositionFailure: AppBootstrapFailure?
   /// Shared byte store behind chat attachments, library entries, and project
-  /// reference files; `sweepOrphanFiles` garbage-collects it.
+  /// reference files; startup cleanup garbage-collects unused bytes.
   let fileBlobStore: FileAttachmentBlobStore
   private let coreServices: BYOKCoreServices
 
   private(set) var hasLoaded = false
-  /// Mutation-hooked sweeping stays disabled until startup has loaded every
-  /// store and run the first sweep. Hook firings during loading would
-  /// otherwise compute references from half-empty stores and delete live
-  /// blobs (the lost-files-after-relaunch bug).
-  private var canSweepOrphans = false
 
   init() {
     let storageEnvironment = AppStorageEnvironment.current
@@ -130,36 +125,13 @@ final class AppModel {
       projectsModel: projectModel,
       mcpModel: mcpModel
     )
-
-    // Reference counting: every mutation that can drop file edges funnels
-    // through a model's snapshot refresh; respond by sweeping orphan bytes.
-    let sweep: () -> Void = { [weak self] in
-      _ = Task { await self?.sweepForOrphansIfNeeded() }
-    }
-    chats.onFileReferencesChanged = sweep
-    projects.onFileReferencesChanged = sweep
-    library.onFileReferencesChanged = sweep
   }
 
-  /// Mutation-hook entry point; inert until startup completes (see
-  /// `canSweepOrphans`).
-  func sweepForOrphansIfNeeded() async {
-    guard canSweepOrphans else { return }
-    await sweepOrphanFiles()
-  }
-
-  /// Arms mutation-hooked sweeping; called once every store is loaded and the
-  /// startup sweep has run.
-  func enableOrphanSweeps() {
-    canSweepOrphans = true
-  }
-
-  /// Derived reference counting, exact because every edge lives in queryable
-  /// state: a blob survives while any chat message attachment, project file
-  /// pointer, or library entry references its ID. Edges are read from the
-  /// stores themselves — UI-model snapshots can be stale or half-loaded at
-  /// sweep time, which previously made the sweep delete live blobs.
-  func sweepOrphanFiles() async {
+  /// Startup-only cleanup, after every reference-owning store has loaded and
+  /// before interactive use. Live saves write blobs before committing their
+  /// references, so sweeping during a mutation can delete an in-flight file.
+  /// Removed files are reclaimed on the next launch.
+  func sweepOrphanFilesAtStartup() async {
     var referenced = await chats.referencedAttachmentIDs()
     referenced.formUnion(await projects.referencedFileIDs())
     referenced.formUnion(await library.referencedEntryIDs())
@@ -171,17 +143,24 @@ final class AppModel {
   }
 
   func load() async {
-    guard !hasLoaded else { return }
+    guard !hasLoaded, startupCompositionFailure == nil else { return }
     await providers.load()
+    guard providers.errorMessage == nil else { return }
     await projects.load()
+    guard projects.errorMessage == nil else { return }
     await mcp.load()
+    guard mcp.errorMessage == nil else { return }
     await chats.load()
+    guard chats.errorMessage == nil else { return }
     await library.load()
+    guard library.errorMessage == nil else { return }
     await chats.recoverUnsentNewChats()
+    guard chats.errorMessage == nil else { return }
     await projects.reconcile(conversations: chats.conversations)
+    guard projects.errorMessage == nil else { return }
     await mcp.reloadFromStorage()
-    await sweepOrphanFiles()
-    enableOrphanSweeps()
+    guard mcp.errorMessage == nil else { return }
+    await sweepOrphanFilesAtStartup()
     hasLoaded = true
   }
 }

@@ -73,16 +73,16 @@ final class BYOKPurchaseStore {
       id: yearlyProductID,
       displayName: "BYOK Pro Yearly",
       description: "BYOK Pro for one year",
-      displayPrice: "$49.99",
-      price: 49.99,
+      displayPrice: "$29.99",
+      price: 29.99,
       subscriptionPeriod: .init(value: 1, unit: .year)
     ),
     PurchaseProduct(
       id: lifetimeProductID,
       displayName: "BYOK Pro Lifetime",
       description: "Pay once and keep BYOK Pro forever",
-      displayPrice: "$129.99",
-      price: 129.99
+      displayPrice: "$49.99",
+      price: 49.99
     ),
   ]
 }

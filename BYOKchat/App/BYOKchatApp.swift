@@ -53,7 +53,7 @@ enum BYOKAppAnalytics {
       appID: "byokchat",
       appKey: Bundle.main.bundleIdentifier ?? "com.hoangbkit.byokchat",
       baseURL: URL(string: "https://analytics.133043.xyz")!,
-      enabled: false,
+      enabled: isEnabled,
       uploadInterval: 60
     )
   )
