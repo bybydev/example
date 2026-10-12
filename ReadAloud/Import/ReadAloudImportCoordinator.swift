@@ -6,6 +6,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
     private let pdfImporter: PDFImportAdapter
     private let textImporter: TextDocumentImportAdapter
     private let pasteImporter: PasteImportAdapter
+    private let articleImporter: WebArticleImportAdapter
+    private let urlLoader: ArticleURLLoader
 
     init(projectStore: ProjectStore) {
         self.projectStore = projectStore
@@ -13,6 +15,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         self.pdfImporter = PDFImportAdapter()
         self.textImporter = TextDocumentImportAdapter()
         self.pasteImporter = PasteImportAdapter()
+        self.articleImporter = WebArticleImportAdapter()
+        self.urlLoader = ArticleURLLoader()
     }
 
     func importSource(
@@ -39,6 +43,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
                 suggestedTitle: suggestedTitle,
                 progress: progress
             )
+        case .web(let url):
+            return try await importWeb(url, progress: progress)
         }
     }
 
@@ -137,6 +143,65 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         )
     }
 
+    private func importWeb(
+        _ url: URL,
+        progress: (@Sendable (ReadAloudImportProgress) -> Void)?
+    ) async throws -> ReadAloudImportResult {
+        try Task.checkCancellation()
+        let fetched = try await urlLoader.fetch(url, progress: progress)
+        try Task.checkCancellation()
+
+        if fetched.fileExtension == "html" {
+            let extracted = try articleImporter.importDocument(
+                data: fetched.data,
+                finalURL: fetched.finalURL,
+                progress: progress
+            )
+            try Task.checkCancellation()
+            return try await persist(
+                normalized: extracted.document,
+                originalFileName: "article.html",
+                retainedExtension: "html",
+                retainedRevision: ProjectDigest.sha256(fetched.data),
+                retainedSource: .data(fetched.data),
+                progress: progress,
+                provenance: ProjectWebProvenance(
+                    originalURL: url,
+                    siteName: extracted.siteName,
+                    language: extracted.language,
+                    publishedTime: extracted.publishedTime
+                )
+            )
+        }
+
+        let fileExtension = fetched.fileExtension
+        let fileName = "downloaded.\(fileExtension)"
+        let importer = try adapter(
+            forExtension: fileExtension,
+            fileName: fileName
+        )
+        let fileManager = FileManager.default
+        let workspace = try makeWorkspace()
+        defer { try? fileManager.removeItem(at: workspace) }
+        let localURL = workspace.appending(path: fileName)
+        try fetched.data.write(to: localURL, options: .atomic)
+        try Task.checkCancellation()
+        let normalized = try await importer.importDocument(
+            from: localURL,
+            progress: progress
+        )
+        try Task.checkCancellation()
+        return try await persist(
+            normalized: normalized,
+            originalFileName: fileName,
+            retainedExtension: fileExtension,
+            retainedRevision: ProjectDigest.sha256(fetched.data),
+            retainedSource: .file(localURL),
+            progress: progress,
+            provenance: ProjectWebProvenance(originalURL: url)
+        )
+    }
+
     private func adapter(
         forExtension fileExtension: String,
         fileName: String
@@ -160,7 +225,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         retainedExtension: String,
         retainedRevision: String,
         retainedSource: ProjectRetainedSource,
-        progress: (@Sendable (ReadAloudImportProgress) -> Void)?
+        progress: (@Sendable (ReadAloudImportProgress) -> Void)?,
+        provenance: ProjectWebProvenance? = nil
     ) async throws -> ReadAloudImportResult {
         try Task.checkCancellation()
 
@@ -187,7 +253,11 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
                 type: projectSourceType(for: normalized.kind),
                 originalFileName: originalFileName,
                 relativePath: sourcePath,
-                sourceRevision: retainedRevision
+                sourceRevision: retainedRevision,
+                originalURL: provenance?.originalURL,
+                siteName: provenance?.siteName,
+                language: provenance?.language,
+                publishedTime: provenance?.publishedTime
             ),
             artwork: artwork,
             createdAt: now,
@@ -264,6 +334,8 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             return .document
         case .paste:
             return .paste
+        case .article:
+            return .article
         }
     }
 

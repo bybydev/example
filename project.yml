@@ -26,6 +26,12 @@ packages:
   TextExtractor:
     url: https://github.com/hoangbkit/TextExtractor.git
     exactVersion: 1.1.0
+  SwiftReadability:
+    url: https://github.com/wolfyy970/swift-readability.git
+    exactVersion: 0.3.3
+  SwiftSoup:
+    url: https://github.com/scinfu/SwiftSoup.git
+    exactVersion: 2.13.6
   JobQueue:
     url: https://github.com/hoangbkit/JobQueue.git
     exactVersion: 1.0.0
@@ -78,6 +84,10 @@ targets:
         product: PDFKitAudio
       - package: TextExtractor
         product: TextExtractor
+      - package: SwiftReadability
+        product: SwiftReadability
+      - package: SwiftSoup
+        product: SwiftSoup
       - package: JobQueue
         product: JobQueue
       - package: onnxruntime

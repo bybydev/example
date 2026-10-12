@@ -11,35 +11,30 @@ struct LibraryView: View {
     @State private var allowedContentTypes: [UTType] = [.data]
     @State private var pasteDraft = PasteDraft()
     @State private var isPastePresented = false
+    @State private var isURLPresented = false
+    @State private var urlDraft = ""
+    @State private var pendingURLImport: URL?
     @State private var renameTarget: LibraryModel.Entry?
     @State private var renameText = ""
     @State private var deleteTarget: LibraryModel.Entry?
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
     @State private var pendingPasteImport: PasteDraft?
+    @State private var selectedSourceFilter: LibrarySourceFilter = .all
 
     var body: some View {
-        @Bindable var model = model
-
         Group {
             if model.isLoading && !model.didLoad {
                 ProgressView("Loading Library…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.entries.isEmpty
-                        && model.catalogIssues.isEmpty
-                        && model.searchText.isEmpty {
-                emptyState
             } else {
                 libraryContent
             }
         }
         .readAloudThemeSurface()
         .navigationTitle("Library")
-        .searchable(
-            text: $model.searchText,
-            placement: .navigationBarDrawer(displayMode: .automatic),
-            prompt: "Search Library"
-        )
+        .navigationSubtitle("Your space for listening.")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 sortMenu
@@ -51,27 +46,26 @@ struct LibraryView: View {
                 .accessibilityLabel("Settings")
             }
         }
+        // Overlay instead of reserving a full bottom row. RootView's
+        // mini-player safe-area inset keeps this button above the player,
+        // whether the player is compact or expanded.
+        .overlay(alignment: .bottomTrailing) {
+            if model.didLoad {
+                floatingAddMenu
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 12)
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if model.isImporting && model.importProgress == nil {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Cancelling import…")
-                            .font(.subheadline)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(.bar)
+            if model.isImporting && model.importProgress == nil {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Cancelling import…")
+                        .font(.subheadline)
                 }
-
-                if model.didLoad {
-                    HStack {
-                        Spacer(minLength: 0)
-                        floatingAddMenu
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(.bar)
             }
         }
         .onDisappear {
@@ -117,6 +111,26 @@ struct LibraryView: View {
                 onImport: {
                     pendingPasteImport = pasteDraft
                     isPastePresented = false
+                }
+            )
+        }
+        .sheet(
+            isPresented: $isURLPresented,
+            onDismiss: {
+                guard let url = pendingURLImport else { return }
+                pendingURLImport = nil
+                Task { _ = await model.importWeb(url) }
+            }
+        ) {
+            FromURLSheet(
+                urlText: $urlDraft,
+                onCancel: {
+                    pendingURLImport = nil
+                    isURLPresented = false
+                },
+                onImport: { url in
+                    pendingURLImport = url
+                    isURLPresented = false
                 }
             )
         }
@@ -226,95 +240,374 @@ struct LibraryView: View {
         }
     }
 
-    private var libraryContent: some View {
-        ReadAloudThemedList {
-            if let entry = model.continueListening {
-                Section("Continue Listening") {
-                    NavigationLink {
-                        ProjectReaderRuntimeHost(
-                            projectID: entry.id,
-                            initialItemID: nil,
-                            initialTitle: entry.snapshot.title,
-                            onProjectChanged: {
-                                Task {
-                                    await model.refresh()
-                                }
-                            }
-                        )
-                    } label: {
-                        ContinueListeningCard(entry: entry)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if !model.catalogIssues.isEmpty {
-                Section {
-                    Button {
-                        isIssuesPresented = true
-                    } label: {
-                        Label(
-                            "\(model.catalogIssues.count) project package(s) need attention",
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .font(.subheadline)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-            }
-
-            Section {
-                if model.filteredEntries.isEmpty {
-                    ContentUnavailableView(
-                        "No Results",
-                        systemImage: "magnifyingglass",
-                        description: Text(
-                            "No projects match “\(model.searchText)”."
-                        )
-                    )
-                    .listRowBackground(Color.clear)
-                } else {
-                    ForEach(model.filteredEntries) { entry in
-                        NavigationLink {
-                            ProjectDetailRuntimeHost(
-                                projectID: entry.id,
-                                initialTitle: entry.snapshot.title,
-                                onProjectChanged: {
-                                    Task {
-                                        await model.refresh()
-                                    }
-                                }
-                            )
-                        } label: {
-                            LibraryProjectRow(entry: entry)
-                        }
-                        .contextMenu {
-                            projectMenu(entry)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button("Delete", role: .destructive) {
-                                deleteTarget = entry
-                            }
-                            Button("Rename") {
-                                beginRename(entry)
-                            }
-                            .tint(.accentColor)
-                        }
-                    }
-                }
-            } header: {
-                Text("Your Library")
-            }
-        }
-        .listStyle(.insetGrouped)
+    private var featuredEntry: LibraryModel.Entry? {
+        model.continueListening
+            ?? model.entries.max(by: { $0.snapshot.updatedAt < $1.snapshot.updatedAt })
     }
 
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("Your Library Is Empty", systemImage: "books.vertical")
-        } description: {
-            Text("Add a book, PDF, or document and listen completely on your device.")
+    private var visibleEntries: [LibraryModel.Entry] {
+        model.filteredEntries.filter {
+            selectedSourceFilter.matches($0.snapshot.sourceType)
         }
+    }
+
+    private var libraryContent: some View {
+        ReadAloudThemedList {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "Search your library",
+                        text: Binding(
+                            get: { model.searchText },
+                            set: { model.searchText = $0 }
+                        )
+                    )
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("Search Library")
+                    if !model.searchText.isEmpty {
+                        Button {
+                            model.searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 13))
+
+                if model.entries.isEmpty {
+                    emptyLibraryHero
+                } else if let featuredEntry {
+                    continueListeningHero(featuredEntry)
+                }
+
+                filterStrip
+
+                HStack {
+                    Text("Your Library")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(visibleEntries.count) items")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+
+            if !model.catalogIssues.isEmpty {
+                Button {
+                    isIssuesPresented = true
+                } label: {
+                    Label(
+                        "\(model.catalogIssues.count) project package(s) need attention",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.subheadline)
+                }
+                .foregroundStyle(.secondary)
+                .listRowBackground(Color.clear)
+            }
+
+            if visibleEntries.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: model.entries.isEmpty ? "books.vertical" : "line.3.horizontal.decrease.circle")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text(model.entries.isEmpty ? "No items yet" : "No matching items")
+                        .font(.subheadline.weight(.medium))
+                    Text(
+                        model.entries.isEmpty
+                            ? "Books and articles you add will appear here."
+                            : "Try another filter or search."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            } else {
+                ForEach(visibleEntries) { entry in
+                    NavigationLink {
+                        ProjectDetailRuntimeHost(
+                            projectID: entry.id,
+                            initialTitle: entry.snapshot.title,
+                            onProjectChanged: {
+                                Task { await model.refresh() }
+                            }
+                        )
+                    } label: {
+                        LibraryProjectRow(entry: entry)
+                    }
+                    .contextMenu {
+                        projectMenu(entry)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", role: .destructive) {
+                            deleteTarget = entry
+                        }
+                        Button("Rename") {
+                            beginRename(entry)
+                        }
+                        .tint(.accentColor)
+                    }
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                    .listRowBackground(Color.clear)
+                }
+            }
+
+            // Keep the final row reachable behind the floating Add button.
+            Color.clear
+                .frame(height: 66)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .accessibilityHidden(true)
+        }
+        .listStyle(.plain)
+    }
+
+    private var emptyLibraryHero: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "headphones")
+                .font(.system(size: 34, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 72, height: 72)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
+
+            Text("Your listening library starts here")
+                .font(.title3.bold())
+                .multilineTextAlignment(.center)
+                .foregroundStyle(theme.primaryForegroundColor)
+
+            Text("Add a book, web article, or your own text to listen whenever you like.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(heroSecondaryText)
+
+            Menu {
+                addMenuItems
+            } label: {
+                Label("Add Content", systemImage: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.backgroundColor)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(model.isImporting)
+            .accessibilityHint("Choose a book, document, web article, or text to add")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22)
+                .strokeBorder(theme.primaryForegroundColor.opacity(0.12), lineWidth: 1)
+        }
+    }
+
+    private func continueListeningHero(_ entry: LibraryModel.Entry) -> some View {
+        let hasHistory = entry.snapshot.lastPlayedAt != nil
+        let progress = runtimeManager.runtimeIfLoaded(projectID: entry.id)?
+            .activity.projectProgress ?? entry.snapshot.projectProgress
+
+        return VStack(alignment: .leading, spacing: 15) {
+            HStack {
+                Text(hasHistory ? "CONTINUE LISTENING" : "READY TO LISTEN")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(heroSecondaryText)
+                Spacer()
+                Image(systemName: "headphones")
+                    .foregroundStyle(heroSecondaryText)
+            }
+
+            NavigationLink {
+                ProjectReaderRuntimeHost(
+                    projectID: entry.id,
+                    initialItemID: nil,
+                    initialTitle: entry.snapshot.title,
+                    onProjectChanged: {
+                        Task { await model.refresh() }
+                    }
+                )
+            } label: {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center, spacing: 14) {
+                        ProjectArtworkView(
+                            url: entry.artworkURL,
+                            sourceType: entry.snapshot.sourceType,
+                            width: 70,
+                            height: 94
+                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entry.snapshot.title)
+                                .font(.headline)
+                                .foregroundStyle(theme.primaryForegroundColor)
+                                .lineLimit(2)
+                            Text(entry.snapshot.author
+                                ?? ReadAloudDisplay.sourceType(entry.snapshot.sourceType))
+                                .font(.subheadline)
+                                .foregroundStyle(heroSecondaryText)
+                                .lineLimit(2)
+                            Text(progress, format: .percent.precision(.fractionLength(0)))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(theme.primaryForegroundColor)
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    ProgressView(value: min(1, max(0, progress)))
+                        .tint(Color.accentColor)
+
+                    Label(
+                        hasHistory ? "Continue Listening" : "Start Listening",
+                        systemImage: "play.fill"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(theme.backgroundColor)
+                    .padding(.vertical, 11)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Rectangle()
+                .fill(theme.primaryForegroundColor.opacity(0.12))
+                .frame(height: 1)
+
+            HStack(spacing: 10) {
+                Image(systemName: runtimeManager.isBackgroundPrefetchPaused
+                    ? "pause.circle" : "waveform")
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtimeManager.isBackgroundPrefetchPaused
+                        ? "Background generation paused"
+                        : "Background audio")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(theme.primaryForegroundColor)
+                    Text(backgroundQueueDescription)
+                        .font(.caption2)
+                        .foregroundStyle(heroSecondaryText)
+                }
+                Spacer(minLength: 4)
+                Button {
+                    runtimeManager.setBackgroundPrefetchPaused(
+                        !runtimeManager.isBackgroundPrefetchPaused
+                    )
+                } label: {
+                    Label(
+                        runtimeManager.isBackgroundPrefetchPaused ? "Resume" : "Pause",
+                        systemImage: runtimeManager.isBackgroundPrefetchPaused
+                            ? "play.fill" : "pause.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.primaryForegroundColor)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(theme.primaryForegroundColor.opacity(0.09), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Controls background audio generation, not playback")
+            }
+        }
+        .padding(20)
+        .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
+    }
+
+    private var backgroundQueueDescription: String {
+        let status = runtimeManager.backgroundGenerationStatus(
+            persisted: model.generationQueueCountsByProject
+        )
+        var details: [String] = []
+        if status.generating > 0 {
+            details.append("\(status.generating) generating")
+        }
+        if status.queued > 0 {
+            details.append("\(status.queued) queued")
+        }
+        if status.failed > 0 {
+            details.append("\(status.failed) failed")
+        }
+        return details.isEmpty
+            ? "No queued audio jobs"
+            : details.joined(separator: " · ")
+    }
+
+    private var heroBackground: Color {
+        theme.surfaceColor
+    }
+
+    private var heroSecondaryText: Color {
+        theme.primaryForegroundColor.opacity(0.7)
+    }
+
+    private var filterStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(LibrarySourceFilter.allCases) { filter in
+                    let selected = selectedSourceFilter == filter
+                    let count = model.entries.filter {
+                        filter.matches($0.snapshot.sourceType)
+                    }.count
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedSourceFilter = filter
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(filter.title)
+                                .font(.system(size: 13, weight: .medium))
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        selected ? Color.white.opacity(0.22)
+                                            : Color.secondary.opacity(0.12),
+                                        in: Capsule()
+                                    )
+                            }
+                        }
+                        .foregroundStyle(selected ? Color.white : theme.primaryForegroundColor)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            selected ? Color.accentColor
+                                : theme.primaryForegroundColor.opacity(0.07),
+                            in: Capsule()
+                        )
+                        .overlay {
+                            Capsule().strokeBorder(
+                                selected ? Color.clear : theme.primaryForegroundColor.opacity(0.14),
+                                lineWidth: 0.5
+                            )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+        }
+        .contentMargins(.horizontal, 0)
     }
 
     private var sortMenu: some View {
@@ -345,15 +638,15 @@ struct LibraryView: View {
                     theme.appearance.preferredColorScheme == .dark
                         ? theme.backgroundColor : Color.white
                 )
-                .font(.title2.weight(.semibold))
-                .frame(width: 28, height: 28)
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .background(Color.accentColor.gradient, in: Circle())
+                .contentShape(Circle())
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
+        .buttonStyle(.plain)
         .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
         .accessibilityLabel("Add to Library")
-        .accessibilityHint("Import a book, PDF, document, or pasted text")
+        .accessibilityHint("Add an EPUB, PDF, document, web article, or text")
         .disabled(model.isImporting)
     }
 
@@ -366,7 +659,7 @@ struct LibraryView: View {
                 types: [UTType(filenameExtension: "epub") ?? .data]
             )
         } label: {
-            Label("Import EPUB", systemImage: "book.closed")
+            Label("Add EPUB", systemImage: "book.closed")
         }
 
         Button {
@@ -374,7 +667,7 @@ struct LibraryView: View {
             else { return }
             presentFileImporter(types: [.pdf])
         } label: {
-            Label("Import PDF", systemImage: "doc.richtext")
+            Label("Add PDF", systemImage: "doc.richtext")
         }
 
         Button {
@@ -382,7 +675,14 @@ struct LibraryView: View {
             else { return }
             presentFileImporter(types: documentTypes)
         } label: {
-            Label("Import Document", systemImage: "doc.text")
+            Label("Add Document", systemImage: "doc.text")
+        }
+
+        Button {
+            guard canCreateProject() else { return }
+            isURLPresented = true
+        } label: {
+            Label("Add Web Article", systemImage: "link")
         }
 
         Button {
@@ -390,7 +690,7 @@ struct LibraryView: View {
             else { return }
             isPastePresented = true
         } label: {
-            Label("Paste Text", systemImage: "doc.on.clipboard")
+            Label("Add Text", systemImage: "doc.on.clipboard")
         }
     }
 
@@ -472,44 +772,31 @@ struct LibraryView: View {
     }
 }
 
-private struct ContinueListeningCard: View {
-    let entry: LibraryModel.Entry
+private enum LibrarySourceFilter: String, CaseIterable, Identifiable {
+    case all, epub, pdf, articles, documents, text
 
-    var body: some View {
-        HStack(spacing: 14) {
-            ProjectArtworkView(
-                url: entry.artworkURL,
-                sourceType: entry.snapshot.sourceType,
-                width: 72,
-                height: 96
-            )
+    var id: Self { self }
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(entry.snapshot.title)
-                    .font(.headline)
-                    .lineLimit(2)
-
-                if let author = entry.snapshot.author {
-                    Text(author)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                ProgressView(value: entry.snapshot.projectProgress)
-
-                Text(entry.snapshot.projectProgress, format: .percent.precision(.fractionLength(0)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 6)
-
-            Image(systemName: "play.fill")
-                .font(.title3)
-                .accessibilityHidden(true)
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .epub: "EPUB"
+        case .pdf: "PDF"
+        case .articles: "Articles"
+        case .documents: "Documents"
+        case .text: "Text"
         }
-        .padding(.vertical, 6)
+    }
+
+    func matches(_ source: ProjectSourceType) -> Bool {
+        switch self {
+        case .all: true
+        case .epub: source == .epub
+        case .pdf: source == .pdf
+        case .articles: source == .article
+        case .documents: source == .document
+        case .text: source == .paste
+        }
     }
 }
 
@@ -624,6 +911,21 @@ private struct ProjectInfoSheet: View {
                     } label: {
                         Text("Progress")
                     }
+                    if let url = entry.snapshot.originalURL {
+                        LabeledContent("Website") {
+                            Link(url.host ?? "Open Original", destination: url)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let site = entry.snapshot.siteName {
+                        LabeledContent("Site", value: site)
+                    }
+                    if let language = entry.snapshot.language {
+                        LabeledContent("Language", value: language)
+                    }
+                    if let published = entry.snapshot.publishedTime {
+                        LabeledContent("Published", value: published)
+                    }
                     LabeledContent {
                         Text(entry.snapshot.createdAt, format: .dateTime)
                     } label: {
@@ -672,14 +974,14 @@ private struct PasteTextSheet: View {
                 }
             }
             .readAloudThemeSurface()
-            .navigationTitle("Paste Text")
+            .navigationTitle("Add Text")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add", action: onImport)
+                    Button("Add to Library", action: onImport)
                         .disabled(
                             draft.text.trimmingCharacters(
                                 in: .whitespacesAndNewlines
@@ -688,6 +990,57 @@ private struct PasteTextSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct FromURLSheet: View {
+    @Binding var urlText: String
+    let onCancel: () -> Void
+    let onImport: (URL) -> Void
+
+    private var validURL: URL? {
+        let value = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else { return nil }
+        return url
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Paste article URL", text: $urlText)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textContentType(.URL)
+                } header: {
+                    Text("Article URL")
+                } footer: {
+                    Text("Public articles are saved for offline reading. Sites requiring login or JavaScript may not be supported.")
+                }
+            }
+            .readAloudThemeSurface()
+            .navigationTitle("Add Web Article")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add to Library") {
+                        guard let url = validURL else { return }
+                        onImport(url)
+                    }
+                    .disabled(validURL == nil)
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

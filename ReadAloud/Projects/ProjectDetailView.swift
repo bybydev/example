@@ -735,7 +735,7 @@ struct ProjectDetailView: View {
         switch project.source.type {
         case .epub:
             return "Chapters"
-        case .pdf, .document, .paste:
+        case .pdf, .document, .paste, .article:
             return "Sections"
         }
     }

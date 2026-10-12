@@ -147,7 +147,7 @@ final class ProjectQueueController {
         }
 
         do {
-            if isActive {
+            if isActive || ReadAloudPreferences.backgroundPrefetchPaused {
                 if !executionQueue.isPaused {
                     try executionQueue.pause()
                 }
@@ -267,9 +267,8 @@ final class ProjectQueueController {
             )
         }
 
-        if runtime?
-            .blocksQueuedGeneration
-            == true,
+        if (runtime?.blocksQueuedGeneration == true
+            || ReadAloudPreferences.backgroundPrefetchPaused),
            !executionQueue.isPaused
         {
             try executionQueue.pause()

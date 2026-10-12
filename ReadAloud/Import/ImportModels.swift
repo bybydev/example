@@ -3,6 +3,7 @@ import Foundation
 nonisolated enum ReadAloudImportSource: Sendable, Equatable {
     case file(URL)
     case pastedText(String, suggestedTitle: String?)
+    case web(URL)
 }
 
 nonisolated enum ReadAloudImportKind: String, Sendable, Equatable {
@@ -10,6 +11,7 @@ nonisolated enum ReadAloudImportKind: String, Sendable, Equatable {
     case pdf
     case document
     case paste
+    case article
 }
 
 nonisolated enum ReadAloudImportStage: String, Sendable, Equatable {

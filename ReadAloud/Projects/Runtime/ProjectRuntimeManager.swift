@@ -8,6 +8,44 @@ final class ProjectRuntimeManager {
     private(set) var loadedRuntimeIDs: Set<UUID> = []
     private(set) var initializationError: String?
     private(set) var readerProjectID: UUID?
+    private(set) var isBackgroundPrefetchPaused = ReadAloudPreferences.backgroundPrefetchPaused
+
+    func backgroundGenerationStatus(
+        persisted: [UUID: ProjectGenerationQueueCounts]
+    ) -> ProjectGenerationQueueCounts {
+        // Live TTS runtimes supersede disk snapshots for the same project.
+        // Dormant projects still contribute their durable queued/failed jobs.
+        _ = loadedRuntimeIDs
+        var byProject = persisted
+        for runtime in runtimes.values where runtime.didLoad {
+            byProject[runtime.id] = ProjectGenerationQueueCounts(
+                queue: runtime.queueController.queue,
+                runtimeIsActive: true
+            )
+        }
+        return byProject.values.reduce(into: ProjectGenerationQueueCounts()) {
+            $0.add($1)
+        }
+    }
+
+    /// Retain queued work while suspending background generation.
+    /// Audible playback remains independent of this control.
+    func setBackgroundPrefetchPaused(_ paused: Bool) {
+        guard isBackgroundPrefetchPaused != paused else { return }
+        isBackgroundPrefetchPaused = paused
+        UserDefaults.standard.set(paused, forKey: ReadAloudPreferences.Key.backgroundPrefetchPaused)
+        for runtime in runtimes.values {
+            if paused {
+                runtime.prefetchTask?.cancel()
+                runtime.prefetchTask = nil
+                runtime.prefetchTaskID = nil
+            }
+            runtime.queueController.setPlaybackActive(runtime.blocksQueuedGeneration)
+            if !paused {
+                runtime.schedulePlaybackPrefetch()
+            }
+        }
+    }
 
     @ObservationIgnored private let projectStore: ProjectStore?
     @ObservationIgnored private let hasPro:

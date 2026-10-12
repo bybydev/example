@@ -320,6 +320,7 @@ extension ProjectRuntime {
 
     func schedulePlaybackPrefetch() {
         guard ReadAloudPreferences.prefetchCount > 0,
+              !ReadAloudPreferences.backgroundPrefetchPaused,
               !readerPauseRequested, !synthesisSuspendedForMemoryPressure,
               prefetchTask == nil, let operationID = playbackOperationID,
               let itemID = activity.activeItemID,
@@ -343,7 +344,8 @@ extension ProjectRuntime {
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard !Task.isCancelled, !synthesisSuspendedForMemoryPressure else { return }
+        guard !Task.isCancelled, !synthesisSuspendedForMemoryPressure,
+              !ReadAloudPreferences.backgroundPrefetchPaused else { return }
 
         let prefetchCount =
             ReadAloudPreferences

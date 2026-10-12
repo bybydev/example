@@ -10,6 +10,7 @@ nonisolated enum ProjectSourceType: String, Codable, Sendable, CaseIterable {
     case pdf
     case document
     case paste
+    case article
 }
 
 nonisolated struct ProjectSource: Codable, Equatable, Sendable {
@@ -18,19 +19,32 @@ nonisolated struct ProjectSource: Codable, Equatable, Sendable {
     let originalFileName: String
     let relativePath: String
     let sourceRevision: String
+    // These optional additions decode as nil for existing schema-v1 projects.
+    let originalURL: URL?
+    let siteName: String?
+    let language: String?
+    let publishedTime: String?
 
     init(
         id: UUID = UUID(),
         type: ProjectSourceType,
         originalFileName: String,
         relativePath: String,
-        sourceRevision: String
+        sourceRevision: String,
+        originalURL: URL? = nil,
+        siteName: String? = nil,
+        language: String? = nil,
+        publishedTime: String? = nil
     ) {
         self.id = id
         self.type = type
         self.originalFileName = originalFileName
         self.relativePath = relativePath
         self.sourceRevision = sourceRevision
+        self.originalURL = originalURL
+        self.siteName = siteName
+        self.language = language
+        self.publishedTime = publishedTime
     }
 }
 
@@ -203,6 +217,7 @@ nonisolated enum ProjectSourceLocatorKind: String, Codable, Sendable {
     case pdf
     case document
     case paste
+    case article
 }
 
 nonisolated struct ProjectSourceLocator: Codable, Equatable, Sendable {
@@ -308,6 +323,42 @@ nonisolated struct ProjectQueueDocument: Codable, Equatable, Sendable {
     }
 }
 
+/// Lightweight summary of the real durable Kokoro generation jobs.
+nonisolated struct ProjectGenerationQueueCounts: Equatable, Sendable {
+    var queued = 0
+    var generating = 0
+    var failed = 0
+
+    init() {}
+
+    init(queue: ProjectQueueDocument, runtimeIsActive: Bool) {
+        for job in queue.jobs {
+            switch job.state {
+            case .queued:
+                queued += 1
+            case .generating:
+                // A project not loaded by the TTS runtime cannot still be
+                // generating. The persisted in-flight job will be recovered.
+                if runtimeIsActive {
+                    generating += 1
+                } else {
+                    queued += 1
+                }
+            case .failed:
+                failed += 1
+            case .completed:
+                break
+            }
+        }
+    }
+
+    mutating func add(_ other: Self) {
+        queued += other.queued
+        generating += other.generating
+        failed += other.failed
+    }
+}
+
 nonisolated struct AudioSourceRange: Codable, Equatable, Sendable {
     let startUTF16: Int
     let endUTF16: Int
@@ -382,6 +433,10 @@ nonisolated struct ProjectSnapshot: Equatable, Sendable {
     let title: String
     let author: String?
     let sourceType: ProjectSourceType
+    let originalURL: URL?
+    let siteName: String?
+    let language: String?
+    let publishedTime: String?
     let artworkRelativePath: String?
     let projectProgress: Double
     let lastPlayedAt: Date?
@@ -393,6 +448,10 @@ nonisolated struct ProjectSnapshot: Equatable, Sendable {
         title = project.title
         author = project.author
         sourceType = project.source.type
+        originalURL = project.source.originalURL
+        siteName = project.source.siteName
+        language = project.source.language
+        publishedTime = project.source.publishedTime
         artworkRelativePath = project.artwork?.relativePath
         projectProgress = project.playback?.projectProgress ?? 0
         lastPlayedAt = project.playback?.lastPlayedAt

@@ -32,6 +32,7 @@ final class LibraryModel {
 
     private(set) var entries: [Entry] = []
     private(set) var catalogIssues: [ProjectCatalogIssue] = []
+    private(set) var generationQueueCountsByProject: [UUID: ProjectGenerationQueueCounts] = [:]
     private(set) var isLoading = false
     private(set) var didLoad = false
     private(set) var importProgress: ReadAloudImportProgress?
@@ -110,6 +111,9 @@ final class LibraryModel {
 
         do {
             let catalog = try await projectStore.catalog()
+            let queueCounts = await projectStore.generationQueueCounts(
+                projectIDs: catalog.projects.map(\.id)
+            )
             let rootURL = await projectStore.rootURL
 
             entries = catalog.projects.map { snapshot in
@@ -122,6 +126,7 @@ final class LibraryModel {
                 )
             }
             catalogIssues = catalog.issues
+            generationQueueCountsByProject = queueCounts
         } catch {
             errorMessage = Self.message(for: error)
         }
@@ -176,6 +181,10 @@ final class LibraryModel {
             .pastedText(text, suggestedTitle: suggestedTitle),
             detail: "Pasted Text"
         )
+    }
+
+    func importWeb(_ url: URL) async -> Bool {
+        await importSource(.web(url), detail: url.host ?? url.absoluteString)
     }
 
     func cancelImport() {
@@ -276,6 +285,7 @@ final class LibraryModel {
         case .pdf: "PDF"
         case .document: "Document"
         case .paste: "Text"
+        case .article: "Article"
         }
     }
 

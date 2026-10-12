@@ -44,6 +44,7 @@ struct ProjectArtworkView: View {
         case .pdf: "doc.richtext"
         case .document: "doc.text"
         case .paste: "doc.on.clipboard"
+        case .article: "globe"
         }
     }
 
@@ -53,6 +54,7 @@ struct ProjectArtworkView: View {
         case .pdf: "PDF"
         case .document: "DOC"
         case .paste: "TEXT"
+        case .article: "WEB"
         }
     }
 

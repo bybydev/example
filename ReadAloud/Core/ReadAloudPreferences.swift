@@ -42,6 +42,8 @@ nonisolated enum ReadAloudPreferences {
             "com.hoangbkit.readaloud.prefetch-count"
         static let generateWhileListening =
             "com.hoangbkit.readaloud.generate-while-listening"
+        static let backgroundPrefetchPaused =
+            "com.hoangbkit.readaloud.background-prefetch-paused"
         static let analyticsEnabled =
             "com.hoangbkit.readaloud.analytics-enabled"
     }
@@ -172,6 +174,11 @@ nonisolated enum ReadAloudPreferences {
             forKey:
                 Key.generateWhileListening
         )
+    }
+
+    /// Pauses queued offline generation and future auto-prefetch, not playback.
+    static var backgroundPrefetchPaused: Bool {
+        UserDefaults.standard.bool(forKey: Key.backgroundPrefetchPaused)
     }
 
     static var analyticsEnabled: Bool {

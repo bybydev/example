@@ -22,6 +22,8 @@ nonisolated enum ReadAloudDisplay {
             "Document"
         case .paste:
             "Text"
+        case .article:
+            "Article"
         }
     }
 }

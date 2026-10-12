@@ -807,6 +807,20 @@ actor ProjectStore {
         )
     }
 
+    /// Read actual durable queue files for the Library hero without loading
+    /// chapter contents or starting TTS engines for idle projects.
+    func generationQueueCounts(projectIDs: [UUID]) -> [UUID: ProjectGenerationQueueCounts] {
+        var result: [UUID: ProjectGenerationQueueCounts] = [:]
+        for id in projectIDs {
+            guard let queue = try? loadQueue(projectID: id) else { continue }
+            result[id] = ProjectGenerationQueueCounts(
+                queue: queue,
+                runtimeIsActive: false
+            )
+        }
+        return result
+    }
+
     func loadQueue(projectID: UUID) throws -> ProjectQueueDocument {
         let paths = try pathsForExistingProject(projectID)
         let queue: ProjectQueueDocument = try readDocument(
