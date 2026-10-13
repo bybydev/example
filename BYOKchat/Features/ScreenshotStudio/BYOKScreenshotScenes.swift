@@ -10,10 +10,10 @@ struct BYOKScreenshotChatScene: View {
     BYOKScreenshotCanvas(
       settings: settings,
       eyebrow: "NATIVE AI CHAT",
-      title: "Chat with\nany model",
-      subtitle: "Streaming answers, reasoning, files, and tools in one native workspace.",
+      title: "Chat With Your\nFavorite Models",
+      subtitle: "Stream answers, reason, and work with files and tools.",
       symbol: "bubble.left.and.text.bubble.right.fill",
-      composition: .focus
+      composition: .hero
     ) {
       BYOKStudioChatFixture(settings: settings)
     }
@@ -28,8 +28,8 @@ struct BYOKScreenshotProvidersScene: View {
     BYOKScreenshotCanvas(
       settings: settings,
       eyebrow: "BRING YOUR OWN KEYS",
-      title: "Your providers.\nYour API keys.",
-      subtitle: "Connect leading AI providers, private endpoints, and your own OpenAI-compatible servers.",
+      title: "Bring Your\nOwn API Keys",
+      subtitle: "Connect AI providers and custom endpoints directly.",
       symbol: "key.horizontal.fill",
       composition: .hero
     ) {
@@ -46,10 +46,10 @@ struct BYOKScreenshotMCPScene: View {
     BYOKScreenshotCanvas(
       settings: settings,
       eyebrow: "REMOTE MCP",
-      title: "Give every chat\npowerful tools",
-      subtitle: "Connect remote MCP servers and decide exactly what each tool is allowed to do.",
+      title: "Connect\nPowerful Tools",
+      subtitle: "Extend AI capabilities with remote MCP tools and permissions.",
       symbol: "shippingbox.fill",
-      composition: .splitLeading
+      composition: .hero
     ) {
       BYOKStudioMCPFixture(settings: settings)
     }
@@ -64,10 +64,10 @@ struct BYOKScreenshotProjectsScene: View {
     BYOKScreenshotCanvas(
       settings: settings,
       eyebrow: "PROJECT WORKSPACES",
-      title: "Keep every\nworkspace organized",
-      subtitle: "Group chats by project with their own prompts, files, models, and tools.",
+      title: "Organize\nYour Projects",
+      subtitle: "Keep chats, files, and instructions together.",
       symbol: "folder.fill",
-      composition: .splitTrailing
+      composition: .hero
     ) {
       BYOKStudioProjectsFixture(settings: settings)
     }
@@ -82,8 +82,8 @@ struct BYOKScreenshotAnalyticsScene: View {
     BYOKScreenshotCanvas(
       settings: settings,
       eyebrow: "LOCAL ANALYTICS",
-      title: "Know what every\nrequest costs",
-      subtitle: "Track tokens, spend, speed, reliability, and provider performance — all locally.",
+      title: "Track Usage\n& Costs",
+      subtitle: "Monitor tokens, spending, and model performance locally.",
       symbol: "chart.bar.xaxis",
       composition: .hero
     ) {

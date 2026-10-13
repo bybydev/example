@@ -203,6 +203,23 @@ jobs:
             rm -rf "$MAC_DERIVED"
           done
 
+      - name: Package generated Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Package after all selected builds to retain any SwiftPM resolution
+          # that xcodebuild records in the generated project workspace.
+          project="BYOKchat.xcodeproj"
+          test -s "$project/project.pbxproj"
+
+          artifact="artifacts/BYOKchat-xcodeproj-${{ steps.release.outputs.tag }}.zip"
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$project" "$artifact"
+          test -s "$artifact"
+          unzip -Z1 "$artifact" | grep -Fxq "BYOKchat.xcodeproj/project.pbxproj"
+          echo "Packaged generated Xcode project: $artifact"
+
       - name: Verify release archives
         env:
           BUILD_PLATFORM: ${{ inputs.platform }}
@@ -211,6 +228,11 @@ jobs:
         run: |
           set -euo pipefail
           ls -lh artifacts
+
+          # The generated project is always published, for either platform.
+          project_archive="artifacts/BYOKchat-xcodeproj-${{ steps.release.outputs.tag }}.zip"
+          test -s "$project_archive"
+          unzip -Z1 "$project_archive" | grep -Fxq "BYOKchat.xcodeproj/project.pbxproj"
 
           case "$BUILD_CONFIGURATION" in
             Debug) configurations=(debug) ;;

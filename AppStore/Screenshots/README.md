@@ -10,14 +10,14 @@ The registered order is intentional:
 
 | # | ID | Story | AppFoundation composition |
 |---|---|---|---|
-| 01 | `chat` | Chat with any model — reasoning, files, streaming and tools | Device Focus |
-| 02 | `providers` | Your providers, your API keys — direct connections | Hero |
-| 03 | `mcp` | Give every chat powerful tools — remote MCP and approvals | Split Feature (leading) |
-| 04 | `projects` | Keep every workspace organized — chats, prompts and files | Split Feature (trailing) |
-| 05 | `analytics` | Know what every request costs — local usage and performance | Hero |
+| 01 | `chat` | Chat With Your Favorite Models — reasoning, files, streaming and tools | Hero |
+| 02 | `providers` | Bring Your Own API Keys — direct connections | Hero |
+| 03 | `mcp` | Connect Powerful Tools — remote MCP and approvals | Hero |
+| 04 | `projects` | Organize Your Projects — chats, prompts and files | Hero |
+| 05 | `analytics` | Track Usage & Costs — local usage and performance | Hero |
 | 06 | `pro` | BYOK Pro reviewer paywall | Full-canvas production `ProPaywallView` template |
 
-- The five feature scenes use the app's Midnight palette by default, AppFoundation responsive templates, a consistent sculpted app icon, distinct headline/visual compositions, and deterministic screenshot-specific example content. The icon is shown without repeating the app name above every headline.
+- The five feature scenes use the app's Midnight palette by default, the full-width AppFoundation Hero template, a consistent sculpted app icon, and deterministic screenshot-specific example content. The icon is shown without repeating the app name above every headline.
 - **Static scene boundary:** Product screenshots must use only value-driven SwiftUI primitives or screenshot-only stateless components. Do not embed shipping chat/message/composer views that depend on `@Environment(AppModel.self)`, `@Environment(BYOKToastCenter.self)`, persistent stores, navigation, `@State`, asynchronous work, clipboard actions, or side effects. The studio's `@Observable` settings are allowed for its controls; the product scenes merely read their supplied theme and example data.
 - **Lazy paywall exception:** The production AppFoundation paywall needs its own screenshot-preview `PurchaseManager`. It is isolated inside `BYOKScreenshotPaywallScene` and is not initialized on entry to Screenshot Studio. The manager is simulated and never uses live purchases.
 - The sixth scene uses **`ProPaywallScreenshotTemplate`** with the app's actual `BYOKPurchaseStore.paywallConfiguration` and a separate simulated `PurchaseManager`. The preview uses the real paywall UI, not a marketing recreation. It selects the yearly plan and offers the built-in monthly (**$6.99**), yearly (**$29.99**), and lifetime (**$49.99**) fixture products; it does not use live App Store pricing or alter real entitlements. **Set the matching live prices separately in App Store Connect before publishing screenshots.**

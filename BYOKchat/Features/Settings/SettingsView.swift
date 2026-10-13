@@ -183,6 +183,7 @@ struct SettingsView: View {
       }
       .listRowBackground(theme.surfaceColor)
 
+      #if DEBUG
       Section {
         Button("Export Full Backup", systemImage: "archivebox") {
           exportBackup()
@@ -225,31 +226,26 @@ struct SettingsView: View {
       }
       .disabled(model.dataPortability.isBusy)
       .listRowBackground(theme.surfaceColor)
-
-      Section("Support") {
-        Link(destination: URL(string: "https://byok.pro/support")!) {
-          Label("Help & Support", systemImage: "questionmark.circle")
-        }
-        Link(destination: URL(string: "https://byok.pro/contact")!) {
-          Label("Contact Us", systemImage: "envelope")
-        }
-        NavigationLink {
-          TelemetryDiagnosticsView()
-        } label: {
-          Label("Diagnostics & Logs", systemImage: "waveform.path.ecg")
-        }
-      }
-      .listRowBackground(theme.surfaceColor)
+      #endif
 
       Section("About") {
         Link(destination: URL(string: "https://byok.pro")!) {
           Label("Website", systemImage: "globe")
+        }
+        Link(destination: URL(string: "https://byok.pro/contact")!) {
+          Label("Contact Us", systemImage: "envelope")
         }
         Link(destination: URL(string: "https://byok.pro/privacy")!) {
           Label("Privacy Policy", systemImage: "hand.raised")
         }
         Link(destination: URL(string: "https://byok.pro/terms")!) {
           Label("Terms of Use", systemImage: "doc.text")
+        }
+        LabeledContent {
+          Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"))")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        } label: {
+          Label("App Version", systemImage: "info.circle")
         }
       }
       .listRowBackground(theme.surfaceColor)
@@ -345,6 +341,7 @@ private struct DefaultSystemPromptView: View {
       }
       .listRowBackground(theme.surfaceColor)
     }
+    .scrollDismissesKeyboard(.interactively)
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))

@@ -11,8 +11,10 @@ struct UsageDashboardView: View {
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
+  #if DEBUG
   @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
   @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
+  #endif
   @State private var range: UsageRange = .today
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
@@ -21,7 +23,9 @@ struct UsageDashboardView: View {
   @State private var isLoadingTelemetry = false
   @State private var showProUpsell = false
   @State private var didTrackOpening = false
+  #if DEBUG
   @FocusState private var isBudgetFieldFocused: Bool
+  #endif
 
   init(
     conversations: [ChatConversation],
@@ -117,7 +121,9 @@ struct UsageDashboardView: View {
         .listRowBackground(theme.surfaceColor)
       }
 
+      #if DEBUG
       monthlyBudgetSection
+      #endif
 
       Section {
         if telemetryUnavailable {
@@ -156,11 +162,13 @@ struct UsageDashboardView: View {
       ToolbarItem(placement: .topBarTrailing) {
         analyticsRangeMenu
       }
+      #if DEBUG
       if isBudgetFieldFocused {
         ToolbarItem(placement: .keyboard) {
           Button("Done") { isBudgetFieldFocused = false }
         }
       }
+      #endif
       if openSidebar != nil {
         ToolbarItem(placement: .cancellationAction) {
           Button("Open Sidebar", systemImage: "text.alignleft") { openSidebar?() }
@@ -324,6 +332,7 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
+  #if DEBUG
   private var monthlyBudgetSection: some View {
     Section {
       HStack {
@@ -372,6 +381,7 @@ struct UsageDashboardView: View {
     }
     .listRowBackground(theme.surfaceColor)
   }
+  #endif
 
   private var filteredMessages: [ChatMessage] {
     messages(since: accessibleRange.startDate(reference: .now))
@@ -408,12 +418,14 @@ struct UsageDashboardView: View {
     return conversations.first(where: { $0.id == currentConversationID })
   }
 
+  #if DEBUG
   /// Budget thresholds remain monthly. Without Pro, only today's portion of
   /// the month can be evaluated; never read or display earlier days.
   private var budgetAggregate: ChatUsageAggregate {
     let budgetRange: UsageRange = purchaseManager.hasPro ? .month : .today
     return ChatBilling.aggregate(messages: messages(since: budgetRange.startDate(reference: .now)))
   }
+  #endif
 
   private var providerBreakdown: [UsageBreakdown] {
     breakdown(
@@ -513,6 +525,7 @@ struct UsageDashboardView: View {
     }
   }
 
+  #if DEBUG
   private var budgetProgress: Double {
     guard monthlyBudgetUSD > 0 else { return 0 }
     let spent = NSDecimalNumber(decimal: budgetAggregate.costUSD).doubleValue
@@ -536,6 +549,7 @@ struct UsageDashboardView: View {
       ? "Estimated spend reached the warning threshold"
       : "Reported spend reached the warning threshold"
   }
+  #endif
 
   private var telemetryFootnote: String {
     if !purchaseManager.hasPro {

@@ -375,55 +375,9 @@ private struct BYOKScreenshotBrandIcon: View {
 
 @MainActor
 private enum BYOKScreenshotAppIconResource {
-  static let image: UIImage? = {
-    if let image = UIImage(named: "AppIcon") {
-      return image
-    }
-
-    for dictionaryKey in ["CFBundleIcons", "CFBundleIcons~ipad"] {
-      guard
-        let icons = Bundle.main.object(forInfoDictionaryKey: dictionaryKey) as? [String: Any],
-        let primary = icons["CFBundlePrimaryIcon"] as? [String: Any]
-      else {
-        continue
-      }
-
-      if let filenames = primary["CFBundleIconFiles"] as? [String] {
-        for filename in filenames.reversed() {
-          if let image = UIImage(named: filename) {
-            return image
-          }
-          if
-            let path = Bundle.main.path(forResource: filename, ofType: nil),
-            let image = UIImage(contentsOfFile: path)
-          {
-            return image
-          }
-        }
-      }
-
-      if
-        let iconName = primary["CFBundleIconName"] as? String,
-        let image = UIImage(named: iconName)
-      {
-        return image
-      }
-    }
-
-    if
-      let iconName = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") as? String,
-      let image = UIImage(named: iconName)
-    {
-      return image
-    }
-
-    let sourceIconURL = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Resources/AppIcon.icon/Assets/AppIcon-1024.png")
-    return UIImage(contentsOfFile: sourceIconURL.path)
-  }()
+  // Use a regular image asset: loading the compiled app icon can make UIKit
+  // raise "Need an imageRef" instead of returning nil for the placeholder.
+  static let image = UIImage(named: "ScreenshotStudioIcon")
 }
 
 private struct BYOKStudioBackgroundDecoration: View {
