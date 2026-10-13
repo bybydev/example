@@ -481,6 +481,9 @@ extension ProjectRuntime {
         chunkBookmarkTask = nil
         activity.currentChunkRange = nil
         activity.currentChunkIndex = nil
+        // Do not keep highlighting the old passage while the new one loads.
+        activity.currentParagraphRange = nil
+        activity.currentParagraphIndex = nil
         playbackTask?.cancel()
         playbackTask = nil
         pipeline.stop()

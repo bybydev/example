@@ -336,6 +336,30 @@ struct ProjectReaderView: View {
                                     )
                                 }
                             }
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button {
+                                    listenFromHere(
+                                        paragraph,
+                                        itemID: state.id,
+                                        proxy: proxy
+                                    )
+                                } label: {
+                                    Label(
+                                        "Listen from Here",
+                                        systemImage: "play.circle.fill"
+                                    )
+                                }
+                            }
+                            .accessibilityAction(
+                                named: Text("Listen from Here")
+                            ) {
+                                listenFromHere(
+                                    paragraph,
+                                    itemID: state.id,
+                                    proxy: proxy
+                                )
+                            }
                             .id(paragraph.id)
                     }
                 }
@@ -895,6 +919,34 @@ struct ProjectReaderView: View {
         }
         followsPlaybackContext = true
         followsParagraph = true
+    }
+
+    private func listenFromHere(
+        _ paragraph: ReaderParagraph,
+        itemID: UUID,
+        proxy: ScrollViewProxy
+    ) {
+        do {
+            // The source range is derived from the original chapter text,
+            // not the trimmed display string or a fabricated audio time.
+            try runtime.play(
+                itemID: itemID,
+                fromOffsetUTF16: paragraph.sourceRange.startUTF16
+            )
+            displayedItemID = itemID
+            followsPlaybackContext = true
+            followsParagraph = true
+
+            if reduceMotion {
+                proxy.scrollTo(paragraph.id, anchor: .center)
+            } else {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(paragraph.id, anchor: .center)
+                }
+            }
+        } catch {
+            errorMessage = Self.message(for: error)
+        }
     }
 
     private func seek(by seconds: Double) {
