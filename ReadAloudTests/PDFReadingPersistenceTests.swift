@@ -3,10 +3,764 @@ import PDFKitAudio
 import XCTest
 @testable import ReadAloud
 
+@MainActor
+final class PlaybackContinuityTests: XCTestCase {
+    private enum FixtureError: Error { case loadFailed, unusedFilePlayback, waitTimedOut }
+
+    @MainActor private final class AudioGate {
+        let requested = XCTestExpectation(description: "Chunk requested")
+        private var waiter: CheckedContinuation<KokoroAudio, Error>?
+        private var result: Result<KokoroAudio, Error>?
+        func load() async throws -> KokoroAudio {
+            requested.fulfill()
+            if let result { return try result.get() }
+            return try await withCheckedThrowingContinuation { waiter = $0 }
+        }
+        func finish(_ result: Result<KokoroAudio, Error>) {
+            self.result = result
+            waiter?.resume(with: result)
+            waiter = nil
+        }
+    }
+
+    @MainActor private final class Playback: SpeechPlaybackOutput {
+        private struct Buffer {
+            let audio: KokoroAudio
+            let onStart: (@MainActor () -> Void)?
+            var started = false
+        }
+        var onSnapshotChange: ((SpeechPlaybackQueue.Snapshot) -> Void)?
+        var onSessionEvent: ((SpeechPlaybackQueue.SessionEvent) -> Void)?
+        var onEnqueued: (() -> Void)?
+        private var buffers: [Buffer] = []
+        private var paused = false
+        private var depthWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+        private(set) var playedSeconds = 0.0
+        private(set) var enqueueCount = 0
+        var snapshot: SpeechPlaybackQueue.Snapshot {
+            SpeechPlaybackQueue.Snapshot(
+                queuedBuffers: buffers.count,
+                queuedDurationSeconds: buffers.reduce(0) { $0 + $1.audio.durationSeconds },
+                isPlaying: !paused && !buffers.isEmpty
+            )
+        }
+        func prepare() throws {}
+        func enqueue(_ audio: KokoroAudio, onPlaybackStart: (@MainActor () -> Void)?) throws {
+            buffers.append(Buffer(audio: audio, onStart: onPlaybackStart))
+            enqueueCount += 1
+            announceFirst(); notify(); onEnqueued?()
+        }
+        func enqueueFile(at url: URL, startSeconds: Double) throws { throw FixtureError.unusedFilePlayback }
+        func waitUntilQueueDepthBelow(_ limit: Int) async {
+            if buffers.count >= limit {
+                await withCheckedContinuation { depthWaiters.append((limit, $0)) }
+            }
+        }
+        func waitUntilDrained() async {
+            if !buffers.isEmpty { await withCheckedContinuation { drainWaiters.append($0) } }
+        }
+        func pause() { paused = true; notify() }
+        func resume() throws { paused = false; announceFirst(); notify() }
+        func stop() { buffers.removeAll(); paused = false; notify(); releaseWaiters() }
+        func shutdown() { stop() }
+        func finishNext() {
+            guard !paused, !buffers.isEmpty else { return }
+            playedSeconds += buffers.removeFirst().audio.durationSeconds
+            announceFirst(); notify(); releaseWaiters()
+        }
+        private func announceFirst() {
+            guard !paused, !buffers.isEmpty, !buffers[0].started else { return }
+            buffers[0].started = true
+            buffers[0].onStart?()
+        }
+        private func notify() { onSnapshotChange?(snapshot) }
+        private func releaseWaiters() {
+            let ready = depthWaiters.filter { buffers.count < $0.0 }
+            depthWaiters.removeAll { buffers.count < $0.0 }
+            for (_, waiter) in ready { waiter.resume() }
+            if buffers.isEmpty {
+                let waiters = drainWaiters
+                drainWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
+    }
+
+    private func waitFor(_ expectation: XCTestExpectation) async throws {
+        let result = await XCTWaiter.fulfillment(of: [expectation], timeout: 2)
+        guard result == .completed else {
+            XCTFail("Playback did not reach the expected boundary")
+            throw FixtureError.waitTimedOut
+        }
+    }
+
+    private func audio() -> KokoroAudio {
+        KokoroAudio(samples: Array(repeating: 0.25, count: 240), sampleRate: 24_000)
+    }
+
+    func testStarvationRecoversWhenAudioReturnsWithoutCountingFinalDrain() async throws {
+        let output = Playback()
+        var now = 0.0
+        let pipeline = ReadAloudPipeline(playback: output, now: { now })
+        let gate = AudioGate()
+        let secondEnqueued = expectation(description: "Second buffer enqueued")
+        output.onEnqueued = { if output.enqueueCount == 2 { secondEnqueued.fulfill() } }
+        var diagnostics: [SpeechPlaybackDiagnostic] = []
+        pipeline.onDiagnostic = { diagnostics.append($0) }
+        let audio = audio()
+        let task = Task {
+            try await pipeline.playChunkStream(count: 2, continuous: false, loadAudio: { index in
+                if index == 0 { return audio }
+                return try await gate.load()
+            }, onChunkStarted: { _ in })
+        }
+        defer {
+            task.cancel()
+            pipeline.shutdown()
+            output.onEnqueued = nil
+            gate.finish(.failure(CancellationError()))
+        }
+        try await waitFor(gate.requested)
+        XCTAssertEqual(pipeline.state, .playing)
+        now = 1
+        output.finishNext()
+        XCTAssertEqual(pipeline.state, .buffering)
+        XCTAssertEqual(diagnostics, [.starvationStarted])
+        now = 4
+        gate.finish(.success(audio))
+        try await waitFor(secondEnqueued)
+        XCTAssertEqual(pipeline.state, .playing)
+        XCTAssertEqual(diagnostics, [.starvationStarted, .starvationEnded(seconds: 3, reason: .resumed)])
+        output.finishNext()
+        try await task.value
+        XCTAssertEqual(pipeline.state, .finished)
+        XCTAssertEqual(diagnostics.count, 2)
+    }
+
+    func testPauseExcludesUserWaitingAndEmptyResumeRemainsBuffering() async throws {
+        let output = Playback()
+        var now = 0.0
+        let pipeline = ReadAloudPipeline(playback: output, now: { now })
+        let gate = AudioGate()
+        let secondEnqueued = expectation(description: "Second buffer enqueued")
+        output.onEnqueued = { if output.enqueueCount == 2 { secondEnqueued.fulfill() } }
+        var diagnostics: [SpeechPlaybackDiagnostic] = []
+        pipeline.onDiagnostic = { diagnostics.append($0) }
+        let audio = audio()
+        let task = Task {
+            try await pipeline.playChunkStream(count: 2, continuous: false, loadAudio: { index in
+                if index == 0 { return audio }
+                return try await gate.load()
+            }, onChunkStarted: { _ in })
+        }
+        defer {
+            task.cancel()
+            pipeline.shutdown()
+            output.onEnqueued = nil
+            gate.finish(.failure(CancellationError()))
+        }
+        try await waitFor(gate.requested)
+        now = 1
+        output.finishNext()
+        now = 3
+        pipeline.pause()
+        XCTAssertEqual(pipeline.state, .paused)
+        now = 50
+        pipeline.resume()
+        XCTAssertEqual(pipeline.state, .buffering)
+        now = 53
+        gate.finish(.success(audio))
+        try await waitFor(secondEnqueued)
+        XCTAssertEqual(diagnostics, [
+            .starvationStarted, .starvationEnded(seconds: 2, reason: .paused),
+            .starvationStarted, .starvationEnded(seconds: 3, reason: .resumed),
+        ])
+        output.finishNext()
+        try await task.value
+    }
+
+    func testPreparedAudioDoesNotStartOrAdvanceAudibleChapterWhilePaused() async throws {
+        let output = Playback()
+        let pipeline = ReadAloudPipeline(playback: output)
+        let gate = AudioGate()
+        let enqueued = expectation(description: "Paused buffer enqueued")
+        output.onEnqueued = { enqueued.fulfill() }
+        var started: [Int] = []
+        let task = Task {
+            try await pipeline.playChunkStream(count: 1, continuous: false,
+                loadAudio: { _ in try await gate.load() }, onChunkStarted: { started.append($0) })
+        }
+        defer {
+            task.cancel()
+            pipeline.shutdown()
+            output.onEnqueued = nil
+            gate.finish(.failure(CancellationError()))
+        }
+        try await waitFor(gate.requested)
+        pipeline.pause()
+        gate.finish(.success(audio()))
+        try await waitFor(enqueued)
+        XCTAssertEqual(pipeline.state, .paused)
+        XCTAssertTrue(started.isEmpty)
+        pipeline.resume()
+        XCTAssertEqual(pipeline.state, .playing)
+        XCTAssertEqual(started, [0])
+        output.finishNext()
+        try await task.value
+    }
+
+    func testStopWhileBufferingRejectsLateChunkWithoutFailure() async throws {
+        let output = Playback()
+        var now = 0.0
+        let pipeline = ReadAloudPipeline(playback: output, now: { now })
+        let gate = AudioGate()
+        let audio = audio()
+        var diagnostics: [SpeechPlaybackDiagnostic] = []
+        pipeline.onDiagnostic = { diagnostics.append($0) }
+        let task = Task {
+            try await pipeline.playChunkStream(count: 2, loadAudio: { index in
+                if index == 0 { return audio }
+                return try await gate.load()
+            }, onChunkStarted: { _ in })
+        }
+        defer {
+            task.cancel()
+            pipeline.shutdown()
+            output.onEnqueued = nil
+            gate.finish(.failure(CancellationError()))
+        }
+        try await waitFor(gate.requested)
+        now = 2
+        output.finishNext()
+        now = 4
+        pipeline.stop()
+        gate.finish(.success(audio))
+        do { try await task.value; XCTFail("Stopped stream must not succeed") }
+        catch ReadAloudPipeline.PipelineError.cancelled {}
+        XCTAssertEqual(pipeline.state, .idle)
+        XCTAssertEqual(output.enqueueCount, 1)
+        XCTAssertEqual(diagnostics, [.starvationStarted, .starvationEnded(seconds: 2, reason: .stopped)])
+    }
+
+    func testFailedChunkEndsBufferingWithRetryableFailure() async throws {
+        let output = Playback()
+        let pipeline = ReadAloudPipeline(playback: output)
+        let gate = AudioGate()
+        let audio = audio()
+        let task = Task {
+            try await pipeline.playChunkStream(count: 2, loadAudio: { index in
+                if index == 0 { return audio }
+                return try await gate.load()
+            }, onChunkStarted: { _ in })
+        }
+        defer {
+            task.cancel()
+            pipeline.shutdown()
+            output.onEnqueued = nil
+            gate.finish(.failure(CancellationError()))
+        }
+        try await waitFor(gate.requested)
+        output.finishNext()
+        gate.finish(.failure(FixtureError.loadFailed))
+        do { try await task.value; XCTFail("Chunk failure must be surfaced") }
+        catch FixtureError.loadFailed {}
+        guard case .failed = pipeline.state else { return XCTFail("Expected a retryable failure") }
+        XCTAssertEqual(output.snapshot.queuedBuffers, 0)
+    }
+
+    func testInitialPreparationAndNormalDrainAreNotStarvation() {
+        var monitor = SpeechStreamContinuity()
+        let loading = monitor.update(queuedBuffers: 0, outputIsPlaying: false,
+            expectingMore: true, paused: false, now: 0)
+        XCTAssertEqual(loading.phase, .loading)
+        XCTAssertNil(loading.diagnostic)
+        let playing = monitor.update(queuedBuffers: 1, outputIsPlaying: true,
+            expectingMore: false, paused: false, now: 5)
+        XCTAssertEqual(playing.phase, .playing)
+        let drained = monitor.update(queuedBuffers: 0, outputIsPlaying: false,
+            expectingMore: false, paused: false, now: 10)
+        XCTAssertEqual(drained.phase, .drained)
+        XCTAssertNil(drained.diagnostic)
+    }
+
+    func testBufferingKeepsPlaybackOwnershipWithoutClaimingAudibleOutput() {
+        var activity = ProjectRuntimeActivity(playbackState: .buffering, queuedAudioBuffers: 1)
+        XCTAssertTrue(activity.hasActivePlaybackWork)
+        XCTAssertFalse(activity.hasAudiblePlayback)
+        activity.playbackState = .playing
+        XCTAssertTrue(activity.hasAudiblePlayback)
+        activity.queuedAudioBuffers = 0
+        XCTAssertFalse(activity.hasAudiblePlayback)
+        activity.playbackState = .paused
+        XCTAssertTrue(activity.hasActivePlaybackWork)
+        XCTAssertFalse(activity.hasAudiblePlayback)
+    }
+
+    func testReadAheadFillsTwentyWithoutAudibleProgressAndKeepsPreparedAudio() async throws {
+        // Playback pause has no producer signal: the fixed audible position
+        // lets the same window fill in foreground or background, then sleep.
+        let window = ChunkReadAhead(startIndex: 100)
+        let audio = audio()
+        for index in 100..<120 {
+            _ = try await window.loadAudio(for: index) { audio }
+            await window.markReady(index)
+        }
+        try await window.awaitReady(119)
+        let full = await window.canProduce(120)
+        XCTAssertFalse(full)
+        await window.markAudible(100)
+        let advanced = await window.canProduce(120)
+        XCTAssertTrue(advanced)
+    }
+
+    func testActiveReadAheadStopsAtTwentyAndResumesWithAudibleProgress() async throws {
+        let window = ChunkReadAhead(startIndex: 100)
+        let audio = audio()
+        for index in 100..<120 {
+            _ = try await window.loadAudio(for: index) { audio }
+            await window.markReady(index)
+        }
+        let lastAllowed = await window.canProduce(119)
+        let outsideWindow = await window.canProduce(120)
+        XCTAssertTrue(lastAllowed)
+        XCTAssertFalse(outsideWindow)
+        let pending = Task { try await window.loadAudio(for: 120) { audio } }
+        defer { pending.cancel() }
+        let deadline = Date().addingTimeInterval(2)
+        while await window.waitingProductionCount == 0, Date() < deadline {
+            await Task.yield()
+        }
+        let waiting = await window.waitingProductionCount
+        guard waiting == 1 else { XCTFail("Producer did not suspend at capacity"); return }
+        // Audible start frees exactly one slot, even from a nonzero seek offset.
+        await window.markAudible(100)
+        let received = try await pending.value
+        XCTAssertEqual(received.samples, audio.samples)
+        let nextOutside = await window.canProduce(121)
+        XCTAssertFalse(nextOutside)
+        // Old audible callbacks cannot advance or move the window backwards.
+        await window.markAudible(99)
+        let stillOutside = await window.canProduce(121)
+        XCTAssertFalse(stillOutside)
+    }
+
+    func testCancelledProducerExitsFullReadAheadWindow() async throws {
+        let window = ChunkReadAhead(startIndex: 0)
+        let pending = Task { try await window.awaitProduction(for: 20) }
+        defer { pending.cancel() }
+        let deadline = Date().addingTimeInterval(2)
+        while await window.waitingProductionCount == 0, Date() < deadline {
+            await Task.yield()
+        }
+        let waiting = await window.waitingProductionCount
+        guard waiting == 1 else { XCTFail("Producer did not suspend at capacity"); return }
+        pending.cancel()
+        do { try await pending.value; XCTFail("Cancelled capacity wait must unwind") }
+        catch is CancellationError { }
+        let remaining = await window.waitingProductionCount
+        XCTAssertEqual(remaining, 0)
+    }
+
+    func testCancelledReadyWaitExitsWithoutPolling() async throws {
+        let window = ChunkReadAhead(startIndex: 0)
+        let waiter = Task { try await window.awaitReady(5) }
+        waiter.cancel()
+        do { try await waiter.value; XCTFail("Cancelled readiness must unwind") }
+        catch is CancellationError { }
+    }
+
+    func testReplacementReadAheadStartsAtNewSeekOffset() async {
+        let old = ChunkReadAhead(startIndex: 0)
+        await old.markAudible(100)
+        let replacement = ChunkReadAhead(startIndex: 500)
+        let lastAllowed = await replacement.canProduce(519)
+        let outside = await replacement.canProduce(520)
+        XCTAssertTrue(lastAllowed)
+        XCTAssertFalse(outside)
+    }
+
+    func testPreparedChunksRemainReadableAfterProducerFailure() async throws {
+        let window = ChunkReadAhead(startIndex: 0)
+        await window.markReady(0)
+        await window.fail(CancellationError())
+        try await window.awaitReady(0)
+        do { try await window.awaitReady(1); XCTFail("Unprepared audio must report producer failure") }
+        catch is CancellationError { }
+    }
+
+}
+
+// Cache lifecycle cases live in this already registered source file so the
+// owner-managed generated Xcode project does not need to be regenerated.
+@MainActor
+final class SharedChunkAudioCacheLifecycleTests: XCTestCase {
+    private actor SynthesisGate {
+        private var started = false
+        private var released = false
+        private var startWaiters: [CheckedContinuation<Void, Never>] = []
+        private var finishWaiter: CheckedContinuation<Void, Never>?
+        private(set) var calls = 0
+
+        // Deliberately ignore cancellation to model a native inference that
+        // cannot be interrupted in the middle of session.run().
+        func synthesize(_ audio: KokoroAudio) async -> KokoroAudio {
+            calls += 1
+            started = true
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            if !released {
+                await withCheckedContinuation { finishWaiter = $0 }
+            }
+            return audio
+        }
+
+        func waitUntilStarted() async {
+            if !started {
+                await withCheckedContinuation { startWaiters.append($0) }
+            }
+        }
+
+        func release() {
+            released = true
+            finishWaiter?.resume()
+            finishWaiter = nil
+        }
+    }
+
+    private enum FixtureError: Error, Equatable { case schedulingTimeout, synthesisFailed }
+
+    private func request(itemID: UUID = UUID(), generation: String = "original") -> ChunkAudioRequest {
+        ChunkAudioRequest(
+            itemID: itemID, index: 0,
+            chunk: SpeechChunk(
+                id: 0, text: "A spoken sentence.",
+                sourceRange: AudioSourceRange(startUTF16: 0, endUTF16: 18),
+                targetBucketSeconds: 3, maxChunkSeconds: 3, estimatedDurationSeconds: 1
+            ),
+            generationKey: generation,
+            resolved: ResolvedNarrationSettings(voiceID: "af_heart", speed: 1),
+            runtimeRevision: "lifecycle-test", synthesisConfigVersion: 4
+        )
+    }
+
+    private func audio(_ sample: Float = 0.25) -> KokoroAudio {
+        KokoroAudio(samples: Array(repeating: sample, count: 240), sampleRate: 24_000)
+    }
+
+    private func packageURL() -> URL {
+        FileManager.default.temporaryDirectory.appending(
+            path: "ReadAloud-CacheLifecycle-\(UUID().uuidString).readaloud",
+            directoryHint: .isDirectory
+        )
+    }
+
+    private func waitForCounts(
+        _ cache: SharedChunkAudioCache, consumers: Int, producers: Int
+    ) async throws {
+        // Only used to arrange a race; assertions below check consumer
+        // cancellation, cache contents and independent replacement results.
+        for _ in 0..<10_000 {
+            let actualConsumers = await cache.activeConsumerCount
+            let actualProducers = await cache.activeProducerCount
+            if actualConsumers == consumers, actualProducers == producers { return }
+            await Task.yield()
+        }
+        XCTFail("Cache did not reach the required race boundary")
+        throw FixtureError.schedulingTimeout
+    }
+
+    private func assertCancelled(_ result: Result<KokoroAudio, Error>) {
+        switch result {
+        case .success: XCTFail("Cancelled consumer received audio")
+        case .failure(let error): XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testCancellingOneConsumerPreservesSharedSynthesisAndCommittedAudio() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        let gate = SynthesisGate()
+        defer { Task { await gate.release() } }
+        let first = Task { try await cache.audio(for: request) { await gate.synthesize(audio) } }
+        await gate.waitUntilStarted()
+        let second = Task { try await cache.audio(for: request) { await gate.synthesize(audio) } }
+        try await waitForCounts(cache, consumers: 2, producers: 1)
+        first.cancel()
+        assertCancelled(await first.result)
+        // Cancellation must complete while the native producer is still held.
+        await gate.release()
+        let completed = try await second.value
+        XCTAssertEqual(completed.samples, audio.samples)
+        let calls = await gate.calls
+        XCTAssertEqual(calls, 1)
+        let cached = try await cache.load(request)
+        XCTAssertEqual(cached?.samples.count, audio.samples.count)
+        await cache.shutdown()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cache.directory.path))
+    }
+
+    func testCancelledProducerCannotWriteOrRemoveSameKeyReplacement() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let oldAudio = audio(0.2)
+        let newAudio = audio(0.4)
+        let oldGate = SynthesisGate()
+        let newGate = SynthesisGate()
+        defer { Task { await oldGate.release(); await newGate.release() } }
+        let old = Task { try await cache.audio(for: request) { await oldGate.synthesize(oldAudio) } }
+        await oldGate.waitUntilStarted()
+        old.cancel()
+        assertCancelled(await old.result)
+        let replacement = Task {
+            try await cache.audio(for: request) { await newGate.synthesize(newAudio) }
+        }
+        await newGate.waitUntilStarted()
+        await oldGate.release()
+        try await waitForCounts(cache, consumers: 1, producers: 1)
+        let stale = try await cache.load(request)
+        XCTAssertNil(stale)
+        await newGate.release()
+        let completed = try await replacement.value
+        XCTAssertEqual(completed.samples, newAudio.samples)
+        await cache.shutdown()
+    }
+
+    func testClearDrainsUninterruptibleWorkAndPreventsLateRepopulation() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        let gate = SynthesisGate()
+        defer { Task { await gate.release() } }
+        let consumer = Task { try await cache.audio(for: request) { await gate.synthesize(audio) } }
+        await gate.waitUntilStarted()
+        let clearing = Task { try await cache.clearAll() }
+        assertCancelled(await consumer.result)
+        do {
+            _ = try await cache.audio(for: request) { audio }
+            XCTFail("Clear must close admission while inference is draining")
+        } catch is CancellationError { }
+        await gate.release()
+        try await clearing.value
+        let stale = try await cache.load(request)
+        XCTAssertNil(stale)
+        let regenerated = try await cache.audio(for: request) { audio }
+        XCTAssertEqual(regenerated.samples, audio.samples)
+        await cache.shutdown()
+    }
+
+    func testScopedNestedInvalidationBlocksChangedGenerationUntilBothTokensRelease() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let itemID = UUID()
+        let original = request(itemID: itemID)
+        let changed = request(itemID: itemID, generation: "changed")
+        let other = request()
+        let audio = audio()
+        let gate = SynthesisGate()
+        defer { Task { await gate.release() } }
+        let consumer = Task { try await cache.audio(for: original) { await gate.synthesize(audio) } }
+        await gate.waitUntilStarted()
+        let invalidating = Task { await cache.suspendAndDrain(itemIDs: [itemID]) }
+        assertCancelled(await consumer.result)
+        await gate.release()
+        let firstToken = await invalidating.value
+        let secondToken = await cache.suspendAndDrain(itemIDs: [itemID])
+        await cache.resumeAdmission(firstToken)
+        do {
+            _ = try await cache.audio(for: changed) { audio }
+            XCTFail("A nested invalidation still owns admission")
+        } catch is CancellationError { }
+        let unrelated = try await cache.audio(for: other) { audio }
+        XCTAssertEqual(unrelated.samples, audio.samples)
+        await cache.resumeAdmission(secondToken)
+        let stale = try await cache.load(original)
+        XCTAssertNil(stale)
+        let regenerated = try await cache.audio(for: changed) { audio }
+        XCTAssertEqual(regenerated.samples, audio.samples)
+        await cache.shutdown()
+    }
+
+    func testShutdownRejectsFutureRequestsWithoutDeletingCompletedChunks() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        _ = try await cache.audio(for: request) { audio }
+        await cache.shutdown()
+        do {
+            _ = try await cache.audio(for: request) { audio }
+            XCTFail("A shut-down runtime cannot admit new consumers")
+        } catch is CancellationError { }
+        let reopened = SharedChunkAudioCache(packageURL: url)
+        let preserved = try await reopened.load(request)
+        XCTAssertEqual(preserved?.samples.count, audio.samples.count)
+        await reopened.shutdown()
+    }
+
+    func testAlreadyCancelledConsumerCannotReceiveCachedAudio() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        _ = try await cache.audio(for: request) { audio }
+        let gate = SynthesisGate()
+        let consumer = Task {
+            _ = await gate.synthesize(audio)
+            return try await cache.audio(for: request) { audio }
+        }
+        await gate.waitUntilStarted()
+        consumer.cancel()
+        await gate.release()
+        assertCancelled(await consumer.result)
+        let cached = try await cache.load(request)
+        XCTAssertNotNil(cached)
+        await cache.shutdown()
+    }
+
+    func testSharedFailureReleasesAllConsumersAndAllowsRetry() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        let gate = SynthesisGate()
+        defer { Task { await gate.release() } }
+        let first = Task {
+            try await cache.audio(for: request) {
+                _ = await gate.synthesize(audio)
+                throw FixtureError.synthesisFailed
+            }
+        }
+        await gate.waitUntilStarted()
+        let second = Task { try await cache.audio(for: request) { audio } }
+        try await waitForCounts(cache, consumers: 2, producers: 1)
+        await gate.release()
+        for result in [await first.result, await second.result] {
+            switch result {
+            case .success: XCTFail("Both coalesced consumers must receive the failure")
+            case .failure(let error):
+                XCTAssertEqual(error as? FixtureError, .synthesisFailed)
+            }
+        }
+        let retried = try await cache.audio(for: request) { audio }
+        XCTAssertEqual(retried.samples, audio.samples)
+        await cache.shutdown()
+    }
+
+    private actor AttemptCounter {
+        private(set) var count = 0
+        func next() -> Int { count += 1; return count }
+    }
+
+    func testStoppedReadAheadReleasesCacheConsumerAndReplacementRetriesSameChunk() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let audio = audio()
+        let gate = SynthesisGate()
+        let attempts = AttemptCounter()
+        let window = ChunkReadAhead(startIndex: 0)
+        defer { Task { await gate.release() } }
+        let listener = Task {
+            try await window.loadAudio(for: 0) {
+                try await cache.audio(for: request) {
+                    if await attempts.next() == 1 { return await gate.synthesize(audio) }
+                    return audio
+                }
+            }
+        }
+        await gate.waitUntilStarted()
+        listener.cancel()
+        do { _ = try await listener.value; XCTFail("Stopped producer must unwind") }
+        catch is CancellationError { }
+        try await waitForCounts(cache, consumers: 0, producers: 1)
+        await gate.release()
+        try await waitForCounts(cache, consumers: 0, producers: 0)
+        let replacement = ChunkReadAhead(startIndex: 0)
+        let received = try await replacement.loadAudio(for: 0) {
+            try await cache.audio(for: request) {
+                _ = await attempts.next()
+                return audio
+            }
+        }
+        XCTAssertEqual(received.samples, audio.samples)
+        let count = await attempts.count
+        XCTAssertEqual(count, 2)
+        await cache.shutdown()
+    }
+
+    func testRapidReadAheadReplacementDoesNotLetOldProducerOverwriteRetry() async throws {
+        let url = packageURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cache = SharedChunkAudioCache(packageURL: url)
+        let request = request()
+        let oldAudio = audio(0.2)
+        let newAudio = audio(0.5)
+        let gate = SynthesisGate()
+        let attempts = AttemptCounter()
+        let window = ChunkReadAhead(startIndex: 0)
+        defer { Task { await gate.release() } }
+        let listener = Task {
+            try await window.loadAudio(for: 0) {
+                try await cache.audio(for: request) {
+                    if await attempts.next() == 1 { return await gate.synthesize(oldAudio) }
+                    return newAudio
+                }
+            }
+        }
+        await gate.waitUntilStarted()
+        listener.cancel()
+        do { _ = try await listener.value; XCTFail("Replaced producer must unwind") }
+        catch is CancellationError { }
+        let replacement = ChunkReadAhead(startIndex: 0)
+        let received = try await replacement.loadAudio(for: 0) {
+            try await cache.audio(for: request) { newAudio }
+        }
+        XCTAssertEqual(received.samples, newAudio.samples)
+        // The old native call is still held while its replacement finishes.
+        await gate.release()
+        try await waitForCounts(cache, consumers: 0, producers: 0)
+        let cached = try await cache.load(request)
+        XCTAssertEqual(cached?.samples.first ?? 0, 0.5, accuracy: 0.001)
+        await cache.shutdown()
+    }
+
+    func testEngineUnloadDoesNotReopenAnExternallyHeldAdmissionBarrier() async throws {
+        // No model assets are needed: closed admission must fail before load.
+        let engine = KokoroONNXEngine()
+        let first = await engine.suspendAndDrain()
+        let second = await engine.suspendAndDrain()
+        await engine.unload()
+        await engine.resumeAdmission(first)
+        do {
+            try await engine.load()
+            XCTFail("Unload must preserve the external suspension")
+        } catch is CancellationError { }
+        do {
+            _ = try await engine.synthesize(text: "Hello.", voice: .heart, speed: 1, maxChunkSeconds: 3)
+            XCTFail("New inference must be rejected while resources are released")
+        } catch is CancellationError { }
+        await engine.resumeAdmission(second)
+    }
+}
+
 /// Disk-backed regression tests: no PDF extraction or ONNX inference needed.
 /// They exercise the storage contract used by reader-side policy changes.
 final class PDFReadingPersistenceTests: XCTestCase {
-    private struct Fixture {
+    private struct Fixture: Sendable {
         let root: URL
         let projectID: UUID
         let first: ProjectContentItem
@@ -23,7 +777,8 @@ final class PDFReadingPersistenceTests: XCTestCase {
     }
 
     private func makeFixture(
-        root existingRoot: URL? = nil
+        root existingRoot: URL? = nil,
+        firstText: String = "First spoken passage."
     ) async throws -> Fixture {
         let root = existingRoot ?? FileManager.default.temporaryDirectory.appending(
             path: "ReadAloud-PDFReadingTests-\(UUID().uuidString)",
@@ -45,7 +800,7 @@ final class PDFReadingPersistenceTests: XCTestCase {
         )
         let first = makeItem(
             title: "One", chapter: "chapter-one",
-            order: 0, text: "First spoken passage."
+            order: 0, text: firstText
         )
         let second = makeItem(
             title: "Two", chapter: "chapter-two",
@@ -120,6 +875,772 @@ final class PDFReadingPersistenceTests: XCTestCase {
             text: text,
             id: item.id
         )
+    }
+
+    func testRecoveryPreservesIntentIdentityAndRejectsChangedSettings() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let oldKey = ProjectDigest.sha256("old")
+        let newKey = ProjectDigest.sha256("new")
+        let now = Date(timeIntervalSince1970: 100)
+        let jobs = [fixture.first, fixture.second].map { item in
+            GenerationJobRecord(
+                id: UUID(), projectID: fixture.projectID, itemID: item.id,
+                operation: .generate, generationKey: oldKey, state: .generating,
+                createdAt: now, updatedAt: now, attempt: 2, lastError: nil
+            )
+        }
+        try await fixture.store.saveQueue(projectID: fixture.projectID, queue: ProjectQueueDocument(jobs: jobs))
+        let recovered = try await fixture.store.recoverGenerationQueue(
+            projectID: fixture.projectID,
+            generationKeys: [fixture.first.id: oldKey, fixture.second.id: newKey],
+            now: now.addingTimeInterval(1)
+        )
+        XCTAssertEqual(recovered.jobs.map(\.id), jobs.map(\.id))
+        XCTAssertEqual(recovered.jobs.map(\.attempt), [2, 2])
+        XCTAssertEqual(recovered.jobs.map(\.state), [.queued, .failed])
+        XCTAssertNotNil(recovered.jobs[1].lastError)
+        let again = try await fixture.store.recoverGenerationQueue(
+            projectID: fixture.projectID,
+            generationKeys: [fixture.first.id: oldKey, fixture.second.id: newKey],
+            now: now.addingTimeInterval(2)
+        )
+        XCTAssertEqual(again, recovered)
+        // Recovery of a user-cancelled queue cannot recreate its old intent.
+        _ = try await fixture.store.removeGenerationJobs(
+            projectID: fixture.projectID, itemIDs: [fixture.first.id], states: [.queued]
+        )
+        let cancelled = try await fixture.store.recoverGenerationQueue(projectID: fixture.projectID)
+        XCTAssertFalse(cancelled.jobs.contains { $0.id == jobs[0].id })
+    }
+
+    func testRecoveryCompletesOnlyMatchingValidatedOfflineIntent() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let key = ProjectDigest.sha256("original")
+        let changed = ProjectDigest.sha256("changed")
+        let now = Date()
+        let jobs = [fixture.first, fixture.second].map { item in
+            GenerationJobRecord(
+                id: UUID(), projectID: fixture.projectID, itemID: item.id,
+                operation: .generate, generationKey: key, state: .generating,
+                createdAt: now, updatedAt: now, attempt: 1, lastError: nil
+            )
+        }
+        try await fixture.store.saveQueue(projectID: fixture.projectID, queue: ProjectQueueDocument(jobs: jobs))
+        let queue = try await fixture.store.recoverGenerationQueue(
+            projectID: fixture.projectID,
+            generationKeys: [fixture.first.id: key, fixture.second.id: changed],
+            readyOfflineItemIDs: [fixture.first.id, fixture.second.id]
+        )
+        XCTAssertEqual(queue.jobs.map(\.state), [.completed, .failed])
+    }
+
+    func testDormantRecoveryIsSingleFlightAndPreservesSelectedProject() async throws {
+        let selected = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: selected.root) }
+        let dormant = try await makeFixture(root: selected.root)
+        let resolved = try NarrationSettingsResolver.resolve(
+            item: dormant.first.settings, project: ProjectNarrationSettings(), hasPro: false
+        )
+        let key = try ReadAloudSynthesisContract.generationKey(item: dormant.first, resolved: resolved)
+        let now = Date()
+        let job = GenerationJobRecord(
+            id: UUID(), projectID: dormant.projectID, itemID: dormant.first.id,
+            operation: .generate, generationKey: key, state: .generating,
+            createdAt: now, updatedAt: now, attempt: 3, lastError: nil
+        )
+        try await selected.store.saveQueue(projectID: dormant.projectID, queue: ProjectQueueDocument(jobs: [job]))
+        try await Self.checkDormantRecovery(store: selected.store, selectedID: selected.projectID, dormantID: dormant.projectID)
+        let queue = try await selected.store.loadQueue(projectID: dormant.projectID)
+        XCTAssertEqual(queue.jobs.count, 1)
+        XCTAssertEqual(queue.jobs.first?.id, job.id)
+        XCTAssertEqual(queue.jobs.first?.state, .queued)
+        XCTAssertEqual(queue.jobs.first?.attempt, 3)
+    }
+
+    @MainActor private static func checkDormantRecovery(
+        store: ProjectStore, selectedID: UUID, dormantID: UUID
+    ) async throws {
+        let preferenceKey = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: preferenceKey)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        defer { UserDefaults.standard.set(previous, forKey: preferenceKey) }
+        let manager = ProjectRuntimeManager(store: store)
+        defer { manager.shutdownAll() }
+        let selected = try await manager.activate(projectID: selectedID)
+        let first = Task { await manager.recoverPendingGeneration() }
+        let second = Task { await manager.recoverPendingGeneration() }
+        await first.value
+        await second.value
+        let dormant = try XCTUnwrap(manager.runtimeIfLoaded(projectID: dormantID))
+        XCTAssertTrue(manager.activeRuntime === selected)
+        XCTAssertFalse(dormant.queueController.hasGlobalAdmission)
+        await manager.recoverPendingGeneration()
+        XCTAssertTrue(manager.runtimeIfLoaded(projectID: dormantID) === dormant)
+        XCTAssertTrue(manager.activeRuntime === selected)
+        // A paused/preparing session owns hero/mini-player selection even
+        // when another project remains the reader selection.
+        dormant.playerItemID = dormant.itemStates.first?.id
+        dormant.activity.activeItemID = dormant.playerItemID
+        dormant.activity.playbackState = .paused
+        XCTAssertTrue(manager.playerRuntime === dormant)
+        UserDefaults.standard.set(false, forKey: preferenceKey)
+        dormant.queueController.reconcileScheduling()
+        XCTAssertEqual(selected.queueController.schedulingStatus, "Waiting for listening")
+        XCTAssertFalse(dormant.queueController.hasGlobalAdmission)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        dormant.activity.playbackState = .loading
+        XCTAssertTrue(manager.playerRuntime === dormant)
+        XCTAssertFalse(dormant.itemStates.contains { $0.generationStatus.state == .readyOffline })
+        dormant.activity.playbackState = .idle
+        dormant.playerItemID = nil
+        dormant.activity.activeItemID = nil
+        await dormant.shutdownAndDrain()
+        await selected.shutdownAndDrain()
+    }
+
+    func testOfflineAdmissionRevocationDrainsUncooperativeWork() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.checkAdmissionDrain(store: fixture.store, projectID: fixture.projectID)
+    }
+
+    @MainActor private final class GenerationDrainGate {
+        let entered = XCTestExpectation(description: "Offline operation entered")
+        var continuation: CheckedContinuation<Void, Never>?
+        var drained = false
+        func run() async {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                entered.fulfill()
+            }
+        }
+        func release() { continuation?.resume(); continuation = nil }
+    }
+
+    @MainActor private static func checkAdmissionDrain(store: ProjectStore, projectID: UUID) async throws {
+        let key = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer { UserDefaults.standard.set(previous, forKey: key) }
+        let manager = ProjectRuntimeManager(store: store)
+        defer { manager.shutdownAll() }
+        let runtime = try await manager.activate(projectID: projectID)
+        let controller = runtime.queueController
+        let gate = GenerationDrainGate()
+        await ProjectGenerationExecutionRegistry.shared.drainForPlayback()
+        controller.setGlobalAdmission(true)
+        let operation = Task { try await controller.executeGeneration { await gate.run() } }
+        defer { operation.cancel(); gate.release() }
+        let entered = await XCTWaiter.fulfillment(of: [gate.entered], timeout: 2)
+        guard entered == .completed else {
+            operation.cancel(); gate.release()
+            _ = await operation.result
+            await runtime.shutdownAndDrain()
+            XCTFail("Offline operation did not enter")
+            return
+        }
+        controller.setGlobalAdmission(false)
+        let drainStarted = XCTestExpectation(description: "Drain started")
+        let drain = Task {
+            drainStarted.fulfill()
+            await controller.cancelAndDrain()
+            gate.drained = true
+        }
+        _ = await XCTWaiter.fulfillment(of: [drainStarted], timeout: 2)
+        XCTAssertFalse(gate.drained)
+        do {
+            try await controller.executeGeneration { XCTFail("Revoked queue admitted another operation") }
+            XCTFail("Revoked queue must throw cancellation")
+        } catch is CancellationError { }
+        gate.release()
+        await drain.value
+        XCTAssertTrue(gate.drained)
+        do { try await operation.value; XCTFail("Cancelled work completed as success") }
+        catch is CancellationError { }
+        await runtime.shutdownAndDrain()
+    }
+
+    func testLatePauseCannotUndoCompletedOfflineIntent() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let now = Date()
+        let job = GenerationJobRecord(
+            id: UUID(), projectID: fixture.projectID, itemID: fixture.first.id,
+            operation: .generate, generationKey: ProjectDigest.sha256("final"), state: .completed,
+            createdAt: now, updatedAt: now, attempt: 1, lastError: nil
+        )
+        try await fixture.store.saveQueue(projectID: fixture.projectID, queue: ProjectQueueDocument(jobs: [job]))
+        let lateStates: [GenerationJobState] = [.queued, .generating, .failed]
+        for state in lateStates {
+            let queue = try await fixture.store.updateGenerationJob(
+                projectID: fixture.projectID, jobID: job.id, state: state,
+                incrementAttempt: true, errorMessage: "Late executor event"
+            )
+            XCTAssertEqual(queue.jobs, [job])
+        }
+    }
+
+    private actor ChunkUseGate {
+        private var entered = false
+        private var released = false
+        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+        func hold() async {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            if !released { await withCheckedContinuation { releaseWaiter = $0 } }
+        }
+        func waitUntilEntered() async {
+            if !entered { await withCheckedContinuation { entryWaiters.append($0) } }
+        }
+        func release() {
+            released = true
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
+    private enum ReclamationTestError: Error { case schedulingTimeout, cleanupFailed }
+
+    private func waitForCacheBoundary(
+        _ cache: SharedChunkAudioCache,
+        condition: @Sendable (Int, Int, Int) -> Bool
+    ) async throws {
+        for _ in 0..<10_000 {
+            let producers = await cache.activeProducerCount
+            let pending = await cache.pendingReclamationCount
+            let suspensions = await cache.activeSuspensionCount
+            if condition(producers, pending, suspensions) { return }
+            await Task.yield()
+        }
+        XCTFail("Cache did not reach the expected race boundary")
+        throw ReclamationTestError.schedulingTimeout
+    }
+
+    private struct ReclamationFixture: Sendable {
+        let project: Fixture
+        let cache: SharedChunkAudioCache
+        let chunks: [ChunkAudioRequest]
+        let request: ProjectGenerationStatusRequest
+        let metadata: GeneratedAudioMetadata
+        let finalBytes: Data
+
+        func reclaim() async throws -> Int {
+            try await project.store.reclaimFinalizedChunks(
+                projectID: project.projectID, request: request,
+                expectedAudioRevision: metadata.audioRevision, chunks: chunks
+            )
+        }
+        func schedule() async {
+            await cache.requestReclamation(itemID: request.itemID, audioRevision: metadata.audioRevision) {
+                _ = try await self.reclaim()
+            }
+        }
+    }
+
+    private static func chunkRequests(
+        item: ProjectContentItem, resolved: ResolvedNarrationSettings,
+        generationKey: String, runtimeRevision: String
+    ) -> [ChunkAudioRequest] {
+        SpeechChunkScheduler().chunks(for: item.text, speed: Float(resolved.speed))
+            .enumerated().map { index, chunk in
+                ChunkAudioRequest(
+                    itemID: item.id, index: index, chunk: chunk,
+                    generationKey: generationKey, resolved: resolved,
+                    runtimeRevision: runtimeRevision,
+                    synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
+                )
+            }
+    }
+
+    private func makeReclamationFixture(commitFinal: Bool = true) async throws -> ReclamationFixture {
+        let project = try await makeFixture()
+        let cache = SharedChunkAudioCache(packageURL: project.paths.packageURL)
+        let resolved = ResolvedNarrationSettings(voiceID: "af_heart", speed: 1)
+        let revision = try ReadAloudSynthesisContract.runtimeRevision()
+        let key = try ReadAloudSynthesisContract.generationKey(item: project.first, resolved: resolved, runtimeRevision: revision)
+        let chunks = Self.chunkRequests(item: project.first, resolved: resolved, generationKey: key, runtimeRevision: revision)
+        let audio = KokoroAudio(samples: Array(repeating: 0.25, count: 240), sampleRate: 24_000)
+        for chunk in chunks { _ = try await cache.audio(for: chunk) { audio } }
+        let bytes = try ProjectWAVCodec.encode(samples: Array(repeating: 0.25, count: 240 * chunks.count), sampleRate: 24_000)
+        let metadata = GeneratedAudioMetadata(
+            itemID: project.first.id, generationKey: key, audioRevision: ProjectDigest.sha256(bytes),
+            contentRevision: project.first.contentRevision, voiceID: resolved.voiceID, speed: resolved.speed,
+            runtimeRevision: ReadAloudSynthesisContract.generationRuntimeRevision(
+                base: revision, pronunciationMode: ReadAloudPreferences.pronunciationFallbackMode
+            ),
+            synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion,
+            durationSeconds: Double(chunks.count) * 0.01,
+            segments: chunks.enumerated().map { index, chunk in
+                AudioSegmentMetadata(sourceRange: chunk.chunk.sourceRange,
+                    startSeconds: Double(index) * 0.01, endSeconds: Double(index + 1) * 0.01)
+            }
+        )
+        if commitFinal {
+            let wav = project.paths.tempDirectory.appending(path: "cleanup-fixture.wav")
+            try bytes.write(to: wav)
+            try await project.store.commitGeneratedAudio(projectID: project.projectID, wavURL: wav, metadata: metadata)
+        }
+        return ReclamationFixture(
+            project: project, cache: cache, chunks: chunks,
+            request: ProjectGenerationStatusRequest(itemID: project.first.id, generationKey: key,
+                contentRevision: project.first.contentRevision, voiceID: resolved.voiceID, speed: resolved.speed),
+            metadata: metadata, finalBytes: bytes
+        )
+    }
+
+    func testReclamationDefersForBothCachedReaderAndAssembler() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let readerGate = ChunkUseGate()
+        let assemblerGate = ChunkUseGate()
+        defer { Task { await readerGate.release(); await assemblerGate.release() } }
+        let reader = Task {
+            try await fixture.cache.withUsage(itemID: fixture.request.itemID) {
+                let cached = try await fixture.cache.load(fixture.chunks[0])
+                await readerGate.hold()
+                return cached?.samples.count
+            }
+        }
+        await readerGate.waitUntilEntered()
+        let assembler = Task {
+            try await fixture.cache.withUsage(itemID: fixture.request.itemID) {
+                await assemblerGate.hold()
+            }
+        }
+        await assemblerGate.waitUntilEntered()
+        await fixture.schedule()
+        let pending = await fixture.cache.pendingReclamationCount
+        XCTAssertEqual(pending, 1)
+        await readerGate.release()
+        let count = try await reader.value
+        XCTAssertEqual(count, 240)
+        let retained = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(retained)
+        await assemblerGate.release()
+        try await assembler.value
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let removed = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNil(removed)
+        let asset = try await fixture.project.store.loadCompatibleFinalAudio(projectID: fixture.project.projectID, request: fixture.request)
+        XCTAssertEqual(asset?.metadata, fixture.metadata)
+        await fixture.cache.shutdown()
+    }
+
+    func testNewReaderWaitsForReclamationAndCannotLoseItsReplacementChunks() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        await fixture.cache.requestReclamation(itemID: fixture.request.itemID, audioRevision: fixture.metadata.audioRevision) {
+            await gate.hold()
+            _ = try await fixture.reclaim()
+        }
+        await gate.waitUntilEntered()
+        let replacement = KokoroAudio(samples: Array(repeating: 0.5, count: 240), sampleRate: 24_000)
+        let reader = Task {
+            try await fixture.cache.withUsage(itemID: fixture.request.itemID) {
+                try await fixture.cache.audio(for: fixture.chunks[0]) { replacement }
+            }
+        }
+        await gate.release()
+        let received = try await reader.value
+        XCTAssertEqual(received.samples, replacement.samples)
+        let cached = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertEqual(cached?.samples.count, replacement.samples.count)
+        XCTAssertEqual(cached?.samples.first ?? 0, 0.5, accuracy: 0.001)
+        await fixture.cache.shutdown()
+    }
+
+    func testReclamationPreservesIncompleteGenerationWithoutFinalAudio() async throws {
+        let fixture = try await makeReclamationFixture(commitFinal: false)
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        await fixture.schedule()
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let cached = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(cached)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.project.paths.audioWAV(fixture.request.itemID).path))
+        await fixture.cache.shutdown()
+    }
+
+    func testReclamationRequiresCurrentValidFinalPairAndExpectedRevision() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let wav = fixture.project.paths.audioWAV(fixture.request.itemID)
+        let json = fixture.project.paths.audioMetadata(fixture.request.itemID)
+        try Data("corrupt audio".utf8).write(to: wav)
+        let corrupt = try await fixture.reclaim()
+        XCTAssertEqual(corrupt, 0)
+        try fixture.finalBytes.write(to: wav)
+        try FileManager.default.removeItem(at: json)
+        let missingMetadata = try await fixture.reclaim()
+        XCTAssertEqual(missingMetadata, 0)
+        try await fixture.project.store.saveAudioMetadata(projectID: fixture.project.projectID, metadata: fixture.metadata)
+        let replaced = try await fixture.project.store.reclaimFinalizedChunks(
+            projectID: fixture.project.projectID, request: fixture.request,
+            expectedAudioRevision: ProjectDigest.sha256("different final audio"), chunks: fixture.chunks
+        )
+        XCTAssertEqual(replaced, 0)
+        let stale = ProjectGenerationStatusRequest(itemID: fixture.request.itemID,
+            generationKey: ProjectDigest.sha256("new settings"), contentRevision: fixture.request.contentRevision,
+            voiceID: fixture.request.voiceID, speed: fixture.request.speed)
+        let changed = try await fixture.project.store.reclaimFinalizedChunks(
+            projectID: fixture.project.projectID, request: stale,
+            expectedAudioRevision: fixture.metadata.audioRevision, chunks: fixture.chunks
+        )
+        XCTAssertEqual(changed, 0)
+        let cached = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(cached)
+        await fixture.cache.shutdown()
+    }
+
+    func testReclamationIsExactAndPreservesSourceBookmarkAndOtherGenerations() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let before = try await fixture.project.store.loadProject(projectID: fixture.project.projectID)
+        let original = fixture.chunks[0]
+        let otherGeneration = ChunkAudioRequest(itemID: original.itemID, index: original.index, chunk: original.chunk,
+            generationKey: ProjectDigest.sha256("another generation"), resolved: original.resolved,
+            runtimeRevision: original.runtimeRevision, synthesisConfigVersion: original.synthesisConfigVersion)
+        let otherChapter = Self.chunkRequests(item: fixture.project.second, resolved: original.resolved,
+            generationKey: ProjectDigest.sha256("another chapter"), runtimeRevision: original.runtimeRevision)[0]
+        let audio = KokoroAudio(samples: Array(repeating: 0.25, count: 240), sampleRate: 24_000)
+        for request in [otherGeneration, otherChapter] { _ = try await fixture.cache.audio(for: request) { audio } }
+        await fixture.schedule()
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let removed = try await fixture.cache.load(original)
+        XCTAssertNil(removed)
+        for request in [otherGeneration, otherChapter] {
+            let preserved = try await fixture.cache.load(request)
+            XCTAssertNotNil(preserved)
+        }
+        let after = try await fixture.project.store.loadProject(projectID: fixture.project.projectID)
+        XCTAssertEqual(after.project.playback, before.project.playback)
+        XCTAssertEqual(after.items, before.items)
+        XCTAssertEqual(after.project.source, before.project.source)
+        let asset = try await fixture.project.store.loadCompatibleFinalAudio(projectID: fixture.project.projectID, request: fixture.request)
+        XCTAssertEqual(asset?.metadata, fixture.metadata)
+        await fixture.cache.shutdown()
+    }
+
+    func testClearDrainsCleanupAndAllowsFreshChunksWithoutLateDeletion() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        await fixture.cache.requestReclamation(itemID: fixture.request.itemID, audioRevision: fixture.metadata.audioRevision) {
+            await gate.hold() // Model a cleanup already waiting on its store transaction.
+            _ = try await fixture.reclaim()
+        }
+        await gate.waitUntilEntered()
+        let clear = Task { try await fixture.cache.clearAll() }
+        try await waitForCacheBoundary(fixture.cache) { _, _, suspensions in suspensions == 1 }
+        // Cleanup is still held. Clear must have closed admission and must
+        // wait for that reservation before deleting any derived files.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.cache.directory.appending(path: "\(fixture.chunks[0].cacheKey).wav").path))
+        await gate.release()
+        try await clear.value
+        let missing = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNil(missing)
+        let audio = KokoroAudio(samples: Array(repeating: 0.4, count: 240), sampleRate: 24_000)
+        _ = try await fixture.cache.audio(for: fixture.chunks[0]) { audio }
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let fresh = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(fresh)
+        let asset = try await fixture.project.store.loadCompatibleFinalAudio(projectID: fixture.project.projectID, request: fixture.request)
+        XCTAssertEqual(asset?.metadata, fixture.metadata)
+        await fixture.cache.shutdown()
+    }
+
+    func testCancelledNativeProducerStillDefersReclamationUntilItDrains() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let old = fixture.chunks[0]
+        let request = ChunkAudioRequest(itemID: old.itemID, index: old.index, chunk: old.chunk,
+            generationKey: ProjectDigest.sha256("incomplete replacement"), resolved: old.resolved,
+            runtimeRevision: old.runtimeRevision, synthesisConfigVersion: old.synthesisConfigVersion)
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        let audio = KokoroAudio(samples: Array(repeating: 0.5, count: 240), sampleRate: 24_000)
+        let consumer = Task {
+            try await fixture.cache.audio(for: request) {
+                await gate.hold() // Deliberately ignore cancellation, like native session.run().
+                return audio
+            }
+        }
+        await gate.waitUntilEntered()
+        await fixture.schedule()
+        consumer.cancel()
+        do { _ = try await consumer.value; XCTFail("Cancelled consumer received audio") }
+        catch is CancellationError { }
+        let pending = await fixture.cache.pendingReclamationCount
+        XCTAssertEqual(pending, 1)
+        let retained = try await fixture.cache.load(old)
+        XCTAssertNotNil(retained)
+        await gate.release()
+        try await waitForCacheBoundary(fixture.cache) { producers, pending, _ in producers == 0 && pending == 0 }
+        await fixture.cache.waitForReclamation(itemID: old.itemID)
+        let removed = try await fixture.cache.load(old)
+        let cancelled = try await fixture.cache.load(request)
+        XCTAssertNil(removed)
+        XCTAssertNil(cancelled)
+        await fixture.cache.shutdown()
+    }
+
+    func testDeferredReclamationRevalidatesAfterFinalAudioReplacement() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        let reader = Task {
+            try await fixture.cache.withUsage(itemID: fixture.request.itemID) { await gate.hold() }
+        }
+        await gate.waitUntilEntered()
+        await fixture.schedule()
+        let bytes = try ProjectWAVCodec.encode(samples: Array(repeating: 0.7, count: 240 * fixture.chunks.count), sampleRate: 24_000)
+        let wav = fixture.project.paths.tempDirectory.appending(path: "replacement-final.wav")
+        try bytes.write(to: wav)
+        let original = fixture.metadata
+        let replacement = GeneratedAudioMetadata(
+            itemID: original.itemID, generationKey: original.generationKey,
+            audioRevision: ProjectDigest.sha256(bytes), contentRevision: original.contentRevision,
+            voiceID: original.voiceID, speed: original.speed, runtimeRevision: original.runtimeRevision,
+            synthesisConfigVersion: original.synthesisConfigVersion,
+            durationSeconds: original.durationSeconds, segments: original.segments
+        )
+        try await fixture.project.store.commitGeneratedAudio(projectID: fixture.project.projectID, wavURL: wav, metadata: replacement)
+        await gate.release()
+        try await reader.value
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let retained = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(retained)
+        let asset = try await fixture.project.store.loadCompatibleFinalAudio(projectID: fixture.project.projectID, request: fixture.request)
+        XCTAssertEqual(asset?.metadata, replacement)
+        await fixture.cache.shutdown()
+    }
+
+    func testInvalidationAndShutdownDiscardDeferredCleanup() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        let reader = Task {
+            try await fixture.cache.withUsage(itemID: fixture.request.itemID) { await gate.hold() }
+        }
+        await gate.waitUntilEntered()
+        await fixture.schedule()
+        let token = await fixture.cache.suspendAndDrain(itemIDs: [fixture.request.itemID])
+        let pending = await fixture.cache.pendingReclamationCount
+        XCTAssertEqual(pending, 0)
+        await fixture.cache.resumeAdmission(token)
+        // Requeue while the reader still holds its usage; shutdown must also
+        // discard this request, rather than deleting chunks after release.
+        await fixture.schedule()
+        await fixture.cache.shutdown()
+        await gate.release()
+        try await reader.value
+        let reopened = SharedChunkAudioCache(packageURL: fixture.project.paths.packageURL)
+        let preserved = try await reopened.load(fixture.chunks[0])
+        XCTAssertNotNil(preserved)
+        await reopened.shutdown()
+    }
+
+    func testFailedHousekeepingDoesNotPoisonSubsequentCachedPlayback() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        await fixture.cache.requestReclamation(itemID: fixture.request.itemID, audioRevision: fixture.metadata.audioRevision) {
+            throw ReclamationTestError.cleanupFailed
+        }
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let audio = try await fixture.cache.withUsage(itemID: fixture.request.itemID) {
+            try await fixture.cache.load(fixture.chunks[0])
+        }
+        XCTAssertNotNil(audio)
+        await fixture.cache.shutdown()
+    }
+
+    func testFinalMetadataMatchesGenerationIdentityForEveryPronunciationMode() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let base = try ReadAloudSynthesisContract.runtimeRevision()
+        let resolved = ResolvedNarrationSettings(voiceID: "af_heart", speed: 1)
+        for mode in PronunciationFallbackMode.allCases {
+            let key = try ReadAloudSynthesisContract.generationKey(
+                item: fixture.first, resolved: resolved, runtimeRevision: base, pronunciationMode: mode
+            )
+            let legacyKey = try ProjectGenerationKey.make(GenerationKeyInput(
+                contentRevision: fixture.first.contentRevision, resolvedVoiceID: resolved.voiceID,
+                canonicalSpeed: resolved.speed, kokoroRuntimeRevision: base + "-g2p-" + mode.rawValue,
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
+            ))
+            XCTAssertEqual(key, legacyKey)
+            let metadata = GeneratedAudioMetadata(
+                itemID: fixture.first.id, generationKey: key, audioRevision: ProjectDigest.sha256("test PCM"),
+                contentRevision: fixture.first.contentRevision, voiceID: resolved.voiceID, speed: resolved.speed,
+                runtimeRevision: ReadAloudSynthesisContract.generationRuntimeRevision(base: base, pronunciationMode: mode),
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion,
+                durationSeconds: 0.01,
+                segments: [AudioSegmentMetadata(sourceRange: AudioSourceRange(startUTF16: 0, endUTF16: fixture.first.text.utf16.count), startSeconds: 0, endSeconds: 0.01)]
+            )
+            XCTAssertNoThrow(try ProjectValidation.validate(metadata))
+        }
+    }
+
+    func testRuntimeFinalizationRetainsPartialChunksThenReclaimsAfterLastReader() async throws {
+        let fixture = try await makeFixture(firstText: String(repeating: "A spoken sentence about a journey through the forest. ", count: 4))
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.checkFinalizationAndCleanup(fixture)
+    }
+
+    @MainActor private static func checkFinalizationAndCleanup(_ fixture: Fixture) async throws {
+        let modeKey = ReadAloudPreferences.Key.pronunciationFallbackMode
+        let oldMode = UserDefaults.standard.object(forKey: modeKey)
+        defer { UserDefaults.standard.set(oldMode, forKey: modeKey) }
+        let preferenceKey = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: preferenceKey)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        defer { UserDefaults.standard.set(previous, forKey: preferenceKey) }
+        let manager = ProjectRuntimeManager(store: fixture.store)
+        defer { manager.shutdownAll() }
+        let runtime = try await manager.activate(projectID: fixture.projectID)
+        let state = try XCTUnwrap(runtime.itemState(fixture.first.id))
+        let revision = try ReadAloudSynthesisContract.runtimeRevision()
+        let requests = chunkRequests(item: state.item, resolved: state.resolved,
+            generationKey: state.generationKey, runtimeRevision: revision)
+        XCTAssertGreaterThan(requests.count, 1)
+        let audio = KokoroAudio(samples: Array(repeating: 0.25, count: 240), sampleRate: 24_000)
+        for request in requests.dropLast() { _ = try await runtime.chunkCache.audio(for: request) { audio } }
+        let paragraphs = runtime.cachedReaderParagraphs(for: state.item)
+        let partial = try await runtime.finalizeItemIfComplete(itemState: state, paragraphs: paragraphs, runtimeRevision: revision)
+        XCTAssertFalse(partial)
+        let preserved = try await runtime.chunkCache.load(requests[0])
+        XCTAssertNotNil(preserved)
+        let before = try await fixture.store.loadProject(projectID: fixture.projectID)
+        let last = try XCTUnwrap(requests.last)
+        _ = try await runtime.chunkCache.audio(for: last) { audio }
+        let gate = ChunkUseGate()
+        defer { Task { await gate.release() } }
+        let reader = Task {
+            try await runtime.chunkCache.withUsage(itemID: state.id) { await gate.hold() }
+        }
+        await gate.waitUntilEntered()
+        let complete = try await runtime.finalizeItemIfComplete(itemState: state, paragraphs: paragraphs, runtimeRevision: revision)
+        XCTAssertTrue(complete)
+        let stillUsed = try await runtime.chunkCache.load(requests[0])
+        XCTAssertNotNil(stillUsed)
+        await gate.release()
+        try await reader.value
+        await runtime.chunkCache.waitForReclamation(itemID: state.id)
+        let ranges = await runtime.chunkCache.cachedSourceRanges(for: requests)
+        XCTAssertTrue(ranges.isEmpty)
+        try await runtime.refreshGenerationState()
+        XCTAssertEqual(runtime.itemState(state.id)?.generationStatus.state, .readyOffline)
+        let buffered = await runtime.playerBufferedRanges(for: state.id)
+        XCTAssertEqual(buffered, [PlayerBufferedRange(start: 0, end: 1)])
+        let asset = try await fixture.store.loadCompatibleFinalAudio(projectID: fixture.projectID,
+            request: ProjectGenerationStatusRequest(itemID: state.id, generationKey: state.generationKey,
+                contentRevision: state.item.contentRevision, voiceID: state.resolved.voiceID, speed: state.resolved.speed))
+        XCTAssertEqual(asset?.metadata.segments.count, requests.count)
+        let after = try await fixture.store.loadProject(projectID: fixture.projectID)
+        XCTAssertEqual(after.project.playback, before.project.playback)
+        XCTAssertEqual(after.items, before.items)
+        // A policy change must invalidate a paused session even though its
+        // resolved voice and speed are unchanged. Old final audio stays intact.
+        runtime.playerItemID = state.id
+        runtime.activity.activeItemID = state.id
+        runtime.activity.playbackState = .paused
+        let nextMode = try XCTUnwrap(PronunciationFallbackMode.allCases.first { $0 != state.pronunciationMode })
+        UserDefaults.standard.set(nextMode.rawValue, forKey: modeKey)
+        await runtime.refreshForExternalPreferencesChange()
+        XCTAssertNil(runtime.activity.activeItemID)
+        XCTAssertEqual(runtime.itemState(state.id)?.pronunciationMode, nextMode)
+        XCTAssertNotEqual(runtime.itemState(state.id)?.generationKey, state.generationKey)
+        XCTAssertNotEqual(runtime.itemState(state.id)?.generationStatus.state, .readyOffline)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.paths.audioWAV(state.id).path))
+        await runtime.shutdownAndDrain()
+    }
+
+    func testBackgroundWithoutListeningRevokesGenerationAndPreservesIntent() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.checkBackgroundAdmission(fixture)
+    }
+
+    @MainActor private static func checkBackgroundAdmission(_ fixture: Fixture) async throws {
+        let registry = ProjectGenerationExecutionRegistry.shared
+        let wasActive = registry.isApplicationActive
+        let preferenceKey = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: preferenceKey)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        let manager = ProjectRuntimeManager(store: fixture.store)
+        defer {
+            manager.shutdownAll()
+            registry.setApplicationActive(wasActive)
+            UserDefaults.standard.set(previous, forKey: preferenceKey)
+        }
+        manager.setApplicationActive(true)
+        let runtime = try await manager.activate(projectID: fixture.projectID)
+        await registry.drainForPlayback()
+        let controller = runtime.queueController
+        let gate = GenerationDrainGate()
+        controller.setGlobalAdmission(true)
+        let operation = Task { try await controller.executeGeneration { await gate.run() } }
+        defer { operation.cancel(); gate.release() }
+        let entered = await XCTWaiter.fulfillment(of: [gate.entered], timeout: 2)
+        guard entered == .completed else { operation.cancel(); gate.release(); XCTFail("Generation did not enter"); return }
+        manager.setApplicationActive(false)
+        XCTAssertFalse(controller.hasGlobalAdmission)
+        XCTAssertFalse(registry.canPerformGeneration)
+        XCTAssertEqual(controller.schedulingStatus, "Paused while not listening in background")
+        XCTAssertTrue(ReadAloudPreferences.backgroundPrefetchPaused)
+        gate.release()
+        do { try await operation.value; XCTFail("Background generation should cancel") }
+        catch is CancellationError { }
+        await controller.cancelAndDrain()
+        let state = try XCTUnwrap(runtime.itemState(fixture.first.id))
+        try await fixture.store.enqueueGeneration(projectID: fixture.projectID,
+            requests: [ProjectGenerationRequest(itemID: state.id, generationKey: state.generationKey)], replaceExisting: false)
+        try await runtime.refreshGenerationState()
+        let before = try await fixture.store.loadQueue(projectID: fixture.projectID)
+        runtime.activity.activeItemID = state.id
+        let listeningStates: [ProjectRuntimePlaybackState] = [.loading, .buffering, .playing]
+        for playback in listeningStates {
+            runtime.activity.playbackState = playback
+            controller.reconcileScheduling()
+            XCTAssertTrue(registry.canPerformGeneration)
+        }
+        runtime.activity.playbackState = .paused
+        controller.reconcileScheduling()
+        XCTAssertFalse(registry.canPerformGeneration)
+        runtime.activity.playbackState = .idle
+        runtime.activity.activeItemID = nil
+        manager.setApplicationActive(true)
+        XCTAssertTrue(registry.canPerformGeneration)
+        XCTAssertTrue(ReadAloudPreferences.backgroundPrefetchPaused)
+        let after = try await fixture.store.loadQueue(projectID: fixture.projectID)
+        XCTAssertEqual(after, before)
+        await runtime.shutdownAndDrain()
+    }
+
+    func testInactiveCleanupWaitsForActivityAndIgnoresStalePolicyUpdates() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        await fixture.cache.setReclamationAllowed(false, revision: 2)
+        await fixture.schedule()
+        let pending = await fixture.cache.pendingReclamationCount
+        XCTAssertEqual(pending, 1)
+        await fixture.cache.setReclamationAllowed(true, revision: 1)
+        let cached = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNotNil(cached)
+        await fixture.cache.setReclamationAllowed(true, revision: 3)
+        await fixture.cache.waitForReclamation(itemID: fixture.request.itemID)
+        let removed = try await fixture.cache.load(fixture.chunks[0])
+        XCTAssertNil(removed)
+        await fixture.cache.shutdown()
     }
 
     func testFourFiltersPersistPerProjectThroughFreshStore() async throws {
@@ -414,5 +1935,228 @@ final class PDFReadingPersistenceTests: XCTestCase {
         ])
         XCTAssertEqual(loaded.project.pdfReadingPolicy, .listening)
         XCTAssertFalse(FileManager.default.fileExists(atPath: transaction.path))
+    }
+}
+
+
+
+final class GenerationAdmissionAndHeroTests: XCTestCase {
+    private func candidate(
+        _ id: UUID, age: Double?, eligible: Bool = true, playback: Bool = false
+    ) -> GenerationAdmissionCandidate {
+        GenerationAdmissionCandidate(
+            projectID: id, oldestJob: age.map { Date(timeIntervalSince1970: $0) },
+            isEligible: eligible, requiresPlaybackPriority: playback
+        )
+    }
+
+    func testActivityPolicyAllowsForegroundWorkAndRequiresListeningInBackground() {
+        XCTAssertTrue(GenerationActivityPolicy.allowsWork(isApplicationActive: true, hasListeningIntent: false))
+        XCTAssertTrue(GenerationActivityPolicy.allowsWork(isApplicationActive: true, hasListeningIntent: true))
+        XCTAssertTrue(GenerationActivityPolicy.allowsWork(isApplicationActive: false, hasListeningIntent: true))
+        XCTAssertFalse(GenerationActivityPolicy.allowsWork(isApplicationActive: false, hasListeningIntent: false))
+    }
+
+    func testGlobalAdmissionSelectsOldestEligibleProjectAndStableTie() {
+        let first = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let second = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let blocked = UUID()
+        let input = [candidate(second, age: 20), candidate(blocked, age: 1, eligible: false), candidate(first, age: 10)]
+        XCTAssertEqual(GenerationAdmissionPolicy.nextProject(candidates: input, paused: false), first)
+        XCTAssertEqual(GenerationAdmissionPolicy.nextProject(candidates: [candidate(second, age: 10), candidate(first, age: 10)], paused: false), first)
+        // No intent (including cancellation/completion) must release the slot.
+        XCTAssertEqual(GenerationAdmissionPolicy.nextProject(candidates: [candidate(first, age: nil), candidate(second, age: 20)], paused: false), second)
+    }
+
+    func testPlaybackInAnotherProjectRevokesOfflineAdmission() {
+        let queued = candidate(UUID(), age: 1)
+        let live = candidate(UUID(), age: nil, playback: true)
+        XCTAssertNil(GenerationAdmissionPolicy.nextProject(candidates: [queued, live], paused: false))
+        XCTAssertNil(GenerationAdmissionPolicy.nextProject(candidates: [queued], paused: true))
+        // Compatible file playback with generate-while-listening enabled has
+        // no speech-model claim, so unrelated durable work can proceed.
+        let file = candidate(live.projectID, age: nil, playback: false)
+        XCTAssertEqual(GenerationAdmissionPolicy.nextProject(candidates: [queued, file], paused: false), queued.projectID)
+    }
+
+    func testMemoryOrInvalidationBlockDoesNotAdmitThatProject() {
+        let suspended = candidate(UUID(), age: 1, eligible: false)
+        XCTAssertNil(GenerationAdmissionPolicy.nextProject(candidates: [suspended], paused: false))
+        let explicitRetry = candidate(suspended.projectID, age: 1)
+        XCTAssertEqual(GenerationAdmissionPolicy.nextProject(candidates: [explicitRetry], paused: false), suspended.projectID)
+    }
+
+    func testHeroActionsFollowPlaybackIncludingPausedPreparationAndFailure() {
+        let playing = ListeningHeroPresentation(state: .playing, active: true, paused: false, preparing: false, hasHistory: true)
+        XCTAssertEqual(playing.action, .pause)
+        XCTAssertEqual(playing.heading, "NOW LISTENING")
+        let paused = ListeningHeroPresentation(state: .paused, active: true, paused: true, preparing: false, hasHistory: true)
+        XCTAssertEqual(paused.action, .resume)
+        XCTAssertEqual(paused.heading, "CONTINUE LISTENING")
+        let preparingStates: [ProjectRuntimePlaybackState] = [.loading, .warmingUp, .buffering, .synthesizing(current: 1, total: 2)]
+        for state in preparingStates {
+            let preparing = ListeningHeroPresentation(state: state, active: true, paused: false, preparing: true, hasHistory: false)
+            XCTAssertEqual(preparing.action, .cancel)
+        }
+        let failed = ListeningHeroPresentation(state: .failed("Speech failed"), active: false, paused: false, preparing: false, hasHistory: true)
+        XCTAssertEqual(failed.action, .retry)
+        XCTAssertEqual(failed.error, "Audio couldn’t play. Try again.")
+    }
+
+    func testHeroStartsOrContinuesWithoutCreatingAnotherPlaybackOwner() {
+        let start = ListeningHeroPresentation(state: nil, active: false, paused: false, preparing: false, hasHistory: false)
+        XCTAssertEqual(start.action, .start)
+        XCTAssertEqual(start.heading, "READY TO LISTEN")
+        let resume = ListeningHeroPresentation(state: .idle, active: false, paused: false, preparing: false, hasHistory: true)
+        XCTAssertEqual(resume.action, .continueListening)
+        XCTAssertNil(resume.error)
+    }
+}
+
+
+// Adapter integration lives here so the owner-managed Xcode project keeps the
+// same registered test sources. HTML is based on TextExtractor 1.2.0's original
+// article-structured fixture; no networking or package-internal APIs are used.
+final class WebArticleImportIntegrationTests: XCTestCase {
+    private let finalURL = URL(string: "https://example.com/final/field-journal")!
+
+    private var html: Data {
+        Data("""
+        <!doctype html>
+        <html lang="en">
+        <head><meta charset="utf-8"><title>Keep a Field Journal | Trail Letter</title>
+        <meta property="og:site_name" content="Trail Letter">
+        <meta name="author" content="Morgan Chen">
+        <meta property="article:published_time" content="2026-04-20T10:00:00Z"></head>
+        <body>
+        <nav>All stories | Subscribe | About</nav>
+        <article>
+          <header><h1>Keep a Field Journal</h1><p class="byline">By Morgan Chen</p></header>
+          <p>A field journal is a record of observations, not a test of drawing skill. A small notebook allows you to notice changes in light, plant growth, and weather patterns over weeks rather than minutes.</p>
+          <h2>Start with three observations</h2>
+          <p>Begin each visit by writing the date and location. Then record what you can see, hear, and smell before reaching for a camera or a guidebook.</p>
+          <ul>
+            <li><p>Notice the light and shadows.</p></li>
+            <li><p>Listen for a repeated bird call.</p><p>Note where it comes from.</p></li>
+            <li>Compare one leaf with your earlier notes.</li>
+          </ul>
+          <blockquote><p>Careful attention turns an ordinary path into a place you can recognize.</p></blockquote>
+          <figure><img src="journal.jpg" alt="A notebook on a rock"><figcaption>A simple notebook beside the path.</figcaption></figure>
+          <h2>An optional data format</h2>
+          <p>People who keep digital copies sometimes use plain text so notes remain searchable. A small structure is often enough to make entries easy to revisit.</p>
+          <pre><code>date: 2026-04-20
+        place: north trail
+        weather: cloudy</code></pre>
+          <table>
+            <thead><tr><th>Time</th><th>Observation</th></tr></thead>
+            <tbody><tr><td>Morning</td><td>Cool breeze</td></tr><tr><td>Afternoon</td><td>Warm sunlight</td></tr></tbody>
+          </table>
+          <p>Record only what you observed and revisit the same location later. Patterns become easier to spot when the journal stays simple.</p>
+        </article>
+        <footer><a href="/archive">Older posts</a></footer>
+        </body>
+        </html>
+        """.utf8)
+    }
+
+    func testTypedArticleMapsMetadataFinalURLAndOrderedSpeechBlocks() throws {
+        let extracted = try WebArticleImportAdapter().importDocument(
+            data: html, finalURL: finalURL, progress: nil
+        )
+        XCTAssertEqual(extracted.document.kind, .article)
+        XCTAssertEqual(extracted.document.title, "Keep a Field Journal")
+        XCTAssertEqual(extracted.document.author, "Morgan Chen")
+        XCTAssertEqual(extracted.siteName, "Trail Letter")
+        XCTAssertEqual(extracted.language, "en")
+        XCTAssertEqual(extracted.publishedTime, "2026-04-20T10:00:00Z")
+        let item = try XCTUnwrap(extracted.document.items.first)
+        XCTAssertEqual(extracted.document.items.count, 1)
+        XCTAssertEqual(item.sourceLocator.kind, .article)
+        XCTAssertEqual(item.sourceLocator.value, finalURL.absoluteString)
+        let blocks = item.normalizedText.components(separatedBy: "\n\n")
+        guard blocks.count == 14 else {
+            XCTFail("Expected 14 ordered article blocks, got \(blocks.count)")
+            return
+        }
+        XCTAssertEqual(blocks[0], "Keep a Field Journal")
+        XCTAssertEqual(blocks[4], "Notice the light and shadows.")
+        XCTAssertEqual(blocks[5], "Listen for a repeated bird call. Note where it comes from.")
+        XCTAssertEqual(blocks[7], "Careful attention turns an ordinary path into a place you can recognize.")
+        XCTAssertEqual(blocks[11], "date: 2026-04-20\nplace: north trail\nweather: cloudy")
+        // ReadAloud's existing speech normalization uses spaces for cell tabs.
+        XCTAssertEqual(blocks[12], "Time Observation\nMorning Cool breeze\nAfternoon Warm sunlight")
+        XCTAssertFalse(item.normalizedText.contains("Older posts"))
+        XCTAssertFalse(item.normalizedText.contains("By Morgan Chen"))
+        let content = try ReadAloudContentNormalizer.makeContent(from: extracted.document.items)
+        XCTAssertEqual(content.items.first?.text, item.normalizedText)
+    }
+
+    func testPackageFailuresKeepAppImportErrors() {
+        let adapter = WebArticleImportAdapter()
+        XCTAssertThrowsError(try adapter.importDocument(
+            data: Data(repeating: 0x20, count: ArticleURLLoader.maxHTMLBytes + 1),
+            finalURL: finalURL, progress: nil
+        )) { error in
+            guard let failure = error as? ArticleURLError, case .tooLarge = failure else {
+                XCTFail("Expected the app's size error, got \(error)"); return
+            }
+        }
+        XCTAssertThrowsError(try adapter.importDocument(
+            data: Data([0]), finalURL: finalURL, progress: nil
+        )) { error in
+            guard let failure = error as? ArticleURLError, case .unreadableEncoding = failure else {
+                XCTFail("Expected the app's encoding error, got \(error)"); return
+            }
+        }
+        XCTAssertThrowsError(try adapter.importDocument(
+            data: Data(), finalURL: finalURL, progress: nil
+        )) { error in
+            guard let failure = error as? ArticleURLError, case .unreadableArticle = failure else {
+                XCTFail("Expected the app's article error, got \(error)"); return
+            }
+        }
+        XCTAssertThrowsError(try adapter.importDocument(
+            data: html, finalURL: URL(fileURLWithPath: "/article.html"), progress: nil
+        )) { error in
+            guard let failure = error as? ArticleURLError, case .invalidURL = failure else {
+                XCTFail("Expected the app's URL error, got \(error)"); return
+            }
+        }
+    }
+
+    private actor ImportGate {
+        private var started = false
+        private var startWaiter: CheckedContinuation<Void, Never>?
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+        func hold() async {
+            await withCheckedContinuation { continuation in
+                releaseWaiter = continuation
+                started = true
+                startWaiter?.resume()
+                startWaiter = nil
+            }
+        }
+        func waitUntilStarted() async {
+            if started { return }
+            await withCheckedContinuation { startWaiter = $0 }
+        }
+        func release() { releaseWaiter?.resume(); releaseWaiter = nil }
+    }
+
+    func testCancelledImportDoesNotBecomeUnreadableArticle() async throws {
+        let gate = ImportGate()
+        let data = html
+        let url = finalURL
+        let worker = Task.detached {
+            await gate.hold()
+            return try WebArticleImportAdapter().importDocument(
+                data: data, finalURL: url, progress: nil
+            )
+        }
+        await gate.waitUntilStarted()
+        worker.cancel()
+        await gate.release()
+        do { _ = try await worker.value; XCTFail("Cancelled import must unwind") }
+        catch is CancellationError { }
     }
 }

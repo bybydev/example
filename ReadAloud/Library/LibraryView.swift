@@ -20,6 +20,8 @@ struct LibraryView: View {
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
     @State private var pendingPasteImport: PasteDraft?
+    @State private var chaptersRuntime: ProjectRuntime?
+    @State private var chaptersPresented = false
     @State private var selectedSourceFilter: LibrarySourceFilter = .all
 
     var body: some View {
@@ -35,6 +37,13 @@ struct LibraryView: View {
         .navigationTitle("Library")
         .navigationSubtitle("Your space for listening.")
         .navigationBarTitleDisplayMode(.large)
+        .searchable(
+            text: Binding(
+                get: { model.searchText },
+                set: { model.searchText = $0 }
+            ),
+            prompt: "Search your library"
+        )
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 sortMenu
@@ -134,6 +143,11 @@ struct LibraryView: View {
                 }
             )
         }
+        .sheet(isPresented: $chaptersPresented, onDismiss: { chaptersRuntime = nil }) {
+            if let runtime = chaptersRuntime {
+                ListeningChaptersSheet(runtime: runtime)
+            }
+        }
         .sheet(item: $infoTarget) { entry in
             ProjectInfoSheet(entry: entry)
         }
@@ -207,10 +221,11 @@ struct LibraryView: View {
             Button("Delete Project", role: .destructive) {
                 guard let target = deleteTarget else { return }
                 Task {
-                    if await model.delete(projectID: target.id) {
-                        runtimeManager.forget(
-                            projectID: target.id
-                        )
+                    do {
+                        try await runtimeManager.deleteProject(projectID: target.id)
+                        await model.refresh()
+                    } catch {
+                        model.errorMessage = error.localizedDescription
                     }
                     deleteTarget = nil
                 }
@@ -241,7 +256,9 @@ struct LibraryView: View {
     }
 
     private var featuredEntry: LibraryModel.Entry? {
-        model.continueListening
+        if let runtime = runtimeManager.playerRuntime,
+           let entry = model.entries.first(where: { $0.id == runtime.id }) { return entry }
+        return model.continueListening
             ?? model.entries.max(by: { $0.snapshot.updatedAt < $1.snapshot.updatedAt })
     }
 
@@ -254,33 +271,6 @@ struct LibraryView: View {
     private var libraryContent: some View {
         ReadAloudThemedList {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        "Search your library",
-                        text: Binding(
-                            get: { model.searchText },
-                            set: { model.searchText = $0 }
-                        )
-                    )
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityLabel("Search Library")
-                    if !model.searchText.isEmpty {
-                        Button {
-                            model.searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .accessibilityLabel("Clear search")
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 13))
-
                 if model.entries.isEmpty {
                     emptyLibraryHero
                 } else if let featuredEntry {
@@ -421,133 +411,127 @@ struct LibraryView: View {
     }
 
     private func continueListeningHero(_ entry: LibraryModel.Entry) -> some View {
-        let hasHistory = entry.snapshot.lastPlayedAt != nil
-        let progress = runtimeManager.runtimeIfLoaded(projectID: entry.id)?
-            .activity.projectProgress ?? entry.snapshot.projectProgress
+        let runtime = runtimeManager.runtimeIfLoaded(projectID: entry.id)
+        let presentation = ListeningHeroPresentation(
+            state: runtime?.activity.playbackState,
+            active: runtime?.isPlaybackActive == true,
+            paused: runtime?.isPlaybackPaused == true,
+            preparing: runtime?.isPlayerPreparing == true,
+            hasHistory: runtime?.project?.playback?.lastPlayedAt != nil || entry.snapshot.lastPlayedAt != nil
+        )
+        let progress = runtime?.project?.playback?.projectProgress ?? entry.snapshot.projectProgress
+        let currentID = runtime?.playerControlItemID(fallback: runtime?.continueItemID)
+        let chapterIndex = runtime?.itemStates.firstIndex { $0.id == currentID }
 
         return VStack(alignment: .leading, spacing: 15) {
             HStack {
-                Text(hasHistory ? "CONTINUE LISTENING" : "READY TO LISTEN")
+                Text(presentation.heading)
                     .font(.caption2.weight(.bold))
                     .tracking(1.4)
-                    .foregroundStyle(heroSecondaryText)
                 Spacer()
                 Image(systemName: "headphones")
-                    .foregroundStyle(heroSecondaryText)
             }
+            .foregroundStyle(heroSecondaryText)
 
             NavigationLink {
                 ProjectReaderRuntimeHost(
                     projectID: entry.id,
-                    initialItemID: nil,
+                    initialItemID: currentID,
                     initialTitle: entry.snapshot.title,
-                    onProjectChanged: {
-                        Task { await model.refresh() }
-                    }
+                    onProjectChanged: { Task { await model.refresh() } }
                 )
             } label: {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .center, spacing: 14) {
-                        ProjectArtworkView(
-                            url: entry.artworkURL,
-                            sourceType: entry.snapshot.sourceType,
-                            width: 70,
-                            height: 94
-                        )
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(entry.snapshot.title)
-                                .font(.headline)
-                                .foregroundStyle(theme.primaryForegroundColor)
-                                .lineLimit(2)
-                            Text(entry.snapshot.author
-                                ?? ReadAloudDisplay.sourceType(entry.snapshot.sourceType))
-                                .font(.subheadline)
-                                .foregroundStyle(heroSecondaryText)
-                                .lineLimit(2)
-                            Text(progress, format: .percent.precision(.fractionLength(0)))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(theme.primaryForegroundColor)
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    ProgressView(value: min(1, max(0, progress)))
-                        .tint(Color.accentColor)
-
-                    Label(
-                        hasHistory ? "Continue Listening" : "Start Listening",
-                        systemImage: "play.fill"
+                HStack(spacing: 14) {
+                    ProjectArtworkView(
+                        url: entry.artworkURL, sourceType: entry.snapshot.sourceType,
+                        width: 70, height: 94
                     )
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .foregroundStyle(theme.backgroundColor)
-                    .padding(.vertical, 11)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(runtime?.project?.title ?? entry.snapshot.title)
+                            .font(.headline)
+                            .foregroundStyle(theme.primaryForegroundColor)
+                            .lineLimit(2)
+                        Text(entry.snapshot.author ?? ReadAloudDisplay.sourceType(entry.snapshot.sourceType))
+                            .font(.subheadline)
+                            .foregroundStyle(heroSecondaryText)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityHint("Opens the reader")
 
-            Rectangle()
-                .fill(theme.primaryForegroundColor.opacity(0.12))
-                .frame(height: 1)
-
-            HStack(spacing: 10) {
-                Image(systemName: runtimeManager.isBackgroundPrefetchPaused
-                    ? "pause.circle" : "waveform")
-                    .foregroundStyle(Color.accentColor)
+            if let runtime, let chapterIndex {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(runtimeManager.isBackgroundPrefetchPaused
-                        ? "Background generation paused"
-                        : "Background audio")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(theme.primaryForegroundColor)
-                    Text(backgroundQueueDescription)
-                        .font(.caption2)
+                    Text("Chapter \(chapterIndex + 1) of \(runtime.itemStates.count)")
+                        .font(.caption)
                         .foregroundStyle(heroSecondaryText)
+                    Text(runtime.itemStates[chapterIndex].item.title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
                 }
-                Spacer(minLength: 4)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: min(1, max(0, progress)))
+                    .tint(Color.accentColor)
+                    .accessibilityLabel("Listening progress")
+                Text("\(Int(min(1, max(0, progress)) * 100))% listened")
+                    .font(.caption)
+                    .foregroundStyle(heroSecondaryText)
+            }
+            if runtime == nil {
+                ProgressView("Loading chapters…").font(.caption)
+            }
+            if runtime?.isPlayerPreparing == true {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing audio…").font(.caption)
+                }
+            }
+            if let error = presentation.error {
+                Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            HStack(spacing: 10) {
                 Button {
-                    runtimeManager.setBackgroundPrefetchPaused(
-                        !runtimeManager.isBackgroundPrefetchPaused
-                    )
+                    guard let runtime, let currentID else { return }
+                    do {
+                        runtimeManager.makeActive(runtime)
+                        if presentation.action == .cancel { runtime.stopPlayback() }
+                        else { try runtime.togglePlayer(itemID: currentID) }
+                    } catch { model.errorMessage = error.localizedDescription }
                 } label: {
-                    Label(
-                        runtimeManager.isBackgroundPrefetchPaused ? "Resume" : "Pause",
-                        systemImage: runtimeManager.isBackgroundPrefetchPaused
-                            ? "play.fill" : "pause.fill"
-                    )
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(theme.primaryForegroundColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(theme.primaryForegroundColor.opacity(0.09), in: Capsule())
+                    Label(presentation.label, systemImage: presentation.symbol)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(theme.backgroundColor)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("Controls background audio generation, not playback")
+                .disabled(runtime == nil || currentID == nil)
+
+                Button {
+                    chaptersRuntime = runtime
+                    chaptersPresented = runtime != nil
+                } label: {
+                    Label("Chapters", systemImage: "list.bullet")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(theme.primaryForegroundColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(runtime == nil)
             }
         }
         .padding(20)
         .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
-    }
-
-    private var backgroundQueueDescription: String {
-        let status = runtimeManager.backgroundGenerationStatus(
-            persisted: model.generationQueueCountsByProject
-        )
-        var details: [String] = []
-        if status.generating > 0 {
-            details.append("\(status.generating) generating")
+        .task(id: entry.id) {
+            do { _ = try await runtimeManager.prepareRuntime(projectID: entry.id) }
+            catch is CancellationError { }
+            catch { model.errorMessage = error.localizedDescription }
         }
-        if status.queued > 0 {
-            details.append("\(status.queued) queued")
-        }
-        if status.failed > 0 {
-            details.append("\(status.failed) failed")
-        }
-        return details.isEmpty
-            ? "No queued audio jobs"
-            : details.joined(separator: " · ")
     }
 
     private var heroBackground: Color {
@@ -1100,6 +1084,87 @@ private struct ImportProgressSheet: View {
         case .normalizing: "Organizing content…"
         case .persisting: "Adding to Library…"
         case .finished: "Finishing…"
+        }
+    }
+}
+
+
+
+/// This is the current book's reading order. Playback stays in ProjectRuntime,
+/// shared with the reader, mini-player and system media controls.
+private struct ListeningChaptersSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @State private var errorMessage: String?
+    let runtime: ProjectRuntime
+
+    private var currentID: UUID? {
+        runtime.playerControlItemID(fallback: runtime.continueItemID)
+    }
+
+    private var nextID: UUID? {
+        currentID.flatMap { runtime.adjacentPlayerItem(to: $0, delta: 1) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ReadAloudThemedList {
+                    Section {
+                        ForEach(Array(runtime.itemStates.enumerated()), id: \.element.id) { index, state in
+                            Button {
+                                do {
+                                    runtimeManager.makeActive(runtime)
+                                    try runtime.play(itemID: state.id)
+                                    dismiss()
+                                } catch { errorMessage = error.localizedDescription }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: state.id == currentID
+                                        ? (runtime.isPlaybackAudible ? "waveform" : "bookmark.fill") : "play.circle")
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("\(index + 1). \(state.item.title)")
+                                            .foregroundStyle(.primary)
+                                        if state.id == currentID {
+                                            Text(runtime.isPlaybackAudible ? "Playing" : "Current chapter")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        } else if state.id == nextID {
+                                            Text("Next").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    if state.generationStatus.state == .readyOffline {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                            .accessibilityLabel("Ready Offline")
+                                    }
+                                }
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .listRowBackground(state.id == currentID ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .id(state.id)
+                        }
+                    } header: {
+                        Text(runtime.project?.title ?? "Chapters")
+                    }
+                }
+                .task { if let currentID { proxy.scrollTo(currentID, anchor: .center) } }
+            }
+            .navigationTitle("Chapters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .alert("Playback Unavailable", isPresented: Binding(
+                get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+            )) { Button("OK", role: .cancel) { errorMessage = nil } }
+                message: { Text(errorMessage ?? "") }
+        }
+        .readAloudThemeSurface()
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .onChange(of: runtimeManager.loadedRuntimeIDs) { _, ids in
+            if !ids.contains(runtime.id) { dismiss() }
         }
     }
 }

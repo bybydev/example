@@ -241,6 +241,8 @@ final class ReaderViewModel {
             return "Warming up…"
         case .synthesizing(let current, let total):
             return "Synthesizing \(current)/\(total)…"
+        case .buffering:
+            return "Preparing audio…"
         case .playing:
             return "Playing"
         case .paused:
@@ -266,3 +268,4 @@ final class ReaderViewModel {
     }
 }
 #endif
+

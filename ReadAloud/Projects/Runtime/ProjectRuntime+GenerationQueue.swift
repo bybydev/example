@@ -9,6 +9,22 @@ extension ProjectRuntime {
         generationKey: String,
         progress: JobProgressReporter
     ) async throws {
+        try await queueController.executeGeneration { [self] in
+            try await chunkCache.withUsage(itemID: itemID) { @MainActor [self] in
+                try await runQueuedGeneration(
+                    jobID: jobID, itemID: itemID,
+                    generationKey: generationKey, progress: progress
+                )
+            }
+        }
+    }
+
+    private func runQueuedGeneration(
+        jobID: UUID,
+        itemID: UUID,
+        generationKey: String,
+        progress: JobProgressReporter
+    ) async throws {
         try requireGenerationCanRun()
         guard let state = itemState(itemID) else {
             throw ProjectStoreError.invalidData("Queued generation item is unavailable.")
@@ -53,7 +69,8 @@ extension ProjectRuntime {
                     let result = try await engine.synthesize(
                         text: chunk.text, voice: voice,
                         speed: Float(state.resolved.speed),
-                        maxChunkSeconds: chunk.maxChunkSeconds
+                        maxChunkSeconds: chunk.maxChunkSeconds,
+                        pronunciationMode: state.pronunciationMode
                     )
                     return result.audio
                 }
@@ -64,6 +81,7 @@ extension ProjectRuntime {
                 )
             }
 
+            try requireGenerationCanRun(expectedEngine: selectedEngine)
             guard itemState(itemID)?.generationKey == generationKey,
                   !isApplyingPDFReadingPolicy else {
                 throw CancellationError()
@@ -260,70 +278,28 @@ extension ProjectRuntime {
         try await refresh()
     }
 
-    func clearCacheAndRegenerate(
-        itemIDs: Set<UUID>
-    ) async throws {
+    func clearCacheAndRegenerate(itemIDs: Set<UUID>) async throws {
         try prepareExplicitWork()
-        guard !itemIDs.isEmpty else {
-            return
-        }
-
-        queueController
-            .setPlaybackActive(true)
-
-        defer {
-            queueController
-                .setPlaybackActive(
-                    blocksQueuedGeneration
-                )
-        }
-
-        if let activeItemID =
-                activity.activeItemID,
-           itemIDs.contains(
-                activeItemID
-           )
-        {
-            await persistPlaybackCheckpoint()
-            stopPlayback()
-            queueController
-                .setPlaybackActive(true)
-        }
-
-        let requests =
-            itemStates.compactMap {
-                state
-                -> ProjectGenerationRequest?
-                in
-                guard itemIDs.contains(
-                    state.id
-                ) else {
-                    return nil
-                }
+        guard !itemIDs.isEmpty else { return }
+        try await withAudioInvalidation(itemIDs: itemIDs) {
+            let requests = itemStates.compactMap { state -> ProjectGenerationRequest? in
+                guard itemIDs.contains(state.id) else { return nil }
                 return ProjectGenerationRequest(
-                    itemID: state.id,
-                    generationKey:
-                        state.generationKey
+                    itemID: state.id, generationKey: state.generationKey
                 )
             }
-
-        try await persistence
-            .clearGeneratedAudio(
-                itemIDs: itemIDs
-            )
-        try await chunkCache.clear(itemIDs: itemIDs)
-        // Discard old, unused paragraph caches from pre-chunk builds.
-        try await cacheCoordinator.clearParagraphCache(itemIDs: itemIDs)
-        try await persistence
-            .enqueueGeneration(
-                requests,
-                replaceExisting: true
-            )
-        try await refresh()
+            try await persistence.clearGeneratedAudio(itemIDs: itemIDs)
+            try await chunkCache.clear(itemIDs: itemIDs)
+            try await cacheCoordinator.clearParagraphCache(itemIDs: itemIDs)
+            try await persistence.enqueueGeneration(requests, replaceExisting: true)
+            try await refresh()
+        }
     }
 
     func schedulePlaybackPrefetch() {
-        guard ReadAloudPreferences.prefetchCount > 0,
+        guard ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
+              ReadAloudPreferences.prefetchCount > 0,
+              !isInvalidatingAudio,
               !ReadAloudPreferences.backgroundPrefetchPaused,
               !readerPauseRequested, !synthesisSuspendedForMemoryPressure,
               prefetchTask == nil, let operationID = playbackOperationID,
@@ -348,7 +324,8 @@ extension ProjectRuntime {
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard !Task.isCancelled, !synthesisSuspendedForMemoryPressure,
+        guard ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
+              !Task.isCancelled, !synthesisSuspendedForMemoryPressure,
               !ReadAloudPreferences.backgroundPrefetchPaused else { return }
 
         let prefetchCount =
@@ -434,6 +411,9 @@ extension ProjectRuntime {
         expectedEngine: SpeechEngineKind? = nil
     ) throws {
         try Task.checkCancellation()
+        guard queueController.hasGlobalAdmission,
+              ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
+              !ReadAloudPreferences.backgroundPrefetchPaused else { throw CancellationError() }
         guard !isApplyingPDFReadingPolicy,
               !blocksQueuedGeneration,
               pipeline.engineKind == ReadAloudPreferences.speechEngine,
@@ -442,4 +422,6 @@ extension ProjectRuntime {
         }
     }
 }
+
+
 

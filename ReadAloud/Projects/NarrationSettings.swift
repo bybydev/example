@@ -142,10 +142,17 @@ nonisolated enum ReadAloudSynthesisContract {
         )
     }
 
+    static func generationRuntimeRevision(
+        base: String, pronunciationMode: PronunciationFallbackMode
+    ) -> String {
+        base + "-g2p-" + pronunciationMode.rawValue
+    }
+
     static func generationKey(
         item: ProjectContentItem,
         resolved: ResolvedNarrationSettings,
-        runtimeRevision: String
+        runtimeRevision: String,
+        pronunciationMode: PronunciationFallbackMode = ReadAloudPreferences.pronunciationFallbackMode
     ) throws -> String {
         try ProjectGenerationKey.make(
             GenerationKeyInput(
@@ -153,12 +160,14 @@ nonisolated enum ReadAloudSynthesisContract {
                 resolvedVoiceID: resolved.voiceID,
                 canonicalSpeed: resolved.speed,
                 // Different modes can synthesize different audio for identical text.
-                kokoroRuntimeRevision: runtimeRevision + "-g2p-"
-                    + ReadAloudPreferences.pronunciationFallbackMode.rawValue,
+                kokoroRuntimeRevision: generationRuntimeRevision(
+                    base: runtimeRevision, pronunciationMode: pronunciationMode
+                ),
                 synthesisConfigVersion:
                     ReadAloudNarrationCatalog.synthesisConfigVersion
             )
         )
     }
 }
+
 

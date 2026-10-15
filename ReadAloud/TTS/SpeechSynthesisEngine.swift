@@ -96,6 +96,9 @@ nonisolated protocol SpeechSynthesisEngine: Actor {
         async throws -> SpeechWarmUpResult
     func synthesize(text: String, voice: SpeechVoice, speed: Float,
                     maxChunkSeconds: Double) async throws -> SpeechSynthesisResult
+    func synthesize(text: String, voice: SpeechVoice, speed: Float,
+                    maxChunkSeconds: Double, pronunciationMode: PronunciationFallbackMode)
+        async throws -> SpeechSynthesisResult
     func unload() async
 }
 
@@ -104,3 +107,4 @@ nonisolated enum SpeechEngineFactory {
         KokoroONNXEngine.shared
     }
 }
+

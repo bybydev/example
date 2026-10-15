@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor
-final class SpeechPlaybackQueue {
+final class SpeechPlaybackQueue: SpeechPlaybackOutput {
     enum SessionEvent: Equatable, Sendable {
         case interruptionBegan
         case interruptionEnded(
@@ -539,4 +539,5 @@ final class SpeechPlaybackQueue {
         }
     }
 }
+
 

@@ -14,9 +14,22 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ProjectMiniPlayerHost()
         }
+        .task {
+            runtimeManager.setApplicationActive(scenePhase == .active)
+            await runtimeManager.recoverPendingGeneration()
+        }
         .onChange(of: scenePhase) {
             _, phase in
+            runtimeManager.setApplicationActive(phase == .active)
 
+            switch phase {
+            case .active:
+                SpeechPlaybackDiagnostics.applicationState("active")
+                Task { await runtimeManager.recoverPendingGeneration() }
+            case .inactive: SpeechPlaybackDiagnostics.applicationState("inactive")
+            case .background: SpeechPlaybackDiagnostics.applicationState("background")
+            @unknown default: break
+            }
             guard phase != .active
             else {
                 return
@@ -147,3 +160,4 @@ private struct ProjectMiniPlayerHost: View {
         runtime.stopPlayback()
     }
 }
+

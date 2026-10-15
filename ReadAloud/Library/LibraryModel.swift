@@ -151,19 +151,6 @@ final class LibraryModel {
         }
     }
 
-    func delete(projectID: UUID) async -> Bool {
-        guard let projectStore else { return false }
-
-        do {
-            try await projectStore.deleteProject(projectID: projectID)
-            entries.removeAll { $0.id == projectID }
-            return true
-        } catch {
-            errorMessage = Self.message(for: error)
-            return false
-        }
-    }
-
     func importFile(
         _ url: URL
     ) async -> Bool {
@@ -347,3 +334,4 @@ final class LibraryModel {
         return String(describing: error)
     }
 }
+

@@ -7,41 +7,52 @@ import OnnxRuntimeBindings
 actor KokoroONNXEngine: SpeechSynthesisEngine {
     static let shared = KokoroONNXEngine()
     private var environment: ORTEnv?
-    private var loading: Task<Void, Error>?
+    private var loading: (id: UUID, task: Task<Void, Error>)?
+    private var lifecycleID = UUID()
+    private var admissionSuspensions: Set<UUID> = []
+    private var activeSyntheses = 0
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private var session: ORTSession?
     private var processor: KokoroTextProcessor?
     private var voiceTables: [String: Data] = [:]
 
     func load() async throws {
+        let lifecycle = lifecycleID
+        try requireAdmission(lifecycle)
         guard session == nil else { return }
         if let loading {
-            try await loading.value
+            try await loading.task.value
+            try requireAdmission(lifecycle)
             return
         }
-        let task = Task { try await self.loadOnce() }
-        loading = task
-        defer { loading = nil }
+        let id = UUID()
+        let task = Task { try await self.loadOnce(lifecycle: lifecycle) }
+        loading = (id, task)
+        defer {
+            if loading?.id == id { loading = nil }
+        }
         try await task.value
+        try requireAdmission(lifecycle)
     }
 
-    private func loadOnce() async throws {
-        try Task.checkCancellation()
+    private func loadOnce(lifecycle: UUID) async throws {
+        try requireAdmission(lifecycle)
         // Never access the network from Listen, prefetch or offline generation.
         let model = try await ONNXResourceStore.shared.installedURL(
             .kokoroModel
         )
-        try Task.checkCancellation()
+        try requireAdmission(lifecycle)
 
         // Load and verify the small pronunciation resources *before* the
         // large Kokoro ORT session, reducing simultaneous cold-start peaks.
         let g2pModelURL = try await ONNXResourceStore.shared.installedURL(
             .g2pModel
         )
-        try Task.checkCancellation()
+        try requireAdmission(lifecycle)
         let g2pMetadataURL = try await ONNXResourceStore.shared.installedURL(
             .g2pLexicon
         )
-        try Task.checkCancellation()
+        try requireAdmission(lifecycle)
         let phonemizer = try ONNXG2PPhonemizer(
             modelURL: g2pModelURL,
             metadataURL: g2pMetadataURL
@@ -50,7 +61,7 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
             phonemizer: phonemizer,
             vocab: phonemizer.vocabulary
         )
-        try Task.checkCancellation()
+        try requireAdmission(lifecycle)
 
         let options = try ORTSessionOptions()
         try options.setIntraOpNumThreads(2)
@@ -59,7 +70,7 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         let loadedSession = try ORTSession(
             env: env, modelPath: model.path, sessionOptions: options
         )
-        try Task.checkCancellation()
+        try requireAdmission(lifecycle)
         environment = env
         session = loadedSession
         processor = textProcessor
@@ -85,6 +96,29 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         speed: Float = 1.0,
         maxChunkSeconds: Double = 15
     ) async throws -> SpeechSynthesisResult {
+        try await synthesize(
+            text: text, voice: voice, speed: speed, maxChunkSeconds: maxChunkSeconds,
+            pronunciationMode: ReadAloudPreferences.pronunciationFallbackMode
+        )
+    }
+
+    /// Project operations pin the policy that their generation key represents,
+    /// rather than reading mutable preferences after model/resource awaits.
+    func synthesize(
+        text: String, voice: SpeechVoice, speed: Float, maxChunkSeconds: Double,
+        pronunciationMode: PronunciationFallbackMode
+    ) async throws -> SpeechSynthesisResult {
+        let lifecycle = lifecycleID
+        try requireAdmission(lifecycle)
+        activeSyntheses += 1
+        defer {
+            activeSyntheses -= 1
+            if activeSyntheses == 0 {
+                let waiters = drainWaiters
+                drainWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SpeechEngineError.synthesisFailed("Empty text.")
         }
@@ -102,17 +136,18 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         try await ONNXResourceStore.shared.require([
             .kokoroModel, .g2pModel, .g2pLexicon, resource
         ])
+        try requireAdmission(lifecycle)
         try await load()
+        try requireAdmission(lifecycle)
         guard let session, let processor else {
             throw SpeechEngineError.notLoaded
         }
-        try Task.checkCancellation()
         let voiceData = try await voiceTable(for: voice.id)
+        try requireAdmission(lifecycle)
         let clock = ContinuousClock()
         let start = clock.now
         var samples: [Float] = []
-        // Keep recursive subfragments on the same policy for this inference.
-        let pronunciationMode = ReadAloudPreferences.pronunciationFallbackMode
+        // All recursive subfragments use the operation's captured policy.
 
         do {
             try synthesizeFragments(
@@ -136,19 +171,40 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
         }
     }
 
-    func unload() async {
-        // Prevent in-progress downloads/session initialization from reviving
-        // an engine that the user has just switched away from.
-        if let loading {
-            loading.cancel()
-            _ = await loading.result
+    /// All project runtimes share this gate. Hold a token across cache/job
+    /// draining as well as unload; nested callers cannot reopen admission.
+    func suspendAndDrain() async -> UUID {
+        let token = UUID()
+        admissionSuspensions.insert(token)
+        lifecycleID = UUID()
+        let pendingLoad = loading
+        pendingLoad?.task.cancel()
+        _ = await pendingLoad?.task.result
+        if loading?.id == pendingLoad?.id { loading = nil }
+        if activeSyntheses > 0 {
+            await withCheckedContinuation { drainWaiters.append($0) }
         }
-        self.loading = nil
-        // Release the session/arena before the other engine loads.
+        return token
+    }
+
+    func resumeAdmission(_ token: UUID) {
+        admissionSuspensions.remove(token)
+    }
+
+    private func requireAdmission(_ lifecycle: UUID) throws {
+        try Task.checkCancellation()
+        guard admissionSuspensions.isEmpty, lifecycleID == lifecycle else {
+            throw CancellationError()
+        }
+    }
+
+    func unload() async {
+        let token = await suspendAndDrain()
         session = nil
         environment = nil
         processor = nil
         voiceTables.removeAll()
+        resumeAdmission(token)
     }
 
     private enum BenchmarkAudioError: LocalizedError {
@@ -314,3 +370,5 @@ actor KokoroONNXEngine: SpeechSynthesisEngine {
     }
 
 }
+
+

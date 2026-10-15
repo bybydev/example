@@ -385,12 +385,71 @@ derived data, independent of final chapter WAVs. In-flight identical syntheses
 coalesce; foreground playback and offline jobs use the same key. Clearing a
 compatible cache removes only derived chunk audio.
 
+Buffering and user pause never advance a bookmark to the producer's prepared
+frontier. Failed live playback flushes the last audible checkpoint for retry.
+Playback pause retains the live cache consumer and lets read-ahead fill at most
+20 chunks beyond the fixed audible position, including in background while iOS
+allows execution. The producer waits at capacity without polling; audible
+progress frees more slots on resume. The limit is an internal developer constant,
+not a persisted user preference. Completed chunks stay on disk, with bounded
+decoded playback buffers. Pause never changes durable jobs or clears chunks.
+Stop/seek/chapter replacement still cancels the old producer and its consumer.
+
+Each in-flight cache entry owns explicit consumer continuations. Cancelling one
+consumer releases it promptly without cancelling work needed by another.
+Cancelling the final consumer removes the entry and cancels its producer;
+completed compatible chunks remain on disk. Entry identities prevent an old
+completion from writing or removing a newer request for the same cache key.
+
+Cache invalidation closes admission for the affected items before suspending.
+Cancelled producers remain tracked until they finish. The runtime holds the
+cache suspension across the storage mutation and drains complete generation
+jobs and retired playback finalizers before deleting/replacing their data.
+Project deletion drains a loaded runtime before removing its package.
+
+Successful finalization requests best-effort reclamation of the exact redundant
+chunk keys. Compatible finalized-file replay is another opportunity to reclaim
+chunks retained by an earlier launch. Whole chapter operations retain cache usage
+through streaming/read-ahead and assembly; queued generation retains usage for
+the complete job. These scopes cover already-cached chunks as well as in-flight
+synthesis. Cancelled native producers remain dependencies until they drain.
+
+Reclamation starts only when no usage, consumer or producer depends on that item.
+The cache reserves the item before suspending; new readers wait for this reservation
+instead of racing file removal. ProjectStore then validates the final WAV checksum,
+metadata, synthesis/content identity and expected audio revision and removes only
+the exact owned chunk pairs in the same actor turn, without an intervening await.
+A missing/corrupt/incompatible/replaced final pair leaves chunks intact. Other
+chapters, other generation keys and unknown/malformed cache entries are not swept.
+
+Invalidation, memory-pressure release, clear and shutdown discard deferred cleanup
+and cancel/drain any active reclamation reservation before mutating storage.
+Housekeeping failure never changes a successful generation/playback result; a later
+compatible replay can retry it. Partial cleanup is harmless while its validated final
+pair remains committed. Source, stable IDs, bookmarks, final audio and its source
+segment timeline are never removed or rewritten by reclamation. Cleanup intent is
+not durable and no new schema or migration is introduced.
+
+All runtimes share the ONNX engine's token-based admission barrier. Unload
+invalidates the lifecycle identity, rejects new load/inference calls, and waits
+for active work before releasing resources. Nested barriers cannot reopen one
+another. Synchronous native inference may finish before cancellation is
+observed; its cancelled/invalidated result cannot repopulate the cache.
+
 The playback source bookmark follows the currently audible chunk's start UTF-16
 offset, not the furthest generated chunk. The finalized WAV timeline contains
 a distinct sample-derived segment per chunk; exact seconds are valid only while
 the audio revision remains compatible. Synthesis config version 4 invalidates
 old paragraph-derived cache/final-audio identities without modifying the source,
 project UUID, item UUIDs, or source bookmark.
+
+Each runtime item captures its pronunciation mode. Chunk inference receives that
+mode explicitly, so resource/model awaits or preference changes cannot mix policies
+inside a generation identity. Final metadata stores the same mode-qualified runtime
+revision used by the generation key; chunk requests retain the existing base runtime
+field and existing cache-key formula. Generation keys are unchanged. A mode change
+is a generation-key change and uses the normal cancellation/invalidation barrier,
+even when resolved voice and speed are unchanged.
 
 ---
 
@@ -428,7 +487,20 @@ Durable states should stay simple:
 
 `generating` is primarily runtime state. If persisted for observability, startup recovery must never assume the process is still doing that work.
 
-On cold launch, stale in-progress state becomes queued/retryable according to policy.
+On cold launch and foreground entry, the runtime manager discovers pending intent
+in dormant projects without changing the selected book. Already loaded runtimes
+are not normalized again. Cold recovery keeps job IDs/attempts: matching unfinished
+intent becomes queued, stale generation keys become failed with a retry explanation,
+and matching intent with validated compatible final audio becomes completed.
+Repeated recovery does not recreate cancelled jobs or duplicate intent. No schema
+change is needed. The global background-generation pause retains durable intent;
+it controls admission, not audible playback. Memory pressure stops automatic
+recovery until explicit work resumes it. Scene inactivity without listening intent
+is a temporary pause for separate offline-job admission: queued jobs, completed
+chunks and the saved global pause preference remain unchanged. Bounded live
+read-ahead is independent and may continue filling its 20-chunk window. Pending
+recovery, prefetch and cleanup defer until activity/listening allows them. A rapid return waits out a cancelled scan
+and then recovers eligible intent.
 
 ---
 
@@ -446,7 +518,11 @@ Persist position periodically and on meaningful lifecycle transitions.
 
 Generation:
 
-- may continue while execution time is available
+- live read-ahead tries to fill 20 chunks ahead while playing or paused in any
+  scene, then waits at capacity; iOS may suspend before it finishes
+- separate offline jobs pause when inactive/backgrounded without listening intent;
+  preparation/buffering count as listening, paused/stopped/finished sessions do not
+- permits deliberate offline preparation while the app is active
 - may be suspended or terminated by iOS
 - must persist enough intent/state to recover
 - must not depend on indefinite background runtime
@@ -513,3 +589,5 @@ Final WAV assembly is temporary and file-backed. Failed or cancelled assembly
 removes its own temporary file, and the existing pair transaction remains
 responsible for commit/rollback. Safe admission failures never delete a project,
 its source, or its previous final-audio pair.
+
+

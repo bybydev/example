@@ -1,4 +1,108 @@
 import Foundation
+import OSLog
+
+/// Audio hardware is replaceable in continuity tests; production still uses
+/// the same AVAudioEngine/player-node implementation and buffer limits.
+@MainActor
+protocol SpeechPlaybackOutput: AnyObject {
+    var onSnapshotChange: ((SpeechPlaybackQueue.Snapshot) -> Void)? { get set }
+    var onSessionEvent: ((SpeechPlaybackQueue.SessionEvent) -> Void)? { get set }
+    var snapshot: SpeechPlaybackQueue.Snapshot { get }
+    var playedSeconds: Double { get }
+    func prepare() throws
+    func enqueue(_ audio: KokoroAudio, onPlaybackStart: (@MainActor () -> Void)?) throws
+    func enqueueFile(at url: URL, startSeconds: Double) throws
+    func waitUntilQueueDepthBelow(_ limit: Int) async
+    func waitUntilDrained() async
+    func pause()
+    func resume() throws
+    func stop()
+    func shutdown()
+}
+
+nonisolated enum SpeechPlaybackDiagnostic: Equatable, Sendable {
+    nonisolated enum EndReason: String, Sendable { case resumed, paused, drained, stopped, failed }
+    case starvationStarted
+    case starvationEnded(seconds: Double, reason: EndReason)
+}
+
+/// Classify queue snapshots independently from synthesis progress. In
+/// particular, the expected final drain and a user pause are not underruns.
+nonisolated struct SpeechStreamContinuity {
+    nonisolated enum Phase: Equatable, Sendable { case loading, playing, buffering, paused, drained }
+    nonisolated struct Update: Sendable {
+        let phase: Phase
+        let diagnostic: SpeechPlaybackDiagnostic?
+    }
+
+    private var hasPlayed = false
+    private var starvationStart: TimeInterval?
+
+    mutating func update(
+        queuedBuffers: Int, outputIsPlaying: Bool,
+        expectingMore: Bool, paused: Bool, now: TimeInterval
+    ) -> Update {
+        let phase: Phase
+        if paused {
+            phase = .paused
+        } else if queuedBuffers > 0, outputIsPlaying {
+            phase = .playing
+            hasPlayed = true
+        } else if queuedBuffers > 0 || expectingMore {
+            phase = hasPlayed ? .buffering : .loading
+        } else {
+            phase = .drained
+        }
+        var diagnostic: SpeechPlaybackDiagnostic?
+        if phase == .buffering {
+            if starvationStart == nil {
+                starvationStart = now
+                diagnostic = .starvationStarted
+            }
+        } else {
+            let reason: SpeechPlaybackDiagnostic.EndReason = phase == .playing
+                ? .resumed : (phase == .paused ? .paused : .drained)
+            diagnostic = endStarvation(at: now, reason: reason)
+        }
+        return Update(phase: phase, diagnostic: diagnostic)
+    }
+
+    mutating func endStarvation(
+        at now: TimeInterval, reason: SpeechPlaybackDiagnostic.EndReason
+    ) -> SpeechPlaybackDiagnostic? {
+        guard let start = starvationStart else { return nil }
+        starvationStart = nil
+        return .starvationEnded(seconds: max(0, now - start), reason: reason)
+    }
+}
+
+@MainActor
+enum SpeechPlaybackDiagnostics {
+    // Local metadata only: never send text, project identity or these events
+    // through analytics. No service connection or telemetry is introduced.
+    private static let logger = Logger(subsystem: "com.hoangbkit.readaloud", category: "Playback")
+
+    static func record(_ event: SpeechPlaybackDiagnostic) {
+        switch event {
+        case .starvationStarted:
+            logger.debug("Live audio starved; waiting for a chunk")
+        case .starvationEnded(let seconds, let reason):
+            logger.debug("Live audio wait ended: \(reason.rawValue, privacy: .public), seconds: \(seconds, privacy: .public)")
+        }
+    }
+
+    static func chapterStarted(finalized: Bool) {
+        logger.debug("Chapter preparation began; finalized audio: \(finalized, privacy: .public)")
+    }
+
+    static func firstAudio(after seconds: Double) {
+        logger.debug("Time to first audible chunk, seconds: \(seconds, privacy: .public)")
+    }
+
+    static func applicationState(_ state: String) {
+        logger.debug("Application state: \(state, privacy: .public)")
+    }
+}
 
 @MainActor
 final class ReadAloudPipeline {
@@ -7,6 +111,7 @@ final class ReadAloudPipeline {
         case loading
         case warmingUp
         case synthesizing(current: Int, total: Int)
+        case buffering
         case playing
         case paused
         case finished
@@ -55,7 +160,7 @@ final class ReadAloudPipeline {
 
     private(set) var engine: any SpeechSynthesisEngine
     private(set) var engineKind: SpeechEngineKind
-    private let playback: SpeechPlaybackQueue
+    private let playback: any SpeechPlaybackOutput
     private let scheduler: SpeechChunkScheduler
     private let maxQueuedBuffers = 2
 
@@ -63,9 +168,14 @@ final class ReadAloudPipeline {
     private var activeOperationID: UUID?
     private var isPaused = false
     private var playbackPositionOriginSeconds = 0.0
+    private var streamContinuity: SpeechStreamContinuity?
+    private var streamExpectsMore = false
+    private var streamStartedAt: TimeInterval?
+    private let now: @MainActor () -> TimeInterval
 
     private(set) var state: State = .idle
     var onEvent: ((Event) -> Void)?
+    var onDiagnostic: ((SpeechPlaybackDiagnostic) -> Void)?
     var onAudioSessionEvent:
         ((SpeechPlaybackQueue.SessionEvent) -> Void)?
 
@@ -77,14 +187,18 @@ final class ReadAloudPipeline {
         )
     }
 
-    init() {
-        let playback = SpeechPlaybackQueue()
+    init(
+        playback: (any SpeechPlaybackOutput)? = nil,
+        now: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        let playback = playback ?? SpeechPlaybackQueue()
 
         let kind = ReadAloudPreferences.speechEngine
         self.engineKind = kind
         self.engine = SpeechEngineFactory.make(kind)
         self.playback = playback
         self.scheduler = SpeechChunkScheduler()
+        self.now = now
 
         playback.onSnapshotChange = { [weak self] snapshot in
             self?.onEvent?(
@@ -93,6 +207,7 @@ final class ReadAloudPipeline {
                     queuedDurationSeconds: snapshot.queuedDurationSeconds
                 )
             )
+            self?.updateStreamState(snapshot)
         }
 
         playback.onSessionEvent = { [weak self] event in
@@ -199,7 +314,7 @@ final class ReadAloudPipeline {
     }
 
     /// Playback consumes already-synthesized shared-cache chunks. Synthesis
-    /// runs independently and may be up to 20 chunks ahead; the player still
+    /// runs independently with disk-backed read-ahead; the player still
     /// schedules only two decoded buffers at a time.
     func playChunkStream(
         count: Int,
@@ -207,10 +322,14 @@ final class ReadAloudPipeline {
         loadAudio: @escaping @MainActor (Int) async throws -> KokoroAudio,
         onChunkStarted: @escaping @MainActor (Int) -> Void
     ) async throws {
+        guard count > 0 else { throw PipelineError.emptyText }
         resetActiveOperation(stopPlayback: !continuous)
         let operationID = UUID()
         activeOperationID = operationID
-        setState(.loading)
+        streamContinuity = SpeechStreamContinuity()
+        streamExpectsMore = true
+        streamStartedAt = now()
+        setState(isPaused ? .paused : .loading)
         do {
             try playback.prepare()
             try await withTaskCancellationHandler {
@@ -223,10 +342,13 @@ final class ReadAloudPipeline {
                     try ReadAloudSafety.validate(
                         audio, maximumSamples: ReadAloudSafety.maximumBufferSamples
                     )
-                    try playback.enqueue(audio, onPlaybackStart: {
+                    // Set this before enqueue's synchronous snapshot callback.
+                    // A last-buffer completion is expected, not starvation.
+                    streamExpectsMore = index + 1 < count
+                    try playback.enqueue(audio, onPlaybackStart: { [weak self] in
+                        guard self?.activeOperationID == operationID else { return }
                         onChunkStarted(index)
                     })
-                    if index == 0 { setState(isPaused ? .paused : .playing) }
                 }
                 await playback.waitUntilDrained()
                 try requireActiveOperation(operationID)
@@ -236,15 +358,28 @@ final class ReadAloudPipeline {
                     self?.stop()
                 }
             }
+            endStream(reason: .drained)
             activeOperationID = nil
             if !continuous {
                 playback.stop()
                 setState(.finished)
+            } else {
+                setState(isPaused ? .paused : .loading)
             }
+        } catch is CancellationError {
+            finishCancellation(operationID)
+            throw PipelineError.cancelled
+        } catch PipelineError.cancelled {
+            finishCancellation(operationID)
+            throw PipelineError.cancelled
+        } catch SpeechEngineError.cancelled {
+            finishCancellation(operationID)
+            throw PipelineError.cancelled
         } catch {
             if activeOperationID == operationID {
-                playback.stop()
+                endStream(reason: .failed)
                 activeOperationID = nil
+                playback.stop()
                 setState(.failed(Self.message(for: error)))
             }
             throw error
@@ -257,7 +392,7 @@ final class ReadAloudPipeline {
     ) async throws {
         try ReadAloudSafety.validate(audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
         try await playScheduled(continuous: continuous) {
-            try self.playback.enqueue(audio)
+            try self.playback.enqueue(audio, onPlaybackStart: nil)
         }
     }
 
@@ -394,6 +529,7 @@ final class ReadAloudPipeline {
     }
 
     func finishContinuousPlayback() {
+        endStream(reason: .drained)
         activeOperationID = nil
         readingTask?.cancel()
         readingTask = nil
@@ -415,7 +551,11 @@ final class ReadAloudPipeline {
         isPaused = false
         do {
             try playback.resume()
-            setState(playback.snapshot.queuedBuffers > 0 ? .playing : .loading)
+            if streamContinuity != nil {
+                updateStreamState(playback.snapshot)
+            } else {
+                setState(playback.snapshot.isPlaying ? .playing : .loading)
+            }
         } catch {
             resetActiveOperation()
             setState(.failed(Self.message(for: error)))
@@ -423,6 +563,8 @@ final class ReadAloudPipeline {
     }
 
     func shutdown() {
+        endStream(reason: .stopped)
+        onDiagnostic = nil
         onEvent = nil
         onAudioSessionEvent = nil
         readingTask?.cancel()
@@ -512,7 +654,7 @@ final class ReadAloudPipeline {
 
             let underrun = offset > 0 && playback.snapshot.queuedBuffers == 0
 
-            try playback.enqueue(result.audio)
+            try playback.enqueue(result.audio, onPlaybackStart: nil)
 
             let firstAudioLatency = offset == 0
                 ? Self.seconds(readStart.duration(to: clock.now))
@@ -548,6 +690,7 @@ final class ReadAloudPipeline {
     private func resetActiveOperation(
         stopPlayback: Bool = true
     ) {
+        endStream(reason: .stopped)
         activeOperationID = nil
         if stopPlayback {
             isPaused = false
@@ -567,9 +710,10 @@ final class ReadAloudPipeline {
             return
         }
 
+        endStream(reason: .stopped)
+        activeOperationID = nil
         playback.stop()
         readingTask = nil
-        activeOperationID = nil
         setState(.idle)
     }
 
@@ -581,7 +725,42 @@ final class ReadAloudPipeline {
         }
     }
 
+    private func updateStreamState(_ snapshot: SpeechPlaybackQueue.Snapshot) {
+        guard activeOperationID != nil, var continuity = streamContinuity else { return }
+        let update = continuity.update(
+            queuedBuffers: snapshot.queuedBuffers, outputIsPlaying: snapshot.isPlaying,
+            expectingMore: streamExpectsMore, paused: isPaused, now: now()
+        )
+        streamContinuity = continuity
+        if let diagnostic = update.diagnostic { record(diagnostic) }
+        switch update.phase {
+        case .loading, .drained: setState(.loading)
+        case .buffering: setState(.buffering)
+        case .playing:
+            if let started = streamStartedAt {
+                SpeechPlaybackDiagnostics.firstAudio(after: max(0, now() - started))
+                streamStartedAt = nil
+            }
+            setState(.playing)
+        case .paused: setState(.paused)
+        }
+    }
+
+    private func endStream(reason: SpeechPlaybackDiagnostic.EndReason) {
+        let diagnostic = streamContinuity?.endStarvation(at: now(), reason: reason)
+        streamContinuity = nil
+        streamExpectsMore = false
+        streamStartedAt = nil
+        if let diagnostic { record(diagnostic) }
+    }
+
+    private func record(_ event: SpeechPlaybackDiagnostic) {
+        SpeechPlaybackDiagnostics.record(event)
+        onDiagnostic?(event)
+    }
+
     private func setState(_ newState: State) {
+        guard state != newState else { return }
         state = newState
         onEvent?(.state(newState))
     }
@@ -601,4 +780,5 @@ final class ReadAloudPipeline {
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
     }
 }
+
 

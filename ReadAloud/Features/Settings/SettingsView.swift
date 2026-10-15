@@ -382,10 +382,17 @@ struct SettingsView: View {
                 Text("Next 2 Chapters").tag(2)
             }
             Toggle("Generate While Listening", isOn: $generateWhileListening)
+            Toggle("Background Generation", isOn: Binding(
+                get: { !runtimeManager.isBackgroundPrefetchPaused },
+                set: { runtimeManager.setBackgroundPrefetchPaused(!$0) }
+            ))
         } header: {
             Text("Generation")
         } footer: {
-            Text("Queued generation yields whenever foreground streaming needs the speech model.")
+            Text("Queued generation yields to live speech and pauses when ReadAloud is in the background without listening. Turning off Background Generation keeps queued work for later and does not stop listening.")
+            if let error = runtimeManager.generationRecoveryError {
+                Text("Some offline work could not be restored: \(error)")
+            }
         }
     }
 
@@ -396,3 +403,4 @@ struct SettingsView: View {
         }
     }
 }
+

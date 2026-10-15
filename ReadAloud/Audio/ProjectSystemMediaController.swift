@@ -79,10 +79,7 @@ final class ProjectSystemMediaController {
                 MPMediaItemPropertyTitle:
                     state.item.title,
                 MPNowPlayingInfoPropertyPlaybackRate:
-                    runtime.isPlaybackPaused
-                    || runtime.activity.queuedAudioBuffers == 0
-                    ? 0.0
-                    : 1.0,
+                    runtime.isPlaybackAudible ? 1.0 : 0.0,
                 MPNowPlayingInfoPropertyDefaultPlaybackRate:
                     1.0,
             ]
@@ -138,9 +135,7 @@ final class ProjectSystemMediaController {
             MPNowPlayingInfoCenter.default()
         center.nowPlayingInfo = info
         center.playbackState =
-            runtime.isPlaybackPaused
-            ? .paused
-            : .playing
+            runtime.isPlaybackAudible ? .playing : .paused
 
         updateSkipIntervals()
         updateCommandAvailability(
@@ -503,4 +498,5 @@ final class ProjectSystemMediaController {
         }
     }
 }
+
 

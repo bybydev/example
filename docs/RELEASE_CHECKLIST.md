@@ -166,3 +166,52 @@ plus mycli/Xcode, with the same verified ONNX resources.
 - [ ] Confirm malformed/oversized input or audio yields an error, not a trap.
 
 These items have not been executed by the implementation pass. No CI was triggered.
+
+
+## Playback, scheduling and reclamation matrix — pending
+
+Implementation for issue #48 adds shared ownership, recoverable buffering,
+app-wide offline admission, dormant-job recovery, the listening hero/Chapters
+sheet and safe redundant-chunk reclamation. This table is a release check plan;
+no row has been executed or passed by the implementation work.
+
+After explicit approval, first run the lifecycle/continuity/admission/reclamation
+regressions in ReadAloudTests and an iOS build with strict concurrency checking.
+Then use physical supported iPhones with real bundled models in Debug and Release.
+Include a compact/lower-memory phone and a large phone, the minimum supported iOS
+and the current shipping iOS where available, speaker and Bluetooth/headphones,
+and both fully finalized and uncached/partially cached multi-chapter projects.
+Record device/OS, build SHA/configuration, chapter/audio mode, memory/thermal
+conditions and local continuity diagnostics for each result. Do not infer a device
+pass from simulator playback or synthetic-audio regression tests.
+
+| Scenario | Exercise | Expected result | Status |
+| --- | --- | --- | --- |
+| Finalized playback under lock | Lock for at least 30 minutes or a complete shorter book; use Lock Screen and Control Center pause/resume/seek/next | Audible output, chapter, progress and remote state agree; exact resume uses the compatible final timeline | Pending |
+| Live playback under lock | Start uncached speech, lock/background, repeat on a naturally CPU/thermal-constrained device | Preparation/starvation is explicit; returning audio recovers; no silent-audio keepalive or promise of indefinite background inference | Pending |
+| Chapter boundaries | Exercise final→final, final→live, live→final and live→live with auto-continue on/off and stop-at-chapter-end | Correct chapter, no duplicated/skipped audible passages; normal final drain is not starvation | Pending |
+| Starvation and retry | Observe an underrun during live speech; pause/resume, cancel preparation and retry a failure | Waiting does not report audible playback; recovery resumes honestly; bookmark remains at last audible passage | Pending |
+| Calls and interruption | Interrupt with a call/Siri/another audio session, then dismiss the interruption | Consistent session state; resume only when appropriate; no duplicate playback/model work | Pending |
+| Audio route | Disconnect Bluetooth/headphones during live and final playback; reconnect/change route | Safe pause/recovery and consistent remote controls; no stale audible state | Pending |
+| Media-services reset | Exercise an audio-services reset in an approved development/device session | Rebuild session or expose retry honestly; no crash, orphaned playback or lost source bookmark | Pending |
+| Memory pressure | Trigger a memory warning during synthesis, final assembly and finalized replay | Work stops/drains before unload; useful source progress remains; no immediate automatic restart; explicit retry is recoverable | Pending |
+| Rapid controls and project switching | Repeatedly seek, switch chapters/books, cancel preparation and retry | Stale consumers release; already-running native inference may finish but cannot write invalidated results or steal the new session | Pending |
+| App switch without listening | Generate offline, then open another app with playback stopped/paused; quickly return and repeat | Separate offline jobs stop after cancellation; a paused live session can fill only its 20-chunk window while iOS permits. Pending jobs/chunks and saved preference survive; eligible offline jobs/recovery resume on return | Pending |
+| Background listening pause | Switch apps while streaming/buffering, then pause/resume from Lock Screen, including rapid repeated actions | Sound pauses; live preparation can finish the same 20-chunk window while iOS permits, then waits without polling. Resume uses prepared audio and audible progress frees capacity; no duplicate playback | Pending |
+| Bounded disk read-ahead | Listen to a long uncached chapter, including a nonzero seek; let synthesis reach 20 chunks ahead, pause/resume, then allow playback to advance | Producer sleeps at 20 ahead without polling and resumes only as audible progress frees capacity; paused playback still allows the window to fill and preserves prepared chunks; decoded PCM memory stays bounded | Pending |
+| Cross-project offline admission | Queue jobs in multiple books, then play/pause live speech in another book | Only one offline job admitted globally; live/paused live speech has priority; compatible file playback honors Generate While Listening | Pending |
+| Global generation switch | Disable/enable Background Generation while listening; relaunch with it disabled | Audio continues; queued intent survives; background admission and prefetch honor the persisted choice | Pending |
+| Dormant recovery | Terminate during generation, relaunch to Library without opening the affected books, repeat | Eligible pending jobs recover once; IDs/attempts remain meaningful; stale keys fail honestly; finalized compatible intent does not resynthesize | Pending |
+| Hero and Chapters | Start/continue/pause/resume/cancel/retry from hero; choose current/next/distant chapters; open reader | One shared session across hero, reader, mini-player and system controls; current book/chapter follows playback, including preparation/pause | Pending |
+| Reclamation and cached seeking | Finish a streamed/offline chapter while cached readers/read-ahead remain active, then replay/seek its finalized audio | Redundant chunks are reclaimed only after dependencies release; final checksum/timeline, offline badge, full buffered track, source and bookmark remain valid | Pending |
+| Final replacement and partial generation | Interrupt assembly, change narration/content, and retry; include a known-good final pair | Incomplete/recoverable data stays; failed/stale/replaced final assets do not authorize cleanup; known-good replacement semantics remain intact | Pending |
+| Pronunciation identity | Switch Adaptive/Skip/Stop during loading, live speech, paused speech and offline generation; finalize each mode | Mode changes cancel/invalidate affected work; chunk synthesis and final metadata use one captured policy; final audio validates without changing existing generation keys | Pending |
+| Clear/delete versus cleanup | Clear Temporary Cache, Clear Generated Audio, or delete the project while generation/reclamation is active | Drain before mutation; no late deletion of fresh chunks, repopulation, recreated packages or removed source bookmarks | Pending |
+| Accessibility and appearance | Use hero/Chapters with VoiceOver, large Dynamic Type and both free themes | Labels/actions, current/next/offline indicators and controls remain understandable and reachable | Pending |
+
+Force quit and suspension are recovery scenarios, not evidence of continuing
+background generation. A native synchronous inference already in progress may
+finish before cancellation takes effect. Reclamation is best effort; a crash or
+failed disk operation can leave redundant chunks for a later compatible replay.
+Acceptance boxes in issue #48 remain open until the corresponding behavior is
+actually exercised and its outcome recorded.

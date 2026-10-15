@@ -6,6 +6,7 @@ nonisolated struct ProjectRuntimeItemState: Identifiable, Equatable, Sendable {
     let item: ProjectContentItem
     let resolved: ResolvedNarrationSettings
     let generationKey: String
+    let pronunciationMode: PronunciationFallbackMode
     let generationStatus: ProjectItemGenerationStatus
 
     var id: UUID { item.id }
@@ -16,6 +17,7 @@ nonisolated enum ProjectRuntimePlaybackState: Equatable, Sendable {
     case loading
     case warmingUp
     case synthesizing(current: Int, total: Int)
+    case buffering
     case playing
     case paused
     case finished
@@ -72,10 +74,18 @@ nonisolated struct ProjectRuntimeActivity: Equatable, Sendable {
 
     var hasActivePlaybackWork: Bool {
         switch playbackState {
-        case .loading, .warmingUp, .synthesizing, .playing, .paused:
+        case .loading, .warmingUp, .synthesizing, .buffering, .playing, .paused:
             return true
         case .idle, .finished, .failed:
             return false
+        }
+    }
+
+    var hasAudiblePlayback: Bool {
+        guard queuedAudioBuffers > 0 else { return false }
+        switch playbackState {
+        case .playing, .synthesizing: return true
+        default: return false
         }
     }
 }
@@ -102,6 +112,9 @@ final class ProjectRuntime {
     @ObservationIgnored var sleepTimerTask: Task<Void, Never>?
     private(set) var isLoading = false
     private(set) var didLoad = false
+    private(set) var isInvalidatingAudio = false
+    private var audioRecoveryRequired = false
+    private var isShutdown = false
     var revision: UInt64 = 0
     var lastErrorMessage: String?
     private(set) var pdfReadingPolicy: PdfReadingPolicy = .listening
@@ -138,6 +151,7 @@ final class ProjectRuntime {
     @ObservationIgnored private var pdfReadingSessionTask: Task<PDFReadingSession, Error>?
     @ObservationIgnored private var pdfReadingSessionLoadID: UUID?
     @ObservationIgnored var playbackTask: Task<Void, Never>?
+    @ObservationIgnored private var retiringPlaybackTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var chunkBookmarkTask: Task<Void, Never>?
     @ObservationIgnored var playbackOperationID: UUID?
     @ObservationIgnored var readerPauseRequested = false
@@ -188,7 +202,17 @@ final class ProjectRuntime {
         hasProAccess()
     }
 
+    var hasListeningIntent: Bool {
+        activity.hasActivePlaybackWork && !isPlaybackPaused
+    }
+
+    var requiresGlobalPlaybackPriority: Bool {
+        activity.hasActivePlaybackWork
+            && (finalAudioAsset == nil || !ReadAloudPreferences.generateWhileListening)
+    }
+
     var blocksQueuedGeneration: Bool {
+        if isInvalidatingAudio || isShutdown || audioRecoveryRequired { return true }
         if synthesisSuspendedForMemoryPressure { return true }
         guard activity
             .hasActivePlaybackWork
@@ -205,7 +229,8 @@ final class ProjectRuntime {
     }
 
     var isBackgroundWorkActive: Bool {
-        activity.hasActivePlaybackWork
+        isInvalidatingAudio || !retiringPlaybackTasks.isEmpty
+            || activity.hasActivePlaybackWork
             || queueController.hasExecutingWork
     }
 
@@ -228,20 +253,22 @@ final class ProjectRuntime {
     func loadIfNeeded() async throws {
         guard !didLoad else { return }
 
-        if !didRecoverGenerationQueue {
-            _ = try await persistence
-                .recoverGenerationQueue()
-            didRecoverGenerationQueue = true
-        }
-
         do {
             try await refresh()
+            if !didRecoverGenerationQueue {
+                // Validate cold intent against today's settings and compatible
+                // final audio before any execution queue can start.
+                _ = try await persistence.recoverGenerationQueue(
+                    generationKeys: Dictionary(uniqueKeysWithValues: itemStates.map { ($0.id, $0.generationKey) }),
+                    readyOfflineItemIDs: Set(itemStates.filter { $0.generationStatus.state == .readyOffline }.map(\.id))
+                )
+                didRecoverGenerationQueue = true
+                try await refreshGenerationState()
+            }
             try queueController.configure(
                 runtime: self
             )
-            queueController.setPlaybackActive(
-                blocksQueuedGeneration
-            )
+            queueController.reconcileScheduling()
         } catch {
             didLoad = false
             throw error
@@ -376,48 +403,42 @@ final class ProjectRuntime {
             return
         }
 
-        // Cancel foreground synthesis without publishing a bookmark from
-        // the previous UTF-16 text domain. Old finalizers cannot commit after
-        // the swap: ProjectStore validates their old content revisions.
-        stopPlayback(persistCheckpoint: false)
-        prefetchTask?.cancel()
-        prefetchTask = nil
-        prefetchTaskID = nil
-        prefetchScheduledItemIDs.removeAll()
-        queueController.shutdown()
-        do {
-            _ = try await persistence.replacePDFReadingContent(
-                policy: policy,
-                items: projected
-            )
-            try await refresh()
-            let active = itemStates.map(\.item).sorted { $0.order < $1.order }
-            guard active.count == projected.count,
-                  zip(active, projected).allSatisfy({ actual, expected in
-                      actual.id == expected.id
-                          && actual.contentRevision == expected.contentRevision
-                          && actual.text == expected.text
-                  }) else {
-                throw ProjectStoreError.invalidData(
-                    "The refreshed PDF reading content did not match its projection."
-                )
-            }
-            pdfReadingPolicy = policy
-            pdfReadingProjection = projection
-            try queueController.configure(runtime: self)
-            queueController.setPlaybackActive(blocksQueuedGeneration)
-            revision &+= 1
-        } catch {
-            // The storage transaction rolls back on failure. Reload from
-            // disk, restart durable generation, and preserve the old policy.
-            pdfReadingProjection = nil
+        try await withAudioInvalidation(persistCheckpoint: false) {
+            queueController.shutdown()
             do {
+                _ = try await persistence.replacePDFReadingContent(
+                    policy: policy,
+                    items: projected
+                )
                 try await refresh()
+                let active = itemStates.map(\.item).sorted { $0.order < $1.order }
+                guard active.count == projected.count,
+                      zip(active, projected).allSatisfy({ actual, expected in
+                          actual.id == expected.id
+                              && actual.contentRevision == expected.contentRevision
+                              && actual.text == expected.text
+                      }) else {
+                    throw ProjectStoreError.invalidData(
+                        "The refreshed PDF reading content did not match its projection."
+                    )
+                }
+                pdfReadingPolicy = policy
+                pdfReadingProjection = projection
                 try queueController.configure(runtime: self)
+                queueController.reconcileScheduling()
+                revision &+= 1
             } catch {
-                lastErrorMessage = Self.message(for: error)
+                // The storage transaction rolls back on failure. Reload from
+                // disk, restart durable generation, and preserve the old policy.
+                pdfReadingProjection = nil
+                do {
+                    try await refresh()
+                    try queueController.configure(runtime: self)
+                } catch {
+                    lastErrorMessage = Self.message(for: error)
+                }
+                throw error
             }
-            throw error
         }
     }
 
@@ -445,6 +466,7 @@ final class ProjectRuntime {
             let runtimeRevision =
                 try ReadAloudSynthesisContract.runtimeRevision()
 
+            let pronunciationMode = ReadAloudPreferences.pronunciationFallbackMode
             var prepared: [(
                 item: ProjectContentItem,
                 resolved: ResolvedNarrationSettings,
@@ -467,7 +489,8 @@ final class ProjectRuntime {
                     try ReadAloudSynthesisContract.generationKey(
                         item: item,
                         resolved: resolved,
-                        runtimeRevision: runtimeRevision
+                        runtimeRevision: runtimeRevision,
+                        pronunciationMode: pronunciationMode
                     )
 
                 prepared.append(
@@ -515,10 +538,12 @@ final class ProjectRuntime {
                     item: $0.item,
                     resolved: $0.resolved,
                     generationKey: $0.generationKey,
+                    pronunciationMode: pronunciationMode,
                     generationStatus:
                         generationState.statuses[$0.item.id] ?? .notGenerated
                 )
             }
+            audioRecoveryRequired = false
             queueController.publish(generationState.queue)
             activity.waitingGenerationJobs =
                 queueController.waitingCount
@@ -531,6 +556,7 @@ final class ProjectRuntime {
             didLoad = true
             isLoading = false
             revision &+= 1
+            queueController.reconcileScheduling()
             ProjectSystemMediaController
                 .shared
                 .publish(self)
@@ -568,6 +594,7 @@ final class ProjectRuntime {
         itemStates = itemStates.map {
             ProjectRuntimeItemState(
                 item: $0.item, resolved: $0.resolved, generationKey: $0.generationKey,
+                pronunciationMode: $0.pronunciationMode,
                 generationStatus: loaded.statuses[$0.id] ?? .notGenerated
             )
         }
@@ -608,9 +635,10 @@ final class ProjectRuntime {
                                     .settings,
                             hasPro: hasPro
                         )
-                if resolved
-                    != state.resolved
-                {
+                let generationKey = try ReadAloudSynthesisContract.generationKey(
+                    item: state.item, resolved: resolved
+                )
+                if resolved != state.resolved || generationKey != state.generationKey {
                     affectedItemIDs
                         .insert(
                             state.id
@@ -625,62 +653,23 @@ final class ProjectRuntime {
             }
         }
 
-        queueController
-            .setPlaybackActive(true)
-
-        defer {
-            prefetchScheduledItemIDs
-                .removeAll()
-            queueController
-                .setPlaybackActive(
-                    blocksQueuedGeneration
-                )
-        }
-
-        if let activeItemID =
-                activity.activeItemID,
-           affectedItemIDs
-            .contains(activeItemID)
-        {
-            await persistPlaybackCheckpoint()
-            stopPlayback()
-            queueController
-                .setPlaybackActive(true)
-        }
-
-        if engineChanged {
-            // Stop running durable generation before unloading the model.
-            // Old finalized assets remain on disk; changed generation keys
-            // make them incompatible without deleting user data.
-            queueController.shutdown()
-            await pipeline.selectEngine(selectedEngine)
-        }
-
         do {
-            if !affectedItemIDs.isEmpty {
-                _ = try await persistence
-                    .removeGenerationJobs(
-                        itemIDs:
-                            affectedItemIDs,
-                        states: [
-                            .queued,
-                            .generating,
-                            .failed,
-                        ]
+            try await withAudioInvalidation(itemIDs: affectedItemIDs) {
+                if engineChanged {
+                    queueController.shutdown()
+                    await pipeline.selectEngine(selectedEngine)
+                }
+                if !affectedItemIDs.isEmpty {
+                    _ = try await persistence.removeGenerationJobs(
+                        itemIDs: affectedItemIDs,
+                        states: [.queued, .generating, .failed]
                     )
-            }
-
-            try await refresh()
-            if engineChanged {
-                try queueController.configure(runtime: self)
+                }
+                try await refresh()
+                if engineChanged { try queueController.configure(runtime: self) }
             }
         } catch {
-            lastErrorMessage =
-                Self.message(
-                    for: error
-                )
-            // Do not restart old durable jobs if refresh/invalidation failed.
-            // They must never synthesize ONNX audio under a Core ML cache key.
+            lastErrorMessage = Self.message(for: error)
         }
     }
 
@@ -710,29 +699,27 @@ final class ProjectRuntime {
         }
         var settings = project.settings
         settings.voiceID = voiceID
-        try stopPlaybackIfProjectNarrationChanges(
-            from: project.settings,
-            to: settings
-        )
         let affectedItemIDs =
             try narrationAffectedItemIDs(
                 from: project.settings,
                 to: settings
             )
-        try await persistence.updateProjectSettings(settings)
-        if !affectedItemIDs.isEmpty {
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs:
-                        affectedItemIDs,
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
+        try await withAudioInvalidation(itemIDs: affectedItemIDs) {
+            try await persistence.updateProjectSettings(settings)
+            if !affectedItemIDs.isEmpty {
+                _ = try await persistence
+                    .removeGenerationJobs(
+                        itemIDs:
+                            affectedItemIDs,
+                        states: [
+                            .queued,
+                            .generating,
+                            .failed,
+                        ]
+                    )
+            }
+            try await refresh()
         }
-        try await refresh()
     }
 
     func updateProjectSpeed(_ speed: Double?) async throws {
@@ -746,29 +733,27 @@ final class ProjectRuntime {
         }
         var settings = project.settings
         settings.speed = speed
-        try stopPlaybackIfProjectNarrationChanges(
-            from: project.settings,
-            to: settings
-        )
         let affectedItemIDs =
             try narrationAffectedItemIDs(
                 from: project.settings,
                 to: settings
             )
-        try await persistence.updateProjectSettings(settings)
-        if !affectedItemIDs.isEmpty {
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs:
-                        affectedItemIDs,
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
+        try await withAudioInvalidation(itemIDs: affectedItemIDs) {
+            try await persistence.updateProjectSettings(settings)
+            if !affectedItemIDs.isEmpty {
+                _ = try await persistence
+                    .removeGenerationJobs(
+                        itemIDs:
+                            affectedItemIDs,
+                        states: [
+                            .queued,
+                            .generating,
+                            .failed,
+                        ]
+                    )
+            }
+            try await refresh()
         }
-        try await refresh()
     }
 
     func updateItemVoiceMode(
@@ -788,25 +773,25 @@ final class ProjectRuntime {
             settings.voice.customValue = entry.resolved.voiceID
         }
 
-        try stopPlaybackIfItemNarrationChanges(
-            itemID: itemID,
-            from: entry.item.settings,
-            to: settings
+        let changed = try itemNarrationChanges(
+            from: entry.item.settings, to: settings
         )
-        try await persistence.updateItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
-        _ = try await persistence
-            .removeGenerationJobs(
-                itemIDs: [itemID],
-                states: [
-                    .queued,
-                    .generating,
-                    .failed,
-                ]
+        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
+            try await persistence.updateItemSettings(
+                itemID: itemID,
+                settings: settings
             )
-        try await refresh()
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs: [itemID],
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+            try await refresh()
+        }
     }
 
     func updateItemVoice(
@@ -835,25 +820,25 @@ final class ProjectRuntime {
         settings.voice.mode = .custom
         settings.voice.customValue = voiceID
 
-        try stopPlaybackIfItemNarrationChanges(
-            itemID: itemID,
-            from: entry.item.settings,
-            to: settings
+        let changed = try itemNarrationChanges(
+            from: entry.item.settings, to: settings
         )
-        try await persistence.updateItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
-        _ = try await persistence
-            .removeGenerationJobs(
-                itemIDs: [itemID],
-                states: [
-                    .queued,
-                    .generating,
-                    .failed,
-                ]
+        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
+            try await persistence.updateItemSettings(
+                itemID: itemID,
+                settings: settings
             )
-        try await refresh()
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs: [itemID],
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+            try await refresh()
+        }
     }
 
     func updateItemSpeedMode(
@@ -873,25 +858,25 @@ final class ProjectRuntime {
             settings.speed.customValue = entry.resolved.speed
         }
 
-        try stopPlaybackIfItemNarrationChanges(
-            itemID: itemID,
-            from: entry.item.settings,
-            to: settings
+        let changed = try itemNarrationChanges(
+            from: entry.item.settings, to: settings
         )
-        try await persistence.updateItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
-        _ = try await persistence
-            .removeGenerationJobs(
-                itemIDs: [itemID],
-                states: [
-                    .queued,
-                    .generating,
-                    .failed,
-                ]
+        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
+            try await persistence.updateItemSettings(
+                itemID: itemID,
+                settings: settings
             )
-        try await refresh()
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs: [itemID],
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+            try await refresh()
+        }
     }
 
     func updateItemSpeed(
@@ -913,25 +898,25 @@ final class ProjectRuntime {
         settings.speed.mode = .custom
         settings.speed.customValue = speed
 
-        try stopPlaybackIfItemNarrationChanges(
-            itemID: itemID,
-            from: entry.item.settings,
-            to: settings
+        let changed = try itemNarrationChanges(
+            from: entry.item.settings, to: settings
         )
-        try await persistence.updateItemSettings(
-            itemID: itemID,
-            settings: settings
-        )
-        _ = try await persistence
-            .removeGenerationJobs(
-                itemIDs: [itemID],
-                states: [
-                    .queued,
-                    .generating,
-                    .failed,
-                ]
+        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
+            try await persistence.updateItemSettings(
+                itemID: itemID,
+                settings: settings
             )
-        try await refresh()
+            _ = try await persistence
+                .removeGenerationJobs(
+                    itemIDs: [itemID],
+                    states: [
+                        .queued,
+                        .generating,
+                        .failed,
+                    ]
+                )
+            try await refresh()
+        }
     }
 
     private func narrationAffectedItemIDs(
@@ -970,59 +955,18 @@ final class ProjectRuntime {
         return affected
     }
 
-    private func stopPlaybackIfProjectNarrationChanges(
-        from oldSettings: ProjectNarrationSettings,
-        to newSettings: ProjectNarrationSettings
-    ) throws {
-        guard activity.hasActivePlaybackWork,
-              let activeItemID = activity.activeItemID,
-              let active = itemState(activeItemID)
-        else {
-            return
-        }
-
-        let oldResolved = try NarrationSettingsResolver.resolve(
-            item: active.item.settings,
-            project: oldSettings,
-            hasPro: hasPro
-        )
-        let newResolved = try NarrationSettingsResolver.resolve(
-            item: active.item.settings,
-            project: newSettings,
-            hasPro: hasPro
-        )
-
-        if oldResolved != newResolved {
-            stopPlayback()
-        }
-    }
-
-    private func stopPlaybackIfItemNarrationChanges(
-        itemID: UUID,
+    private func itemNarrationChanges(
         from oldSettings: ItemNarrationSettings,
         to newSettings: ItemNarrationSettings
-    ) throws {
-        guard activity.hasActivePlaybackWork,
-              activity.activeItemID == itemID,
-              let project
-        else {
-            return
-        }
-
+    ) throws -> Bool {
+        guard let project else { throw ProjectStoreError.projectNotFound(id) }
         let oldResolved = try NarrationSettingsResolver.resolve(
-            item: oldSettings,
-            project: project.settings,
-            hasPro: hasPro
+            item: oldSettings, project: project.settings, hasPro: hasPro
         )
         let newResolved = try NarrationSettingsResolver.resolve(
-            item: newSettings,
-            project: project.settings,
-            hasPro: hasPro
+            item: newSettings, project: project.settings, hasPro: hasPro
         )
-
-        if oldResolved != newResolved {
-            stopPlayback()
-        }
+        return oldResolved != newResolved
     }
 
     func enqueueGeneration(
@@ -1071,39 +1015,62 @@ final class ProjectRuntime {
         try await refresh()
     }
 
-    func clearGeneratedAudio(
-        itemIDs: Set<UUID>
-    ) async throws {
-        guard !itemIDs.isEmpty else {
-            return
+    /// Hold cache admission closed across the complete storage mutation.
+    /// Drain complete generation jobs as well as chunk producers so a final
+    /// WAV commit cannot recreate audio after Clear or project deletion.
+    func withAudioInvalidation<T>(
+        itemIDs: Set<UUID>? = nil,
+        persistCheckpoint: Bool = true,
+        operation: @MainActor () async throws -> T
+    ) async throws -> T {
+        guard !isInvalidatingAudio, !isShutdown else { throw CancellationError() }
+        isInvalidatingAudio = true
+        queueController.reconcileScheduling()
+        let pendingPrefetch = prefetchTask
+        pendingPrefetch?.cancel()
+        prefetchTask = nil
+        prefetchTaskID = nil
+        prefetchScheduledItemIDs.removeAll()
+
+        var pendingPlayback: Task<Void, Never>?
+        if let activeItemID = activity.activeItemID,
+           itemIDs?.contains(activeItemID) ?? true {
+            if persistCheckpoint { await persistPlaybackCheckpoint() }
+            pendingPlayback = playbackTask
+            stopPlayback(persistCheckpoint: false)
         }
 
-        queueController
-            .setPlaybackActive(true)
-
-        defer {
-            queueController
-                .setPlaybackActive(
-                    blocksQueuedGeneration
-                )
+        let token = await chunkCache.suspendAndDrain(itemIDs: itemIDs)
+        await queueController.cancelAndDrain()
+        await pendingPlayback?.value
+        await drainStoppedPlayback()
+        await pendingPrefetch?.value
+        do {
+            try Task.checkCancellation()
+            guard !isShutdown else { throw CancellationError() }
+            let result = try await operation()
+            await chunkCache.resumeAdmission(token)
+            isInvalidatingAudio = false
+            queueController.reconcileScheduling()
+            schedulePlaybackPrefetch()
+            return result
+        } catch {
+            await chunkCache.resumeAdmission(token)
+            isInvalidatingAudio = false
+            // A partial storage mutation may have changed generation keys.
+            // Keep old runtime state inert until a full refresh succeeds.
+            audioRecoveryRequired = true
+            queueController.reconcileScheduling()
+            throw error
         }
+    }
 
-        if let activeItemID =
-                activity.activeItemID,
-           itemIDs.contains(
-                activeItemID
-           )
-        {
-            await persistPlaybackCheckpoint()
-            stopPlayback()
-            queueController
-                .setPlaybackActive(true)
+    func clearGeneratedAudio(itemIDs: Set<UUID>) async throws {
+        guard !itemIDs.isEmpty else { return }
+        try await withAudioInvalidation(itemIDs: itemIDs) {
+            try await persistence.clearGeneratedAudio(itemIDs: itemIDs)
+            try await refresh()
         }
-
-        try await persistence.clearGeneratedAudio(
-            itemIDs: itemIDs
-        )
-        try await refresh()
     }
 
     func storageBreakdown()
@@ -1113,28 +1080,11 @@ final class ProjectRuntime {
             .storageBreakdown()
     }
 
-    func clearTemporaryCache()
-        async throws
-    {
-        // Chunk WAVs are the producer/consumer handoff. Stop the session
-        // cleanly before removing the files that queued playback expects.
-        if isPlaybackActive {
-            await persistPlaybackCheckpoint()
-            stopPlayback()
+    func clearTemporaryCache() async throws {
+        try await withAudioInvalidation {
+            try await chunkCache.clearAll()
+            try await cacheCoordinator.clearAllParagraphCache()
         }
-        queueController
-            .setPlaybackActive(true)
-
-        defer {
-            queueController
-                .setPlaybackActive(
-                    blocksQueuedGeneration
-                )
-        }
-
-        // Remove both the current chunk cache and any legacy paragraph cache.
-        try await chunkCache.clearAll()
-        try await cacheCoordinator.clearAllParagraphCache()
     }
 
     func rename(to title: String) async throws {
@@ -1143,13 +1093,17 @@ final class ProjectRuntime {
     }
 
     func deleteProject() async throws {
-        stopPlayback()
-        try await persistence.deleteProject()
-        project = nil
-        manifest = nil
-        itemStates = []
-        artworkURL = nil
-        revision &+= 1
+        try await withAudioInvalidation {
+            try await persistence.deleteProject()
+            project = nil
+            manifest = nil
+            itemStates = []
+            artworkURL = nil
+            revision &+= 1
+            isShutdown = true
+            queueController.shutdown()
+            await chunkCache.shutdown()
+        }
     }
 
     func itemState(_ itemID: UUID) -> ProjectRuntimeItemState? {
@@ -1157,6 +1111,12 @@ final class ProjectRuntime {
     }
 
     func prepareExplicitWork() throws {
+        guard !isInvalidatingAudio, !isShutdown else {
+            throw CancellationError()
+        }
+        guard !audioRecoveryRequired else {
+            throw ProjectStoreError.invalidData("Audio state needs to be refreshed. Reopen this project and try again.")
+        }
         guard !isApplyingPDFReadingPolicy else {
             throw ProjectStoreError.invalidData(
                 "Listening options are being applied. Try again shortly."
@@ -1172,7 +1132,7 @@ final class ProjectRuntime {
         }
         try ReadAloudSafety.requireMemoryHeadroom()
         synthesisSuspendedForMemoryPressure = false
-        queueController.setPlaybackActive(blocksQueuedGeneration)
+        queueController.reconcileScheduling()
     }
 
     func suspendForMemoryPressure() {
@@ -1181,7 +1141,7 @@ final class ProjectRuntime {
         let hadWork = isBackgroundWorkActive
         stopPlayback()
         readerLayoutCache = nil
-        queueController.setPlaybackActive(true)
+        queueController.reconcileScheduling()
         if hadWork {
             let message = "Listening stopped because the device is low on memory. Your progress is saved. Try again after memory is available."
             activity.playbackState = .failed(message)
@@ -1221,7 +1181,7 @@ final class ProjectRuntime {
         readerPauseRequested = false
         chunkBookmarkTask?.cancel()
         chunkBookmarkTask = nil
-        playbackTask?.cancel()
+        retirePlayback(playbackTask)
         playbackTask = nil
         pipeline.stop()
         finalAudioAsset = nil
@@ -1253,7 +1213,24 @@ final class ProjectRuntime {
         }
     }
 
+    func retirePlayback(_ task: Task<Void, Never>?) {
+        guard let task else { return }
+        let id = UUID()
+        retiringPlaybackTasks[id] = task
+        task.cancel()
+        Task { @MainActor in
+            await task.value
+            self.retiringPlaybackTasks.removeValue(forKey: id)
+        }
+    }
+
+    func drainStoppedPlayback() async {
+        let pending = Array(retiringPlaybackTasks.values)
+        for task in pending { await task.value }
+    }
+
     func shutdown() {
+        isShutdown = true
         pdfReadingProjection = nil
         pdfReadingSessionTask?.cancel()
         pdfReadingSessionTask = nil
@@ -1269,10 +1246,16 @@ final class ProjectRuntime {
         isLoading = false
         playbackOperationID = nil
         readerPauseRequested = false
-        playbackTask?.cancel()
+        retirePlayback(playbackTask)
         playbackTask = nil
         pipeline.shutdown()
         queueController.shutdown()
+        let cache = chunkCache
+        let controller = queueController
+        Task {
+            await cache.shutdown()
+            await controller.cancelAndDrain()
+        }
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
         finalAudioPlaybackOriginSeconds = 0
@@ -1281,6 +1264,19 @@ final class ProjectRuntime {
         ProjectSystemMediaController
             .shared
             .detach(self)
+    }
+
+    func shutdownAndDrain() async {
+        let pendingPlayback = playbackTask
+        let pendingPrefetch = prefetchTask
+        let pendingBookmark = chunkBookmarkTask
+        shutdown()
+        await chunkCache.shutdown()
+        await queueController.cancelAndDrain()
+        await pendingPlayback?.value
+        await drainStoppedPlayback()
+        await pendingPrefetch?.value
+        await pendingBookmark?.value
     }
 
     private func handlePipelineEvent(
@@ -1293,7 +1289,7 @@ final class ProjectRuntime {
                 case .idle, .finished, .failed:
                     activity.playbackState =
                         Self.playbackState(state)
-                case .loading, .warmingUp, .synthesizing,
+                case .loading, .warmingUp, .synthesizing, .buffering,
                      .playing, .paused:
                     activity.playbackState = .paused
                 }
@@ -1301,9 +1297,7 @@ final class ProjectRuntime {
                 activity.playbackState =
                     Self.playbackState(state)
             }
-            queueController.setPlaybackActive(
-                blocksQueuedGeneration
-            )
+            queueController.reconcileScheduling()
 
             if activity.hasActivePlaybackWork {
                 ProjectSystemMediaController
@@ -1331,7 +1325,7 @@ final class ProjectRuntime {
             activity.activeItemID = nil
             activity.queuedAudioBuffers = 0
             activity.queuedAudioDurationSeconds = 0
-            queueController.setPlaybackActive(blocksQueuedGeneration)
+            queueController.reconcileScheduling()
             ProjectSystemMediaController
                 .shared
                 .clear(self)
@@ -1425,6 +1419,8 @@ final class ProjectRuntime {
                 current: current,
                 total: total
             )
+        case .buffering:
+            return .buffering
         case .playing:
             return .playing
         case .paused:
@@ -1463,4 +1459,6 @@ final class ProjectRuntime {
         return String(describing: error)
     }
 }
+
+
 

@@ -116,7 +116,7 @@ nonisolated struct ProjectRetainedArtwork: Sendable {
 }
 
 actor ProjectStore {
-    let rootURL: URL
+    nonisolated let rootURL: URL
     private let fileManager: FileManager
 
     init(
@@ -1165,7 +1165,7 @@ actor ProjectStore {
         )
     }
 
-    /// Read actual durable queue files for the Library hero without loading
+    /// Read actual durable queue files for library summaries without loading
     /// chapter contents or starting TTS engines for idle projects.
     func generationQueueCounts(projectIDs: [UUID]) -> [UUID: ProjectGenerationQueueCounts] {
         var result: [UUID: ProjectGenerationQueueCounts] = [:]
@@ -1322,6 +1322,51 @@ actor ProjectStore {
         } catch {
             return nil
         }
+    }
+
+    /// Called only while SharedChunkAudioCache owns the item's reclamation
+    /// reservation. Validation and deletion share this actor turn with no await,
+    /// so clearing/replacing final audio cannot interleave between them.
+    @discardableResult
+    func reclaimFinalizedChunks(
+        projectID: UUID, request: ProjectGenerationStatusRequest,
+        expectedAudioRevision: String, chunks: [ChunkAudioRequest]
+    ) throws -> Int {
+        try Task.checkCancellation()
+        guard !chunks.isEmpty,
+              chunks.allSatisfy({
+                  $0.itemID == request.itemID && $0.generationKey == request.generationKey
+                      && $0.resolved.voiceID == request.voiceID && $0.resolved.speed == request.speed
+              }),
+              let asset = try loadCompatibleFinalAudio(projectID: projectID, request: request),
+              asset.metadata.audioRevision == expectedAudioRevision,
+              chunks.allSatisfy({
+                  $0.synthesisConfigVersion == asset.metadata.synthesisConfigVersion
+              }) else { return 0 }
+        let paths = try pathsForExistingProject(projectID)
+        var removed = 0
+        for chunk in chunks {
+            try Task.checkCancellation()
+            let key = chunk.cacheKey
+            let json = paths.chunkCacheDirectory.appending(path: "\(key).json")
+            let wav = paths.chunkCacheDirectory.appending(path: "\(key).wav")
+            // Do not scavenge unknown files, other generations, or malformed
+            // metadata. Only these exact, owned redundant pairs are eligible.
+            guard let size = try? json.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size > 0, size <= 16_384,
+                  let bytes = try? Data(contentsOf: json),
+                  let metadata = try? ProjectJSONCodec.decode(
+                    ChunkAudioMetadata.self, from: bytes,
+                    relativePath: "cache/chunks/\(key).json"
+                  ),
+                  metadata.schemaVersion == ProjectSchema.currentVersion,
+                  metadata.cacheKey == key, metadata.itemID == request.itemID,
+                  metadata.sourceRange == chunk.chunk.sourceRange else { continue }
+            if fileManager.fileExists(atPath: wav.path) { try fileManager.removeItem(at: wav) }
+            try fileManager.removeItem(at: json)
+            removed += 1
+        }
+        return removed
     }
 
     func commitGeneratedAudio(
@@ -1751,6 +1796,8 @@ actor ProjectStore {
     @discardableResult
     func recoverGenerationQueue(
         projectID: UUID,
+        generationKeys: [UUID: String]? = nil,
+        readyOfflineItemIDs: Set<UUID> = [],
         now: Date = .now
     ) throws -> ProjectQueueDocument {
         var queue = try loadQueue(
@@ -1759,18 +1806,24 @@ actor ProjectStore {
         var changed = false
 
         for index in queue.jobs.indices {
-            guard queue.jobs[index].state
-                    == .generating
-            else {
-                continue
+            let job = queue.jobs[index]
+            guard job.state == .queued || job.state == .generating else { continue }
+            let state: GenerationJobState
+            let error: String?
+            if let generationKeys, generationKeys[job.itemID] != job.generationKey {
+                state = .failed
+                error = "Narration settings changed. Generate offline audio again to use the current settings."
+            } else if generationKeys != nil, readyOfflineItemIDs.contains(job.itemID) {
+                state = .completed
+                error = nil
+            } else {
+                state = .queued
+                error = nil
             }
-
-            queue.jobs[index].state =
-                .queued
-            queue.jobs[index].updatedAt =
-                now
-            queue.jobs[index].lastError =
-                nil
+            guard job.state != state || job.lastError != error else { continue }
+            queue.jobs[index].state = state
+            queue.jobs[index].updatedAt = now
+            queue.jobs[index].lastError = error
             changed = true
         }
 
@@ -1805,6 +1858,9 @@ actor ProjectStore {
             return queue
         }
 
+        // A late executor pause/failure event cannot undo a durable final
+        // asset commit. Explicit regeneration creates a new job identity.
+        guard queue.jobs[index].state != .completed || state == .completed else { return queue }
         queue.jobs[index].state = state
         queue.jobs[index].updatedAt = now
         queue.jobs[index].lastError =
@@ -2738,4 +2794,5 @@ actor ProjectStore {
         return String(describing: error)
     }
 }
+
 

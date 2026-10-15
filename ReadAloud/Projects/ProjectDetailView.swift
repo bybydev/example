@@ -992,6 +992,11 @@ private struct OfflineAudioSheet: View {
                             value: String(model.generatingCount)
                         )
                     }
+                    if model.waitingCount + model.generatingCount > 0 {
+                        Text(model.runtime.queueController.schedulingStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if model.waitingCount > 0 {
                         LabeledContent(
                             "Waiting",
@@ -1355,3 +1360,4 @@ private struct ProjectStorageSheet: View {
     }
 
 }
+

@@ -6,6 +6,50 @@ nonisolated struct PlayerBufferedRange: Equatable, Sendable {
     let end: Double
 }
 
+/// Shared presentation rules keep hero controls tied to the playback owner.
+nonisolated struct ListeningHeroPresentation {
+    enum Action: Equatable { case start, continueListening, pause, resume, cancel, retry }
+    let action: Action
+    let heading: String
+    let error: String?
+
+    init(state: ProjectRuntimePlaybackState?, active: Bool, paused: Bool,
+         preparing: Bool, hasHistory: Bool) {
+        heading = active && !paused ? "NOW LISTENING" : ((active || hasHistory) ? "CONTINUE LISTENING" : "READY TO LISTEN")
+        if case .failed(let message)? = state {
+            error = message.localizedCaseInsensitiveContains("memory")
+                ? "Audio stopped because the device is low on memory. Try again when memory is available."
+                : "Audio couldn’t play. Try again."
+            action = .retry
+        } else {
+            error = nil
+            if preparing { action = .cancel }
+            else if active { action = paused ? .resume : .pause }
+            else { action = hasHistory ? .continueListening : .start }
+        }
+    }
+
+    var label: String {
+        switch action {
+        case .start: "Start Listening"
+        case .continueListening: "Continue Listening"
+        case .pause: "Pause"
+        case .resume: "Resume"
+        case .cancel: "Cancel"
+        case .retry: "Try Again"
+        }
+    }
+
+    var symbol: String {
+        switch action {
+        case .pause: "pause.fill"
+        case .cancel: "xmark"
+        case .retry: "arrow.clockwise"
+        default: "play.fill"
+        }
+    }
+}
+
 @MainActor
 extension ProjectRuntime {
     func clearSleepTimer() {
@@ -45,11 +89,17 @@ extension ProjectRuntime {
     }
 
     var isPlayerPreparing: Bool {
-        guard !isPlaybackPaused, activity.queuedAudioBuffers == 0 else { return false }
+        guard !isPlaybackPaused else { return false }
+        if activity.playbackState == .buffering { return true }
+        guard activity.queuedAudioBuffers == 0 else { return false }
         switch activity.playbackState {
-        case .loading, .warmingUp, .synthesizing, .playing: return true
+        case .loading, .buffering, .warmingUp, .synthesizing, .playing: return true
         default: return false
         }
+    }
+
+    var isPlaybackAudible: Bool {
+        !isPlaybackPaused && activity.hasAudiblePlayback
     }
 
     var canSkipPlayback: Bool {
@@ -147,6 +197,7 @@ extension ProjectRuntime {
         switch activity.playbackState {
         case .idle: return "Ready to listen"
         case .loading, .warmingUp: return "Preparing audio…"
+        case .buffering: return "Preparing audio…"
         case .synthesizing: return isPlayerPreparing ? "Preparing audio…" : "Playing"
         case .playing: return isPlayerPreparing ? "Preparing audio…" : "Playing"
         case .paused: return "Paused"
@@ -204,3 +255,4 @@ extension ProjectRuntime {
         if wasPaused { pausePlayback() }
     }
 }
+

@@ -23,6 +23,44 @@ final class ProjectQueueController {
     @ObservationIgnored
     private var isConfigured = false
 
+    @ObservationIgnored private var generationExecutions: [UUID: Task<Void, Error>] = [:]
+    @ObservationIgnored private var configurationID: UUID?
+    @ObservationIgnored private var drainDepth = 0
+    private(set) var hasGlobalAdmission = false
+    private(set) var schedulingStatus = "Queued"
+
+    func publishSchedulingStatus(_ status: String) { schedulingStatus = status }
+
+    /// Keep an awaitable handle to the complete job, including final WAV
+    /// assembly/commit. Cancelling JobQueue alone does not drain that work.
+    func executeGeneration(
+        _ operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
+        guard isConfigured, hasGlobalAdmission, drainDepth == 0 else { throw CancellationError() }
+        let id = UUID()
+        let task = Task { @MainActor in
+            try Task.checkCancellation()
+            try await operation()
+        }
+        generationExecutions[id] = task
+        defer { generationExecutions.removeValue(forKey: id) }
+        try await withTaskCancellationHandler {
+            try await task.value
+            try Task.checkCancellation()
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func cancelAndDrain() async {
+        drainDepth += 1
+        defer { drainDepth -= 1 }
+        let pending = Array(generationExecutions.values)
+        for task in pending { task.cancel() }
+        for task in pending { _ = await task.result }
+    }
+
     var waitingCount: Int {
         queue.jobs.filter {
             $0.state == .queued
@@ -105,12 +143,16 @@ final class ProjectQueueController {
                     true
             )
 
+        let configurationID = UUID()
+        self.configurationID = configurationID
         executionQueue.eventHandler = {
             [weak self] event in
+            guard self?.configurationID == configurationID else { return }
             self?.handle(event)
         }
 
         try executionQueue.start()
+        try executionQueue.pause()
 
         self.registry = registry
         self.executionQueue =
@@ -138,32 +180,33 @@ final class ProjectQueueController {
         }
     }
 
-    func setPlaybackActive(
-        _ isActive: Bool
-    ) {
-        guard let executionQueue
-        else {
-            return
-        }
+    func reconcileScheduling() {
+        // The registry considers playback in every project before granting
+        // this queue access to the app-wide offline synthesis slot.
+        ProjectGenerationExecutionRegistry.shared.reconcileAdmission()
+    }
 
+    func setGlobalAdmission(_ admitted: Bool) {
+        hasGlobalAdmission = admitted
+        if !admitted {
+            for task in generationExecutions.values { task.cancel() }
+        }
+        guard let executionQueue else { return }
         do {
-            if isActive || ReadAloudPreferences.backgroundPrefetchPaused {
-                if !executionQueue.isPaused {
-                    try executionQueue.pause()
-                }
-            } else {
-                if executionQueue.isPaused {
-                    try executionQueue.resume()
-                }
-                try reconcile()
+            if admitted {
+                if executionQueue.isPaused { try executionQueue.resume() }
+            } else if !executionQueue.isPaused {
+                try executionQueue.pause()
             }
         } catch {
-            runtime?.lastErrorMessage =
-                Self.message(for: error)
+            runtime?.lastErrorMessage = Self.message(for: error)
         }
     }
 
     func shutdown() {
+        setGlobalAdmission(false)
+        configurationID = nil
+        for task in generationExecutions.values { task.cancel() }
         if let executionQueue {
             try? executionQueue
                 .cancelAll()
@@ -267,24 +310,22 @@ final class ProjectQueueController {
             )
         }
 
-        if (runtime?.blocksQueuedGeneration == true
-            || ReadAloudPreferences.backgroundPrefetchPaused),
-           !executionQueue.isPaused
-        {
-            try executionQueue.pause()
-        }
+        ProjectGenerationExecutionRegistry.shared.reconcileAdmission()
     }
 
     private func handle(
         _ event: JobQueueEvent
     ) {
-        guard let runtime else {
+        guard let runtime, let configurationID else {
             return
         }
 
         switch event {
         case .jobStarted(let id):
-            Task {
+            Task { [weak self] in
+                guard self?.configurationID == configurationID,
+                      self?.queue.jobs.contains(where: { $0.id == id }) == true
+                else { return }
                 await runtime
                     .generationJobStarted(
                         id
@@ -292,7 +333,10 @@ final class ProjectQueueController {
             }
 
         case .jobPausing(let id):
-            Task {
+            Task { [weak self] in
+                guard self?.configurationID == configurationID,
+                      self?.queue.jobs.contains(where: { $0.id == id }) == true
+                else { return }
                 await runtime
                     .generationJobYielded(
                         id
@@ -300,7 +344,10 @@ final class ProjectQueueController {
             }
 
         case .jobCompleted(let id):
-            Task {
+            Task { [weak self] in
+                guard self?.configurationID == configurationID,
+                      self?.queue.jobs.contains(where: { $0.id == id }) == true
+                else { return }
                 await runtime
                     .generationJobCompleted(
                         id
@@ -311,7 +358,10 @@ final class ProjectQueueController {
             let id,
             let errorDescription
         ):
-            Task {
+            Task { [weak self] in
+                guard self?.configurationID == configurationID,
+                      self?.queue.jobs.contains(where: { $0.id == id }) == true
+                else { return }
                 await runtime
                     .generationJobFailed(
                         id,
@@ -774,4 +824,6 @@ actor ProjectCacheCoordinator {
         )
     }
 }
+
+
 

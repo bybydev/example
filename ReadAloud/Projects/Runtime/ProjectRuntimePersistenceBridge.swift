@@ -60,6 +60,16 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         )
     }
 
+    func reclaimFinalizedChunks(
+        request: ProjectGenerationStatusRequest, expectedAudioRevision: String,
+        chunks: [ChunkAudioRequest]
+    ) async throws {
+        _ = try await store.reclaimFinalizedChunks(
+            projectID: projectID, request: request,
+            expectedAudioRevision: expectedAudioRevision, chunks: chunks
+        )
+    }
+
     func commitGeneratedAudio(
         wavURL: URL,
         metadata: GeneratedAudioMetadata
@@ -100,12 +110,16 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         )
     }
 
-    func recoverGenerationQueue()
-        async throws -> ProjectQueueDocument
+    func recoverGenerationQueue(
+        generationKeys: [UUID: String]? = nil,
+        readyOfflineItemIDs: Set<UUID> = []
+    ) async throws -> ProjectQueueDocument
     {
         try await store
             .recoverGenerationQueue(
-                projectID: projectID
+                projectID: projectID,
+                generationKeys: generationKeys,
+                readyOfflineItemIDs: readyOfflineItemIDs
             )
     }
 
@@ -183,4 +197,5 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         try await store.generationState(projectID: projectID, requests: requests)
     }
 }
+
 
