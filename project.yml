@@ -22,7 +22,7 @@ packages:
     exactVersion: 1.1.0
   PDFKitAudio:
     url: https://github.com/hoangbkit/PDFKitAudio.git
-    exactVersion: 1.1.0
+    exactVersion: 1.2.0
   TextExtractor:
     url: https://github.com/hoangbkit/TextExtractor.git
     exactVersion: 1.1.0
@@ -110,6 +110,23 @@ targets:
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
 
+  ReadAloudTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: ReadAloudTests
+    dependencies:
+      - target: ReadAloud
+      - package: PDFKitAudio
+        product: PDFKitAudio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.readaloud.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 6.0
+        SWIFT_STRICT_CONCURRENCY: complete
+
 schemes:
   ReadAloud:
     build:
@@ -117,6 +134,10 @@ schemes:
       buildImplicitDependencies: true
       targets:
         ReadAloud: all
+    test:
+      config: Debug
+      targets:
+        - ReadAloudTests
     run:
       config: Debug
       storeKitConfiguration: Config/ReadAloud.storekit

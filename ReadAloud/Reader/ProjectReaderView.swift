@@ -68,10 +68,14 @@ struct ProjectReaderRuntimeHost: View {
             defer { isLoading = false }
 
             do {
-                runtime =
-                    try await runtimeManager.activate(
-                        projectID: projectID
-                    )
+                let loaded = try await runtimeManager.activate(
+                    projectID: projectID
+                )
+                if loaded.project?.source.type == .pdf {
+                    try await loaded.preparePDFReadingOptions()
+                }
+                try Task.checkCancellation()
+                runtime = loaded
                 errorMessage = nil
             } catch {
                 errorMessage = Self.message(for: error)
@@ -109,6 +113,7 @@ struct ProjectReaderView: View {
     @State private var speedPresented = false
     @State private var narrationItemID: UUID?
     @State private var appearancePresented = false
+    @State private var listeningOptionsPresented = false
     @State private var infoPresented = false
     @State private var errorMessage: String?
     @State private var settingsModel:
@@ -177,6 +182,15 @@ struct ProjectReaderView: View {
                 }
                 .accessibilityLabel("Chapters")
 
+                if runtime.project?.source.type == .pdf {
+                    Button {
+                        listeningOptionsPresented = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Listening Options")
+                }
+
                 moreMenu
             }
         }
@@ -226,6 +240,11 @@ struct ProjectReaderView: View {
                     }
                 )
             }
+        }
+        .sheet(
+            isPresented: $listeningOptionsPresented
+        ) {
+            PDFListeningOptionsSheet(runtime: runtime)
         }
         .sheet(
             isPresented: $appearancePresented
@@ -350,6 +369,7 @@ struct ProjectReaderView: View {
                                         systemImage: "play.circle.fill"
                                     )
                                 }
+                                .disabled(!runtime.pdfProjectionMatchesStoredText)
                             }
                             .accessibilityAction(
                                 named: Text("Listen from Here")
@@ -515,7 +535,7 @@ struct ProjectReaderView: View {
     }
 
     private var readerControls: some View {
-        Group {
+        VStack(spacing: 0) {
             if let state = controlState {
                 ProjectPlayerExpandableCard(isExpanded: $isPlayerExpanded) {
                     ProjectPlayerCompactContent(
@@ -560,6 +580,7 @@ struct ProjectReaderView: View {
                         }
                     }
                 }
+                .disabled(!runtime.pdfProjectionMatchesStoredText)
             }
         }
     }

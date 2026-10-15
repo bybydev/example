@@ -463,6 +463,9 @@ extension ProjectRuntime {
             return []
         }
 
+        if let paragraphs = pdfReadingProjection?.paragraphsByItemID[itemID] {
+            return paragraphs
+        }
         return cachedReaderParagraphs(for: state.item)
     }
 

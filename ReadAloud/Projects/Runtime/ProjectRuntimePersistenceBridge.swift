@@ -1,4 +1,5 @@
 import Foundation
+import PDFKitAudio
 
 nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
     let projectID: UUID
@@ -24,6 +25,30 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
 
     func load() async throws -> LoadedProject {
         try await store.loadProject(projectID: projectID)
+    }
+
+    func retainedPDFSourceURL() async throws -> URL {
+        try await store.retainedPDFSourceURL(projectID: projectID)
+    }
+
+    func updatePDFReadingPolicy(
+        _ policy: PdfReadingPolicy
+    ) async throws -> ProjectDocument {
+        try await store.updatePDFReadingPolicy(
+            projectID: projectID,
+            policy: policy
+        )
+    }
+
+    func replacePDFReadingContent(
+        policy: PdfReadingPolicy,
+        items: [ProjectContentItem]
+    ) async throws -> ProjectDocument {
+        try await store.replacePDFReadingContent(
+            projectID: projectID,
+            policy: policy,
+            items: items
+        )
     }
 
     func loadCompatibleFinalAudio(

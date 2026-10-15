@@ -1,4 +1,5 @@
 import Foundation
+import PDFKitAudio
 
 nonisolated struct ReadAloudImportCoordinator: Sendable {
     private let projectStore: ProjectStore
@@ -260,6 +261,7 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
                 publishedTime: provenance?.publishedTime
             ),
             artwork: artwork,
+            pdfReadingPolicy: normalized.kind == .pdf ? .listening : nil,
             createdAt: now,
             updatedAt: now
         )

@@ -74,6 +74,15 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Package generated Xcode project
+        run: |
+          set -euo pipefail
+          test -f ReadAloud.xcodeproj/project.pbxproj
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            ReadAloud.xcodeproj artifacts/ReadAloud.xcodeproj.zip
+          echo "Xcode project: artifacts/ReadAloud.xcodeproj.zip"
+
       - name: Archive unsigned iOS app
         env:
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
@@ -129,7 +138,7 @@ jobs:
           echo "Artifact: $ARTIFACT"
           rm -rf "$IOS_DERIVED" "$IOS_ARCHIVE"
 
-      - name: Verify release archive
+      - name: Verify release assets
         env:
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -145,6 +154,14 @@ jobs:
             exit 1
           fi
 
+          # Ensure the separate XcodeGen output is a usable .xcodeproj ZIP,
+          # including the project.pbxproj needed by mycli.
+          project_asset="artifacts/ReadAloud.xcodeproj.zip"
+          test -s "$project_asset"
+          unzip -tq "$project_asset"
+          unzip -p "$project_asset" ReadAloud.xcodeproj/project.pbxproj > /dev/null
+          ls -lh "$project_asset"
+
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -153,11 +170,12 @@ jobs:
           BUILD_CONFIGURATION: ${{ inputs.configuration }}
         run: |
           set -euo pipefail
-          gh release create "$RELEASE_TAG" artifacts/*.xcarchive.zip \
+          gh release create "$RELEASE_TAG" \
+            artifacts/*.xcarchive.zip artifacts/*.xcodeproj.zip \
             --target "$RELEASE_SHA" \
             --title "$RELEASE_TAG · $BUILD_CONFIGURATION · ONNX INT8 bundled" \
             --prerelease \
-            --notes "ReadAloud iOS unsigned mycli artifact.
+            --notes "ReadAloud iOS unsigned mycli artifacts (xcarchive and generated Xcode project).
 
           Configuration: $BUILD_CONFIGURATION
           Speech backend: ONNX Runtime CPU INT8 only

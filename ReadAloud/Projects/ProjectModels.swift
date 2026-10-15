@@ -1,4 +1,5 @@
 import Foundation
+import PDFKitAudio
 
 nonisolated enum ProjectSchema {
     static let currentVersion = 1
@@ -141,6 +142,8 @@ nonisolated struct ProjectDocument: Codable, Equatable, Sendable {
     var source: ProjectSource
     var artwork: ProjectArtwork?
     var settings: ProjectNarrationSettings
+    /// Durable selection for this PDF; irrelevant for other source types.
+    var pdfReadingPolicy: PdfReadingPolicy?
     var playback: ProjectPlaybackState?
     let createdAt: Date
     var updatedAt: Date
@@ -153,6 +156,7 @@ nonisolated struct ProjectDocument: Codable, Equatable, Sendable {
         source: ProjectSource,
         artwork: ProjectArtwork? = nil,
         settings: ProjectNarrationSettings = ProjectNarrationSettings(),
+        pdfReadingPolicy: PdfReadingPolicy? = nil,
         playback: ProjectPlaybackState? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
@@ -164,6 +168,7 @@ nonisolated struct ProjectDocument: Codable, Equatable, Sendable {
         self.source = source
         self.artwork = artwork
         self.settings = settings
+        self.pdfReadingPolicy = pdfReadingPolicy
         self.playback = playback
         self.createdAt = createdAt
         self.updatedAt = updatedAt

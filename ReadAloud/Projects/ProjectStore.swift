@@ -1,4 +1,5 @@
 import Foundation
+import PDFKitAudio
 
 nonisolated enum ProjectStoreError: Error, LocalizedError, Equatable, Sendable {
     case projectNotFound(UUID)
@@ -143,6 +144,11 @@ actor ProjectStore {
         }
 
         Self.cleanupStaleCreatingDirectories(
+            rootURL: self.rootURL,
+            fileManager: fileManager
+        )
+        // Finish rolling back any PDF content swap interrupted by an app kill.
+        try Self.recoverPDFReadingTransactions(
             rootURL: self.rootURL,
             fileManager: fileManager
         )
@@ -485,16 +491,39 @@ actor ProjectStore {
         return project
     }
 
-    func loadProject(projectID: UUID) throws -> LoadedProject {
+    /// A validated URL for the original PDF retained inside the project package.
+    /// Reader sessions can reopen this file without a file-importer security scope.
+    func retainedPDFSourceURL(projectID: UUID) throws -> URL {
+        let packageRootURL = try existingPackageURL(for: projectID)
+        let project = try loadProjectMetadata(projectID: projectID)
+        guard project.source.type == .pdf else {
+            throw ProjectStoreError.invalidData("This project is not a PDF.")
+        }
+        try requireRetainedSourceCompatibility(
+            project: project,
+            packageRootURL: packageRootURL
+        )
+        return try packageURL(
+            forRelativePath: project.source.relativePath,
+            in: packageRootURL
+        )
+    }
+
+    func loadProject(
+        projectID: UUID,
+        verifyRetainedSource: Bool = true
+    ) throws -> LoadedProject {
         try ReadAloudSafety.requireMemoryHeadroom()
         let packageURL = try existingPackageURL(for: projectID)
         let paths = ProjectPackagePaths(packageURL: packageURL)
 
         let project = try loadProjectMetadata(projectID: projectID)
-        try requireRetainedSourceCompatibility(
-            project: project,
-            packageRootURL: packageURL
-        )
+        if verifyRetainedSource {
+            try requireRetainedSourceCompatibility(
+                project: project,
+                packageRootURL: packageURL
+            )
+        }
 
         let manifest: ProjectContentManifest = try readDocument(
             ProjectContentManifest.self,
@@ -635,6 +664,300 @@ actor ProjectStore {
         return project
     }
 
+    /// Persist one PDF project's listening policy without touching its source,
+    /// chapter text, synthesis caches, or unrelated narration settings.
+    @discardableResult
+    func updatePDFReadingPolicy(
+        projectID: UUID,
+        policy: PdfReadingPolicy,
+        now: Date = .now
+    ) throws -> ProjectDocument {
+        var project = try loadProjectMetadata(projectID: projectID)
+        guard project.source.type == .pdf else {
+            throw ProjectStoreError.invalidData("Listening filters require a PDF project.")
+        }
+        project.pdfReadingPolicy = policy
+        project.updatedAt = now
+        try writeProjectDocument(
+            project,
+            packageURL: packageURL(for: projectID)
+        )
+        return project
+    }
+
+    /// Replace the active PDF reading projection and its generation/bookmark
+    /// identity as one recoverable, project-local transaction. The retained
+    /// original PDF, cached synthesis chunks and audio WAVs are not erased.
+    /// A policy selection is *never* made durable without its matching text.
+    @discardableResult
+    func replacePDFReadingContent(
+        projectID: UUID,
+        policy: PdfReadingPolicy,
+        items: [ProjectContentItem],
+        now: Date = .now
+    ) throws -> ProjectDocument {
+        try Task.checkCancellation()
+        // The PDF was already validated and parsed when opening its session;
+        // a lightweight policy toggle must not rehash the entire source PDF.
+        let loaded = try loadProject(
+            projectID: projectID,
+            verifyRetainedSource: false
+        )
+        guard loaded.project.source.type == .pdf else {
+            throw ProjectStoreError.invalidData(
+                "Listening policy content changes require a PDF."
+            )
+        }
+        guard !items.isEmpty, items.count <= 20_000 else {
+            throw ProjectStoreError.invalidData(
+                "PDF listening content has an invalid chapter count."
+            )
+        }
+        let oldEntries = Dictionary(
+            uniqueKeysWithValues: loaded.manifest.items.map { ($0.id, $0) }
+        )
+        var ordered = items.sorted { $0.order < $1.order }
+        let storedByID = Dictionary(
+            uniqueKeysWithValues: loaded.items.map { ($0.id, $0) }
+        )
+        // Preserve any narration/title edits made after the asynchronous
+        // PDF projection was prepared, without overwriting selected text.
+        for index in ordered.indices {
+            if let stored = storedByID[ordered[index].id] {
+                ordered[index].settings = stored.settings
+                ordered[index].title = stored.title
+            }
+        }
+        let entries = ordered.map { item in
+            ContentManifestItem(
+                id: item.id,
+                order: item.order,
+                relativePath: ProjectPackagePaths.relativeItemPath(item.id),
+                parentID: oldEntries[item.id]?.parentID
+            )
+        }
+        let manifest = ProjectContentManifest(
+            contentRevision: try ProjectContentRevision.project(
+                manifestItems: entries,
+                items: ordered
+            ),
+            items: entries
+        )
+        try validateContentBundle(manifest: manifest, items: ordered)
+
+        let oldByID = Dictionary(
+            uniqueKeysWithValues: loaded.items.map { ($0.id, $0) }
+        )
+        let newByID = Dictionary(
+            uniqueKeysWithValues: ordered.map { ($0.id, $0) }
+        )
+        let changedIDs = Set(oldByID.keys).union(newByID.keys).filter { id in
+            oldByID[id]?.contentRevision != newByID[id]?.contentRevision
+        }
+        let oldOrder = loaded.manifest.items.sorted { $0.order < $1.order }
+            .map(\.id)
+        let newOrder = entries.map(\.id)
+        var project = loaded.project
+        project.pdfReadingPolicy = policy
+        if !changedIDs.isEmpty || oldOrder != newOrder {
+            // A source offset is meaningful only for its exact text revision.
+            // If the current chapter survived unchanged, preserve its position
+            // and recompute the project-wide percentage for the new order.
+            if let currentID = project.playback?.currentItemID,
+               let bookmark = project.playback?.contentBookmark,
+               let current = newByID[currentID],
+               bookmark.contentRevision == current.contentRevision,
+               bookmark.textOffsetUTF16 >= 0,
+               bookmark.textOffsetUTF16 <= current.text.utf16.count {
+                let total = ordered.reduce(0) {
+                    $0 + max(1, $1.text.utf16.count)
+                }
+                let prefix = ordered.prefix {
+                    $0.id != currentID
+                }.reduce(0) {
+                    $0 + max(1, $1.text.utf16.count)
+                }
+                let offset = min(bookmark.textOffsetUTF16, current.text.utf16.count)
+                project.playback?.projectProgress = Double(prefix + offset)
+                    / Double(max(1, total))
+            } else {
+                project.playback?.contentBookmark = nil
+                project.playback?.projectProgress = 0
+                if let currentID = project.playback?.currentItemID,
+                   newByID[currentID] == nil {
+                    project.playback?.currentItemID = ordered.first?.id
+                }
+            }
+            // Saved final-audio seconds have no meaningful project-wide
+            // mapping after any reading-order or text transition.
+            project.playback?.audioPosition = nil
+        }
+        project.updatedAt = now
+        try ProjectValidation.validate(project)
+
+        // Durable jobs for changed or removed chapter text cannot synthesize
+        // or finish under their former generation key after the swap.
+        var queue = loaded.queue
+        queue.jobs.removeAll { job in
+            changedIDs.contains(job.itemID) || newByID[job.itemID] == nil
+        }
+        try ProjectValidation.validate(queue)
+        try requireQueueOwnership(
+            queue, projectID: projectID,
+            itemIDs: Set(entries.map(\.id))
+        )
+
+        let paths = try pathsForExistingProject(projectID)
+        let transaction = paths.tempDirectory.appending(
+            path: "pdf-reading-transaction", directoryHint: .isDirectory
+        )
+        guard !fileManager.fileExists(atPath: transaction.path) else {
+            throw ProjectStoreError.invalidData(
+                "A PDF content transition requires recovery before retry."
+            )
+        }
+        let staging = transaction.appending(path: "staged", directoryHint: .isDirectory)
+        let stagedContent = staging.appending(path: "content", directoryHint: .isDirectory)
+        let stagedProject = staging.appending(path: "project.json")
+        let stagedQueue = staging.appending(path: "jobs.json")
+        let backup = transaction.appending(path: "backup", directoryHint: .isDirectory)
+
+        do {
+            try fileManager.createDirectory(
+                at: staging, withIntermediateDirectories: true
+            )
+            try fileManager.createDirectory(
+                at: backup, withIntermediateDirectories: true
+            )
+            try fileManager.copyItem(at: paths.contentDirectory, to: stagedContent)
+            // Remove the stale source content snapshots; each variant is
+            // represented by exactly the new manifest's items.
+            let stagedItems = stagedContent.appending(
+                path: "items", directoryHint: .isDirectory
+            )
+            if fileManager.fileExists(atPath: stagedItems.path) {
+                try fileManager.removeItem(at: stagedItems)
+            }
+            try fileManager.createDirectory(
+                at: stagedItems, withIntermediateDirectories: true
+            )
+            for item in ordered {
+                try Task.checkCancellation()
+                try ProjectAtomicWriter.write(
+                    item,
+                    to: stagedItems.appending(
+                        path: "\(ProjectPackagePaths.fileID(item.id)).json"
+                    ),
+                    temporaryDirectory: staging,
+                    fileManager: fileManager
+                )
+            }
+            try ProjectAtomicWriter.write(
+                manifest,
+                to: stagedContent.appending(path: "manifest.json"),
+                temporaryDirectory: staging,
+                fileManager: fileManager
+            )
+            try ProjectAtomicWriter.write(
+                queue, to: stagedQueue,
+                temporaryDirectory: staging, fileManager: fileManager
+            )
+            try ProjectAtomicWriter.write(
+                project, to: stagedProject,
+                temporaryDirectory: staging, fileManager: fileManager
+            )
+            try Task.checkCancellation()
+            // After this marker, swaps and rollback ignore cancellation.
+            // Crash recovery restores backups if any part of the swap began.
+            try Data("ready".utf8).write(
+                to: transaction.appending(path: "ready"), options: .atomic
+            )
+
+            let slots: [(URL, URL, URL)] = [
+                (paths.contentDirectory, stagedContent,
+                 backup.appending(path: "content")),
+                (paths.queueJobs, stagedQueue,
+                 backup.appending(path: "jobs.json")),
+                (paths.projectJSON, stagedProject,
+                 backup.appending(path: "project.json"))
+            ]
+            for (active, next, previous) in slots {
+                try fileManager.moveItem(at: active, to: previous)
+                try fileManager.moveItem(at: next, to: active)
+            }
+            // The commit marker comes after all three swaps. A crash before
+            // it rolls back; a crash after it retains the new projection.
+            try Data("committed".utf8).write(
+                to: transaction.appending(path: "committed"), options: .atomic
+            )
+            try? fileManager.removeItem(at: transaction)
+            return project
+        } catch {
+            do {
+                try Self.rollbackPDFReadingTransaction(
+                    paths: paths, fileManager: fileManager
+                )
+            } catch {
+                throw ProjectStoreError.io(
+                    "PDF content transaction failed and recovery is required: \(error)"
+                )
+            }
+            if error is CancellationError { throw CancellationError() }
+            throw ProjectStoreError.io(
+                "Unable to save PDF listening content: \(error)"
+            )
+        }
+    }
+
+    private static func rollbackPDFReadingTransaction(
+        paths: ProjectPackagePaths,
+        fileManager: FileManager
+    ) throws {
+        let transaction = paths.tempDirectory.appending(
+            path: "pdf-reading-transaction", directoryHint: .isDirectory
+        )
+        guard fileManager.fileExists(atPath: transaction.path) else { return }
+        if fileManager.fileExists(
+            atPath: transaction.appending(path: "committed").path
+        ) {
+            try fileManager.removeItem(at: transaction)
+            return
+        }
+        let backup = transaction.appending(path: "backup", directoryHint: .isDirectory)
+        // Restore in reverse order: the original project.json becomes active
+        // again before original content is restored.
+        let slots: [(URL, URL)] = [
+            (paths.projectJSON, backup.appending(path: "project.json")),
+            (paths.queueJobs, backup.appending(path: "jobs.json")),
+            (paths.contentDirectory, backup.appending(path: "content"))
+        ]
+        for (active, previous) in slots {
+            guard fileManager.fileExists(atPath: previous.path) else { continue }
+            if fileManager.fileExists(atPath: active.path) {
+                try fileManager.removeItem(at: active)
+            }
+            try fileManager.moveItem(at: previous, to: active)
+        }
+        try fileManager.removeItem(at: transaction)
+    }
+
+    private static func recoverPDFReadingTransactions(
+        rootURL: URL,
+        fileManager: FileManager
+    ) throws {
+        let candidates = try fileManager.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        for packageURL in candidates where
+            packageURL.pathExtension == ProjectSchema.packageExtension {
+            try rollbackPDFReadingTransaction(
+                paths: ProjectPackagePaths(packageURL: packageURL),
+                fileManager: fileManager
+            )
+        }
+    }
+
     @discardableResult
     func updatePlayback(
         projectID: UUID,
@@ -642,6 +965,41 @@ actor ProjectStore {
         now: Date = .now
     ) throws -> ProjectDocument {
         var project = try loadProjectMetadata(projectID: projectID)
+        if let itemID = playback?.currentItemID {
+            // The item itself must still exist in the active projection,
+            // even when the incoming checkpoint omits both optional offsets.
+            let item = try loadContentItem(
+                projectID: projectID, itemID: itemID
+            )
+            if let bookmark = playback?.contentBookmark {
+                guard bookmark.contentRevision == item.contentRevision,
+                      bookmark.textOffsetUTF16 >= 0,
+                      bookmark.textOffsetUTF16 <= item.text.utf16.count else {
+                    throw ProjectStoreError.invalidData(
+                        "Playback checkpoint does not match the active chapter."
+                    )
+                }
+            }
+            if let audio = playback?.audioPosition {
+                // An audio-only checkpoint has no bookmark text revision.
+                // Bind it to the actual validated final-audio metadata so
+                // a cancelled old playback cannot overwrite the new position.
+                let paths = try pathsForExistingProject(projectID)
+                let metadata: GeneratedAudioMetadata = try readDocument(
+                    GeneratedAudioMetadata.self,
+                    at: paths.audioMetadata(itemID),
+                    relativePath: ProjectPackagePaths.relativeAudioMetadataPath(itemID)
+                )
+                try ProjectValidation.validate(metadata)
+                try requireAudioMetadataCompatibility(metadata, in: paths)
+                guard audio.generationKey == metadata.generationKey,
+                      audio.audioRevision == metadata.audioRevision else {
+                    throw ProjectStoreError.invalidData(
+                        "Audio position belongs to a previous listening projection."
+                    )
+                }
+            }
+        }
         project.playback = playback
         project.updatedAt = now
         try ProjectValidation.validate(project)

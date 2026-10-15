@@ -64,6 +64,10 @@ extension ProjectRuntime {
                 )
             }
 
+            guard itemState(itemID)?.generationKey == generationKey,
+                  !isApplyingPDFReadingPolicy else {
+                throw CancellationError()
+            }
             guard try await finalizeItemIfComplete(
                 itemState: state,
                 paragraphs: cachedReaderParagraphs(for: state.item),
@@ -430,7 +434,8 @@ extension ProjectRuntime {
         expectedEngine: SpeechEngineKind? = nil
     ) throws {
         try Task.checkCancellation()
-        guard !blocksQueuedGeneration,
+        guard !isApplyingPDFReadingPolicy,
+              !blocksQueuedGeneration,
               pipeline.engineKind == ReadAloudPreferences.speechEngine,
               expectedEngine == nil || pipeline.engineKind == expectedEngine else {
             throw CancellationError()
