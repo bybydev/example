@@ -35,8 +35,11 @@ it above the root mini-player.
 A single mini-player follows the listening session across Library and Settings,
 including retry and replay while its runtime remains loaded. The Library hero
 follows that same session, including paused/preparing playback, before falling
-back to the most recent book. Its primary action directly controls playback;
-cover/title opens the reader. Listening progress is separate from generation.
+back to the most recent book. Its primary action starts/continues listening only
+when the global player is absent; otherwise it opens the Reader without changing
+playback. Cover/title also opens the Reader. The global player owns transport
+controls, including during preparation and pause. Weekly usage and the local
+reset date appear below the hero action without a second progress bar. Listening progress is separate from generation.
 The Chapters sheet lists the hero book in reading order, highlights the current
 chapter, identifies the next chapter and shows Ready Offline only for compatible,
 validated final audio. It is not a cross-book playback queue. Explicit offline
@@ -374,9 +377,9 @@ Delete Project is the operation that removes the complete package.
 
 ## Free and Pro
 
-Only **Kokoro voices and extra themes** are Pro-locked.
+Pro unlocks **unlimited listening, Kokoro voices, and extra themes**.
 
-Free includes unlimited projects, imports, reading/playback, offline generation
+Free includes unlimited projects, imports, reading, 3 hours/week of playback, and offline generation
 (including selected, remaining, and all chapters), prefetch, generate while
 listening, full regeneration and project/chapter narration overrides.
 
@@ -387,8 +390,24 @@ listening, full regeneration and project/chapter narration overrides.
 - **Themes:** ReadAloud Light/Dark are Free. Additional themes remain Pro-gated
   through the AppFoundation theme catalog.
 
-No other feature uses a Free/Pro entitlement check in the Library, offline
-generation, regeneration, reader, or narration-speed controls.
+- **Listening:** `ReadAloudListeningAllowance` is an observable, device-wide ledger
+  owned by the runtime manager and persisted in UserDefaults independently of
+  project packages. The Free allowance is centralized in
+  `ReadAloudAccessPolicy.weeklyListeningSeconds` (initially 3 hours). Pro playback
+  does not consume it. Weeks start Monday 00:00 UTC and reset dates display locally.
+  Both live and saved playback use `SpeechPlaybackQueue`; rendered sample-time
+  intersections with scheduled audio intervals exclude preparation, buffer gaps,
+  pause, and seek offsets. A 250 ms monitor pauses the current session at exhaustion;
+  completion, pause/stop, scene, and entitlement transitions flush accounting.
+  Persistence is checkpointed at most every 5 seconds while playing and at lifecycle
+  boundaries. Abrupt termination may lose at most the uncheckpointed tail. Usage is
+  local to an installation; cross-device/reinstall enforcement is not implemented.
+  Quota pause retains the session/bookmark. New starts/seeks and all resumes use
+  the same admission check; the root presents the reset time and a Pro entry point.
+  Purchases/weekly rollover unlock subsequent user-initiated playback, never auto-play.
+
+No listening allowance check restricts reading, importing, offline generation,
+regeneration, prefetch, or narration-speed controls. Voice previews are excluded.
 
 ## Preferences
 
@@ -448,8 +467,9 @@ Use these documents in this order:
 
 ## Listen safety (synthesis configuration 2)
 
-Start/Continue Listening opens the Reader; synthesis starts from its Play control.
-Both paths need separate resource bounds. Reader layout uses source-preserving,
+Detail Start/Continue Listening starts playback and opens the Reader. The Library
+hero starts playback when the player is absent; otherwise it only opens the Reader.
+Reader layout and playback need separate resource bounds. Reader layout uses source-preserving,
 UTF-16 ranges and slices at newline/word boundaries, with a 600-unit hard limit.
 One layout is cached per runtime instead of rebuilding the chapter on every
 playback update. Extremely large sections, project JSON, or malformed grapheme
@@ -575,3 +595,4 @@ session events, low memory, cancellation, dormant-job recovery and reclamation.
 The deterministic regression source uses synthetic audio without ONNX inference;
 these tests do not establish sustained live inference under screen lock. Runtime
 acceptance remains pending owner-approved builds/tests and physical-device checks.
+

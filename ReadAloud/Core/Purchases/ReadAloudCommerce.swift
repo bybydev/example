@@ -4,8 +4,6 @@ import Foundation
 enum ReadAloudCommerce {
     static let lifetimeProductID =
         "com.hoangbkit.readaloud.pro.lifetime"
-    static let yearlyProductID =
-        "com.hoangbkit.readaloud.pro.yearly"
     static let monthlyProductID =
         "com.hoangbkit.readaloud.pro.monthly"
 
@@ -26,6 +24,14 @@ enum ReadAloudCommerce {
         )!
 
     static let features: [PurchaseFeature] = [
+        PurchaseFeature(
+            id: "listening",
+            systemImage: "headphones",
+            title: "Listening Time",
+            message: "Listen without a weekly time limit, online or offline.",
+            freeValue: "\(Int(ReadAloudAccessPolicy.weeklyListeningSeconds / 3600)) hours/week",
+            proValue: "Unlimited"
+        ),
         PurchaseFeature(
             id: "voices",
             systemImage: "waveform.circle.fill",
@@ -48,7 +54,6 @@ enum ReadAloudCommerce {
         PurchaseConfiguration(
             productIDs: [
                 lifetimeProductID,
-                yearlyProductID,
                 monthlyProductID,
             ],
             preferredProductID:
@@ -67,29 +72,16 @@ enum ReadAloudCommerce {
                 displayName: "Lifetime",
                 description:
                     "One-time purchase for permanent ReadAloud Pro access.",
-                displayPrice: "$49.99",
-                price: 49.99
-            ),
-            PurchaseProduct(
-                id: yearlyProductID,
-                displayName: "Yearly",
-                description:
-                    "ReadAloud Pro billed yearly.",
-                displayPrice: "$24.99",
-                price: 24.99,
-                subscriptionPeriod:
-                    .init(
-                        value: 1,
-                        unit: .year
-                    )
+                displayPrice: "$29.99",
+                price: 29.99
             ),
             PurchaseProduct(
                 id: monthlyProductID,
                 displayName: "Monthly",
                 description:
                     "ReadAloud Pro billed monthly.",
-                displayPrice: "$4.99",
-                price: 4.99,
+                displayPrice: "$6.99",
+                price: 6.99,
                 subscriptionPeriod:
                     .init(
                         value: 1,
@@ -104,7 +96,7 @@ enum ReadAloudCommerce {
             title:
                 "Make every book sound like yours",
             subtitle:
-                "Unlock all 28 English voices and premium app themes. Reading, projects, generation, and chapter controls are free.",
+                "Unlock unlimited listening, all 28 English voices, and premium app themes. Reading, projects, generation, and chapter controls are free.",
             purchaseButtonTitle:
                 "Continue",
             highlightedProductID:
@@ -126,3 +118,4 @@ enum ReadAloudCommerce {
                 "Compare plans"
         )
 }
+

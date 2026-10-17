@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(PurchaseManager.self) private var purchases
     @Environment(\.appFoundationTheme) private var theme
     @State private var model = LibraryModel()
     @State private var isFileImporterPresented = false
@@ -19,6 +20,7 @@ struct LibraryView: View {
     @State private var deleteTarget: LibraryModel.Entry?
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
+    @State private var proDestination: LibraryProDestination?
     @State private var pendingPasteImport: PasteDraft?
     @State private var selectedSourceFilter: LibrarySourceFilter = .all
 
@@ -40,12 +42,20 @@ struct LibraryView: View {
                 get: { model.searchText },
                 set: { model.searchText = $0 }
             ),
-            placement: .navigationBarDrawer(displayMode: .always),
+            placement: .navigationBarDrawer(displayMode: .automatic),
             prompt: "Search your library"
         )
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 sortMenu
+                Button {
+                    proDestination = purchases.hasPro ? .celebration : .paywall
+                } label: {
+                    Label("Pro", systemImage: purchases.hasPro ? "crown.fill" : "crown")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel(purchases.hasPro ? "Pro Status" : "Unlock Pro")
+                .accessibilityIdentifier("toolbar.pro")
                 NavigationLink {
                     SettingsView()
                 } label: {
@@ -141,6 +151,19 @@ struct LibraryView: View {
                     isURLPresented = false
                 }
             )
+        }
+        .sheet(item: $proDestination) { destination in
+            switch destination {
+            case .paywall:
+                ReadAloudProPaywall()
+            case .celebration:
+                ProCelebrationView(
+                    configuration: FoundationProCelebrationConfiguration(
+                        navigationTitle: "ReadAloud Pro",
+                        message: "Thanks for supporting ReadAloud. Enjoy unlimited listening, all 28 voices, and every theme."
+                    )
+                )
+            }
         }
         .sheet(item: $infoTarget) { entry in
             ProjectInfoSheet(entry: entry)
@@ -394,6 +417,7 @@ struct LibraryView: View {
             }
             .disabled(model.isImporting)
             .accessibilityHint("Choose a book, document, web article, or text to add")
+            listeningUsage
         }
         .frame(maxWidth: .infinity)
         .padding(24)
@@ -416,6 +440,10 @@ struct LibraryView: View {
         let progress = runtime?.project?.playback?.projectProgress ?? entry.snapshot.projectProgress
         let currentID = runtime?.playerControlItemID(fallback: runtime?.continueItemID)
         let chapterIndex = runtime?.itemStates.firstIndex { $0.id == currentID }
+        let hasPresentedPlayer = runtime != nil
+            && runtimeManager.playerRuntime === runtime
+            && runtime?.isPlayerDismissed == false
+            && currentID != nil
 
         return VStack(alignment: .leading, spacing: 15) {
             HStack {
@@ -478,24 +506,28 @@ struct LibraryView: View {
             if runtime == nil {
                 ProgressView("Loading chapters…").font(.caption)
             }
-            if runtime?.isPlayerPreparing == true {
+            if !hasPresentedPlayer, runtime?.isPlayerPreparing == true {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Preparing audio…").font(.caption)
                 }
             }
-            if let error = presentation.error {
+            if !hasPresentedPlayer, let error = presentation.error {
                 Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Button {
                 guard let runtime, let currentID else { return }
+                if hasPresentedPlayer {
+                    runtimeManager.openPlayerReader()
+                    return
+                }
                 do {
                     runtimeManager.makeActive(runtime)
-                    if presentation.action == .cancel { runtime.stopPlayback() }
-                    else { try runtime.togglePlayer(itemID: currentID) }
+                    try runtime.listen(itemID: currentID)
                 } catch { model.errorMessage = error.localizedDescription }
             } label: {
-                Label(presentation.label, systemImage: presentation.symbol)
+                Label(hasPresentedPlayer ? "Open Reader" : presentation.label,
+                      systemImage: hasPresentedPlayer ? "book" : presentation.symbol)
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .foregroundStyle(theme.backgroundColor)
@@ -503,6 +535,7 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(runtime == nil || currentID == nil)
+            listeningUsage
         }
         .padding(20)
         .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
@@ -515,6 +548,27 @@ struct LibraryView: View {
 
     private var heroBackground: Color {
         theme.surfaceColor
+    }
+
+    private var listeningUsage: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                Label(
+                    purchases.hasPro ? "Unlimited listening · Pro"
+                        : runtimeManager.listeningAllowance.usageDescription(at: context.date),
+                    systemImage: purchases.hasPro ? "infinity" : "clock"
+                )
+                if !purchases.hasPro {
+                    let reset = runtimeManager.listeningAllowance.resetDate(at: context.date)
+                    Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(heroSecondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+            .accessibilityElement(children: .combine)
+        }
     }
 
     private var heroSecondaryText: Color {
@@ -1066,3 +1120,11 @@ private struct ImportProgressSheet: View {
         }
     }
 }
+
+private enum LibraryProDestination: String, Identifiable {
+    case paywall
+    case celebration
+
+    var id: String { rawValue }
+}
+

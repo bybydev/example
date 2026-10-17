@@ -15,7 +15,7 @@
   ],
   "products" : [
     {
-      "displayPrice" : "49.99",
+      "displayPrice" : "29.99",
       "familyShareable" : false,
       "internalID" : "READALOUD001",
       "localizations" : [
@@ -59,37 +59,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "24.99",
-          "familyShareable" : false,
-          "groupNumber" : 1,
-          "internalID" : "READALOUD002",
-          "introductoryOffers" : [
-
-          ],
-          "localizations" : [
-            {
-              "description" : "ReadAloud Pro billed yearly.",
-              "displayName" : "Yearly",
-              "locale" : "en_US"
-            }
-          ],
-          "productID" : "com.hoangbkit.readaloud.pro.yearly",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Yearly",
-          "subscriptionGroupID" : "READALOUDPRO1",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
-        },
-        {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "4.99",
+          "displayPrice" : "6.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "READALOUD003",

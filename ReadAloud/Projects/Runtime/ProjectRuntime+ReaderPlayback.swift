@@ -140,6 +140,7 @@ extension ProjectRuntime {
             return
         }
         if let playbackCoordinator, playbackCoordinator.playerRuntime !== self { return }
+        guard playbackCoordinator?.authorizeListening() != false else { return }
 
         interruptedPlaybackOperationID = nil
         readerPauseRequested = false
@@ -485,6 +486,7 @@ extension ProjectRuntime {
         exactStartSeconds: Double?,
         allowsExactAudioResume: Bool
     ) {
+        guard playbackCoordinator?.authorizeListening() != false else { return }
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchTaskID = nil
@@ -597,6 +599,9 @@ extension ProjectRuntime {
                 try requirePlaybackOperation(
                     operationID
                 )
+                // In particular, do not transition past the last audible
+                // chapter while the weekly limit has paused the session.
+                try await waitWhileReaderPaused(operationID)
 
                 guard let state =
                         itemState(
@@ -714,6 +719,7 @@ extension ProjectRuntime {
             try requirePlaybackOperation(
                 operationID
             )
+            try await waitWhileReaderPaused(operationID)
             pipeline
                 .finishContinuousPlayback()
             finalAudioAsset = nil
@@ -1642,6 +1648,7 @@ private nonisolated struct ReaderTimedPlaybackPosition {
     let chunk: SpeechChunk
     let durationSeconds: Double
 }
+
 
 
 

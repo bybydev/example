@@ -2366,3 +2366,112 @@ final class WebArticleImportIntegrationTests: XCTestCase {
         catch is CancellationError { }
     }
 }
+
+
+@MainActor
+final class WeeklyListeningAllowanceTests: XCTestCase {
+    private let wednesday = Date(timeIntervalSince1970: 1_791_979_200)
+
+    private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
+        let name = "readaloud-listening-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        try body(defaults)
+    }
+
+    func testUsageSurvivesRelaunchAndProDoesNotConsumeOrEraseIt() {
+        withDefaults { defaults in
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            allowance.record(seconds: 120, isPro: false, now: wednesday)
+            allowance.record(seconds: 600, isPro: true, now: wednesday)
+            allowance.record(seconds: 30, isPro: false, now: wednesday)
+            allowance.persist(now: wednesday)
+            let reloaded = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            XCTAssertEqual(reloaded.usedSeconds(at: wednesday), 150)
+            XCTAssertFalse(reloaded.isExhausted(at: wednesday))
+        }
+    }
+
+    func testExhaustionCapsAtAllowanceAndWeekRolloverRestoresPlayback() {
+        withDefaults { defaults in
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            allowance.record(seconds: 20_000, isPro: false, now: wednesday)
+            XCTAssertTrue(allowance.isExhausted(at: wednesday))
+            XCTAssertEqual(allowance.usedSeconds(at: wednesday),
+                           ReadAloudAccessPolicy.weeklyListeningSeconds)
+            let reset = allowance.resetDate(at: wednesday)
+            XCTAssertEqual(allowance.usedSeconds(at: reset), 0)
+            XCTAssertFalse(allowance.isExhausted(at: reset))
+            allowance.refresh(now: reset)
+            XCTAssertEqual(allowance.usedSeconds(at: reset), 0)
+        }
+    }
+
+    func testBoundarySampleChargesOnlyNewWeekPortion() {
+        withDefaults { defaults in
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            let reset = allowance.resetDate(at: wednesday)
+            allowance.record(seconds: 4, isPro: false, now: reset.addingTimeInterval(1))
+            XCTAssertEqual(allowance.usedSeconds(at: reset.addingTimeInterval(1)), 1)
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            XCTAssertEqual(calendar.component(.weekday, from: reset), 2)
+            XCTAssertEqual(calendar.component(.hour, from: reset), 0)
+        }
+    }
+
+    func testMovingClockBackDoesNotReplenishUsage() {
+        withDefaults { defaults in
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            allowance.record(seconds: 120, isPro: false, now: wednesday)
+            let earlier = wednesday.addingTimeInterval(-7 * 24 * 3600)
+            allowance.refresh(now: earlier)
+            allowance.record(seconds: 30, isPro: false, now: earlier)
+            XCTAssertEqual(allowance.usedSeconds(at: earlier), 150)
+            XCTAssertEqual(allowance.resetDate(at: earlier), allowance.resetDate(at: wednesday))
+        }
+    }
+
+    func testInvalidSamplesDoNotCorruptLedger() {
+        withDefaults { defaults in
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            for sample in [Double.nan, .infinity, -1, 0] {
+                allowance.record(seconds: sample, isPro: false, now: wednesday)
+            }
+            XCTAssertEqual(allowance.usedSeconds(at: wednesday), 0)
+        }
+    }
+
+    func testDamagedLedgerDoesNotSilentlyGrantAnotherAllowance() {
+        withDefaults { defaults in
+            defaults.set(Data("invalid".utf8), forKey: "readaloud.listening-allowance.v1")
+            let allowance = ReadAloudListeningAllowance(defaults: defaults, now: wednesday)
+            XCTAssertTrue(allowance.isExhausted(at: wednesday))
+        }
+    }
+
+    func testRenderedMeterExcludesGapsAndDoesNotCountSamplesTwice() {
+        var meter = SpeechRenderedUsage()
+        let first = UUID(), second = UUID()
+        meter.schedule(first, duration: 2, at: 0)
+        XCTAssertEqual(meter.consume(at: 1), 1)
+        XCTAssertEqual(meter.consume(at: 1), 0)
+        XCTAssertEqual(meter.consume(at: 5, completing: first), 1)
+        meter.remove(first)
+        meter.schedule(second, duration: 3, at: 10)
+        XCTAssertEqual(meter.consume(at: 10), 0)
+        XCTAssertEqual(meter.consume(at: 11), 1)
+        XCTAssertEqual(meter.consume(at: 20, completing: second), 2)
+    }
+
+    func testRenderedMeterBillsReplayButNotSavedFileSeekOffset() {
+        var meter = SpeechRenderedUsage()
+        let first = UUID(), next = UUID()
+        // File seek offsets are deliberately not supplied to this node meter.
+        meter.schedule(first, duration: 10, at: 0)
+        XCTAssertEqual(meter.consume(at: 2), 2)
+        meter = SpeechRenderedUsage() // stop/seek resets the node timeline
+        meter.schedule(next, duration: 10, at: 0)
+        XCTAssertEqual(meter.consume(at: 1), 1)
+    }
+}

@@ -1,6 +1,42 @@
 import AVFoundation
 import Foundation
 
+/// Node time can advance through underruns; bill only scheduled audio frames.
+/// Independent from the hardware so gaps, seeks/restarts and completion tails
+/// can be exercised without a device or synthesis model.
+nonisolated struct SpeechRenderedUsage {
+    private struct Audio {
+        let start: Double
+        let duration: Double
+        var accounted: Double = 0
+    }
+    private var audio: [UUID: Audio] = [:]
+    private var scheduledEnd = 0.0
+
+    mutating func schedule(_ id: UUID, duration: Double, at position: Double) {
+        let start = max(scheduledEnd, position)
+        audio[id] = Audio(start: start, duration: duration)
+        scheduledEnd = start + duration
+    }
+
+    mutating func consume(at position: Double, completing completedID: UUID? = nil) -> Double {
+        var delta = 0.0
+        for id in Array(audio.keys) {
+            guard var segment = audio[id] else { continue }
+            let rendered = id == completedID ? segment.duration
+                : min(segment.duration, max(0, position - segment.start))
+            delta += max(0, rendered - segment.accounted)
+            segment.accounted = max(segment.accounted, rendered)
+            audio[id] = segment
+        }
+        return delta
+    }
+
+    mutating func remove(_ id: UUID) {
+        audio.removeValue(forKey: id)
+    }
+}
+
 @MainActor
 final class SpeechPlaybackQueue: SpeechPlaybackOutput {
     enum SessionEvent: Equatable, Sendable {
@@ -52,6 +88,11 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
     private var connectedSampleRate: Double?
     private var connectedChannelCount: AVAudioChannelCount?
     private var isPaused = false
+    private var usageMeter = SpeechRenderedUsage()
+    private var meterTask: Task<Void, Never>?
+    private var isSamplingUsage = false
+    var onPlayedAudio: ((TimeInterval) -> Void)?
+    var onUsageCheckpoint: (() -> Void)?
     private var notificationObservers:
         [NSObjectProtocol] = []
 
@@ -112,6 +153,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         let itemGeneration = generation
 
         pendingDurations[itemID] = audio.durationSeconds
+        registerMeteredAudio(itemID, duration: audio.durationSeconds)
         queuedDurationSeconds += audio.durationSeconds
         let beginsNow = pendingOrder.isEmpty
         pendingOrder.append(itemID)
@@ -130,6 +172,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         }
         if beginsNow { announceStart(itemID) }
 
+        startUsageMeter()
         notifySnapshotChange()
     }
 
@@ -158,6 +201,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         let duration = Double(remaining) / rate
         pendingFiles[itemID] = file
         pendingDurations[itemID] = duration
+        registerMeteredAudio(itemID, duration: duration)
         queuedDurationSeconds += duration
         playerNode.scheduleSegment(
             file, startingFrame: start, frameCount: AVAudioFrameCount(remaining),
@@ -167,6 +211,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
             )
         )
         if !isPaused && !playerNode.isPlaying { playerNode.play() }
+        startUsageMeter()
         notifySnapshotChange()
     }
 
@@ -214,6 +259,9 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         if playerNode.isPlaying {
             playerNode.pause()
         }
+        flushPlayedAudio()
+        meterTask?.cancel()
+        meterTask = nil
         notifySnapshotChange()
     }
 
@@ -234,10 +282,14 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
             playerNode.play()
         }
         if let first = pendingOrder.first { announceStart(first) }
+        startUsageMeter()
         notifySnapshotChange()
     }
 
     func stop() {
+        flushPlayedAudio()
+        meterTask?.cancel()
+        meterTask = nil
         generation += 1
         isPaused = false
         playerNode.stop()
@@ -248,6 +300,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         onStart.removeAll()
         announcedStart.removeAll()
         queuedDurationSeconds = 0
+        usageMeter = SpeechRenderedUsage()
 
         resumeDepthWaiters()
         resumeDrainWaiters()
@@ -276,6 +329,8 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         notificationObservers.removeAll()
         onSnapshotChange = nil
         onSessionEvent = nil
+        onPlayedAudio = nil
+        onUsageCheckpoint = nil
     }
 
     private func installAudioSessionObservers() {
@@ -352,6 +407,9 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
     }
 
     private func handleMediaServicesReset() {
+        flushPlayedAudio()
+        meterTask?.cancel()
+        meterTask = nil
         generation += 1
         playerNode.stop()
 
@@ -361,6 +419,7 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         onStart.removeAll()
         announcedStart.removeAll()
         queuedDurationSeconds = 0
+        usageMeter = SpeechRenderedUsage()
         resumeDepthWaiters()
         resumeDrainWaiters()
 
@@ -475,10 +534,15 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         generation itemGeneration: Int
     ) {
         guard itemGeneration == generation,
-              let duration = pendingDurations.removeValue(forKey: itemID)
+              let duration = pendingDurations[itemID]
         else {
             return
         }
+
+        samplePlayedAudio(completing: itemID)
+        pendingDurations.removeValue(forKey: itemID)
+        usageMeter.remove(itemID)
+        onUsageCheckpoint?()
 
         pendingFiles.removeValue(forKey: itemID)
         onStart.removeValue(forKey: itemID)
@@ -497,8 +561,39 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         resumeDepthWaiters()
 
         if pendingDurations.isEmpty {
+            meterTask?.cancel()
+            meterTask = nil
             resumeDrainWaiters()
         }
+    }
+
+    func flushPlayedAudio() {
+        samplePlayedAudio()
+        onUsageCheckpoint?()
+    }
+
+    private func registerMeteredAudio(_ id: UUID, duration: Double) {
+        usageMeter.schedule(id, duration: duration, at: playedSeconds)
+    }
+
+    private func startUsageMeter() {
+        guard onPlayedAudio != nil, meterTask == nil, !isPaused,
+              !pendingDurations.isEmpty else { return }
+        meterTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+                self?.samplePlayedAudio()
+            }
+        }
+    }
+
+    private func samplePlayedAudio(completing completedID: UUID? = nil) {
+        guard !isSamplingUsage, onPlayedAudio != nil else { return }
+        isSamplingUsage = true
+        defer { isSamplingUsage = false }
+        let delta = usageMeter.consume(at: playedSeconds, completing: completedID)
+        if delta > 0 { onPlayedAudio?(delta) }
     }
 
     private func announceStart(_ itemID: UUID) {
@@ -539,5 +634,6 @@ final class SpeechPlaybackQueue: SpeechPlaybackOutput {
         }
     }
 }
+
 
 

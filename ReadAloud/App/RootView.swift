@@ -28,6 +28,9 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ProjectGlobalPlayerHost()
         }
+        .sheet(isPresented: $runtimeManager.isListeningLimitPresented) {
+            ListeningLimitSheet()
+        }
         // Keep the Library/navigation tree mounted while the first-run flow
         // is presented, matching the shared Spokio/AppFoundation pattern.
         .fullScreenCover(
@@ -68,6 +71,46 @@ struct RootView: View {
             Task {
                 await runtimeManager
                     .persistPlaybackCheckpoints()
+            }
+        }
+    }
+}
+
+private struct ListeningLimitSheet: View {
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 20) {
+                Image(systemName: "headphones")
+                    .font(.largeTitle)
+                    .foregroundStyle(Color.accentColor)
+                Text("Your weekly listening time is used")
+                    .font(.title2.bold())
+                Text("Your position is saved. Continue listening when your allowance resets, or unlock unlimited listening with Pro.")
+                    .foregroundStyle(.secondary)
+                let reset = runtimeManager.listeningAllowance.resetDate()
+                Label("Resets \(reset.formatted(date: .abbreviated, time: .shortened))",
+                      systemImage: "calendar")
+                    .font(.subheadline)
+                NavigationLink {
+                    ReadAloudProPaywall()
+                } label: {
+                    Text("Unlock Unlimited Listening")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Keep Reading") { dismiss() }
+                    .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .readAloudThemeSurface()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
     }
@@ -221,4 +264,5 @@ private struct ProjectGlobalPlayerHost: View {
         runtime.stopPlayback()
     }
 }
+
 

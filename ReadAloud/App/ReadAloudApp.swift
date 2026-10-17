@@ -87,6 +87,7 @@ struct ReadAloudApp: App {
                         purchaseManager
                             .hasPro
                 ) { _, _ in
+                    runtimeManager.listeningEntitlementDidChange()
                     Task {
                         await runtimeManager
                             .refreshAllLoaded()
@@ -95,4 +96,5 @@ struct ReadAloudApp: App {
         }
     }
 }
+
 

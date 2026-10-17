@@ -229,6 +229,21 @@ final class ReadAloudPipeline {
         engineKind = kind
     }
 
+    /// Project playback opts in; voice previews and standalone demos do not
+    /// consume the library listening allowance.
+    func configureListeningMeter(
+        onPlayed: @escaping (TimeInterval) -> Void,
+        onCheckpoint: @escaping () -> Void
+    ) {
+        guard let output = playback as? SpeechPlaybackQueue else { return }
+        output.onPlayedAudio = onPlayed
+        output.onUsageCheckpoint = onCheckpoint
+    }
+
+    func flushListeningUsage() {
+        (playback as? SpeechPlaybackQueue)?.flushPlayedAudio()
+    }
+
     func read(
         text: String,
         voice: SpeechVoice = .heart,
@@ -780,5 +795,6 @@ final class ReadAloudPipeline {
             + Double(components.attoseconds) / 1_000_000_000_000_000_000
     }
 }
+
 
 

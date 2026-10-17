@@ -14,6 +14,9 @@ final class ProjectRuntimeManager {
     // Browsing selection is independent from the one explicit playback owner.
     private(set) var playerRuntime: ProjectRuntime?
     var isPlayerExpanded = false
+    let listeningAllowance = ReadAloudListeningAllowance()
+    var isListeningLimitPresented = false
+    @ObservationIgnored private var meteringHasPro: Bool
     var playerReaderTarget: PlayerReaderTarget?
     private(set) var readerFollowRevision: UInt64 = 0
     private(set) var loadedRuntimeIDs: Set<UUID> = []
@@ -42,6 +45,12 @@ final class ProjectRuntimeManager {
 
     /// Scene activity is a temporary admission rule, never a preference write.
     func setApplicationActive(_ active: Bool) {
+        playerRuntime?.pipeline.flushListeningUsage()
+        listeningAllowance.refresh()
+        listeningAllowance.persist()
+        if hasPro() || !listeningAllowance.isExhausted() {
+            isListeningLimitPresented = false
+        }
         let registry = ProjectGenerationExecutionRegistry.shared
         registry.setApplicationActive(active)
         if !registry.canPerformGeneration {
@@ -96,6 +105,7 @@ final class ProjectRuntimeManager {
     ) {
         self.makePipeline = makePipeline
         self.hasPro = hasPro
+        self.meteringHasPro = hasPro()
         do {
             projectStore = try store ?? ProjectStore()
             initializationError = nil
@@ -181,6 +191,14 @@ final class ProjectRuntimeManager {
                 pipeline: makePipeline()
             )
             runtime.playbackCoordinator = self
+            runtime.pipeline.configureListeningMeter(
+                onPlayed: { [weak self] seconds in
+                    self?.recordListening(seconds: seconds)
+                },
+                onCheckpoint: { [weak self] in
+                    self?.listeningAllowance.persist()
+                }
+            )
             runtimes[projectID] = runtime
             if memoryReleaseTask != nil || recoverySuspendedForMemoryPressure {
                 runtime.suspendForMemoryPressure()
@@ -281,6 +299,42 @@ final class ProjectRuntimeManager {
     var playbackRuntime: ProjectRuntime? {
         guard let playerRuntime, playerRuntime.isPlaybackActive else { return nil }
         return playerRuntime
+    }
+
+    /// Called by every start/seek/replay and resume path before changing the
+    /// existing session. The reader and offline generation never use this gate.
+    func authorizeListening() -> Bool {
+        playerRuntime?.pipeline.flushListeningUsage()
+        listeningAllowance.refresh()
+        guard !hasPro(), listeningAllowance.isExhausted() else { return true }
+        presentListeningLimit()
+        return false
+    }
+
+    private func recordListening(seconds: TimeInterval) {
+        listeningAllowance.record(seconds: seconds, isPro: meteringHasPro)
+        if !hasPro(), listeningAllowance.isExhausted() {
+            presentListeningLimit()
+        }
+    }
+
+    private func presentListeningLimit() {
+        guard !isShutdown else { return }
+        playerRuntime?.pausePlayback()
+        isListeningLimitPresented = true
+    }
+
+    func listeningEntitlementDidChange() {
+        // Flush the old entitlement's rendered tail before changing which
+        // plan future samples belong to. Pro time never erases Free usage.
+        playerRuntime?.pipeline.flushListeningUsage()
+        meteringHasPro = hasPro()
+        listeningAllowance.refresh()
+        if hasPro() || !listeningAllowance.isExhausted() {
+            isListeningLimitPresented = false
+        } else if playerRuntime?.isPlaybackActive == true {
+            presentListeningLimit()
+        }
     }
 
     /// Called synchronously by every playback path, including seeks and replay.
@@ -522,6 +576,7 @@ final class ProjectRuntimeManager {
         return String(describing: error)
     }
 }
+
 
 
 

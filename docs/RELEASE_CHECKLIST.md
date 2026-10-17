@@ -77,7 +77,15 @@ This reduced final release pass replaces the original Phases 12–15 for 1.0.
 - Clear Generated Audio; verify source and reading bookmark remain.
 - On Free, verify bulk Generate Selected/Remaining/All, prefetch,
   Generate While Listening, and Clear Cache & Regenerate work without a paywall.
-- Verify the Pro paywall advertises only extra voices and themes.
+- Verify the Pro comparison advertises unlimited listening, extra voices, and themes.
+- Verify Free usage is shared across books and live/saved/offline playback; pauses,
+  buffering, generation, seeks, and voice previews do not consume listening time.
+- Check exhaustion during live and saved playback, chapter handoff, background
+  listening, Lock Screen resume, and interruption resume. Playback pauses with a
+  saved position and reset/Pro explanation; reading/importing/generation stay usable.
+- Check relaunch, project deletion, Monday 00:00 UTC rollover/local reset display,
+  Pro purchase/expiry/restore, and library hero states (absent/preparing/playing/paused/
+  closed). Only the floating player has active transport; hero opens the Reader.
 - On Free, confirm Heart can be selected as a project or chapter voice while
   the other 27 voices require Pro. Theme locking must remain unchanged.
 - Restore purchases in the Plan section.
@@ -215,3 +223,4 @@ finish before cancellation takes effect. Reclamation is best effort; a crash or
 failed disk operation can leave redundant chunks for a later compatible replay.
 Acceptance boxes in issue #48 remain open until the corresponding behavior is
 actually exercised and its outcome recorded.
+

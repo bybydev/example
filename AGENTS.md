@@ -40,6 +40,7 @@ Current **explicitly approved** Riidrr access boundaries:
 
 - **Voices:** Heart (`af_heart`) is Free. The other 27 bundled English Kokoro voices require Pro. Voice selection at app, project, and chapter levels is allowed, but applying a Pro voice still requires Pro.
 - **Themes:** ReadAloud Light and Dark are Free. Additional themes require Pro.
+- **Listening (issue #56):** Free includes 3 hours/week shared across all books and playback paths; Pro listening is unlimited. The initial allowance is centralized in `ReadAloudAccessPolicy.weeklyListeningSeconds`. Weeks reset Monday 00:00 UTC, shown in local time. Reading/imports/offline generation remain Free when listening is exhausted.
 - **Everything else is Free for now**, including unlimited Library projects/imports, chapter-level voice and speed customization, bulk/selected/all offline generation, automatic prefetch, generate while listening, and clear-cache/advanced regeneration.
 
 Non-negotiable implementation rules:
@@ -135,3 +136,4 @@ Keep these internal unless there is a technical migration reason:
 - internal ReadAloud type/module names
 
 Public display/App Store branding can be changed independently.
+

@@ -173,11 +173,13 @@ tools. It is not part of the Release product.
 
 ## Free / Pro
 
-Free includes unlimited projects, importing, streaming and offline listening,
+Free includes unlimited projects and importing, 3 hours/week of streaming or offline listening,
 per-chapter voice/speed customization (subject to voice entitlement), bulk
 generation, automatic prefetch, generate while listening, and cache regeneration.
 
-Only **voices and themes** are gated for Pro:
+**Pro unlocks unlimited listening, voices, and themes:**
+
+- **Listening:** 3 hours/week on Free; unlimited with Pro. Weeks reset Monday 00:00 UTC, displayed locally. Usage is stored on-device across the whole library.
 - **Voices:** Heart is free; Pro unlocks the other 27 English Kokoro voices.
 - **Themes:** ReadAloud Light and Dark are free; Pro unlocks the extra themes.
 
@@ -185,7 +187,7 @@ Voice entitlement is enforced when choosing and using a voice, including
 per-chapter overrides. Project limits, custom chapter speed, generation and
 prefetch are not Pro features.
 
-`ReadAloudAccessPolicy` is the central voice access contract.
+`ReadAloudAccessPolicy` is the central voice and weekly allowance policy.
 Theme entitlements are handled by AppFoundation.
 
 ## Release
@@ -205,3 +207,4 @@ The workflow always builds the selected branch/ref and publishes one
 `mycli-build-*` prerelease. It does not upload to App Store Connect.
 
 App Store metadata lives under `AppStore/`.
+

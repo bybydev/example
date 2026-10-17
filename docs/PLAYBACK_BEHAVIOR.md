@@ -16,7 +16,11 @@ is the only player-card host and lives at the root navigation stack.
 | Browse another book or choose a chapter to read | Current audio continues and the same global player remains visible. | Browsing changes `activeRuntime`/Reader selection, never playback ownership. |
 | Reader: Listen to this chapter | Start/resume the displayed chapter, including handoff from another book. | Reader toolbar calls `listen`. |
 | Reader: Listen from here | Play from the selected passage, including handoff from another book. | Explicit-offset `play` uses the same claim path. |
-| Library hero or player transport | Perform the labelled start, pause, resume, cancel, retry, or replay action. | Hero presentation plus `togglePlayer`/`listen`; terminal states do not pause a retiring task. |
+| Library hero, player absent | Start/continue listening and show the shared player. | Hero uses `listen`. |
+| Library hero, player visible (playing, paused, preparing, or terminal) | Open the Reader without changing playback. | Hero calls coordinator `openPlayerReader`; transport stays in the player. |
+| Player transport | Perform the labelled pause, resume, cancel, retry, or replay action. | `togglePlayer`/`listen`; terminal states do not pause a retiring task. |
+| Free listening exhausted | Pause and retain the position; show usage/reset/Pro, block new starts and resumes including system controls. | Shared rendered-audio meter and manager admission; reading/importing/generation stay available. |
+| Week resets or Pro is restored | Allow the next explicit listen/resume; do not auto-play. | UTC weekly ledger rollover and entitlement transition flush. |
 | Player: Previous/Next chapter | Switch within the owner book; preserve user pause. | `changePlayerChapter` uses `play`, then reapplies pause. |
 | Player: Seek or skip | Seek in the owner book and ask its visible Reader to follow the new passage. | Existing runtime seek path plus coordinator follow request. |
 | Rapid A → B → C | Latest accepted request owns playback. Old tasks cannot reclaim ownership or publish a new active state after stop. | Synchronous ownership plus runtime/pipeline operation and cancellation guards. |
@@ -47,3 +51,4 @@ Device checks remain necessary for audible output, saved-audio/live-synthesis
 handoff, navigation/back gestures, compact/expanded layout, background listening,
 Lock Screen/headphones, and interruption/route-change behavior. Build and test
 execution require owner approval under `AGENTS.md`.
+
