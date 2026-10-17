@@ -28,6 +28,8 @@ nonisolated enum PronunciationFallbackMode: String, CaseIterable, Identifiable, 
 
 nonisolated enum ReadAloudPreferences {
     enum Key {
+        static let hasCompletedOnboarding =
+            "com.hoangbkit.readaloud.onboarding-completed"
         static let defaultVoiceID =
             "com.hoangbkit.readaloud.default-voice"
         static let defaultSpeed =

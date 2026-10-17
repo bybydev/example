@@ -255,13 +255,36 @@ The same runtime drives:
 - Now Playing
 - Lock Screen / Control Center commands
 
-There is no separate system-media playback model.
+`ProjectRuntimeManager` is the app-level playback coordinator. Its explicit
+`playerRuntime` is independent from the browsed `activeRuntime`; no dictionary
+scan or inactive-book fallback chooses a playback owner. Every new playback
+operation claims ownership synchronously before asynchronous preparation,
+stopping the previous runtime's output and cancelling its playback work. The
+system-media controller mirrors that owner and publishes its runtime state.
+There is no separate copy of progress or playback state in the coordinator.
 
-The Reader and mini-player share themed card surfaces and transport components.
-Controls follow the playing chapter while the Reader can browse another chapter;
-an explicit action starts the chapter on screen. Voice and speed sheets capture
-the player chapter when opened. Transport targets are at least 44 points, with
-VoiceOver labels and an adjustable scrubber.
+One `ProjectGlobalPlayerHost` at the root navigation stack renders the compact
+or expanded card throughout Library, book details, and Reader. The Reader has
+no player host of its own. Opening the Reader from the player pushes onto the
+same stack and collapses the card; opening it while already reading that book
+follows the playing passage instead of pushing another Reader. Expansion state
+belongs to the coordinator and resets when switching books or closing.
+
+Book-detail Start/Continue and Reader chapter-listening actions use `listen`:
+the same active/preparing chapter is reused, a paused chapter resumes, and a
+different chapter/book starts through the ownership handoff. Transport uses
+`togglePlayer` for pause/resume and terminal-state retry/replay. Browsing a book
+or selecting a chapter to read does not start or interrupt audio. Controls follow
+the playback owner while the Reader can browse another chapter or book. Voice
+and speed sheets capture their target runtime and chapter when opened.
+Transport targets are at least 44 points, with VoiceOver labels and an
+adjustable scrubber. The behavior matrix is in `PLAYBACK_BEHAVIOR.md`.
+
+A cold PDF with custom saved filters prepares and validates its reader
+projection inside the owned loading operation before any audio is played. A
+known projection/text mismatch still fails preflight. Pause/close remain usable
+during cold preparation; cancelling or superseding the operation prevents its
+eventual parser/cache result from starting audio.
 
 Saved audio exposes elapsed/remaining time and exact scrubbing. Live synthesis
 exposes chapter source position and passage seeking; skip seconds are approximate
@@ -273,8 +296,11 @@ The runtime owns an optional session sleep timer (5/15/30/45/60 minutes or end o
 chapter). It survives Reader dismissal and seeks, pauses at its deadline, and is
 cleared on explicit Stop, shutdown, completion, or failure. It is not persisted
 across process restarts. End-of-chapter takes precedence over automatic chapter
-continuation. The mini-player sheet captures its runtime and has an explicit Done
-action. ImageIO downsampling bounds displayed cover thumbnails to 512 pixels.
+continuation. Close removes the explicit owner, so older sessions cannot return
+as fallback cards. Shutdown/deletion also releases ownership. Interruption
+resume is tied to the interrupted playback operation; a new session or explicit
+pause cancels automatic resume. ImageIO downsampling bounds displayed cover
+thumbnails to 512 pixels.
 
 See AUDIO_PLAYER_REVIEW.md for source findings and pending device review.
 

@@ -57,7 +57,9 @@ extension ProjectRuntime {
         itemID: UUID,
         fromOffsetUTF16 explicitOffset: Int? = nil
     ) throws {
-        try prepareExplicitWork()
+        // A cold PDF with saved custom filters prepares its projection inside
+        // this owned playback operation, just like audio/cache preparation.
+        try prepareExplicitWork(requiresPDFProjection: false)
         guard let state =
                 itemState(itemID)
         else {
@@ -95,7 +97,29 @@ extension ProjectRuntime {
         )
     }
 
+    /// Explicit listening is idempotent for the same chapter. Transport buttons
+    /// use togglePlayer instead; opening/continuing must never pause or restart.
+    func listen(itemID: UUID) throws {
+        if activity.activeItemID == itemID, playbackOperationID != nil {
+            switch activity.playbackState {
+            case .paused:
+                resumePlayback()
+                return
+            case .loading, .buffering, .warmingUp, .synthesizing, .playing:
+                return
+            case .idle, .finished, .failed:
+                break
+            }
+        }
+        if case .finished = activity.playbackState, playerItemID == itemID {
+            try play(itemID: itemID, fromOffsetUTF16: 0)
+        } else {
+            try play(itemID: itemID)
+        }
+    }
+
     func pausePlayback() {
+        interruptedPlaybackOperationID = nil
         guard isPlaybackActive,
               !readerPauseRequested
         else {
@@ -112,10 +136,12 @@ extension ProjectRuntime {
     }
 
     func resumePlayback() {
-        guard readerPauseRequested else {
+        guard readerPauseRequested, playbackOperationID != nil else {
             return
         }
+        if let playbackCoordinator, playbackCoordinator.playerRuntime !== self { return }
 
+        interruptedPlaybackOperationID = nil
         readerPauseRequested = false
         pipeline.resume()
         // A failed session restart must stay failed. Pipeline events publish
@@ -137,27 +163,7 @@ extension ProjectRuntime {
     func togglePlayback(
         itemID: UUID
     ) throws {
-        if activity.activeItemID
-            == itemID {
-            switch activity.playbackState {
-            case .paused:
-                resumePlayback()
-                return
-            case .loading,
-                 .buffering,
-                 .warmingUp,
-                 .synthesizing,
-                 .playing:
-                pausePlayback()
-                return
-            case .idle,
-                 .finished,
-                 .failed:
-                break
-            }
-        }
-
-        try play(itemID: itemID)
+        try togglePlayer(itemID: itemID)
     }
 
     func seekPlayback(
@@ -483,6 +489,7 @@ extension ProjectRuntime {
         prefetchTask = nil
         prefetchTaskID = nil
         playbackOperationID = nil
+        interruptedPlaybackOperationID = nil
         readerPauseRequested = false
         chunkBookmarkTask?.cancel()
         chunkBookmarkTask = nil
@@ -495,6 +502,7 @@ extension ProjectRuntime {
         playbackTask = nil
         pipeline.stop()
         playerItemID = itemID
+        isPlayerDismissed = false
         finalAudioAsset = nil
         finalAudioPlaybackOriginSeconds = 0
         finalAudioPositionSeconds = 0
@@ -505,6 +513,9 @@ extension ProjectRuntime {
         activity.activeItemID =
             itemID
         activity.playbackState = .loading
+        // Ownership is transferred before file/cache reads or generation drains
+        // can suspend. System media only mirrors the coordinator's decision.
+        playbackCoordinator?.claimPlayback(self)
         queueController.reconcileScheduling()
 
         playbackTask =
@@ -556,6 +567,15 @@ extension ProjectRuntime {
         }
 
         do {
+            if !pdfProjectionMatchesStoredText {
+                try await preparePDFReadingOptions()
+                try requirePlaybackOperation(operationID)
+                guard pdfProjectionMatchesStoredText else {
+                    throw ProjectStoreError.invalidData(
+                        "PDF reading content is not synchronized with playback."
+                    )
+                }
+            }
             let runtimeRevision =
                 try ReadAloudSynthesisContract
                     .runtimeRevision()
@@ -1609,6 +1629,9 @@ extension ProjectRuntime {
         guard playbackOperationID
                 == operationID
         else {
+            throw CancellationError()
+        }
+        if let playbackCoordinator, playbackCoordinator.playerRuntime !== self {
             throw CancellationError()
         }
     }

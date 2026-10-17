@@ -423,10 +423,15 @@ struct ProjectDetailView: View {
             if let itemID = model.continueItemID,
                let entry = model.itemEntry(itemID) {
                 Button {
-                    readerTarget = ReaderTarget(
-                        itemID: itemID,
-                        title: entry.item.title
-                    )
+                    do {
+                        try model.runtime.listen(itemID: itemID)
+                        readerTarget = ReaderTarget(
+                            itemID: itemID,
+                            title: entry.item.title
+                        )
+                    } catch {
+                        model.errorMessage = error.localizedDescription
+                    }
                 } label: {
                     Label(
                         project.playback == nil

@@ -77,6 +77,17 @@ struct SettingsView: View {
         FoundationDeveloperConfiguration
     {
         FoundationDeveloperConfiguration(
+            replays: [
+                FoundationDeveloperReplay(
+                    id: "onboarding",
+                    title: "Onboarding",
+                    systemImage: "rectangle.stack.fill",
+                    presentation: .fullScreen
+                ) { close in
+                    ReadAloudOnboardingView(onCompletion: close)
+                        .appFoundationTheme(themes, purchaseManager: purchases)
+                },
+            ],
             additionalSections: [
                 FoundationDeveloperSection(
                     title: "ReadAloud",

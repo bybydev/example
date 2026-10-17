@@ -107,17 +107,11 @@ struct ProjectReaderView: View {
     @State private var displayedItemID: UUID?
     @State private var followsPlaybackContext = true
     @State private var followsParagraph = true
-    @State private var isPlayerExpanded = false
     @State private var chaptersPresented = false
-    @State private var voicePresented = false
-    @State private var speedPresented = false
-    @State private var narrationItemID: UUID?
     @State private var appearancePresented = false
     @State private var listeningOptionsPresented = false
     @State private var infoPresented = false
     @State private var errorMessage: String?
-    @State private var settingsModel:
-        ProjectDetailModel
 
     @AppStorage(
         "com.hoangbkit.readaloud.reader-font-size"
@@ -141,10 +135,6 @@ struct ProjectReaderView: View {
                 initialItemID
                 ?? runtime.continueItemID
                 ?? runtime.itemStates.first?.id
-        )
-        _settingsModel = State(
-            initialValue:
-                ProjectDetailModel(runtime: runtime)
         )
     }
 
@@ -173,6 +163,21 @@ struct ProjectReaderView: View {
             ToolbarItemGroup(
                 placement: .topBarTrailing
             ) {
+                if needsListeningAction, let displayedItemID {
+                    Button {
+                        do {
+                            try runtime.listen(itemID: displayedItemID)
+                            followPlayer()
+                        } catch {
+                            errorMessage = Self.message(for: error)
+                        }
+                    } label: {
+                        Image(systemName: "play.circle")
+                    }
+                    .accessibilityLabel("Listen to this chapter")
+                    .disabled(runtime.isApplyingPDFReadingPolicy)
+                }
+
                 Button {
                     chaptersPresented = true
                 } label: {
@@ -194,12 +199,6 @@ struct ProjectReaderView: View {
                 moreMenu
             }
         }
-        .safeAreaInset(
-            edge: .bottom,
-            spacing: 0
-        ) {
-            readerControls
-        }
         .sheet(
             isPresented: $chaptersPresented
         ) {
@@ -214,32 +213,6 @@ struct ProjectReaderView: View {
                     errorMessage = $0
                 }
             )
-        }
-        .sheet(
-            isPresented: $voicePresented
-        ) {
-            if let narrationItemID {
-                ItemVoicePicker(
-                    model: settingsModel,
-                    itemID: narrationItemID,
-                    onChanged: {
-                        handleNarrationChange()
-                    }
-                )
-            }
-        }
-        .sheet(
-            isPresented: $speedPresented
-        ) {
-            if let narrationItemID {
-                ItemSpeedPicker(
-                    model: settingsModel,
-                    itemID: narrationItemID,
-                    onChanged: {
-                        handleNarrationChange()
-                    }
-                )
-            }
         }
         .sheet(
             isPresented: $listeningOptionsPresented
@@ -287,6 +260,9 @@ struct ProjectReaderView: View {
         }
         .onDisappear {
             runtimeManager.endReader(runtime)
+        }
+        .onChange(of: runtimeManager.readerFollowRevision) { _, _ in
+            if runtimeManager.playerRuntime === runtime { followPlayer() }
         }
         .onChange(
             of: runtime.activity.activeItemID
@@ -534,57 +510,6 @@ struct ProjectReaderView: View {
         .padding(.bottom, 6)
     }
 
-    private var readerControls: some View {
-        VStack(spacing: 0) {
-            if let state = controlState {
-                ProjectPlayerExpandableCard(isExpanded: $isPlayerExpanded) {
-                    ProjectPlayerCompactContent(
-                        runtime: runtime,
-                        itemID: state.id,
-                        onError: { errorMessage = $0 }
-                    )
-                } expanded: {
-                    VStack(spacing: 10) {
-                        ProjectPlayerExpandedContent(
-                            runtime: runtime,
-                            itemID: state.id,
-                            onError: { errorMessage = $0 },
-                            onSeek: { followPlayer() },
-                            onChapterChanged: { followPlayer() },
-                            onVoice: {
-                                narrationItemID = state.id
-                                voicePresented = true
-                            },
-                            onSpeed: {
-                                narrationItemID = state.id
-                                speedPresented = true
-                            }
-                        )
-
-                        if let displayedItemID, displayedItemID != state.id {
-                            Button {
-                                do {
-                                    try runtime.play(itemID: displayedItemID)
-                                    followPlayer()
-                                } catch {
-                                    errorMessage = Self.message(for: error)
-                                }
-                            } label: {
-                                Label(
-                                    "Listen to the chapter on screen",
-                                    systemImage: "play.circle"
-                                )
-                                .font(.subheadline)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                            }
-                        }
-                    }
-                }
-                .disabled(!runtime.pdfProjectionMatchesStoredText)
-            }
-        }
-    }
-
     private var moreMenu: some View {
         Menu {
             if displayedState != nil {
@@ -685,33 +610,10 @@ struct ProjectReaderView: View {
         )
     }
 
-    private var controlState: ProjectRuntimeItemState? {
-        runtime.playerControlItemID(fallback: displayedItemID)
-            .flatMap { runtime.itemState($0) }
-    }
-
-    private var currentVoiceLabel: String {
-        guard let state = controlState
-        else {
-            return "Voice"
-        }
-        return ReadAloudNarrationCatalog
-            .voiceName(
-                state.resolved.voiceID
-            )
-    }
-
-    private var currentSpeedLabel: String {
-        guard let state = controlState
-        else {
-            return "Speed"
-        }
-        return state.resolved.speed
-            .formatted(
-                .number.precision(
-                    .fractionLength(1)
-                )
-            ) + "×"
+    private var needsListeningAction: Bool {
+        runtimeManager.playerRuntime !== runtime
+            || runtime.playerControlItemID() != displayedItemID
+            || runtime.isPlayerDismissed
     }
 
     private var previousDisplayedItemID:
@@ -1027,19 +929,6 @@ struct ProjectReaderView: View {
                         for: error
                     )
             }
-        }
-    }
-
-    private func handleNarrationChange() {
-        if runtime.activity.activeItemID
-            == narrationItemID
-        {
-            runtime.stopPlayback()
-        }
-        if let narrationItemID {
-            displayedItemID = narrationItemID
-            followsPlaybackContext = true
-            followsParagraph = true
         }
     }
 

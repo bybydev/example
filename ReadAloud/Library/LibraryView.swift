@@ -20,8 +20,6 @@ struct LibraryView: View {
     @State private var infoTarget: LibraryModel.Entry?
     @State private var isIssuesPresented = false
     @State private var pendingPasteImport: PasteDraft?
-    @State private var chaptersRuntime: ProjectRuntime?
-    @State private var chaptersPresented = false
     @State private var selectedSourceFilter: LibrarySourceFilter = .all
 
     var body: some View {
@@ -42,6 +40,7 @@ struct LibraryView: View {
                 get: { model.searchText },
                 set: { model.searchText = $0 }
             ),
+            placement: .navigationBarDrawer(displayMode: .always),
             prompt: "Search your library"
         )
         .toolbar {
@@ -142,11 +141,6 @@ struct LibraryView: View {
                     isURLPresented = false
                 }
             )
-        }
-        .sheet(isPresented: $chaptersPresented, onDismiss: { chaptersRuntime = nil }) {
-            if let runtime = chaptersRuntime {
-                ListeningChaptersSheet(runtime: runtime)
-            }
         }
         .sheet(item: $infoTarget) { entry in
             ProjectInfoSheet(entry: entry)
@@ -493,37 +487,22 @@ struct LibraryView: View {
             if let error = presentation.error {
                 Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
-            HStack(spacing: 10) {
-                Button {
-                    guard let runtime, let currentID else { return }
-                    do {
-                        runtimeManager.makeActive(runtime)
-                        if presentation.action == .cancel { runtime.stopPlayback() }
-                        else { try runtime.togglePlayer(itemID: currentID) }
-                    } catch { model.errorMessage = error.localizedDescription }
-                } label: {
-                    Label(presentation.label, systemImage: presentation.symbol)
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .foregroundStyle(theme.backgroundColor)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-                .disabled(runtime == nil || currentID == nil)
-
-                Button {
-                    chaptersRuntime = runtime
-                    chaptersPresented = runtime != nil
-                } label: {
-                    Label("Chapters", systemImage: "list.bullet")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .background(theme.primaryForegroundColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-                .disabled(runtime == nil)
+            Button {
+                guard let runtime, let currentID else { return }
+                do {
+                    runtimeManager.makeActive(runtime)
+                    if presentation.action == .cancel { runtime.stopPlayback() }
+                    else { try runtime.togglePlayer(itemID: currentID) }
+                } catch { model.errorMessage = error.localizedDescription }
+            } label: {
+                Label(presentation.label, systemImage: presentation.symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .foregroundStyle(theme.backgroundColor)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
             }
+            .buttonStyle(.plain)
+            .disabled(runtime == nil || currentID == nil)
         }
         .padding(20)
         .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
@@ -1084,87 +1063,6 @@ private struct ImportProgressSheet: View {
         case .normalizing: "Organizing content…"
         case .persisting: "Adding to Library…"
         case .finished: "Finishing…"
-        }
-    }
-}
-
-
-
-/// This is the current book's reading order. Playback stays in ProjectRuntime,
-/// shared with the reader, mini-player and system media controls.
-private struct ListeningChaptersSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(ProjectRuntimeManager.self) private var runtimeManager
-    @State private var errorMessage: String?
-    let runtime: ProjectRuntime
-
-    private var currentID: UUID? {
-        runtime.playerControlItemID(fallback: runtime.continueItemID)
-    }
-
-    private var nextID: UUID? {
-        currentID.flatMap { runtime.adjacentPlayerItem(to: $0, delta: 1) }
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
-                ReadAloudThemedList {
-                    Section {
-                        ForEach(Array(runtime.itemStates.enumerated()), id: \.element.id) { index, state in
-                            Button {
-                                do {
-                                    runtimeManager.makeActive(runtime)
-                                    try runtime.play(itemID: state.id)
-                                    dismiss()
-                                } catch { errorMessage = error.localizedDescription }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: state.id == currentID
-                                        ? (runtime.isPlaybackAudible ? "waveform" : "bookmark.fill") : "play.circle")
-                                        .frame(width: 24)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("\(index + 1). \(state.item.title)")
-                                            .foregroundStyle(.primary)
-                                        if state.id == currentID {
-                                            Text(runtime.isPlaybackAudible ? "Playing" : "Current chapter")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        } else if state.id == nextID {
-                                            Text("Next").font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer(minLength: 0)
-                                    if state.generationStatus.state == .readyOffline {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.secondary)
-                                            .accessibilityLabel("Ready Offline")
-                                    }
-                                }
-                                .frame(minHeight: 44)
-                                .contentShape(Rectangle())
-                            }
-                            .listRowBackground(state.id == currentID ? Color.accentColor.opacity(0.1) : Color.clear)
-                            .id(state.id)
-                        }
-                    } header: {
-                        Text(runtime.project?.title ?? "Chapters")
-                    }
-                }
-                .task { if let currentID { proxy.scrollTo(currentID, anchor: .center) } }
-            }
-            .navigationTitle("Chapters")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .alert("Playback Unavailable", isPresented: Binding(
-                get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
-            )) { Button("OK", role: .cancel) { errorMessage = nil } }
-                message: { Text(errorMessage ?? "") }
-        }
-        .readAloudThemeSurface()
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .onChange(of: runtimeManager.loadedRuntimeIDs) { _, ids in
-            if !ids.contains(runtime.id) { dismiss() }
         }
     }
 }

@@ -23,7 +23,7 @@ final class PlaybackContinuityTests: XCTestCase {
         }
     }
 
-    @MainActor private final class Playback: SpeechPlaybackOutput {
+    @MainActor fileprivate final class Playback: SpeechPlaybackOutput {
         private struct Buffer {
             let audio: KokoroAudio
             let onStart: (@MainActor () -> Void)?
@@ -877,6 +877,211 @@ final class PDFReadingPersistenceTests: XCTestCase {
         )
     }
 
+    /// All listening actions/assertions run without a suspension. Playback tasks
+    /// are stopped before they can reach synthesis; transport uses fake output.
+    @MainActor private static func withPlaybackRuntimes(
+        _ fixtures: [Fixture],
+        body: @MainActor (ProjectRuntimeManager, [ProjectRuntime]) throws -> Void
+    ) async throws {
+        let preferenceKey = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: preferenceKey)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        defer { UserDefaults.standard.set(previous, forKey: preferenceKey) }
+        let manager = ProjectRuntimeManager(
+            store: fixtures[0].store,
+            makePipeline: { ReadAloudPipeline(playback: PlaybackContinuityTests.Playback()) }
+        )
+        defer { manager.shutdownAll() }
+        var runtimes: [ProjectRuntime] = []
+        for fixture in fixtures {
+            runtimes.append(try await manager.prepareRuntime(projectID: fixture.projectID))
+        }
+        let result = Result { try body(manager, runtimes) }
+        for runtime in runtimes { runtime.stopPlayback() }
+        for runtime in runtimes { await runtime.shutdownAndDrain() }
+        try result.get()
+    }
+
+    func testExplicitListeningPreservesSessionWhileBrowsingAndOnRepeatedTaps() async throws {
+        let a = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: a.root) }
+        let b = try await makeFixture(root: a.root)
+        try await Self.withPlaybackRuntimes([a, b]) { manager, runtimes in
+            let first = runtimes[0], second = runtimes[1]
+            XCTAssertNil(manager.playerRuntime)
+            try first.listen(itemID: a.first.id)
+            let operation = try XCTUnwrap(first.playbackOperationID)
+            XCTAssertTrue(manager.playerRuntime === first)
+            manager.beginReader(second)
+            manager.makeActive(second)
+            XCTAssertTrue(manager.activeRuntime === second)
+            XCTAssertTrue(manager.playbackRuntime === first)
+            try first.listen(itemID: a.first.id)
+            XCTAssertEqual(first.playbackOperationID, operation)
+            first.pausePlayback()
+            try first.listen(itemID: a.first.id)
+            XCTAssertFalse(first.isPlaybackPaused)
+            XCTAssertEqual(first.playbackOperationID, operation)
+            XCTAssertTrue(manager.playerRuntime === first)
+        }
+    }
+
+    func testSwitchingBooksStopsPausedPreparationAndRejectsLateActivity() async throws {
+        let a = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: a.root) }
+        let b = try await makeFixture(root: a.root)
+        try await Self.withPlaybackRuntimes([a, b]) { manager, runtimes in
+            let first = runtimes[0], second = runtimes[1]
+            let bookmark = first.project?.playback?.contentBookmark
+            try first.listen(itemID: a.first.id)
+            first.pausePlayback()
+            manager.isPlayerExpanded = true
+            try second.listen(itemID: b.first.id)
+            XCTAssertTrue(manager.playerRuntime === second)
+            XCTAssertFalse(manager.isPlayerExpanded)
+            XCTAssertNil(first.playbackOperationID)
+            XCTAssertFalse(first.isPlaybackActive)
+            XCTAssertEqual(first.project?.playback?.contentBookmark, bookmark)
+            first.pipeline.onEvent?(.state(.playing))
+            XCTAssertFalse(first.isPlaybackActive)
+            first.resumePlayback()
+            XCTAssertTrue(manager.playbackRuntime === second)
+        }
+    }
+
+    func testRapidBookSwitchThenCloseCannotResurrectEarlierPlayer() async throws {
+        let a = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: a.root) }
+        let b = try await makeFixture(root: a.root)
+        let c = try await makeFixture(root: a.root)
+        try await Self.withPlaybackRuntimes([a, b, c]) { manager, runtimes in
+            try runtimes[0].listen(itemID: a.first.id)
+            try runtimes[1].listen(itemID: b.first.id)
+            try runtimes[2].listen(itemID: c.first.id)
+            XCTAssertTrue(manager.playerRuntime === runtimes[2])
+            XCTAssertNil(runtimes[0].playbackOperationID)
+            XCTAssertNil(runtimes[1].playbackOperationID)
+            manager.closePlayer(runtimes[0]) // A stale view cannot close C.
+            XCTAssertTrue(manager.playerRuntime === runtimes[2])
+            manager.closePlayer(runtimes[2])
+            XCTAssertNil(manager.playerRuntime)
+            XCTAssertNil(manager.playbackRuntime)
+            XCTAssertTrue(runtimes[2].isPlayerDismissed)
+            XCTAssertTrue(runtimes.allSatisfy { $0.playbackOperationID == nil })
+            for runtime in runtimes { runtime.pipeline.onEvent?(.state(.loading)) }
+            XCTAssertNil(manager.playerRuntime)
+            XCTAssertTrue(runtimes.allSatisfy { !$0.isPlaybackActive })
+            try runtimes[0].listen(itemID: a.first.id)
+            XCTAssertTrue(manager.playerRuntime === runtimes[0])
+            XCTAssertFalse(runtimes[0].isPlayerDismissed)
+        }
+    }
+
+    func testFailedPreparationCanRetryBeforeOldTaskFinishesWithoutRevivingPreviousBook() async throws {
+        let a = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: a.root) }
+        let b = try await makeFixture(root: a.root)
+        try await Self.withPlaybackRuntimes([a, b]) { manager, runtimes in
+            let first = runtimes[0], second = runtimes[1]
+            try first.listen(itemID: a.first.id)
+            try second.listen(itemID: b.first.id)
+            let failedOperation = second.playbackOperationID
+            second.pipeline.onEvent?(.state(.failed("Fixture failure")))
+            XCTAssertNotNil(second.playbackTask)
+            XCTAssertEqual(second.playerActionLabel, "Retry")
+            XCTAssertEqual(second.playerActionSymbol, "arrow.clockwise")
+            try second.togglePlayer(itemID: b.first.id)
+            XCTAssertNotEqual(second.playbackOperationID, failedOperation)
+            XCTAssertEqual(second.activity.playbackState, .loading)
+            XCTAssertTrue(manager.playerRuntime === second)
+            XCTAssertFalse(first.isPlaybackActive)
+        }
+    }
+
+    func testInterruptionCannotResumeReplacementSessionOrOverrideExplicitPause() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.withPlaybackRuntimes([fixture]) { _, runtimes in
+            let runtime = runtimes[0]
+            try runtime.listen(itemID: fixture.first.id)
+            runtime.pipeline.onAudioSessionEvent?(.interruptionBegan)
+            XCTAssertTrue(runtime.isPlaybackPaused)
+            try runtime.listen(itemID: fixture.second.id)
+            runtime.pausePlayback()
+            runtime.pipeline.onAudioSessionEvent?(.interruptionEnded(shouldResume: true))
+            XCTAssertTrue(runtime.isPlaybackPaused)
+            runtime.resumePlayback()
+            runtime.pipeline.onAudioSessionEvent?(.interruptionBegan)
+            runtime.pipeline.onAudioSessionEvent?(.interruptionEnded(shouldResume: true))
+            XCTAssertFalse(runtime.isPlaybackPaused)
+            runtime.pipeline.onAudioSessionEvent?(.interruptionBegan)
+            runtime.pausePlayback() // An explicit pause cancels automatic resume.
+            runtime.pipeline.onAudioSessionEvent?(.interruptionEnded(shouldResume: true))
+            XCTAssertTrue(runtime.isPlaybackPaused)
+        }
+    }
+
+    func testInvalidListeningRequestDoesNotInterruptCurrentBook() async throws {
+        let a = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: a.root) }
+        let b = try await makeFixture(root: a.root)
+        try await Self.withPlaybackRuntimes([a, b]) { manager, runtimes in
+            try runtimes[0].listen(itemID: a.first.id)
+            let operation = runtimes[0].playbackOperationID
+            XCTAssertThrowsError(try runtimes[1].listen(itemID: UUID()))
+            XCTAssertTrue(manager.playerRuntime === runtimes[0])
+            XCTAssertEqual(runtimes[0].playbackOperationID, operation)
+            XCTAssertNil(runtimes[1].playbackOperationID)
+        }
+    }
+
+    func testColdCustomPDFListeningCanClaimPreparationBeforeProjectionLoads() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await fixture.store.updatePDFReadingPolicy(
+            projectID: fixture.projectID,
+            policy: PdfReadingPolicy(includesFootnotes: true)
+        )
+        try await Self.withPlaybackRuntimes([fixture]) { manager, runtimes in
+            let runtime = runtimes[0]
+            XCTAssertFalse(runtime.pdfProjectionMatchesStoredText)
+            try runtime.listen(itemID: fixture.first.id)
+            XCTAssertTrue(manager.playerRuntime === runtime)
+            XCTAssertEqual(runtime.activity.playbackState, .loading)
+            manager.closePlayer(runtime)
+            XCTAssertNil(runtime.playbackOperationID)
+            XCTAssertNil(manager.playerRuntime)
+        }
+    }
+
+    func testPlayerReaderNavigationAndOwnerRemovalKeepOneSession() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.withPlaybackRuntimes([fixture]) { manager, runtimes in
+            let runtime = runtimes[0]
+            try runtime.listen(itemID: fixture.first.id)
+            let operation = runtime.playbackOperationID
+            manager.isPlayerExpanded = true
+            manager.openPlayerReader()
+            XCTAssertEqual(manager.playerReaderTarget?.projectID, fixture.projectID)
+            XCTAssertEqual(manager.playerReaderTarget?.itemID, fixture.first.id)
+            XCTAssertFalse(manager.isPlayerExpanded)
+            manager.playerReaderTarget = nil
+            manager.beginReader(runtime)
+            let followRevision = manager.readerFollowRevision
+            manager.openPlayerReader()
+            XCTAssertNil(manager.playerReaderTarget)
+            XCTAssertNotEqual(manager.readerFollowRevision, followRevision)
+            XCTAssertEqual(runtime.playbackOperationID, operation)
+            manager.endReader(runtime)
+            manager.openPlayerReader()
+            manager.forget(projectID: runtime.id)
+            XCTAssertNil(manager.playerRuntime)
+            XCTAssertNil(manager.playerReaderTarget)
+            XCTAssertFalse(runtime.isPlaybackActive)
+        }
+    }
+
     func testRecoveryPreservesIntentIdentityAndRejectsChangedSettings() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -984,6 +1189,7 @@ final class PDFReadingPersistenceTests: XCTestCase {
         dormant.playerItemID = dormant.itemStates.first?.id
         dormant.activity.activeItemID = dormant.playerItemID
         dormant.activity.playbackState = .paused
+        manager.claimPlayback(dormant)
         XCTAssertTrue(manager.playerRuntime === dormant)
         UserDefaults.standard.set(false, forKey: preferenceKey)
         dormant.queueController.reconcileScheduling()

@@ -107,6 +107,8 @@ final class ProjectRuntime {
     var activity = ProjectRuntimeActivity()
     // Keeps retry/replay available after the audio queue has stopped.
     var playerItemID: UUID?
+    // Presentation state is session-only; closing never clears the bookmark.
+    var isPlayerDismissed = false
     var sleepTimerDeadline: Date?
     var stopsAtChapterEnd = false
     @ObservationIgnored var sleepTimerTask: Task<Void, Never>?
@@ -136,6 +138,7 @@ final class ProjectRuntime {
     }
 
     @ObservationIgnored let pipeline: ReadAloudPipeline
+    @ObservationIgnored weak var playbackCoordinator: ProjectRuntimeManager?
     @ObservationIgnored let hasProAccess:
         @MainActor () -> Bool
     @ObservationIgnored var synthesisSuspendedForMemoryPressure = false
@@ -159,7 +162,7 @@ final class ProjectRuntime {
         ProjectFinalAudioAsset?
     @ObservationIgnored var finalAudioPositionSeconds = 0.0
     @ObservationIgnored var finalAudioPlaybackOriginSeconds = 0.0
-    @ObservationIgnored var shouldResumeAfterInterruption = false
+    @ObservationIgnored var interruptedPlaybackOperationID: UUID?
     @ObservationIgnored var prefetchScheduledItemIDs = Set<UUID>()
     @ObservationIgnored var prefetchTask: Task<Void, Never>?
     @ObservationIgnored var prefetchTaskID: UUID?
@@ -1110,7 +1113,7 @@ final class ProjectRuntime {
         itemStates.first { $0.id == itemID }
     }
 
-    func prepareExplicitWork() throws {
+    func prepareExplicitWork(requiresPDFProjection: Bool = true) throws {
         guard !isInvalidatingAudio, !isShutdown else {
             throw CancellationError()
         }
@@ -1122,7 +1125,8 @@ final class ProjectRuntime {
                 "Listening options are being applied. Try again shortly."
             )
         }
-        guard pdfProjectionMatchesStoredText else {
+        guard pdfProjectionMatchesStoredText
+                || (!requiresPDFProjection && pdfReadingProjection == nil) else {
             throw ProjectStoreError.invalidData(
                 "PDF reading content is not synchronized with playback."
             )
@@ -1139,10 +1143,12 @@ final class ProjectRuntime {
         synthesisSuspendedForMemoryPressure = true
         isReleasingSpeechMemory = true
         let hadWork = isBackgroundWorkActive
+        let playbackItemID = playerControlItemID()
         stopPlayback()
         readerLayoutCache = nil
         queueController.reconcileScheduling()
         if hadWork {
+            playerItemID = playbackItemID
             let message = "Listening stopped because the device is low on memory. Your progress is saved. Try again after memory is available."
             activity.playbackState = .failed(message)
             lastErrorMessage = message
@@ -1187,7 +1193,7 @@ final class ProjectRuntime {
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
         finalAudioPlaybackOriginSeconds = 0
-        shouldResumeAfterInterruption = false
+        interruptedPlaybackOperationID = nil
         activity.activeItemID = nil
         activity.currentParagraphRange = nil
         activity.currentParagraphIndex = nil
@@ -1231,6 +1237,7 @@ final class ProjectRuntime {
 
     func shutdown() {
         isShutdown = true
+        playbackCoordinator?.releasePlayback(self)
         pdfReadingProjection = nil
         pdfReadingSessionTask?.cancel()
         pdfReadingSessionTask = nil
@@ -1259,7 +1266,7 @@ final class ProjectRuntime {
         finalAudioAsset = nil
         finalAudioPositionSeconds = 0
         finalAudioPlaybackOriginSeconds = 0
-        shouldResumeAfterInterruption = false
+        interruptedPlaybackOperationID = nil
         activity = ProjectRuntimeActivity()
         ProjectSystemMediaController
             .shared
@@ -1284,6 +1291,14 @@ final class ProjectRuntime {
     ) {
         switch event {
         case .state(let state):
+            // Preparation/playing events are meaningful only for a live request.
+            // A retired pipeline must not resurrect activity after stop/close.
+            switch state {
+            case .loading, .warmingUp, .synthesizing, .buffering, .playing, .paused:
+                guard playbackOperationID != nil else { return }
+            case .idle, .finished, .failed:
+                break
+            }
             if readerPauseRequested {
                 switch state {
                 case .idle, .finished, .failed:
@@ -1300,9 +1315,11 @@ final class ProjectRuntime {
             queueController.reconcileScheduling()
 
             if activity.hasActivePlaybackWork {
+                // Explicit playback claims ownership before preparation starts.
+                // Pipeline updates must never reclaim a superseded session.
                 ProjectSystemMediaController
                     .shared
-                    .activate(self)
+                    .publish(self)
             } else {
                 ProjectSystemMediaController
                     .shared
@@ -1343,36 +1360,30 @@ final class ProjectRuntime {
     ) {
         switch event {
         case .interruptionBegan:
-            shouldResumeAfterInterruption =
-                isPlaybackActive
-                && !isPlaybackPaused
+            let interruptedOperation = isPlaybackActive && !isPlaybackPaused
+                ? playbackOperationID : nil
 
             guard isPlaybackActive else {
                 return
             }
 
-            Task { [weak self] in
-                await self?
-                    .persistPlaybackCheckpoint()
-            }
+            scheduleAudioSessionCheckpoint()
             pausePlayback()
+            interruptedPlaybackOperationID = interruptedOperation
 
         case .interruptionEnded(
             let shouldResume
         ):
-            let resume =
-                shouldResume
-                && shouldResumeAfterInterruption
-            shouldResumeAfterInterruption =
-                false
+            let resume = shouldResume && interruptedPlaybackOperationID != nil
+                && interruptedPlaybackOperationID == playbackOperationID
+            interruptedPlaybackOperationID = nil
 
             if resume {
                 resumePlayback()
             }
 
         case .routeBecameUnavailable:
-            shouldResumeAfterInterruption =
-                false
+            interruptedPlaybackOperationID = nil
 
             guard isPlaybackActive,
                   !isPlaybackPaused
@@ -1380,27 +1391,27 @@ final class ProjectRuntime {
                 return
             }
 
-            Task { [weak self] in
-                await self?
-                    .persistPlaybackCheckpoint()
-            }
+            scheduleAudioSessionCheckpoint()
             pausePlayback()
 
         case .mediaServicesWereReset:
-            shouldResumeAfterInterruption =
-                false
+            interruptedPlaybackOperationID = nil
 
             guard isPlaybackActive else {
                 return
             }
 
-            Task { [weak self] in
-                await self?
-                    .persistPlaybackCheckpoint()
-            }
             stopPlayback()
             lastErrorMessage =
                 "Audio services restarted. Resume playback to continue."
+        }
+    }
+
+    private func scheduleAudioSessionCheckpoint() {
+        guard let operationID = playbackOperationID else { return }
+        Task { [weak self] in
+            guard let self, self.playbackOperationID == operationID else { return }
+            await self.persistPlaybackCheckpoint()
         }
     }
 

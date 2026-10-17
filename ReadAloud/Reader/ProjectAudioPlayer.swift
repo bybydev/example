@@ -7,6 +7,7 @@ struct ProjectPlayerPlayButton: View {
     let runtime: ProjectRuntime
     let itemID: UUID
     var diameter: CGFloat = 64
+    var isProminent = true
     let onError: (String) -> Void
 
     var body: some View {
@@ -14,12 +15,11 @@ struct ProjectPlayerPlayButton: View {
             do { try runtime.togglePlayer(itemID: itemID) }
             catch { onError(error.localizedDescription) }
         } label: {
-            Image(systemName: runtime.isPlaybackActive && !runtime.isPlaybackPaused
-                ? "pause.fill" : "play.fill")
-                .font(.system(size: diameter * 0.36, weight: .semibold))
-                .foregroundStyle(theme.backgroundColor)
+            Image(systemName: runtime.playerActionSymbol)
+                .font(.system(size: max(20, diameter * 0.36), weight: .semibold))
+                .foregroundStyle(isProminent ? theme.backgroundColor : theme.primaryForegroundColor)
                 .frame(width: diameter, height: diameter)
-                .background(Color.accentColor.gradient, in: Circle())
+                .background(isProminent ? Color.accentColor : Color.clear, in: Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(runtime.playerActionLabel)
@@ -263,78 +263,54 @@ private struct PlayerScrubberContent: View {
     }
 }
 
-/// Compact player: artwork is the only transport button. The remainder of
-/// the surface is reserved for the parent expand/collapse button.
-struct ProjectPlayerCoverButton: View {
-    let runtime: ProjectRuntime
-    let itemID: UUID
-    let onError: (String) -> Void
-
-    var body: some View {
-        Button {
-            do { try runtime.togglePlayer(itemID: itemID) }
-            catch { onError(error.localizedDescription) }
-        } label: {
-            ZStack {
-                ProjectArtworkView(
-                    url: runtime.artworkURL,
-                    sourceType: runtime.project?.source.type ?? .paste,
-                    width: 40, height: 48
-                )
-
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.black.opacity(0.48))
-                    .frame(width: 40, height: 48)
-
-                if runtime.isPlayerPreparing && !runtime.isPlaybackPaused {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Image(systemName:
-                        runtime.isPlaybackActive && !runtime.isPlaybackPaused
-                        ? "pause.fill" : "play.fill"
-                    )
-                    .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 2)
-                }
-            }
-            .frame(width: 48, height: 48)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(runtime.playerActionLabel)
-        .accessibilityHint("Controls playback without expanding or collapsing the player.")
-    }
-}
-
+/// Artwork and labels expand the player. Playback and close have separate
+/// hit regions, so neither control changes the player's size.
 struct ProjectPlayerCompactContent: View {
     let runtime: ProjectRuntime
     let itemID: UUID
     let onError: (String) -> Void
+    let onExpand: () -> Void
+    let onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 8) {
-                ProjectPlayerCoverButton(
-                    runtime: runtime,
-                    itemID: itemID,
+        VStack(spacing: 7) {
+            HStack(spacing: 4) {
+                Button(action: onExpand) {
+                    HStack(spacing: 11) {
+                        ProjectArtworkView(
+                            url: runtime.artworkURL,
+                            sourceType: runtime.project?.source.type ?? .paste,
+                            width: 38, height: 46
+                        )
+                        .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(runtime.project?.title ?? "ReadAloud")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Expand audio player")
+                .accessibilityValue("\(runtime.project?.title ?? "ReadAloud"), \(subtitle)")
+                .accessibilityHint("Expands the audio player without changing playback.")
+
+                ProjectPlayerPlayButton(
+                    runtime: runtime, itemID: itemID,
+                    diameter: 44, isProminent: false,
                     onError: onError
                 )
+                .disabled(runtime.isApplyingPDFReadingPolicy)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(runtime.project?.title ?? "ReadAloud")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Only the overlay on the cover owns an action in compact mode.
-                // Let taps on labels and empty space reach the surface button.
-                .allowsHitTesting(false)
+                ProjectPlayerCloseButton(action: onClose)
             }
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
@@ -365,9 +341,25 @@ struct ProjectPlayerCompactContent: View {
     }
 }
 
-/// Full controls are shared between the Reader and Library players. Their
-/// actions own their hit regions; taps elsewhere belong to the background
-/// expand/collapse surface.
+private struct ProjectPlayerCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close audio player")
+        .accessibilityHint("Stops playback and keeps your listening position.")
+    }
+}
+
+/// Full controls for the single app-level player.
+/// Collapse and close are explicit, separate actions.
 struct ProjectPlayerExpandedContent: View {
     let runtime: ProjectRuntime
     let itemID: UUID
@@ -376,63 +368,61 @@ struct ProjectPlayerExpandedContent: View {
     let onChapterChanged: () -> Void
     let onVoice: () -> Void
     let onSpeed: () -> Void
+    let onCollapse: () -> Void
+    let onClose: () -> Void
     var onOpenReader: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                ProjectArtworkView(
-                    url: runtime.artworkURL,
-                    sourceType: runtime.project?.source.type ?? .paste,
-                    width: 36, height: 44
-                )
-                .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(runtime.project?.title ?? "ReadAloud")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(runtime.itemState(itemID)?.item.title ?? "Chapter")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if runtime.isPlayerPreparing {
-                        Text(runtime.playerStatus)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else if case .failed = runtime.activity.playbackState {
-                        Text(runtime.playerStatus)
-                            .font(.caption2)
-                            .foregroundStyle(.red)
-                            .lineLimit(2)
-                            .accessibilityLabel("Playback error: \(runtime.playerStatus)")
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .allowsHitTesting(false)
-
-                Menu {
-                    if let onOpenReader {
-                        Button("Open Reader", systemImage: "book") {
-                            onOpenReader()
-                        }
-                    }
-                    Button("Stop Playback", systemImage: "stop.fill", role: .destructive) {
-                        runtime.stopPlayback()
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
+        VStack(spacing: 14) {
+            HStack(spacing: 0) {
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 19, weight: .medium))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel("Player actions")
+                .buttonStyle(.plain)
+                .accessibilityLabel("Collapse audio player")
+                .accessibilityHint("Keeps playback running in the compact player.")
+
+                Spacer(minLength: 8)
+                Text("NOW PLAYING")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                ProjectPlayerCloseButton(action: onClose)
+            }
+
+            if let onOpenReader {
+                Button(action: onOpenReader) {
+                    bookDetails
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the reader without stopping playback.")
+            } else {
+                bookDetails
+            }
+
+            if runtime.isPlayerPreparing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(runtime.playerStatus).font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if case .failed = runtime.activity.playbackState {
+                Text(runtime.playerStatus)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Playback error: \(runtime.playerStatus)")
             }
 
             ProjectPlayerScrubber(
                 runtime: runtime, itemID: itemID,
                 onError: onError, onSeek: onSeek
             )
+            .disabled(!runtime.pdfProjectionMatchesStoredText)
 
             HStack(spacing: 0) {
                 chapterButton(forward: false)
@@ -460,6 +450,7 @@ struct ProjectPlayerExpandedContent: View {
                 Spacer(minLength: 0)
                 chapterButton(forward: true)
             }
+            .disabled(runtime.isApplyingPDFReadingPolicy)
 
             HStack(spacing: 12) {
                 Button(action: onVoice) {
@@ -487,8 +478,46 @@ struct ProjectPlayerExpandedContent: View {
                 ProjectPlayerSleepTimer(runtime: runtime)
             }
             .font(.subheadline)
+            .foregroundStyle(.secondary)
             .buttonStyle(.plain)
+            .disabled(!runtime.pdfProjectionMatchesStoredText)
         }
+    }
+
+    private var bookDetails: some View {
+        HStack(spacing: 13) {
+            ProjectArtworkView(
+                url: runtime.artworkURL,
+                sourceType: runtime.project?.source.type ?? .paste,
+                width: 48, height: 64
+            )
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(runtime.project?.title ?? "ReadAloud")
+                    .font(.headline)
+                    .lineLimit(2)
+                if let author = runtime.project?.author, !author.isEmpty {
+                    Text(author)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(runtime.itemState(itemID)?.item.title ?? "Chapter")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if onOpenReader != nil {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func seek(by seconds: Double) {
@@ -526,10 +555,10 @@ struct ProjectPlayerExpandedContent: View {
     }
 }
 
-/// The toggle button is BEHIND the contents, never a parent onTapGesture.
-/// Therefore all visible transport buttons, menus and the scrubber receive
-/// their own gestures exclusively. Background also catches empty card space.
+/// Contents own their buttons. Empty card space never toggles the player,
+/// and outer margins cannot activate reader rows behind the safe-area inset.
 struct ProjectPlayerExpandableCard<Compact: View, Expanded: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var isExpanded: Bool
     private let compact: () -> Compact
     private let expanded: () -> Expanded
@@ -554,31 +583,19 @@ struct ProjectPlayerExpandableCard<Compact: View, Expanded: View>: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .background {
-                toggleButton
-            }
             .projectPlayerCard(compact: !isExpanded)
         }
         .frame(maxWidth: .infinity)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: isExpanded)
         // Consume the outer margin too; it must not activate Reader rows
         // behind the safe-area-inset player.
-        .background { toggleButton.accessibilityHidden(true) }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var toggleButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.22)) {
-                isExpanded.toggle()
-            }
-        } label: {
-            Rectangle()
-                .fill(.clear)
+        .background {
+            Color.clear
                 .contentShape(Rectangle())
+                .onTapGesture { }
+                .accessibilityHidden(true)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isExpanded ? "Collapse audio player" : "Expand audio player")
-        .accessibilityHint("Changes the player size without affecting playback.")
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -589,14 +606,14 @@ private struct ProjectPlayerCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .foregroundStyle(theme.primaryForegroundColor)
-            .padding(.horizontal, compact ? 8 : 16)
-            .padding(.vertical, compact ? 4 : 16)
-            .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: compact ? 18 : 24))
+            .padding(.horizontal, compact ? 10 : 18)
+            .padding(.vertical, 8)
+            .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: compact ? 20 : 24))
             .overlay {
-                RoundedRectangle(cornerRadius: compact ? 18 : 24)
-                    .strokeBorder(theme.primaryForegroundColor.opacity(0.12), lineWidth: 1)
+                RoundedRectangle(cornerRadius: compact ? 20 : 24)
+                    .strokeBorder(theme.primaryForegroundColor.opacity(0.08), lineWidth: 0.5)
             }
-            .shadow(color: theme.primaryForegroundColor.opacity(0.10), radius: 14, y: 5)
+            .shadow(color: theme.primaryForegroundColor.opacity(0.08), radius: 12, y: 4)
             .padding(.horizontal, 12)
             .padding(.vertical, compact ? 3 : 8)
     }

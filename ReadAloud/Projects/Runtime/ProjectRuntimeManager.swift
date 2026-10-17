@@ -1,10 +1,21 @@
 import Foundation
 import Observation
 
+nonisolated struct PlayerReaderTarget: Hashable, Sendable {
+    let projectID: UUID
+    let itemID: UUID?
+    let title: String
+}
+
 @Observable
 @MainActor
 final class ProjectRuntimeManager {
     private(set) var activeRuntime: ProjectRuntime?
+    // Browsing selection is independent from the one explicit playback owner.
+    private(set) var playerRuntime: ProjectRuntime?
+    var isPlayerExpanded = false
+    var playerReaderTarget: PlayerReaderTarget?
+    private(set) var readerFollowRevision: UInt64 = 0
     private(set) var loadedRuntimeIDs: Set<UUID> = []
     private(set) var initializationError: String?
     private(set) var readerProjectID: UUID?
@@ -62,6 +73,7 @@ final class ProjectRuntimeManager {
     }
 
     @ObservationIgnored private let projectStore: ProjectStore?
+    @ObservationIgnored private let makePipeline: @MainActor () -> ReadAloudPipeline
     @ObservationIgnored private let hasPro:
         @MainActor () -> Bool
     @ObservationIgnored private var runtimes: [UUID: ProjectRuntime] = [:]
@@ -77,10 +89,12 @@ final class ProjectRuntimeManager {
 
     init(
         store: ProjectStore? = nil,
+        makePipeline: @escaping @MainActor () -> ReadAloudPipeline = { ReadAloudPipeline() },
         hasPro:
             @escaping @MainActor () -> Bool
             = { false }
     ) {
+        self.makePipeline = makePipeline
         self.hasPro = hasPro
         do {
             projectStore = try store ?? ProjectStore()
@@ -163,8 +177,10 @@ final class ProjectRuntimeManager {
                     projectID: projectID,
                     store: projectStore
                 ),
-                hasPro: hasPro
+                hasPro: hasPro,
+                pipeline: makePipeline()
             )
+            runtime.playbackCoordinator = self
             runtimes[projectID] = runtime
             if memoryReleaseTask != nil || recoverySuspendedForMemoryPressure {
                 runtime.suspendForMemoryPressure()
@@ -263,25 +279,45 @@ final class ProjectRuntimeManager {
     }
 
     var playbackRuntime: ProjectRuntime? {
-        if let activeRuntime,
-           activeRuntime.isPlaybackActive
-        {
-            return activeRuntime
-        }
+        guard let playerRuntime, playerRuntime.isPlaybackActive else { return nil }
+        return playerRuntime
+    }
 
-        return runtimes.values.first(
-            where: {
-                $0.isPlaybackActive
-            }
+    /// Called synchronously by every playback path, including seeks and replay.
+    /// Runtime state remains authoritative for progress, pause, and preparation.
+    func claimPlayback(_ runtime: ProjectRuntime) {
+        guard runtimes[runtime.id] === runtime else { return }
+        if playerRuntime !== runtime {
+            playerRuntime?.stopPlayback()
+            isPlayerExpanded = false
+        }
+        playerRuntime = runtime
+        ProjectSystemMediaController.shared.attach(runtime)
+    }
+
+    func releasePlayback(_ runtime: ProjectRuntime) {
+        guard playerRuntime === runtime else { return }
+        ProjectSystemMediaController.shared.detach(runtime)
+        playerRuntime = nil
+        isPlayerExpanded = false
+    }
+
+    func openPlayerReader() {
+        guard let runtime = playerRuntime else { return }
+        isPlayerExpanded = false
+        if readerProjectID == runtime.id {
+            requestReaderFollow()
+            return
+        }
+        playerReaderTarget = PlayerReaderTarget(
+            projectID: runtime.id,
+            itemID: runtime.playerControlItemID() ?? runtime.continueItemID,
+            title: runtime.project?.title ?? "Reader"
         )
     }
 
-    var playerRuntime: ProjectRuntime? {
-        if let playing = playbackRuntime { return playing }
-        if let activeRuntime, activeRuntime.playerItemID != nil {
-            return activeRuntime
-        }
-        return runtimes.values.first { $0.playerItemID != nil }
+    func requestReaderFollow() {
+        readerFollowRevision &+= 1
     }
 
     func runtimeIfLoaded(
@@ -334,7 +370,13 @@ final class ProjectRuntimeManager {
         activeRuntime = runtime
     }
 
+    func closePlayer(_ runtime: ProjectRuntime) {
+        guard playerRuntime === runtime else { return }
+        runtime.closePlayer()
+    }
+
     func forget(projectID: UUID) {
+        if playerReaderTarget?.projectID == projectID { playerReaderTarget = nil }
         loadingTasks[projectID]?.cancel()
         loadingTasks.removeValue(forKey: projectID)
 
@@ -381,6 +423,7 @@ final class ProjectRuntimeManager {
     ) {
         let removable = runtimes.values.filter { runtime in
             runtime.id != projectID
+                && runtime !== playerRuntime
                 && runtime.id != readerProjectID
                 && !runtime.isBackgroundWorkActive
                 && runtime.queueController.waitingCount == 0
@@ -452,6 +495,9 @@ final class ProjectRuntimeManager {
         runtimes.removeAll()
         loadedRuntimeIDs = []
         activeRuntime = nil
+        playerRuntime = nil
+        isPlayerExpanded = false
+        playerReaderTarget = nil
         readerProjectID = nil
         for runtime in values {
             runtime.shutdown()

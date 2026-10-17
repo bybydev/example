@@ -9,7 +9,6 @@ private struct ReadAloudThemeSurface: ViewModifier {
             .scrollContentBackground(.hidden)
             .foregroundStyle(theme.primaryForegroundColor)
             .background(theme.backgroundColor.ignoresSafeArea())
-            .toolbarBackground(theme.backgroundColor, for: .navigationBar)
     }
 }
 

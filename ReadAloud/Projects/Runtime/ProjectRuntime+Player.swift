@@ -52,6 +52,15 @@ nonisolated struct ListeningHeroPresentation {
 
 @MainActor
 extension ProjectRuntime {
+    func closePlayer() {
+        isPlayerDismissed = true
+        // Reuse Stop's checkpoint and cancellation path for both live speech
+        // and saved audio. Detach lock-screen controls from the closed session.
+        stopPlayback()
+        playbackCoordinator?.releasePlayback(self)
+        ProjectSystemMediaController.shared.detach(self)
+    }
+
     func clearSleepTimer() {
         sleepTimerTask?.cancel()
         sleepTimerTask = nil
@@ -207,22 +216,35 @@ extension ProjectRuntime {
     }
 
     var playerActionLabel: String {
-        if isPlaybackActive { return isPlaybackPaused ? "Resume" : "Pause" }
         switch activity.playbackState {
         case .failed: return "Retry"
         case .finished: return "Replay chapter"
-        default: return "Listen"
+        default: return isPlaybackActive ? (isPlaybackPaused ? "Resume" : "Pause") : "Listen"
+        }
+    }
+
+    var playerActionSymbol: String {
+        switch activity.playbackState {
+        case .failed: return "arrow.clockwise"
+        case .finished, .idle: return "play.fill"
+        default: return isPlaybackPaused ? "play.fill" : "pause.fill"
         }
     }
 
     func togglePlayer(itemID: UUID) throws {
-        if isPlaybackActive, activity.activeItemID == itemID {
-            if isPlaybackPaused { resumePlayback() } else { pausePlayback() }
-        } else if case .finished = activity.playbackState, playerItemID == itemID {
-            try play(itemID: itemID, fromOffsetUTF16: 0)
-        } else {
-            try play(itemID: itemID)
+        if activity.activeItemID == itemID, playbackOperationID != nil {
+            switch activity.playbackState {
+            case .paused:
+                resumePlayback()
+                return
+            case .loading, .buffering, .warmingUp, .synthesizing, .playing:
+                pausePlayback()
+                return
+            case .idle, .finished, .failed:
+                break
+            }
         }
+        try listen(itemID: itemID)
     }
 
     func adjacentPlayerItem(to itemID: UUID, delta: Int) -> UUID? {

@@ -35,16 +35,11 @@ final class ProjectSystemMediaController {
         installRemoteCommands()
     }
 
-    func activate(
+    /// Mirror the app coordinator's owner; this adapter never chooses or stops
+    /// another book in response to pipeline events.
+    func attach(
         _ runtime: ProjectRuntime
     ) {
-        if let current = self.runtime,
-           current !== runtime,
-           current.isPlaybackActive
-        {
-            current.stopPlayback()
-        }
-
         self.runtime = runtime
         publish(runtime)
     }
@@ -246,34 +241,16 @@ final class ProjectSystemMediaController {
 
         switch action {
         case .play:
-            if runtime.isPlaybackPaused {
-                runtime.resumePlayback()
-            } else if !runtime
-                .isPlaybackActive,
-                      let itemID =
-                        runtime.continueItemID
-            {
-                try? runtime.play(
-                    itemID: itemID
-                )
+            if let itemID = runtime.playerControlItemID(fallback: runtime.continueItemID) {
+                try? runtime.listen(itemID: itemID)
             }
 
         case .pause:
             runtime.pausePlayback()
 
         case .togglePlayPause:
-            if runtime.isPlaybackPaused {
-                runtime.resumePlayback()
-            } else if runtime
-                .isPlaybackActive
-            {
-                runtime.pausePlayback()
-            } else if let itemID =
-                        runtime.continueItemID
-            {
-                try? runtime.play(
-                    itemID: itemID
-                )
+            if let itemID = runtime.playerControlItemID(fallback: runtime.continueItemID) {
+                try? runtime.togglePlayer(itemID: itemID)
             }
 
         case .skipForward:
