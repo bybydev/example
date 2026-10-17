@@ -12,6 +12,19 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
+      - name: Authenticate private GitHub repositories (if configured)
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPO_TOKEN" ]]; then
+            echo "PRIVATE_REPO_TOKEN is not configured; skipping private repository authentication."
+            exit 0
+          fi
+          git config --global \
+            url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Download offline ONNX assets
