@@ -31,7 +31,8 @@ nonisolated struct PasteImportAdapter {
                 )
             ],
             artwork: nil,
-            diagnostics: []
+            diagnostics: [],
+            parsedOutput: .paste(rawText: text)
         )
     }
 

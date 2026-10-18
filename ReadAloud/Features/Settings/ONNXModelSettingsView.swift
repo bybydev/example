@@ -1,3 +1,4 @@
+#if DEBUG
 import AVFoundation
 import SwiftUI
 
@@ -175,3 +176,4 @@ struct ONNXModelSettingsView: View {
         }
     }
 }
+#endif

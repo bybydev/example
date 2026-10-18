@@ -552,16 +552,20 @@ struct LibraryView: View {
 
     private var listeningUsage: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            VStack(alignment: .leading, spacing: 4) {
-                Label(
-                    purchases.hasPro ? "Unlimited listening · Pro"
-                        : runtimeManager.listeningAllowance.usageDescription(at: context.date),
-                    systemImage: purchases.hasPro ? "infinity" : "clock"
-                )
-                if !purchases.hasPro {
-                    let reset = runtimeManager.listeningAllowance.resetDate(at: context.date)
-                    Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: purchases.hasPro ? "infinity" : "clock")
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(
+                        purchases.hasPro ? "Unlimited listening · Pro"
+                            : runtimeManager.listeningAllowance.usageDescription(at: context.date)
+                    )
+                    if !purchases.hasPro {
+                        let reset = runtimeManager.listeningAllowance.resetDate(at: context.date)
+                        Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                    }
                 }
+                .multilineTextAlignment(.leading)
             }
             .font(.caption)
             .foregroundStyle(heroSecondaryText)

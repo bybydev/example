@@ -23,9 +23,6 @@ struct SettingsView: View {
     )
     private var defaultSpeed = 1.0
 
-    @AppStorage(ReadAloudPreferences.Key.pronunciationFallbackMode)
-    private var pronunciationMode = PronunciationFallbackMode.adaptive.rawValue
-
     @AppStorage(
         ReadAloudPreferences
             .Key.skipInterval
@@ -37,19 +34,6 @@ struct SettingsView: View {
             .Key.continueToNextChapter
     )
     private var continueToNextChapter =
-        true
-
-    @AppStorage(
-        ReadAloudPreferences
-            .Key.prefetchCount
-    )
-    private var prefetchCount = 2
-
-    @AppStorage(
-        ReadAloudPreferences
-            .Key.generateWhileListening
-    )
-    private var generateWhileListening =
         true
 
     @State private var
@@ -90,7 +74,35 @@ struct SettingsView: View {
             ],
             additionalSections: [
                 FoundationDeveloperSection(
-                    title: "ReadAloud",
+                    title: "Speech Diagnostics",
+                    items: [
+                        .destination(
+                            FoundationDeveloperDestination(
+                                title: "Kokoro ONNX INT8",
+                                systemImage: "cpu"
+                            ) {
+                                ONNXModelSettingsView()
+                            }
+                        ),
+                        .destination(
+                            FoundationDeveloperDestination(
+                                title: "Generation Recovery",
+                                systemImage: "arrow.clockwise"
+                            ) {
+                                ReadAloudThemedList {
+                                    Section("Details") {
+                                        Text(runtimeManager.generationRecoveryError
+                                            ?? "No generation recovery errors.")
+                                    }
+                                }
+                                .readAloudThemeSurface()
+                                .navigationTitle("Generation Recovery")
+                            }
+                        ),
+                    ]
+                ),
+                FoundationDeveloperSection(
+                    title: "Prototypes",
                     items: [
                         .destination(
                             FoundationDeveloperDestination(
@@ -102,6 +114,11 @@ struct SettingsView: View {
                                 ReaderView()
                             }
                         ),
+                    ]
+                ),
+                FoundationDeveloperSection(
+                    title: "UI Previews",
+                    items: [
                         .destination(
                             FoundationDeveloperDestination(
                                 title:
@@ -132,6 +149,8 @@ struct SettingsView: View {
                 }
             )
 
+            listeningSection
+
             Section("Appearance") {
                 ThemePickerView(
                     manager: themes,
@@ -145,39 +164,13 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
             }
 
-            Section {
+            offlineStorageSection
+
+            Section("Advanced") {
                 NavigationLink {
-                    ONNXModelSettingsView()
+                    AdvancedListeningSettingsView()
                 } label: {
-                    Label("Kokoro ONNX INT8", systemImage: "cpu")
-                }
-
-                Picker("Unknown Words", selection: $pronunciationMode) {
-                    ForEach(PronunciationFallbackMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
-                    }
-                }
-            } header: {
-                Text("Speech Engine")
-            } footer: {
-                Text(PronunciationFallbackMode(rawValue: pronunciationMode)?.explanation
-                    ?? PronunciationFallbackMode.adaptive.explanation)
-                Text("Only pronunciation problems use this mode. Model errors still stop playback. Speech assets are bundled for offline use.")
-            }
-
-            narrationDefaultsSection
-            playbackSection
-            generationSection
-
-            Section("App Data") {
-                NavigationLink {
-                    StorageManagementView()
-                } label: {
-                    Label(
-                        "Storage",
-                        systemImage:
-                            "externaldrive"
-                    )
+                    Label("Advanced Listening", systemImage: "slider.horizontal.3")
                 }
             }
 
@@ -219,15 +212,15 @@ struct SettingsView: View {
                 }
             }
 
-            Section("About") {
-                LabeledContent(
-                    "Synthesis",
-                    value: "On-device"
-                )
+            Section {
                 LabeledContent(
                     "Version",
                     value: version
                 )
+            } header: {
+                Text("About")
+            } footer: {
+                Text("Speech is generated on your device and works offline.")
             }
 
             #if DEBUG
@@ -275,9 +268,6 @@ struct SettingsView: View {
                 return true
             }
         }
-        .onChange(of: pronunciationMode) { _, _ in
-            refreshLoadedProjects()
-        }
         .onChange(
             of: defaultVoiceID
         ) { _, _ in
@@ -288,19 +278,9 @@ struct SettingsView: View {
         ) { _, _ in
             refreshLoadedProjects()
         }
-        .onChange(
-            of: prefetchCount
-        ) { _, _ in
-            refreshLoadedProjects()
-        }
-        .onChange(
-            of: generateWhileListening
-        ) { _, _ in
-            refreshLoadedProjects()
-        }
     }
 
-    private var narrationDefaultsSection:
+    private var listeningSection:
         some View
     {
         Section {
@@ -335,8 +315,10 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            playbackRows
         } header: {
-            Text("ReadAloud Defaults")
+            Text("Listening")
         } footer: {
             if !purchases.hasPro,
                !ReadAloudAccessPolicy
@@ -350,16 +332,16 @@ struct SettingsView: View {
                 )
             } else {
                 Text(
-                    "Projects set to App Default follow these values."
+                    "Projects set to App Default follow the default voice and speed."
                 )
             }
         }
     }
 
-    private var playbackSection:
+    private var playbackRows:
         some View
     {
-        Section("Playback") {
+        Group {
             Picker(
                 "Skip Interval",
                 selection:
@@ -385,24 +367,23 @@ struct SettingsView: View {
         }
     }
 
-    private var generationSection: some View {
+    private var offlineStorageSection: some View {
         Section {
-            Picker("Prefetch", selection: $prefetchCount) {
-                Text("Off").tag(0)
-                Text("Next Chapter").tag(1)
-                Text("Next 2 Chapters").tag(2)
-            }
-            Toggle("Generate While Listening", isOn: $generateWhileListening)
-            Toggle("Background Generation", isOn: Binding(
-                get: { !runtimeManager.isBackgroundPrefetchPaused },
-                set: { runtimeManager.setBackgroundPrefetchPaused(!$0) }
+            Toggle("Pause Audio Generation", isOn: Binding(
+                get: { runtimeManager.isBackgroundPrefetchPaused },
+                set: { runtimeManager.setBackgroundPrefetchPaused($0) }
             ))
+            NavigationLink {
+                StorageManagementView()
+            } label: {
+                Label("Storage", systemImage: "externaldrive")
+            }
         } header: {
-            Text("Generation")
+            Text("Offline & Storage")
         } footer: {
-            Text("Queued generation yields to live speech and pauses when ReadAloud is in the background without listening. Turning off Background Generation keeps queued work for later and does not stop listening.")
-            if let error = runtimeManager.generationRecoveryError {
-                Text("Some offline work could not be restored: \(error)")
+            Text("Pauses queued generation and preparation of upcoming chapters. Listening continues and queued work is kept for later.")
+            if runtimeManager.generationRecoveryError != nil {
+                Text("Some queued audio could not be restored. Open the book and try generating its audio again.")
             }
         }
     }
@@ -415,3 +396,61 @@ struct SettingsView: View {
     }
 }
 
+private struct AdvancedListeningSettingsView: View {
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+
+    @AppStorage(ReadAloudPreferences.Key.pronunciationFallbackMode)
+    private var pronunciationMode = PronunciationFallbackMode.adaptive.rawValue
+    @AppStorage(ReadAloudPreferences.Key.prefetchCount)
+    private var prefetchCount = 2
+    @AppStorage(ReadAloudPreferences.Key.generateWhileListening)
+    private var generateWhileListening = true
+
+    var body: some View {
+        ReadAloudThemedList {
+            Section {
+                Picker("Unknown Words", selection: $pronunciationMode) {
+                    ForEach(PronunciationFallbackMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+            } header: {
+                Text("Pronunciation")
+            } footer: {
+                Text(PronunciationFallbackMode(rawValue: pronunciationMode)?.explanation
+                    ?? PronunciationFallbackMode.adaptive.explanation)
+            }
+
+            Section {
+                Picker("Prepare Upcoming Chapters", selection: $prefetchCount) {
+                    Text("Off").tag(0)
+                    Text("Next Chapter").tag(1)
+                    Text("Next 2 Chapters").tag(2)
+                }
+                .pickerStyle(.navigationLink)
+            } header: {
+                Text("Offline Preparation")
+            } footer: {
+                Text("Choose how many upcoming chapters to prepare while listening. Audio generation must be unpaused.")
+            }
+
+            Section {
+                Toggle("Generate While Listening", isOn: $generateWhileListening)
+            } header: {
+                Text("Performance")
+            } footer: {
+                Text("Allow queued audio generation while a book is playing. Turn this off if listening feels slow.")
+            }
+        }
+        .readAloudThemeSurface()
+        .navigationTitle("Advanced Listening")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: pronunciationMode) { _, _ in refreshLoadedProjects() }
+        .onChange(of: prefetchCount) { _, _ in refreshLoadedProjects() }
+        .onChange(of: generateWhileListening) { _, _ in refreshLoadedProjects() }
+    }
+
+    private func refreshLoadedProjects() {
+        Task { await runtimeManager.refreshAllLoaded() }
+    }
+}

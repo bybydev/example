@@ -28,6 +28,7 @@ struct RootView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ProjectGlobalPlayerHost()
         }
+        .parsedOutputPreparationPresenter(priority: 0)
         .sheet(isPresented: $runtimeManager.isListeningLimitPresented) {
             ListeningLimitSheet()
         }

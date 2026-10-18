@@ -137,6 +137,7 @@ struct ProjectDetailView: View {
             }
         }
         .readAloudThemeSurface()
+        .parsedOutputPreparationPresenter(priority: 2)
         .navigationTitle(model.project?.title ?? initialTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -424,7 +425,7 @@ struct ProjectDetailView: View {
                let entry = model.itemEntry(itemID) {
                 Button {
                     do {
-                        try model.runtime.listen(itemID: itemID)
+                        guard try model.runtime.listen(itemID: itemID) else { return }
                         readerTarget = ReaderTarget(
                             itemID: itemID,
                             title: entry.item.title
@@ -1180,6 +1181,7 @@ private struct OfflineAudioSheet: View {
                 }
             }
             .readAloudThemeSurface()
+            .parsedOutputPreparationPresenter(priority: 4)
             .navigationTitle("Offline Audio")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

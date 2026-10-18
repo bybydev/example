@@ -79,7 +79,9 @@ nonisolated enum ReadAloudContentNormalizer {
             }
 
             let text = normalizeSpokenText(input.normalizedText)
-            guard !text.isEmpty else {
+            // Keep a PDF chapter's identity even when defaults exclude all its
+            // blocks. Including those blocks later must not create a new item.
+            guard !text.isEmpty || input.sourceLocator.kind == .pdf else {
                 throw ReadAloudImportError.normalizationFailed(
                     "Import produced an empty normalized content item."
                 )

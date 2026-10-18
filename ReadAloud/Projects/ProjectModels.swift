@@ -470,6 +470,7 @@ nonisolated struct LoadedProject: Equatable, Sendable {
     let manifest: ProjectContentManifest
     let items: [ProjectContentItem]
     let queue: ProjectQueueDocument
+    var hasParsedPDFOutput = false
 }
 
 nonisolated enum ProjectCatalogIssueKind: String, Sendable {

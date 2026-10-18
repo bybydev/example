@@ -174,13 +174,19 @@ extension ProjectRuntime {
         itemIDs: Set<UUID>,
         regenerate: Bool
     ) async throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in
+                try await enqueueSelectedGeneration(itemIDs: itemIDs, regenerate: regenerate)
+            }
+            return
+        }
         try prepareExplicitWork()
         let requests =
             itemStates.compactMap {
                 state
                 -> ProjectGenerationRequest?
                 in
-                guard itemIDs.contains(
+                guard !state.item.text.isEmpty, itemIDs.contains(
                     state.id
                 ) else {
                     return nil
@@ -241,6 +247,10 @@ extension ProjectRuntime {
     func retryGeneration(
         itemIDs: Set<UUID>
     ) async throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in try await retryGeneration(itemIDs: itemIDs) }
+            return
+        }
         try prepareExplicitWork()
         _ = try await persistence
             .removeGenerationJobs(
@@ -257,7 +267,7 @@ extension ProjectRuntime {
                 state
                 -> ProjectGenerationRequest?
                 in
-                guard itemIDs.contains(
+                guard !state.item.text.isEmpty, itemIDs.contains(
                     state.id
                 ) else {
                     return nil
@@ -279,11 +289,15 @@ extension ProjectRuntime {
     }
 
     func clearCacheAndRegenerate(itemIDs: Set<UUID>) async throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in try await clearCacheAndRegenerate(itemIDs: itemIDs) }
+            return
+        }
         try prepareExplicitWork()
         guard !itemIDs.isEmpty else { return }
         try await withAudioInvalidation(itemIDs: itemIDs) {
             let requests = itemStates.compactMap { state -> ProjectGenerationRequest? in
-                guard itemIDs.contains(state.id) else { return nil }
+                guard !state.item.text.isEmpty, itemIDs.contains(state.id) else { return nil }
                 return ProjectGenerationRequest(
                     itemID: state.id, generationKey: state.generationKey
                 )
@@ -299,7 +313,7 @@ extension ProjectRuntime {
     func schedulePlaybackPrefetch() {
         guard ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
               ReadAloudPreferences.prefetchCount > 0,
-              !isInvalidatingAudio,
+              !isInvalidatingAudio, !isPreparingParsedOutput,
               !ReadAloudPreferences.backgroundPrefetchPaused,
               !readerPauseRequested, !synthesisSuspendedForMemoryPressure,
               prefetchTask == nil, let operationID = playbackOperationID,
@@ -324,7 +338,8 @@ extension ProjectRuntime {
     func schedulePrefetch(
         after itemID: UUID
     ) async {
-        guard ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
+        guard isPDFReadingReady, !isPreparingParsedOutput,
+              ProjectGenerationExecutionRegistry.shared.canPerformGeneration,
               !Task.isCancelled, !synthesisSuspendedForMemoryPressure,
               !ReadAloudPreferences.backgroundPrefetchPaused else { return }
 
@@ -367,6 +382,7 @@ extension ProjectRuntime {
                 state
                 -> ProjectGenerationRequest?
                 in
+                guard !state.item.text.isEmpty else { return nil }
                 switch state
                     .generationStatus.state
                 {

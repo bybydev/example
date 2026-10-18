@@ -106,7 +106,37 @@ nonisolated struct EPUBImportAdapter: ReadAloudDocumentImporting {
             ),
             items: items,
             artwork: artwork,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            parsedOutput: .epub(ParsedEPUBDocument(
+                title: document.metadata.title,
+                creators: document.metadata.creators,
+                language: document.metadata.language,
+                identifiers: document.metadata.identifiers,
+                publisher: document.metadata.publisher,
+                modified: document.metadata.modified,
+                renditionLayout: document.metadata.renditionLayout,
+                chapters: document.chapters.map {
+                    ParsedEPUBDocument.Chapter(
+                        id: $0.id, order: $0.order, title: $0.title,
+                        href: $0.href, mediaType: $0.mediaType,
+                        properties: $0.properties, text: $0.text
+                    )
+                },
+                tableOfContents: document.tableOfContents.map(Self.cachedTOCItem),
+                diagnostics: document.diagnostics.map {
+                    ParsedEPUBDocument.Diagnostic(
+                        severity: $0.severity.rawValue,
+                        message: $0.message, path: $0.path
+                    )
+                }
+            ))
+        )
+    }
+
+    private static func cachedTOCItem(_ item: EPUBTOCItem) -> ParsedEPUBDocument.TOCItem {
+        ParsedEPUBDocument.TOCItem(
+            id: item.id, title: item.title, href: item.href,
+            children: item.children.map(cachedTOCItem)
         )
     }
 

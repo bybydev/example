@@ -69,7 +69,23 @@ nonisolated struct TextDocumentImportAdapter: ReadAloudDocumentImporting {
                     message: $0.message,
                     sourceLocator: nil
                 )
-            }
+            },
+            parsedOutput: .document(ParsedTextDocument(
+                title: document.title, sourceURL: document.sourceURL,
+                format: document.format.rawValue, text: document.text,
+                rawText: document.rawText,
+                segments: document.segments.map {
+                    ParsedTextDocument.Segment(
+                        id: $0.id, text: $0.text,
+                        startTime: $0.startTime, endTime: $0.endTime,
+                        metadata: $0.metadata
+                    )
+                },
+                metadata: document.metadata,
+                warnings: document.warnings.map {
+                    ParsedTextDocument.Warning(code: $0.code.rawValue, message: $0.message)
+                }
+            ))
         )
     }
 

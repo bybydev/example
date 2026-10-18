@@ -4,6 +4,729 @@ import XCTest
 @testable import ReadAloud
 
 @MainActor
+final class CachedPDFReadingTests: XCTestCase {
+    private struct Fixture: Sendable {
+        let root: URL
+        let store: ProjectStore
+        let project: ProjectDocument
+        let items: [ProjectContentItem]
+        let cache: ParsedImportCache
+        var paths: ProjectPackagePaths {
+            ProjectPackagePaths(packageURL: ProjectPackagePaths.packageURL(projectID: project.id, rootURL: root))
+        }
+    }
+
+    private func fixture(cacheAvailable: Bool = true) async throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory.appending(path: "CachedPDF-\(UUID().uuidString)")
+        let store = try ProjectStore(rootURL: root)
+        // Deliberately not a parseable PDF. Opening/filtering must use its cache.
+        let bytes = Data("retained PDF snapshot used for identity checks only".utf8)
+        let sourceID = UUID()
+        let source = ProjectSource(
+            id: sourceID, type: .pdf, originalFileName: "book.pdf",
+            relativePath: "source/\(sourceID.uuidString.lowercased()).pdf",
+            sourceRevision: ProjectDigest.sha256(bytes)
+        )
+        let normalized = [
+            NormalizedImportItem(title: "Main", order: 0, normalizedText: "Main text.\n\nCaption.\n\nUncertain header.",
+                sourceLocator: ProjectSourceLocator(kind: .pdf, value: "chapter:main;pages:0-0")),
+            NormalizedImportItem(title: "Notes", order: 1, normalizedText: "",
+                sourceLocator: ProjectSourceLocator(kind: .pdf, value: "chapter:notes;pages:1-1"))
+        ]
+        let content = try ReadAloudContentNormalizer.makeContent(from: normalized)
+        let project = ProjectDocument(title: "Cached PDF", source: source, pdfReadingPolicy: .listening)
+        let elements = try [
+            PdfSemanticElement(content: .paragraph(text: "Main text.")),
+            PdfSemanticElement(content: .pageHeader(text: "Confirmed header.")),
+            PdfSemanticElement(content: .caption(text: "Caption.")),
+            PdfSemanticElement(content: .pageHeader(text: "Uncertain header.")),
+            PdfSemanticElement(content: .footnote(text: "Optional note."))
+        ]
+        let blocks = try elements.enumerated().map { index, element in
+            try PdfReadingItem(
+                element: element, sourceElementIDs: [element.id],
+                decision: PdfReadingDecision(
+                    disposition: .read,
+                    evidence: index == 1 ? .confirmedRunningMatter : (index == 3 ? .uncertainContent : .supportedContent),
+                    reason: .includeByDefault
+                )
+            )
+        }
+        let cached = ParsedImportCache(source: source, items: normalized, output: .pdf(
+            result: PdfReadingResult(title: "Cached PDF", items: blocks),
+            chapters: [
+                ParsedPDFChapter(id: "main", title: "Main", order: 0, firstPage: 0, lastPage: 0, sourceElementIDs: elements.prefix(4).map(\.id)),
+                ParsedPDFChapter(id: "notes", title: "Notes", order: 1, firstPage: 1, lastPage: 1, sourceElementIDs: [elements[4].id])
+            ]
+        ))
+        try await store.createPackage(
+            project: project, manifest: content.manifest, items: content.items,
+            retainedSource: .data(bytes), parsedCache: cacheAvailable ? cached : nil
+        )
+        return Fixture(root: root, store: store, project: project, items: content.items, cache: cached)
+    }
+
+    func testFiltersRestoreOptionalBlocksWithoutChangingStoredTextManifestOrCache() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let paths = fixture.paths
+        let before = try [paths.contentManifest, paths.parsedOutputCache]
+            .map { try Data(contentsOf: $0) } + fixture.items.map { try Data(contentsOf: paths.itemJSON($0.id)) }
+        let runtime = ProjectRuntime(
+            id: fixture.project.id, packageURL: paths.packageURL,
+            persistence: ProjectRuntimePersistenceBridge(projectID: fixture.project.id, store: fixture.store)
+        )
+        defer { runtime.shutdown() }
+        try await runtime.loadIfNeeded()
+        XCTAssertTrue(runtime.isPDFReadingReady)
+        XCTAssertEqual(runtime.itemStates.map(\.id), fixture.items.map(\.id))
+        XCTAssertEqual(runtime.itemStates[1].item.text, "")
+        XCTAssertFalse(runtime.itemStates[0].item.text.contains("Confirmed header."))
+        XCTAssertTrue(runtime.itemStates[0].item.text.contains("Uncertain header."))
+
+        var policy = PdfReadingPolicy.includeAll
+        policy.includesCaptions = false
+        try await runtime.applyPDFReadingPolicy(policy)
+        XCTAssertEqual(runtime.itemStates[1].item.text, "Optional note.")
+        XCTAssertTrue(runtime.itemStates[0].item.text.contains("Confirmed header."))
+        XCTAssertFalse(runtime.itemStates[0].item.text.contains("Caption."))
+        XCTAssertEqual(runtime.readerParagraphs(itemID: fixture.items[1].id).map(\.text).joined(), "Optional note.")
+        let keyWithNote = runtime.itemStates[1].generationKey
+
+        let freshStore = try ProjectStore(rootURL: fixture.root)
+        let reopened = try await freshStore.loadProject(projectID: fixture.project.id)
+        XCTAssertTrue(reopened.hasParsedPDFOutput)
+        XCTAssertEqual(reopened.items.map(\.text), runtime.itemStates.map { $0.item.text })
+
+        try await runtime.applyPDFReadingPolicy(.listening)
+        XCTAssertEqual(runtime.itemStates[1].item.text, "")
+        XCTAssertNotEqual(runtime.itemStates[1].generationKey, keyWithNote)
+        XCTAssertEqual(runtime.itemStates.map(\.id), fixture.items.map(\.id))
+        let after = try [paths.contentManifest, paths.parsedOutputCache]
+            .map { try Data(contentsOf: $0) } + fixture.items.map { try Data(contentsOf: paths.itemJSON($0.id)) }
+        XCTAssertEqual(after, before)
+    }
+
+    func testAudioAndBookmarksValidateEffectiveTextInsteadOfEmptySavedChapter() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await fixture.store.updatePDFReadingPolicy(projectID: fixture.project.id, policy: .includeAll)
+        let loaded = try await fixture.store.loadProject(projectID: fixture.project.id)
+        let notes = loaded.items[1]
+        XCTAssertEqual(fixture.items[1].text, "")
+        XCTAssertEqual(notes.text, "Optional note.")
+        let metadata = GeneratedAudioMetadata(
+            itemID: notes.id, generationKey: ProjectDigest.sha256("filtered-generation"),
+            audioRevision: ProjectDigest.sha256("filtered-wav"), contentRevision: notes.contentRevision,
+            voiceID: "af_heart", speed: 1, runtimeRevision: "test", synthesisConfigVersion: 1,
+            durationSeconds: 1,
+            segments: [AudioSegmentMetadata(
+                sourceRange: AudioSourceRange(startUTF16: 0, endUTF16: notes.text.utf16.count),
+                startSeconds: 0, endSeconds: 1
+            )]
+        )
+        try await fixture.store.saveAudioMetadata(projectID: fixture.project.id, metadata: metadata)
+        let checkpoint = ProjectPlaybackState(
+            currentItemID: notes.id,
+            contentBookmark: ProjectContentBookmark(contentRevision: notes.contentRevision, textOffsetUTF16: 5)
+        )
+        _ = try await fixture.store.updatePlayback(projectID: fixture.project.id, playback: checkpoint)
+        let updated = try await fixture.store.updatePDFReadingPolicy(projectID: fixture.project.id, policy: .listening)
+        XCTAssertEqual(updated.playback?.contentBookmark?.textOffsetUTF16, 0)
+        XCTAssertEqual(updated.playback?.contentBookmark?.contentRevision, fixture.items[1].contentRevision)
+        do {
+            try await fixture.store.saveAudioMetadata(projectID: fixture.project.id, metadata: metadata)
+            XCTFail("Audio for the included note must not validate under an excluding policy")
+        } catch let error as ProjectStoreError {
+            guard case .invalidData = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testLoadedBlocksRemainUsableWhenTheDiskSidecarIsRemoved() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let runtime = ProjectRuntime(
+            id: fixture.project.id, packageURL: fixture.paths.packageURL,
+            persistence: ProjectRuntimePersistenceBridge(projectID: fixture.project.id, store: fixture.store)
+        )
+        defer { runtime.shutdown() }
+        try await runtime.loadIfNeeded()
+        try await runtime.applyPDFReadingPolicy(.includeAll)
+        try FileManager.default.removeItem(at: fixture.paths.parsedOutputCache)
+        try await runtime.applyPDFReadingPolicy(.listening)
+        XCTAssertEqual(runtime.itemStates[1].item.text, "")
+        XCTAssertTrue(runtime.isPDFReadingReady)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+    }
+
+    func testCacheMissKeepsSavedTextAndDoesNotParseOrSavePendingFilters() async throws {
+        let fixture = try await fixture(cacheAvailable: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let runtime = ProjectRuntime(
+            id: fixture.project.id, packageURL: fixture.paths.packageURL,
+            persistence: ProjectRuntimePersistenceBridge(projectID: fixture.project.id, store: fixture.store)
+        )
+        defer { runtime.shutdown() }
+        try await runtime.loadIfNeeded()
+        XCTAssertNil(runtime.pdfReadingProjection)
+        XCTAssertTrue(runtime.isPDFReadingReady)
+        XCTAssertEqual(runtime.itemStates.map { $0.item.text }, fixture.items.map(\.text))
+        do {
+            try await runtime.applyPDFReadingPolicy(.includeAll)
+            XCTFail("Unavailable blocks require explicit preparation, never implicit parsing")
+        } catch is ParsedOutputPreparationError { }
+        let project = try await fixture.store.loadProjectMetadata(projectID: fixture.project.id)
+        XCTAssertEqual(project.pdfReadingPolicy, .listening)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+
+        _ = try await fixture.store.updatePDFReadingPolicy(projectID: fixture.project.id, policy: .includeAll)
+        try await runtime.refresh()
+        XCTAssertFalse(runtime.isPDFReadingReady)
+        XCTAssertTrue(runtime.blocksQueuedGeneration)
+        XCTAssertEqual(runtime.itemStates.map { $0.item.text }, fixture.items.map(\.text))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+    }
+
+    func testExplicitFilterActionOffersWithoutParsingThenStartCachesAndApplies() async throws {
+        let fixture = try await fixture(cacheAvailable: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = ProjectRuntimeManager(store: fixture.store)
+        let wasActive = ProjectGenerationExecutionRegistry.shared.isApplicationActive
+        manager.setApplicationActive(true)
+        defer { manager.shutdownAll(); manager.setApplicationActive(wasActive) }
+        let runtime = try await manager.prepareRuntime(projectID: fixture.project.id)
+        let files = [fixture.paths.contentManifest] + fixture.items.map { fixture.paths.itemJSON($0.id) }
+        let saved = try files.map { try Data(contentsOf: $0) }
+        var parses = 0
+        var request: ParsedOutputPreparation?
+        manager.registerPreparationPresenter(id: UUID(), priority: 1) { runtime, retry in
+            request = ParsedOutputPreparation(title: "Book", process: { progress in
+                parses += 1
+                try await runtime.prepareParsedOutputFromUser(progress: progress, parse: { _, progress in
+                    progress(ReadAloudImportProgress(stage: .extracting, fractionCompleted: 0.5))
+                    return fixture.cache
+                })
+            }, retry: retry)
+            return true
+        }
+        try await runtime.applyPDFReadingPolicy(.includeAll)
+        let preparation = try XCTUnwrap(request)
+        XCTAssertEqual(preparation.phase, .offered)
+        XCTAssertEqual(parses, 0)
+        XCTAssertEqual(runtime.pdfReadingPolicy, .listening)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+
+        preparation.start()
+        await preparation.waitForCompletion()
+        XCTAssertEqual(preparation.phase, .finished)
+        XCTAssertEqual(parses, 1)
+        XCTAssertEqual(runtime.pdfReadingPolicy, .includeAll)
+        XCTAssertEqual(runtime.itemStates[1].item.text, "Optional note.")
+        let cached = try await fixture.store.loadParsedOutput(projectID: fixture.project.id)
+        XCTAssertEqual(cached, fixture.cache)
+        XCTAssertEqual(try files.map { try Data(contentsOf: $0) }, saved)
+    }
+
+    func testPassiveWorkAndInactiveActionsNeverQueuePreparationForForegrounding() async throws {
+        let fixture = try await fixture(cacheAvailable: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = ProjectRuntimeManager(store: fixture.store)
+        let wasActive = ProjectGenerationExecutionRegistry.shared.isApplicationActive
+        manager.setApplicationActive(true)
+        defer { manager.shutdownAll(); manager.setApplicationActive(wasActive) }
+        let runtime = try await manager.prepareRuntime(projectID: fixture.project.id)
+        var rootOffers = 0
+        var modalOffers = 0
+        let modalID = UUID()
+        manager.registerPreparationPresenter(id: UUID(), priority: 0) { _, _ in rootOffers += 1; return true }
+        manager.registerPreparationPresenter(id: modalID, priority: 4) { _, _ in modalOffers += 1; return true }
+        try await runtime.refresh()
+        await runtime.schedulePrefetch(after: fixture.items[0].id)
+        XCTAssertEqual(rootOffers + modalOffers, 0)
+        manager.setApplicationActive(false)
+        do {
+            try await runtime.applyPDFReadingPolicy(.includeAll)
+            XCTFail("Inactive actions must not queue a sheet")
+        } catch is ParsedOutputPreparationError { }
+        manager.setApplicationActive(true)
+        try await runtime.loadIfNeeded()
+        XCTAssertEqual(rootOffers + modalOffers, 0)
+        try await runtime.applyPDFReadingPolicy(.includeAll)
+        XCTAssertEqual(modalOffers, 1)
+        XCTAssertEqual(rootOffers, 0)
+        manager.unregisterPreparationPresenter(id: modalID)
+        try await runtime.applyPDFReadingPolicy(.includeAll)
+        XCTAssertEqual(rootOffers, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+    }
+
+    func testCancelledNativeParserReturningLateCannotPublishCache() async throws {
+        let fixture = try await fixture(cacheAvailable: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let runtime = ProjectRuntime(
+            id: fixture.project.id, packageURL: fixture.paths.packageURL,
+            persistence: ProjectRuntimePersistenceBridge(projectID: fixture.project.id, store: fixture.store)
+        )
+        defer { runtime.shutdown() }
+        try await runtime.loadIfNeeded()
+        let gate = ParsedOutputPreparationGate()
+        let operation = Task {
+            try await runtime.prepareParsedOutputFromUser(progress: { _ in }, parse: { _, _ in
+                // Deliberately ignores cancellation, like a native parser call.
+                await gate.suspend()
+                return fixture.cache
+            })
+        }
+        await gate.waitForEntry()
+        operation.cancel()
+        await gate.release()
+        do { try await operation.value; XCTFail("Late output must be rejected") }
+        catch is CancellationError { }
+        XCTAssertFalse(runtime.isPreparingParsedOutput)
+        XCTAssertNil(runtime.pdfReadingProjection)
+        XCTAssertEqual(runtime.itemStates.map { $0.item.text }, fixture.items.map(\.text))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.parsedOutputCache.path))
+    }
+
+    func testExplicitKindOverridesKeepUncertainContentAndStableEmptyChapterIDs() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var policy = PdfReadingPolicy.includeAll
+        policy.overrides[.pageHeader] = .skip
+        let projection = try XCTUnwrap(PDFReadingProjection.cached(
+            fixture.cache, items: fixture.items, projectID: fixture.project.id, policy: policy
+        ))
+        XCTAssertFalse(projection.items[0].text.contains("header."))
+        XCTAssertEqual(projection.items[1].id, fixture.items[1].id)
+        XCTAssertTrue(projection.paragraphsByItemID.isEmpty, "Opening a book must not lay out every chapter")
+    }
+}
+
+
+
+// A controllable native-style call that does not itself honor cancellation.
+private actor ParsedOutputPreparationGate {
+    private var entered = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var completion: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        await withCheckedContinuation { completion = $0 }
+    }
+    func waitForEntry() async {
+        if !entered { await withCheckedContinuation { entryWaiter = $0 } }
+    }
+    func release() { completion?.resume(); completion = nil }
+}
+
+@MainActor
+final class ParsedOutputPreparationTests: XCTestCase {
+    func testOfferAndNotNowNeverStartProcessing() async {
+        var starts = 0
+        var retries = 0
+        let request = ParsedOutputPreparation(title: "Book", process: { _ in starts += 1 }, retry: { retries += 1 })
+        XCTAssertEqual(request.phase, .offered)
+        XCTAssertEqual(starts, 0)
+        request.cancel()
+        request.start()
+        await request.waitForCompletion()
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(retries, 0)
+        XCTAssertEqual(request.phase, .cancelled)
+    }
+
+    func testCancelRejectsLateProgressAndPendingAction() async {
+        let gate = ParsedOutputPreparationGate()
+        var retries = 0
+        let request = ParsedOutputPreparation(title: "Book", process: { progress in
+            await gate.suspend()
+            progress(ReadAloudImportProgress(stage: .finished, fractionCompleted: 1))
+        }, retry: { retries += 1 })
+        request.start()
+        await gate.waitForEntry()
+        request.cancel()
+        await gate.release()
+        await request.waitForCompletion()
+        XCTAssertEqual(request.phase, .cancelled)
+        XCTAssertEqual(request.progress.stage, .preparing)
+        XCTAssertEqual(retries, 0)
+    }
+
+    func testFailureWaitsForExplicitRetry() async {
+        let registry = ProjectGenerationExecutionRegistry.shared
+        let wasActive = registry.isApplicationActive
+        registry.setApplicationActive(true)
+        defer { registry.setApplicationActive(wasActive) }
+        var starts = 0
+        var retries = 0
+        let request = ParsedOutputPreparation(title: "Book", process: { _ in
+            starts += 1
+            if starts == 1 { throw ParsedOutputPreparationError.unavailable }
+        }, retry: { retries += 1 })
+        request.start()
+        await request.waitForCompletion()
+        guard case .failed = request.phase else { return XCTFail("Expected a visible failure") }
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(retries, 0)
+        request.start()
+        await request.waitForCompletion()
+        XCTAssertEqual(starts, 2)
+        XCTAssertEqual(retries, 1)
+        XCTAssertEqual(request.phase, .finished)
+    }
+
+    func testCompletionInBackgroundDoesNotResumePendingAction() async {
+        let registry = ProjectGenerationExecutionRegistry.shared
+        let wasActive = registry.isApplicationActive
+        registry.setApplicationActive(false)
+        defer { registry.setApplicationActive(wasActive) }
+        var retries = 0
+        let request = ParsedOutputPreparation(title: "Book", process: { _ in }, retry: { retries += 1 })
+        request.start()
+        await request.waitForCompletion()
+        XCTAssertEqual(request.phase, .finished)
+        registry.setApplicationActive(true)
+        XCTAssertEqual(retries, 0)
+    }
+}
+
+// Pass 1 cache coverage uses the already registered test source. These tests
+// exercise persistence only; loading a missing cache must not run any importer.
+@MainActor
+final class ParsedOutputCacheTests: XCTestCase {
+    private func directory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appending(
+            path: "ReadAloud-ParsedOutputTests-\(UUID().uuidString)", directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func importedPaste(in root: URL) async throws -> (ProjectStore, ProjectDocument) {
+        let store = try ProjectStore(rootURL: root)
+        let result = try await ReadAloudImportCoordinator(projectStore: store).importSource(
+            .pastedText("First   paragraph.\n\nSecond paragraph.", suggestedTitle: "Fixture")
+        )
+        return (store, result.project)
+    }
+
+    private func paths(_ project: ProjectDocument, root: URL) -> ProjectPackagePaths {
+        ProjectPackagePaths(packageURL: ProjectPackagePaths.packageURL(
+            projectID: project.id, rootURL: root
+        ))
+    }
+
+    func testImportPersistsRawOutputAndExistingTextWithTheSameItemIDs() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, project) = try await importedPaste(in: root)
+        let loaded = try await store.loadProject(projectID: project.id)
+        let cachedValue = try await store.loadParsedOutput(projectID: project.id)
+        let cached = try XCTUnwrap(cachedValue)
+        XCTAssertEqual(cached.itemMappings.map(\.itemID), loaded.items.map(\.id))
+        XCTAssertEqual(cached.itemMappings.map(\.sourceLocator), loaded.items.map(\.sourceLocator))
+        guard case .paste(let raw) = cached.output else { return XCTFail("Missing raw paste") }
+        XCTAssertEqual(raw, "First   paragraph.\n\nSecond paragraph.")
+        XCTAssertEqual(loaded.items.first?.text, "First paragraph.\n\nSecond paragraph.")
+
+        let filePaths = paths(project, root: root)
+        let textBefore = try Data(contentsOf: filePaths.itemJSON(loaded.items[0].id))
+        let projectBefore = try Data(contentsOf: filePaths.projectJSON)
+        _ = try await store.clearTemporaryCache(projectID: project.id)
+        let freshStore = try ProjectStore(rootURL: root)
+        let restored = try await freshStore.loadParsedOutput(projectID: project.id)
+        XCTAssertEqual(restored, cached)
+        XCTAssertEqual(try Data(contentsOf: filePaths.itemJSON(loaded.items[0].id)), textBefore)
+        XCTAssertEqual(try Data(contentsOf: filePaths.projectJSON), projectBefore)
+    }
+
+    func testMissingCorruptAndIncompatibleCachesAreMissesWithoutChangingTheProject() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, project) = try await importedPaste(in: root)
+        let filePaths = paths(project, root: root)
+        let original = try Data(contentsOf: filePaths.parsedOutputCache)
+        let projectBefore = try Data(contentsOf: filePaths.projectJSON)
+        try FileManager.default.removeItem(at: filePaths.parsedOutputCache)
+        let missing = try await store.loadParsedOutput(projectID: project.id)
+        XCTAssertNil(missing)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: filePaths.parsedOutputCache.path))
+
+        try Data("not JSON".utf8).write(to: filePaths.parsedOutputCache)
+        let corrupt = try await store.loadParsedOutput(projectID: project.id)
+        XCTAssertNil(corrupt)
+        for (key, value) in [
+            ("schemaVersion", 999 as Any),
+            ("producerID", "incompatible-parser" as Any),
+            ("sourceRevision", String(repeating: "0", count: 64) as Any),
+            ("sourceID", UUID().uuidString as Any)
+        ] {
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+            json[key] = value
+            try JSONSerialization.data(withJSONObject: json).write(to: filePaths.parsedOutputCache)
+            let incompatible = try await store.loadParsedOutput(projectID: project.id)
+            XCTAssertNil(incompatible, "Expected a cache miss for \(key)")
+        }
+        XCTAssertEqual(try Data(contentsOf: filePaths.projectJSON), projectBefore)
+        let loaded = try await store.loadProject(projectID: project.id)
+        XCTAssertEqual(loaded.items.first?.text, "First paragraph.\n\nSecond paragraph.")
+    }
+
+    func testSavingCacheRejectsAnotherSourceAndKeepsPreviousCache() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, project) = try await importedPaste(in: root)
+        let original = try await store.loadParsedOutput(projectID: project.id)
+        let unrelated = ProjectSource(
+            type: .paste, originalFileName: "other.txt",
+            relativePath: "source/other.txt", sourceRevision: project.source.sourceRevision
+        )
+        let wrong = ParsedImportCache(source: unrelated, items: [], output: .paste(rawText: "Other"))
+        do {
+            try await store.saveParsedOutput(projectID: project.id, cache: wrong)
+            XCTFail("A different source ID must not replace the cache")
+        } catch let error as ProjectStoreError {
+            guard case .invalidData = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        let remaining = try await store.loadParsedOutput(projectID: project.id)
+        XCTAssertEqual(remaining, original)
+    }
+
+    func testSubtitleImportRetainsCueIDsTimingAndMetadataAfterReopen() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appending(path: "captions.srt")
+        try """
+        1
+        00:00:01,000 --> 00:00:02,500
+        First cue.
+
+        2
+        00:00:03,000 --> 00:00:04,000
+        Second cue.
+        """.write(to: input, atomically: true, encoding: .utf8)
+        let store = try ProjectStore(rootURL: root.appending(path: "Projects"))
+        let result = try await ReadAloudImportCoordinator(projectStore: store).importSource(.file(input))
+        let freshStore = try ProjectStore(rootURL: store.rootURL)
+        let cachedValue = try await freshStore.loadParsedOutput(projectID: result.project.id)
+        let cache = try XCTUnwrap(cachedValue)
+        guard case .document(let document) = cache.output else { return XCTFail("Missing document") }
+        XCTAssertEqual(document.format, "srt")
+        XCTAssertEqual(document.segments.count, 2)
+        XCTAssertEqual(document.segments[0].startTime, 1)
+        XCTAssertEqual(document.segments[0].endTime, 2.5)
+        XCTAssertEqual(document.segments[1].startTime, 3)
+        XCTAssertFalse(document.segments[0].id.isEmpty)
+        XCTAssertNotEqual(document.segments[0].id, document.segments[1].id)
+        XCTAssertTrue(document.rawText?.contains("00:00:01,000") == true)
+    }
+
+    func testMarkdownCacheRetainsRawCodeWithoutChangingCurrentSavedSpeech() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appending(path: "notes.md")
+        let raw = "# Notes\n\nA spoken paragraph.\n\n" + String(repeating: "`", count: 3)
+            + "swift\nlet secret = 42\n" + String(repeating: "`", count: 3) + "\n"
+        try raw.write(to: input, atomically: true, encoding: .utf8)
+        let imported = try await TextDocumentImportAdapter().importDocument(from: input, progress: nil)
+        guard case .document(let cached)? = imported.parsedOutput else { return XCTFail("Missing output") }
+        XCTAssertEqual(cached.rawText, raw)
+        XCTAssertFalse(imported.items.map(\.normalizedText).joined().contains("let secret"))
+    }
+
+    func testPDFCacheRoundTripRetainsOmissionsAndInitiallySkippedChapterMapping() throws {
+        let body = try PdfSemanticElement(content: .paragraph(text: "Main text."))
+        let note = try PdfSemanticElement(content: .footnote(text: "Optional note."))
+        let result = PdfReadingResult(title: "PDF", items: [
+            try PdfReadingItem(
+                element: body, sourceElementIDs: ["body-source"],
+                decision: PdfReadingDecision(disposition: .read, evidence: .supportedContent, reason: .includeByDefault)
+            ),
+            try PdfReadingItem(
+                element: note, sourceElementIDs: ["note-source"],
+                decision: PdfReadingDecision(disposition: .skip, evidence: .supportedContent, reason: .optionalContent)
+            )
+        ])
+        let source = ProjectSource(
+            type: .pdf, originalFileName: "fixture.pdf", relativePath: "source/fixture.pdf",
+            sourceRevision: ProjectDigest.sha256("fixture")
+        )
+        let cached = ParsedImportCache(source: source, items: [], output: .pdf(
+            result: result,
+            chapters: [
+                ParsedPDFChapter(id: "body", title: "Main", order: 0, firstPage: 0, lastPage: 0, sourceElementIDs: ["body-source"]),
+                ParsedPDFChapter(id: "notes", title: "Notes", order: 1, firstPage: 1, lastPage: 1, sourceElementIDs: ["note-source"])
+            ]
+        ))
+        let decoded = try ProjectJSONCodec.decode(
+            ParsedImportCache.self, from: ProjectJSONCodec.encode(cached),
+            relativePath: "cache/parsed/blocks.json"
+        )
+        guard case .pdf(let restored, let chapters) = decoded.output else { return XCTFail("Missing PDF") }
+        XCTAssertEqual(restored.items, result.items)
+        XCTAssertEqual(restored.omissions.first?.element.text, "Optional note.")
+        XCTAssertEqual(chapters[1].sourceElementIDs, ["note-source"])
+        XCTAssertEqual(decoded, cached)
+    }
+}
+
+
+@MainActor
+final class VoicePreviewCacheTests: XCTestCase {
+    private actor Engine: SpeechSynthesisEngine {
+        private(set) var synthesisCount = 0
+        private(set) var unloadCount = 0
+        private var hold: Bool
+        private let started: @Sendable () -> Void
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        init(hold: Bool = false, started: @escaping @Sendable () -> Void = {}) {
+            self.hold = hold
+            self.started = started
+        }
+        func load() async throws {}
+        func unload() async { unloadCount += 1 }
+        func warmUp(text: String, voice: SpeechVoice, speed: Float) async throws -> SpeechWarmUpResult {
+            SpeechWarmUpResult(elapsedSeconds: 0)
+        }
+        func synthesize(
+            text: String, voice: SpeechVoice, speed: Float, maxChunkSeconds: Double
+        ) async throws -> SpeechSynthesisResult {
+            try await synthesize(
+                text: text, voice: voice, speed: speed, maxChunkSeconds: maxChunkSeconds,
+                pronunciationMode: .adaptive
+            )
+        }
+        func synthesize(
+            text: String, voice: SpeechVoice, speed: Float, maxChunkSeconds: Double,
+            pronunciationMode: PronunciationFallbackMode
+        ) async throws -> SpeechSynthesisResult {
+            synthesisCount += 1
+            if hold {
+                hold = false
+                await withCheckedContinuation { waiter in
+                    self.waiter = waiter
+                    started()
+                }
+            }
+            // Deliberately ignore cancellation: the cache/controller must still
+            // reject a late result from an already in-flight inference.
+            return SpeechSynthesisResult(
+                audio: KokoroAudio(samples: [0, 0.25, -0.25], sampleRate: 24_000),
+                elapsedSeconds: 0
+            )
+        }
+        func release() {
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
+    private func request(
+        voice: SpeechVoice = .heart, text: String = "Hello.",
+        mode: PronunciationFallbackMode = .adaptive
+    ) -> VoicePreviewRequest {
+        VoicePreviewRequest(voice: voice, text: text, pronunciationMode: mode)
+    }
+
+    private func directory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+
+    func testCachedPreviewSurvivesCacheRecreation() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = Engine()
+        let cache = VoicePreviewCache(rootURL: root, engine: engine)
+        let first = try await cache.audioURL(for: request())
+        let second = try await cache.audioURL(for: request())
+        XCTAssertEqual(first, second)
+        let count = await engine.synthesisCount
+        XCTAssertEqual(count, 1)
+        let freshEngine = Engine()
+        let freshCache = VoicePreviewCache(rootURL: root, engine: freshEngine)
+        let restored = try await freshCache.audioURL(for: request())
+        XCTAssertEqual(restored, first)
+        let freshCount = await freshEngine.synthesisCount
+        XCTAssertEqual(freshCount, 0)
+        let unloads = await engine.unloadCount
+        XCTAssertEqual(unloads, 0)
+    }
+
+    func testTextVoiceAndPronunciationModeHaveSeparateCacheEntries() throws {
+        let key = try request().cacheKey
+        XCTAssertNotEqual(key, try request(text: "Another sample.").cacheKey)
+        XCTAssertNotEqual(key, try request(voice: .bella).cacheKey)
+        XCTAssertNotEqual(key, try request(mode: .skip).cacheKey)
+        XCTAssertEqual(key, try request().cacheKey)
+    }
+
+    func testCorruptAndEvictedPreviewsRegenerate() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = Engine()
+        let cache = VoicePreviewCache(rootURL: root, engine: engine)
+        let url = try await cache.audioURL(for: request())
+        try Data("not a WAV".utf8).write(to: url)
+        _ = try await cache.audioURL(for: request())
+        let regenerated = try ProjectWAVCodec.decode(Data(contentsOf: url))
+        XCTAssertEqual(regenerated.samples.count, 3)
+        try FileManager.default.removeItem(at: url)
+        _ = try await cache.audioURL(for: request())
+        let count = await engine.synthesisCount
+        XCTAssertEqual(count, 3)
+    }
+
+    func testCancelledInferenceCannotPublishCacheFile() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let started = expectation(description: "Preview inference started")
+        let engine = Engine(hold: true) { started.fulfill() }
+        let cache = VoicePreviewCache(rootURL: root, engine: engine)
+        let request = request()
+        let task = Task { try await cache.audioURL(for: request) }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        await engine.release()
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled preview wrote audio")
+        } catch is CancellationError {
+            // Expected even though the engine returned audio after cancellation.
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        let unloads = await engine.unloadCount
+        XCTAssertEqual(unloads, 0)
+    }
+
+    func testStoppedPreviewCannotPauseBookOrRestartAfterLateSynthesis() async throws {
+        let root = directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let started = expectation(description: "Preview inference started")
+        let engine = Engine(hold: true) { started.fulfill() }
+        let cache = VoicePreviewCache(rootURL: root, engine: engine)
+        let controller = VoicePreviewController(cache: cache)
+        controller.preview(.heart, text: "Hello.") { XCTFail("Stale preview paused book") }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(controller.activeVoiceID, SpeechVoice.heart.id)
+        XCTAssertTrue(controller.isPreparing)
+        controller.stop()
+        await engine.release()
+        // A barrier behind the old cache request lets its cancelled continuation
+        // finish without touching real audio hardware.
+        _ = try await cache.audioURL(for: request(text: "Barrier."))
+        await Task.yield()
+        XCTAssertNil(controller.activeVoiceID)
+        XCTAssertFalse(controller.isPreparing)
+        XCTAssertNil(controller.errorMessage)
+        controller.shutdown()
+    }
+}
+
+@MainActor
 final class PlaybackContinuityTests: XCTestCase {
     private enum FixtureError: Error { case loadFailed, unusedFilePlayback, waitTimedOut }
 
@@ -1080,6 +1803,71 @@ final class PDFReadingPersistenceTests: XCTestCase {
             XCTAssertNil(manager.playerReaderTarget)
             XCTAssertFalse(runtime.isPlaybackActive)
         }
+    }
+
+    func testReaderActivationReusesLoadedContentAndPreservesPausedOwner() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await Self.checkWarmReaderActivation(fixture)
+    }
+
+    @MainActor private static func checkWarmReaderActivation(_ fixture: Fixture) async throws {
+        let key = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer { UserDefaults.standard.set(previous, forKey: key) }
+        let manager = ProjectRuntimeManager(
+            store: fixture.store,
+            makePipeline: { ReadAloudPipeline(playback: PlaybackContinuityTests.Playback()) }
+        )
+        defer { manager.shutdownAll() }
+        let runtime = try await manager.prepareRuntime(projectID: fixture.projectID)
+        let originalTitle = runtime.project?.title
+        let bookmark = runtime.project?.playback?.contentBookmark
+        let revision = runtime.revision
+        // A retained paused owner without launching real audio or synthesis.
+        let operation = UUID()
+        runtime.playerItemID = fixture.first.id
+        runtime.activity.activeItemID = fixture.first.id
+        runtime.activity.playbackState = .paused
+        runtime.readerPauseRequested = true
+        runtime.playbackOperationID = operation
+        manager.claimPlayback(runtime)
+
+        _ = try await fixture.store.renameProject(projectID: fixture.projectID, to: "Changed on disk")
+        let activated = try await manager.activate(projectID: fixture.projectID)
+        XCTAssertTrue(activated === runtime)
+        XCTAssertTrue(manager.activeRuntime === runtime)
+        XCTAssertTrue(manager.playerRuntime === runtime)
+        XCTAssertEqual(runtime.project?.title, originalTitle, "Navigation must not hydrate disk content again")
+        XCTAssertEqual(runtime.revision, revision)
+        XCTAssertEqual(runtime.project?.playback?.contentBookmark, bookmark)
+        XCTAssertEqual(runtime.playbackOperationID, operation)
+        XCTAssertTrue(runtime.isPlaybackPaused)
+
+        // Explicit refresh remains the way to observe durable content changes.
+        try await manager.refreshIfLoaded(projectID: fixture.projectID)
+        XCTAssertEqual(runtime.project?.title, "Changed on disk")
+
+        let source = try XCTUnwrap(runtime.project?.source)
+        let sourceURL = runtime.packageURL.appendingPathComponent(source.relativePath)
+        try Data("changed source bytes".utf8).write(to: sourceURL)
+        let reopened = try await manager.activate(projectID: fixture.projectID)
+        XCTAssertTrue(reopened === runtime, "Warm navigation must not rehash the retained source")
+        do {
+            try await manager.refreshIfLoaded(projectID: fixture.projectID)
+            XCTFail("Explicit refresh must retain source integrity checks")
+        } catch {
+            XCTAssertTrue(error is ProjectStoreError)
+        }
+        manager.forget(projectID: fixture.projectID)
+        do {
+            _ = try await manager.activate(projectID: fixture.projectID)
+            XCTFail("Cold loads must retain source integrity checks")
+        } catch {
+            XCTAssertTrue(error is ProjectStoreError)
+        }
+        XCTAssertNil(manager.runtimeIfLoaded(projectID: fixture.projectID))
     }
 
     func testRecoveryPreservesIntentIdentityAndRejectsChangedSettings() async throws {
@@ -2295,6 +3083,14 @@ final class WebArticleImportIntegrationTests: XCTestCase {
         XCTAssertFalse(item.normalizedText.contains("By Morgan Chen"))
         let content = try ReadAloudContentNormalizer.makeContent(from: extracted.document.items)
         XCTAssertEqual(content.items.first?.text, item.normalizedText)
+        guard case .article(let cached)? = extracted.document.parsedOutput else {
+            return XCTFail("Article import must retain typed parser output")
+        }
+        XCTAssertEqual(cached.sourceURL, finalURL)
+        XCTAssertEqual(cached.blocks.count, 14)
+        XCTAssertEqual(cached.blocks[0].kind, .heading(level: 1))
+        XCTAssertEqual(cached.blocks[11].kind, .code)
+        XCTAssertEqual(cached.blocks[12].kind, .table)
     }
 
     func testPackageFailuresKeepAppImportErrors() {
@@ -2475,3 +3271,4 @@ final class WeeklyListeningAllowanceTests: XCTestCase {
         XCTAssertEqual(meter.consume(at: 1), 1)
     }
 }
+

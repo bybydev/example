@@ -37,8 +37,10 @@ generation compatibility identity remains engine/model/G2P-specific.
 
 The app looks up these files inside `Bundle.main.resourceURL/ONNX` and never
 uses `URLSession` to fetch speech resources. Missing/invalid bundle assets
-produce a reinstall error. Settings -> Kokoro ONNX INT8 can display local
-status and test real-text synthesis offline; it cannot download resources.
+produce a reinstall error. In DEBUG builds, Settings -> Developer Tools ->
+Speech Diagnostics -> Kokoro ONNX INT8 displays local status and tests real-text
+synthesis offline; it cannot download resources. This diagnostic screen is
+excluded from Release builds.
 
 ## Build-time supply and validation
 

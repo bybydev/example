@@ -27,27 +27,30 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         try await store.loadProject(projectID: projectID)
     }
 
+    func loadParsedOutput() async throws -> ParsedImportCache? {
+        try await store.loadParsedOutput(projectID: projectID)
+    }
+
+    func parsedOutputSource() async throws -> ParsedOutputSource {
+        try await store.parsedOutputSource(projectID: projectID)
+    }
+
+    func saveParsedOutput(_ cache: ParsedImportCache) async throws {
+        try await store.saveParsedOutput(projectID: projectID, cache: cache)
+    }
+
     func retainedPDFSourceURL() async throws -> URL {
         try await store.retainedPDFSourceURL(projectID: projectID)
     }
 
     func updatePDFReadingPolicy(
-        _ policy: PdfReadingPolicy
+        _ policy: PdfReadingPolicy,
+        parsedCache: ParsedImportCache? = nil
     ) async throws -> ProjectDocument {
         try await store.updatePDFReadingPolicy(
             projectID: projectID,
-            policy: policy
-        )
-    }
-
-    func replacePDFReadingContent(
-        policy: PdfReadingPolicy,
-        items: [ProjectContentItem]
-    ) async throws -> ProjectDocument {
-        try await store.replacePDFReadingContent(
-            projectID: projectID,
             policy: policy,
-            items: items
+            parsedCache: parsedCache
         )
     }
 

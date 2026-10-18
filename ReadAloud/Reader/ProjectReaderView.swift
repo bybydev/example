@@ -71,9 +71,6 @@ struct ProjectReaderRuntimeHost: View {
                 let loaded = try await runtimeManager.activate(
                     projectID: projectID
                 )
-                if loaded.project?.source.type == .pdf {
-                    try await loaded.preparePDFReadingOptions()
-                }
                 try Task.checkCancellation()
                 runtime = loaded
                 errorMessage = nil
@@ -153,6 +150,7 @@ struct ProjectReaderView: View {
             }
         }
         .readAloudThemeSurface()
+        .parsedOutputPreparationPresenter(priority: 3)
         .navigationTitle(
             displayedState?.item.title
                 ?? runtime.project?.title
@@ -166,7 +164,7 @@ struct ProjectReaderView: View {
                 if needsListeningAction, let displayedItemID {
                     Button {
                         do {
-                            try runtime.listen(itemID: displayedItemID)
+                            guard try runtime.listen(itemID: displayedItemID) else { return }
                             followPlayer()
                         } catch {
                             errorMessage = Self.message(for: error)
@@ -345,7 +343,6 @@ struct ProjectReaderView: View {
                                         systemImage: "play.circle.fill"
                                     )
                                 }
-                                .disabled(!runtime.pdfProjectionMatchesStoredText)
                             }
                             .accessibilityAction(
                                 named: Text("Listen from Here")
@@ -852,7 +849,7 @@ struct ProjectReaderView: View {
         do {
             // The source range is derived from the original chapter text,
             // not the trimmed display string or a fabricated audio time.
-            try runtime.play(
+            try runtime.playFromUser(
                 itemID: itemID,
                 fromOffsetUTF16: paragraph.sourceRange.startUTF16
             )
@@ -1047,6 +1044,7 @@ private struct ReaderChaptersSheet: View {
                 prompt: "Search Chapters"
             )
             .readAloudThemeSurface()
+            .parsedOutputPreparationPresenter(priority: 4)
             .navigationTitle("Chapters")
             .navigationBarTitleDisplayMode(
                 .inline

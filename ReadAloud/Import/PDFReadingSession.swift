@@ -178,7 +178,7 @@ nonisolated final class PDFReadingSession: Sendable {
     }
 
     /// Identity must remain stable across included/excluded policy variants.
-    private static func stableItemID(
+    static func stableItemID(
         projectID: UUID, chapterID: String
     ) throws -> UUID {
         let hex = Array(ProjectDigest.sha256(
@@ -219,10 +219,109 @@ nonisolated final class PDFReadingSession: Sendable {
     }
 }
 
-/// A policy-specific in-memory reader projection. No stored source data is
-/// modified; the playback/cache migration is handled separately in Pass 3.
+/// Policy-specific text in memory. Disk chapter text and cached blocks stay
+/// unchanged; Reader layout is built lazily from the effective item text.
 nonisolated struct PDFReadingProjection: Sendable {
     let items: [ProjectContentItem]
     let textByItemID: [UUID: String]
     let paragraphsByItemID: [UUID: [ReaderParagraph]]
+
+    /// Uses finalized parser output only. No source access, classification or
+    /// layout work is performed when selecting the blocks for a policy.
+    static func cached(
+        _ cache: ParsedImportCache, items: [ProjectContentItem],
+        projectID: UUID, policy: PdfReadingPolicy
+    ) throws -> Self? {
+        guard case .pdf(let result, let chapters) = cache.output else { return nil }
+        var ownerByElementID: [String: String] = [:]
+        for chapter in chapters {
+            for id in chapter.sourceElementIDs {
+                guard ownerByElementID.updateValue(chapter.id, forKey: id) == nil else {
+                    throw ProjectStoreError.invalidData("Cached PDF chapter mappings are duplicated.")
+                }
+            }
+        }
+        var textByChapter: [String: [String]] = [:]
+        for block in result.items {
+            try Task.checkCancellation()
+            guard let sourceID = block.sourceElementIDs.first,
+                  let owner = ownerByElementID[sourceID],
+                  block.sourceElementIDs.allSatisfy({ ownerByElementID[$0] != nil }) else {
+                throw ProjectStoreError.invalidData("Cached PDF block has no source chapter.")
+            }
+            if includes(block, policy: policy) {
+                textByChapter[owner, default: []].append(block.element.text)
+            }
+        }
+        var existingByLocator: [String: ProjectContentItem] = [:]
+        for item in items { existingByLocator[item.sourceLocator.value] = item }
+        var projected: [ProjectContentItem] = []
+        var seenIDs = Set<UUID>()
+        var textBytes = 0
+        for chapter in chapters.sorted(by: { $0.order < $1.order }) {
+            try Task.checkCancellation()
+            let locator = "chapter:\(chapter.id);pages:\(chapter.firstPage)-\(chapter.lastPage)"
+            let previous = existingByLocator[locator]
+            let itemID: UUID
+            if let previous {
+                itemID = previous.id
+            } else if let mapping = cache.itemMappings.first(where: { $0.sourceLocator.value == locator }) {
+                itemID = mapping.itemID
+            } else {
+                itemID = try PDFReadingSession.stableItemID(projectID: projectID, chapterID: chapter.id)
+            }
+            guard seenIDs.insert(itemID).inserted else {
+                throw ProjectStoreError.invalidData("Cached PDF chapter identities are duplicated.")
+            }
+            let text = ReadAloudContentNormalizer.normalizeSpokenText(
+                textByChapter[chapter.id, default: []].joined(separator: "\n\n")
+            )
+            let bytes = text.utf8.count
+            guard bytes <= ReadAloudSafety.maximumProjectBytes - textBytes else {
+                throw ProjectStoreError.invalidData("Cached reading content exceeds the project's safe loading limit.")
+            }
+            textBytes += bytes
+            let item = ProjectContentItem(
+                id: itemID, title: previous?.title ?? chapter.title,
+                order: projected.count, text: text,
+                contentRevision: ProjectContentRevision.item(normalizedText: text),
+                sourceLocator: ProjectSourceLocator(kind: .pdf, value: locator),
+                settings: previous?.settings ?? ItemNarrationSettings()
+            )
+            try ProjectValidation.validate(item)
+            projected.append(item)
+        }
+        guard !projected.isEmpty, projected.count <= 20_000,
+              Set(items.map(\.id)).isSubset(of: seenIDs) else {
+            throw ProjectStoreError.invalidData("Cached PDF chapter mapping is incomplete.")
+        }
+        return Self(
+            items: projected,
+            textByItemID: Dictionary(uniqueKeysWithValues: projected.map { ($0.id, $0.text) }),
+            // Reader layout remains lazy and bounded to its current chapter.
+            paragraphsByItemID: [:]
+        )
+    }
+
+    private static func includes(_ block: PdfReadingItem, policy: PdfReadingPolicy) -> Bool {
+        if let override = policy.overrides[block.element.kind] { return override == .read }
+        switch block.decision.evidence {
+        case .confirmedPagination, .confirmedRunningMatter: return policy.includesRunningMatter
+        case .supportedContent, .uncertainContent: break
+        }
+        switch block.element.kind {
+        case .footnote: return policy.includesFootnotes
+        case .caption: return policy.includesCaptions
+        case .table: return policy.includesTables
+        default: return true
+        }
+    }
+}
+
+nonisolated enum ParsedOutputPreparationError: Error, LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "Reading options need the book's parsed content. Prepare it from the saved source before changing filters."
+    }
 }

@@ -30,6 +30,9 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
         )
 
         let book = session.book
+        // One source parse, two inexpensive views: existing saved speech text
+        // and complete typed output for later in-memory filtering.
+        let fullReading = try await session.reading(policy: .includeAll)
         let reading = try await session.reading(policy: .listening)
         let chapters = try session.chapters(for: reading)
         var items: [NormalizedImportItem] = []
@@ -41,8 +44,6 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
             let text = ReadAloudContentNormalizer.normalizeSpokenText(
                 entry.text
             )
-            guard !text.isEmpty else { continue }
-
             let order = items.count
             items.append(
                 NormalizedImportItem(
@@ -60,7 +61,8 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
             )
         }
 
-        guard !items.isEmpty else {
+        guard !items.isEmpty,
+              fullReading.items.contains(where: { !$0.element.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw ReadAloudImportError.emptyContent
         }
 
@@ -104,7 +106,18 @@ nonisolated struct PDFImportAdapter: ReadAloudDocumentImporting {
                     fileExtension: "jpg"
                 )
             },
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            parsedOutput: .pdf(
+                result: fullReading,
+                chapters: book.chapters.sorted { $0.order < $1.order }.map {
+                    ParsedPDFChapter(
+                        id: $0.id, title: $0.title, order: $0.order,
+                        firstPage: $0.pageRange.lowerBound,
+                        lastPage: $0.pageRange.upperBound,
+                        sourceElementIDs: $0.elements.map(\.id)
+                    )
+                }
+            )
         )
     }
 

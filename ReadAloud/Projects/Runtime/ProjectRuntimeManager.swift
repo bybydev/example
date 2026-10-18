@@ -10,6 +10,38 @@ nonisolated struct PlayerReaderTarget: Hashable, Sendable {
 @Observable
 @MainActor
 final class ProjectRuntimeManager {
+    private struct PreparationPresenter {
+        let id: UUID
+        let priority: Int
+        let present: @MainActor (ProjectRuntime, @escaping ParsedOutputRetry) -> Bool
+    }
+    @ObservationIgnored private var preparationPresenters: [PreparationPresenter] = []
+
+    func registerPreparationPresenter(
+        id: UUID, priority: Int,
+        present: @escaping @MainActor (ProjectRuntime, @escaping ParsedOutputRetry) -> Bool
+    ) {
+        preparationPresenters.removeAll { $0.id == id }
+        preparationPresenters.append(PreparationPresenter(id: id, priority: priority, present: present))
+    }
+
+    func unregisterPreparationPresenter(id: UUID) {
+        preparationPresenters.removeAll { $0.id == id }
+    }
+
+    /// Synchronous handoff to a currently visible screen. There is no pending
+    /// request on the manager and nothing to replay when the app foregrounds.
+    func offerParsedPreparation(runtime: ProjectRuntime, retry: @escaping ParsedOutputRetry) -> Bool {
+        guard !isShutdown, ProjectGenerationExecutionRegistry.shared.isApplicationActive,
+              runtimes[runtime.id] === runtime,
+              let presenter = preparationPresenters.enumerated().max(by: {
+                  $0.element.priority == $1.element.priority
+                      ? $0.offset < $1.offset : $0.element.priority < $1.element.priority
+              })?.element else { return false }
+        return presenter.present(runtime, retry)
+    }
+
+    let voicePreviews = VoicePreviewController()
     private(set) var activeRuntime: ProjectRuntime?
     // Browsing selection is independent from the one explicit playback owner.
     private(set) var playerRuntime: ProjectRuntime?
@@ -45,6 +77,7 @@ final class ProjectRuntimeManager {
 
     /// Scene activity is a temporary admission rule, never a preference write.
     func setApplicationActive(_ active: Bool) {
+        if !active { voicePreviews.stop() }
         playerRuntime?.pipeline.flushListeningUsage()
         listeningAllowance.refresh()
         listeningAllowance.persist()
@@ -130,8 +163,10 @@ final class ProjectRuntimeManager {
         return try await loadRuntime(projectID: projectID)
     }
 
-    /// Recovery shares the single-flight loader without changing the selected
-    /// project or interrupting a reader in another book.
+    /// Navigation and recovery share the single-flight loader. Loaded runtimes
+    /// already own validated content and live playback state; opening a Reader
+    /// must not reload every chapter or rehash all saved audio. Content changes
+    /// use the explicit refresh paths instead.
     private func loadRuntime(projectID: UUID) async throws -> ProjectRuntime {
         try Task.checkCancellation()
         guard !isShutdown, !deletedProjectIDs.contains(projectID),
@@ -146,20 +181,7 @@ final class ProjectRuntimeManager {
 
         if let existing = runtimes[projectID],
            existing.didLoad {
-            do {
-                try await existing.refresh()
-                guard runtimes[projectID] === existing,
-                      !deletingProjectIDs.contains(projectID) else { throw CancellationError() }
-                return existing
-            } catch {
-                if runtimes[projectID] === existing { runtimes.removeValue(forKey: projectID) }
-                publishLoadedRuntimeIDs()
-                if activeRuntime === existing {
-                    activeRuntime = nil
-                }
-                existing.shutdown()
-                throw error
-            }
+            return existing
         }
 
         guard let projectStore else {
@@ -341,12 +363,23 @@ final class ProjectRuntimeManager {
     /// Runtime state remains authoritative for progress, pause, and preparation.
     func claimPlayback(_ runtime: ProjectRuntime) {
         guard runtimes[runtime.id] === runtime else { return }
+        voicePreviews.stop()
         if playerRuntime !== runtime {
             playerRuntime?.stopPlayback()
             isPlayerExpanded = false
         }
         playerRuntime = runtime
         ProjectSystemMediaController.shared.attach(runtime)
+    }
+
+    /// Preview audio has no book ownership, bookmark, Now Playing item or meter.
+    /// Pause only once the sample is ready; a failed cache load/synthesis leaves
+    /// the book alone. Explicit book starts/resumes invalidate the pending sample.
+    func previewVoice(_ voice: SpeechVoice) {
+        guard !isShutdown, memoryReleaseTask == nil else { return }
+        voicePreviews.preview(voice, text: ReadAloudPreferences.voicePreviewText) { [weak self] in
+            self?.playerRuntime?.pausePlayback()
+        }
     }
 
     func releasePlayback(_ runtime: ProjectRuntime) {
@@ -511,6 +544,7 @@ final class ProjectRuntimeManager {
 
     func handleMemoryPressure() {
         guard memoryReleaseTask == nil else { return }
+        voicePreviews.stop()
         recoverySuspendedForMemoryPressure = true
         recoveryTask?.cancel()
         let loaded = Array(runtimes.values)
@@ -538,7 +572,9 @@ final class ProjectRuntimeManager {
     }
 
     func shutdownAll() {
+        voicePreviews.shutdown()
         isShutdown = true
+        preparationPresenters.removeAll()
         recoveryTask?.cancel()
         recoverySuspendedForMemoryPressure = true
         let values = Array(runtimes.values)
@@ -576,6 +612,7 @@ final class ProjectRuntimeManager {
         return String(describing: error)
     }
 }
+
 
 
 

@@ -44,7 +44,7 @@ The Chapters sheet lists the hero book in reading order, highlights the current
 chapter, identifies the next chapter and shows Ready Offline only for compatible,
 validated final audio. It is not a cross-book playback queue. Explicit offline
 generation, cancellation and retry remain in project/chapter controls. The global
-Background Generation switch is in Settings.
+Pause Audio Generation switch is in Settings > Offline & Storage.
 
 ## App root
 
@@ -69,7 +69,39 @@ The existing state key is retained; old Midnight/Paper selections and committed
 bases migrate to ReadAloud Dark/Light without resetting other preferences.
 `ProjectRuntimeManager` owns reference-stable loaded project runtimes.
 
+Reader/detail navigation reuses a loaded runtime without refreshing its project.
+This keeps full chapter decoding, retained-source hashing and saved-audio hashes
+off the warm navigation path and preserves the live playback bookmark/session.
+Cold loads still use the validated single-flight loader. Explicit content or
+settings changes use the existing refresh methods; playback still validates the
+audio it loads. PDF effective text is restored from cached blocks in the shared
+loader; Hero has no additional PDF preparation gate.
+
 Views receive these through the SwiftUI environment.
+
+### Voice previews
+
+The runtime manager owns a separate `VoicePreviewController` (declared in the
+existing voice-picker source to preserve owner-managed Xcode project files).
+It owns only transient preview request/player state, not a book session. The
+picker observes its preparation, active voice and error state. New book starts
+and same-session resumes cancel previews synchronously, including remote media
+commands. A ready preview pauses the current book before becoming audible and
+leaves that book paused. Preparing books retain their pause flag and bookmark.
+Interruption, route loss, scene deactivation, memory pressure and shutdown cancel
+preview work; request IDs reject late callbacks/results.
+
+`VoicePreviewCache` performs disk access/PCM encoding off the main actor and
+uses the shared ONNX engine for cache misses without unloading it. Cache keys
+reuse generation compatibility inputs (text digest, voice, speed 1.0, runtime
+revision, pronunciation mode and synthesis config version), with a preview/WAV
+namespace. Validated 24 kHz mono WAV files are atomically written to
+`Library/Caches/VoicePreviews/`; missing or corrupt files regenerate. These are
+disposable caches, outside project packages. Preview text is a separate app-wide
+UserDefaults preference edited through Voice Options > Preview Text; draft edits
+and Reset are not committed until Save. It is bounded by the existing 300-unit
+synthesis input safety budget. Previews bypass voice-application and listening
+gates and have no listening meter, floating card or Now Playing item.
 
 ## Library and import
 
@@ -283,11 +315,14 @@ and speed sheets capture their target runtime and chapter when opened.
 Transport targets are at least 44 points, with VoiceOver labels and an
 adjustable scrubber. The behavior matrix is in `PLAYBACK_BEHAVIOR.md`.
 
-A cold PDF with custom saved filters prepares and validates its reader
-projection inside the owned loading operation before any audio is played. A
-known projection/text mismatch still fails preflight. Pause/close remain usable
-during cold preparation; cancelling or superseding the operation prevents its
-eventual parser/cache result from starting audio.
+A cold PDF restores its selected policy from cached typed blocks. Reader,
+streaming, offline generation, highlighting and audio/bookmark validation use
+that effective text, even though saved chapter text stays unchanged. Source
+parsing is restricted to import; runtime loading/playback never opens a parser.
+On a cache miss, saved text remains readable. Default-policy saved text remains
+playable; custom-policy generation/playback defers until its projection is
+available. Queue recovery also defers rather than invalidating intent against
+unavailable custom-policy text. No background work presents preparation UI.
 
 Saved audio exposes elapsed/remaining time and exact scrubbing. Live synthesis
 exposes chapter source position and passage seeking; skip seconds are approximate
@@ -351,6 +386,41 @@ Important rules:
 - background synthesis is opportunistic; it is not kept alive artificially
 
 ## Storage
+
+Issue #61 pass 1 adds `cache/parsed/blocks.json` alongside saved chapter text.
+Import adapters pass their existing parser output through the coordinator to the
+staged package save: complete typed PDF items plus chapter mappings, typed article
+blocks, EPUB chapter/TOC output, document segments/raw text/timing, and pasted text.
+No parser/package capabilities or default saved-text behavior change.
+
+ProjectStore and its persistence bridge expose disk-only cache load/save methods.
+Cache identity uses the retained source and producer contract, independently of
+listening options. A miss returns nil and cannot invoke a parser or schedule
+preparation. Temporary audio cleanup preserves this sidecar. Runtime filtering
+uses the cached PDF projection. EPUB, article and document Readers continue to
+use their existing saved-text paths and do not re-extract sources.
+
+Only an explicit block-dependent action can offer the preparation sheet when
+output is unavailable. A visible foreground presenter explains the need; no work
+starts before Start Processing. The operation reuses import adapters on retained
+local bytes (saved HTML for articles), reports progress and supports Cancel or
+dismissal. Complete output atomically replaces only the parsed sidecar, preserving
+source, saved chapter files, manifest and stable IDs. Cancellation/teardown rejects
+late results and pending actions; shutdown drains the parser before deletion.
+The requested action resumes only while its presenter/app remain active. There
+is no pending presentation or action to replay on foregrounding, and passive
+loading, queue recovery and prefetch cannot offer or start preparation.
+
+PDF filtering selects saved kinds/classifications in memory and persists policy
+metadata only, with a safe bookmark reset if its chapter text changes. Changed
+audio work is drained and incompatible pending jobs are removed through existing
+invalidation; chapter files, the manifest and full parsed cache are not rewritten.
+New PDF imports retain empty default-filtered chapters so their item IDs survive
+inclusion changes. Reader layout remains lazy for the current chapter. A bounded
+single-project derived-text cache in ProjectStore avoids repeated block decoding
+for audio/status/checkpoint calls; ordinary dormant queue summaries do not load
+typed content. The active runtime can reuse loaded blocks even if its disk cache
+is subsequently unavailable.
 
 Storage categories are measured from the real project package:
 
@@ -424,13 +494,31 @@ regeneration, prefetch, or narration-speed controls. Voice previews are excluded
 
 Changing a preference that affects runtime behavior reconciles loaded runtimes.
 
+Settings groups user controls in this order: Plan, Listening, Appearance,
+Offline & Storage, Advanced, Support and About. Listening combines default voice,
+default speed, skip interval and chapter continuation. Offline & Storage exposes
+the generation-pause switch and the existing storage-management screens; an enabled
+pause switch maps directly to the persisted paused state, without inverting its
+meaning. Storage cleanup controls remain available to all users.
+
+Advanced > Advanced Listening contains pronunciation recovery, Prepare Upcoming
+Chapters (Off/Next Chapter/Next 2 Chapters), and Generate While Listening. These
+retain their existing preference keys, defaults and runtime reconciliation. The
+fixed 20-chunk playback lookahead has no user setting. About shows the app version
+and an offline/on-device speech footer.
+
 ## Analytics and diagnostics
 
 ReadAloud 1.0 does not enable product analytics collection.
 
-The old Kokoro prototype reader and live performance dashboard are compiled only
-for DEBUG and are reachable only from developer tools. They are not part of the
-Release product surface.
+The ONNX resource diagnostics/offline test screen, old Kokoro prototype reader
+and live performance dashboard are compiled only for DEBUG and reachable only
+from Developer Tools. App-specific developer destinations are grouped into
+Speech Diagnostics, Prototypes and UI Previews, alongside the shared onboarding
+replay and AppFoundation developer controls. Raw generation-recovery details are
+available under Speech Diagnostics; Release Settings shows an actionable error
+without engine/storage details. Plan actions and voice/theme entitlement rules
+are unchanged.
 
 ## Release configuration
 
@@ -518,7 +606,7 @@ identities prevent stale write-back and same-key replacement races.
 
 Runtime audio mutations close affected cache admission, pause/drain complete
 offline jobs, and drain stopped playback/finalization before changing narration
-identity, replacing PDF text, clearing caches/audio, or deleting a project.
+identity, changing effective PDF text, clearing caches/audio, or deleting a project.
 Library deletion goes through ProjectRuntimeManager instead of deleting a
 package underneath a live runtime. Completed compatible chunk files survive
 ordinary stop and runtime shutdown.
@@ -595,4 +683,5 @@ session events, low memory, cancellation, dormant-job recovery and reclamation.
 The deterministic regression source uses synthetic audio without ONNX inference;
 these tests do not establish sustained live inference under screen lock. Runtime
 acceptance remains pending owner-approved builds/tests and physical-device checks.
+
 

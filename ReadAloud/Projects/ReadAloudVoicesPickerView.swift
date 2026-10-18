@@ -1,5 +1,6 @@
 import AppFoundation
 import AVFoundation
+import Observation
 import SwiftUI
 
 /// Voice selection follows Spokio iOS's searchable Voices sheet and list-row
@@ -24,15 +25,14 @@ struct ReadAloudVoicesPickerView: View {
     @State private var accentFilter: String?
     @State private var showingFilters = false
     @State private var showingPaywall = false
+    @State private var showingPreviewText = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
     @AppStorage("riidrr.voices.favorites") private var favoritesStorage = ""
     @AppStorage("riidrr.voices.recent") private var recentStorage = ""
 
-    @State private var previewTask: Task<Void, Never>?
-    @State private var previewPlayer: AVAudioPlayer?
-    @State private var previewVoiceID: String?
+    private var previews: VoicePreviewController { runtimeManager.voicePreviews }
 
     @State private var detent: PresentationDetent = .large
 
@@ -166,6 +166,14 @@ struct ReadAloudVoicesPickerView: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Preview Text", systemImage: "text.quote") {
+                            showingPreviewText = true
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Voice Options")
                     if scope != .recent {
                         Menu {
                             Picker("Sort By", selection: $sort) {
@@ -201,6 +209,22 @@ struct ReadAloudVoicesPickerView: View {
             .sheet(isPresented: $showingPaywall) {
                 ReadAloudProPaywall()
             }
+            .sheet(isPresented: $showingPreviewText) {
+                VoicePreviewTextSheet {
+                    stopPreview()
+                }
+            }
+            .alert(
+                "Voice Preview",
+                isPresented: Binding(
+                    get: { previews.errorMessage != nil },
+                    set: { if !$0 { previews.errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { previews.errorMessage = nil }
+            } message: {
+                Text(previews.errorMessage ?? "Preview unavailable. Please try again.")
+            }
             .alert(
                 "Voice Selection",
                 isPresented: Binding(
@@ -211,9 +235,6 @@ struct ReadAloudVoicesPickerView: View {
                 Button("OK", role: .cancel) { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "This voice could not be selected.")
-            }
-            .onChange(of: runtimeManager.hasActiveAudioWork) { _, active in
-                if active { stopPreview() }
             }
             .onDisappear { stopPreview() }
         }
@@ -311,14 +332,14 @@ struct ReadAloudVoicesPickerView: View {
             .disabled(isSaving)
 
             Button {
-                preview(voice)
+                runtimeManager.previewVoice(voice)
             } label: {
                 Group {
-                    if previewVoiceID == voice.id && previewTask != nil {
+                    if previews.activeVoiceID == voice.id && previews.isPreparing {
                         ProgressView()
                     } else {
-                        Image(systemName: previewVoiceID == voice.id
-                              && previewPlayer?.isPlaying == true ? "pause.fill" : "play.fill")
+                        Image(systemName: previews.activeVoiceID == voice.id
+                              ? "stop.fill" : "play.fill")
                             .font(.system(size: 13, weight: .semibold))
                     }
                 }
@@ -327,9 +348,8 @@ struct ReadAloudVoicesPickerView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .disabled(isSaving || runtimeManager.hasActiveAudioWork
-                      || (previewTask != nil && previewVoiceID != voice.id))
-            .accessibilityLabel(previewVoiceID == voice.id ? "Stop preview" : "Preview \(voice.name)")
+            .disabled(isSaving)
+            .accessibilityLabel(previews.activeVoiceID == voice.id ? "Stop preview" : "Preview \(voice.name)")
 
             Button {
                 toggleFavorite(voice.id)
@@ -402,70 +422,313 @@ struct ReadAloudVoicesPickerView: View {
     }
 
     private func stopPreview() {
-        previewTask?.cancel()
-        previewPlayer?.stop()
-        previewPlayer = nil
-        if previewTask == nil { previewVoiceID = nil }
+        previews.stop()
+    }
+}
+
+/// Lives beside the existing picker to keep owner-managed project files intact.
+/// The runtime manager owns this controller, but previews never own a book.
+@Observable
+@MainActor
+final class VoicePreviewController {
+    private(set) var activeVoiceID: String?
+    private(set) var isPreparing = false
+    var errorMessage: String?
+
+    @ObservationIgnored private let cache: VoicePreviewCache
+    @ObservationIgnored private var requestID: UUID?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var playerDelegate: VoicePreviewPlayerDelegate?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    init(cache: VoicePreviewCache = VoicePreviewCache()) {
+        self.cache = cache
     }
 
-    /// Spokio plays bundled clips; Riidrr synthesizes a short preview locally,
-    /// only while no project playback or generation is active.
-    private func preview(_ voice: SpeechVoice) {
-        if previewVoiceID == voice.id {
-            if previewTask != nil {
-                previewTask?.cancel()
-                return
-            }
-            if previewPlayer?.isPlaying == true {
-                previewPlayer?.stop()
-                previewPlayer = nil
-                previewVoiceID = nil
-                return
-            }
+    func preview(
+        _ voice: SpeechVoice, text: String,
+        beforePlayback: @escaping @MainActor () -> Void
+    ) {
+        if activeVoiceID == voice.id {
+            stop()
+            return
         }
-        guard previewTask == nil, !runtimeManager.hasActiveAudioWork else { return }
-        previewPlayer?.stop()
-        previewPlayer = nil
-        previewVoiceID = voice.id
-        previewTask = Task { @MainActor in
-            let engine = KokoroONNXEngine.shared
-            defer {
-                previewTask = nil
-                if previewPlayer == nil { previewVoiceID = nil }
-            }
+        stop()
+        errorMessage = nil
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              text.utf16.count <= ReadAloudPreferences.maximumVoicePreviewUTF16 else {
+            errorMessage = "Use a short preview text of up to \(ReadAloudPreferences.maximumVoicePreviewUTF16) characters."
+            return
+        }
+
+        let id = UUID()
+        requestID = id
+        activeVoiceID = voice.id
+        isPreparing = true
+        installObservers(for: id)
+        let request = VoicePreviewRequest(
+            voice: voice, text: text,
+            pronunciationMode: ReadAloudPreferences.pronunciationFallbackMode
+        )
+        task = Task { @MainActor [weak self, cache] in
             do {
-                let result = try await engine.synthesize(
-                    text: "Hello, welcome to your next chapter.",
-                    voice: voice,
-                    speed: 1,
-                    maxChunkSeconds: 15
-                )
+                let url = try await cache.audioURL(for: request)
                 try Task.checkCancellation()
-                await engine.unload()
-                try Task.checkCancellation()
-                guard !runtimeManager.hasActiveAudioWork else { return }
-                let wav = try ProjectWAVCodec.encode(
-                    samples: result.audio.samples,
-                    sampleRate: result.audio.sampleRate
-                )
-                try AVAudioSession.sharedInstance().setCategory(
-                    .playback, mode: .spokenAudio
-                )
+                guard let self, self.requestID == id else { return }
+                let player = try AVAudioPlayer(contentsOf: url)
+                guard player.prepareToPlay() else {
+                    throw SpeechEngineError.synthesisFailed("Preview could not be prepared.")
+                }
+                // No suspension between pausing a preparing/playing book and
+                // starting the sample. All starts/resumes invalidate this ID.
+                beforePlayback()
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
                 try AVAudioSession.sharedInstance().setActive(true)
-                let player = try AVAudioPlayer(data: wav)
-                guard player.prepareToPlay(), player.play() else {
+                self.player = player
+                let delegate = VoicePreviewPlayerDelegate { [weak self] success in
+                    guard let self, self.requestID == id else { return }
+                    self.stop()
+                    if !success {
+                        self.errorMessage = "Preview could not be played. Please try again."
+                    }
+                }
+                self.playerDelegate = delegate
+                player.delegate = delegate
+                guard player.play() else {
                     throw SpeechEngineError.synthesisFailed("Preview could not start.")
                 }
-                previewPlayer = player
-            } catch is CancellationError {
-                await engine.unload()
+                self.isPreparing = false
+                self.task = nil
             } catch {
-                await engine.unload()
-                if !Task.isCancelled {
-                    errorMessage = "Preview unavailable: \(error.localizedDescription)"
+                guard let self, self.requestID == id else { return }
+                let wasCancelled = Task.isCancelled || error is CancellationError
+                self.stop()
+                if !wasCancelled {
+                    self.errorMessage = "Preview unavailable: \(error.localizedDescription)"
                 }
             }
         }
+    }
+
+    func stop() {
+        requestID = nil
+        task?.cancel()
+        task = nil
+        player?.delegate = nil
+        player?.stop()
+        player = nil
+        playerDelegate = nil
+        activeVoiceID = nil
+        isPreparing = false
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers.removeAll()
+        // The audio session is shared with the paused book. Do not deactivate it.
+    }
+
+    func shutdown() {
+        stop()
+        errorMessage = nil
+    }
+
+    private nonisolated enum SessionNotice: Sendable {
+        case interruption, routeChange, reset
+    }
+
+    private func installObservers(for id: UUID) {
+        let notices: [(Notification.Name, SessionNotice)] = [
+            (AVAudioSession.interruptionNotification, .interruption),
+            (AVAudioSession.routeChangeNotification, .routeChange),
+            (AVAudioSession.mediaServicesWereResetNotification, .reset),
+        ]
+        for (name, notice) in notices {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: AVAudioSession.sharedInstance(), queue: .main,
+                using: Self.sessionHandler(self, requestID: id, notice: notice)
+            ))
+        }
+    }
+
+    nonisolated private static func sessionHandler(
+        _ controller: VoicePreviewController, requestID: UUID, notice: SessionNotice
+    ) -> @Sendable (Notification) -> Void {
+        { [weak controller] notification in
+            switch notice {
+            case .interruption:
+                guard notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                        == AVAudioSession.InterruptionType.began.rawValue else { return }
+            case .routeChange:
+                guard notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                        == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
+            case .reset:
+                break
+            }
+            Task { @MainActor [weak controller] in
+                guard controller?.requestID == requestID else { return }
+                controller?.stop()
+            }
+        }
+    }
+}
+
+/// Each player gets a delegate bound to its immutable request ID via onFinish.
+/// Forward only Sendable values from audio callbacks, never player/error objects.
+@MainActor
+private final class VoicePreviewPlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    nonisolated let onFinish: @MainActor @Sendable (Bool) -> Void
+
+    init(onFinish: @escaping @MainActor @Sendable (Bool) -> Void) {
+        self.onFinish = onFinish
+        super.init()
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let onFinish = onFinish
+        Task { @MainActor in onFinish(flag) }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let onFinish = onFinish
+        Task { @MainActor in onFinish(false) }
+    }
+}
+
+nonisolated struct VoicePreviewRequest: Sendable {
+    let voice: SpeechVoice
+    let text: String
+    let pronunciationMode: PronunciationFallbackMode
+
+    var cacheKey: String {
+        get throws {
+            let key = try ProjectGenerationKey.make(GenerationKeyInput(
+                contentRevision: ProjectDigest.sha256(text),
+                resolvedVoiceID: voice.id,
+                canonicalSpeed: 1.0,
+                kokoroRuntimeRevision: ReadAloudSynthesisContract.generationRuntimeRevision(
+                    base: ReadAloudSynthesisContract.runtimeRevision(),
+                    pronunciationMode: pronunciationMode
+                ),
+                synthesisConfigVersion: ReadAloudNarrationCatalog.synthesisConfigVersion
+            ))
+            return ProjectDigest.sha256("readaloud-voice-preview-wav-v1\n" + key)
+        }
+    }
+}
+
+/// Disk IO/PCM encoding stay off the main actor. Inference uses the same ONNX
+/// actor as book generation; no private engine or global cancellation/unload.
+actor VoicePreviewCache {
+    private let rootURL: URL?
+    private let engine: any SpeechSynthesisEngine
+
+    init(rootURL: URL? = nil, engine: any SpeechSynthesisEngine = KokoroONNXEngine.shared) {
+        self.rootURL = rootURL
+        self.engine = engine
+    }
+
+    func audioURL(for request: VoicePreviewRequest) async throws -> URL {
+        try Task.checkCancellation()
+        guard SpeechVoice.all.contains(request.voice),
+              !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              request.text.utf16.count <= ReadAloudPreferences.maximumVoicePreviewUTF16 else {
+            throw SpeechEngineError.synthesisFailed("Invalid preview text or voice.")
+        }
+        let directory: URL
+        if let rootURL {
+            directory = rootURL
+        } else {
+            directory = try FileManager.default.url(
+                for: .cachesDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
+            ).appendingPathComponent("VoicePreviews", isDirectory: true)
+        }
+        let url = directory.appendingPathComponent(try request.cacheKey).appendingPathExtension("wav")
+        if validAudio(at: url) { return url }
+
+        let result = try await engine.synthesize(
+            text: request.text, voice: request.voice, speed: 1.0,
+            maxChunkSeconds: 15, pronunciationMode: request.pronunciationMode
+        )
+        try Task.checkCancellation()
+        try ReadAloudSafety.validate(result.audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
+        let data = try ProjectWAVCodec.encode(
+            samples: result.audio.samples, sampleRate: result.audio.sampleRate
+        )
+        try Task.checkCancellation()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func validAudio(at url: URL) -> Bool {
+        do {
+            // Bound the read before allocating/decoding even a corrupt cache file.
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard let size = attributes[.size] as? NSNumber,
+                  size.intValue >= 44,
+                  size.intValue <= 44 + ReadAloudSafety.maximumParagraphSamples * 2 else { return false }
+            let data = try Data(contentsOf: url)
+            let audio = try ProjectWAVCodec.decode(data)
+            try ReadAloudSafety.validate(audio, maximumSamples: ReadAloudSafety.maximumParagraphSamples)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+private struct VoicePreviewTextSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.appFoundationTheme) private var theme
+    @State private var text = ReadAloudPreferences.voicePreviewText
+    let onSave: @MainActor () -> Void
+
+    private var savedText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSave: Bool {
+        !savedText.isEmpty && savedText.utf16.count <= ReadAloudPreferences.maximumVoicePreviewUTF16
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Preview text", text: $text, axis: .vertical)
+                        .lineLimit(3...8)
+                        .accessibilityLabel("Preview text")
+                } footer: {
+                    Text("Used for every voice at normal speed. Keep it short (up to \(ReadAloudPreferences.maximumVoicePreviewUTF16) characters).")
+                }
+                Section {
+                    Button("Reset to Default") {
+                        text = ReadAloudPreferences.defaultVoicePreviewText
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(theme.backgroundColor.ignoresSafeArea())
+            .tint(theme.accentColor)
+            .navigationTitle("Preview Text")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        guard canSave else { return }
+                        if savedText != ReadAloudPreferences.voicePreviewText {
+                            onSave()
+                            UserDefaults.standard.set(savedText, forKey: ReadAloudPreferences.Key.voicePreviewText)
+                        }
+                        dismiss()
+                    }
+                    .disabled(!canSave)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -598,3 +861,4 @@ private struct VoiceFilterSheet: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
+

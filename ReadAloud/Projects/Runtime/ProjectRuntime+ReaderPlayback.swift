@@ -57,9 +57,9 @@ extension ProjectRuntime {
         itemID: UUID,
         fromOffsetUTF16 explicitOffset: Int? = nil
     ) throws {
-        // A cold PDF with saved custom filters prepares its projection inside
-        // this owned playback operation, just like audio/cache preparation.
-        try prepareExplicitWork(requiresPDFProjection: false)
+        // Low-level playback never offers preparation UI (including automatic
+        // resume paths). Explicit controls use listen/playFromUser instead.
+        try prepareExplicitWork()
         guard let state =
                 itemState(itemID)
         else {
@@ -99,14 +99,19 @@ extension ProjectRuntime {
 
     /// Explicit listening is idempotent for the same chapter. Transport buttons
     /// use togglePlayer instead; opening/continuing must never pause or restart.
-    func listen(itemID: UUID) throws {
+    @discardableResult
+    func listen(itemID: UUID) throws -> Bool {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in _ = try listen(itemID: itemID) }
+            return false
+        }
         if activity.activeItemID == itemID, playbackOperationID != nil {
             switch activity.playbackState {
             case .paused:
                 resumePlayback()
-                return
+                return true
             case .loading, .buffering, .warmingUp, .synthesizing, .playing:
-                return
+                return true
             case .idle, .finished, .failed:
                 break
             }
@@ -116,6 +121,17 @@ extension ProjectRuntime {
         } else {
             try play(itemID: itemID)
         }
+        return true
+    }
+
+    func playFromUser(itemID: UUID, fromOffsetUTF16: Int) throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in
+                try playFromUser(itemID: itemID, fromOffsetUTF16: fromOffsetUTF16)
+            }
+            return
+        }
+        try play(itemID: itemID, fromOffsetUTF16: fromOffsetUTF16)
     }
 
     func pausePlayback() {
@@ -142,6 +158,7 @@ extension ProjectRuntime {
         if let playbackCoordinator, playbackCoordinator.playerRuntime !== self { return }
         guard playbackCoordinator?.authorizeListening() != false else { return }
 
+        playbackCoordinator?.voicePreviews.stop()
         interruptedPlaybackOperationID = nil
         readerPauseRequested = false
         pipeline.resume()
@@ -474,9 +491,6 @@ extension ProjectRuntime {
             return []
         }
 
-        if let paragraphs = pdfReadingProjection?.paragraphsByItemID[itemID] {
-            return paragraphs
-        }
         return cachedReaderParagraphs(for: state.item)
     }
 
@@ -569,15 +583,7 @@ extension ProjectRuntime {
         }
 
         do {
-            if !pdfProjectionMatchesStoredText {
-                try await preparePDFReadingOptions()
-                try requirePlaybackOperation(operationID)
-                guard pdfProjectionMatchesStoredText else {
-                    throw ProjectStoreError.invalidData(
-                        "PDF reading content is not synchronized with playback."
-                    )
-                }
-            }
+            guard isPDFReadingReady else { throw ParsedOutputPreparationError.unavailable }
             let runtimeRevision =
                 try ReadAloudSynthesisContract
                     .runtimeRevision()
@@ -1648,6 +1654,7 @@ private nonisolated struct ReaderTimedPlaybackPosition {
     let chunk: SpeechChunk
     let durationSeconds: Double
 }
+
 
 
 

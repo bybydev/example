@@ -116,8 +116,10 @@ The app includes 31 verified, offline runtime resources:
 - All 28 English Kokoro v1.0 voice styles (20 American and 8 British, about 0.5 MB each; Heart by default)
 
 There are **no user downloads or first-play downloads**. The app accesses the
-models from its signed bundle. All voice styles use the bundled English-language G2P. Settings > Kokoro ONNX INT8 shows bundled
-readiness and provides an offline real-text speech test.
+models from its signed bundle. All voice styles use the bundled English-language G2P.
+In DEBUG builds, Settings > Developer Tools > Speech Diagnostics > Kokoro ONNX INT8
+shows bundled readiness and provides an offline real-text speech test. Model
+diagnostics and test controls are excluded from Release builds.
 
 ```text
 Reader / generation queue
@@ -187,6 +189,17 @@ Voice entitlement is enforced when choosing and using a voice, including
 per-chapter overrides. Project limits, custom chapter speed, generation and
 prefetch are not Pro features.
 
+All 28 voices can be previewed for Free, even after the weekly listening allowance
+is exhausted. Voices > Voice Options > Preview Text edits a shared sample (up to
+300 UTF-16 units); it is synthesized only on tapping a preview button. Successful
+previews are cached in the app's Library/Caches/VoicePreviews directory, keyed by
+text, voice, speed, pronunciation policy and synthesis/runtime revision. Cached
+previews play without inference; missing/corrupt entries regenerate offline.
+Preview audio pauses the current book without changing its bookmark/ownership or
+consuming listening usage. The book stays paused until explicitly resumed; any
+book start/resume cancels pending or playing previews. Preview work never unloads
+the shared Kokoro engine or cancels book generation.
+
 `ReadAloudAccessPolicy` is the central voice and weekly allowance policy.
 Theme entitlements are handled by AppFoundation.
 
@@ -207,4 +220,5 @@ The workflow always builds the selected branch/ref and publishes one
 `mycli-build-*` prerelease. It does not upload to App Store Connect.
 
 App Store metadata lives under `AppStore/`.
+
 

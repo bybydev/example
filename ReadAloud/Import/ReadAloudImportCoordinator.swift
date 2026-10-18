@@ -49,6 +49,43 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
         }
     }
 
+    /// Used only after the preparation sheet's Start action. Reuses import
+    /// adapters on retained local bytes; never creates a project or fetches URLs.
+    func parseRetainedOutput(
+        _ source: ParsedOutputSource,
+        progress: @escaping @Sendable (ReadAloudImportProgress) -> Void
+    ) async throws -> ParsedImportCache {
+        try Task.checkCancellation()
+        let normalized: NormalizedImportDocument
+        switch source.project.source.type {
+        case .paste:
+            let text = try String(contentsOf: source.fileURL, encoding: .utf8)
+            normalized = try pasteImporter.importDocument(text: text, suggestedTitle: source.project.title)
+        case .article:
+            let articleURL = source.items.first(where: { $0.sourceLocator.kind == .article })
+                .flatMap { URL(string: $0.sourceLocator.value) } ?? source.project.source.originalURL
+            guard let articleURL else {
+                throw ReadAloudImportError.sourceUnavailable("The saved article URL is unavailable.")
+            }
+            normalized = try articleImporter.importDocument(
+                data: Data(contentsOf: source.fileURL), finalURL: articleURL, progress: progress
+            ).document
+        case .pdf:
+            normalized = try await pdfImporter.importDocument(from: source.fileURL, progress: progress)
+        case .epub:
+            normalized = try await epubImporter.importDocument(from: source.fileURL, progress: progress)
+        case .document:
+            normalized = try await textImporter.importDocument(from: source.fileURL, progress: progress)
+        }
+        try Task.checkCancellation()
+        guard let output = normalized.parsedOutput else { throw ParsedOutputPreparationError.unavailable }
+        let mappings = source.items.map {
+            NormalizedImportItem(id: $0.id, title: $0.title, order: $0.order,
+                normalizedText: $0.text, sourceLocator: $0.sourceLocator)
+        }
+        return ParsedImportCache(source: source.project.source, items: mappings, output: output)
+    }
+
     private func importFile(
         _ externalURL: URL,
         progress: (@Sendable (ReadAloudImportProgress) -> Void)?
@@ -281,6 +318,9 @@ nonisolated struct ReadAloudImportCoordinator: Sendable {
             retainedSource: retainedSource,
             retainedArtwork: normalized.artwork.map {
                 ProjectRetainedArtwork(data: $0.data)
+            },
+            parsedCache: normalized.parsedOutput.map {
+                ParsedImportCache(source: project.source, items: normalized.items, output: $0)
             }
         )
 

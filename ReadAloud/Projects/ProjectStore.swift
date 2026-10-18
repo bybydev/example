@@ -118,6 +118,13 @@ nonisolated struct ProjectRetainedArtwork: Sendable {
 actor ProjectStore {
     nonisolated let rootURL: URL
     private let fileManager: FileManager
+    // One bounded derived-text cache avoids decoding a book's blocks for every
+    // audio/status/checkpoint operation. Parser output remains owned by disk or
+    // the active runtime; switching projects replaces this entry.
+    private var readingProjection: (
+        projectID: UUID, source: ProjectSource, policy: PdfReadingPolicy,
+        projection: PDFReadingProjection
+    )?
 
     init(
         rootURL: URL? = nil,
@@ -188,7 +195,8 @@ actor ProjectStore {
         items: [ProjectContentItem],
         queue: ProjectQueueDocument = ProjectQueueDocument(),
         retainedSource: ProjectRetainedSource? = nil,
-        retainedArtwork: ProjectRetainedArtwork? = nil
+        retainedArtwork: ProjectRetainedArtwork? = nil,
+        parsedCache: ParsedImportCache? = nil
     ) throws {
         try Task.checkCancellation()
         try ProjectValidation.validate(project)
@@ -198,6 +206,12 @@ actor ProjectStore {
             manifest: manifest,
             items: items
         )
+        if let parsedCache {
+            try requireParsedCacheCompatibility(parsedCache, source: project.source)
+            guard Set(parsedCache.itemMappings.map(\.itemID)) == Set(items.map(\.id)) else {
+                throw ProjectStoreError.invalidData("Parsed output does not match imported item identities.")
+            }
+        }
         try requireQueueOwnership(
             queue,
             projectID: project.id,
@@ -231,6 +245,9 @@ actor ProjectStore {
                 project: project,
                 paths: paths
             )
+            if let parsedCache {
+                try writeParsedCache(parsedCache, paths: paths)
+            }
             try ProjectAtomicWriter.write(
                 project,
                 to: paths.projectJSON,
@@ -478,6 +495,152 @@ actor ProjectStore {
         ProjectSnapshot(project: try loadProjectMetadata(projectID: projectID))
     }
 
+    /// Disk lookup only. A miss never starts parsing or schedules background work.
+    func loadParsedOutput(projectID: UUID) throws -> ParsedImportCache? {
+        try Task.checkCancellation()
+        let source = try loadProjectMetadata(projectID: projectID).source
+        let paths = try pathsForExistingProject(projectID)
+        guard fileManager.fileExists(atPath: paths.parsedOutputCache.path) else { return nil }
+        do {
+            let size = try paths.parsedOutputCache.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= ParsedImportCache.maximumBytes else { return nil }
+            let data = try Data(contentsOf: paths.parsedOutputCache, options: .mappedIfSafe)
+            let cached = try ProjectJSONCodec.decode(
+                ParsedImportCache.self, from: data, relativePath: "cache/parsed/blocks.json"
+            )
+            try Task.checkCancellation()
+            return cached.matches(source) ? cached : nil
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // This sidecar is optional. Saved text/source stay usable when it is
+            // corrupt, unreadable or from an incompatible producer/schema.
+            try Task.checkCancellation()
+            return nil
+        }
+    }
+
+    /// Saves already parsed output. It intentionally has no parser dependency.
+    func saveParsedOutput(projectID: UUID, cache: ParsedImportCache) throws {
+        try Task.checkCancellation()
+        let source = try loadProjectMetadata(projectID: projectID).source
+        try requireParsedCacheCompatibility(cache, source: source)
+        let paths = try pathsForExistingProject(projectID)
+        try writeParsedCache(cache, paths: paths)
+        invalidateReadingProjection(projectID)
+    }
+
+    private func invalidateReadingProjection(_ projectID: UUID) {
+        if readingProjection?.projectID == projectID { readingProjection = nil }
+    }
+
+    private func effectivePDFProjection(
+        project: ProjectDocument, storedItems: [ProjectContentItem]? = nil,
+        suppliedCache: ParsedImportCache? = nil
+    ) throws -> PDFReadingProjection? {
+        guard project.source.type == .pdf else { return nil }
+        let policy = project.pdfReadingPolicy ?? .listening
+        if let cached = readingProjection,
+           cached.projectID == project.id, cached.source == project.source, cached.policy == policy {
+            if let storedItems {
+                let stored = Dictionary(uniqueKeysWithValues: storedItems.map { ($0.id, $0) })
+                let projected = Dictionary(uniqueKeysWithValues: cached.projection.items.map { ($0.id, $0) })
+                if storedItems.allSatisfy({ item in
+                    projected[item.id]?.sourceLocator == item.sourceLocator
+                }) {
+                    let items = cached.projection.items.map { item in
+                        var result = item
+                        if let original = stored[item.id] {
+                            result.title = original.title
+                            result.settings = original.settings
+                        }
+                        return result
+                    }
+                    let projection = PDFReadingProjection(
+                        items: items, textByItemID: cached.projection.textByItemID, paragraphsByItemID: [:]
+                    )
+                    readingProjection = (project.id, project.source, policy, projection)
+                    return projection
+                }
+            } else {
+                return cached.projection
+            }
+            invalidateReadingProjection(project.id)
+        }
+        let available = try suppliedCache ?? loadParsedOutput(projectID: project.id)
+        guard let cache = available, cache.matches(project.source) else { return nil }
+        let items: [ProjectContentItem]
+        if let storedItems {
+            items = storedItems
+        } else {
+            let paths = try pathsForExistingProject(project.id)
+            let manifest = try loadContentManifest(paths: paths)
+            items = try manifest.items.map { try loadContentItem(projectID: project.id, itemID: $0.id) }
+        }
+        let projection: PDFReadingProjection?
+        do {
+            projection = try PDFReadingProjection.cached(cache, items: items, projectID: project.id, policy: policy)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Invalid mappings are a cache miss, never an instruction to parse.
+            return nil
+        }
+        if let projection {
+            readingProjection = (project.id, project.source, policy, projection)
+        }
+        return projection
+    }
+
+    private func effectiveContentItem(projectID: UUID, itemID: UUID) throws -> ProjectContentItem {
+        let project = try loadProjectMetadata(projectID: projectID)
+        if let projection = try effectivePDFProjection(project: project) {
+            guard let item = projection.items.first(where: { $0.id == itemID }) else {
+                throw ProjectStoreError.invalidData("Chapter is not in the active reading projection.")
+            }
+            return item
+        }
+        let paths = try pathsForExistingProject(projectID)
+        let manifest = try loadContentManifest(paths: paths)
+        guard manifest.items.contains(where: { $0.id == itemID }) else {
+            throw ProjectStoreError.invalidData("Chapter is not represented by the content manifest.")
+        }
+        return try loadContentItem(projectID: projectID, itemID: itemID)
+    }
+
+    private func readingItemIDs(
+        paths: ProjectPackagePaths, manifest: ProjectContentManifest, requiredIDs: Set<UUID>
+    ) throws -> Set<UUID> {
+        let storedIDs = Set(manifest.items.map(\.id))
+        // Catalog/queue summaries must stay lightweight for dormant books.
+        if requiredIDs.isSubset(of: storedIDs) { return storedIDs }
+        let project = try loadProjectDocument(at: paths.packageURL)
+        if let projection = try effectivePDFProjection(project: project) {
+            return Set(projection.items.map(\.id))
+        }
+        return storedIDs
+    }
+
+    private func requireParsedCacheCompatibility(
+        _ cache: ParsedImportCache, source: ProjectSource
+    ) throws {
+        guard cache.matches(source) else {
+            throw ProjectStoreError.invalidData("Parsed output does not match the retained source.")
+        }
+    }
+
+    private func writeParsedCache(_ cache: ParsedImportCache, paths: ProjectPackagePaths) throws {
+        let data = try ProjectJSONCodec.encode(cache)
+        guard data.count <= ParsedImportCache.maximumBytes else {
+            throw ProjectStoreError.invalidData("Parsed output exceeds safe cache loading limits.")
+        }
+        try Task.checkCancellation()
+        try ProjectAtomicWriter.write(
+            data, to: paths.parsedOutputCache,
+            temporaryDirectory: paths.tempDirectory, fileManager: fileManager
+        )
+    }
+
     func loadProjectMetadata(projectID: UUID) throws -> ProjectDocument {
         let url = try existingPackageURL(for: projectID)
         let project = try loadProjectDocument(at: url)
@@ -507,6 +670,20 @@ actor ProjectStore {
             forRelativePath: project.source.relativePath,
             in: packageRootURL
         )
+    }
+
+    /// Validate retained bytes only for an explicitly started preparation.
+    func parsedOutputSource(projectID: UUID) throws -> ParsedOutputSource {
+        try Task.checkCancellation()
+        let project = try loadProjectMetadata(projectID: projectID)
+        let paths = try pathsForExistingProject(projectID)
+        try requireRetainedSourceCompatibility(project: project, packageRootURL: paths.packageURL)
+        let url = try packageURL(forRelativePath: project.source.relativePath, in: paths.packageURL)
+        let manifest = try loadContentManifest(paths: paths)
+        let items = try manifest.items.sorted { $0.order < $1.order }.map {
+            try loadContentItem(projectID: projectID, itemID: $0.id)
+        }
+        return ParsedOutputSource(project: project, fileURL: url, items: items)
     }
 
     func loadProject(
@@ -575,6 +752,18 @@ actor ProjectStore {
             items: items
         )
 
+        let projection = try effectivePDFProjection(project: project, storedItems: items)
+        let activeItems = projection?.items ?? items
+        let activeEntries = activeItems.map {
+            ContentManifestItem(id: $0.id, order: $0.order, relativePath: ProjectPackagePaths.relativeItemPath($0.id))
+        }
+        let activeManifest = try projection.map { _ in
+            ProjectContentManifest(
+                contentRevision: try ProjectContentRevision.project(manifestItems: activeEntries, items: activeItems),
+                items: activeEntries
+            )
+        } ?? manifest
+
         let queue: ProjectQueueDocument = try readDocument(
             ProjectQueueDocument.self,
             at: paths.queueJobs,
@@ -584,14 +773,15 @@ actor ProjectStore {
         try requireQueueOwnership(
             queue,
             projectID: projectID,
-            itemIDs: Set(manifest.items.map(\.id))
+            itemIDs: Set(activeItems.map(\.id))
         )
 
         return LoadedProject(
             project: project,
-            manifest: manifest,
-            items: items,
-            queue: queue
+            manifest: activeManifest,
+            items: activeItems,
+            queue: queue,
+            hasParsedPDFOutput: projection != nil
         )
     }
 
@@ -670,13 +860,26 @@ actor ProjectStore {
     func updatePDFReadingPolicy(
         projectID: UUID,
         policy: PdfReadingPolicy,
+        parsedCache: ParsedImportCache? = nil,
         now: Date = .now
     ) throws -> ProjectDocument {
         var project = try loadProjectMetadata(projectID: projectID)
         guard project.source.type == .pdf else {
             throw ProjectStoreError.invalidData("Listening filters require a PDF project.")
         }
+        if let parsedCache { try requireParsedCacheCompatibility(parsedCache, source: project.source) }
+        let previous = try effectivePDFProjection(project: project, suppliedCache: parsedCache)
         project.pdfReadingPolicy = policy
+        let next = try effectivePDFProjection(project: project, suppliedCache: parsedCache)
+        if let currentID = project.playback?.currentItemID,
+           let nextItem = next?.items.first(where: { $0.id == currentID }),
+           previous?.items.first(where: { $0.id == currentID })?.contentRevision != nextItem.contentRevision {
+            project.playback?.contentBookmark = ProjectContentBookmark(
+                contentRevision: nextItem.contentRevision, textOffsetUTF16: 0
+            )
+            project.playback?.audioPosition = nil
+            project.playback?.projectProgress = 0
+        }
         project.updatedAt = now
         try writeProjectDocument(
             project,
@@ -685,10 +888,8 @@ actor ProjectStore {
         return project
     }
 
-    /// Replace the active PDF reading projection and its generation/bookmark
-    /// identity as one recoverable, project-local transaction. The retained
-    /// original PDF, cached synthesis chunks and audio WAVs are not erased.
-    /// A policy selection is *never* made durable without its matching text.
+    /// Legacy explicit content replacement. Listening-option changes use
+    /// updatePDFReadingPolicy and a cached in-memory projection instead.
     @discardableResult
     func replacePDFReadingContent(
         projectID: UUID,
@@ -968,7 +1169,7 @@ actor ProjectStore {
         if let itemID = playback?.currentItemID {
             // The item itself must still exist in the active projection,
             // even when the incoming checkpoint omits both optional offsets.
-            let item = try loadContentItem(
+            let item = try effectiveContentItem(
                 projectID: projectID, itemID: itemID
             )
             if let bookmark = playback?.contentBookmark {
@@ -1039,6 +1240,7 @@ actor ProjectStore {
             temporaryDirectory: paths.tempDirectory,
             fileManager: fileManager
         )
+        invalidateReadingProjection(projectID)
     }
 
     func saveContentItem(
@@ -1082,6 +1284,7 @@ actor ProjectStore {
             temporaryDirectory: paths.tempDirectory,
             fileManager: fileManager
         )
+        invalidateReadingProjection(projectID)
     }
 
     func loadContentItem(
@@ -1155,7 +1358,7 @@ actor ProjectStore {
         try requireQueueOwnership(
             queue,
             projectID: projectID,
-            itemIDs: Set(manifest.items.map(\.id))
+            itemIDs: try readingItemIDs(paths: paths, manifest: manifest, requiredIDs: Set(queue.jobs.map(\.itemID)))
         )
         try ProjectAtomicWriter.write(
             queue,
@@ -1191,7 +1394,7 @@ actor ProjectStore {
         try requireQueueOwnership(
             queue,
             projectID: projectID,
-            itemIDs: Set(manifest.items.map(\.id))
+            itemIDs: try readingItemIDs(paths: paths, manifest: manifest, requiredIDs: Set(queue.jobs.map(\.itemID)))
         )
         return queue
     }
@@ -1925,7 +2128,7 @@ actor ProjectStore {
 
         let paths = try pathsForExistingProject(projectID)
         let manifest = try loadContentManifest(paths: paths)
-        let validItemIDs = Set(manifest.items.map(\.id))
+        let validItemIDs = try readingItemIDs(paths: paths, manifest: manifest, requiredIDs: Set(requests.map(\.itemID)))
         var queue = try loadQueue(projectID: projectID)
 
         for request in requests {
@@ -2041,6 +2244,7 @@ actor ProjectStore {
 
         do {
             try fileManager.removeItem(at: url)
+            invalidateReadingProjection(projectID)
         } catch {
             throw ProjectStoreError.io(String(describing: error))
         }
@@ -2586,19 +2790,10 @@ actor ProjectStore {
         _ metadata: GeneratedAudioMetadata,
         in paths: ProjectPackagePaths
     ) throws {
-        let manifest = try loadContentManifest(paths: paths)
-        guard manifest.items.contains(where: { $0.id == metadata.itemID }) else {
-            throw ProjectStoreError.invalidData(
-                "Audio metadata item is not represented by the content manifest"
-            )
-        }
-
-        let item: ProjectContentItem = try readDocument(
-            ProjectContentItem.self,
-            at: paths.itemJSON(metadata.itemID),
-            relativePath: ProjectPackagePaths.relativeItemPath(metadata.itemID)
+        let project = try loadProjectDocument(at: paths.packageURL)
+        let item = try effectiveContentItem(
+            projectID: project.id, itemID: metadata.itemID
         )
-        try ProjectValidation.validate(item)
 
         guard item.id == metadata.itemID,
               item.contentRevision == metadata.contentRevision else {

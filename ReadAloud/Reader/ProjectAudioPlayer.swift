@@ -422,7 +422,7 @@ struct ProjectPlayerExpandedContent: View {
                 runtime: runtime, itemID: itemID,
                 onError: onError, onSeek: onSeek
             )
-            .disabled(!runtime.pdfProjectionMatchesStoredText)
+            .disabled(!runtime.isPDFReadingReady)
 
             HStack(spacing: 0) {
                 chapterButton(forward: false)
@@ -480,7 +480,7 @@ struct ProjectPlayerExpandedContent: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .buttonStyle(.plain)
-            .disabled(!runtime.pdfProjectionMatchesStoredText)
+            .disabled(!runtime.isPDFReadingReady)
         }
     }
 

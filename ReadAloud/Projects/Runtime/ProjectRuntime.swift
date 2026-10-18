@@ -122,19 +122,13 @@ final class ProjectRuntime {
     private(set) var pdfReadingPolicy: PdfReadingPolicy = .listening
     private(set) var pdfReadingProjection: PDFReadingProjection?
     private(set) var isApplyingPDFReadingPolicy = false
+    private(set) var isPreparingParsedOutput = false
+    @ObservationIgnored private var parsedPreparationTask: Task<ParsedImportCache, Error>?
 
-    /// Policy-derived text and stored playback revisions must agree before
-    /// playback or offline generation is permitted.
-    var pdfProjectionMatchesStoredText: Bool {
-        guard project?.source.type == .pdf else { return true }
-        guard let projection = pdfReadingProjection else {
-            // A newly imported PDF starts at the same listening defaults
-            // as its stored chapter text. Other policies require projection.
-            return pdfReadingPolicy == .listening
-        }
-        return itemStates.allSatisfy {
-            projection.textByItemID[$0.id] == $0.item.text
-        }
+    /// Saved default text remains usable on a cache miss. Custom policies need
+    /// a restored projection, never an implicit parse to make them ready.
+    var isPDFReadingReady: Bool {
+        project?.source.type != .pdf || pdfReadingProjection != nil || pdfReadingPolicy == .listening
     }
 
     @ObservationIgnored let pipeline: ReadAloudPipeline
@@ -148,11 +142,7 @@ final class ProjectRuntime {
         (itemID: UUID, contentRevision: String, paragraphs: [ReaderParagraph])?
     @ObservationIgnored private var playerTextLengthCache:
         (itemID: UUID, contentRevision: String, length: Int)?
-    // Parser-backed PDF evidence stays alive for this reader runtime; UI policy
-    // changes will derive new reading results without reopening the PDF.
-    @ObservationIgnored private var pdfReadingSession: PDFReadingSession?
-    @ObservationIgnored private var pdfReadingSessionTask: Task<PDFReadingSession, Error>?
-    @ObservationIgnored private var pdfReadingSessionLoadID: UUID?
+    @ObservationIgnored private var parsedOutputCache: ParsedImportCache?
     @ObservationIgnored var playbackTask: Task<Void, Never>?
     @ObservationIgnored private var retiringPlaybackTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var chunkBookmarkTask: Task<Void, Never>?
@@ -215,7 +205,8 @@ final class ProjectRuntime {
     }
 
     var blocksQueuedGeneration: Bool {
-        if isInvalidatingAudio || isShutdown || audioRecoveryRequired { return true }
+        if isInvalidatingAudio || isApplyingPDFReadingPolicy || isPreparingParsedOutput || isShutdown || audioRecoveryRequired
+            || !isPDFReadingReady { return true }
         if synthesisSuspendedForMemoryPressure { return true }
         guard activity
             .hasActivePlaybackWork
@@ -232,7 +223,7 @@ final class ProjectRuntime {
     }
 
     var isBackgroundWorkActive: Bool {
-        isInvalidatingAudio || !retiringPlaybackTasks.isEmpty
+        isPreparingParsedOutput || isInvalidatingAudio || !retiringPlaybackTasks.isEmpty
             || activity.hasActivePlaybackWork
             || queueController.hasExecutingWork
     }
@@ -250,7 +241,10 @@ final class ProjectRuntime {
     }
 
     var continueItemID: UUID? {
-        currentItemID ?? itemStates.first?.id
+        if let currentItemID, itemState(currentItemID)?.item.text.isEmpty == false {
+            return currentItemID
+        }
+        return itemStates.first(where: { !$0.item.text.isEmpty })?.id ?? itemStates.first?.id
     }
 
     func loadIfNeeded() async throws {
@@ -258,16 +252,7 @@ final class ProjectRuntime {
 
         do {
             try await refresh()
-            if !didRecoverGenerationQueue {
-                // Validate cold intent against today's settings and compatible
-                // final audio before any execution queue can start.
-                _ = try await persistence.recoverGenerationQueue(
-                    generationKeys: Dictionary(uniqueKeysWithValues: itemStates.map { ($0.id, $0.generationKey) }),
-                    readyOfflineItemIDs: Set(itemStates.filter { $0.generationStatus.state == .readyOffline }.map(\.id))
-                )
-                didRecoverGenerationQueue = true
-                try await refreshGenerationState()
-            }
+            try await recoverGenerationQueueIfNeeded()
             try queueController.configure(
                 runtime: self
             )
@@ -278,86 +263,119 @@ final class ProjectRuntime {
         }
     }
 
-    /// Lazy, single-flight access to the parser-backed PDF reading source.
-    /// Pass 2 will use this to apply reader policy changes in memory.
-    /// No PDF is parsed for non-PDF projects or merely to show the library.
-    func pdfReadingSessionIfNeeded() async throws -> PDFReadingSession? {
-        try await loadIfNeeded()
-        try Task.checkCancellation()
-        guard let project, project.source.type == .pdf else { return nil }
-
-        if let pdfReadingSession { return pdfReadingSession }
-
-        let sourceRevision = project.source.sourceRevision
-        let task: Task<PDFReadingSession, Error>
-        let loadID: UUID
-        if let pending = pdfReadingSessionTask,
-           let pendingID = pdfReadingSessionLoadID {
-            task = pending
-            loadID = pendingID
-        } else {
-            loadID = UUID()
-            let bridge = persistence
-            task = Task.detached(priority: .userInitiated) {
-                let sourceURL = try await bridge.retainedPDFSourceURL()
-                try Task.checkCancellation()
-                return try await PDFReadingSession.open(at: sourceURL)
-            }
-            pdfReadingSessionTask = task
-            pdfReadingSessionLoadID = loadID
-        }
-
-        do {
-            let session = try await withTaskCancellationHandler {
-                try await task.value
-            } onCancel: {
-                task.cancel()
-            }
-            try Task.checkCancellation()
-            guard self.project?.source.sourceRevision == sourceRevision else {
-                throw CancellationError()
-            }
-            // Another waiter may already have published this successful load.
-            if let pdfReadingSession { return pdfReadingSession }
-            guard pdfReadingSessionLoadID == loadID else {
-                throw CancellationError()
-            }
-            pdfReadingSession = session
-            pdfReadingSessionTask = nil
-            pdfReadingSessionLoadID = nil
-            return session
-        } catch {
-            if pdfReadingSessionLoadID == loadID {
-                task.cancel()
-                pdfReadingSessionTask = nil
-                pdfReadingSessionLoadID = nil
-            }
-            throw error
-        }
+    private func recoverGenerationQueueIfNeeded() async throws {
+        guard !didRecoverGenerationQueue, isPDFReadingReady else { return }
+        _ = try await persistence.recoverGenerationQueue(
+            generationKeys: Dictionary(uniqueKeysWithValues: itemStates.map { ($0.id, $0.generationKey) }),
+            readyOfflineItemIDs: Set(itemStates.filter { $0.generationStatus.state == .readyOffline }.map(\.id))
+        )
+        didRecoverGenerationQueue = true
+        try await refreshGenerationState()
     }
 
-    /// Prepare the saved policy before the PDF reader first renders.
-    /// The retained source PDF is parsed only when the reader needs it.
+    /// Disk/memory lookup only. A miss is handled by an explicit UI preparation
+    /// action in pass 3; neither this method nor background work can parse.
+    private func cachedParsedOutputIfNeeded() async throws -> ParsedImportCache {
+        try await loadIfNeeded()
+        guard let project else { throw ParsedOutputPreparationError.unavailable }
+        if let cached = parsedOutputCache, cached.matches(project.source) { return cached }
+        try ReadAloudSafety.requireMemoryHeadroom()
+        guard let cached = try await persistence.loadParsedOutput(),
+              cached.matches(project.source) else {
+            throw ParsedOutputPreparationError.unavailable
+        }
+        parsedOutputCache = cached
+        return cached
+    }
+
     func preparePDFReadingOptions() async throws {
         try await loadIfNeeded()
-        guard project?.source.type == .pdf else { return }
-        guard pdfReadingProjection == nil else { return }
-        guard let session = try await pdfReadingSessionIfNeeded() else { return }
-        let sourceRevision = project?.source.sourceRevision
-        let policy = project?.pdfReadingPolicy ?? .listening
-        let projection = try await session.projection(
-            for: itemStates.map(\.item),
-            projectID: id,
-            policy: policy
-        )
-        try Task.checkCancellation()
-        guard project?.source.sourceRevision == sourceRevision,
-              (project?.pdfReadingPolicy ?? .listening) == policy else {
-            throw CancellationError()
+        guard project?.source.type == .pdf, pdfReadingProjection == nil else { return }
+        _ = try await cachedParsedOutputIfNeeded()
+        try await refresh()
+        guard pdfReadingProjection != nil else { throw ParsedOutputPreparationError.unavailable }
+        try await recoverGenerationQueueIfNeeded()
+        queueController.reconcileScheduling()
+    }
+
+    /// Called only by the visible preparation sheet's Start button. No loader,
+    /// queue, lifecycle or automatic-resume path invokes this method.
+    func prepareParsedOutputFromUser(
+        progress: @escaping ParsedOutputProgress,
+        parse: ParsedOutputParseOperation? = nil
+    ) async throws {
+        guard !isShutdown, !isPreparingParsedOutput,
+              !isApplyingPDFReadingPolicy, !isInvalidatingAudio else {
+            throw ProjectStoreError.invalidData("Previous processing is still stopping. Try again shortly.")
         }
-        pdfReadingPolicy = policy
-        pdfReadingProjection = projection
-        revision &+= 1
+        try ReadAloudSafety.requireMemoryHeadroom()
+        isPreparingParsedOutput = true
+        queueController.reconcileScheduling()
+        defer {
+            parsedPreparationTask = nil
+            isPreparingParsedOutput = false
+            queueController.reconcileScheduling()
+        }
+        progress(ReadAloudImportProgress(stage: .preparing, fractionCompleted: nil))
+        let source = try await persistence.parsedOutputSource()
+        try Task.checkCancellation()
+        guard !isShutdown else { throw CancellationError() }
+        let importer = ReadAloudImportCoordinator(projectStore: persistence.store)
+        let operation: ParsedOutputParseOperation = parse ?? { source, progress in
+            try await importer.parseRetainedOutput(source, progress: progress)
+        }
+        let worker = Task.detached(priority: .userInitiated) {
+            let cache = try await operation(source, progress)
+            try Task.checkCancellation()
+            if source.project.source.type == .pdf {
+                guard try PDFReadingProjection.cached(
+                    cache, items: source.items, projectID: source.project.id,
+                    policy: source.project.pdfReadingPolicy ?? .listening
+                ) != nil else { throw ParsedOutputPreparationError.unavailable }
+            }
+            return cache
+        }
+        parsedPreparationTask = worker
+        let cache = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        try Task.checkCancellation()
+        guard !worker.isCancelled, !isShutdown, !isReleasingSpeechMemory,
+              project?.source == source.project.source else { throw CancellationError() }
+        // Publish only complete output after old book work has drained. Source,
+        // saved text and the manifest are never replaced by this operation.
+        try await withAudioInvalidation {
+            try Task.checkCancellation()
+            guard !worker.isCancelled, !isShutdown else { throw CancellationError() }
+            progress(ReadAloudImportProgress(stage: .persisting, fractionCompleted: nil))
+            try await persistence.saveParsedOutput(cache)
+            try Task.checkCancellation()
+            guard !worker.isCancelled, !isShutdown else { throw CancellationError() }
+            parsedOutputCache = cache
+            try await refresh()
+            try await recoverGenerationQueueIfNeeded()
+        }
+        try Task.checkCancellation()
+        progress(ReadAloudImportProgress(stage: .finished, fractionCompleted: 1))
+    }
+
+    func cancelParsedOutputPreparation() {
+        parsedPreparationTask?.cancel()
+    }
+
+    /// Only explicit controls call this. The presenter registry refuses a
+    /// request without an active visible host; it never queues one for later.
+    @discardableResult
+    func offerParsedPreparationForUserAction(
+        _ retry: @escaping @MainActor () async throws -> Void
+    ) throws -> Bool {
+        guard let playbackCoordinator,
+              playbackCoordinator.offerParsedPreparation(runtime: self, retry: retry) else {
+            throw ParsedOutputPreparationError.unavailable
+        }
+        return true
     }
 
     /// Persist the policy per project and publish the fully computed reader
@@ -366,22 +384,50 @@ final class ProjectRuntime {
         guard project?.source.type == .pdf else {
             throw ProjectStoreError.invalidData("Reading options require a PDF.")
         }
-        guard !isApplyingPDFReadingPolicy else {
-            throw ProjectStoreError.invalidData("A reading option update is in progress.")
+        guard !isApplyingPDFReadingPolicy, !isPreparingParsedOutput else {
+            throw ProjectStoreError.invalidData("Book content is being prepared. Try again shortly.")
         }
         if policy == pdfReadingPolicy, pdfReadingProjection != nil { return }
         isApplyingPDFReadingPolicy = true
-        defer { isApplyingPDFReadingPolicy = false }
+        defer {
+            isApplyingPDFReadingPolicy = false
+            queueController.reconcileScheduling()
+        }
 
-        guard let session = try await pdfReadingSessionIfNeeded() else {
-            throw ProjectStoreError.invalidData("PDF reading source is unavailable.")
+        let cache: ParsedImportCache
+        do {
+            cache = try await cachedParsedOutputIfNeeded()
+        } catch is ParsedOutputPreparationError {
+            try offerParsedPreparationForUserAction { [self] in try await applyPDFReadingPolicy(policy) }
+            return
         }
         let sourceRevision = project?.source.sourceRevision
-        let projection = try await session.projection(
-            for: itemStates.map(\.item),
-            projectID: id,
-            policy: policy
-        )
+        let items = itemStates.map(\.item)
+        let projectID = id
+        let task = Task.detached(priority: .userInitiated) {
+            try PDFReadingProjection.cached(cache, items: items, projectID: projectID, policy: policy)
+        }
+        let candidate: PDFReadingProjection?
+        do {
+            candidate = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Decodable but unusable block/chapter mappings require the same
+            // explicit preparation as a missing sidecar.
+            parsedOutputCache = nil
+            try offerParsedPreparationForUserAction { [self] in try await applyPDFReadingPolicy(policy) }
+            return
+        }
+        guard let projection = candidate else {
+            parsedOutputCache = nil
+            try offerParsedPreparationForUserAction { [self] in try await applyPDFReadingPolicy(policy) }
+            return
+        }
         try Task.checkCancellation()
         guard project?.source.sourceRevision == sourceRevision else {
             throw CancellationError()
@@ -398,20 +444,26 @@ final class ProjectRuntime {
         if sameContent {
             // A policy whose spoken output is identical keeps its playback,
             // exact bookmarks, generated audio and in-progress jobs intact.
-            let updated = try await persistence.updatePDFReadingPolicy(policy)
+            let updated = try await persistence.updatePDFReadingPolicy(policy, parsedCache: cache)
             project = updated
             pdfReadingPolicy = policy
             pdfReadingProjection = projection
+            try await recoverGenerationQueueIfNeeded()
             revision &+= 1
             return
         }
 
-        try await withAudioInvalidation(persistCheckpoint: false) {
+        let previousByID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0.contentRevision) })
+        let projectedByID = Dictionary(uniqueKeysWithValues: projected.map { ($0.id, $0.contentRevision) })
+        let changedIDs = Set(previousByID.keys).union(projectedByID.keys).filter {
+            previousByID[$0] != projectedByID[$0]
+        }
+        try await withAudioInvalidation(itemIDs: Set(changedIDs), persistCheckpoint: false) {
             queueController.shutdown()
             do {
-                _ = try await persistence.replacePDFReadingContent(
-                    policy: policy,
-                    items: projected
+                _ = try await persistence.updatePDFReadingPolicy(policy, parsedCache: cache)
+                _ = try await persistence.removeGenerationJobs(
+                    itemIDs: Set(changedIDs), states: [.queued, .generating, .failed]
                 )
                 try await refresh()
                 let active = itemStates.map(\.item).sorted { $0.order < $1.order }
@@ -427,12 +479,13 @@ final class ProjectRuntime {
                 }
                 pdfReadingPolicy = policy
                 pdfReadingProjection = projection
+                try await recoverGenerationQueueIfNeeded()
                 try queueController.configure(runtime: self)
                 queueController.reconcileScheduling()
                 revision &+= 1
             } catch {
-                // The storage transaction rolls back on failure. Reload from
-                // disk, restart durable generation, and preserve the old policy.
+                // Reload whichever policy was committed and keep old work
+                // drained until the matching effective text is restored.
                 pdfReadingProjection = nil
                 do {
                     try await refresh()
@@ -519,17 +572,13 @@ final class ProjectRuntime {
                 return
             }
 
-            if project?.source.sourceRevision != loaded.project.source.sourceRevision {
-                pdfReadingSessionTask?.cancel()
-                pdfReadingSessionTask = nil
-                pdfReadingSessionLoadID = nil
-                pdfReadingSession = nil
-                pdfReadingProjection = nil
-            }
+            if project?.source != loaded.project.source { parsedOutputCache = nil }
             pdfReadingPolicy = loaded.project.pdfReadingPolicy ?? .listening
-            if pdfReadingPolicy != (project?.pdfReadingPolicy ?? .listening) {
-                pdfReadingProjection = nil
-            }
+            pdfReadingProjection = loaded.hasParsedPDFOutput ? PDFReadingProjection(
+                items: loaded.items,
+                textByItemID: Dictionary(uniqueKeysWithValues: loaded.items.map { ($0.id, $0.text) }),
+                paragraphsByItemID: [:]
+            ) : nil
             project = loaded.project
             manifest = loaded.manifest
             readingProgressIndex = readingProgress
@@ -976,11 +1025,20 @@ final class ProjectRuntime {
         itemID: UUID,
         regenerate: Bool
     ) async throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in
+                try await enqueueGeneration(itemID: itemID, regenerate: regenerate)
+            }
+            return
+        }
         try prepareExplicitWork()
         guard let entry = itemState(itemID) else {
             throw ProjectStoreError.invalidData(
                 "Runtime item is unavailable."
             )
+        }
+        guard !entry.item.text.isEmpty else {
+            throw ProjectStoreError.invalidData("This chapter has no text under the selected reading options.")
         }
 
         try await persistence.enqueueGeneration(
@@ -996,8 +1054,13 @@ final class ProjectRuntime {
     }
 
     func enqueueRemainingGeneration() async throws {
+        if !isPDFReadingReady {
+            try offerParsedPreparationForUserAction { [self] in try await enqueueRemainingGeneration() }
+            return
+        }
         try prepareExplicitWork()
         let requests: [ProjectGenerationRequest] = itemStates.compactMap { entry -> ProjectGenerationRequest? in
+            guard !entry.item.text.isEmpty else { return nil }
             switch entry.generationStatus.state {
             case .readyOffline, .generating, .waiting:
                 return nil
@@ -1120,16 +1183,14 @@ final class ProjectRuntime {
         guard !audioRecoveryRequired else {
             throw ProjectStoreError.invalidData("Audio state needs to be refreshed. Reopen this project and try again.")
         }
-        guard !isApplyingPDFReadingPolicy else {
+        guard !isApplyingPDFReadingPolicy, !isPreparingParsedOutput else {
             throw ProjectStoreError.invalidData(
-                "Listening options are being applied. Try again shortly."
+                "Book content is being prepared. Try again shortly."
             )
         }
-        guard pdfProjectionMatchesStoredText
+        guard isPDFReadingReady
                 || (!requiresPDFProjection && pdfReadingProjection == nil) else {
-            throw ProjectStoreError.invalidData(
-                "PDF reading content is not synchronized with playback."
-            )
+            throw ParsedOutputPreparationError.unavailable
         }
         guard !isReleasingSpeechMemory else {
             throw ProjectStoreError.invalidData("Speech resources are being released. Try listening again in a moment.")
@@ -1141,11 +1202,13 @@ final class ProjectRuntime {
 
     func suspendForMemoryPressure() {
         synthesisSuspendedForMemoryPressure = true
+        cancelParsedOutputPreparation()
         isReleasingSpeechMemory = true
         let hadWork = isBackgroundWorkActive
         let playbackItemID = playerControlItemID()
         stopPlayback()
         readerLayoutCache = nil
+        parsedOutputCache = nil
         queueController.reconcileScheduling()
         if hadWork {
             playerItemID = playbackItemID
@@ -1236,13 +1299,11 @@ final class ProjectRuntime {
     }
 
     func shutdown() {
+        cancelParsedOutputPreparation()
         isShutdown = true
         playbackCoordinator?.releasePlayback(self)
         pdfReadingProjection = nil
-        pdfReadingSessionTask?.cancel()
-        pdfReadingSessionTask = nil
-        pdfReadingSessionLoadID = nil
-        pdfReadingSession = nil
+        parsedOutputCache = nil
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchTaskID = nil
@@ -1277,6 +1338,7 @@ final class ProjectRuntime {
         let pendingPlayback = playbackTask
         let pendingPrefetch = prefetchTask
         let pendingBookmark = chunkBookmarkTask
+        let pendingPreparation = parsedPreparationTask
         shutdown()
         await chunkCache.shutdown()
         await queueController.cancelAndDrain()
@@ -1284,6 +1346,7 @@ final class ProjectRuntime {
         await drainStoppedPlayback()
         await pendingPrefetch?.value
         await pendingBookmark?.value
+        _ = await pendingPreparation?.result
     }
 
     private func handlePipelineEvent(

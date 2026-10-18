@@ -34,6 +34,8 @@ nonisolated enum ReadAloudPreferences {
             "com.hoangbkit.readaloud.default-voice"
         static let defaultSpeed =
             "com.hoangbkit.readaloud.default-speed"
+        static let voicePreviewText =
+            "com.hoangbkit.readaloud.voice-preview-text"
         static let pronunciationFallbackMode =
             "com.hoangbkit.readaloud.pronunciation-fallback-mode"
         static let skipInterval =
@@ -55,6 +57,16 @@ nonisolated enum ReadAloudPreferences {
             forKey: Key.pronunciationFallbackMode
         ) else { return .adaptive }
         return PronunciationFallbackMode(rawValue: raw) ?? .adaptive
+    }
+
+    static let defaultVoicePreviewText = "Hello, welcome to your next chapter."
+    static let maximumVoicePreviewUTF16 = ReadAloudSafety.maximumSynthesisUTF16
+
+    static var voicePreviewText: String {
+        let value = UserDefaults.standard.string(forKey: Key.voicePreviewText)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !value.isEmpty && value.utf16.count <= maximumVoicePreviewUTF16
+            ? value : defaultVoicePreviewText
     }
 
     static let supportedSkipIntervals =
@@ -190,3 +202,4 @@ nonisolated enum ReadAloudPreferences {
         )
     }
 }
+

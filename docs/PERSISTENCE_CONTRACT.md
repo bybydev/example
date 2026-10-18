@@ -23,6 +23,7 @@ The Swift type layout may evolve, but on-disk semantics must remain compatible t
 │   └── jobs.json
 ├── cache/
 │   ├── chunks/
+│   ├── parsed/blocks.json
 │   └── artwork/
 ├── audio/
 │   ├── <item-id>.wav
@@ -34,6 +35,56 @@ The Swift type layout may evolve, but on-disk semantics must remain compatible t
 Project and item filenames use stable lowercase UUID strings.
 
 All persisted timestamps use an unambiguous ISO-8601 representation in UTC.
+
+### Parsed-output cache and reading projections (issue #61, passes 1–2)
+
+New imports additionally write `cache/parsed/blocks.json` in the existing staged
+package transaction. Saved chapter text, IDs, manifest and source keep their
+current format. The optional sidecar has its own schema/producer identifier,
+retained-source ID/revision, existing item/locator mappings, and parser output.
+It is independent of narration settings and listening-policy selection.
+
+PDF stores the complete Codable include-all reading result and chapter/source-ID
+associations, including initially skipped content. Article imports retain the
+typed article result. EPUB and TextExtractor use small Codable copies of their
+existing public chapter/segment output, metadata and diagnostics; subtitle timing
+and returned raw text are retained. Paste retains its original text. Artwork
+bytes stay in the existing artwork location. No new semantic classifications or
+extraction settings are introduced in this pass.
+
+The whole-book sidecar has a 64 MiB encode/decode limit, separate from the existing
+per-chapter document limit. An import cache-write failure rolls back its staged
+package along with the other import files. Cache replacement is atomic.
+
+`loadParsedOutput` reads this sidecar only. Missing, corrupt, incompatible or
+source-mismatched output returns nil without parsing, fetching, modifying project
+files or scheduling work. `saveParsedOutput` accepts already parsed output and
+rejects a different source identity/revision. Ordinary temporary-audio cleanup
+leaves parsed output intact.
+
+Pass 2 restores effective PDF text from the cached typed items and saved policy.
+Filtering changes in-memory items/revisions and policy metadata without replacing
+the baseline saved text, manifest or full parsed output. PDF imports keep chapter
+IDs even where default filters leave an empty chapter. Other input types continue
+their existing saved-text Reader/playback paths without extraction.
+
+Audio compatibility and checkpoints validate the effective PDF text/revision.
+When the bookmarked chapter changes, reset its content offset and clear its old
+audio timeline; unchanged spoken output keeps its generation identity/bookmark.
+The existing invalidation path drains affected work and removes incompatible
+pending jobs, with no new audio-cache key scheme.
+
+A cache miss is never permission for automatic parsing. Saved text remains
+readable; custom-policy playback/generation and queue recovery defer if its
+projection is unavailable. Only an explicit block-dependent user action may
+offer preparation through a currently visible foreground presenter. The sheet
+explains the need and waits for Start Processing, then shows progress and Cancel.
+It reuses retained local source bytes and existing adapters, never fetches a URL
+or replaces source/chapter text/manifest/IDs, and atomically saves only complete,
+source-compatible parsed output. Cancellation and runtime teardown reject late
+results and pending actions; deletion waits for parser completion. The original
+action may resume only in the active app with its presenter still mounted. No
+background/lifecycle task can offer, start or queue preparation for later.
 
 ---
 
@@ -274,7 +325,10 @@ Persist both a content bookmark and an optional audio position for the current i
 - `audioPosition.audioRevision`: SHA-256 of the finalized WAV bytes identifying the actual saved timeline; absent until finalization
 - `audioPosition.positionSeconds`: elapsed time on that timeline
 
-Offsets are measured in the exact normalized item text persisted in `content/items/<id>.json`, not the original EPUB/PDF source. Segment boundaries must be valid text boundaries.
+Offsets are measured in the exact normalized text supplied to speech, not the
+original source. For PDF with cached reading options, this is the in-memory
+projection's item text/revision; otherwise it is the saved item text. Segment
+boundaries must be valid text boundaries.
 
 Restore policy:
 

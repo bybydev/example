@@ -73,7 +73,8 @@ nonisolated struct WebArticleImportAdapter: Sendable {
                 )
             ],
             artwork: nil,
-            diagnostics: []
+            diagnostics: [],
+            parsedOutput: .article(article)
         )
         return WebArticleExtracted(
             document: document,
