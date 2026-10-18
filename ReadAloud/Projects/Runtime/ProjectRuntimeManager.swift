@@ -56,6 +56,167 @@ final class ProjectRuntimeManager {
     private(set) var readerProjectID: UUID?
     private(set) var generationRecoveryError: String?
     private(set) var isBackgroundPrefetchPaused = ReadAloudPreferences.backgroundPrefetchPaused
+    private(set) var offlineQueueIssues: [String] = []
+    private(set) var isLoadingOfflineQueue = false
+    private(set) var cancellingOfflineJobIDs: Set<UUID> = []
+    private var persistedOfflineQueueBooks: [OfflineGenerationQueueBook] = []
+    @ObservationIgnored private var offlineQueueRefreshRevision: UInt64 = 0
+
+    /// Durable snapshots cover unopened books. A loaded runtime always replaces
+    /// its entire snapshot, including when it has no remaining active jobs.
+    var offlineGenerationQueueBooks: [OfflineGenerationQueueBook] {
+        _ = loadedRuntimeIDs
+        var books = Dictionary(uniqueKeysWithValues: persistedOfflineQueueBooks.map { ($0.id, $0) })
+        for runtime in runtimes.values where runtime.didLoad && loadingTasks[runtime.id] == nil {
+            books.removeValue(forKey: runtime.id)
+            if let book = offlineQueueBook(for: runtime) { books[runtime.id] = book }
+        }
+        return books.values.filter { !deletingProjectIDs.contains($0.id) && !$0.rows.isEmpty }
+            .map { book in
+                var book = book
+                if runtimeIfLoaded(projectID: book.id) == nil {
+                    for index in book.rows.indices {
+                        book.rows[index].isProcessing = false
+                        book.rows[index].progress = nil
+                        book.rows[index].waitingReason = dormantGenerationWaitingReason
+                    }
+                }
+                return book
+            }
+            .sorted { lhs, rhs in
+                let leftRunning = lhs.rows.contains(where: \.isProcessing)
+                let rightRunning = rhs.rows.contains(where: \.isProcessing)
+                if leftRunning != rightRunning { return leftRunning }
+                let left = lhs.rows.map { $0.job.createdAt }.min() ?? .distantFuture
+                let right = rhs.rows.map { $0.job.createdAt }.min() ?? .distantFuture
+                return left == right ? lhs.id.uuidString < rhs.id.uuidString : left < right
+            }
+    }
+
+    var offlineGenerationQueueIssues: [String] {
+        var issues = offlineQueueIssues
+        if generationRecoveryError != nil {
+            issues.append("Some queued audio could not be restored. Open the book to review its offline audio.")
+        }
+        for runtime in runtimes.values where runtime.queueController.queueError != nil {
+            issues.append("Queue storage for \(runtime.project?.title ?? "a book") could not be updated. Open the book or refresh to try again.")
+        }
+        return issues
+    }
+
+    /// Metadata-only refresh. Viewing the queue never restores a runtime,
+    /// starts synthesis, changes playback ownership, or offers source parsing.
+    func refreshOfflineGenerationQueue() async {
+        guard let projectStore, !isShutdown else {
+            offlineQueueIssues = [initializationError ?? "Queue storage is unavailable."]
+            return
+        }
+        offlineQueueRefreshRevision &+= 1
+        let revision = offlineQueueRefreshRevision
+        isLoadingOfflineQueue = true
+        defer {
+            if revision == offlineQueueRefreshRevision { isLoadingOfflineQueue = false }
+        }
+        do {
+            let titles = Dictionary(uniqueKeysWithValues: runtimes.values.filter(\.didLoad).map { runtime in
+                (runtime.id, Dictionary(uniqueKeysWithValues: runtime.itemStates.map { ($0.id, $0.item.title) }))
+            })
+            let snapshot = try await projectStore.offlineGenerationQueueSnapshot(knownTitles: titles)
+            guard !Task.isCancelled, revision == offlineQueueRefreshRevision, !isShutdown else { return }
+            persistedOfflineQueueBooks = snapshot.books
+            offlineQueueIssues = snapshot.issues
+        } catch is CancellationError { }
+        catch {
+            guard revision == offlineQueueRefreshRevision, !isShutdown else { return }
+            offlineQueueIssues = ["The generation queue could not be refreshed. Your saved requests are preserved. Try refreshing again."]
+        }
+    }
+
+    func cancelOfflineGeneration(_ row: OfflineGenerationQueueRow) async throws {
+        let projectID = row.job.projectID
+        guard let projectStore, !isShutdown, !deletingProjectIDs.contains(projectID),
+              !deletedProjectIDs.contains(projectID), !cancellingOfflineJobIDs.contains(row.id) else { return }
+        cancellingOfflineJobIDs.insert(row.id)
+        defer { cancellingOfflineJobIDs.remove(row.id) }
+        do {
+            // Storage rechecks the exact job ID/key and its current active state.
+            // No chapter-wide remove, audio invalidation, or new runtime load.
+            let queue = try await projectStore.cancelGenerationJob(
+                projectID: projectID, jobID: row.id, generationKey: row.job.generationKey
+            )
+            // Recovery may already be loading this book. Let that existing load
+            // finish, then reconcile it; never create a runtime just to cancel.
+            if let loading = loadingTasks[projectID] { _ = await loading.result }
+            if let runtime = runtimeIfLoaded(projectID: projectID) {
+                var executionError: Error?
+                if !queue.jobs.contains(where: { $0.id == row.id }) {
+                    do { try runtime.queueController.removeCancelledExecution(jobID: row.id) }
+                    catch {
+                        runtime.queueController.publishQueueError(Self.message(for: error))
+                        executionError = error
+                    }
+                }
+                try await runtime.refreshGenerationState()
+                if let executionError { throw executionError }
+            }
+            await refreshOfflineGenerationQueue()
+        } catch {
+            await refreshOfflineGenerationQueue()
+            throw error
+        }
+    }
+
+    private var dormantGenerationWaitingReason: String {
+        if isBackgroundPrefetchPaused { return "Generation paused" }
+        if recoverySuspendedForMemoryPressure { return "Waiting for speech resources. Open the book to continue." }
+        if !ProjectGenerationExecutionRegistry.shared.canPerformGeneration {
+            return "Paused while not listening in background"
+        }
+        return "Waiting to restore queued work"
+    }
+
+    private func offlineQueueBook(for runtime: ProjectRuntime) -> OfflineGenerationQueueBook? {
+        guard let project = runtime.project else { return nil }
+        let controller = runtime.queueController
+        let rows = controller.queue.jobs.filter { $0.state == .queued || $0.state == .generating }
+            .map { job in
+                var row = OfflineGenerationQueueRow(
+                    job: job, title: runtime.itemState(job.itemID)?.item.title ?? "Chapter"
+                )
+                row.isProcessing = controller.hasGlobalAdmission && controller.executingJobIDs.contains(job.id)
+                row.progress = row.isProcessing ? controller.progressByJobID[job.id] : nil
+                if isBackgroundPrefetchPaused { row.waitingReason = "Generation paused" }
+                else if !runtime.isPDFReadingReady {
+                    row.waitingReason = "Open the book to prepare its reading content."
+                } else if runtime.synthesisSuspendedForMemoryPressure || runtime.isReleasingSpeechMemory {
+                    row.waitingReason = "Waiting for speech resources. Open the book to continue."
+                } else if controller.hasGlobalAdmission {
+                    row.waitingReason = controller.executingJobIDs.isEmpty
+                        ? "Preparing offline audio…" : "Waiting for another chapter"
+                } else { row.waitingReason = controller.schedulingStatus }
+                return row
+            }
+            .sorted { lhs, rhs in
+                if lhs.isProcessing != rhs.isProcessing { return lhs.isProcessing }
+                return lhs.job.createdAt == rhs.job.createdAt
+                    ? lhs.id.uuidString < rhs.id.uuidString : lhs.job.createdAt < rhs.job.createdAt
+            }
+        guard !rows.isEmpty else { return nil }
+        return OfflineGenerationQueueBook(
+            project: ProjectSnapshot(project: project), artworkURL: runtime.artworkURL, rows: rows
+        )
+    }
+
+    private func rememberOfflineQueue(_ runtime: ProjectRuntime) {
+        // Retain the latest projection when a runtime leaves memory, so an old
+        // disk snapshot cannot briefly resurrect its completed/cancelled rows.
+        offlineQueueRefreshRevision &+= 1
+        isLoadingOfflineQueue = false
+        persistedOfflineQueueBooks.removeAll { $0.id == runtime.id }
+        if !deletingProjectIDs.contains(runtime.id), let book = offlineQueueBook(for: runtime) {
+            persistedOfflineQueueBooks.append(book)
+        }
+    }
 
     func backgroundGenerationStatus(
         persisted: [UUID: ProjectGenerationQueueCounts]
@@ -473,6 +634,8 @@ final class ProjectRuntimeManager {
             return
         }
 
+        rememberOfflineQueue(runtime)
+
         if activeRuntime === runtime {
             activeRuntime = nil
         }
@@ -518,6 +681,7 @@ final class ProjectRuntimeManager {
         }
 
         for runtime in removable {
+            rememberOfflineQueue(runtime)
             runtimes.removeValue(forKey: runtime.id)
             if activeRuntime === runtime {
                 activeRuntime = nil
@@ -574,6 +738,9 @@ final class ProjectRuntimeManager {
     func shutdownAll() {
         voicePreviews.shutdown()
         isShutdown = true
+        offlineQueueRefreshRevision &+= 1
+        persistedOfflineQueueBooks.removeAll()
+        isLoadingOfflineQueue = false
         preparationPresenters.removeAll()
         recoveryTask?.cancel()
         recoverySuspendedForMemoryPressure = true
@@ -612,6 +779,7 @@ final class ProjectRuntimeManager {
         return String(describing: error)
     }
 }
+
 
 
 

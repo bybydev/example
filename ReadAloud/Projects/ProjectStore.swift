@@ -1,6 +1,12 @@
 import Foundation
 import PDFKitAudio
 
+nonisolated private struct QueueChapterHeading: Decodable {
+    let schemaVersion: Int
+    let id: UUID
+    let title: String
+}
+
 nonisolated enum ProjectStoreError: Error, LocalizedError, Equatable, Sendable {
     case projectNotFound(UUID)
     case projectAlreadyExists(UUID)
@@ -1396,6 +1402,82 @@ actor ProjectStore {
             projectID: projectID,
             itemIDs: try readingItemIDs(paths: paths, manifest: manifest, requiredIDs: Set(queue.jobs.map(\.itemID)))
         )
+        return queue
+    }
+
+    /// Read only display fields for pending chapters. Do not decode their text,
+    /// hydrate runtimes, open a parser, validate final WAVs, or load speech.
+    func offlineGenerationQueueSnapshot(
+        knownTitles: [UUID: [UUID: String]]
+    ) throws -> OfflineGenerationQueueSnapshot {
+        let catalog = try catalog()
+        var snapshot = OfflineGenerationQueueSnapshot()
+        if !catalog.issues.isEmpty {
+            snapshot.issues.append("Some books could not be read. Check Library Issues for details.")
+        }
+        for project in catalog.projects {
+            try Task.checkCancellation()
+            do {
+                let queue = try loadQueue(projectID: project.id)
+                let active = queue.jobs.filter { $0.state == .queued || $0.state == .generating }
+                    .sorted { $0.createdAt == $1.createdAt
+                        ? $0.id.uuidString < $1.id.uuidString : $0.createdAt < $1.createdAt }
+                guard !active.isEmpty else { continue }
+                let paths = try pathsForExistingProject(project.id)
+                let manifest = try loadContentManifest(paths: paths)
+                let ordered = manifest.items.sorted { $0.order < $1.order }
+                var titles = knownTitles[project.id] ?? [:]
+                var titleUnavailable = false
+                var rows: [OfflineGenerationQueueRow] = []
+                for job in active {
+                    try Task.checkCancellation()
+                    let index = ordered.firstIndex { $0.id == job.itemID }
+                    var title = titles[job.itemID] ?? index.map { "Chapter \($0 + 1)" } ?? "Chapter"
+                    if titles[job.itemID] == nil, index != nil {
+                        do {
+                            let heading: QueueChapterHeading = try readDocument(
+                                QueueChapterHeading.self, at: paths.itemJSON(job.itemID),
+                                relativePath: ProjectPackagePaths.relativeItemPath(job.itemID)
+                            )
+                            guard heading.id == job.itemID else {
+                                throw ProjectStoreError.invalidData("Queued chapter identity does not match.")
+                            }
+                            if !heading.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                title = heading.title
+                            }
+                        } catch { titleUnavailable = true }
+                        titles[job.itemID] = title
+                    }
+                    rows.append(OfflineGenerationQueueRow(job: job, title: title))
+                }
+                if titleUnavailable {
+                    snapshot.issues.append("Some chapter titles in \(project.title) could not be read. Their queued requests are preserved.")
+                }
+                snapshot.books.append(OfflineGenerationQueueBook(
+                    project: project,
+                    artworkURL: project.artworkRelativePath.map { packageURL(for: project.id).appending(path: $0) },
+                    rows: rows
+                ))
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                snapshot.issues.append("Queued audio for \(project.title) could not be read. Open the book or refresh to try again.")
+            }
+        }
+        return snapshot
+    }
+
+    /// Compare identity/state and remove intent in one actor turn. A stale row
+    /// cannot remove a newer request for the same chapter or completed history.
+    func cancelGenerationJob(
+        projectID: UUID, jobID: UUID, generationKey: String
+    ) throws -> ProjectQueueDocument {
+        var queue = try loadQueue(projectID: projectID)
+        guard let index = queue.jobs.firstIndex(where: {
+            $0.id == jobID && $0.generationKey == generationKey
+                && ($0.state == .queued || $0.state == .generating)
+        }) else { return queue }
+        queue.jobs.remove(at: index)
+        try saveQueue(projectID: projectID, queue: queue)
         return queue
     }
 
@@ -2989,5 +3071,6 @@ actor ProjectStore {
         return String(describing: error)
     }
 }
+
 
 

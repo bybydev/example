@@ -28,6 +28,21 @@ final class ProjectQueueController {
     @ObservationIgnored private var drainDepth = 0
     private(set) var hasGlobalAdmission = false
     private(set) var schedulingStatus = "Queued"
+    private(set) var executingJobIDs: Set<UUID> = []
+    private(set) var progressByJobID: [UUID: JobProgress] = [:]
+    private(set) var queueError: String?
+
+    func publishQueueError(_ message: String) { queueError = message }
+
+    /// Called only after this exact durable request is absent from storage.
+    /// Keep other live requests intact while cancelling the removed executor.
+    func removeCancelledExecution(jobID: UUID) throws {
+        queue.jobs.removeAll { $0.id == jobID }
+        executingJobIDs.remove(jobID)
+        progressByJobID.removeValue(forKey: jobID)
+        try executionQueue?.remove(id: jobID)
+        reconcileScheduling()
+    }
 
     func publishSchedulingStatus(_ status: String) { schedulingStatus = status }
 
@@ -167,6 +182,11 @@ final class ProjectQueueController {
             ProjectQueueDocument
     ) {
         self.queue = queue
+        let activeIDs = Set(queue.jobs.filter {
+            $0.state == .queued || $0.state == .generating
+        }.map(\.id))
+        executingJobIDs.formIntersection(activeIDs)
+        progressByJobID = progressByJobID.filter { activeIDs.contains($0.key) }
 
         guard isConfigured else {
             return
@@ -174,7 +194,9 @@ final class ProjectQueueController {
 
         do {
             try reconcile()
+            queueError = nil
         } catch {
+            queueError = Self.message(for: error)
             runtime?.lastErrorMessage =
                 Self.message(for: error)
         }
@@ -189,6 +211,7 @@ final class ProjectQueueController {
     func setGlobalAdmission(_ admitted: Bool) {
         hasGlobalAdmission = admitted
         if !admitted {
+            progressByJobID.removeAll()
             for task in generationExecutions.values { task.cancel() }
         }
         guard let executionQueue else { return }
@@ -199,12 +222,14 @@ final class ProjectQueueController {
                 try executionQueue.pause()
             }
         } catch {
+            queueError = Self.message(for: error)
             runtime?.lastErrorMessage = Self.message(for: error)
         }
     }
 
     func shutdown() {
         setGlobalAdmission(false)
+        executingJobIDs.removeAll()
         configurationID = nil
         for task in generationExecutions.values { task.cancel() }
         if let executionQueue {
@@ -322,6 +347,8 @@ final class ProjectQueueController {
 
         switch event {
         case .jobStarted(let id):
+            executingJobIDs.insert(id)
+            progressByJobID.removeValue(forKey: id)
             Task { [weak self] in
                 guard self?.configurationID == configurationID,
                       self?.queue.jobs.contains(where: { $0.id == id }) == true
@@ -333,6 +360,8 @@ final class ProjectQueueController {
             }
 
         case .jobPausing(let id):
+            executingJobIDs.remove(id)
+            progressByJobID.removeValue(forKey: id)
             Task { [weak self] in
                 guard self?.configurationID == configurationID,
                       self?.queue.jobs.contains(where: { $0.id == id }) == true
@@ -344,6 +373,8 @@ final class ProjectQueueController {
             }
 
         case .jobCompleted(let id):
+            executingJobIDs.remove(id)
+            progressByJobID.removeValue(forKey: id)
             Task { [weak self] in
                 guard self?.configurationID == configurationID,
                       self?.queue.jobs.contains(where: { $0.id == id }) == true
@@ -358,6 +389,8 @@ final class ProjectQueueController {
             let id,
             let errorDescription
         ):
+            executingJobIDs.remove(id)
+            progressByJobID.removeValue(forKey: id)
             Task { [weak self] in
                 guard self?.configurationID == configurationID,
                       self?.queue.jobs.contains(where: { $0.id == id }) == true
@@ -373,14 +406,23 @@ final class ProjectQueueController {
         case .persistenceFailed(
             let errorDescription
         ):
+            queueError = errorDescription
             runtime.lastErrorMessage =
                 errorDescription
 
+        case .jobProgressUpdated(let id, let progress):
+            guard hasGlobalAdmission, executingJobIDs.contains(id),
+                  queue.jobs.contains(where: {
+                      $0.id == id && ($0.state == .queued || $0.state == .generating)
+                  }) else { return }
+            progressByJobID[id] = progress
+
+        case .jobCancelled(let id), .jobRemoved(let id):
+            executingJobIDs.remove(id)
+            progressByJobID.removeValue(forKey: id)
+
         case .jobAdded(_),
              .jobCancelling(_),
-             .jobProgressUpdated(_, _),
-             .jobCancelled(_),
-             .jobRemoved(_),
              .queueStatusChanged(_),
              .queueDrained:
             break
@@ -824,6 +866,7 @@ actor ProjectCacheCoordinator {
         )
     }
 }
+
 
 
 

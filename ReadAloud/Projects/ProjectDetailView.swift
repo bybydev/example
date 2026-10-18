@@ -90,6 +90,7 @@ struct ProjectDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(PurchaseManager.self) private var purchases
     @State private var model: ProjectDetailModel
     @State private var projectVoicePresented = false
     @State private var projectSpeedPresented = false
@@ -103,6 +104,7 @@ struct ProjectDetailView: View {
     @State private var renamePresented = false
     @State private var renameText = ""
     @State private var deletePresented = false
+    @State private var offlineGenerationUpsellPresented = false
 
     let initialTitle: String
     let onProjectChanged: () -> Void
@@ -214,6 +216,9 @@ struct ProjectDetailView: View {
                 model: model,
                 onChanged: notifyProjectChanged
             )
+        }
+        .sheet(isPresented: $offlineGenerationUpsellPresented) {
+            ReadAloudProUpsell(reason: .offlineGeneration)
         }
         .sheet(isPresented: $storagePresented) {
             ProjectStorageSheet(
@@ -369,11 +374,13 @@ struct ProjectDetailView: View {
                             .tint(.accentColor)
 
                         case .notGenerated:
-                            Button("Generate") {
+                            Button {
                                 generate(
                                     entry,
                                     regenerate: false
                                 )
+                            } label: {
+                                ReadAloudOfflineGenerateLabel(title: "Generate", systemImage: "arrow.down.circle")
                             }
                             .tint(.accentColor)
                         }
@@ -486,8 +493,8 @@ struct ProjectDetailView: View {
                     regenerate: false
                 )
             } label: {
-                Label(
-                    "Generate Offline",
+                ReadAloudOfflineGenerateLabel(
+                    title: "Generate Offline",
                     systemImage: "arrow.down.circle"
                 )
             }
@@ -601,27 +608,33 @@ struct ProjectDetailView: View {
             }
 
             Button {
+                guard ReadAloudOfflineGenerationGate.allowsRequest(
+                    purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                ) else { return }
                 Task {
                     if await model.queueRemaining() {
                         notifyProjectChanged()
                     }
                 }
             } label: {
-                Label(
-                    "Generate Remaining",
+                ReadAloudOfflineGenerateLabel(
+                    title: "Generate Remaining",
                     systemImage: "arrow.down.circle"
                 )
             }
 
             Button {
+                guard ReadAloudOfflineGenerationGate.allowsRequest(
+                    purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                ) else { return }
                 Task {
                     if await model.queueAll() {
                         notifyProjectChanged()
                     }
                 }
             } label: {
-                Label(
-                    "Generate All",
+                ReadAloudOfflineGenerateLabel(
+                    title: "Generate All",
                     systemImage: "square.and.arrow.down"
                 )
             }
@@ -666,6 +679,11 @@ struct ProjectDetailView: View {
         _ entry: ProjectDetailModel.ItemEntry,
         regenerate: Bool
     ) {
+        if !regenerate {
+            guard ReadAloudOfflineGenerationGate.allowsRequest(
+                purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+            ) else { return }
+        }
         Task {
             if await model.queueGeneration(
                 itemID: entry.id,
@@ -980,7 +998,9 @@ private struct ProjectItemInfoSheet: View {
 
 private struct OfflineAudioSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
     @State private var selection = Set<UUID>()
+    @State private var offlineGenerationUpsellPresented = false
     let model: ProjectDetailModel
     let onChanged: () -> Void
 
@@ -1042,7 +1062,10 @@ private struct OfflineAudioSheet: View {
                         .contextMenu {
                             switch entry.generationStatus.state {
                             case .notGenerated:
-                                Button("Generate Offline") {
+                                Button {
+                                    guard ReadAloudOfflineGenerationGate.allowsRequest(
+                                        purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                                    ) else { return }
                                     Task {
                                         if await model.queueGeneration(
                                             itemID: entry.id,
@@ -1051,6 +1074,8 @@ private struct OfflineAudioSheet: View {
                                             onChanged()
                                         }
                                     }
+                                } label: {
+                                    ReadAloudOfflineGenerateLabel(title: "Generate Offline", systemImage: "arrow.down.circle")
                                 }
 
                             case .waiting, .generating:
@@ -1127,6 +1152,9 @@ private struct OfflineAudioSheet: View {
                 Section {
                     if !selection.isEmpty {
                         Button {
+                            guard ReadAloudOfflineGenerationGate.allowsRequest(
+                                purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                            ) else { return }
                             let selected =
                                 selection
                             Task {
@@ -1142,14 +1170,17 @@ private struct OfflineAudioSheet: View {
                                 }
                             }
                         } label: {
-                            Label(
-                                "Generate Selected",
+                            ReadAloudOfflineGenerateLabel(
+                                title: "Generate Selected",
                                 systemImage: "checkmark.circle"
                             )
                         }
                     }
 
                     Button {
+                        guard ReadAloudOfflineGenerationGate.allowsRequest(
+                            purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                        ) else { return }
                         Task {
                             if await model
                                 .queueRemaining()
@@ -1158,8 +1189,8 @@ private struct OfflineAudioSheet: View {
                             }
                         }
                     } label: {
-                        Label(
-                            "Generate Remaining",
+                        ReadAloudOfflineGenerateLabel(
+                            title: "Generate Remaining",
                             systemImage: "arrow.down.circle"
                         )
                     }
@@ -1183,6 +1214,9 @@ private struct OfflineAudioSheet: View {
             .readAloudThemeSurface()
             .parsedOutputPreparationPresenter(priority: 4)
             .navigationTitle("Offline Audio")
+            .sheet(isPresented: $offlineGenerationUpsellPresented) {
+                ReadAloudProUpsell(reason: .offlineGeneration)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -1367,4 +1401,5 @@ private struct ProjectStorageSheet: View {
     }
 
 }
+
 

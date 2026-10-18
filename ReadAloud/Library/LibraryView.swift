@@ -1,5 +1,6 @@
 import AppFoundation
 import Foundation
+import JobQueue
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -23,6 +24,8 @@ struct LibraryView: View {
     @State private var proDestination: LibraryProDestination?
     @State private var pendingPasteImport: PasteDraft?
     @State private var selectedSourceFilter: LibrarySourceFilter = .all
+    @State private var isSearchPresented = false
+    @State private var isGenerationQueuePresented = false
 
     var body: some View {
         Group {
@@ -42,6 +45,7 @@ struct LibraryView: View {
                 get: { model.searchText },
                 set: { model.searchText = $0 }
             ),
+            isPresented: $isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .automatic),
             prompt: "Search your library"
         )
@@ -94,6 +98,11 @@ struct LibraryView: View {
         }
         .task {
             await model.loadIfNeeded()
+        }
+        .task(id: LibraryQueueRefreshID(
+            projects: model.entries.map(\.snapshot), runtimeIDs: runtimeManager.loadedRuntimeIDs
+        )) {
+            await runtimeManager.refreshOfflineGenerationQueue()
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
@@ -156,11 +165,13 @@ struct LibraryView: View {
             switch destination {
             case .paywall:
                 ReadAloudProPaywall()
+            case .listeningUpsell:
+                ReadAloudProUpsell(reason: .listening)
             case .celebration:
                 ProCelebrationView(
                     configuration: FoundationProCelebrationConfiguration(
                         navigationTitle: "ReadAloud Pro",
-                        message: "Thanks for supporting ReadAloud. Enjoy unlimited listening, all 28 voices, and every theme."
+                        message: "Thanks for supporting ReadAloud. Enjoy unlimited listening, audio preparation, all 28 voices, and every theme."
                     )
                 )
             }
@@ -170,6 +181,9 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $isIssuesPresented) {
             LibraryIssuesSheet(issues: model.catalogIssues)
+        }
+        .sheet(isPresented: $isGenerationQueuePresented) {
+            OfflineGenerationQueueSheet()
         }
         .sheet(
             isPresented: Binding(
@@ -280,21 +294,30 @@ struct LibraryView: View {
     }
 
     private var visibleEntries: [LibraryModel.Entry] {
-        model.filteredEntries.filter {
+        // Search always spans the Library. Keep the selected filter intact so
+        // leaving search restores the user's browsing selection.
+        if isSearching { return model.filteredEntries }
+        return model.filteredEntries.filter {
             selectedSourceFilter.matches($0.snapshot.sourceType)
         }
+    }
+
+    private var isSearching: Bool {
+        isSearchPresented || !model.searchText.isEmpty
+    }
+
+    private var hasQueuedGeneration: Bool {
+        !runtimeManager.offlineGenerationQueueBooks.isEmpty
+            || !runtimeManager.offlineGenerationQueueIssues.isEmpty
     }
 
     private var libraryContent: some View {
         ReadAloudThemedList {
             VStack(alignment: .leading, spacing: 18) {
-                if model.entries.isEmpty {
-                    emptyLibraryHero
-                } else if let featuredEntry {
-                    continueListeningHero(featuredEntry)
+                if !isSearching {
+                    libraryHero
+                    filterStrip
                 }
-
-                filterStrip
 
                 HStack {
                     Text("Your Library")
@@ -334,11 +357,7 @@ struct LibraryView: View {
                         .foregroundStyle(.tertiary)
                     Text(model.entries.isEmpty ? "No items yet" : "No matching items")
                         .font(.subheadline.weight(.medium))
-                    Text(
-                        model.entries.isEmpty
-                            ? "Books and articles you add will appear here."
-                            : "Try another filter or search."
-                    )
+                    Text(emptyResultsDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
@@ -387,45 +406,54 @@ struct LibraryView: View {
         .listStyle(.plain)
     }
 
-    private var emptyLibraryHero: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "headphones")
-                .font(.system(size: 34, weight: .medium))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 72, height: 72)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
+    private var emptyResultsDescription: String {
+        if isSearching { return "Try another search." }
+        return model.entries.isEmpty
+            ? "Add a book, web article, or text using the + button."
+            : "Try another filter or search."
+    }
 
-            Text("Your listening library starts here")
-                .font(.title3.bold())
-                .multilineTextAlignment(.center)
-                .foregroundStyle(theme.primaryForegroundColor)
+    @ViewBuilder
+    private var libraryHero: some View {
+        let entry = featuredEntry
+        let showsUsage = !purchases.hasPro
+        let showsQueue = hasQueuedGeneration
 
-            Text("Add a book, web article, or your own text to listen whenever you like.")
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(heroSecondaryText)
+        if entry != nil || showsUsage || showsQueue {
+            VStack(alignment: .leading, spacing: 0) {
+                if let entry {
+                    continueListeningHero(entry)
+                        .padding(20)
+                }
 
-            Menu {
-                addMenuItems
-            } label: {
-                Label("Add Content", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(theme.backgroundColor)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                if showsUsage {
+                    if entry != nil { heroDivider }
+                    listeningUsage
+                        .padding(20)
+                }
+
+                if showsQueue {
+                    if entry != nil || showsUsage { heroDivider }
+                    generationStatus
+                        .padding(20)
+                }
             }
-            .disabled(model.isImporting)
-            .accessibilityHint("Choose a book, document, web article, or text to add")
-            listeningUsage
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22)
+                    .strokeBorder(theme.primaryForegroundColor.opacity(0.12), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityIdentifier("library.hero")
         }
-        .frame(maxWidth: .infinity)
-        .padding(24)
-        .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22)
-                .strokeBorder(theme.primaryForegroundColor.opacity(0.12), lineWidth: 1)
-        }
+    }
+
+    private var heroDivider: some View {
+        Divider()
+            .overlay(theme.primaryForegroundColor.opacity(0.12))
+            .padding(.horizontal, 20)
+            .accessibilityHidden(true)
     }
 
     private func continueListeningHero(_ entry: LibraryModel.Entry) -> some View {
@@ -535,10 +563,7 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
             .disabled(runtime == nil || currentID == nil)
-            listeningUsage
         }
-        .padding(20)
-        .background(heroBackground, in: RoundedRectangle(cornerRadius: 22))
         .task(id: entry.id) {
             do { _ = try await runtimeManager.prepareRuntime(projectID: entry.id) }
             catch is CancellationError { }
@@ -552,27 +577,96 @@ struct LibraryView: View {
 
     private var listeningUsage: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: purchases.hasPro ? "infinity" : "clock")
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(
-                        purchases.hasPro ? "Unlimited listening · Pro"
-                            : runtimeManager.listeningAllowance.usageDescription(at: context.date)
-                    )
-                    if !purchases.hasPro {
+            Button {
+                guard !purchases.hasPro else { return }
+                proDestination = .listeningUpsell
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "clock")
+                        .font(.headline)
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Listening This Week")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(theme.primaryForegroundColor)
+                        Text(runtimeManager.listeningAllowance.usageDescription(at: context.date))
+                            .font(.caption)
                         let reset = runtimeManager.listeningAllowance.resetDate(at: context.date)
                         Text("Resets \(reset.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption2)
+                        Text("Unlock unlimited listening")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .accessibilityHidden(true)
                 }
                 .multilineTextAlignment(.leading)
+                .foregroundStyle(heroSecondaryText)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .font(.caption)
-            .foregroundStyle(heroSecondaryText)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+            .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
+            .accessibilityHint("Shows upgrade options for unlimited listening")
+            .accessibilityIdentifier("library.listeningUsage")
         }
+    }
+
+    private var generationStatus: some View {
+        let books = runtimeManager.offlineGenerationQueueBooks
+        let rows = books.flatMap(\.rows)
+        let processingCount = rows.filter(\.isProcessing).count
+        let paused = runtimeManager.isBackgroundPrefetchPaused
+        let needsAttention = rows.isEmpty && !runtimeManager.offlineGenerationQueueIssues.isEmpty
+
+        return Button {
+            isGenerationQueuePresented = true
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: paused ? "pause.circle" : "waveform")
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(needsAttention ? "Queue Needs Attention" : paused ? "Generation Paused" : "Generation Queue")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(theme.primaryForegroundColor)
+                    if let book = books.first, let row = book.rows.first {
+                        Text(book.project.title)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                        Text(row.title)
+                            .font(.caption)
+                            .lineLimit(2)
+                        OfflineGenerationProgress(row: row)
+                    }
+                    if needsAttention {
+                        Text("Open the queue to review storage or recovery issues.")
+                            .font(.caption)
+                    } else {
+                        Text("\(processingCount) processing · \(rows.count - processingCount) waiting")
+                            .font(.caption)
+                    }
+                }
+                .foregroundStyle(heroSecondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(heroSecondaryText)
+                    .accessibilityHidden(true)
+            }
+            .multilineTextAlignment(.leading)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens generation progress and queue controls")
+        .accessibilityIdentifier("library.generationStatus")
     }
 
     private var heroSecondaryText: Color {
@@ -790,6 +884,233 @@ struct LibraryView: View {
                 pasteDraft = PasteDraft()
             }
         }
+    }
+}
+
+private struct LibraryQueueRefreshID: Equatable {
+    let projects: [ProjectSnapshot]
+    let runtimeIDs: Set<UUID>
+}
+
+/// Spokio's native queue-list/row pattern, scoped to active chapter requests.
+/// The manager owns all storage, scheduling, and cancellation behavior.
+private struct OfflineGenerationQueueSheet: View {
+    @Environment(ProjectRuntimeManager.self) private var runtimeManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var cancelTarget: OfflineGenerationQueueRow?
+    @State private var actionError: String?
+
+    var body: some View {
+        let books = runtimeManager.offlineGenerationQueueBooks
+        let issues = runtimeManager.offlineGenerationQueueIssues
+        let rows = books.flatMap(\.rows)
+        let processing = rows.filter(\.isProcessing).count
+
+        NavigationStack {
+            ReadAloudThemedList {
+                if !issues.isEmpty {
+                    Section {
+                        ForEach(Array(issues.enumerated()), id: \.offset) { _, message in
+                            Label(message, systemImage: "exclamationmark.triangle")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                if books.isEmpty {
+                    if runtimeManager.isLoadingOfflineQueue {
+                        ProgressView("Loading Queue…")
+                            .frame(maxWidth: .infinity, minHeight: 180)
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ContentUnavailableView(
+                            "No Queued Audio",
+                            systemImage: "tray",
+                            description: Text("Pending and running chapters appear here. Manage offline audio from a book to add work or retry failed chapters.")
+                        )
+                        .listRowSeparator(.hidden)
+                    }
+                } else {
+                    Section {
+                        Label(
+                            runtimeManager.isBackgroundPrefetchPaused
+                                ? "Generation is paused. Queued chapters and prepared audio are kept."
+                                : "Chapters generate one at a time and yield to live listening.",
+                            systemImage: runtimeManager.isBackgroundPrefetchPaused ? "pause.circle" : "waveform"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    } footer: {
+                        Text("Pause also pauses preparation of upcoming chapters. Listening continues. Background generation is available only while iOS allows it.")
+                    }
+
+                    ForEach(books) { book in
+                        Section {
+                            ForEach(book.rows) { row in
+                                OfflineGenerationQueueRowView(
+                                    row: row,
+                                    isCancelling: runtimeManager.cancellingOfflineJobIDs.contains(row.id),
+                                    onCancel: { cancelTarget = row }
+                                )
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button("Cancel", systemImage: "xmark.circle", role: .destructive) {
+                                        cancelTarget = row
+                                    }
+                                    .disabled(runtimeManager.cancellingOfflineJobIDs.contains(row.id))
+                                }
+                                .contextMenu {
+                                    Button("Cancel Generation", systemImage: "xmark.circle", role: .destructive) {
+                                        cancelTarget = row
+                                    }
+                                    .disabled(runtimeManager.cancellingOfflineJobIDs.contains(row.id))
+                                }
+                                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                            }
+                        } header: {
+                            HStack(spacing: 10) {
+                                ProjectArtworkView(
+                                    url: book.artworkURL, sourceType: book.project.sourceType,
+                                    width: 32, height: 44
+                                )
+                                Text(book.project.title)
+                                    .font(.headline)
+                                    .textCase(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.vertical, 4)
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .readAloudThemeSurface()
+            .navigationTitle("Generation Queue")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationSubtitle("\(processing) processing · \(rows.count - processing) waiting")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        runtimeManager.setBackgroundPrefetchPaused(!runtimeManager.isBackgroundPrefetchPaused)
+                    } label: {
+                        Label(
+                            runtimeManager.isBackgroundPrefetchPaused ? "Resume" : "Pause",
+                            systemImage: runtimeManager.isBackgroundPrefetchPaused ? "play.fill" : "pause.fill"
+                        )
+                    }
+                    .disabled(rows.isEmpty && !runtimeManager.isBackgroundPrefetchPaused)
+                    .accessibilityIdentifier("generationQueue.pauseResume")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .refreshable { await runtimeManager.refreshOfflineGenerationQueue() }
+            .task { await runtimeManager.refreshOfflineGenerationQueue() }
+            .confirmationDialog(
+                "Cancel chapter generation?",
+                isPresented: Binding(
+                    get: { cancelTarget != nil },
+                    set: { if !$0 { cancelTarget = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: cancelTarget
+            ) { row in
+                Button("Cancel Generation", role: .destructive) {
+                    cancelTarget = nil
+                    Task {
+                        do { try await runtimeManager.cancelOfflineGeneration(row) }
+                        catch is CancellationError { }
+                        catch {
+                            actionError = "This generation request could not be cancelled. Your saved audio is preserved. Refresh the queue and try again."
+                        }
+                    }
+                }
+                Button("Keep Generating", role: .cancel) { cancelTarget = nil }
+            } message: { row in
+                Text("Cancel \(row.title)? Prepared chunks and existing offline audio will be kept. Listening continues.")
+            }
+            .alert("Queue Action Failed", isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            )) {
+                Button("OK", role: .cancel) { actionError = nil }
+            } message: {
+                Text(actionError ?? "")
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+private struct OfflineGenerationQueueRowView: View {
+    @Environment(\.appFoundationTheme) private var theme
+    let row: OfflineGenerationQueueRow
+    let isCancelling: Bool
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: row.isProcessing ? "waveform" : "clock")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(row.isProcessing ? theme.accentColor : theme.secondaryForegroundColor)
+                .frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(row.title)
+                    .font(.body.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(row.isProcessing ? "Processing" : "Waiting")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(row.isProcessing ? theme.accentColor : theme.secondaryForegroundColor)
+                OfflineGenerationProgress(row: row)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle")
+                    .font(.body)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .disabled(isCancelling)
+            .accessibilityLabel("Cancel generation of \(row.title)")
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Fractions describe measured chunk preparation, not a guessed total including
+/// WAV assembly. Finalization is an explicit indeterminate processing phase.
+private struct OfflineGenerationProgress: View {
+    let row: OfflineGenerationQueueRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if row.isProcessing, let fraction = row.progress?.fractionCompleted, fraction.isFinite {
+                HStack(spacing: 8) {
+                    ProgressView(value: min(1, max(0, fraction)))
+                        .accessibilityLabel("Chunk preparation")
+                    Text(fraction, format: .percent.precision(.fractionLength(0)))
+                        .font(.caption.monospacedDigit())
+                }
+                Text("Chunk preparation · \(row.statusMessage)")
+                    .font(.caption)
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    if row.isProcessing { ProgressView().controlSize(.mini) }
+                    Text(row.statusMessage)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -1127,8 +1448,10 @@ private struct ImportProgressSheet: View {
 
 private enum LibraryProDestination: String, Identifiable {
     case paywall
+    case listeningUpsell
     case celebration
 
     var id: String { rawValue }
 }
+
 

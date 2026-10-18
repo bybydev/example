@@ -86,6 +86,9 @@ extension ProjectRuntime {
                   !isApplyingPDFReadingPolicy else {
                 throw CancellationError()
             }
+            // Chunk preparation is complete; final WAV assembly/commit still
+            // runs. Report an indeterminate phase rather than overall 100%.
+            await progress.report(message: "Finalizing chapter…")
             guard try await finalizeItemIfComplete(
                 itemState: state,
                 paragraphs: cachedReaderParagraphs(for: state.item),
@@ -115,6 +118,7 @@ extension ProjectRuntime {
                 )
             try await refreshGenerationState()
         } catch {
+            queueController.publishQueueError(Self.message(for: error))
             lastErrorMessage =
                 Self.message(for: error)
         }
@@ -131,6 +135,7 @@ extension ProjectRuntime {
                 )
             try await refreshGenerationState()
         } catch {
+            queueController.publishQueueError(Self.message(for: error))
             lastErrorMessage =
                 Self.message(for: error)
         }
@@ -147,6 +152,7 @@ extension ProjectRuntime {
                 )
             try await refreshGenerationState()
         } catch {
+            queueController.publishQueueError(Self.message(for: error))
             lastErrorMessage =
                 Self.message(for: error)
         }
@@ -165,6 +171,7 @@ extension ProjectRuntime {
                 )
             try await refreshGenerationState()
         } catch {
+            queueController.publishQueueError(Self.message(for: error))
             lastErrorMessage =
                 Self.message(for: error)
         }
@@ -438,6 +445,7 @@ extension ProjectRuntime {
         }
     }
 }
+
 
 
 

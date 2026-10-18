@@ -38,8 +38,29 @@ follows that same session, including paused/preparing playback, before falling
 back to the most recent book. Its primary action starts/continues listening only
 when the global player is absent; otherwise it opens the Reader without changing
 playback. Cover/title also opens the Reader. The global player owns transport
-controls, including during preparation and pause. Weekly usage and the local
-reset date appear below the hero action without a second progress bar. Listening progress is separate from generation.
+controls, including during preparation and pause. The hero is one card with
+vertically stacked listening, Free weekly-usage, and active-generation sections.
+Thin inset dividers appear only between visible sections. Pro users have no usage
+section; an empty Library has no listening section, and the entire card disappears
+when none apply. The usage row shows the local reset date and opens AppFoundation's
+`LimitReachedUpsellFlow`; only its upgrade action opens the existing paywall.
+Listening progress is separate from generation. The generation hero section opens
+a native queue sheet adapted from Spokio iOS's list, row/progress, swipe-action,
+and confirmation patterns. The sheet groups active chapter requests by book,
+shows real executor progress and waiting reasons, and provides global Pause/Resume
+plus per-job Cancel. There are no history, filter, search, or job-detail screens.
+The section also remains available for queue storage/recovery issues even if no
+requests could be read. It disappears after the last active request finishes or
+is cancelled unless such an issue remains; an already-open sheet shows an empty
+state. Explicit offline Generate buttons require Pro through the UI-only gate;
+their upsell and the weekly listening-limit upsell share AppFoundation's flow.
+
+While the native Library search is presented or its query is non-empty, the hero
+and source-filter strip are hidden. Search spans all Library entries; it never
+changes the selected source filter. Ending search with an empty query restores
+that filter and the applicable hero sections. Empty search results suggest a new
+query rather than a hidden filter. Empty-Library import guidance lives in the
+list's empty state beside the existing floating Add menu.
 The Chapters sheet lists the hero book in reading order, highlights the current
 chapter, identifies the next chapter and shows Ready Offline only for compatible,
 validated final audio. It is not a cross-book playback queue. Explicit offline
@@ -385,6 +406,41 @@ Important rules:
 - project offline controls show why pending work is paused or waiting
 - background synthesis is opportunistic; it is not kept alive artificially
 
+### Global queue presentation (issue #59 pass 2)
+
+`ProjectRuntimeManager.offlineGenerationQueueBooks` overlays live runtime requests
+on transient per-book snapshots of the same durable queue files. Loaded runtimes
+replace whole snapshots, including an empty queue, so active work is not counted
+twice and completed requests are not revived. Runtime release preserves its latest
+projection until metadata refresh completes. Library/catalog and runtime membership
+changes, opening the sheet, pull-to-refresh, and cancellation refresh dormant work.
+
+`ProjectStore.offlineGenerationQueueSnapshot` reads catalog/queue/manifest metadata
+and reuses loaded chapter titles, reading title-only headings for dormant pending
+chapters sequentially. It does not decode
+chapter text, initialize runtimes/models, hash every final WAV, or parse sources.
+Unreadable queues and headings produce visible notices while leaving packages
+intact. Dormant persisted `generating` records display as waiting for restoration,
+never as a live process. This adds no durable schema or second queue store.
+
+`ProjectQueueController` exposes observable execution identities and JobQueue progress.
+Revocation/yield clears live progress; execution identities, not a saved `generating`
+state, determine which row is Processing. Fractions describe measured chunk
+preparation only. Finalization explicitly reports an indeterminate "Finalizing
+chapter…" phase; a row leaves active work only after its durable terminal state.
+
+Queue Pause/Resume reuses the persisted generation preference, including its
+existing upcoming-chapter preparation scope. It does not control audible playback.
+Cancel compares the exact job ID, generation key, and active state in one ProjectStore
+actor turn, removes only that intent, and cooperatively removes its executor before
+refreshing chapter status. It does not load dormant runtimes just to cancel or use
+audio invalidation/clear-cache paths. Already-loading recovery is reconciled after
+its load finishes. Prepared chunks, listening consumers, valid final audio, and
+bookmarks remain intact. Late executor events cannot recreate removed intent.
+
+The sheet owns presentation/confirmation state only; the manager owns commands.
+Viewing and all queue controls are available regardless of Pro and have no upsell.
+
 ## Storage
 
 Issue #61 pass 1 adds `cache/parsed/blocks.json` alongside saved chapter text.
@@ -447,11 +503,30 @@ Delete Project is the operation that removes the complete package.
 
 ## Free and Pro
 
-Pro unlocks **unlimited listening, Kokoro voices, and extra themes**.
+Pro unlocks **unlimited listening, offline Generate buttons, Kokoro voices, and extra themes**.
 
-Free includes unlimited projects, imports, reading, 3 hours/week of playback, and offline generation
-(including selected, remaining, and all chapters), prefetch, generate while
-listening, full regeneration and project/chapter narration overrides.
+Free includes unlimited projects, imports, reading, 3 hours/week of playback,
+live synthesis/read-ahead, prefetch, generate while listening, existing
+regeneration/retry controls, project/chapter narration overrides, and all queue
+viewing/management actions. Voice application follows its separate approved gate.
+
+- **Offline preparation (issue #59):** `ReadAloudOfflineGenerationGate` checks
+  the current PurchaseManager entitlement only at the Generate Offline/Current,
+  Selected, Remaining, and All UI entry points in book details, Offline Audio,
+  Reader, and the Reader Chapters sheet. Free taps show the shared AppFoundation
+  upsell before any enqueue, preparation, or cache mutation. Native labels display
+  a Pro indicator. Runtime/model enqueue APIs, the execution engine, scheduling,
+  recovery, Pause/Resume/Cancel, retry, and regeneration remain ungated. Already
+  accepted requests continue after entitlement expiry. There is no pending action
+  to automatically execute after purchasing or dismissing the upsell.
+
+- **Contextual upsells:** `ReadAloudProUpsell` uses AppFoundation's
+  `LimitReachedUpsellFlow` for usage-card taps, weekly exhaustion, and offline
+  Generate-button taps. Its explicit upgrade action opens `ReadAloudProPaywall`.
+  It derives the comparison from the same registered commerce features as the
+  paywall and includes the actual usage/local reset time for listening. The
+  previous custom listening-limit sheet is removed. Limit enforcement and saved
+  playback position remain runtime-owned; dismissing or purchasing never auto-plays.
 
 - **Voices:** Heart (`af_heart`) is Free. The other 27 English voice styles
   require Pro. All voices may be previewed or favorited regardless of purchase;
@@ -683,5 +758,6 @@ session events, low memory, cancellation, dormant-job recovery and reclamation.
 The deterministic regression source uses synthetic audio without ONNX inference;
 these tests do not establish sustained live inference under screen lock. Runtime
 acceptance remains pending owner-approved builds/tests and physical-device checks.
+
 
 

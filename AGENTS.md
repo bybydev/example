@@ -40,8 +40,10 @@ Current **explicitly approved** Riidrr access boundaries:
 
 - **Voices:** Heart (`af_heart`) is Free. The other 27 bundled English Kokoro voices require Pro. Voice selection at app, project, and chapter levels is allowed, but applying a Pro voice still requires Pro.
 - **Themes:** ReadAloud Light and Dark are Free. Additional themes require Pro.
-- **Listening (issue #56):** Free includes 3 hours/week shared across all books and playback paths; Pro listening is unlimited. The initial allowance is centralized in `ReadAloudAccessPolicy.weeklyListeningSeconds`. Weeks reset Monday 00:00 UTC, shown in local time. Reading/imports/offline generation remain Free when listening is exhausted.
-- **Everything else is Free for now**, including unlimited Library projects/imports, chapter-level voice and speed customization, bulk/selected/all offline generation, automatic prefetch, generate while listening, and clear-cache/advanced regeneration.
+- **Listening (issue #56):** Free includes 3 hours/week shared across all books and playback paths; Pro listening is unlimited. The initial allowance is centralized in `ReadAloudAccessPolicy.weeklyListeningSeconds`. Weeks reset Monday 00:00 UTC, shown in local time. Reading/imports, existing queued work, and queue management remain available when listening is exhausted.
+- **Offline Generate buttons (issue #59, explicitly approved 2026-10-18):** Generate Offline/Current, Generate Selected, Generate Remaining, and Generate All require Pro at the initiating UI button only. A Free tap presents AppFoundation's upsell and enqueues nothing. Do not add an entitlement check to generation services, JobQueue execution, scheduling, or recovery. Accepted requests can continue/recover after entitlement expiry. Queue viewing, Pause/Resume/Cancel, and existing retry actions remain Free. This approval does not extend to Regenerate or Clear Cache & Regenerate controls.
+- **Contextual upgrade presentation:** The Library usage row, weekly listening-limit trigger, and locked offline Generate buttons use AppFoundation's `LimitReachedUpsellFlow` first; only its upgrade action opens the paywall. Dismissal never starts/resumes playback or enqueues work.
+- **Everything else is Free for now**, including unlimited Library projects/imports, chapter-level voice and speed customization (subject to the approved voice boundary), automatic prefetch, generate while listening, queue management/retry, and clear-cache/advanced regeneration.
 
 Non-negotiable implementation rules:
 
@@ -49,6 +51,7 @@ Non-negotiable implementation rules:
 - Copying or adapting UI/features from Spokio or another app **does not authorize copying its monetization or restrictions**. Reuse UI and behavior independently from access rules.
 - If a task touches an existing restriction, **flag it as existing behavior, not an approved requirement**. Do not assume it should remain or be expanded. Ask for an explicit decision when the intended access is unclear; do not quietly choose a paywall rule.
 - Implement approved access rules consistently in UI, runtime/domain enforcement, settings, paywall comparisons, App Store copy, and release checks. Do not unlock a button while leaving the same operation blocked deeper in the runtime.
+- The explicitly UI-only offline Generate-button boundary above is an exception to runtime enforcement: never move or duplicate that gate into generation execution/recovery or queue actions.
 - Keep purchase infrastructure available, but gate **only** the expressly approved features. New functionality defaults to Free unless the owner explicitly decides otherwise.
 - Before completing a PR with entitlement-related changes, statically audit every added or modified `hasPro`, `requirePro`, access-policy, locked-label, and paywall path against the approved list. State the exact gates retained or changed.
 
@@ -136,4 +139,5 @@ Keep these internal unless there is a technical migration reason:
 - internal ReadAloud type/module names
 
 Public display/App Store branding can be changed independently.
+
 

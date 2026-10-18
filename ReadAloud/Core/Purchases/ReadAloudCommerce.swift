@@ -28,15 +28,23 @@ enum ReadAloudCommerce {
             id: "listening",
             systemImage: "headphones",
             title: "Listening Time",
-            message: "Listen without a weekly time limit, online or offline.",
+            message: "Unlimited Listening",
             freeValue: "\(Int(ReadAloudAccessPolicy.weeklyListeningSeconds / 3600)) hours/week",
             proValue: "Unlimited"
+        ),
+        PurchaseFeature(
+            id: "offlineGeneration",
+            systemImage: "arrow.down.circle.fill",
+            title: "Prepare Audio Ahead",
+            message: "Offline Generation",
+            freeValue: "Live listening",
+            proValue: "Chapters & books"
         ),
         PurchaseFeature(
             id: "voices",
             systemImage: "waveform.circle.fill",
             title: "All Voices",
-            message: "Unlock all 28 American and British English Kokoro voices.",
+            message: "All Built-in Voices",
             freeValue: "Heart",
             proValue: "All 28 voices"
         ),
@@ -44,7 +52,7 @@ enum ReadAloudCommerce {
             id: "themes",
             systemImage: "paintpalette.fill",
             title: "Premium Themes",
-            message: "Unlock the complete ReadAloud theme collection.",
+            message: "All Premium Themes",
             freeValue: "ReadAloud Light + Dark",
             proValue: "All themes"
         ),
@@ -96,7 +104,7 @@ enum ReadAloudCommerce {
             title:
                 "Make every book sound like yours",
             subtitle:
-                "Unlock unlimited listening, all 28 English voices, and premium app themes. Reading, projects, generation, and chapter controls are free.",
+                "Unlock unlimited listening, audio preparation, all 28 English voices, and premium app themes. Reading, imports, and queue controls stay free.",
             purchaseButtonTitle:
                 "Continue",
             highlightedProductID:
@@ -118,4 +126,5 @@ enum ReadAloudCommerce {
                 "Compare plans"
         )
 }
+
 

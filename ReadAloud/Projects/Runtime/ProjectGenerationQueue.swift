@@ -1,6 +1,34 @@
 import Foundation
 import JobQueue
 
+/// Transient presentation of durable chapter requests, overlaid with live
+/// executor progress by the runtime manager. These are never persisted.
+nonisolated struct OfflineGenerationQueueRow: Identifiable, Sendable {
+    let job: GenerationJobRecord
+    let title: String
+    var isProcessing = false
+    var progress: JobProgress?
+    var waitingReason = "Waiting to restore queued work"
+
+    var id: UUID { job.id }
+    var statusMessage: String {
+        isProcessing ? (progress?.message ?? "Preparing offline audio…") : waitingReason
+    }
+}
+
+nonisolated struct OfflineGenerationQueueBook: Identifiable, Sendable {
+    let project: ProjectSnapshot
+    let artworkURL: URL?
+    var rows: [OfflineGenerationQueueRow]
+
+    var id: UUID { project.id }
+}
+
+nonisolated struct OfflineGenerationQueueSnapshot: Sendable {
+    var books: [OfflineGenerationQueueBook] = []
+    var issues: [String] = []
+}
+
 nonisolated struct ReadAloudGenerationJob: Job {
     nonisolated struct Payload: Codable, Sendable {
         let projectID: UUID
@@ -201,3 +229,4 @@ final class ProjectGenerationExecutionRegistry {
         )
     }
 }
+

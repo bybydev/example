@@ -95,6 +95,7 @@ struct ProjectReaderRuntimeHost: View {
 }
 
 struct ProjectReaderView: View {
+    @Environment(PurchaseManager.self) private var purchases
     @Environment(ProjectRuntimeManager.self)
     private var runtimeManager
 
@@ -108,6 +109,7 @@ struct ProjectReaderView: View {
     @State private var appearancePresented = false
     @State private var listeningOptionsPresented = false
     @State private var infoPresented = false
+    @State private var offlineGenerationUpsellPresented = false
     @State private var errorMessage: String?
 
     @AppStorage(
@@ -216,6 +218,9 @@ struct ProjectReaderView: View {
             isPresented: $listeningOptionsPresented
         ) {
             PDFListeningOptionsSheet(runtime: runtime)
+        }
+        .sheet(isPresented: $offlineGenerationUpsellPresented) {
+            ReadAloudProUpsell(reason: .offlineGeneration)
         }
         .sheet(
             isPresented: $appearancePresented
@@ -517,8 +522,8 @@ struct ProjectReaderView: View {
                             regenerate: false
                         )
                     } label: {
-                        Label(
-                            "Generate Current",
+                        ReadAloudOfflineGenerateLabel(
+                            title: "Generate Current",
                             systemImage:
                                 "arrow.down.circle"
                         )
@@ -889,6 +894,12 @@ struct ProjectReaderView: View {
             return
         }
 
+        if !regenerate {
+            guard ReadAloudOfflineGenerationGate.allowsRequest(
+                purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+            ) else { return }
+        }
+
         Task {
             do {
                 try await runtime
@@ -945,7 +956,9 @@ struct ProjectReaderView: View {
 
 private struct ReaderChaptersSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PurchaseManager.self) private var purchases
     @State private var searchText = ""
+    @State private var offlineGenerationUpsellPresented = false
 
     let runtime: ProjectRuntime
     let selectedItemID: UUID?
@@ -1018,6 +1031,9 @@ private struct ReaderChaptersSheet: View {
 
                 Section {
                     Button {
+                        guard ReadAloudOfflineGenerationGate.allowsRequest(
+                            purchases: purchases, isUpsellPresented: $offlineGenerationUpsellPresented
+                        ) else { return }
                         Task {
                             do {
                                 try await runtime
@@ -1031,8 +1047,8 @@ private struct ReaderChaptersSheet: View {
                             }
                         }
                     } label: {
-                        Label(
-                            "Generate Remaining",
+                        ReadAloudOfflineGenerateLabel(
+                            title: "Generate Remaining",
                             systemImage:
                                 "arrow.down.circle"
                         )
@@ -1046,6 +1062,9 @@ private struct ReaderChaptersSheet: View {
             .readAloudThemeSurface()
             .parsedOutputPreparationPresenter(priority: 4)
             .navigationTitle("Chapters")
+            .sheet(isPresented: $offlineGenerationUpsellPresented) {
+                ReadAloudProUpsell(reason: .offlineGeneration)
+            }
             .navigationBarTitleDisplayMode(
                 .inline
             )
@@ -1321,4 +1340,5 @@ private struct ReaderItemInfoSheet: View {
         }
     }
 }
+
 
