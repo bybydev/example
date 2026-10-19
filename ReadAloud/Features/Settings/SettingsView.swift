@@ -129,6 +129,17 @@ struct SettingsView: View {
                                 ReadAloudProPaywall()
                             }
                         ),
+                        .destination(
+                            FoundationDeveloperDestination(
+                                id: "screenshot-studio",
+                                title: "Screenshot Studio",
+                                systemImage: "photo.stack.fill"
+                            ) {
+                                ReadAloudScreenshotStudioView()
+                                    .navigationTitle("Screenshot Studio")
+                                    .navigationBarTitleDisplayMode(.inline)
+                            }
+                        ),
                     ]
                 )
             ]

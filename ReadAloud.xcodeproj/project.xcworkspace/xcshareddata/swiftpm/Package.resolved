@@ -1,5 +1,5 @@
 {
-  "originHash" : "1de4f5ccdcb0f0486d36c6826cefaae24a692045ae7b4e71569b721c44210a17",
+  "originHash" : "6f2c1a5b7a91cebf7a0d12c6e6fd82529baa2071f654aa9427e8d0c0847e147e",
   "pins" : [
     {
       "identity" : "appfoundation",
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hoangbkit/TextExtractor.git",
       "state" : {
-        "revision" : "aee3cc44f155f4a6906eed37f285e27872ef612d",
-        "version" : "1.1.0"
+        "revision" : "2c1de305453ae2e0766181bf3c403aa1a91f2562",
+        "version" : "1.2.0"
       }
     },
     {

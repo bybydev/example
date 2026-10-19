@@ -10,17 +10,17 @@ enum ReadAloudCommerce {
     static let supportURL =
         URL(
             string:
-                "https://github.com/hoangbkit/ReadAloud/issues"
+                "https://studio.spokio.pro/riidrr/contact"
         )!
     static let privacyURL =
         URL(
             string:
-                "https://github.com/hoangbkit/ReadAloud/blob/master/docs/PRIVACY.md"
+                "https://studio.spokio.pro/riidrr/privacy"
         )!
     static let termsURL =
         URL(
             string:
-                "https://github.com/hoangbkit/ReadAloud/blob/master/docs/TERMS.md"
+                "https://studio.spokio.pro/riidrr/terms"
         )!
 
     static let features: [PurchaseFeature] = [

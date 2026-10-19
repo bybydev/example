@@ -1,8 +1,14 @@
 # ReadAloud CI and Release Contract
 
-> Status: Release is implemented. Fast CI and Full CI remain deferred.
-> App Store submission remains a separate manual/local process described in
+> Status: GitHub Release and Xcode Cloud repository hooks are implemented.
+> Fast CI and Full CI remain deferred. Xcode Cloud workflow activation and
+> private dependency access are configured in Apple tooling; see
+> [Xcode Cloud setup](XCODE_CLOUD.md). Local shipping checks remain in
 > `RELEASE_CHECKLIST.md`.
+>
+> The implemented GitHub Release workflow and Xcode Cloud hooks always bundle
+> real ONNX INT8/G2P/voice resources. Fixture-mode sections below describe the
+> deferred blueprint, not the current Release workflow.
 
 ## Purpose
 
