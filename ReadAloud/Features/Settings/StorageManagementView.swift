@@ -15,7 +15,7 @@ final class StorageManagementModel {
 
     init() {
         do {
-            store = try ProjectStore()
+            store = try ProjectStore.shared()
             initializationError = nil
         } catch {
             store = nil

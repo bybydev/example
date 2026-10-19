@@ -259,15 +259,6 @@ extension ProjectRuntime {
             return
         }
         try prepareExplicitWork()
-        _ = try await persistence
-            .removeGenerationJobs(
-                itemIDs: itemIDs,
-                states: [
-                    .failed,
-                    .queued,
-                    .generating,
-                ]
-            )
 
         let requests =
             itemStates.compactMap {
@@ -287,11 +278,7 @@ extension ProjectRuntime {
                 )
             }
 
-        try await persistence
-            .enqueueGeneration(
-                requests,
-                replaceExisting: false
-            )
+        try await persistence.retryGeneration(requests)
         try await refresh()
     }
 

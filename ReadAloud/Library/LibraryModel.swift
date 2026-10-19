@@ -44,6 +44,7 @@ final class LibraryModel {
     private var importSessionID: UUID?
     private var importWorker: Task<ReadAloudImportResult, Error>?
     private var importCancellationRequested = false
+    private var refreshRevision: UInt64 = 0
 
     var isImporting: Bool { importSessionID != nil }
 
@@ -53,7 +54,7 @@ final class LibraryModel {
 
     init() {
         do {
-            let store = try ProjectStore()
+            let store = try ProjectStore.shared()
             projectStore = store
             importer = ReadAloudImportCoordinator(projectStore: store)
             initializationError = nil
@@ -97,6 +98,8 @@ final class LibraryModel {
     }
 
     func refresh() async {
+        refreshRevision &+= 1
+        let revision = refreshRevision
         guard let projectStore else {
             errorMessage = initializationError ?? "Unable to open the Library."
             didLoad = true
@@ -105,8 +108,10 @@ final class LibraryModel {
 
         isLoading = true
         defer {
-            isLoading = false
-            didLoad = true
+            if revision == refreshRevision {
+                isLoading = false
+                didLoad = true
+            }
         }
 
         do {
@@ -116,6 +121,7 @@ final class LibraryModel {
             )
             let rootURL = await projectStore.rootURL
 
+            guard revision == refreshRevision else { return }
             entries = catalog.projects.map { snapshot in
                 Entry(
                     snapshot: snapshot,
@@ -128,6 +134,7 @@ final class LibraryModel {
             catalogIssues = catalog.issues
             generationQueueCountsByProject = queueCounts
         } catch {
+            guard revision == refreshRevision else { return }
             errorMessage = Self.message(for: error)
         }
     }

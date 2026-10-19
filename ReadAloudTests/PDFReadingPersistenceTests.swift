@@ -2187,6 +2187,327 @@ final class PDFReadingPersistenceTests: XCTestCase {
         )
     }
 
+    private func seedRetryQueue(_ fixture: Fixture) async throws -> [GenerationJobRecord] {
+        let now = Date()
+        let jobs = [GenerationJobState.failed, .queued, .generating, .completed].map { state in
+            GenerationJobRecord(
+                id: UUID(), projectID: fixture.projectID, itemID: fixture.first.id,
+                operation: .generate, generationKey: ProjectDigest.sha256("old retry key"), state: state,
+                createdAt: now, updatedAt: now, attempt: 3,
+                lastError: state == .failed ? "Original failure" : nil
+            )
+        } + [GenerationJobRecord(
+            id: UUID(), projectID: fixture.projectID, itemID: fixture.second.id,
+            operation: .generate, generationKey: ProjectDigest.sha256("unrelated job"), state: .queued,
+            createdAt: now, updatedAt: now, attempt: 1, lastError: nil
+        )]
+        try await fixture.store.saveQueue(projectID: fixture.projectID, queue: ProjectQueueDocument(jobs: jobs))
+        return jobs
+    }
+
+    func testRetryAtomicallyReplacesPendingJobsAndPreservesHistoryAndOtherChapters() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try await seedRetryQueue(fixture)
+        let key = ProjectDigest.sha256("replacement key")
+        let bridge = ProjectRuntimePersistenceBridge(projectID: fixture.projectID, store: fixture.store)
+        try await bridge.retryGeneration([ProjectGenerationRequest(itemID: fixture.first.id, generationKey: key)])
+        let reopened = try ProjectStore(rootURL: fixture.root)
+        let queue = try await reopened.loadQueue(projectID: fixture.projectID)
+        let retained = original.filter { $0.itemID != fixture.first.id || $0.state == .completed }
+        XCTAssertEqual(Array(queue.jobs.prefix(retained.count)), retained)
+        XCTAssertEqual(queue.jobs.count, retained.count + 1)
+        let replacement = try XCTUnwrap(queue.jobs.last)
+        XCTAssertFalse(original.contains { $0.id == replacement.id })
+        XCTAssertEqual(replacement.itemID, fixture.first.id)
+        XCTAssertEqual(replacement.generationKey, key)
+        XCTAssertEqual(replacement.state, .queued)
+        XCTAssertEqual(replacement.attempt, 0)
+        XCTAssertNil(replacement.lastError)
+    }
+
+    func testInvalidRetryBatchLeavesOriginalQueueBytesUntouched() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await seedRetryQueue(fixture)
+        let before = try Data(contentsOf: fixture.paths.queueJobs)
+        let valid = ProjectGenerationRequest(itemID: fixture.first.id, generationKey: ProjectDigest.sha256("new key"))
+        let batches = [
+            [valid, ProjectGenerationRequest(itemID: fixture.second.id, generationKey: "invalid")],
+            [valid, ProjectGenerationRequest(itemID: UUID(), generationKey: valid.generationKey)],
+            [valid, valid]
+        ]
+        for requests in batches {
+            do {
+                try await fixture.store.retryGeneration(projectID: fixture.projectID, requests: requests)
+                XCTFail("Invalid batch must not replace any original requests")
+            } catch is ProjectStoreError { }
+            XCTAssertEqual(try Data(contentsOf: fixture.paths.queueJobs), before)
+        }
+        try await fixture.store.retryGeneration(projectID: fixture.projectID, requests: [])
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.queueJobs), before)
+    }
+
+    func testRetryWriteFailurePreservesOriginalDurableIntent() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let original = try await seedRetryQueue(fixture)
+        let before = try Data(contentsOf: fixture.paths.queueJobs)
+        // Block staging without changing the existing, readable queue file.
+        try FileManager.default.removeItem(at: fixture.paths.tempDirectory)
+        try Data("not a directory".utf8).write(to: fixture.paths.tempDirectory)
+        do {
+            try await fixture.store.retryGeneration(projectID: fixture.projectID, requests: [
+                ProjectGenerationRequest(itemID: fixture.first.id, generationKey: ProjectDigest.sha256("new key"))
+            ])
+            XCTFail("Retry must fail when atomic queue staging is unavailable")
+        } catch is ProjectStoreError { }
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.queueJobs), before)
+        let queue = try await fixture.store.loadQueue(projectID: fixture.projectID)
+        XCTAssertEqual(queue.jobs, original)
+    }
+
+    func testCancelledRetryPreservesOriginalQueue() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await seedRetryQueue(fixture)
+        let before = try Data(contentsOf: fixture.paths.queueJobs)
+        let request = ProjectGenerationRequest(itemID: fixture.first.id, generationKey: ProjectDigest.sha256("new key"))
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await fixture.store.retryGeneration(projectID: fixture.projectID, requests: [request])
+        }
+        do { try await task.value; XCTFail("Cancelled retry must not commit") }
+        catch is CancellationError { }
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.queueJobs), before)
+    }
+
+    func testNarrationEditsPreserveEquivalentWorkAndInvalidateOnlyRealChanges() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        await fixture.cache.shutdown()
+        try await Self.checkNarrationEdits(fixture)
+    }
+
+    @MainActor private static func checkNarrationEdits(_ fixture: ReclamationFixture) async throws {
+        let preferenceKey = ReadAloudPreferences.Key.backgroundPrefetchPaused
+        let previous = UserDefaults.standard.object(forKey: preferenceKey)
+        UserDefaults.standard.set(true, forKey: preferenceKey)
+        defer { UserDefaults.standard.set(previous, forKey: preferenceKey) }
+        let project = fixture.project
+        _ = try await project.store.updateSettings(
+            projectID: project.projectID, settings: ProjectNarrationSettings(voiceID: "af_heart", speed: 1)
+        )
+        let runtime = ProjectRuntime(
+            id: project.projectID, packageURL: project.paths.packageURL,
+            persistence: ProjectRuntimePersistenceBridge(projectID: project.projectID, store: project.store),
+            hasPro: { true }
+        )
+        defer { runtime.shutdown() }
+        // Refresh without configuring an executor: these are durable-state
+        // tests and must never start inference or recover away seeded states.
+        try await runtime.refresh()
+        let itemID = fixture.request.itemID
+        let initialKey = try XCTUnwrap(runtime.itemState(itemID)).generationKey
+        let other = try XCTUnwrap(runtime.itemState(project.second.id))
+        let now = Date()
+        func jobs(for key: String) -> [GenerationJobRecord] {
+            let pending = [GenerationJobState.queued, .generating, .failed, .completed].map { state in
+                GenerationJobRecord(
+                    id: UUID(), projectID: project.projectID, itemID: itemID,
+                    operation: .generate, generationKey: key, state: state,
+                    createdAt: now, updatedAt: now, attempt: 2,
+                    lastError: state == .failed ? "Retry me" : nil
+                )
+            }
+            return pending + [GenerationJobRecord(
+                id: UUID(), projectID: project.projectID, itemID: other.id,
+                operation: .generate, generationKey: other.generationKey, state: .queued,
+                createdAt: now, updatedAt: now, attempt: 0, lastError: nil
+            )]
+        }
+        let originalJobs = jobs(for: initialKey)
+        try await project.store.saveQueue(projectID: project.projectID, queue: ProjectQueueDocument(jobs: originalJobs))
+        let equivalentEdits: [@MainActor () async throws -> Void] = [
+            { try await runtime.updateItemVoiceMode(itemID: itemID, mode: .custom) },
+            { try await runtime.updateItemVoiceMode(itemID: itemID, mode: .inherit) },
+            { try await runtime.updateItemVoice(itemID: itemID, voiceID: "af_heart") },
+            { try await runtime.updateItemVoice(itemID: itemID, voiceID: "af_heart") },
+            { try await runtime.updateItemVoiceMode(itemID: itemID, mode: .inherit) },
+            { try await runtime.updateItemSpeedMode(itemID: itemID, mode: .custom) },
+            { try await runtime.updateItemSpeedMode(itemID: itemID, mode: .inherit) },
+            { try await runtime.updateItemSpeed(itemID: itemID, speed: 1) },
+            { try await runtime.updateItemSpeed(itemID: itemID, speed: 1) },
+            { try await runtime.updateItemSpeedMode(itemID: itemID, mode: .inherit) }
+        ]
+        for edit in equivalentEdits {
+            try await edit()
+            let queue = try await project.store.loadQueue(projectID: project.projectID)
+            XCTAssertEqual(queue.jobs, originalJobs, "Equivalent edits must preserve IDs, states, attempts and errors")
+            XCTAssertEqual(runtime.itemState(itemID)?.generationKey, initialKey)
+            XCTAssertEqual(runtime.itemState(itemID)?.generationStatus.state, .readyOffline)
+            XCTAssertEqual(try Data(contentsOf: project.paths.audioWAV(itemID)), fixture.finalBytes)
+        }
+        let saved = try await project.store.loadContentItem(projectID: project.projectID, itemID: itemID)
+        XCTAssertEqual(saved.settings.voice.mode, .inherit)
+        XCTAssertEqual(saved.settings.voice.customValue, "af_heart")
+        XCTAssertEqual(saved.settings.speed.mode, .inherit)
+        XCTAssertEqual(saved.settings.speed.customValue, 1)
+        let chunk = try await runtime.chunkCache.load(fixture.chunks[0])
+        XCTAssertNotNil(chunk)
+
+        let newVoice = try XCTUnwrap(SpeechVoice.all.first { $0.id != "af_heart" })
+        let changedEdits: [@MainActor () async throws -> Void] = [
+            { try await runtime.updateItemVoice(itemID: itemID, voiceID: newVoice.id) },
+            { try await runtime.updateItemVoiceMode(itemID: itemID, mode: .inherit) },
+            { try await runtime.updateItemSpeed(itemID: itemID, speed: 1.1) },
+            { try await runtime.updateItemSpeedMode(itemID: itemID, mode: .inherit) }
+        ]
+        for edit in changedEdits {
+            let oldKey = try XCTUnwrap(runtime.itemState(itemID)).generationKey
+            let seeded = jobs(for: oldKey)
+            try await project.store.saveQueue(projectID: project.projectID, queue: ProjectQueueDocument(jobs: seeded))
+            try await edit()
+            let queue = try await project.store.loadQueue(projectID: project.projectID)
+            XCTAssertEqual(queue.jobs, seeded.filter { $0.itemID != itemID || $0.state == .completed })
+            XCTAssertNotEqual(runtime.itemState(itemID)?.generationKey, oldKey)
+        }
+        await runtime.shutdownAndDrain()
+    }
+
+    private func writeAudioRecoveryJournal(
+        in directory: URL, itemID: UUID, phase: String,
+        hadPrevious: Bool = true
+    ) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1, "itemID": itemID.uuidString,
+            "hadWAV": hadPrevious, "hadMetadata": hadPrevious, "phase": phase
+        ])
+        try data.write(to: directory.appending(path: "transaction.json"), options: .atomic)
+    }
+
+    private func replacementAudio(
+        for fixture: ReclamationFixture
+    ) throws -> (Data, GeneratedAudioMetadata) {
+        let bytes = try ProjectWAVCodec.encode(
+            samples: Array(repeating: 0.7, count: 240 * fixture.chunks.count), sampleRate: 24_000
+        )
+        let original = fixture.metadata
+        return (bytes, GeneratedAudioMetadata(
+            itemID: original.itemID, generationKey: original.generationKey,
+            audioRevision: ProjectDigest.sha256(bytes), contentRevision: original.contentRevision,
+            voiceID: original.voiceID, speed: original.speed, runtimeRevision: original.runtimeRevision,
+            synthesisConfigVersion: original.synthesisConfigVersion,
+            durationSeconds: original.durationSeconds, segments: original.segments
+        ))
+    }
+
+    func testAudioCommitReopenRecoversEveryReplacementBoundary() async throws {
+        // Recreate the durable state left by a process kill at each boundary;
+        // use a fresh store, not a catchable-error rollback on the old instance.
+        for stage in ["preparing", "before-swap", "wav-only", "both-files", "mid-rollback", "finished", "cleanup"] {
+            let fixture = try await makeReclamationFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+            await fixture.cache.shutdown()
+            let paths = fixture.project.paths
+            let itemID = fixture.request.itemID
+            let oldMetadata = try Data(contentsOf: paths.audioMetadata(itemID))
+            let (bytes, metadata) = try replacementAudio(for: fixture)
+            let directory = paths.tempDirectory.appending(path: "audio-commit-\(UUID().uuidString)")
+            let phase = stage == "preparing" ? "preparing" : (stage == "finished" || stage == "cleanup" ? "finished" : "replacing")
+            try writeAudioRecoveryJournal(in: directory, itemID: itemID, phase: phase)
+            // Preparing may have only a partial backup; final files are still old.
+            try fixture.finalBytes.write(to: directory.appending(path: "previous.wav"))
+            if stage != "preparing" {
+                try oldMetadata.write(to: directory.appending(path: "previous.metadata.json"))
+            }
+            if ["wav-only", "both-files", "finished", "cleanup"].contains(stage) {
+                try bytes.write(to: paths.audioWAV(itemID), options: .atomic)
+            }
+            if ["both-files", "mid-rollback", "finished", "cleanup"].contains(stage) {
+                try ProjectJSONCodec.encode(metadata).write(to: paths.audioMetadata(itemID), options: .atomic)
+            }
+            if stage == "finished" {
+                // A completed transaction must not require its backups again.
+                try FileManager.default.removeItem(at: directory.appending(path: "previous.wav"))
+            }
+            if stage == "cleanup" {
+                let cleanup = paths.tempDirectory.appending(path: "audio-cleanup-\(UUID().uuidString)")
+                try FileManager.default.moveItem(at: directory, to: cleanup)
+                try FileManager.default.removeItem(at: cleanup.appending(path: "transaction.json"))
+            }
+            let keepsNew = stage == "finished" || stage == "cleanup"
+            for _ in 0..<2 {
+                let reopened = try ProjectStore(rootURL: fixture.project.root)
+                let asset = try await reopened.loadCompatibleFinalAudio(
+                    projectID: fixture.project.projectID, request: fixture.request
+                )
+                XCTAssertEqual(asset?.metadata, keepsNew ? metadata : fixture.metadata, stage)
+                XCTAssertEqual(try Data(contentsOf: paths.audioWAV(itemID)), keepsNew ? bytes : fixture.finalBytes, stage)
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), stage)
+        }
+    }
+
+    func testInterruptedFirstAudioCommitRemovesOnlyUncommittedPair() async throws {
+        for wroteMetadata in [false, true] {
+            let fixture = try await makeReclamationFixture(commitFinal: false)
+            defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+            await fixture.cache.shutdown()
+            let paths = fixture.project.paths
+            let itemID = fixture.request.itemID
+            let directory = paths.tempDirectory.appending(path: "audio-commit-\(UUID().uuidString)")
+            try writeAudioRecoveryJournal(in: directory, itemID: itemID, phase: "replacing", hadPrevious: false)
+            try fixture.finalBytes.write(to: paths.audioWAV(itemID))
+            if wroteMetadata {
+                try ProjectJSONCodec.encode(fixture.metadata).write(to: paths.audioMetadata(itemID))
+            }
+            let reopened = try ProjectStore(rootURL: fixture.project.root)
+            let asset = try await reopened.loadCompatibleFinalAudio(
+                projectID: fixture.project.projectID, request: fixture.request
+            )
+            XCTAssertNil(asset)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.audioWAV(itemID).path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: paths.audioMetadata(itemID).path))
+            let cache = SharedChunkAudioCache(packageURL: paths.packageURL)
+            let chunk = try await cache.load(fixture.chunks[0])
+            XCTAssertNotNil(chunk, "Recovery must preserve chunks for retry")
+            await cache.shutdown()
+        }
+    }
+
+    func testFailedAudioRecoveryRetainsBackupsForAnotherAttempt() async throws {
+        let fixture = try await makeReclamationFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.project.root) }
+        await fixture.cache.shutdown()
+        let paths = fixture.project.paths
+        let itemID = fixture.request.itemID
+        let oldMetadata = try Data(contentsOf: paths.audioMetadata(itemID))
+        let (bytes, metadata) = try replacementAudio(for: fixture)
+        let directory = paths.tempDirectory.appending(path: "audio-commit-\(UUID().uuidString)")
+        try writeAudioRecoveryJournal(in: directory, itemID: itemID, phase: "replacing")
+        let backupWAV = directory.appending(path: "previous.wav")
+        try fixture.finalBytes.write(to: backupWAV)
+        try bytes.write(to: paths.audioWAV(itemID), options: .atomic)
+        try ProjectJSONCodec.encode(metadata).write(to: paths.audioMetadata(itemID), options: .atomic)
+        XCTAssertThrowsError(try ProjectStore(rootURL: fixture.project.root))
+        XCTAssertEqual(try Data(contentsOf: backupWAV), fixture.finalBytes)
+        XCTAssertEqual(try Data(contentsOf: paths.audioWAV(itemID)), bytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appending(path: "transaction.json").path))
+
+        try oldMetadata.write(to: directory.appending(path: "previous.metadata.json"))
+        // Simulate a second interruption after restoring just the first file.
+        try fixture.finalBytes.write(to: paths.audioWAV(itemID), options: .atomic)
+        let reopened = try ProjectStore(rootURL: fixture.project.root)
+        let asset = try await reopened.loadCompatibleFinalAudio(
+            projectID: fixture.project.projectID, request: fixture.request
+        )
+        XCTAssertEqual(asset?.metadata, fixture.metadata)
+        XCTAssertEqual(try Data(contentsOf: paths.audioWAV(itemID)), fixture.finalBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
     func testReclamationDefersForBothCachedReaderAndAssembler() async throws {
         let fixture = try await makeReclamationFixture()
         defer { try? FileManager.default.removeItem(at: fixture.project.root) }

@@ -154,6 +154,10 @@ nonisolated struct ProjectRuntimePersistenceBridge: Sendable {
         )
     }
 
+    func retryGeneration(_ requests: [ProjectGenerationRequest]) async throws {
+        try await store.retryGeneration(projectID: projectID, requests: requests)
+    }
+
     func enqueueGeneration(
         _ requests: [ProjectGenerationRequest],
         replaceExisting: Bool

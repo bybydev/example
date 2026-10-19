@@ -28,7 +28,7 @@ enum ReadAloudCommerce {
             id: "listening",
             systemImage: "headphones",
             title: "Listening Time",
-            message: "Unlimited Listening",
+            message: "Listen as much as you like across your entire library, without weekly limits",
             freeValue: "\(Int(ReadAloudAccessPolicy.weeklyListeningSeconds / 3600)) hours/week",
             proValue: "Unlimited"
         ),
@@ -36,7 +36,7 @@ enum ReadAloudCommerce {
             id: "offlineGeneration",
             systemImage: "arrow.down.circle.fill",
             title: "Prepare Audio Ahead",
-            message: "Offline Generation",
+            message: "Generate complete chapters or entire books ahead of time for offline listening",
             freeValue: "Live listening",
             proValue: "Chapters & books"
         ),
@@ -44,15 +44,15 @@ enum ReadAloudCommerce {
             id: "voices",
             systemImage: "waveform.circle.fill",
             title: "All Voices",
-            message: "All Built-in Voices",
-            freeValue: "Heart",
+            message: "Unlock every built-in voice and choose the perfect narrator for each book",
+            freeValue: SpeechVoice.heart.name,
             proValue: "All 28 voices"
         ),
         PurchaseFeature(
             id: "themes",
             systemImage: "paintpalette.fill",
             title: "Premium Themes",
-            message: "All Premium Themes",
+            message: "Make the app feel like yours with full access to every premium theme",
             freeValue: "ReadAloud Light + Dark",
             proValue: "All themes"
         ),

@@ -15,40 +15,40 @@ nonisolated struct SpeechVoice: Identifiable, Equatable, Hashable, Sendable {
     let name: String
     let locale: String
 
-    static let heart = SpeechVoice(id: "af_heart", name: "Heart", locale: "American English")
-    static let bella = SpeechVoice(id: "af_bella", name: "Bella", locale: "American English")
-    static let michael = SpeechVoice(id: "am_michael", name: "Michael", locale: "American English")
+    static let heart = SpeechVoice(id: "af_heart", name: "Clara", locale: "American English")
+    static let bella = SpeechVoice(id: "af_bella", name: "Sophie", locale: "American English")
+    static let michael = SpeechVoice(id: "am_michael", name: "Lucas", locale: "American English")
 
     /// All 28 English Kokoro v1.0 voice styles (American and British).
     static let all: [SpeechVoice] = [
         .heart,
-        SpeechVoice(id: "af_alloy", name: "Alloy", locale: "American English"),
-        SpeechVoice(id: "af_aoede", name: "Aoede", locale: "American English"),
+        SpeechVoice(id: "af_alloy", name: "Avery", locale: "American English"),
+        SpeechVoice(id: "af_aoede", name: "Lyra", locale: "American English"),
         .bella,
-        SpeechVoice(id: "af_jessica", name: "Jessica", locale: "American English"),
-        SpeechVoice(id: "af_kore", name: "Kore", locale: "American English"),
-        SpeechVoice(id: "af_nicole", name: "Nicole", locale: "American English"),
-        SpeechVoice(id: "af_nova", name: "Nova", locale: "American English"),
-        SpeechVoice(id: "af_river", name: "River", locale: "American English"),
-        SpeechVoice(id: "af_sarah", name: "Sarah", locale: "American English"),
-        SpeechVoice(id: "af_sky", name: "Sky", locale: "American English"),
-        SpeechVoice(id: "am_adam", name: "Adam", locale: "American English"),
-        SpeechVoice(id: "am_echo", name: "Echo", locale: "American English"),
-        SpeechVoice(id: "am_eric", name: "Eric", locale: "American English"),
-        SpeechVoice(id: "am_fenrir", name: "Fenrir", locale: "American English"),
-        SpeechVoice(id: "am_liam", name: "Liam", locale: "American English"),
+        SpeechVoice(id: "af_jessica", name: "Natalie", locale: "American English"),
+        SpeechVoice(id: "af_kore", name: "Iris", locale: "American English"),
+        SpeechVoice(id: "af_nicole", name: "Vivian", locale: "American English"),
+        SpeechVoice(id: "af_nova", name: "Aurora", locale: "American English"),
+        SpeechVoice(id: "af_river", name: "Willow", locale: "American English"),
+        SpeechVoice(id: "af_sarah", name: "Grace", locale: "American English"),
+        SpeechVoice(id: "af_sky", name: "Hazel", locale: "American English"),
+        SpeechVoice(id: "am_adam", name: "Ethan", locale: "American English"),
+        SpeechVoice(id: "am_echo", name: "Mason", locale: "American English"),
+        SpeechVoice(id: "am_eric", name: "Owen", locale: "American English"),
+        SpeechVoice(id: "am_fenrir", name: "Atlas", locale: "American English"),
+        SpeechVoice(id: "am_liam", name: "Noah", locale: "American English"),
         .michael,
-        SpeechVoice(id: "am_onyx", name: "Onyx", locale: "American English"),
-        SpeechVoice(id: "am_puck", name: "Puck", locale: "American English"),
-        SpeechVoice(id: "am_santa", name: "Santa", locale: "American English"),
-        SpeechVoice(id: "bf_alice", name: "Alice", locale: "British English"),
-        SpeechVoice(id: "bf_emma", name: "Emma", locale: "British English"),
-        SpeechVoice(id: "bf_isabella", name: "Isabella", locale: "British English"),
-        SpeechVoice(id: "bf_lily", name: "Lily", locale: "British English"),
-        SpeechVoice(id: "bm_daniel", name: "Daniel", locale: "British English"),
-        SpeechVoice(id: "bm_fable", name: "Fable", locale: "British English"),
-        SpeechVoice(id: "bm_george", name: "George", locale: "British English"),
-        SpeechVoice(id: "bm_lewis", name: "Lewis", locale: "British English"),
+        SpeechVoice(id: "am_onyx", name: "Adrian", locale: "American English"),
+        SpeechVoice(id: "am_puck", name: "Felix", locale: "American English"),
+        SpeechVoice(id: "am_santa", name: "Walter", locale: "American English"),
+        SpeechVoice(id: "bf_alice", name: "Florence", locale: "British English"),
+        SpeechVoice(id: "bf_emma", name: "Charlotte", locale: "British English"),
+        SpeechVoice(id: "bf_isabella", name: "Beatrice", locale: "British English"),
+        SpeechVoice(id: "bf_lily", name: "Poppy", locale: "British English"),
+        SpeechVoice(id: "bm_daniel", name: "Oliver", locale: "British English"),
+        SpeechVoice(id: "bm_fable", name: "Arthur", locale: "British English"),
+        SpeechVoice(id: "bm_george", name: "Edward", locale: "British English"),
+        SpeechVoice(id: "bm_lewis", name: "Hugo", locale: "British English"),
     ]
 }
 

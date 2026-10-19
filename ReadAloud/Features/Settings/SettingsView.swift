@@ -328,7 +328,7 @@ struct SettingsView: View {
                 )
             {
                 Text(
-                    "Your saved Pro voice is preserved. Heart is used while Pro is inactive."
+                    "Your saved Pro voice is preserved. \(SpeechVoice.heart.name) is used while Pro is inactive."
                 )
             } else {
                 Text(

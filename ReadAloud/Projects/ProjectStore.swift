@@ -7,6 +7,18 @@ nonisolated private struct QueueChapterHeading: Decodable {
     let title: String
 }
 
+nonisolated private struct AudioCommitJournal: Codable {
+    enum Phase: String, Codable {
+        case preparing, replacing, finished
+    }
+
+    var schemaVersion = 1
+    let itemID: UUID
+    let hadWAV: Bool
+    let hadMetadata: Bool
+    var phase: Phase = .preparing
+}
+
 nonisolated enum ProjectStoreError: Error, LocalizedError, Equatable, Sendable {
     case projectNotFound(UUID)
     case projectAlreadyExists(UUID)
@@ -122,6 +134,17 @@ nonisolated struct ProjectRetainedArtwork: Sendable {
 }
 
 actor ProjectStore {
+    // All production callers share one actor for the default project root.
+    // Cache initialization failure too, so opening another screen cannot start
+    // a second store/recovery pass. Explicit initializers remain isolated.
+    nonisolated private static let applicationStore: Result<ProjectStore, Error> = Result {
+        try ProjectStore()
+    }
+
+    nonisolated static func shared() throws -> ProjectStore {
+        try applicationStore.get()
+    }
+
     nonisolated let rootURL: URL
     private let fileManager: FileManager
     // One bounded derived-text cache avoids decoding a book's blocks for every
@@ -164,6 +187,9 @@ actor ProjectStore {
         try Self.recoverPDFReadingTransactions(
             rootURL: self.rootURL,
             fileManager: fileManager
+        )
+        try Self.recoverAudioCommitTransactions(
+            rootURL: self.rootURL, fileManager: fileManager
         )
     }
 
@@ -1668,6 +1694,9 @@ actor ProjectStore {
             try pathsForExistingProject(
                 projectID
             )
+        // A previous catchable rollback may have failed. Resolve it before
+        // allowing another replacement to touch the same final files.
+        try Self.recoverAudioCommitTransactions(paths: paths, fileManager: fileManager)
         try requireAudioMetadataCompatibility(
             metadata,
             in: paths
@@ -1708,12 +1737,6 @@ actor ProjectStore {
             )
         }
 
-        defer {
-            try? fileManager.removeItem(
-                at: transactionDirectory
-            )
-        }
-
         let stagedWAV =
             transactionDirectory.appending(
                 path: "staged.wav"
@@ -1751,7 +1774,12 @@ actor ProjectStore {
                     destinationMetadata.path
             )
 
+        var journal = AudioCommitJournal(
+            itemID: metadata.itemID, hadWAV: hadWAV, hadMetadata: hadMetadata
+        )
+
         do {
+            try Self.writeAudioCommitJournal(journal, in: transactionDirectory)
             try fileManager.copyItem(at: wavURL, to: stagedWAV)
             try Task.checkCancellation()
             let metadataData =
@@ -1776,15 +1804,21 @@ actor ProjectStore {
                 )
             }
 
-            try replaceStagedFile(
+            // This durable phase is written only after both backups exist.
+            try Task.checkCancellation()
+            journal.phase = .replacing
+            try Self.writeAudioCommitJournal(journal, in: transactionDirectory)
+            try Self.replaceStagedFile(
                 stagedWAV,
                 destination:
-                    destinationWAV
+                    destinationWAV,
+                fileManager: fileManager
             )
-            try replaceStagedFile(
+            try Self.replaceStagedFile(
                 stagedMetadata,
                 destination:
-                    destinationMetadata
+                    destinationMetadata,
+                fileManager: fileManager
             )
 
             guard try ProjectDigest.sha256(
@@ -1812,19 +1846,19 @@ actor ProjectStore {
                     "Committed audio metadata failed verification."
                 )
             }
+            journal.phase = .finished
+            try Self.writeAudioCommitJournal(journal, in: transactionDirectory)
         } catch {
-            restoreFinalAudioPair(
-                destinationWAV:
-                    destinationWAV,
-                destinationMetadata:
-                    destinationMetadata,
-                backupWAV: backupWAV,
-                backupMetadata:
-                    backupMetadata,
-                hadWAV: hadWAV,
-                hadMetadata:
-                    hadMetadata
-            )
+            do {
+                try Self.recoverAudioCommitTransaction(
+                    transactionDirectory, paths: paths, fileManager: fileManager
+                )
+            } catch let recoveryError {
+                // Never delete the journal/backups when rollback fails.
+                throw ProjectStoreError.io(
+                    "Audio save failed: \(error). Recovery is pending: \(recoveryError)"
+                )
+            }
 
             if let storeError =
                 error as? ProjectStoreError {
@@ -1834,6 +1868,10 @@ actor ProjectStore {
                 "Unable to commit generated audio: \(error)"
             )
         }
+
+        // Cleanup failure cannot turn a successfully committed pair into an
+        // error. Startup recognizes the finished journal and only cleans up.
+        try? Self.discardAudioCommitTransaction(transactionDirectory, fileManager: fileManager)
 
         var queue =
             try loadQueue(
@@ -2198,6 +2236,37 @@ actor ProjectStore {
             queue: queue
         )
         return queue
+    }
+
+    func retryGeneration(
+        projectID: UUID,
+        requests: [ProjectGenerationRequest],
+        now: Date = .now
+    ) throws {
+        guard !requests.isEmpty else { return }
+        try Task.checkCancellation()
+        let itemIDs = Set(requests.map(\.itemID))
+        guard itemIDs.count == requests.count else {
+            throw ProjectStoreError.invalidData("Retry contains duplicate chapter requests.")
+        }
+        var queue = try loadQueue(projectID: projectID)
+        let retryStates: Set<GenerationJobState> = [.failed, .queued, .generating]
+        queue.jobs.removeAll {
+            itemIDs.contains($0.itemID) && retryStates.contains($0.state)
+        }
+        queue.jobs.append(contentsOf: requests.map { request in
+            GenerationJobRecord(
+                id: UUID(), projectID: projectID, itemID: request.itemID,
+                operation: .generate, generationKey: request.generationKey,
+                state: .queued, createdAt: now, updatedAt: now,
+                attempt: 0, lastError: nil
+            )
+        })
+        try Task.checkCancellation()
+        // saveQueue validates every request's ownership/key before its single
+        // atomic write. No durable removal happens before replacements exist.
+        try saveQueue(projectID: projectID, queue: queue)
+        try touchProject(projectID: projectID, at: now)
     }
 
     func enqueueGeneration(
@@ -2588,9 +2657,10 @@ actor ProjectStore {
         }
     }
 
-    private func replaceStagedFile(
+    private static func replaceStagedFile(
         _ staged: URL,
-        destination: URL
+        destination: URL,
+        fileManager: FileManager
     ) throws {
         try fileManager.createDirectory(
             at:
@@ -2618,64 +2688,107 @@ actor ProjectStore {
         }
     }
 
-    private func restoreFinalAudioPair(
-        destinationWAV: URL,
-        destinationMetadata: URL,
-        backupWAV: URL,
-        backupMetadata: URL,
-        hadWAV: Bool,
-        hadMetadata: Bool
-    ) {
-        restoreFile(
-            destination: destinationWAV,
-            backup: backupWAV,
-            hadPrevious: hadWAV
-        )
-        restoreFile(
-            destination:
-                destinationMetadata,
-            backup: backupMetadata,
-            hadPrevious: hadMetadata
+    private static func writeAudioCommitJournal(
+        _ journal: AudioCommitJournal, in directory: URL
+    ) throws {
+        try ProjectJSONCodec.encode(journal).write(
+            to: directory.appending(path: "transaction.json"), options: .atomic
         )
     }
 
-    private func restoreFile(
-        destination: URL,
-        backup: URL,
-        hadPrevious: Bool
-    ) {
-        if hadPrevious {
-            guard fileManager.fileExists(
-                atPath: backup.path
-            ) else {
-                // Backup creation may have failed before any replacement.
-                // In that case the safest action is to leave the existing
-                // destination untouched.
-                return
-            }
-
-            if fileManager.fileExists(
-                atPath: destination.path
-            ) {
-                try? fileManager.removeItem(
-                    at: destination
-                )
-            }
-
-            try? fileManager.copyItem(
-                at: backup,
-                to: destination
-            )
-            return
-        }
-
-        if fileManager.fileExists(
-            atPath: destination.path
-        ) {
-            try? fileManager.removeItem(
-                at: destination
+    private static func recoverAudioCommitTransactions(
+        rootURL: URL, fileManager: FileManager
+    ) throws {
+        let packages = try fileManager.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        )
+        for package in packages where package.pathExtension == ProjectSchema.packageExtension {
+            let values = try package.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+            try recoverAudioCommitTransactions(
+                paths: ProjectPackagePaths(packageURL: package), fileManager: fileManager
             )
         }
+    }
+
+    private static func recoverAudioCommitTransactions(
+        paths: ProjectPackagePaths, fileManager: FileManager
+    ) throws {
+        guard fileManager.fileExists(atPath: paths.tempDirectory.path) else { return }
+        let directories = try fileManager.contentsOfDirectory(
+            at: paths.tempDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: []
+        )
+        for directory in directories {
+            let name = directory.lastPathComponent
+            guard name.hasPrefix("audio-commit-") || name.hasPrefix("audio-cleanup-") else { continue }
+            let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
+            if name.hasPrefix("audio-cleanup-") {
+                try? fileManager.removeItem(at: directory)
+            } else {
+                try recoverAudioCommitTransaction(directory, paths: paths, fileManager: fileManager)
+            }
+        }
+    }
+
+    private static func recoverAudioCommitTransaction(
+        _ directory: URL, paths: ProjectPackagePaths, fileManager: FileManager
+    ) throws {
+        let journalURL = directory.appending(path: "transaction.json")
+        // Unjournaled transactions from older versions are left intact: their
+        // backup files alone do not identify which chapter is safe to restore.
+        guard fileManager.fileExists(atPath: journalURL.path) else { return }
+        let size = try journalURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, size <= 16_384 else {
+            throw ProjectStoreError.invalidData("Invalid audio recovery journal size.")
+        }
+        var journal = try ProjectJSONCodec.decode(
+            AudioCommitJournal.self, from: Data(contentsOf: journalURL),
+            relativePath: "temp/\(directory.lastPathComponent)/transaction.json"
+        )
+        if journal.phase == .replacing {
+            let files: [(URL, URL, Bool)] = [
+                (paths.audioWAV(journal.itemID), directory.appending(path: "previous.wav"), journal.hadWAV),
+                (paths.audioMetadata(journal.itemID), directory.appending(path: "previous.metadata.json"), journal.hadMetadata)
+            ]
+            // Check both backups before touching either active file.
+            for (_, backup, existed) in files where existed {
+                guard fileManager.fileExists(atPath: backup.path) else {
+                    throw ProjectStoreError.invalidData("Audio recovery backup is missing; transaction retained.")
+                }
+            }
+            for (destination, backup, existed) in files {
+                if existed {
+                    // Copy, never move, the backup so a second interruption can
+                    // repeat the entire rollback without losing its source.
+                    let staged = directory.appending(path: "restore-\(UUID().uuidString)")
+                    defer { try? fileManager.removeItem(at: staged) }
+                    try fileManager.copyItem(at: backup, to: staged)
+                    try replaceStagedFile(staged, destination: destination, fileManager: fileManager)
+                } else if fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.removeItem(at: destination)
+                }
+            }
+            journal.phase = .finished
+            try writeAudioCommitJournal(journal, in: directory)
+        }
+        // Preparing means no final file changed; finished means either commit
+        // or rollback completed. Neither phase needs another restoration.
+        try? discardAudioCommitTransaction(directory, fileManager: fileManager)
+    }
+
+    private static func discardAudioCommitTransaction(
+        _ directory: URL, fileManager: FileManager
+    ) throws {
+        // Rename out of the recovery namespace before recursive deletion. A
+        // kill during cleanup must not leave a journal with half its backups.
+        let cleanup = directory.deletingLastPathComponent().appending(
+            path: "audio-cleanup-\(UUID().uuidString)", directoryHint: .isDirectory
+        )
+        try fileManager.moveItem(at: directory, to: cleanup)
+        try fileManager.removeItem(at: cleanup)
     }
 
     private func pathsForExistingProject(

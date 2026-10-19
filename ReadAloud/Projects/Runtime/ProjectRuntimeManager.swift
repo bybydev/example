@@ -301,7 +301,7 @@ final class ProjectRuntimeManager {
         self.hasPro = hasPro
         self.meteringHasPro = hasPro()
         do {
-            projectStore = try store ?? ProjectStore()
+            projectStore = try store ?? ProjectStore.shared()
             initializationError = nil
         } catch {
             projectStore = nil

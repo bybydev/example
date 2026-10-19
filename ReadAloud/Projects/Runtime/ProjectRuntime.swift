@@ -115,6 +115,7 @@ final class ProjectRuntime {
     private(set) var isLoading = false
     private(set) var didLoad = false
     private(set) var isInvalidatingAudio = false
+    @ObservationIgnored private var isUpdatingItemSettings = false
     private var audioRecoveryRequired = false
     private var isShutdown = false
     var revision: UInt64 = 0
@@ -825,25 +826,9 @@ final class ProjectRuntime {
             settings.voice.customValue = entry.resolved.voiceID
         }
 
-        let changed = try itemNarrationChanges(
-            from: entry.item.settings, to: settings
+        try await updateItemNarrationSettings(
+            itemID: itemID, from: entry.item.settings, to: settings
         )
-        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
-            try await persistence.updateItemSettings(
-                itemID: itemID,
-                settings: settings
-            )
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs: [itemID],
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
-            try await refresh()
-        }
     }
 
     func updateItemVoice(
@@ -872,25 +857,9 @@ final class ProjectRuntime {
         settings.voice.mode = .custom
         settings.voice.customValue = voiceID
 
-        let changed = try itemNarrationChanges(
-            from: entry.item.settings, to: settings
+        try await updateItemNarrationSettings(
+            itemID: itemID, from: entry.item.settings, to: settings
         )
-        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
-            try await persistence.updateItemSettings(
-                itemID: itemID,
-                settings: settings
-            )
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs: [itemID],
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
-            try await refresh()
-        }
     }
 
     func updateItemSpeedMode(
@@ -910,25 +879,9 @@ final class ProjectRuntime {
             settings.speed.customValue = entry.resolved.speed
         }
 
-        let changed = try itemNarrationChanges(
-            from: entry.item.settings, to: settings
+        try await updateItemNarrationSettings(
+            itemID: itemID, from: entry.item.settings, to: settings
         )
-        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
-            try await persistence.updateItemSettings(
-                itemID: itemID,
-                settings: settings
-            )
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs: [itemID],
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
-            try await refresh()
-        }
     }
 
     func updateItemSpeed(
@@ -950,23 +903,33 @@ final class ProjectRuntime {
         settings.speed.mode = .custom
         settings.speed.customValue = speed
 
-        let changed = try itemNarrationChanges(
-            from: entry.item.settings, to: settings
+        try await updateItemNarrationSettings(
+            itemID: itemID, from: entry.item.settings, to: settings
         )
-        try await withAudioInvalidation(itemIDs: changed ? [itemID] : []) {
-            try await persistence.updateItemSettings(
-                itemID: itemID,
-                settings: settings
+    }
+
+    private func updateItemNarrationSettings(
+        itemID: UUID, from oldSettings: ItemNarrationSettings,
+        to settings: ItemNarrationSettings
+    ) async throws {
+        guard !isInvalidatingAudio, !isUpdatingItemSettings, !isShutdown else {
+            throw CancellationError()
+        }
+        let changed = try itemNarrationChanges(from: oldSettings, to: settings)
+        if !changed {
+            // Persist Custom/Default choices without interrupting compatible work.
+            // Retain mutation exclusion while allowing generation to continue.
+            isUpdatingItemSettings = true
+            defer { isUpdatingItemSettings = false }
+            try await persistence.updateItemSettings(itemID: itemID, settings: settings)
+            try await refresh()
+            return
+        }
+        try await withAudioInvalidation(itemIDs: [itemID]) {
+            try await persistence.updateItemSettings(itemID: itemID, settings: settings)
+            _ = try await persistence.removeGenerationJobs(
+                itemIDs: [itemID], states: [.queued, .generating, .failed]
             )
-            _ = try await persistence
-                .removeGenerationJobs(
-                    itemIDs: [itemID],
-                    states: [
-                        .queued,
-                        .generating,
-                        .failed,
-                    ]
-                )
             try await refresh()
         }
     }
@@ -1089,7 +1052,7 @@ final class ProjectRuntime {
         persistCheckpoint: Bool = true,
         operation: @MainActor () async throws -> T
     ) async throws -> T {
-        guard !isInvalidatingAudio, !isShutdown else { throw CancellationError() }
+        guard !isInvalidatingAudio, !isUpdatingItemSettings, !isShutdown else { throw CancellationError() }
         isInvalidatingAudio = true
         queueController.reconcileScheduling()
         let pendingPrefetch = prefetchTask
