@@ -9,7 +9,8 @@ regeneration runs in the cloud.
 | Hook | Responsibility |
 | --- | --- |
 | `ci_scripts/ci_post_clone.sh` | Apply Spokio's macro/plugin trust settings; check committed project inputs; download, verify, and stage production ONNX assets. |
-| `ci_scripts/ci_post_xcodebuild.sh` | After a successful archive, verify the archived app's assets, manifest, license notices, and absence of Core ML models. |
+| `ci_scripts/ci_pre_xcodebuild.sh` | Stamp the resolved ONNX Runtime framework's MinimumOSVersion to 26.0 before embedding/signing, following Spokio. |
+| `ci_scripts/ci_post_xcodebuild.sh` | After a successful archive, verify the embedded ONNX Runtime minimum OS, assets, manifest, license notices, and absence of Core ML models. |
 
 All hooks are executable and automatically discovered by Xcode Cloud. Resource
 preparation uses the same commands as the GitHub release workflow:
@@ -29,14 +30,28 @@ The target's existing pre-build phase verifies/stages resources again before
 the Resources phase. The archive hook verifies the actual bundled files,
 rather than relying only on workspace staging.
 
-Test-without-building skips model preparation because it uses
+Test-without-building skips model preparation and framework stamping because it uses
 the previously built test products. The archive hook does not run archive
 verification for test, build, or analyze actions, or after a failed archive.
 
-ReadAloud does not patch ONNX Runtime framework metadata. The pinned 1.24.2
-binary already declares `MinimumOSVersion = 15.1` for both iOS device and
-simulator slices. Spokio's Extensions workaround does not apply because
-ReadAloud does not link ONNX Runtime Extensions.
+## ONNX Runtime minimum OS workaround
+
+App Store Connect rejected ReadAloud's embedded `onnxruntime.framework` with
+**ITMS-90208: Invalid Bundle** (minimum OS version mismatch). The upstream
+1.24.2 XCFramework's plist declares 15.1, but inspecting that input alone does
+not establish that the final packaged framework passes Apple's validation.
+
+Following Spokio, the pre-xcodebuild hook replaces `MinimumOSVersion` with
+`26.0` in the resolved ONNX Runtime artifact before Xcode embeds and signs it.
+Keep this explicit value aligned with the iOS deployment target in `project.yml`;
+Xcode Cloud does not reliably expose `IPHONEOS_DEPLOYMENT_TARGET` to the hook.
+Missing framework plists fail the hook instead of silently skipping the fix.
+ReadAloud does not link or patch ONNX Runtime Extensions.
+
+After a successful archive, the post-xcodebuild hook reads the embedded
+framework and fails if its minimum OS differs from the app's. It never edits
+the signed archive. A fresh archive/upload is still required to confirm Apple
+accepts the corrected bundle.
 
 ## One-time Apple setup
 
@@ -54,8 +69,7 @@ configured in Xcode/App Store Connect, not by committing a GitHub workflow.
 5. Configure an **Archive → iOS → Release** action. Keep automatic signing.
    TestFlight/App Store Connect distribution is an optional workflow setting.
 6. Remove automatic branch, PR, tag, and scheduled start conditions; run the
-   workflow manually on the selected branch. To try this PR, select
-   `codex/screenshot-studio-six-scenes`.
+   workflow manually on the selected branch.
 7. If tests are desired, add a separate **Test → iPhone → Debug** action using
    the existing `ReadAloudTests` scheme test target.
 
@@ -67,7 +81,7 @@ Spokio's `SPOKIO_CI_USE_TEST_MODELS` flag; ReadAloud has no fixture mode.
 
 Review the post-clone log for all 31 verified assets and successful staging.
 After Archive, review the post-xcodebuild log for verification of
-`ReadAloud.app/ONNX`.
+`ReadAloud.app/ONNX` and matching app/framework minimum OS versions.
 
 No cloud build, test run, or distribution was started as part of adding these
 hooks. The first successful Apple-hosted archive remains the end-to-end check.
@@ -77,5 +91,5 @@ hooks. The first successful Apple-hosted archive remains the end-to-end check.
 - [Apple: Writing custom build scripts](https://developer.apple.com/documentation/xcode/writing-custom-build-scripts)
 - [Apple: Environment variable reference](https://developer.apple.com/documentation/xcode/environment-variable-reference)
 - [Apple: Configuring your first Xcode Cloud workflow](https://developer.apple.com/documentation/xcode/configuring-your-first-xcode-cloud-workflow)
-- Spokio `ci_scripts/ci_post_clone.sh`
+- Spokio `ci_scripts/ci_post_clone.sh` and `ci_pre_xcodebuild.sh`
 - ReadAloud `.github/workflows/release.yml`

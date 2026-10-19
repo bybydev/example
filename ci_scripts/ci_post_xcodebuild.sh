@@ -26,6 +26,17 @@ if [[ "$bundle_id" != "com.hoangbkit.readaloud" ]]; then
   exit 1
 fi
 
+# Check the actual embedded framework without modifying the signed archive.
+# A valid field in the downloaded XCFramework alone did not prevent ITMS-90208.
+app_min="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")"
+framework_min="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' \
+  "$app/Frameworks/onnxruntime.framework/Info.plist")"
+if [[ "$framework_min" != "$app_min" ]]; then
+  echo "error: archived ONNX Runtime MinimumOSVersion=$framework_min; expected app minimum $app_min" >&2
+  exit 1
+fi
+echo "Verified archived ONNX Runtime MinimumOSVersion=$framework_min."
+
 # Verify the actual archive with the same validator as the GitHub release flow.
 python3 scripts/onnx-assets.py verify --root "$app/ONNX"
 cmp scripts/onnx-assets.json "$app/ONNX/ONNXAssetManifest.json"
