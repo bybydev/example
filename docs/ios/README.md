@@ -2,7 +2,7 @@
 
 This directory is the self-contained implementation handoff for [issue #21](https://github.com/hoangbkit/Inkribe/issues/21). It plans the complete caption/video product in the existing repository. The Mac app keeps its existing behavior and product identity.
 
-**Status: planning only. No iOS phase has started. This documentation PR must not be merged until the user says so.** It does not authorize P0.
+**Status (2026-10-22):** Planning PR [#22](https://github.com/hoangbkit/Inkribe/pull/22) was squash merged into `develop`. P0 was separately authorized and is implemented in source in [draft PR #23](https://github.com/hoangbkit/Inkribe/pull/23), targeting `develop`, **held open for review**. It has not been built, tested, regenerated or device-validated. P1–P13 have not started.
 
 ## Reading order
 
@@ -29,6 +29,7 @@ This directory is the self-contained implementation handoff for [issue #21](http
 | [RISKS.md](RISKS.md) | Risks, owners, evidence required and unresolved platform/provider limitations |
 | [HANDOFF.md](HANDOFF.md) | Live progress, next authorized action and continuation/review prompts |
 | [handoffs/TEMPLATE.md](handoffs/TEMPLATE.md) | Completion/resumption record to fill during each phase |
+| [handoffs/P0.md](handoffs/P0.md) | Actual P0 changes, source evidence, unresolved assumptions and user checks |
 | [phases/P0.md](phases/P0.md)–[P13.md](phases/P13.md) | Specific implementation briefs for all 14 phases |
 
 The historical Mac v1 phases in `docs/handoffs/PHASE_*.md` and `docs/V1_IMPLEMENTATION_PLAN.md` are a separate sequence. Do not mark iOS phases complete because the Mac README says its phases are complete.

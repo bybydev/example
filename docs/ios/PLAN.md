@@ -10,7 +10,7 @@ All 467 source items are in [FEATURES.md](FEATURES.md); the complete issue is in
 
 ## Phase index
 
-All phases are **not started**. None is authorized by this planning PR.
+P0 was explicitly authorized, and its implementation source is in draft [PR #23](https://github.com/hoangbkit/Inkribe/pull/23), awaiting review and user-run checks. P1–P13 remain not started. Planning PR #22 was already squash merged.
 
 | Phase | Brief | Primary result | Prerequisites / later integrations |
 |---|---|---|---|
@@ -44,7 +44,7 @@ P0–P13 are workstreams, not unconditional strict-waterfall release cuts. A use
 
 ## Execution boundaries
 
-Follow [WORKFLOW.md](WORKFLOW.md): one PR per requested phase from latest develop, all passes in it, squash merge on completion. **The present planning PR is an explicit exception and stays open until the user requests its merge.**
+Follow [WORKFLOW.md](WORKFLOW.md): one PR per requested phase from latest develop, all passes in it. Planning PR #22 has been merged. The newer explicit instruction for P0 PR #23 is to **leave open for review, without merge or auto-merge**.
 
 Do not set up/trigger CI or perform device validation. Root AGENTS.md also prohibits builds/tests unless asked. The user tests finished implementation. Static reasoning and source/document review should identify correctness risks without claiming runtime validation.
 

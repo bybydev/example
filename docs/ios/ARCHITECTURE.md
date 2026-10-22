@@ -1,6 +1,6 @@
 # Inkribe iOS architecture contracts
 
-Status: planned contracts, not implemented APIs. Concrete Swift type names and file locations must be chosen against latest develop during the owning phase. Read [BASELINE.md](BASELINE.md) before assuming a capability is absent.
+Status: overarching contracts remain planned. P0 **has authored the narrower source-level types** below in PR #23; code is unexecuted and is not a persisted project, editor, preview or video export. Read [BASELINE.md](BASELINE.md) and [handoffs/P0.md](handoffs/P0.md) for as-built boundaries.
 
 ## App and package boundaries
 
@@ -117,3 +117,14 @@ P5 centralizes individual-user entitlement decisions in the iOS app layer using 
 ## Decisions and review
 
 [DECISIONS.md](DECISIONS.md) separates fixed invariants from implementation choices. Update decisions in the owning phase PR. Review architecture-critical contracts at P0/P1, P2, P3–P5 and P6. No extra package, backend or abstraction is required merely to satisfy a diagram. Follow WORKFLOW.md for execution permissions.
+
+## P0 concrete contracts (draft PR #23, source-only)
+
+- `InkribeIOS/App/InkribeIOSApp.swift`: iOS-only `@main` + AppFoundation theme-state composition; separate empty iOS entitlements, asset catalog and zero-product StoreKit test file. `EmptyView` is intentional to avoid unapproved UI; P1 introduces navigation and source media.
+- `InkribeIOS/Domain/MediaTime.swift`: validated nonnegative `MediaTime` backed by rational `CMTime`, validated half-open `MediaInterval`, identity-speed `IdentityClipMapping` that maps source to project time, with decoding that rejects invalid values and inconsistent placement. P6 must extend this seam for multiple clips and time transformations.
+- `InkribeIOS/Domain/ProjectContract.swift`: `ProjectRevision`, `ProjectEditToken`, `ProjectEditApplying` protocol and schema version **intent**. There is deliberately no file format, repository, migration code, undo engine or claim of durable edits in P0. P1 must implement atomic document writes/migration/recovery; P3 must implement editor sessions/revisions and actual commands.
+- `InkribeIOS/Rendering/CaptionScene.swift`: immutable representative `CaptionRenderSnapshot`, canvas budget (maximum 1080p-equivalent pixels), 16-word limit, pure `CaptionSceneEvaluator` with deterministic upcoming/active/spoken classification, and a non-persisted sample fixture.
+- `InkribeIOS/Rendering/ClipFrameCompositor.swift`: CoreText text layout into a bounded bitmap, Core Image compositing over a caller-supplied decoded clip frame, and rendering to caller-supplied BGRA `CVPixelBuffer` via a reused `CIContext`. Both future preview and writer consumers must call the **same** evaluator/compositor at rational composition times.
+- P0 uses centre-crop aspect fill of an already-oriented source frame, a fixed HelveticaNeue-Bold request and opaque translucent background. Production font resolution, safe-area layout, transitions, HDR/color-space handling, Unicode directionality, reusable scene caches, frame scheduling and final render profiles are **not** implemented here.
+
+The P0 prototype explicitly cannot take an arbitrary media URL and produce video. AVAssetReader/AVPlayer/AVAssetWriter adapters, frame-time reconciliation, audio, VFR/rotation support, cancel/progress and final export belong to P3/P4/P5/P6. Source review establishes no device parity or feasibility measurements.

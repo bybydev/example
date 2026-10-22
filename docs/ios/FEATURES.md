@@ -2,7 +2,7 @@
 
 All **467** unchecked feature items from issue #21 are preserved below with stable IDs. The original wording remains unchanged. IDs reflect original section/item order and must not be renumbered when labels change or items move. New items receive new IDs.
 
-This is the editable implementation ledger. The exact source is archived in [ISSUE_21.md](ISSUE_21.md). No feature is implemented by this planning PR. A primary phase owns delivery/accounting; other phases can supply prerequisites. Continuous reliability/accessibility obligations apply before P13.
+This is the editable implementation ledger. The exact source is archived in [ISSUE_21.md](ISSUE_21.md). Planning PR #22 was merged. P0 implementation source is in review in [PR #23](https://github.com/hoangbkit/Inkribe/pull/23); P0 owns **zero primary feature IDs**, and no item below has been checked off. Target setup/render spike are infrastructure, not completed product features. A primary phase owns delivery/accounting; other phases can supply prerequisites. Continuous reliability/accessibility obligations apply before P13.
 
 Read [PLAN.md](PLAN.md) for dependency-pending accounting and [WORKFLOW.md](WORKFLOW.md) for permissions. Cross-phase dependencies never justify checking a nonfunctional feature. Track an accepted capability limit with its evidence, user acceptance and substitute UX, keeping the underlying requirement visible.
 

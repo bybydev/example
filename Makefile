@@ -6,10 +6,10 @@ generate:
 	xcodegen generate
 
 build:
-	xcodebuild -project Inkribe.xcodeproj -scheme Inkribe -configuration Debug build
+	xcodebuild -project Inkribe.xcodeproj -scheme InkribeMac -configuration Debug build
 
 test:
-	xcodebuild -project Inkribe.xcodeproj -scheme Inkribe -configuration Debug test
+	xcodebuild -project Inkribe.xcodeproj -scheme InkribeMac -configuration Debug test
 
 download-models:
 	./scripts/download-models.sh

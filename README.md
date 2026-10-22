@@ -2,9 +2,9 @@
 
 Inkribe is a macOS-first, fully offline speech-to-text workspace built around durable transcript documents.
 
-## iOS caption/video editor planning
+## iOS caption/video editor
 
-The full iOS roadmap and fresh-agent handoff are in [docs/ios/README.md](docs/ios/README.md): architecture, design reference, all 467 issue #21 feature items, workflow and P0–P13 implementation briefs. This is planning only; no iOS phase has started. The planning PR must remain open until the user requests merge.
+The complete 467-item roadmap, design and implementation contracts live in [docs/ios/README.md](docs/ios/README.md). Planning PR #22 was squash merged. P0 implementation source (target split, contracts and renderer feasibility spike) is in [draft PR #23](https://github.com/hoangbkit/Inkribe/pull/23), awaiting review; no iOS user-feature screens, builds, tests or device checks are claimed. Later P1–P13 work has not started.
 
 The v1 implementation status and numbered handoffs below refer to the existing **Mac** product, not the new iOS phase sequence.
 
@@ -38,7 +38,7 @@ testfixtures/                Tiny path-compatible model fixtures
 docs/                        Product, architecture, shell, and phase documentation
 ```
 
-Shared packages target macOS 15+ and iOS 26+ and must not depend on AppKit or MacAppFoundation.
+Package manifests declare macOS 15+ and iOS 26+; these declarations are not proof that native binaries or every source path work on device. See [P0 portability handoff](docs/ios/handoffs/P0.md). Shared packages must not depend on AppKit or MacAppFoundation.
 
 ## Foundation dependencies
 
@@ -203,3 +203,9 @@ The v1 implementation plan is complete. `docs/V1_IMPLEMENTATION_PLAN.md` and `do
 For current ownership and behavior, prefer the focused contracts referenced throughout this README: architecture, queue, model assets, runtimes, transcription pipeline, transcript workspace, local AI, export, settings/performance, and release hardening.
 
 Post-v1 cleanup should consolidate existing ownership rather than weaken established persistence, privacy, offline, runtime, or package boundaries. See `docs/CONSOLIDATION.md` for the current consolidation rules and `AGENTS.md` for repository working rules.
+
+## App targets after iOS P0
+
+- `InkribeMac` (macOS 15+, existing bundle IDs `com.hoangbkit.inkribe[.debug]`, existing purchases and data).
+- `Inkribe` (iOS 26+, new identifiers `com.hoangbkit.inkribe.ios[.debug]`, app sources in `InkribeIOS/`, AppFoundation 0.1.8). The new target currently presents no feature UI; its renderer is a source-only prototype, not finished video export.
+- `project.yml` is authoritative; generated `.xcodeproj` is intentionally unchanged until the user chooses to regenerate it. Mac Makefile commands now explicitly use `InkribeMac`.

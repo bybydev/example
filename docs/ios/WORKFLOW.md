@@ -2,9 +2,9 @@
 
 ## Current authorization
 
-The user authorized a **planning-only PR targeting develop** containing the full roadmap and implementation handoff. **Do not merge this planning PR until the user explicitly says to merge it.** Do not start P0 or another feature phase from this request.
+Planning PR #22 was squash merged into develop before P0. The user explicitly authorized P0 in one new PR from the latest develop. [P0 PR #23](https://github.com/hoangbkit/Inkribe/pull/23) is **on review hold:** leave open, do not merge or enable auto-merge. All internal P0 passes must stay in #23. Do not start P1 without a separate request.
 
-For later implementation, start a phase only when requested. Refresh current user instructions and root [AGENTS.md](../../AGENTS.md). Session instructions take precedence over historical issue text.
+For any later phase, refresh current user instructions and root [AGENTS.md](../../AGENTS.md). Session instructions take precedence over historical issue text.
 
 ## One PR per phase
 
@@ -17,7 +17,7 @@ For later implementation, start a phase only when requested. Refresh current use
 7. Squash merge when the requested phase is implementation-complete. The user's standing instruction authorizes this for implementation phases without a separate merge confirmation, unless a newer instruction puts that PR on hold.
 8. Do not advance to another phase until requested.
 
-The present planning PR remains on hold regardless of the standing phase merge instruction. Do not enable auto-merge for it.
+The planning PR is already merged; PR #23 has a newer explicit review hold and must not be merged, even when source implementation is ready.
 
 ## Implementation and validation limits
 
@@ -34,7 +34,7 @@ If a required integration is unavailable, do independent implementation that rem
 
 The user may use GPT-6 Sol High for implementation and GPT-6.1 Sol High for critical review/fixes. Suggested reviews: P0/P1 boundaries and persistence, P2 word timing/memory, P3 editor state, P4/P5 preview/export fidelity, P6 transformed timing, and P13 final hardening. This is a recommended allocation, not a mandatory model or an automatic requirement to spawn agents.
 
-If the user requests review before a phase merges, keep that PR open until the review and required fixes finish. Do not infer that every phase requires a second model or additional permission to merge.
+PR #23 is already explicitly held open for review. If the user requests review before any other phase merges, keep that PR open until review and fixes finish. Do not infer that every phase requires a second model or additional permission to merge.
 
 ## PR descriptions
 

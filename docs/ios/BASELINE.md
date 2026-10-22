@@ -1,6 +1,6 @@
 # Inspected repository baseline
 
-Inspected on 2026-10-22 from **develop at `e860f0fac71ce923ee594ac1a9e6dd636750e2d3`**. This is the parent commit for the planning PR. It is later than the issue's historical master-based assessment. Refresh this record at implementation start; do not merge or reset master into develop as part of planning.
+Original planning baseline: **develop `e860f0fac71ce923ee594ac1a9e6dd636750e2d3`** (parent of the subsequently squash-merged PR #22). **P0 refreshed from develop `955196997b3fbc2683d59fcb44fbc4b11ec5ec9c` on 2026-10-22**, and branched to `feat/ios-p0-foundation` for draft PR #23. The pre-P0 source entry points below describe that branch's starting state; see the as-built audit below.
 
 ## Working rules and automation
 
@@ -9,7 +9,7 @@ Root [AGENTS.md](../../AGENTS.md) says:
 - Do not run builds or tests unless asked.
 - XcodeGen owns the project; do not modify .xcodeproj files.
 
-The inspected develop tree contains no `.github/workflows/` files or `ci_scripts/` directory. Historical docs mention Xcode Cloud, but that does not authorize setup, dispatch, external account operations or assumptions about externally configured services. The planning commit uses a skip-CI marker; no CI is intentionally dispatched. Recheck trigger files before any future push/PR and respect the user's no-CI rule.
+The inspected develop tree contains no `.github/workflows/` files or `ci_scripts/` directory. Historical docs mention Xcode Cloud, but that does not authorize setup, dispatch, external account operations or assumptions about externally configured services. P0 commits use skip-CI messages; no workflows were created, modified, repaired or dispatched by this work. Externally configured services were not inspected. No tests, builds, generated project changes or CI runs were requested or performed.
 
 ## Actual code entry points
 
@@ -43,3 +43,33 @@ Existing `docs/ARCHITECTURE.md`, `docs/FEATURES.md` and numbered Mac handoffs de
 ## Evidence limits
 
 This baseline is source inspection only. No package resolution, builds, tests, model downloads, device measurements, CI setup/runs or deployment occurred. Source declarations do not establish device compatibility, performance or release readiness.
+
+## P0 as-built target/preservation audit (PR #23; source review only)
+
+| Contract | Develop before P0 | P0 source |
+|---|---|---|
+| Mac target/scheme | `Inkribe` / `Inkribe` | `InkribeMac` / `InkribeMac`; Mac test target `InkribeMacTests` |
+| Mac Release / Debug ID | `com.hoangbkit.inkribe` / `com.hoangbkit.inkribe.debug` | **Unchanged** |
+| Mac product/display name | `Inkribe` / `Inkribe` | **Unchanged**; XcodeGen target `productName: Inkribe` explicitly matches `PRODUCT_NAME` |
+| Mac storage | Application Support/`Inkribe`; `jobs.json`, `transcripts.json`, `Media/` | **Unchanged** (Mac source not edited) |
+| Mac commerce | `com.hoangbkit.inkribe.pro.monthly`, `.yearly`, `.lifetime` | **Unchanged**, as is `InkribeMac/Resources/Inkribe.storekit` |
+| Mac sandbox/settings | `InkribeMac/Resources/Inkribe.entitlements`; sandbox/audio/input/file entitlements, offline network flags | **Unchanged** |
+| Mac sources/models | `InkribeMac/` and optional `Models/` folder resource | **Unchanged** |
+| Mac Swift app module | `Inkribe` | **Unchanged**; explicitly pinned with `PRODUCT_MODULE_NAME: Inkribe` |
+| Mac tests | `InkribeTests`, `@testable import Inkribe` | New target name `InkribeMacTests`; all seven app-module imports remain `Inkribe`; test bundle ID unchanged |
+| Mac test host | App product `Inkribe.app` / executable `Inkribe` | Explicit target `productName: Inkribe` keeps XcodeGen's generated host path aligned with `Inkribe.app/Contents/MacOS/Inkribe` |
+| Mac CLI references | Makefile build/test use old scheme | `InkribeMac` scheme in Makefile; no commands run |
+| iOS app | None | `Inkribe` target/scheme, `InkribeIOS/` sources, deployment iOS 26, iPhone/iPad; Release `com.hoangbkit.inkribe.ios`, Debug `.ios.debug` |
+| iOS foundation | None | AppFoundation 0.1.8 linked only to iOS target; independent theme-state key; isolated empty StoreKit test config, asset catalog/entitlements, no feature UI |
+| Project file | Existing `Inkribe.xcodeproj` generated from project.yml | `project.yml` edited; .xcodeproj **not regenerated or modified** |
+
+The target/source diff leaves `InkribeMac/` and `Packages/` unchanged; Mac runtime behavior remains untested, not proven by a source-only comparison. New iOS code does **not** depend on MacAppFoundation, Mac entitlements, Mac StoreKit, Model folder or native runtime packages. It has its own zero-permission entitlements, empty asset catalog and zero-product StoreKit test configuration.
+
+### Portability evidence and unknowns
+
+- Existing `InkribeCore`, `InkribeAudio`, `InkribeExport`, `InkribePersistence` and runtimes declare iOS 26 in package manifests; this is configuration evidence only.
+- `InkribeAudio/AudioMediaDecoder.swift` reads with AVAssetReader but appends every PCM chunk to one `[Float]`; it is not bounded streaming. `DefaultTranscriptionJobExecutor` and `NativeWhisperRuntime` consume full samples, and diarization `process(samples:)` is synchronous. P2 must change the end-to-end memory policy before importing large clips.
+- `WhisperRuntime` references a pinned remote whisper.cpp XCFramework (b5130), `LLMRuntime` a llama.cpp XCFramework (b10964), and `DiarizationRuntime` sherpa-onnx 1.13.8 native wrapper. Binary architectures, iOS deployment loadability, native link dependencies, codesigning, resource packaging, model memory and latency were **not** verified. No remote binaries or models were downloaded.
+- Microphone recorder contains macOS-specific CoreAudio paths under `#if os(macOS)` and an iOS capture-device path; permission/audio session and interruption handling are still unverified and are not included in P0 iOS target.
+- The feasibility renderer has a source-level identity clip mapping and bounded compositing API; it was not run. See [handoffs/P0.md](handoffs/P0.md) for user checks and limitations.
+

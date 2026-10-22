@@ -1,54 +1,38 @@
 # Live iOS handoff
 
-Updated: 2026-10-22.
+Updated: 2026-10-22. Source of truth: [P0 handoff](handoffs/P0.md).
 
-## Current state
+## Current state and authority
 
-- This PR adds planning documentation only. **No iOS phase has started.**
-- Planning base: develop `e860f0fac71ce923ee594ac1a9e6dd636750e2d3`.
-- Source issue: [#21](https://github.com/hoangbkit/Inkribe/issues/21), copied in full to [ISSUE_21.md](ISSUE_21.md).
-- All 467 source feature items are mapped in [FEATURES.md](FEATURES.md).
-- Design image is included at [assets/main-screens-reference.jpeg](assets/main-screens-reference.jpeg).
-- **This planning PR must remain open until the user explicitly requests merge.** No auto-merge.
-- No code changes, app targets, generated projects, dependencies, build/test execution, model downloads, CI setup/runs, device validation or deployment are authorized by this planning request.
+- Issue [#21](https://github.com/hoangbkit/Inkribe/issues/21) is the complete 467-item roadmap; no user-feature checkbox is implemented in P0.
+- Planning PR [#22](https://github.com/hoangbkit/Inkribe/pull/22) was **squash merged**. Any instruction to wait for planning PR approval/merge is historical.
+- Develop at P0 branch creation: `955196997b3fbc2683d59fcb44fbc4b11ec5ec9c`.
+- P0 implementation branch: `feat/ios-p0-foundation`. Draft [PR #23](https://github.com/hoangbkit/Inkribe/pull/23) targets `develop`; **leave open for user review, do not merge or enable auto-merge**.
+- P0 source now includes Mac target/scheme rename, independent iOS target, AppFoundation composition root, rational time/edit metadata contracts and a bounded Core Text/Core Image compositing spike.
+- The iOS app entry scene deliberately has no feature UI; its Projects/import/editor workflows are not implemented. No native iOS inference target is linked.
+- No builds, tests, XcodeGen regeneration, CI setup/runs, model downloads, UI tests, device validation, media uploads or deployment were performed.
 
 ## Next action
 
-Wait for the user's review/merge instruction for this planning PR. P0 is the first implementation candidate, but requires a separate request. When authorized, inspect latest develop and refresh [BASELINE.md](BASELINE.md); do not assume this snapshot is the future source state.
+Review [PR #23](https://github.com/hoangbkit/Inkribe/pull/23), especially source-level target/scheme references, AppFoundation pin, rational-time validation, one-frame compositor and Mac preservation. The user will regenerate, build and test after implementation. Keep all P0 corrections in this same PR; never start P1 or merge until explicitly requested.
 
 ## Phase progress
 
-| Phase | Implementation | Verification | User device testing |
+| Phase | Implementation | Source verification | User device testing |
 |---|---|---|---|
-| [P0](phases/P0.md) | Not started | Not run | Pending user |
-| [P1](phases/P1.md) | Not started | Not run | Pending user |
-| [P2](phases/P2.md) | Not started | Not run | Pending user |
-| [P3](phases/P3.md) | Not started | Not run | Pending user |
-| [P4](phases/P4.md) | Not started | Not run | Pending user |
-| [P5](phases/P5.md) | Not started | Not run | Pending user |
-| [P6](phases/P6.md) | Not started | Not run | Pending user |
-| [P7](phases/P7.md) | Not started | Not run | Pending user |
-| [P8](phases/P8.md) | Not started | Not run | Pending user |
-| [P9](phases/P9.md) | Not started | Not run | Pending user |
-| [P10](phases/P10.md) | Not started | Not run | Pending user |
-| [P11](phases/P11.md) | Not started | Not run | Pending user |
-| [P12](phases/P12.md) | Not started | Not run | Pending user |
-| [P13](phases/P13.md) | Not started | Not run | Pending user |
+| [P0](phases/P0.md) | Code authored, review pending, runtime unverified — [#23](https://github.com/hoangbkit/Inkribe/pull/23) | Source audit only | Pending user |
+| P1–P13 | Not started | Not run | Pending user |
 
-## Starting or resuming a phase
+## P0 outcomes / caveats
 
-Read root AGENTS.md and the reading order in README.md. Check open PRs/branch heads and the current user's scope before editing. Inspect source symbols listed in the phase brief. Record newly discovered baseline differences; do not broaden the phase silently.
+- Mac release/debug bundle IDs and product/display name unchanged. StoreKit configuration, product IDs, entitlements and Application Support data paths unchanged. The application/test targets and schemes are renamed; the Swift app module stays `Inkribe`, explicitly pinned alongside the preserved XcodeGen product name. All Mac app-module test imports use `Inkribe`.
+- iOS uses a distinct bundle ID and source tree. AppFoundation version is pinned to `0.1.8`; iOS has an isolated empty StoreKit test file (zero products), empty entitlement dictionary (no permissions), and an empty asset catalog (no app icon); no paid IDs or UI assets were invented.
+- The preview/export seam shares a deterministic scene evaluator and one-frame Core Image compositor. This is not a media reader/player, live preview, AVAssetWriter export, P4 caption styling, or production AVFoundation composition.
+- Native XCFramework iOS slices, dynamic frameworks, model footprints/performance and device behavior remain **unverified**, regardless of package platform declarations.
+- P1 owns document persistence/migration and import; P2 owns bounded inference and word timing; P3 owns editor session commands; P4/P5 own production render/preview/export; P6 owns nonidentity clip timing and effects.
 
-At the first pass create `handoffs/Pn.md` using [the template](handoffs/TEMPLATE.md); keep it current within the same phase PR. Record branch/base/head, feature IDs, document/schema contracts, remaining work, explicit next step and user instructions. Do not rely on an earlier chat or model memory.
+## Resuming work
 
-## Completion handoff
+Read root AGENTS.md, README/WORKFLOW, this HANDOFF, P0 brief and [handoffs/P0.md](handoffs/P0.md), then inspect the current PR head and latest develop. Do not rely on an earlier planning snapshot. Resolve concrete source-review findings in the same PR. Do not mark any feature complete without integrated behavior.
 
-Update FEATURES.md only for integrated functioning behavior; preserve unchecked dependency-pending items. Set implementation, source review, build/test and device-test statuses separately. Link actual PR/commit results once available. Do not manufacture evidence, future PR numbers or device metrics.
-
-For review of a critical phase:
-
-> Review the entire diff of phase Pn against latest develop. Read docs/ios/WORKFLOW.md, ARCHITECTURE.md, phases/Pn.md and handoffs/Pn.md. Focus on correctness, state/persistence boundaries, timing and Mac regressions. Do not run CI, builds/tests or device validation unless explicitly requested. Keep fixes in the same phase PR and respect its current merge hold.
-
-## Phase outcomes / known limitations
-
-None yet. Unresolved design/technical choices are in [DECISIONS.md](DECISIONS.md); planning risks are in [RISKS.md](RISKS.md). Append real outcomes here as phases land.
+**Review prompt:** Review PR #23 versus latest develop under the no-build/no-test/no-CI rules. Focus on Mac identity and storage/purchase regression risk, XcodeGen target membership and scheme paths, Swift 6/26 API assumptions, rational half-open intervals, CoreText/CoreImage frame layout and source-time mapping. Keep fixes on #23 and leave it open.

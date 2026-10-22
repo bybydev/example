@@ -10,4 +10,4 @@ Before working on the new iOS roadmap, read [docs/ios/README.md](docs/ios/README
 
 - Do not set up or trigger CI or perform device validation; the user will test after implementation.
 - Existing no-build/no-test and XcodeGen rules above still apply.
-- Follow the latest user instruction for the active PR's merge status; the planning PR is explicitly on hold until the user requests merge.
+- Planning PR #22 was squash merged. P0 is in PR #23 (draft, targeting develop); leave it open for review, do not merge/auto-merge. The latest user instruction for each PR's merge status always wins.
