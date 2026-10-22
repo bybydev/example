@@ -8,15 +8,13 @@ import WhisperRuntime
 actor IOSLocalTranscriber {
     private let repository: IOSProjectRepository
     private let decoder = IOSSpeechDecoder()
-    private let modelURL: URL?
-    private var runtime: NativeWhisperRuntime?
 
-    init(repository: IOSProjectRepository, modelURL: URL?) {
+    init(repository: IOSProjectRepository) {
         self.repository = repository
-        self.modelURL = modelURL
     }
 
     func execute(id: UUID, payload: IOSSpeechJob.Payload, progress: JobProgressReporter) async throws {
+        try Task.checkCancellation()
         let project = try await repository.open(payload.projectID)
         // Do not erase a committed result if the process died before queue completion.
         if project.recognition?.id == id { return }
@@ -25,38 +23,40 @@ actor IOSLocalTranscriber {
             throw IOSProjectStoreError.staleRevision(expected: payload.expectedRevision,
                                                       actual: project.contentRevision)
         }
-        guard let modelURL else { throw IOSSpeechError.missingModel }
         guard project.assets.contains(where: { $0.metadata.audioTrackCount > 0 }) else { throw IOSSpeechError.noAudio }
         let tracker = IOSSpeechProgress(reporter: progress)
         await tracker.stage("Loading speech model…", fraction: 0)
-        if runtime == nil {
-            runtime = NativeWhisperRuntime(modelURL: modelURL,
-                configuration: .init(threadCount: Int32(max(1, min(4, ProcessInfo.processInfo.processorCount - 1))),
-                                     useGPU: false, flashAttention: false),
-                captureTokenBytes: true)
-        }
-        guard let runtime else { throw IOSSpeechError.missingModel }
+        let lease = UUID()
+        let model = try await IOSSpeechModelStore.shared.acquire(payload.resolvedModelID, lease: lease)
+        let runtime = NativeWhisperRuntime(modelURL: model.url,
+            configuration: .init(threadCount: Int32(max(1, min(4, ProcessInfo.processInfo.processorCount - 1))),
+                                 useGPU: false, flashAttention: false),
+            captureTokenBytes: true, modelDescriptor: model.descriptor)
         do {
             try Task.checkCancellation()
             try await runtime.loadModel()
             try Task.checkCancellation()
             let result = try await recognize(project, id: id, language: payload.languageCode,
-                                             runtime: runtime, tracker: tracker)
+                                             runtime: runtime, model: model.descriptor, tracker: tracker)
             await tracker.stage("Saving captions…", fraction: 0.98)
             try Task.checkCancellation()
             try await repository.saveRecognition(result, projectID: project.id,
                                                   expectedRevision: payload.expectedRevision)
             // Publication precedes queue success, with no cancellation check in between.
             await runtime.unloadModel()
+            await IOSSpeechModelStore.shared.release(lease)
             await tracker.stage("Captions saved", fraction: 1)
         } catch {
             await runtime.unloadModel()
+            await IOSSpeechModelStore.shared.release(lease)
+            if Task.isCancelled { throw CancellationError() }
             throw error
         }
     }
 
     private func recognize(_ project: IOSProjectDocument, id: UUID, language: String?,
-                           runtime: NativeWhisperRuntime, tracker: IOSSpeechProgress) async throws -> IOSRecognition {
+                           runtime: NativeWhisperRuntime, model: ModelAssetDescriptor,
+                           tracker: IOSSpeechProgress) async throws -> IOSRecognition {
         var windows: [IOSRecognitionWindow] = []
         var words: [IOSCaptionWord] = []
         let assets = Dictionary(uniqueKeysWithValues: project.assets.map { ($0.id, $0) })
@@ -105,8 +105,7 @@ actor IOSLocalTranscriber {
             $0.element.projectInterval.start == $1.element.projectInterval.start
                 ? $0.offset < $1.offset : $0.element.projectInterval.start < $1.element.projectInterval.start
         }.map(\.element)
-        let descriptor = try WhisperModelAsset.descriptor()
-        let result = IOSRecognition(id: id, modelID: descriptor.id, modelSHA256: descriptor.sha256,
+        let result = IOSRecognition(id: id, modelID: model.id, modelSHA256: model.sha256,
             requestedLanguageCode: language, completedAt: Date(), rawWindows: windows,
             words: words, cues: try IOSWordMapper.cues(for: words))
         try result.validate(clips: clips, assets: project.assets)

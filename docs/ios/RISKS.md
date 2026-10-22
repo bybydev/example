@@ -62,3 +62,16 @@ No cloud/team/publishing service risks need engineering because these features a
 - Recognition still processes canonical original clips so later reset/expansion can reveal them. Trimming does not reduce the P2 model's source work. Editing revisions during recognition may require the existing explicit retry. P2 model/native compatibility and memory limitations remain.
 - Actual live audio-mix updates, generation cancellation/rebuild timing, simultaneous save/undo and empty-gap black-clock playback are unmeasured. Native load/decode/writer calls can delay cancellation. Metadata dictionaries scale with transcript length; native model/GPU/decoder/encoder memory is not proven by app-owned buffer bounds.
 - The tiny clock seed is process-cached temporary media, used only when no source samples remain. Native encoding failure must surface a useful error; it must never substitute for missing/corrupt expected sources. Source thumbnails remain source thumbnails; output duration is updated independently.
+
+## Optional speech-model amendment
+
+- Tiny/Base/Small byte counts and digests were verified against upstream metadata at the pinned revision; weights/native inference were not fetched/run. Smaller variants do not establish measured device accuracy/latency.
+- Downloads require network and foreground app time; interruption/relaunch restarts rather than resuming byte ranges. Completed files survive ordinary launches/updates, but uninstall removes app storage. Hosting/CDN availability is external; no cloud inference is introduced.
+- Download SHA-256 reads use 1 MiB chunks with cancellation checks; native runtime integrity/load remains synchronous and may delay cancellation. iOS rechecks a fresh runtime per job so the selected descriptor cannot inherit a previous variant's integrity state.
+- Base project.yml intentionally contains no iOS weights for Debug or Release. Production must explicitly choose project-ios-bundled.yml (required Small plus bundled-only compilation condition), then independently validate resource presence/native load. No generated project/archive was produced here.
+
+## P7 source audit evidence and limits
+
+P7 is included in PR #30 by explicit user instruction. See handoffs/P7.md for fixes and every V1 item's entry points. In particular, both app controllers now distinguish failed initial JobQueue restoration from later save failure, so retry cannot persist empty pre-start records. Model removal and project Trash cleanup are blocked while transcription storage cannot establish queued dependencies. No shared JobQueue change/reset flow was added. Genuinely corrupt queue documents remain preserved with a blocking error and require manual support/backup recovery.
+
+Library/storage generation guards, ingress/staging ownership, background speech pause/restart, unchanged exact timing, malformed metadata, byte-limited export names, long duplicate titles, date rollback and Trash prior-valid reads are source corrections only. No compile/API/concurrency/network/media/device proof exists. Pro and production packaging policy are still explicit user decisions. User validation, native compatibility, fidelity/accessibility and measured performance remain prerequisites to any release claim.

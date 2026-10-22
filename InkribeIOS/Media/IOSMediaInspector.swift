@@ -25,6 +25,13 @@ enum IOSMediaInspector {
             let natural = try await video.load(.naturalSize)
             let transform = try await video.load(.preferredTransform)
             let bounds = CGRect(origin: .zero, size: natural).applying(transform).standardized
+            // Reject malformed metadata before floating-point-to-Int conversion.
+            let dimensions = [natural.width, natural.height, bounds.width, bounds.height]
+            guard dimensions.allSatisfy({ $0.isFinite && $0 > 0 && $0 < CGFloat(Int32.max) }),
+                  bounds.minX.isFinite, bounds.minY.isFinite,
+                  [transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty].allSatisfy(\.isFinite) else {
+                throw IOSProjectStoreError.unsupportedMedia
+            }
             naturalWidth = Int(abs(natural.width).rounded())
             naturalHeight = Int(abs(natural.height).rounded())
             width = Int(abs(bounds.width).rounded())

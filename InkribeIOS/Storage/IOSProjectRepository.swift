@@ -10,6 +10,7 @@ actor IOSProjectRepository {
     private let files = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var activeStaging: Set<UUID> = []
 
     init(root: URL? = nil) {
         overrideRoot = root
@@ -53,6 +54,7 @@ actor IOSProjectRepository {
         let url = try directory("Pending").appendingPathComponent(UUID().uuidString, isDirectory: true)
         try files.createDirectory(at: url.appendingPathComponent("Originals", isDirectory: true),
                                   withIntermediateDirectories: true)
+        if let id = UUID(uuidString: url.lastPathComponent) { activeStaging.insert(id) }
         return url
     }
 
@@ -62,6 +64,7 @@ actor IOSProjectRepository {
               UUID(uuidString: url.lastPathComponent) != nil else {
             throw IOSProjectStoreError.invalidPath(url.path)
         }
+        defer { if let id = UUID(uuidString: url.lastPathComponent) { activeStaging.remove(id) } }
         if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
     }
 
@@ -84,6 +87,7 @@ actor IOSProjectRepository {
         try encoded.write(to: documentURL(in: staging), options: .atomic)
         try Task.checkCancellation()
         try files.moveItem(at: staging, to: destination)
+        if let id = UUID(uuidString: staging.lastPathComponent) { activeStaging.remove(id) }
         return document
     }
 
@@ -99,7 +103,7 @@ actor IOSProjectRepository {
         var next = proposed
         next.schemaVersion = IOSProjectSchema.current
         next.contentRevision = expectedRevision + 1
-        next.updatedAt = Date()
+        next.updatedAt = max(Date(), current.updatedAt)
         guard next.id == current.id, next.createdAt == current.createdAt else {
             throw IOSProjectStoreError.invalidDocument("Project identity cannot be rewritten")
         }
@@ -168,19 +172,22 @@ actor IOSProjectRepository {
     func open(_ id: UUID) throws -> IOSProjectDocument {
         let directory = try projectDirectory(id)
         guard files.fileExists(atPath: directory.path) else { throw IOSProjectStoreError.missingProject(id) }
-        let document: IOSProjectDocument
-        do {
-            document = try read(documentURL(in: directory))
-        } catch IOSProjectStoreError.unsupportedSchema(let version) {
-            throw IOSProjectStoreError.unsupportedSchema(version)
-        } catch {
-            // A corrupt last write never causes an implicit destructive reset.
-            document = try read(recoveryURL(in: directory))
-        }
+        let document = try readRecoverable(in: directory)
         guard document.id == id else {
             throw IOSProjectStoreError.invalidDocument("Directory and document identities differ")
         }
         return document
+    }
+
+    private func readRecoverable(in directory: URL) throws -> IOSProjectDocument {
+        do {
+            return try read(documentURL(in: directory))
+        } catch IOSProjectStoreError.unsupportedSchema(let version) {
+            throw IOSProjectStoreError.unsupportedSchema(version)
+        } catch {
+            // A corrupt last write never causes an implicit destructive reset.
+            return try read(recoveryURL(in: directory))
+        }
     }
 
     private func read(_ url: URL) throws -> IOSProjectDocument {
@@ -316,7 +323,7 @@ actor IOSProjectRepository {
             }
             let now = Date()
             let copy = IOSProjectDocument(schemaVersion: IOSProjectSchema.current,
-                id: UUID(), contentRevision: 1, title: original.title + " Copy",
+                id: UUID(), contentRevision: 1, title: String(original.title.prefix(251)) + " Copy",
                 createdAt: now, updatedAt: now, preset: original.preset,
                 canvas: original.canvas, assets: newAssets, clips: newClips,
                 recognition: original.recognition?.duplicated(assetClips: clipMapping),
@@ -362,7 +369,7 @@ actor IOSProjectRepository {
         let entries = try files.contentsOfDirectory(at: pending, includingPropertiesForKeys: nil)
         var recovered: [UUID] = []
         for staging in entries where staging.hasDirectoryPath {
-            guard UUID(uuidString: staging.lastPathComponent) != nil,
+            guard let stagingID = UUID(uuidString: staging.lastPathComponent), !activeStaging.contains(stagingID),
                   files.fileExists(atPath: documentURL(in: staging).path),
                   let document = try? read(documentURL(in: staging)),
                   (try? verifyOriginals(of: document, in: staging)) != nil else { continue }
@@ -380,9 +387,13 @@ actor IOSProjectRepository {
         try files.contentsOfDirectory(at: directory("Pending"),
                                       includingPropertiesForKeys: nil)
             .compactMap { UUID(uuidString: $0.lastPathComponent) }
+            .filter { !activeStaging.contains($0) }
     }
 
     func discardPendingImport(id: UUID) throws {
+        guard !activeStaging.contains(id) else {
+            throw IOSProjectStoreError.invalidDocument("This import is still running. Cancel it before cleanup.")
+        }
         try discardStaging(try directory("Pending").appendingPathComponent(id.uuidString))
     }
 
@@ -397,7 +408,7 @@ actor IOSProjectRepository {
         return try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)
             .compactMap { entry -> TrashedProject? in
                 guard let id = UUID(uuidString: entry.lastPathComponent),
-                      let document = try? read(documentURL(in: entry)),
+                      let document = try? readRecoverable(in: entry),
                       document.id == id else { return nil }
                 return TrashedProject(id: id, title: document.title)
             }

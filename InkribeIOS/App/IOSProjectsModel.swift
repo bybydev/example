@@ -17,7 +17,14 @@ struct IOSPickedMovie: Transferable {
             let ext = received.file.pathExtension
             let copy = directory.appendingPathComponent(UUID().uuidString
                 + (ext.isEmpty ? ".mov" : "." + ext))
-            try FileManager.default.copyItem(at: received.file, to: copy)
+            do {
+                try Task.checkCancellation()
+                try FileManager.default.copyItem(at: received.file, to: copy)
+                try Task.checkCancellation()
+            } catch {
+                try? FileManager.default.removeItem(at: copy)
+                throw error
+            }
             return IOSPickedMovie(localURL: copy)
         }
     }
@@ -42,6 +49,7 @@ final class IOSProjectsModel {
     var cacheGeneration = 0
     var isLoading = false
     var isImporting = false
+    private(set) var isPreparingPhotos = false
     var alertMessage: String?
     var importMessage: String?
     var selectedSources: [IOSImportInput] = []
@@ -51,42 +59,73 @@ final class IOSProjectsModel {
     private var ownedPhotoURLs: Set<URL> = []
     private var selectionSession = UUID()
     private var importTask: Task<Void, Never>?
+    private var libraryGeneration = 0
+    private var storageGeneration = 0
+
+    init() {
+        // These ingress copies have no durable authority: committed projects
+        // own their originals in the repository. Safe once, before new picks.
+        for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                do { try FileManager.default.removeItem(at: directory) }
+                catch { alertMessage = "Temporary import files could not be cleaned up: " + error.localizedDescription }
+            }
+        }
+    }
 
     func refresh() async {
-        isLoading = true
-        defer { isLoading = false }
         do {
-            do {
-                _ = try await repository.recoverCommittedStaging()
-            } catch {
-                alertMessage = "An unfinished import could not be recovered: " + error.localizedDescription
-            }
-            let snapshot = try await repository.list(titleQuery: search, sort: sort, filter: filter)
+            _ = try await repository.recoverCommittedStaging()
+        } catch {
+            alertMessage = "An unfinished import could not be recovered: " + error.localizedDescription
+        }
+        await refreshLibrary()
+        await refreshStorage()
+    }
+
+    /// Search, filters and thumbnail work all publish through the same guard.
+    private func refreshLibrary() async {
+        libraryGeneration += 1
+        let generation = libraryGeneration
+        let query = search, requestedSort = sort, requestedFilter = filter
+        isLoading = true
+        defer { if generation == libraryGeneration { isLoading = false } }
+        do {
+            let snapshot = try await repository.list(titleQuery: query, sort: requestedSort, filter: requestedFilter)
+            guard generation == libraryGeneration, query == search, requestedSort == sort, requestedFilter == filter else { return }
             projects = snapshot.projects
             libraryIssues = snapshot.issues
-            await refreshStorage()
         } catch {
-            alertMessage = error.localizedDescription
+            if generation == libraryGeneration { alertMessage = error.localizedDescription }
         }
     }
 
     func refreshStorage() async {
+        storageGeneration += 1
+        let generation = storageGeneration
         do {
-            storage = try await repository.storageUsage()
-            trashed = try await repository.trashedProjects()
-            pendingStaging = try await repository.pendingStagingIDs()
+            let usage = try await repository.storageUsage()
+            let trash = try await repository.trashedProjects()
+            let pending = try await repository.pendingStagingIDs()
+            guard generation == storageGeneration else { return }
+            storage = usage; trashed = trash; pendingStaging = pending
         } catch {
-            alertMessage = error.localizedDescription
+            if generation == storageGeneration { alertMessage = error.localizedDescription }
         }
     }
 
     func addFiles(_ urls: [URL]) {
+        guard !isImporting, !isPreparingPhotos else { return }
         selectedSources += urls.map {
             IOSImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent)
         }
     }
 
     func addPhotos(_ items: [PhotosPickerItem]) async {
+        guard !isImporting, !isPreparingPhotos else { return }
+        isPreparingPhotos = true
+        defer { isPreparingPhotos = false }
         let session = selectionSession
         for item in items {
             do {
@@ -101,13 +140,17 @@ final class IOSProjectsModel {
                 ownedPhotoURLs.insert(file.localURL)
                 selectedSources.append(IOSImportInput(localURL: file.localURL, origin: .photos,
                                                        displayName: file.localURL.lastPathComponent))
+            } catch is CancellationError {
+                return
             } catch {
+                guard selectionSession == session else { return }
                 alertMessage = "A Photos video could not be prepared: " + error.localizedDescription
             }
         }
     }
 
     func removeSource(_ id: UUID) {
+        guard !isImporting, !isPreparingPhotos else { return }
         for source in selectedSources where source.id == id {
             if ownedPhotoURLs.remove(source.localURL) != nil {
                 try? FileManager.default.removeItem(at: source.localURL)
@@ -125,7 +168,7 @@ final class IOSProjectsModel {
 
     func beginImport(disposition: IOSImportDisposition, preset: IOSCanvasPreset,
                      canvas: IOSCanvas? = nil) {
-        guard !isImporting, !selectedSources.isEmpty else { return }
+        guard !isImporting, !isPreparingPhotos, !selectedSources.isEmpty else { return }
         let sources = selectedSources
         isImporting = true
         importMessage = nil
@@ -158,7 +201,8 @@ final class IOSProjectsModel {
 
     func beginURLImport(text: String, rightsConfirmed: Bool,
                         preset: IOSCanvasPreset) {
-        guard !isImporting, let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard !isImporting, !isPreparingPhotos else { return }
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             alertMessage = "Enter a valid HTTPS media URL."
             return
         }
@@ -194,15 +238,13 @@ final class IOSProjectsModel {
                 // Don't recast a committed media project as an import failure.
             }
         }
-        let snapshot = try? await repository.list(titleQuery: search, sort: sort, filter: filter)
-        if let snapshot { projects = snapshot.projects; libraryIssues = snapshot.issues }
+        await refreshLibrary()
     }
 
     func regenerateThumbnail(_ id: UUID) async {
         do {
             _ = try await thumbnails.regenerate(projectID: id)
-            let snapshot = try await repository.list(titleQuery: search, sort: sort, filter: filter)
-            projects = snapshot.projects
+            await refreshLibrary()
         } catch {
             // No thumbnail is a supported recoverable cache state.
         }
@@ -224,6 +266,10 @@ final class IOSProjectsModel {
     }
 
     func trash(_ id: UUID) async {
+        guard transcription.persistenceError == nil else {
+            alertMessage = "Resolve the transcription storage problem before moving projects to Trash."
+            return
+        }
         guard !transcription.isActive(id) else {
             alertMessage = "Cancel this project's transcription before moving it to Trash."
             return
@@ -247,6 +293,10 @@ final class IOSProjectsModel {
     }
 
     func emptyTrash() async {
+        guard transcription.persistenceError == nil else {
+            alertMessage = "Resolve the transcription storage problem before emptying Trash."
+            return
+        }
         do { try await repository.emptyTrash(); await refresh() }
         catch { alertMessage = error.localizedDescription }
     }

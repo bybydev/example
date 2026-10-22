@@ -7,6 +7,9 @@ struct IOSSpeechJob: Job {
         let projectID: UUID
         let expectedRevision: UInt64
         let languageCode: String?
+        /// Nil in pre-picker durable jobs: keep their original Small variant.
+        var modelID: String? = nil
+        var resolvedModelID: String { modelID ?? IOSSpeechModelCatalog.smallID }
     }
     static let maxConcurrentExecutions = 1
     let id: UUID
@@ -37,36 +40,61 @@ final class IOSTranscriptionController {
     private(set) var resultGeneration = 0
     private let registry = JobRegistry()
     private let repository = IOSProjectRepository.shared
-    private let modelURL = Bundle.main.url(forResource: "ggml-small", withExtension: "bin")
-    var modelAvailable: Bool { modelURL != nil }
+    private var registered = false
+    private var queueStarted = false
+    private var foreground = true
+    let models = IOSSpeechModels()
+    var modelAvailable: Bool { models.available }
+    var protectedModelIDs: Set<String> {
+        Set((queue?.sortedRecords ?? []).filter { !$0.status.isTerminal }.compactMap {
+            (try? $0.decode(IOSSpeechJob.self))?.payload.resolvedModelID
+        })
+    }
     var persistenceError: String? { startupError ?? queue?.persistenceIssue?.errorDescription }
 
     func start() {
-        guard queue == nil else { return }
+        models.start()
+        guard !queueStarted else { return }
         do {
-            let root = try FileManager.default.url(for: .applicationSupportDirectory,
-                in: .userDomainMask, appropriateFor: nil, create: true)
-                .appendingPathComponent("InkribeIOSProcessing", isDirectory: true)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try registry.register(IOSSpeechJob.self)
-            IOSSpeechEnvironment.shared.install(IOSLocalTranscriber(repository: repository, modelURL: modelURL))
-            let value = JobQueue(fileURL: root.appendingPathComponent("speech-jobs.json"),
-                policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
-                maxRecords: 100, autoCleanupEnabled: true)
-            value.eventHandler = { [weak self] event in
-                if case .jobCompleted = event { self?.resultGeneration += 1 }
+            if queue == nil {
+                let root = try FileManager.default.url(for: .applicationSupportDirectory,
+                    in: .userDomainMask, appropriateFor: nil, create: true)
+                    .appendingPathComponent("InkribeIOSProcessing", isDirectory: true)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                if !registered { try registry.register(IOSSpeechJob.self); registered = true }
+                IOSSpeechEnvironment.shared.install(IOSLocalTranscriber(repository: repository))
+                let value = JobQueue(fileURL: root.appendingPathComponent("speech-jobs.json"),
+                    policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
+                    maxRecords: 100, autoCleanupEnabled: true)
+                value.eventHandler = { [weak self] event in
+                    if case .jobCompleted = event { self?.resultGeneration += 1 }
+                }
+                queue = value
             }
-            queue = value
-            try value.start()
+            try queue?.start()
+            queueStarted = true
+            if !foreground { try queue?.pause() }
             startupError = nil
         } catch { startupError = error.localizedDescription }
     }
 
     func retryStorage() {
-        if let queue {
-            do { try queue.perform(.retryPersistence); startupError = nil }
+        if let queue, queueStarted {
+            do {
+                try queue.perform(.retryPersistence)
+                if foreground { try queue.resume() } else { try queue.pause() }
+                startupError = nil
+            }
             catch { startupError = error.localizedDescription }
         } else { start() }
+    }
+
+    func setForeground(_ value: Bool) {
+        foreground = value
+        guard queueStarted, let queue else { return }
+        do {
+            if value { try queue.resume() } else { try queue.pause() }
+        } catch { startupError = error.localizedDescription }
     }
 
     func record(for projectID: UUID) -> JobRecord? {
@@ -84,22 +112,26 @@ final class IOSTranscriptionController {
 
     func enqueue(projectID: UUID, language: String) async throws {
         start()
-        guard let queue else { throw IOSProjectStoreError.unavailableRoot }
-        guard modelAvailable else { throw IOSSpeechError.missingModel }
+        guard queueStarted, persistenceError == nil, let queue else { throw IOSProjectStoreError.unavailableRoot }
+        let chosenModelID = models.selectedID
+        await models.refresh()
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         guard !isActive(projectID) else { throw IOSSpeechError.busy }
         let project = try await repository.open(projectID)
         // Recheck after suspension so rapid double taps cannot enqueue duplicates.
         guard !isActive(projectID) else { throw IOSSpeechError.busy }
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         guard project.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
         let code = IOSSpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
         try queue.enqueue(IOSSpeechJob(id: UUID(), payload: .init(projectID: projectID,
-            expectedRevision: project.contentRevision, languageCode: code)))
+            expectedRevision: project.contentRevision, languageCode: code, modelID: chosenModelID)))
     }
 
     func cancel(_ id: UUID) throws { try queue?.cancel(id: id) }
 
     func retry(_ record: JobRecord, language: String) async throws {
-        guard let queue else { throw IOSProjectStoreError.unavailableRoot }
+        guard queueStarted, persistenceError == nil, let queue else { throw IOSProjectStoreError.unavailableRoot }
+        let chosenModelID = models.selectedID
         let previous = try record.decode(IOSSpeechJob.self)
         guard !isActive(previous.payload.projectID) else { throw IOSSpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
@@ -110,11 +142,13 @@ final class IOSTranscriptionController {
             return
         }
         guard project.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         // Explicit retry takes a new document revision only while there are no
         // saved captions to overwrite. Reuse the durable operation identity.
         try queue.replace(id: record.id, with: IOSSpeechJob(id: record.id, payload: .init(
             projectID: project.id, expectedRevision: project.contentRevision,
-            languageCode: IOSSpeechLanguage.codes.contains(language) && language != "auto" ? language : nil)))
+            languageCode: IOSSpeechLanguage.codes.contains(language) && language != "auto" ? language : nil,
+            modelID: chosenModelID)))
     }
 }
 

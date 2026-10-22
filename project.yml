@@ -175,10 +175,8 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: InkribeIOS
-      # Speech model only; never copy the entire Mac Models directory to iOS.
-      - path: Models/whisper/ggml-small.bin
-        buildPhase: resources
-        optional: true
+      # Optional iOS weights are added by project-ios-bundled.yml. Mac Models
+      # membership is independent and stays unchanged.
     settings:
       groups:
         - InkribeIOSApp

@@ -14,7 +14,7 @@ Current user instructions, root AGENTS and PLAN/FEATURES control work. Only curr
 6. Incorporate relevant latest develop and resolve conflicts. Leave phase PRs open for review until the user explicitly requests merging.
 7. Start no next phase without request.
 
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645. P2 PR #25 was squash merged as 97d647e on user instruction. P3 PR #26 was squash merged as 11902e6 on user instruction. P4 PR #27 was squash merged as ab67747 on user instruction. P5 PR #28 was squash merged as 3c09e32 on user instruction. The user requested P6 next from that latest develop. **Leave P6 PR #29 open for review; no merge/auto-merge until asked.**
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645. P2 PR #25 was squash merged as 97d647e on user instruction. P3 PR #26 was squash merged as 11902e6 on user instruction. P4 PR #27 was squash merged as ab67747 on user instruction. P5 PR #28 was squash merged as 3c09e32 on user instruction. P6 #29 was subsequently squash merged as e2bb512 on user instruction. The user then explicitly requested optional speech-model bundles/download/cache/selection. Keep this follow-up in one new PR from that develop, open until asked to merge. The user subsequently requested P7 in the same PR #30, overriding the usual one-new-PR-per-phase rule.
 
 ## Execution limits
 
@@ -35,3 +35,11 @@ The P5 request covered the stated Export sheet, format/resolution controls, prog
 ## P6 authorization and scope
 
 The user requested the next phase after merging P5. The stated Media panel covers V1.TRIM/CROP/VOLUME: non-destructive whole-project trim, aspect presets, fit/fill/zoom/pan and original-audio volume. Keep all passes in feat/ios-p6-media-editing. Preserve original clips/recognition and use one derived retained-range map in preview/MP4/SRT, with revisioned undo/autosave. Pro remains deferred by prior explicit choice. Do not start P7 or expand into advanced media tools.
+
+## Current optional model authorization
+
+The user explicitly requests retaining bundled support while making weights optional for development, adding app downloads/cache and model variants, with the option to hard-bundle for production later. The stated sheet and scope in DESIGN/MODELS cover this work. No agent model downloads, CI, builds/typechecks/tests, generation or device validation are authorized. Default development packaging and the opt-in bundled spec are source changes only. Preserve Mac; Pro is still deferred.
+
+## P7 — explicit same-PR authorization
+
+The user requested finishing the last phase in this PR. P7 source audit/fixes and handoff therefore stay on feat/ios-optional-speech-models in PR #30 targeting develop; no new branch/PR or merge is authorized. This supersedes earlier P7-not-started instructions. V1.RECOVERY/BOUNDS/ACCESS/HANDOFF are source-integrated with no compilation/runtime/device evidence. Pro remains deferred. No build/typecheck/test, CI, generation, weights, deployment, hardware or UI validation work. User runs the scenarios in handoffs/P7.md.

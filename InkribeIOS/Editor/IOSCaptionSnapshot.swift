@@ -112,10 +112,12 @@ enum IOSEditorTime {
         return String(format: "%02d:%02d.%03d", milliseconds / 60_000, (milliseconds / 1_000) % 60, milliseconds % 1_000)
     }
     static func field(_ time: MediaTime) -> String { String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), seconds(time)) }
-    static func interval(start: String, end: String) throws -> MediaInterval {
-        let a = start.replacingOccurrences(of: ",", with: ".")
-        let b = end.replacingOccurrences(of: ",", with: ".")
-        guard let start = Double(a), let end = Double(b) else { throw IOSCaptionEditError.invalidTiming }
-        return try MediaInterval(start: stamp(start), end: stamp(end))
+    static func interval(start: String, end: String, preserving original: MediaInterval? = nil) throws -> MediaInterval {
+        func parse(_ field: String, original: MediaTime?) throws -> MediaTime {
+            if let original, field == IOSEditorTime.field(original) { return original }
+            guard let seconds = Double(field.replacingOccurrences(of: ",", with: ".")) else { throw IOSCaptionEditError.invalidTiming }
+            return try stamp(seconds)
+        }
+        return try MediaInterval(start: parse(start, original: original?.start), end: parse(end, original: original?.end))
     }
 }

@@ -141,7 +141,7 @@ enum IOSSpeechError: LocalizedError {
     case missingModel, noAudio, wordTimingUnavailable, invalidUTF8, invalidAudio, busy, alreadyTranscribed
     var errorDescription: String? {
         switch self {
-        case .missingModel: "The speech model is unavailable in this installation. Reinstall or update Inkribe."
+        case .missingModel: "The selected speech model is unavailable. Open Speech Models to download it, or select an available model."
         case .noAudio: "This project has no audio track to transcribe."
         case .wordTimingUnavailable: "The speech model did not return usable word timing. No caption result was saved."
         case .invalidUTF8: "The speech model returned incomplete text. Retry transcription."

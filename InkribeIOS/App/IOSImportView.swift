@@ -33,6 +33,11 @@ struct IOSImportView: View {
                 } footer: {
                     Text("Files supports local files, iCloud Drive and compatible document providers. Originals are copied into your device's private library.")
                 }
+                .disabled(model.isImporting || model.isPreparingPhotos)
+
+                if model.isPreparingPhotos {
+                    Section { ProgressView("Preparing videos from Photos…") }
+                }
 
                 if !model.selectedSources.isEmpty {
                     Section("Review selected media (\(model.selectedSources.count))") {
@@ -44,7 +49,7 @@ struct IOSImportView: View {
                                     .font(.subheadline)
                                     .lineLimit(2)
                                 Spacer()
-                                if !model.isImporting {
+                                if !model.isImporting && !model.isPreparingPhotos {
                                     Button(role: .destructive) {
                                         model.removeSource(file.id)
                                     } label: {
@@ -83,16 +88,19 @@ struct IOSImportView: View {
                         HStack {
                             TextField("Width", text: $customWidth)
                                 .keyboardType(.numberPad)
+                                .accessibilityLabel("Canvas width in pixels")
                             Text("×")
                             TextField("Height", text: $customHeight)
                                 .keyboardType(.numberPad)
+                                .accessibilityLabel("Canvas height in pixels")
                         }
                         .accessibilityElement(children: .contain)
-                        Text("Custom dimensions are stored in the project. Actual cropping and export are later editing/render stages.")
+                        Text("Custom dimensions set the project aspect ratio. Adjust framing in Media; export scales to 720p or 1080p.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .disabled(model.isImporting || model.isPreparingPhotos)
 
                 if model.selectedSources.isEmpty {
                     Section {
@@ -105,7 +113,7 @@ struct IOSImportView: View {
                             model.beginURLImport(text: mediaURL, rightsConfirmed: confirmRights,
                                                  preset: preset)
                         }
-                        .disabled(model.isImporting || !confirmRights || mediaURL.isEmpty
+                        .disabled(model.isImporting || model.isPreparingPhotos || !confirmRights || mediaURL.isEmpty
                                   || preset == .custom)
                     } header: {
                         Text("Direct HTTPS media URL")
@@ -126,7 +134,7 @@ struct IOSImportView: View {
                             submit()
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(model.selectedSources.isEmpty)
+                        .disabled(model.selectedSources.isEmpty || model.isPreparingPhotos)
                     }
                 }
 

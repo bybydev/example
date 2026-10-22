@@ -12,6 +12,7 @@ struct IOSProjectsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingImport = false
     @State private var showingStorage = false
+    @State private var showingModels = false
     @State private var showingExport = false
     @State private var attemptedThumbnails: Set<UUID> = []
 
@@ -88,7 +89,10 @@ struct IOSProjectsView: View {
                         prompt: "Search project titles")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Storage", systemImage: "internaldrive") { showingStorage = true }
+                    Menu {
+                        Button("Speech Models", systemImage: "cpu") { showingModels = true }
+                        Button("Storage", systemImage: "internaldrive") { showingStorage = true }
+                    } label: { Label("Settings", systemImage: "gearshape") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if model.exports.record != nil || model.exports.persistenceError != nil {
@@ -111,6 +115,7 @@ struct IOSProjectsView: View {
                 IOSStorageView()
                     .environment(model)
             }
+            .sheet(isPresented: $showingModels) { IOSSpeechModelsView() }
             .alert("Inkribe", isPresented: Binding(
                 get: { model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } }
@@ -123,6 +128,7 @@ struct IOSProjectsView: View {
             .onChange(of: model.search) { _, _ in Task { await model.refresh() } }
             .onChange(of: model.filter) { _, _ in Task { await model.refresh() } }
             .task {
+                model.transcription.setForeground(scenePhase == .active)
                 model.transcription.start()
                 model.exports.setForeground(scenePhase == .active)
                 await model.exports.start()
@@ -130,6 +136,7 @@ struct IOSProjectsView: View {
             }
             .sheet(isPresented: $showingExport) { IOSExportView(session: nil) }
             .onChange(of: scenePhase) { _, value in
+                model.transcription.setForeground(value == .active)
                 model.exports.setForeground(value == .active)
                 if value == .active { Task { await model.refresh() } }
             }

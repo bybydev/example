@@ -10,7 +10,7 @@ This replaces the old P0–P13 roadmap. Difficulty/value are planning judgments 
 | [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
 | [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
 | [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
-| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Source-integrated in open #29; compilation/runtime unverified |
-| [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Not started; final audit after P0–P6 |
+| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Merged #29 (e2bb512); compilation/runtime unverified |
+| [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Source audit/fixes/handoff in open #30; compilation/runtime/user validation unrun |
 
-Each phase is one PR from latest develop when requested. P1 #24 is merged; P2 #25 is merged; P3 #26 is merged; P4 #27 is merged; P5 #28 is merged; P6 stays open for review. P7 now means hardening; P8–P13 retired. No estimated runtime performance or time commitment is implied.
+Each phase is one PR from latest develop when requested. P1–P6 #24–#29 are merged. The optional-model follow-up and explicitly requested P7 hardening share PR #30; see MODELS.md and handoffs/P7.md. P7 is source-integrated with validation still unrun; P8–P13 retired. No estimated runtime performance or time commitment is implied.

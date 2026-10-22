@@ -16,8 +16,8 @@ Focused native workflow: Photos/Files import → on-device recognition → capti
 | [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
 | [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
 | [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
-| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Source-integrated in open #29; compilation/runtime unverified |
-| [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Not started; final audit after P0–P6 |
+| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Merged #29 (e2bb512); compilation/runtime unverified |
+| [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Source audit/fixes/handoff in open #30; compilation/runtime/user validation unrun |
 
 P0–P6 keep their broad historical roles with reduced scope. P7 now means v1 hardening, replacing its unstarted AI/localization role. P8–P13 are retired. Reliability applies throughout, not only in P7.
 
@@ -29,7 +29,7 @@ Also outside v1: advanced video effects/transitions/speed/reverse/tracking/maski
 
 ## Existing extras and status
 
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 #28 was squash merged as 3c09e32. P6 stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 #28 was squash merged as 3c09e32. P6 #29 was squash merged as e2bb512. The subsequent explicitly requested optional-model change stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
 
 URL import, combined/batch imports and advanced canvas controls already present in P1 source are not v1 requirements. The scope-reset documentation removed no source/UI. A subsequent explicit user request authorized the two correctness fixes, including hardening the existing URL path; it did not add URL import to v1 requirements. Record them separately; obtain an actual fix/removal decision before changing them. Transcript search is no longer a P2 obligation. Incoming share extension was removed and must not return.
 
@@ -40,3 +40,7 @@ One PR per requested phase from latest develop, all passes in it. State included
 P2 must resolve compatible local model/packaging and genuine word timing. P3 implements compact preview/transport, a scrubber/cue overview and correction list; P4 the curated fonts/templates. The user selected Defer Pro during P5. Export proceeds without new gates. V1.PRO remains deferred until actual free/Pro limits, plans/IDs and prices are supplied. Do not invent commercial policy or infrastructure.
 
 No builds/tests unless asked, CI setup/repair/triggers, Xcode project generation, model downloads, deployment or device validation. User tests afterward. Source integration is not compilation/runtime verification; missing required behavior remains incomplete.
+
+## Explicit model-flow amendment — after P6 merge
+
+The user requested optional bundling plus in-app download/cache and variant selection to speed development. This amends V1.LOCAL_STT/JOB without adding a phase or cloud transcription. Support Tiny, Base and Small multilingual GGML models. Default project.yml packages no iOS weights; the opt-in project-ios-bundled.yml requires Small and disables downloads/cache fallback for a future production choice. No production policy is switched automatically by Release configuration. See MODELS.md. By subsequent user request P7 source hardening is included in PR #30; Pro remains deferred. The agent still must not download weights itself.

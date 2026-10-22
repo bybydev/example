@@ -44,8 +44,18 @@ struct IOSFrozenExport: Sendable {
     var partialURL: URL { directory.appendingPathComponent("partial." + manifest.profile.format.rawValue) }
     var outputURL: URL {
         let banned = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:?%*|\"<>"))
-        let title = String(manifest.document.title.unicodeScalars.map { banned.contains($0) ? "_" : String($0) }.joined().prefix(80))
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        let cleaned = String(manifest.document.title.unicodeScalars.map { banned.contains($0) ? "_" : String($0) }.joined().prefix(80))
+        // File-system limits count UTF-8 bytes, not graphemes. Keep whole
+        // characters (including emoji/combining sequences) within a safe basename.
+        var basename = ""
+        var bytes = 0
+        for character in cleaned {
+            let unit = String(character)
+            guard bytes + unit.utf8.count <= 251 else { break }
+            basename += unit
+            bytes += unit.utf8.count
+        }
+        let title = basename.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
         return directory.appendingPathComponent("Result", isDirectory: true)
             .appendingPathComponent((title.isEmpty ? "Inkribe" : title) + "." + manifest.profile.format.rawValue)
     }

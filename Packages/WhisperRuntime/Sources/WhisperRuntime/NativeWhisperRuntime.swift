@@ -7,6 +7,7 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
     private let modelURL: URL
     private let captureTokenBytes: Bool
     private let configuration: WhisperRuntimeConfiguration
+    private let modelDescriptor: ModelAssetDescriptor?
     private let logger = Logger(label: "Inkribe.WhisperRuntime")
 
     private var contextHandle: WhisperContextHandle?
@@ -15,11 +16,13 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
     public init(
         modelURL: URL,
         configuration: WhisperRuntimeConfiguration = .recommended,
-        captureTokenBytes: Bool = false
+        captureTokenBytes: Bool = false,
+        modelDescriptor: ModelAssetDescriptor? = nil
     ) {
         self.modelURL = modelURL
         self.configuration = configuration
         self.captureTokenBytes = captureTokenBytes
+        self.modelDescriptor = modelDescriptor
     }
 
     public static func bundled(
@@ -116,7 +119,7 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
     private func loadModelIfNeeded() throws {
         guard contextHandle == nil else { return }
 
-        let descriptor = try WhisperModelAsset.descriptor()
+        let descriptor = try modelDescriptor ?? WhisperModelAsset.descriptor()
         if !integrityChecked {
             try ModelAssetIntegrityChecker.check(modelURL, against: descriptor)
             integrityChecked = true

@@ -413,7 +413,7 @@ private struct IOSTimingFields: View {
                 }
             }
             Button("Apply timing") {
-                do { let value = try IOSEditorTime.interval(start: start, end: end); error = nil; focused = nil; apply(value) }
+                do { let value = try IOSEditorTime.interval(start: start, end: end, preserving: interval); error = nil; focused = nil; apply(value) }
                 catch { self.error = "Enter valid start and end seconds, with end after start." }
             }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }

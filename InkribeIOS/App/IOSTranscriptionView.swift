@@ -6,6 +6,7 @@ import SwiftUI
 struct IOSTranscriptionView: View {
     @Environment(IOSProjectsModel.self) private var model
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
+    @State private var showingModels = false
     let document: IOSProjectDocument
 
     var body: some View {
@@ -36,6 +37,7 @@ struct IOSTranscriptionView: View {
                 }
             } else {
                 let record = speech.record(for: document.id)
+                Button("Model: \(speech.models.selectedName)", systemImage: "cpu") { showingModels = true }
                 Picker("Language", selection: $language) {
                     ForEach(IOSSpeechLanguage.codes, id: \.self) { code in
                         Text(IOSSpeechLanguage.name(code)).tag(code)
@@ -56,7 +58,7 @@ struct IOSTranscriptionView: View {
                     .disabled(!speech.modelAvailable || speech.persistenceError != nil)
                 }
                 if !speech.modelAvailable {
-                    Text("The speech model is missing from this app installation.")
+                    Text("Select an available model or download one in Speech Models.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -68,13 +70,19 @@ struct IOSTranscriptionView: View {
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .task { speech.start() }
+        .sheet(isPresented: $showingModels) { IOSSpeechModelsView() }
     }
 
     @ViewBuilder
     private func status(_ record: JobRecord, speech: IOSTranscriptionController) -> some View {
         let progress = speech.queue?.liveProgress[record.id]
         if !record.status.isTerminal {
-            Text(record.status == .pending ? "Waiting to transcribe…" :
+            if let id = (try? record.decode(IOSSpeechJob.self))?.payload.resolvedModelID,
+               let variant = try? IOSSpeechModelCatalog.descriptor(id) {
+                Text(variant.displayName).font(.caption).foregroundStyle(.secondary)
+            }
+            Text(speech.queue?.isPaused == true ? "Paused. Return to Inkribe to restart transcription." :
+                record.status == .pending ? "Waiting to transcribe…" :
                 record.status == .cancelling ? "Cancelling…" : progress?.message ?? "Preparing transcription…")
                 .font(.subheadline)
             if let fraction = progress?.fractionCompleted {

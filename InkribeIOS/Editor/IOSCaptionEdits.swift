@@ -54,6 +54,7 @@ enum IOSCaptionEdits {
               let cueIndex = state.cues.firstIndex(where: { $0.wordIDs.contains(wordID) }) else {
             throw IOSCaptionEditError.missingCaption
         }
+        guard interval != state.words[index].projectInterval else { return }
         try retime(&state.words[index], to: interval, project: project)
         let wordIndex = Dictionary(uniqueKeysWithValues: state.words.map { ($0.id, $0) })
         let linked = state.cues[cueIndex].wordIDs.compactMap { wordIndex[$0] }
@@ -69,6 +70,7 @@ enum IOSCaptionEdits {
             throw IOSCaptionEditError.missingCaption
         }
         let cue = state.cues[index]
+        guard interval != cue.interval else { return }
         let oldDuration = CMTimeGetSeconds(cue.interval.duration)
         let newDuration = CMTimeGetSeconds(interval.duration)
         guard oldDuration.isFinite, oldDuration > 0, newDuration.isFinite, newDuration > 0 else {

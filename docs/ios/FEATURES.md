@@ -9,7 +9,7 @@
 | V1.DUPLICATE_DELETE | P1 | Safe project duplicate/delete | Source-integrated; runtime unverified |
 | V1.IMPORT | P1 | Photos/Files video and audio import | Source-integrated; runtime unverified |
 | V1.STORAGE | P1 | Storage cleanup and safe originals | Source-integrated; runtime unverified |
-| V1.LOCAL_STT | P2 | On-device recognition and language selection | Source-integrated in #25; compilation/runtime unverified |
+| V1.LOCAL_STT | P2 | On-device recognition, language/model selection and optional download/cache | P2 plus explicit post-P6 amendment; source-integrated, compilation/runtime unverified |
 | V1.WORDS | P2 | Genuine word timestamps and stable identities | Source-integrated in #25; compilation/runtime unverified |
 | V1.JOB | P2 | Progress, cancel, retry and useful errors | Source-integrated in #25; compilation/runtime unverified |
 | V1.RESULT | P2 | Durable raw recognition and editable captions | Source-integrated in #25; compilation/runtime unverified |
@@ -29,10 +29,10 @@
 | V1.TRIM | P6 | Non-destructive trim with caption mapping | Source-integrated; compilation/timing/runtime unverified |
 | V1.CROP | P6 | Crop/aspect ratio in preview and export | Source-integrated; orientation/pixel/runtime unverified |
 | V1.VOLUME | P6 | Original-audio volume in preview and export | Source-integrated; mix/playback/runtime unverified |
-| V1.RECOVERY | P7 | Persistence and interruption/relaunch recovery | Continuous; final audit pending |
-| V1.BOUNDS | P7 | Bounded processing, stale-result protection and cleanup | Continuous; final audit pending |
-| V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | Continuous; final audit pending |
-| V1.HANDOFF | P7 | End-to-end source audit and user-testing handoff | Not started |
+| V1.RECOVERY | P7 | Persistence and interruption/relaunch recovery | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.BOUNDS | P7 | Bounded processing, stale-result protection and cleanup | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.HANDOFF | P7 | End-to-end source audit and user-testing handoff | Source audit and handoff in #30; user validation unrun |
 
 ## Accounting
 
@@ -42,11 +42,11 @@ Update each item only from actual integration; report source review, unrun check
 
 ## P2 source evidence — PR #25
 
-Local Whisper Small Multilingual is bundled from the existing pinned asset. CPU execution uses <=4 threads. AVFoundation reads <=28-second windows around 24-second ownership cores; PCM is never accumulated across windows. Raw UTF-8 tokens are joined before NLTokenizer word segmentation; word intervals aggregate actual native token intervals, with midpoint core ownership and conservative acoustic-overlap reconciliation. Token timing is approximate, not forced alignment; unavailable timing fails without fake output.
+Historical P2 used bundled Whisper Small Multilingual. The explicit post-P6 amendment now supports optional bundle/download/cache and Tiny/Base/Small selection; MODELS.md supersedes the old placement instructions. CPU execution uses <=4 threads. AVFoundation reads <=28-second windows around 24-second ownership cores; PCM is never accumulated across windows. Raw UTF-8 tokens are joined before NLTokenizer word segmentation; word intervals aggregate actual native token intervals, with midpoint core ownership and conservative acoustic-overlap reconciliation. Token timing is approximate, not forced alignment; unavailable timing fails without fake output.
 
 JobQueue 1.0.0 owns durable one-at-a-time execution, progress/cancel/retry and interrupted-job restoration. Schema-v2 projects atomically store raw windows, words/cues and job identity; v1 remains readable, older clients reject v2. Completion is idempotent and strict revisions protect edits. Duplicates remap recognition/clip/word/cue identities. P2 UI is language/start/status and read-only results, not P3 editing.
 
-No build/test/native inference/device evidence. Model weights were not downloaded; place the existing pinned file before user builds. See handoffs/P2.md for exact path/hash and pending checks. All four P2 items are source-integrated, not verified runtime-complete.
+No build/test/native inference/device evidence. Model weights were not downloaded by the agent. Default development builds need no weight file; opt-in bundled packaging requires the pinned Small file before user generation/build. See handoffs/P2.md for exact path/hash and pending checks. All four P2 items are source-integrated, not verified runtime-complete.
 
 ## P3 source evidence
 
@@ -79,3 +79,13 @@ One rational retained-range map intersects clips/cues/words and subtracts trim s
 The shared AV composition maps retained source/track intersections, preferred orientation, crop transforms/source crop rectangles and project-aspect placement. Preview overlays fit the same rounded raster viewport. One audio-mix factory serves preview and export; volume-only edits replace the mix without a player rebuild. Other media changes pause and use a debounced generation-guarded rebuild preserving the source playhead. Empty retained gaps use a tiny held black clock frame; MP4 stays intentionally black/silent rather than requiring nonexistent source samples.
 
 P5 frozen exports now include schema-v5 media settings, pin only referenced retained assets, and validate retained duration. Existing version-1 export manifests remain readable; prior frozen exports never adopt later edits. Pro remains deferred. No builds/typechecks/tests, CI, generation, model downloads, runtime exports or device validation. See handoffs/P6.md for boundaries and pending user scenarios.
+
+## Explicit post-P6 model-flow amendment
+
+V1.LOCAL_STT/JOB now include an iOS-only Tiny/Base/Small multilingual catalog with immutable upstream revision, exact bytes and SHA-256; a bounded disk download with progress/cancel/retry, verification and atomic publication; durable app-private storage excluded from backup; variant selection; cache usage/removal; and optional bundled-first resolution. Saved jobs carry model ID; old payloads without it mean Small. Result provenance uses the actual chosen ID/hash. Existing results/canonical media are unchanged. Active/pending jobs protect model removal and native execution holds a store lease. Mac defaults/catalog/resource membership remain unchanged; its runtime gets only an optional descriptor parameter that defaults to the previous behavior. Source review only. See MODELS.md; P7 was subsequently requested in #30, Pro deferred.
+
+## P7 source audit — PR #30
+
+The user explicitly included P7 in the optional-model PR. V1.RECOVERY fixes initial-queue-rewrite retry preservation, recoverable Trash listing and staging protection. V1.BOUNDS fixes stale library/storage publications, import-selection races, foreground transcription restart/cancellation and malformed-dimension conversion; reviewed existing bounded decode/render/download and export pin/delivery paths. V1.ACCESS adds Photos preparation/loading/disabled state, model selected/offline traits and canvas field labels, with actual UI/accessibility validation still unrun. V1.HANDOFF supplies handoffs/P7.md with all acceptance-item entry points, outcomes, exact user checks and remaining choices. Timing Apply preserves unchanged rational boundaries and does not invent manual edits; Unicode output basenames fit filesystem byte limits, long titles duplicate safely and updates tolerate clock rollback.
+
+Accounting: 28 of 29 current acceptance items are source-integrated; V1.PRO is explicitly deferred. None are claimed compilation/runtime/device verified. This is completion of the authorized source work, not a release-readiness certification. No tests/builds/typechecks, CI, generation, weights, media execution or device checks ran.

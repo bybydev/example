@@ -1,0 +1,12 @@
+# Opt-in production packaging: same targets, required Small model, no downloads.
+# User runs: xcodegen generate --spec project-ios-bundled.yml
+include:
+  - project.yml
+targets:
+  Inkribe:
+    sources:
+      - path: Models/whisper/ggml-small.bin
+        buildPhase: resources
+    settings:
+      base:
+        OTHER_SWIFT_FLAGS: "$(inherited) -D INKRIBE_IOS_BUNDLED_MODELS_ONLY"

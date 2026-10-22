@@ -6,11 +6,14 @@ struct IOSStorageView: View {
     @State private var clearCaches = false
     @State private var clearTrash = false
     @State private var selectedPending: UUID?
+    @State private var showingModels = false
 
     var body: some View {
         NavigationStack {
             List {
                 Section("On-device usage") {
+                    usageRow("Downloaded speech models", model.transcription.models.inventory.cachedBytes)
+                    Button("Manage speech models") { showingModels = true }
                     if let usage = model.storage {
                         usageRow("Projects and originals", usage.projectBytes)
                         usageRow("Rebuildable cache", usage.cacheBytes)
@@ -66,8 +69,9 @@ struct IOSStorageView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .task { await model.refreshStorage() }
-            .refreshable { await model.refreshStorage() }
+            .task { await model.refreshStorage(); await model.transcription.models.refresh() }
+            .sheet(isPresented: $showingModels) { IOSSpeechModelsView() }
+            .refreshable { await model.refreshStorage(); await model.transcription.models.refresh() }
             .alert("Storage problem", isPresented: Binding(
                 get: { model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } }

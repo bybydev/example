@@ -70,6 +70,7 @@ final class IOSExportController {
     private var startup: Task<Void, Never>?
     private var ready = false
     private var registered = false
+    private var queueStarted = false
     private var foreground = true
 
     var record: JobRecord? { queue?.sortedRecords.first }
@@ -103,6 +104,7 @@ final class IOSExportController {
                 queue = value
             }
             try queue?.start()
+            queueStarted = true
             if !foreground { try queue?.pause() }
             let ids = Set(queue?.records.keys.map { $0 } ?? [])
             try await repository.removeOrphanedExports(keeping: ids)
@@ -114,7 +116,9 @@ final class IOSExportController {
 
     func retryStorage() async {
         do {
-            if let queue { try queue.perform(.retryPersistence) }
+            // A failed initial rewrite has not published loaded records into
+            // memory. Retry start/load rather than saving an empty record set.
+            if let queue, queueStarted { try queue.perform(.retryPersistence) }
             ready = false
             await start()
         } catch { startupError = error.localizedDescription }

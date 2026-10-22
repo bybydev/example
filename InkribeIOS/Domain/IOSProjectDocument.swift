@@ -88,7 +88,7 @@ struct IOSMediaMetadata: Codable, Equatable, Sendable {
         guard duration > .zero, naturalWidth >= 0, naturalHeight >= 0,
               displayedWidth >= 0, displayedHeight >= 0,
               videoTrackCount >= 0, audioTrackCount >= 0,
-              videoTrackCount + audioTrackCount > 0,
+              (videoTrackCount > 0 || audioTrackCount > 0),
               (videoTrackCount == 0 ||
                (naturalWidth > 0 && naturalHeight > 0 && displayedWidth > 0 && displayedHeight > 0)),
               (nominalFrameRate == nil ||
