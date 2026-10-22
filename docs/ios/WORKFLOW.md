@@ -14,7 +14,7 @@ Current user instructions, root AGENTS and PLAN/FEATURES control work. Only curr
 6. Incorporate relevant latest develop and resolve conflicts. Honor explicit review holds first; otherwise standing workflow is squash merge when finished.
 7. Start no next phase without request.
 
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645. P2 PR #25 was squash merged as 97d647e on user instruction. P3 PR #26 was squash merged as 11902e6 on user instruction. **P4 PR #27 stays open for review, no merge/auto-merge.** The user requested P4 after merging P3.
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645. P2 PR #25 was squash merged as 97d647e on user instruction. P3 PR #26 was squash merged as 11902e6 on user instruction. P4 PR #27 was squash merged as ab67747 on user instruction. The user requested P5 next, from that latest develop. **Leave P5 PR #28 open for review; no merge/auto-merge until asked.**
 
 ## Execution limits
 
@@ -27,3 +27,7 @@ Blocked required behavior stays incomplete; no mock output, fake timestamps or e
 ## Fresh-agent prompt
 
 > Implement only current Inkribe iOS v1 phase Pn. Read AGENTS, docs/ios/README, PLAN, FEATURES, WORKFLOW, HANDOFF and phases/Pn first. State the V1 IDs and short plan. Old 467-item catalog is historical. One PR from latest develop targeting develop; all passes in it. Preserve Mac. No builds/tests, CI, project generation, model downloads or device validation. Follow current UI approval and merge hold. Do not expand scope or start another phase.
+
+## P5 authorization
+
+The stated Export sheet, format/resolution controls, progress/cancel/retry, native Photos/Files/share delivery, storage accounting and current-export access are routine implementation of the current P5 request. The user explicitly selected **Defer Pro**. Complete V1.MP4/SRT/DELIVERY/EXPORT_JOB; leave V1.PRO honestly deferred, with no new commercial policy, product IDs, restrictions or prices. No P6 implementation or automatic merge.

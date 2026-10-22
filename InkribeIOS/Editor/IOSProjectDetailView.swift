@@ -19,6 +19,7 @@ struct IOSProjectDetailView: View {
     @State private var isLeaving = false
     @State private var panel = IOSEditorPanel.captions
     @State private var captionRenderError: String?
+    @State private var showExport = false
     @FocusState private var focused: IOSEditorField?
 
     init(projectID: UUID) {
@@ -67,6 +68,14 @@ struct IOSProjectDetailView: View {
                     .disabled(!session.canUndo)
                 Button(session.redoLabel, systemImage: "arrow.uturn.forward") { focused = nil; session.redo() }
                     .disabled(!session.canRedo)
+                Button("Export", systemImage: "square.and.arrow.up") {
+                    focused = nil
+                    session.pause()
+                    session.endTyping()
+                    session.endStyleEditing()
+                    showExport = true
+                }
+                .disabled(session.document == nil)
                 Menu {
                     Button("Duplicate project", systemImage: "plus.square.on.square") {
                         Task {
@@ -115,6 +124,7 @@ struct IOSProjectDetailView: View {
             }
         }
         .task { await session.open() }
+        .sheet(isPresented: $showExport) { IOSExportView(session: session) }
         .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await session.refreshSaved() } }
         .onChange(of: focused) { _, value in
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }

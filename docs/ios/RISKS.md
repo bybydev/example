@@ -43,3 +43,13 @@ No cloud/team/publishing service risks need engineering because these features a
 - Actual memory/latency at the 20 Hz preview clock and future export frame rates are unmeasured. Bitmap allocation/per-frame integration needs P5 device assessment; no exported-file result is claimed.
 - The same draw/layout/effect path exists for preview and output, but real 720p/1080p wrapping, antialiasing/color, orientation, output-aspect letterboxing and native preview geometry still need pixel/device validation.
 - Caption styles are global for the project. Per-cue styles, imported fonts/brand libraries and custom effects remain outside v1.
+
+## P5 residual limitations — source integration only
+
+- AVFoundation/Core Image/SwiftUI/Photos APIs and Swift concurrency integration remain uncompiled. No exported file, media playback, pixel comparison, permission/provider/share operation or performance measurement was executed here.
+- The shared media graph explicitly targets SDR Rec.709; Core Image output is sRGB. Actual HDR-to-SDR appearance, range/gamma/antialiasing, rotation, VFR cadence, gaps, source offsets and AAC sync/priming require user media/device validation. Stereo 48 kHz AAC uses the existing first-track policy, not surround/multi-track mastering.
+- Six output buffers/two reader samples/one audio buffer bound app-owned references, not native decoder/encoder/GPU memory. Pool backpressure and the 30-second no-progress watchdog need real devices, especially SE2. Export overlays still allocate one bitmap per visible frame; throughput/thermal/memory behavior is unmeasured.
+- Foreground interruption restarts from the frozen request. No continuous background export or partial-frame checkpointing. Large fallback media copies and native synchronous reader calls may delay cancellation until they return. Queue persistence failure can prevent a requested transition; it surfaces an error rather than claiming cancellation succeeded.
+- Failed/cancelled requests retain pinned input for retry until discard/replacement; storage accounting counts logical bytes, so hard links can be counted in both project and export totals. The MP4 free-space check is an estimate, not a guarantee; writer/storage errors remain possible.
+- SRT retains overlapping edited cues; player-specific overlap/markup rendering may differ from the preview's latest-active-cue rule. Plain SRT does not retain typography or animation. Millisecond outward rounding may extend boundaries by less than 1 ms.
+- Pro is deferred by explicit user choice. No products/limits/pricing/gates/paywall purchase claims. It remains a separate user decision and incomplete V1 item.

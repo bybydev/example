@@ -30,6 +30,7 @@ struct IOSPickedMovie: Transferable {
 final class IOSProjectsModel {
     let repository = IOSProjectRepository.shared
     let transcription = IOSTranscriptionController()
+    let exports = IOSExportController()
     private let importer = IOSMediaImporter(repository: .shared)
     private let thumbnails = IOSProjectThumbnails(repository: .shared)
 

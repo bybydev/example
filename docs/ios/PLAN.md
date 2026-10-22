@@ -14,8 +14,8 @@ Focused native workflow: Photos/Files import → on-device recognition → capti
 | [P1](phases/P1.md) | Local projects and import | Medium | Essential | Merged #24; reported source findings corrected, runtime unverified |
 | [P2](phases/P2.md) | On-device transcription and word timing | High | Essential | Merged #25 (97d647e); model/native/runtime checks unrun |
 | [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
-| [P4](phases/P4.md) | Caption styles and curated animations | High | High | Source-integrated in open #27; compilation/render/runtime unverified |
-| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Not started; depends on P4 |
+| [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
+| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Export source-integrated in open #28; Pro deferred by user; compilation/runtime unverified |
 | [P6](phases/P6.md) | Basic media editing | Medium–High | High | Not started; depends on P5 |
 | [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Not started; final audit after P0–P6 |
 
@@ -29,7 +29,7 @@ Also outside v1: advanced video effects/transitions/speed/reverse/tracking/maski
 
 ## Existing extras and status
 
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
 
 URL import, combined/batch imports and advanced canvas controls already present in P1 source are not v1 requirements. The scope-reset documentation removed no source/UI. A subsequent explicit user request authorized the two correctness fixes, including hardening the existing URL path; it did not add URL import to v1 requirements. Record them separately; obtain an actual fix/removal decision before changing them. Transcript search is no longer a P2 obligation. Incoming share extension was removed and must not return.
 
@@ -37,6 +37,6 @@ URL import, combined/batch imports and advanced canvas controls already present 
 
 One PR per requested phase from latest develop, all passes in it. State included V1 IDs and a short plan first; do not start another phase automatically or expand scope. Follow WORKFLOW and relevant UI approval. Preserve Mac data/identity/purchases/behavior.
 
-P2 must resolve compatible local model/packaging and genuine word timing. P3 implements compact preview/transport, a scrubber/cue overview and correction list; P4 the curated fonts/templates. P5 needs actual free/Pro limits, plans/IDs and prices. Do not invent commercial policy or infrastructure.
+P2 must resolve compatible local model/packaging and genuine word timing. P3 implements compact preview/transport, a scrubber/cue overview and correction list; P4 the curated fonts/templates. The user selected Defer Pro during P5. Export proceeds without new gates. V1.PRO remains deferred until actual free/Pro limits, plans/IDs and prices are supplied. Do not invent commercial policy or infrastructure.
 
 No builds/tests unless asked, CI setup/repair/triggers, Xcode project generation, model downloads, deployment or device validation. User tests afterward. Source integration is not compilation/runtime verification; missing required behavior remains incomplete.

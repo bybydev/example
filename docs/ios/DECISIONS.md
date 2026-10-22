@@ -7,7 +7,7 @@
 - Stable identities/revisions, safe originals, atomic project persistence, honest raw/edited timing and deterministic preview/export.
 - P7 now means hardening. P8–P13 retired. Incoming share extension removed.
 - Existing P1 extras are recorded source, not requirements. This update removes no app/UI code.
-- PR #24 was subsequently squash merged; P2 #25 was subsequently squash merged. P3 #26 was subsequently squash merged; P4 stays open. No builds/tests/CI/project generation/model downloads/device checks.
+- PR #24 was subsequently squash merged; P2 #25 was subsequently squash merged. P3 #26 and P4 #27 were subsequently squash merged; P5 stays open for review. No builds/tests/CI/project generation/model downloads/device checks.
 
 ## Necessary owning-phase choices
 
@@ -52,3 +52,12 @@ The user explicitly requested fixes for the autosave race and existing URL-downl
 - Use Core Text for whole-string shaping/line wrapping and UTF-16 run geometry, a pure timestamp motion evaluator, and the same drawing path in UIKit and sRGB bitmap/CI adapters. No SwiftUI-only animation counted as an effect.
 - Bound active layout to 16,384 UTF-16 units/eight lines and a one-cue cache. Explicit render errors require splitting/reducing size; do not silently truncate. P5 owns actual exports and must surface the same errors.
 - No Mac/shared-package/project.yml/generated-project/CI changes, builds/tests or device/model operations.
+
+## P5 source decisions — 2026-10-22
+
+- User requested P5 after squash merge #27 (ab67747), then explicitly selected **Defer Pro**. Implement the four export V1 items; V1.PRO stays deferred and no commerce policy is inferred from other apps.
+- One feat/ios-p5-export PR from ab67747 targeting develop; keep it open, no auto-merge.
+- AVAssetReader/Writer directly specifies H.264/AAC and bounded frames/PCM. Use the shared media graph and P4 overlay, not a second caption typography implementation. Export is 30 fps within the selected HD/Full HD envelope; square/custom canvas dimensions are shown explicitly.
+- Freeze the saved canonical document, profile and pinned original bytes. One durable export, restart rather than resume frames after suspension, one retained artifact and explicit discard/replace. Successful publication releases pins; partial files are never delivered. No batch renderer/history/service feature.
+- UTF-8 SRT uses edited visible cue text/project timing; overlaps are retained, blank cues omitted, millisecond rounding is outward. It does not add new word timing or carry styles.
+- Only iOS source and its add-only Photos usage string in project.yml change. Mac, shared packages, generated projects, StoreKit products and entitlements remain unchanged. No builds/typechecks/tests/CI/generation/models/device operations.

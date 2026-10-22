@@ -21,11 +21,11 @@
 | V1.STYLE | P4 | Fonts, size, color, outline and background | Source-integrated in #27; compilation/render/runtime unverified |
 | V1.POSITION | P4 | Caption position in output coordinates | Source-integrated in #27; compilation/render/runtime unverified |
 | V1.PRESETS | P4 | Curated templates: highlighting, karaoke, pop and fade | Source-integrated in #27; compilation/render/runtime unverified |
-| V1.MP4 | P5 | Captioned MP4 at 720p/1080p with source audio | Not started |
-| V1.SRT | P5 | Edited captions exported as SRT | Not started |
-| V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Not started |
-| V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Not started |
-| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Not started; policy/prices undecided |
+| V1.MP4 | P5 | Captioned MP4 at 720p/1080p with source audio | Source-integrated; compilation/runtime unverified |
+| V1.SRT | P5 | Edited captions exported as SRT | Source-integrated; compilation/runtime unverified |
+| V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Source-integrated; permission/provider/runtime checks unrun |
+| V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Source-integrated; interruption/cleanup/runtime checks unrun |
+| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Deferred by explicit user choice during P5; policy/prices undecided |
 | V1.TRIM | P6 | Non-destructive trim with caption mapping | Not started |
 | V1.CROP | P6 | Crop/aspect ratio in preview and export | Not started |
 | V1.VOLUME | P6 | Original-audio volume in preview and export | Not started |
@@ -60,4 +60,12 @@ V1.STYLE/POSITION/PRESETS integrate project-wide editable style values, normaliz
 
 Schema v4 adds optional captionStyle; v1–v3 reads retain the default style without an eager rewrite. Duplicates preserve style values. A single Core Text renderer shapes/wraps text and draws base/outline/background, active-word highlight, progressive karaoke, word-triggered pop and word-envelope fade from project time. UIView preview, transparent bitmap and CI frame-composition adapters share this path. Unicode ranges use UTF-16 glyph-run mapping and explicit installed-font/system fallback. Layout is capped at 16,384 UTF-16 units and eight lines, with clear split/reduce-size errors, never silent truncation.
 
-P5 file export/audio/jobs/commerce remain unimplemented. The shared bitmap/composition interfaces are implemented source, not an exported-file or pixel-parity result. No builds/typechecks/tests, CI, generation, model downloads or device validation. See handoffs/P4.md for exact interfaces and pending user scenarios.
+P4 did not implement P5 files/audio/jobs/commerce; subsequent export integration is recorded below. The shared bitmap/composition interfaces are implemented source, not an exported-file or pixel-parity result. No builds/typechecks/tests, CI, generation, model downloads or device validation. See handoffs/P4.md for exact interfaces and pending user scenarios.
+
+## P5 source evidence
+
+V1.MP4/SRT/DELIVERY/EXPORT_JOB are integrated in PR #28 on feat/ios-p5-export. A single JobQueue operation uses a frozen saved document/profile and pinned immutable media. Preview/export share source-range/orientation/track-offset composition; H.264 output uses an even-dimension 720p/1080p envelope at 30 fps, the exact P4 overlay at each output PTS, AAC source audio and black audio-only/gap frames. The finalized file is checked for size/duration/video codec/dimensions and expected AAC audio before atomic publication. SRT streams edited, visible cues as UTF-8 with stable ordering and outward millisecond rounding. No raw recognition or original media is rewritten.
+
+Progress/cancel/retry, restart after interruption, partial cleanup, one retained artifact, delivery leases, add-only Photos permission, provider copies and native outbound sharing are integrated. Current export is accessible from Projects even if its source project is trashed. Storage includes retained export bytes; successful publication releases source pins, and explicit discard/new export cleans the retained job. No batch pipeline or export history added.
+
+The user explicitly selected Defer Pro. V1.PRO remains deferred, not complete. No gates/plans/prices/watermarks/trials were invented. Schema remains v4. Source review only; no builds/typechecks/tests, CI, generation, models, deployment or device validation. See handoffs/P5.md for APIs, caveats and user scenarios.

@@ -16,6 +16,7 @@ struct IOSStorageView: View {
                         usageRow("Rebuildable cache", usage.cacheBytes)
                         usageRow("Pending imports", usage.pendingBytes)
                         usageRow("Project Trash", usage.trashBytes)
+                        usageRow("Current export", usage.exportBytes)
                     } else {
                         ProgressView("Calculating storage…")
                     }

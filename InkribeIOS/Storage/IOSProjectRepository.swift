@@ -475,6 +475,114 @@ actor IOSProjectRepository {
         try files.moveItem(at: temp, to: destination)
     }
 
+    /// Serialize snapshot publication with project deletion/Trash operations.
+    /// Hard links pin immutable bytes on the same volume; copying is the fallback.
+    func prepareExport(document: IOSProjectDocument, profile: IOSExportProfile, id: UUID) throws {
+        try Task.checkCancellation()
+        let saved = try open(document.id)
+        // ISO-8601 disk dates omit fractional seconds; compare the canonical
+        // persisted representation, not the returned in-memory Date precision.
+        guard saved.contentRevision == document.contentRevision,
+              try encoder.encode(saved) == encoder.encode(document) else {
+            throw IOSProjectStoreError.staleRevision(expected: document.contentRevision, actual: saved.contentRevision)
+        }
+        try saved.validate()
+        let snapshot = IOSCaptionSnapshot(saved)
+        if profile.format == .srt, !snapshot.cues.contains(where: { !snapshot.text(for: $0).isEmpty }) {
+            throw IOSExportError.noCaptions
+        }
+        let folder = try exportDirectory(id)
+        guard !files.fileExists(atPath: folder.path) else { throw IOSExportError.invalidRequest }
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        do {
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var directory = folder
+            try directory.setResourceValues(values)
+            let media = folder.appendingPathComponent("Media", isDirectory: true)
+            try files.createDirectory(at: media, withIntermediateDirectories: true)
+            try files.createDirectory(at: folder.appendingPathComponent("Result", isDirectory: true), withIntermediateDirectories: true)
+            if profile.format == .mp4 {
+                let used = Set(saved.clips.map(\.sourceAssetID))
+                for asset in saved.assets where used.contains(asset.id) {
+                    try Task.checkCancellation()
+                    let source = try sourceURL(projectID: saved.id, assetID: asset.id)
+                    let attributes = try files.attributesOfItem(atPath: source.path)
+                    guard (attributes[.size] as? NSNumber)?.int64Value == asset.byteCount else {
+                        throw IOSProjectStoreError.missingOriginal(asset.displayName)
+                    }
+                    let destination = media.appendingPathComponent(asset.id.uuidString + "." + source.pathExtension)
+                    do { try files.linkItem(at: source, to: destination) }
+                    catch { try files.copyItem(at: source, to: destination) }
+                }
+            }
+            try Task.checkCancellation()
+            let manifest = IOSExportManifest(version: 1, jobID: id, document: saved, profile: profile)
+            try encoder.encode(manifest).write(to: folder.appendingPathComponent("request.json"), options: .atomic)
+        } catch {
+            try? files.removeItem(at: folder)
+            throw error
+        }
+    }
+
+    private func exportDirectory(_ id: UUID) throws -> URL {
+        let folder = try directory("Exports").appendingPathComponent(id.uuidString, isDirectory: true)
+        if files.fileExists(atPath: folder.path),
+           try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+            throw IOSExportError.invalidRequest
+        }
+        return folder
+    }
+
+    func frozenExport(_ id: UUID) throws -> IOSFrozenExport {
+        let folder = try exportDirectory(id)
+        let manifest = try decoder.decode(IOSExportManifest.self,
+            from: Data(contentsOf: folder.appendingPathComponent("request.json")))
+        guard manifest.version == 1, manifest.jobID == id else { throw IOSExportError.invalidRequest }
+        try manifest.document.validate()
+        var urls: [UUID: URL] = [:]
+        for asset in manifest.document.assets where manifest.profile.format == .mp4 {
+            let ext = URL(fileURLWithPath: asset.relativeOriginalPath).pathExtension
+            urls[asset.id] = folder.appendingPathComponent("Media", isDirectory: true)
+                .appendingPathComponent(asset.id.uuidString + "." + ext)
+        }
+        return IOSFrozenExport(manifest: manifest, directory: folder, urls: urls)
+    }
+
+    func removeExportPartial(_ id: UUID) throws {
+        let folder = try exportDirectory(id)
+        for ext in ["mp4", "srt"] {
+            let url = folder.appendingPathComponent("partial." + ext)
+            if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+        }
+    }
+
+    func publishExport(_ id: UUID) throws {
+        let request = try frozenExport(id)
+        // Same-volume rename publishes only a finalized, validated file. Result
+        // names live apart from working files, including a title of "partial".
+        if !files.fileExists(atPath: request.outputURL.path) {
+            try Task.checkCancellation()
+            try files.moveItem(at: request.partialURL, to: request.outputURL)
+        }
+        let media = request.directory.appendingPathComponent("Media", isDirectory: true)
+        if files.fileExists(atPath: media.path) { try files.removeItem(at: media) }
+        try removeExportPartial(id)
+    }
+
+    func discardExport(_ id: UUID) throws {
+        let folder = try exportDirectory(id)
+        if files.fileExists(atPath: folder.path) { try files.removeItem(at: folder) }
+    }
+
+    /// Queue publication can be interrupted after staging but before enqueue.
+    /// Retain only the one durable job; never touch project originals/cache.
+    func removeOrphanedExports(keeping ids: Set<UUID>) throws {
+        for folder in try files.contentsOfDirectory(at: directory("Exports"), includingPropertiesForKeys: nil) {
+            if let id = UUID(uuidString: folder.lastPathComponent), !ids.contains(id) { try discardExport(id) }
+        }
+    }
+
     func thumbnailURL(id: UUID) throws -> URL {
         var cache = try directory("Cache").appendingPathComponent("Thumbnails", isDirectory: true)
         try files.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -495,13 +603,15 @@ actor IOSProjectRepository {
         let cacheBytes: Int64
         let pendingBytes: Int64
         let trashBytes: Int64
+        let exportBytes: Int64
     }
 
     func storageUsage() throws -> StorageUsage {
         StorageUsage(projectBytes: try folderSize(try directory("Projects")),
                      cacheBytes: try folderSize(try directory("Cache")),
                      pendingBytes: try folderSize(try directory("Pending")),
-                     trashBytes: try folderSize(try directory("Trash")))
+                     trashBytes: try folderSize(try directory("Trash")),
+                     exportBytes: try folderSize(try directory("Exports")))
     }
 
     private func folderSize(_ root: URL) throws -> Int64 {

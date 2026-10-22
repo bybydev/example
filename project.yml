@@ -111,6 +111,7 @@ settingGroups:
       MARKETING_VERSION: "1.0"
       PRODUCT_NAME: Inkribe
       SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+      INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Inkribe adds finished videos to Photos only when you choose Save to Photos."
       SWIFT_STRICT_CONCURRENCY: complete
       SUPPORTS_MACCATALYST: NO
       TARGETED_DEVICE_FAMILY: "1,2"

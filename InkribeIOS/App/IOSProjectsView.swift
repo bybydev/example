@@ -12,6 +12,7 @@ struct IOSProjectsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingImport = false
     @State private var showingStorage = false
+    @State private var showingExport = false
     @State private var attemptedThumbnails: Set<UUID> = []
 
     var body: some View {
@@ -90,6 +91,11 @@ struct IOSProjectsView: View {
                     Button("Storage", systemImage: "internaldrive") { showingStorage = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    if model.exports.record != nil || model.exports.persistenceError != nil {
+                        Button("Current export", systemImage: "tray.and.arrow.up") { showingExport = true }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Add", systemImage: "plus") { showingImport = true }
                         .tint(.indigo)
                 }
@@ -116,8 +122,15 @@ struct IOSProjectsView: View {
             .onChange(of: model.cacheGeneration) { _, _ in attemptedThumbnails.removeAll() }
             .onChange(of: model.search) { _, _ in Task { await model.refresh() } }
             .onChange(of: model.filter) { _, _ in Task { await model.refresh() } }
-            .task { model.transcription.start(); await model.refresh() }
+            .task {
+                model.transcription.start()
+                model.exports.setForeground(scenePhase == .active)
+                await model.exports.start()
+                await model.refresh()
+            }
+            .sheet(isPresented: $showingExport) { IOSExportView(session: nil) }
             .onChange(of: scenePhase) { _, value in
+                model.exports.setForeground(value == .active)
                 if value == .active { Task { await model.refresh() } }
             }
             .refreshable { await model.refresh() }
@@ -200,4 +213,3 @@ struct IOSProjectsView: View {
         Task { await model.refresh() }
     }
 }
-
