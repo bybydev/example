@@ -6,6 +6,8 @@ import Observation
 @MainActor
 @Observable
 final class IOSEditorSession {
+    let access: IOSProAccess
+    var proUpsell: IOSProFeature?
     let projectID: UUID
     let player = AVPlayer()
     private(set) var document: IOSProjectDocument?
@@ -89,7 +91,7 @@ final class IOSEditorSession {
         let edits: IOSMediaEdits
     }
 
-    init(projectID: UUID) { self.projectID = projectID }
+    init(projectID: UUID, access: IOSProAccess) { self.projectID = projectID; self.access = access }
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: IOSCaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: IOSCaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
@@ -275,6 +277,10 @@ final class IOSEditorSession {
 
     func setCaptionStyle(_ style: IOSCaptionStyle, coalescing control: IOSCaptionStyleControl? = nil) {
         guard var project = document, style != project.effectiveCaptionStyle else { return }
+        guard access.canChangeStyle(from: project.effectiveCaptionStyle, to: style) else {
+            proUpsell = .styles
+            return
+        }
         let before = project.captionStyle
         do {
             project.schemaVersion = IOSProjectSchema.current

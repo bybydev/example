@@ -1,5 +1,7 @@
 # Inkribe iOS v1.0 feature ledger
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 **29 acceptance items**, grouped from the user-approved compact list. This replaces the 466-active-item ledger. V1 IDs distinguish current requirements from historical Fxx entries. P0 owns foundations, no user feature items. Source status is not runtime verification.
 
 | ID | Owner | Requirement | Status |
@@ -25,7 +27,7 @@
 | V1.SRT | P5 | Edited captions exported as SRT | Source-integrated; compilation/runtime unverified |
 | V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Source-integrated; permission/provider/runtime checks unrun |
 | V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Source-integrated; interruption/cleanup/runtime checks unrun |
-| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Deferred by explicit user choice during P5; policy/prices undecided |
+| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Source-integrated in Pro follow-up: approved free/Pro policy, AF paywall/restore/themes; StoreKit/runtime unverified |
 | V1.TRIM | P6 | Non-destructive trim with caption mapping | Source-integrated; compilation/timing/runtime unverified |
 | V1.CROP | P6 | Crop/aspect ratio in preview and export | Source-integrated; orientation/pixel/runtime unverified |
 | V1.VOLUME | P6 | Original-audio volume in preview and export | Source-integrated; mix/playback/runtime unverified |

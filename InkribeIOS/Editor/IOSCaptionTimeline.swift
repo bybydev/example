@@ -1,7 +1,9 @@
 import SwiftUI
+import AppFoundation
 
 /// An overview and accessible scrubber, not a waveform or multi-track editor.
 struct IOSCaptionTimeline: View {
+    @Environment(\.appFoundationTheme) private var theme
     let snapshot: IOSCaptionSnapshot?
     let selectedCueID: UUID?
     let duration: Double
@@ -12,7 +14,7 @@ struct IOSCaptionTimeline: View {
         VStack(spacing: 2) {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    TimelineBars(snapshot: snapshot, selectedCueID: selectedCueID, duration: duration)
+                    TimelineBars(snapshot: snapshot, selectedCueID: selectedCueID, duration: duration, accent: theme.accentColor)
                         .equatable()
                     Rectangle().fill(.primary)
                         .frame(width: 2)
@@ -35,8 +37,9 @@ private struct TimelineBars: View, Equatable {
     let snapshot: IOSCaptionSnapshot?
     let selectedCueID: UUID?
     let duration: Double
+    let accent: Color
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.snapshot?.id == rhs.snapshot?.id && lhs.selectedCueID == rhs.selectedCueID && lhs.duration == rhs.duration
+        lhs.snapshot?.id == rhs.snapshot?.id && lhs.selectedCueID == rhs.selectedCueID && lhs.duration == rhs.duration && lhs.accent == rhs.accent
     }
     var body: some View {
         Canvas { context, size in
@@ -47,7 +50,7 @@ private struct TimelineBars: View, Equatable {
                 let end = IOSEditorTime.seconds(cue.interval.end) / duration * size.width
                 let rect = CGRect(x: start, y: 2, width: max(1, end - start - 1), height: size.height - 4)
                 context.fill(Path(roundedRect: rect, cornerRadius: 2),
-                    with: .color(cue.id == selectedCueID ? .purple : .indigo.opacity(0.65)))
+                    with: .color(cue.id == selectedCueID ? accent : accent.opacity(0.65)))
             }
         }
     }

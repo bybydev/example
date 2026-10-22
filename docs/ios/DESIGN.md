@@ -1,5 +1,7 @@
 # Inkribe iOS v1 design
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 ![Visual reference](assets/main-screens-reference.jpeg)
 
 Reference supplies dark surfaces, restrained purple/blue accents, strong footage previews, thumbnails and caption styling. It does not authorize every pictured control; PLAN/FEATURES overrides it. Preserve Mac branding.
@@ -48,3 +50,7 @@ The user's request and short UI plan authorize Speech Models from Projects' sett
 ## P7 state/accessibility corrections
 
 The authorized hardening pass adds visible Photos preparation, disables conflicting ingress/source mutations while preparing/importing, shows transcription pause/restart state, gives model choices selected/offline availability semantics and explicit canvas width/height accessibility labels, and updates stale import copy now that crop/export exist. Existing small-screen scrolling, keyboard Done, timeline slider labels, text error/retry states, template selection, color/position sliders and Reduce Motion surrounding UI were source-reviewed. No new screens/redesign, native UI tests or device accessibility checks. Actual fit/VoiceOver/keyboard behavior remains user validation.
+
+## Authorized Pro and appearance UI
+
+Projects settings adds Inkribe Pro (plan, usage, restore) and Appearance; a crown toolbar action explicitly opens the AF paywall. Locked captioning, font/effect/template, 1080p and premium theme actions present AF's contextual comparison/upsell before its paywall. Transcription shows remaining/reserved time and reset date. Style offers a free Basic reset and Pro labels; Export defaults to 720p and labels 1080p Pro. Appearance uses AF ThemePickerView, default Rose free, premium choices locked without timed trials. AF tokens paint app backgrounds, tint and selection while preserving media/caption artwork. The phase implementation request authorizes this stated UI; no new scope/redesign. See phases/PRO.

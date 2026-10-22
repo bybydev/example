@@ -1,5 +1,7 @@
 # Inkribe iOS v1.0 — scoped plan
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 Updated 2026-10-22 following the user's compact v1 feature list. This supersedes the old 467-item catalog and P0–P13 roadmap. Only current FEATURES and active P0–P7 briefs define deliverables when the user requests a phase. Archived documents, reference images, Mac capabilities and existing extra source do not authorize features.
 
 ## Product
@@ -37,7 +39,7 @@ URL import, combined/batch imports and advanced canvas controls already present 
 
 One PR per requested phase from latest develop, all passes in it. State included V1 IDs and a short plan first; do not start another phase automatically or expand scope. Follow WORKFLOW and relevant UI approval. Preserve Mac data/identity/purchases/behavior.
 
-P2 must resolve compatible local model/packaging and genuine word timing. P3 implements compact preview/transport, a scrubber/cue overview and correction list; P4 the curated fonts/templates. The user selected Defer Pro during P5. Export proceeds without new gates. V1.PRO remains deferred until actual free/Pro limits, plans/IDs and prices are supplied. Do not invent commercial policy or infrastructure.
+P2 model packaging is now governed by MODELS. The subsequent user-approved [Pro phase](phases/PRO.md) implements free 5-minute weekly captioning/basic style/720p/default AF theme versus unlimited captioning/all styles/1080p/premium AF themes. Monthly $6.99 and lifetime $24.99 use the approved IDs in IOSCommerce. Core editing/media/SRT remain free. Existing saved content stays usable after expiry. No watermark/trial/credit backend. See handoffs/PRO for exact quota/recovery and production inputs.
 
 No builds/tests unless asked, CI setup/repair/triggers, Xcode project generation, model downloads, deployment or device validation. User tests afterward. Source integration is not compilation/runtime verification; missing required behavior remains incomplete.
 

@@ -26,7 +26,7 @@ enum IOSExportResolution: Int, Codable, CaseIterable, Sendable {
 
 struct IOSExportProfile: Codable, Equatable, Sendable {
     var format: IOSExportFormat = .mp4
-    var resolution: IOSExportResolution = .fullHD
+    var resolution: IOSExportResolution = .hd
 }
 
 /// This file is durable input; the small JobQueue payload only identifies it.

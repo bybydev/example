@@ -9,6 +9,8 @@ struct IOSSpeechJob: Job {
         let languageCode: String?
         /// Nil in pre-picker durable jobs: keep their original Small variant.
         var modelID: String? = nil
+        /// Nil means accepted before the allowance policy; false is Pro-granted.
+        var requiresAllowance: Bool? = nil
         var resolvedModelID: String { modelID ?? IOSSpeechModelCatalog.smallID }
     }
     static let maxConcurrentExecutions = 1
@@ -38,6 +40,11 @@ final class IOSTranscriptionController {
     private(set) var queue: JobQueue?
     private(set) var startupError: String?
     private(set) var resultGeneration = 0
+    private(set) var allowance: IOSCaptionAllowance?
+    private(set) var allowanceError: String?
+    private(set) var isAuthorizing = false
+    private var needsAllowanceRefresh = false
+    let access: IOSProAccess
     private let registry = JobRegistry()
     private let repository = IOSProjectRepository.shared
     private var registered = false
@@ -51,6 +58,31 @@ final class IOSTranscriptionController {
         })
     }
     var persistenceError: String? { startupError ?? queue?.persistenceIssue?.errorDescription }
+
+    init(access: IOSProAccess) { self.access = access }
+
+    private var activeJobIDs: Set<UUID> {
+        Set((queue?.sortedRecords ?? []).filter { !$0.status.isTerminal }.map(\.id))
+    }
+
+    private func endAuthorization() {
+        isAuthorizing = false
+        if needsAllowanceRefresh {
+            needsAllowanceRefresh = false
+            Task { await refreshAllowance() }
+        }
+    }
+
+    func refreshAllowance() async {
+        guard queueStarted, persistenceError == nil else { return }
+        guard !isAuthorizing else { needsAllowanceRefresh = true; return }
+        isAuthorizing = true
+        defer { endAuthorization() }
+        do {
+            allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
+            allowanceError = nil
+        } catch { allowanceError = error.localizedDescription }
+    }
 
     func start() {
         models.start()
@@ -67,7 +99,12 @@ final class IOSTranscriptionController {
                     policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
                     maxRecords: 100, autoCleanupEnabled: true)
                 value.eventHandler = { [weak self] event in
-                    if case .jobCompleted = event { self?.resultGeneration += 1 }
+                    switch event {
+                    case .jobCompleted, .jobFailed, .jobCancelled:
+                        self?.resultGeneration += 1
+                        Task { await self?.refreshAllowance() }
+                    default: break
+                    }
                 }
                 queue = value
             }
@@ -75,6 +112,7 @@ final class IOSTranscriptionController {
             queueStarted = true
             if !foreground { try queue?.pause() }
             startupError = nil
+            Task { await refreshAllowance() }
         } catch { startupError = error.localizedDescription }
     }
 
@@ -84,6 +122,7 @@ final class IOSTranscriptionController {
                 try queue.perform(.retryPersistence)
                 if foreground { try queue.resume() } else { try queue.pause() }
                 startupError = nil
+                Task { await refreshAllowance() }
             }
             catch { startupError = error.localizedDescription }
         } else { start() }
@@ -113,7 +152,11 @@ final class IOSTranscriptionController {
     func enqueue(projectID: UUID, language: String) async throws {
         start()
         guard queueStarted, persistenceError == nil, let queue else { throw IOSProjectStoreError.unavailableRoot }
+        guard !isAuthorizing else { throw IOSSpeechError.busy }
+        isAuthorizing = true
+        defer { needsAllowanceRefresh = true; endAuthorization() }
         let chosenModelID = models.selectedID
+        await access.refreshForRequest()
         await models.refresh()
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         guard !isActive(projectID) else { throw IOSSpeechError.busy }
@@ -123,15 +166,29 @@ final class IOSTranscriptionController {
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         guard project.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
         let code = IOSSpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
-        try queue.enqueue(IOSSpeechJob(id: UUID(), payload: .init(projectID: projectID,
-            expectedRevision: project.contentRevision, languageCode: code, modelID: chosenModelID)))
+        let id = UUID()
+        let free = !access.hasPro
+        if free {
+            allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
+            try await repository.reserveSpeechAllowance(jobID: id, projectID: projectID, revision: project.contentRevision)
+        }
+        try Task.checkCancellation()
+        guard persistenceError == nil else { throw IOSProjectStoreError.unavailableRoot }
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
+        try queue.enqueue(IOSSpeechJob(id: id, payload: .init(projectID: projectID,
+            expectedRevision: project.contentRevision, languageCode: code, modelID: chosenModelID,
+            requiresAllowance: free)))
     }
 
     func cancel(_ id: UUID) throws { try queue?.cancel(id: id) }
 
     func retry(_ record: JobRecord, language: String) async throws {
         guard queueStarted, persistenceError == nil, let queue else { throw IOSProjectStoreError.unavailableRoot }
+        guard !isAuthorizing else { throw IOSSpeechError.busy }
+        isAuthorizing = true
+        defer { needsAllowanceRefresh = true; endAuthorization() }
         let chosenModelID = models.selectedID
+        await access.refreshForRequest()
         let previous = try record.decode(IOSSpeechJob.self)
         guard !isActive(previous.payload.projectID) else { throw IOSSpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
@@ -143,12 +200,22 @@ final class IOSTranscriptionController {
         }
         guard project.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
+        let free = !access.hasPro
+        if free {
+            allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
+            try await repository.reserveSpeechAllowance(jobID: record.id, projectID: project.id, revision: project.contentRevision)
+        } else {
+            try await repository.releaseSpeechAllowance(record.id)
+        }
+        try Task.checkCancellation()
+        guard persistenceError == nil else { throw IOSProjectStoreError.unavailableRoot }
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw IOSSpeechError.missingModel }
         // Explicit retry takes a new document revision only while there are no
         // saved captions to overwrite. Reuse the durable operation identity.
         try queue.replace(id: record.id, with: IOSSpeechJob(id: record.id, payload: .init(
             projectID: project.id, expectedRevision: project.contentRevision,
             languageCode: IOSSpeechLanguage.codes.contains(language) && language != "auto" ? language : nil,
-            modelID: chosenModelID)))
+            modelID: chosenModelID, requiresAllowance: free)))
     }
 }
 

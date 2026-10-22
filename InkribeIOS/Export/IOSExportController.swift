@@ -58,6 +58,8 @@ struct IOSExportJob: Job {
 @MainActor
 @Observable
 final class IOSExportController {
+    private let access: IOSProAccess
+    init(access: IOSProAccess) { self.access = access }
     private(set) var queue: JobQueue?
     private(set) var startupError: String?
     private(set) var isPreparing = false
@@ -138,6 +140,8 @@ final class IOSExportController {
         isPreparing = true
         defer { isPreparing = false }
         await start()
+        await access.refreshForRequest()
+        if profile.format == .mp4 && profile.resolution == .fullHD { try access.require(.fullHD) }
         guard ready, persistenceError == nil, let queue else { throw IOSExportError.invalidRequest }
         guard !isActive, !queue.isProcessing else { throw IOSExportError.busy }
         if let old = record {

@@ -1,5 +1,7 @@
 # V1 working agreement
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 ## Scope
 
 Current user instructions, root AGENTS and PLAN/FEATURES control work. Only current V1 items in the requested phase are required. Old catalog/phase prompts, images, frameworks and existing extra code do not expand scope. State included IDs and concrete result before implementation; ask about actual scope expansions before adding them.
@@ -43,3 +45,7 @@ The user explicitly requests retaining bundled support while making weights opti
 ## P7 — explicit same-PR authorization
 
 The user requested finishing the last phase in this PR. P7 source audit/fixes and handoff therefore stay on feat/ios-optional-speech-models in PR #30 targeting develop; no new branch/PR or merge is authorized. This supersedes earlier P7-not-started instructions. V1.RECOVERY/BOUNDS/ACCESS/HANDOFF are source-integrated with no compilation/runtime/device evidence. Pro remains deferred. No build/typecheck/test, CI, generation, weights, deployment, hardware or UI validation work. User runs the scenarios in handoffs/P7.md.
+
+## Current Pro authorization
+
+The user has now supplied the policy/plans/IDs/prices and requested implementation, including AF themes. This overrides the historical Pro deferral in the phase notes above. All Pro work stays in one new feat/ios-pro-access-themes PR from merged develop eb89f0f, targeting develop and held open until asked to merge. No builds/typechecks/tests, CI, generation, weights or device validation. Update phases/PRO, handoffs/PRO and current V1 accounting; do not add another phase or change Mac.

@@ -64,6 +64,7 @@ struct IOSStorageView: View {
                 }
             }
             .navigationTitle("Storage")
+            .iosThemedSurface()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }

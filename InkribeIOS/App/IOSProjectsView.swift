@@ -1,4 +1,5 @@
 import AVKit
+import AppFoundation
 import CoreMedia
 import UIKit
 import PhotosUI
@@ -10,9 +11,13 @@ import UniformTypeIdentifiers
 struct IOSProjectsView: View {
     @Environment(IOSProjectsModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.appFoundationTheme) private var theme
     @State private var showingImport = false
     @State private var showingStorage = false
     @State private var showingModels = false
+    @State private var showingAppearance = false
+    @State private var showingPlan = false
+    @State private var showingPaywall = false
     @State private var showingExport = false
     @State private var attemptedThumbnails: Set<UUID> = []
 
@@ -83,6 +88,7 @@ struct IOSProjectsView: View {
                 .padding(.vertical, 14)
             }
             .navigationTitle("Inkribe")
+            .iosThemedSurface()
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $binding.search,
                         placement: .navigationBarDrawer(displayMode: .always),
@@ -90,6 +96,8 @@ struct IOSProjectsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
+                        Button("Inkribe Pro", systemImage: "crown.fill") { showingPlan = true }
+                        Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
                         Button("Speech Models", systemImage: "cpu") { showingModels = true }
                         Button("Storage", systemImage: "internaldrive") { showingStorage = true }
                     } label: { Label("Settings", systemImage: "gearshape") }
@@ -100,12 +108,14 @@ struct IOSProjectsView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("Inkribe Pro", systemImage: "crown.fill") { showingPaywall = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Add", systemImage: "plus") { showingImport = true }
-                        .tint(.indigo)
                 }
             }
             .navigationDestination(for: UUID.self) { id in
-                IOSProjectDetailView(projectID: id)
+                IOSProjectDetailView(projectID: id, access: model.access)
             }
             .sheet(isPresented: $showingImport) {
                 IOSImportView()
@@ -116,6 +126,9 @@ struct IOSProjectsView: View {
                     .environment(model)
             }
             .sheet(isPresented: $showingModels) { IOSSpeechModelsView() }
+            .sheet(isPresented: $showingAppearance) { IOSAppearanceView() }
+            .sheet(isPresented: $showingPlan) { IOSPlanView() }
+            .sheet(isPresented: $showingPaywall) { IOSProPaywall() }
             .alert("Inkribe", isPresented: Binding(
                 get: { model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } }
@@ -139,6 +152,7 @@ struct IOSProjectsView: View {
                 model.transcription.setForeground(value == .active)
                 model.exports.setForeground(value == .active)
                 if value == .active { Task { await model.refresh() } }
+                if value == .active { Task { await model.transcription.refreshAllowance() } }
             }
             .refreshable { await model.refresh() }
 
@@ -161,7 +175,7 @@ struct IOSProjectsView: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.indigo.opacity(0.25))
+                    .fill(theme.accentColor.opacity(0.25))
                 if let url = project.thumbnailURL,
                    let image = UIImage(contentsOfFile: url.path) {
                     Image(uiImage: image)

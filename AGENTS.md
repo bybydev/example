@@ -1,28 +1,28 @@
 # Inkribe Working Rules
 
-- Do not fake completion; report problems honestly.
-- Do not run builds or tests unless asked.
+- Do not fake completion. Source integration is not compilation or runtime evidence.
+- Do not run builds/typechecks/tests, CI setup/triggers, project generation, model downloads, deployment or device/UI validation. User tests afterward.
 - XcodeGen owns project.yml; do not modify generated .xcodeproj files.
+- Preserve Mac identity, source, purchases, catalog, storage, resources and behavior.
 
-## iOS v1.0 scope
+## Scope and workflow
 
-Read docs/ios/README.md, PLAN.md, FEATURES.md, WORKFLOW.md, HANDOFF.md and the requested phase brief first.
+Read docs/ios/README.md, PLAN.md, FEATURES.md, WORKFLOW.md, HANDOFF.md and the requested phase brief. The compact 29-item v1 scope supersedes the historical 467-item catalog and P0–P13 roadmap. Old handoffs, images and Mac capabilities do not authorize features. No accounts/backend/cloud inference/sync, teams/social integration, credits, stock libraries, dubbing, share extension/App Group/inbox, camera, translation or advanced editor expansion.
 
-- The compact v1 scope dated 2026-10-22 supersedes the exhaustive 467-item catalog and P0–P13 plan. Only current V1 items and P0–P7 briefs define deliverables. Historical issue/handoffs and Mac capabilities do not authorize features.
-- Do not add accounts/backends, cloud STT/AI/sync, teams, social integrations, credits, stock libraries, dubbing, share extension/App Group/inbox, camera/teleprompter, translation, automation or advanced editor features excluded by PLAN.
-- State included V1 IDs and short concrete plan before each requested phase. Obtain explicit approval for scope expansions; do not invent infrastructure or pricing.
-- Preserve Mac identity, purchases, entitlements, storage and behavior. AppFoundation for iOS; reuse useful portable code without forced abstractions.
-- One PR per requested phase from latest develop targeting develop; all passes in it. P0–P6 are squash merged (#23–#29); P6 merge is e2bb512. PR #30 on feat/ios-optional-speech-models contains the optional-model change and, by explicit subsequent user instruction, P7 in the same PR. Leave it open until explicitly asked to merge; do not create another phase branch/PR.
-- No CI setup/triggers, project regeneration, model downloads or device validation. User tests afterward.
-- Short UI plan before edits. The current user request authorizes P6 with the stated Media panel: whole-project trim start/end, aspect presets, fit/fill/zoom/pan and original-audio volume, integrated with undo/autosave/preview/export. Do not re-ask for routine details or run UI tests. Future phases and excluded features need their own request.
-- The user explicitly selected Defer Pro for P5. Implement the four export items; V1.PRO remains deferred. Do not invent gates, limits, products, prices, watermark/trials or a paywall offer.
+One PR per requested phase from latest develop targeting develop; keep all passes in it. Leave open with auto-merge disabled until the user explicitly requests merge. Do not start another phase automatically. State scoped IDs and short UI plan; the current implementation request authorizes its settled UI and routine details. Ask only about actual new scope.
 
-- P6 keeps persisted clips/recognition/manual timing in the original project clock. One retained-range map drives zero-based preview/MP4/SRT; never destructively delete trimmed captions or originals. Project writes use schema v5, with v1–v4 readable.
+P0–P6 (#23–#29) and optional models plus P7 (#30) are squash merged. Latest phase baseline is eb89f0fb3cd0f67054e6d29de2375342718c1651. Historical PR review holds and P5 Pro deferral are superseded by the current request below.
 
-## Current optional speech-model request
+## Current authorized phase: Pro locking and AF themes
 
-The user explicitly authorizes optional bundling, in-app download/cache and variant selection for faster development, while retaining a future hard-bundled production flow. This updates V1.LOCAL_STT/V1.JOB. The user subsequently requested P7 in the same PR #30, overriding the usual separate-phase PR rule. The stated UI is a Speech Models sheet from Projects settings, transcription and Storage, with Tiny/Base/Small multilingual variants, progress/cancel/select/remove. Routine implementation is authorized; do not add cloud inference or larger model families. Read docs/ios/MODELS.md for exact packaging/cache/job contracts. Default project.yml omits iOS weights; project-ios-bundled.yml requires Small and disables download/cache fallback via INKRIBE_IOS_BUNDLED_MODELS_ONLY. Mac resources remain unchanged. Do not download weights or run generation/build/test/CI/device work yourself.
+Implement V1.PRO plus access rules on V1.LOCAL_STT/JOB/STYLE/PRESETS/MP4. Use feat/ios-pro-access-themes, one new PR targeting develop, leave open. Read docs/ios/phases/PRO.md and handoffs/PRO.md.
 
-## P7 authorization and final source handoff
+The user approved: free 5 minutes captioning/week versus unlimited Pro; basic free caption style versus all fonts/templates/animations; free 720p versus Pro 1080p; default free app theme versus all premium AppFoundation themes. Monthly $6.99 and lifetime $24.99 use com.hoangbkit.inkribe.pro.monthly and com.hoangbkit.inkribe.pro.lifetime. AppFoundation owns paywall, contextual upsell, restore, verified purchase state and theme picker/state. No watermark, trial, credit backend or new products.
 
-The user explicitly said to keep working on the last phase in this PR. P7 owns V1.RECOVERY/BOUNDS/ACCESS/HANDOFF and is included in PR #30 with optional models. Its short plan covers source audit and concrete recovery/cancellation/stale-result/cleanup/accessibility/error fixes; no redesign or new feature scope. Read docs/ios/handoffs/P7.md for outcomes and user checks. Source integration is not release/runtime validation. No builds/typechecks/tests, CI, generation, weights or device work. Keep PR #30 open until asked to merge. Pro remains deferred; do not start excluded work.
+Import/projects, caption text/timing/split/merge/undo, media tools and SRT remain free. Keep existing projects/captions/styles/export files usable after expiry; new premium choices require Pro. Failed/cancelled recognition is not charged; publication/retry is idempotent. Preserve accepted durable work across expiry and pre-policy jobs across upgrade.
+
+## Existing local contracts
+
+Schema v5 reads v1–v4. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
+
+Optional bundle/download/cache and Tiny/Base/Small selection remain per docs/ios/MODELS.md. Default project.yml omits iOS weights; project-ios-bundled.yml requires Small and disables download/cache fallback through INKRIBE_IOS_BUNDLED_MODELS_ONLY. Release alone does not change packaging. No weights are to be downloaded by the agent.

@@ -22,6 +22,7 @@ struct IOSExportView: View {
     @State private var deliveryToken: UUID?
     @State private var savingPhotos = false
     @State private var confirmDiscard = false
+    @State private var upsell: IOSProFeature?
     private var exports: IOSExportController { model.exports }
 
     var body: some View {
@@ -34,9 +35,14 @@ struct IOSExportView: View {
                             ForEach(IOSExportFormat.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
                         if profile.format == .mp4 {
-                            Picker("Resolution", selection: $profile.resolution) {
-                                ForEach(IOSExportResolution.allCases, id: \.self) { Text($0.title).tag($0) }
+                            Picker("Resolution", selection: Binding(get: { profile.resolution }, set: { value in
+                                if value == .fullHD && !model.access.hasPro { upsell = .fullHD }
+                                else { profile.resolution = value }
+                            })) {
+                                Text("720p").tag(IOSExportResolution.hd)
+                                Text(model.access.hasPro ? "1080p" : "1080p · Pro").tag(IOSExportResolution.fullHD)
                             }
+                            .disabled(model.access.isChecking)
                             if let canvas = session.document?.canvas, let output = try? profile.resolution.canvas(for: canvas) {
                                 LabeledContent("Output", value: "\(output.width) × \(output.height) · 30 fps")
                                     .font(.caption).foregroundStyle(.secondary)
@@ -55,7 +61,7 @@ struct IOSExportView: View {
                         }
                         .disabled(launching || exports.isPreparing || exports.isActive || exports.isDelivering
                             || exports.persistenceError != nil || session.document == nil
-                            || (profile.format == .srt && !hasCaptions))
+                            || model.access.isChecking || (profile.format == .srt && !hasCaptions))
                         if profile.format == .srt && !hasCaptions {
                             Text("Transcribe the media and keep at least one visible caption to export SRT.")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -91,6 +97,7 @@ struct IOSExportView: View {
                 }
             }
             .navigationTitle("Export")
+            .iosThemedSurface()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -125,6 +132,7 @@ struct IOSExportView: View {
                 }
             } message: { Text("Your project, captions and original media are preserved.") }
             .task { await exports.start(); await exports.refreshArtifact() }
+            .sheet(item: $upsell) { IOSProUpsell(feature: $0) }
         }
     }
 
@@ -191,6 +199,8 @@ struct IOSExportView: View {
                 await model.refreshStorage()
             } catch is CancellationError {
                 message = "Export cancelled."
+            } catch IOSProError.requiresPro(let feature) {
+                upsell = feature
             } catch { self.error = error.localizedDescription }
         }
     }

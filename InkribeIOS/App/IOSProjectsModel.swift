@@ -36,8 +36,9 @@ struct IOSPickedMovie: Transferable {
 @Observable
 final class IOSProjectsModel {
     let repository = IOSProjectRepository.shared
-    let transcription = IOSTranscriptionController()
-    let exports = IOSExportController()
+    let access: IOSProAccess
+    let transcription: IOSTranscriptionController
+    let exports: IOSExportController
     private let importer = IOSMediaImporter(repository: .shared)
     private let thumbnails = IOSProjectThumbnails(repository: .shared)
 
@@ -63,6 +64,10 @@ final class IOSProjectsModel {
     private var storageGeneration = 0
 
     init() {
+        let access = IOSProAccess()
+        self.access = access
+        transcription = IOSTranscriptionController(access: access)
+        exports = IOSExportController(access: access)
         // These ingress copies have no durable authority: committed projects
         // own their originals in the repository. Safe once, before new picks.
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {

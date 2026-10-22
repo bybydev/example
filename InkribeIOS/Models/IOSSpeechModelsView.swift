@@ -63,7 +63,7 @@ struct IOSSpeechModelsView: View {
                             Button(role: .destructive) { pendingRemoval = variant.id } label: {
                                 Label("Remove download", systemImage: "trash")
                             }
-                                .disabled(models.isRemoving || models.downloadingID == variant.id || speech.protectedModelIDs.contains(variant.id) || speech.persistenceError != nil)
+                                .disabled(models.isRemoving || models.downloadingID == variant.id || speech.protectedModelIDs.contains(variant.id) || speech.persistenceError != nil || speech.isAuthorizing)
                         }
                     }
                 }
@@ -84,13 +84,14 @@ struct IOSSpeechModelsView: View {
                 }
             }
             .navigationTitle("Speech Models")
+            .iosThemedSurface()
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { speech.start(); await models.refresh() }
             .confirmationDialog("Remove downloaded model?", isPresented: Binding(
                 get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
             )) {
                 Button("Remove download", role: .destructive) {
-                    guard let id = pendingRemoval else { return }
+                    guard let id = pendingRemoval, !speech.isAuthorizing else { return }
                     pendingRemoval = nil
                     Task { await models.remove(id, protectedIDs: speech.protectedModelIDs, jobStorageError: speech.persistenceError) }
                 }

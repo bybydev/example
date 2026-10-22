@@ -7,6 +7,7 @@ struct IOSTranscriptionView: View {
     @Environment(IOSProjectsModel.self) private var model
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
     @State private var showingModels = false
+    @State private var upsell: IOSProFeature?
     let document: IOSProjectDocument
 
     var body: some View {
@@ -37,6 +38,15 @@ struct IOSTranscriptionView: View {
                 }
             } else {
                 let record = speech.record(for: document.id)
+                if !model.access.hasPro, let usage = speech.allowance {
+                    Text("\(usage.remaining / 60)m \(usage.remaining % 60)s available this week")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if usage.reserved > 0 { Text("Queued work reserves \(usage.reserved)s.").font(.caption) }
+                    Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Text("Transcription uses the full original clip, including media outside your trim.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button("Model: \(speech.models.selectedName)", systemImage: "cpu") { showingModels = true }
                 Picker("Language", selection: $language) {
                     ForEach(IOSSpeechLanguage.codes, id: \.self) { code in
@@ -51,11 +61,12 @@ struct IOSTranscriptionView: View {
                     Button("Transcribe", systemImage: "waveform") {
                         Task {
                             do { try await speech.enqueue(projectID: document.id, language: language) }
+                            catch IOSProError.requiresPro(let feature) { upsell = feature }
                             catch { model.alertMessage = error.localizedDescription }
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!speech.modelAvailable || speech.persistenceError != nil)
+                    .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || model.access.isChecking)
                 }
                 if !speech.modelAvailable {
                     Text("Select an available model or download one in Speech Models.")
@@ -66,11 +77,17 @@ struct IOSTranscriptionView: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
                 Button("Retry local job storage") { speech.retryStorage() }
             }
+            if speech.isAuthorizing { ProgressView("Checking caption allowance…") }
+            if !model.access.hasPro, let error = speech.allowanceError {
+                Text(error).font(.footnote).foregroundStyle(.red)
+                Button("Retry allowance storage") { Task { await speech.refreshAllowance() } }
+            }
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .task { speech.start() }
         .sheet(isPresented: $showingModels) { IOSSpeechModelsView() }
+        .sheet(item: $upsell) { IOSProUpsell(feature: $0) }
     }
 
     @ViewBuilder
@@ -102,10 +119,11 @@ struct IOSTranscriptionView: View {
             Button("Retry", systemImage: "arrow.clockwise") {
                 Task {
                     do { try await speech.retry(record, language: language) }
+                    catch IOSProError.requiresPro(let feature) { upsell = feature }
                     catch { model.alertMessage = error.localizedDescription }
                 }
             }
-            .disabled(!speech.modelAvailable || speech.persistenceError != nil)
+            .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || model.access.isChecking)
         } else if record.status == .unrecoverable {
             Text(record.error ?? "This saved job could not be restored. You can start a new transcription.")
                 .font(.footnote).foregroundStyle(.secondary)

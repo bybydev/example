@@ -1,4 +1,5 @@
 import SwiftUI
+import AppFoundation
 import UIKit
 
 struct IOSCaptionStylePanel: View {
@@ -9,15 +10,21 @@ struct IOSCaptionStylePanel: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Caption style").font(.headline)
             Picker("Font", selection: value(\.font)) {
-                ForEach(IOSCaptionFont.allCases, id: \.self) { font in Text(font.name).tag(font) }
+                ForEach(IOSCaptionFont.allCases, id: \.self) { font in
+                    Text(font.name + (!session.access.hasPro && font != .modern ? " · Pro" : "")).tag(font)
+                }
             }
             .pickerStyle(.segmented)
+            .disabled(session.access.isChecking)
             slider("Size", value: value(\.fontSize, control: .size), range: 0.025...0.12,
                    display: "\(Int((style.fontSize * 100).rounded()))%")
             ColorPicker("Text color", selection: color(\.textColor, control: .textColor), supportsOpacity: true)
             Picker("Animation", selection: value(\.effect)) {
-                ForEach(IOSCaptionEffect.allCases, id: \.self) { effect in Text(effect.name).tag(effect) }
+                ForEach(IOSCaptionEffect.allCases, id: \.self) { effect in
+                    Text(effect.name + (!session.access.hasPro && effect != .none ? " · Pro" : "")).tag(effect)
+                }
             }
+            .disabled(session.access.isChecking)
             if style.effect == .highlight || style.effect == .karaoke {
                 ColorPicker("Highlight color", selection: color(\.accentColor, control: .accentColor), supportsOpacity: true)
             }
@@ -100,6 +107,7 @@ struct IOSCaptionStylePanel: View {
 }
 
 struct IOSCaptionTemplatesPanel: View {
+    @Environment(\.appFoundationTheme) private var theme
     let session: IOSEditorSession
     private var style: IOSCaptionStyle { session.document?.effectiveCaptionStyle ?? .standard }
 
@@ -108,6 +116,11 @@ struct IOSCaptionTemplatesPanel: View {
             Text("Caption templates").font(.headline)
             Text("Choose a look, then play to preview it on your video.")
                 .font(.caption).foregroundStyle(.secondary)
+            Button("Basic · Free", systemImage: "textformat") {
+                var basic = IOSCaptionStyle.standard
+                basic.positionX = style.positionX; basic.positionY = style.positionY
+                session.setCaptionStyle(basic)
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                 ForEach(IOSCaptionTemplate.allCases) { template in
                     let look = positioned(template)
@@ -120,7 +133,8 @@ struct IOSCaptionTemplatesPanel: View {
                                     .foregroundStyle(Color(.sRGB, red: look.accentColor.red,
                                         green: look.accentColor.green, blue: look.accentColor.blue, opacity: 1))
                                 Spacer()
-                                if style == look { Image(systemName: "checkmark.circle.fill").foregroundStyle(.purple) }
+                                if style == look { Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.accentColor) }
+                                else if !session.access.hasPro { Image(systemName: "lock.fill").accessibilityLabel("Pro") }
                             }
                             Text(template.name).font(.headline)
                             Text("\(look.font.name) · \(look.effect.name)").font(.caption).foregroundStyle(.secondary)
@@ -128,7 +142,7 @@ struct IOSCaptionTemplatesPanel: View {
                         .padding(14)
                         .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(style == look ? Color.purple : .clear, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(style == look ? theme.accentColor : .clear, lineWidth: 2))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(template.name), \(look.effect.name)")
@@ -137,6 +151,7 @@ struct IOSCaptionTemplatesPanel: View {
             }
         }
         .onDisappear { session.endStyleEditing() }
+        .disabled(session.access.isChecking)
     }
     private func positioned(_ template: IOSCaptionTemplate) -> IOSCaptionStyle {
         var look = template.style

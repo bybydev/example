@@ -1,10 +1,12 @@
 import PhotosUI
+import AppFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 /// User reviews the media, canvas, and transaction boundary before any
 /// project is published. Originals are adopted only after the import is committed.
 struct IOSImportView: View {
+    @Environment(\.appFoundationTheme) private var theme
     @Environment(IOSProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
@@ -44,7 +46,7 @@ struct IOSImportView: View {
                         ForEach(model.selectedSources) { file in
                             HStack {
                                 Image(systemName: "film")
-                                    .foregroundStyle(.indigo)
+                                    .foregroundStyle(theme.accentColor)
                                 Text(file.displayName)
                                     .font(.subheadline)
                                     .lineLimit(2)
@@ -147,6 +149,7 @@ struct IOSImportView: View {
                 }
             }
             .navigationTitle("Import media")
+            .iosThemedSurface()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

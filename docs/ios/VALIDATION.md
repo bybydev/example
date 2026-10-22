@@ -1,5 +1,7 @@
 # V1 review and user testing
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 Agent work is source/document review only. No builds/tests, CI, Xcode generation, model downloads or device checks. Do not execute fixtures or call source inspection a test pass. User tests afterward.
 
 Review identities, ownership, persistence, cancellation, stale-result guards, genuine time/Unicode, preview/export parity and Mac preservation. Record actual findings and incomplete V1 items separately from unrun checks.
@@ -63,3 +65,7 @@ For the future bundled production choice, generate from project-ios-bundled.yml 
 ## P7 source hardening — validation handoff
 
 All actual user-run scenarios, including initial queue restore/rewrite failure retry, background speech pause/restart, query/thumbnail races, active staging protection, Photos preparation, abandoned ingress cleanup, recoverable Trash, clock rollback, long duplicate titles, exact unchanged timing fields and UTF-8 export names, are in [handoffs/P7.md](handoffs/P7.md). No scenarios were executed by the agent. Existing native crop/render/audio/export/model/device scenarios remain pending; P7 does not convert source review into runtime evidence. When job storage is unavailable, model removal and project Trash/empty actions are blocked until storage recovery makes the durable job dependencies known again.
+
+## Pro phase
+
+See [handoffs/PRO.md](handoffs/PRO.md) for user-run StoreKit, quota/interruption/idempotency, expiry, preserved content, 720p/1080p and AF theme scenarios. All are unrun. The active request supersedes earlier deferred commerce checks; no agent builds/typechecks/tests/device validation are authorized.

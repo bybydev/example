@@ -1,5 +1,6 @@
 import CoreMedia
 import SwiftUI
+import AppFoundation
 import UniformTypeIdentifiers
 
 enum IOSEditorField: Hashable { case title, word(UUID), timing(UUID, Bool), trimStart, trimEnd }
@@ -9,6 +10,7 @@ struct IOSProjectDetailView: View {
     @Environment(IOSProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.appFoundationTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let projectID: UUID
     @State private var session: IOSEditorSession
@@ -22,9 +24,9 @@ struct IOSProjectDetailView: View {
     @State private var showExport = false
     @FocusState private var focused: IOSEditorField?
 
-    init(projectID: UUID) {
+    init(projectID: UUID, access: IOSProAccess) {
         self.projectID = projectID
-        _session = State(initialValue: IOSEditorSession(projectID: projectID))
+        _session = State(initialValue: IOSEditorSession(projectID: projectID, access: access))
     }
 
     var body: some View {
@@ -56,6 +58,7 @@ struct IOSProjectDetailView: View {
             }
         }
         .navigationTitle(session.document?.title ?? "Project")
+        .iosThemedSurface()
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
         .toolbar {
@@ -126,6 +129,7 @@ struct IOSProjectDetailView: View {
         }
         .task { await session.open() }
         .sheet(isPresented: $showExport) { IOSExportView(session: session) }
+        .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { IOSProUpsell(feature: $0) }
         .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await session.refreshSaved() } }
         .onChange(of: focused) { _, value in
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }
@@ -336,10 +340,10 @@ struct IOSProjectDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
-            .background(cue.id == session.presentation?.cueID ? Color.indigo.opacity(0.25) : Color.secondary.opacity(0.08),
+            .background(cue.id == session.presentation?.cueID ? theme.accentColor.opacity(0.25) : theme.surfaceColor,
                         in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(cue.id == session.selectedCueID ? Color.purple : .clear, lineWidth: 2))
+                .stroke(cue.id == session.selectedCueID ? theme.accentColor : .clear, lineWidth: 2))
         }
         .buttonStyle(.plain)
         .id(cue.id)

@@ -17,13 +17,19 @@ actor IOSLocalTranscriber {
         try Task.checkCancellation()
         let project = try await repository.open(payload.projectID)
         // Do not erase a committed result if the process died before queue completion.
-        if project.recognition?.id == id { return }
+        if project.recognition?.id == id {
+            if payload.requiresAllowance == true { try await repository.finishSpeechAllowance(id) }
+            return
+        }
         guard project.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
         guard project.contentRevision == payload.expectedRevision else {
             throw IOSProjectStoreError.staleRevision(expected: payload.expectedRevision,
                                                       actual: project.contentRevision)
         }
         guard project.assets.contains(where: { $0.metadata.audioTrackCount > 0 }) else { throw IOSSpeechError.noAudio }
+        if payload.requiresAllowance == true {
+            try await repository.requireSpeechAllowance(jobID: id, projectID: project.id, revision: payload.expectedRevision)
+        }
         let tracker = IOSSpeechProgress(reporter: progress)
         await tracker.stage("Loading speech model…", fraction: 0)
         let lease = UUID()
@@ -41,7 +47,8 @@ actor IOSLocalTranscriber {
             await tracker.stage("Saving captions…", fraction: 0.98)
             try Task.checkCancellation()
             try await repository.saveRecognition(result, projectID: project.id,
-                                                  expectedRevision: payload.expectedRevision)
+                                                  expectedRevision: payload.expectedRevision,
+                                                  chargeAllowance: payload.requiresAllowance == true)
             // Publication precedes queue success, with no cancellation check in between.
             await runtime.unloadModel()
             await IOSSpeechModelStore.shared.release(lease)

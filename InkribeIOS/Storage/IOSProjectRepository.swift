@@ -150,10 +150,13 @@ actor IOSProjectRepository {
     /// One atomic publication of raw output and editable captions. The job ID
     /// handles a crash after publication but before JobQueue marks completion.
     func saveRecognition(_ result: IOSRecognition, projectID: UUID,
-                         expectedRevision: UInt64) throws {
+                         expectedRevision: UInt64, chargeAllowance: Bool = false) throws {
         try Task.checkCancellation()
         var current = try open(projectID)
-        if current.recognition?.id == result.id { return }
+        if current.recognition?.id == result.id {
+            if chargeAllowance { try finishSpeechAllowance(result.id) }
+            return
+        }
         guard current.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
         guard current.contentRevision == expectedRevision else {
             throw IOSProjectStoreError.staleRevision(expected: expectedRevision,
@@ -161,6 +164,115 @@ actor IOSProjectRepository {
         }
         current.recognition = result
         _ = try commitEdit(current, expectedRevision: expectedRevision)
+        // The reservation remains durable if charging fails after publication.
+        // Retrying/reconciling can settle it without running or charging twice.
+        if chargeAllowance { try finishSpeechAllowance(result.id) }
+    }
+
+    private func speechAllowanceURL() throws -> URL {
+        try directory("Usage").appendingPathComponent("caption-allowance-v1.json")
+    }
+
+    private func loadSpeechAllowance() throws -> IOSCaptionAllowanceLedger {
+        do {
+            let url = try speechAllowanceURL()
+            var value: IOSCaptionAllowanceLedger
+            if files.fileExists(atPath: url.path) {
+                let input = try FileHandle(forReadingFrom: url)
+                defer { try? input.close() }
+                // A normal ledger is a few KB. Bound malformed input before decoding.
+                let data = try input.read(upToCount: 1_048_577) ?? Data()
+                guard data.count <= 1_048_576 else { throw IOSProError.allowanceStorage }
+                value = try decoder.decode(IOSCaptionAllowanceLedger.self, from: data)
+                try value.validate()
+            } else {
+                value = IOSCaptionAllowanceLedger(weekStart: IOSCaptionAllowanceLedger.week(containing: Date()))
+            }
+            value.advance(at: Date())
+            return value
+        } catch { throw IOSProError.allowanceStorage }
+    }
+
+    private func writeSpeechAllowance(_ value: IOSCaptionAllowanceLedger) throws {
+        do {
+            try value.validate()
+            try encoder.encode(value).write(to: speechAllowanceURL(), options: .atomic)
+        } catch { throw IOSProError.allowanceStorage }
+    }
+
+    private func hasPublishedSpeech(_ reservation: IOSCaptionAllowanceLedger.Reservation) throws -> Bool {
+        let candidates = [try projectDirectory(reservation.projectID),
+            try directory("Trash").appendingPathComponent(reservation.projectID.uuidString)]
+        for folder in candidates where files.fileExists(atPath: folder.path) {
+            let document = try readRecoverable(in: folder)
+            guard document.id == reservation.projectID else { throw IOSProError.allowanceStorage }
+            return document.recognition?.id == reservation.jobID
+        }
+        return false
+    }
+
+    /// Called under the controller's request/reconciliation guard. It cannot
+    /// race a reservation that has not yet been published into JobQueue.
+    func reconcileSpeechAllowance(activeJobIDs: Set<UUID>) throws -> IOSCaptionAllowance {
+        var value = try loadSpeechAllowance()
+        for reservation in value.reservations {
+            if try hasPublishedSpeech(reservation) { value.finish(reservation.jobID) }
+            else if !activeJobIDs.contains(reservation.jobID) {
+                value.reservations.removeAll { $0.jobID == reservation.jobID }
+            }
+        }
+        try writeSpeechAllowance(value)
+        return value.snapshot
+    }
+
+    func reserveSpeechAllowance(jobID: UUID, projectID: UUID, revision: UInt64) throws {
+        let project = try open(projectID)
+        guard project.contentRevision == revision, project.recognition == nil else {
+            throw IOSProjectStoreError.staleRevision(expected: revision, actual: project.contentRevision)
+        }
+        var value = try loadSpeechAllowance()
+        guard !value.charged.contains(jobID), !value.reservations.contains(where: { $0.jobID == jobID }) else {
+            throw IOSSpeechError.busy
+        }
+        let seconds = try IOSCaptionAllowanceLedger.seconds(for: project)
+        guard seconds <= value.snapshot.remaining else { throw IOSProError.requiresPro(.captioning) }
+        value.reservations.append(.init(jobID: jobID, projectID: projectID, revision: revision,
+                                       weekStart: value.weekStart, seconds: seconds))
+        try writeSpeechAllowance(value)
+    }
+
+    func requireSpeechAllowance(jobID: UUID, projectID: UUID, revision: UInt64) throws {
+        let value = try loadSpeechAllowance()
+        guard value.reservations.contains(where: { $0.jobID == jobID && $0.projectID == projectID && $0.revision == revision }) else {
+            throw IOSProError.authorizationUnavailable
+        }
+    }
+
+    func finishSpeechAllowance(_ jobID: UUID) throws {
+        // Older jobs and Pro-authorized jobs carry no free reservation.
+        let url = try speechAllowanceURL()
+        guard files.fileExists(atPath: url.path) else { return }
+        var value = try loadSpeechAllowance()
+        guard value.reservations.contains(where: { $0.jobID == jobID }) else { return }
+        value.finish(jobID)
+        try writeSpeechAllowance(value)
+    }
+
+    func releaseSpeechAllowance(_ jobID: UUID) throws {
+        guard files.fileExists(atPath: try speechAllowanceURL().path) else { return }
+        var value = try loadSpeechAllowance()
+        guard value.reservations.contains(where: { $0.jobID == jobID }) else { return }
+        value.reservations.removeAll { $0.jobID == jobID }
+        try writeSpeechAllowance(value)
+    }
+
+    private func settlePublishedSpeechAllowance() throws {
+        guard files.fileExists(atPath: try speechAllowanceURL().path) else { return }
+        var value = try loadSpeechAllowance()
+        for reservation in value.reservations {
+            if try hasPublishedSpeech(reservation) { value.finish(reservation.jobID) }
+        }
+        try writeSpeechAllowance(value)
     }
 
     func rename(_ id: UUID, title: String, expectedRevision: UInt64) throws -> IOSProjectDocument {
@@ -338,6 +450,7 @@ actor IOSProjectRepository {
     /// Explicit user deletion moves a *whole* project to recoverable Trash.
     /// Neither cache clearing nor pruning pending imports calls this.
     func moveToTrash(_ id: UUID) throws {
+        try settlePublishedSpeechAllowance()
         _ = try open(id)
         let destination = try directory("Trash").appendingPathComponent(id.uuidString)
         guard !files.fileExists(atPath: destination.path) else {
@@ -417,6 +530,7 @@ actor IOSProjectRepository {
 
     /// Explicitly destructive action, called only after user confirmation.
     func emptyTrash() throws {
+        try settlePublishedSpeechAllowance()
         let trash = try directory("Trash")
         for child in try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil) {
             guard UUID(uuidString: child.lastPathComponent) != nil,

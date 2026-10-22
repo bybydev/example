@@ -1,5 +1,7 @@
 # V1 risks and open findings
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 | Risk | Owner | Required response |
 |---|---|---|
 | Older autosave reload overwrites newer typing | P1/#24 | Corrected in source: one save drain, latest draft retained, returned revisions, no post-save reload; runtime unverified |
@@ -75,3 +77,7 @@ No cloud/team/publishing service risks need engineering because these features a
 P7 is included in PR #30 by explicit user instruction. See handoffs/P7.md for fixes and every V1 item's entry points. In particular, both app controllers now distinguish failed initial JobQueue restoration from later save failure, so retry cannot persist empty pre-start records. Model removal and project Trash cleanup are blocked while transcription storage cannot establish queued dependencies. No shared JobQueue change/reset flow was added. Genuinely corrupt queue documents remain preserved with a blocking error and require manual support/backup recovery.
 
 Library/storage generation guards, ingress/staging ownership, background speech pause/restart, unchanged exact timing, malformed metadata, byte-limited export names, long duplicate titles, date rollback and Trash prior-valid reads are source corrections only. No compile/API/concurrency/network/media/device proof exists. Pro and production packaging policy are still explicit user decisions. User validation, native compatibility, fidelity/accessibility and measured performance remain prerequisites to any release claim.
+
+## Pro follow-up risks
+
+Source has no compiler/runtime evidence. Live App Store product assignment/prices and a real Inkribe privacy destination remain release inputs. Approved product strings overlap Mac local config; preserve Mac and verify intended store ownership. The weekly allowance is local and uses device time; it does not promise tamper resistance or cross-device synchronization. Invalid quota storage fails visibly rather than resetting grants. Entitlement expiry/pending/revocation, publication/usage-write interruption, nested sheets and premium light/dark themes need user validation per handoffs/PRO.

@@ -1,5 +1,7 @@
 # Inkribe iOS v1 architecture
 
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
 Current scope is PLAN/FEATURES. This replaces the broad product architecture. No account/provider/backend layer is needed.
 
 ## Ownership
@@ -97,3 +99,7 @@ Library/thumbnail completion paths share a generation- and query/sort/filter-gua
 Both queue controllers distinguish a successfully started queue from a queue object whose initial load/rewrite failed. Retry starts/loads the latter again; only a fully started queue can persist its current records during retry. This avoids replacing durable jobs with empty pre-start memory. Foreground speech pause cancels execution through JobQueue's existing pause/requeue semantics; native shutdown errors under cancellation become CancellationError after unload/lease release. No background execution entitlement or frame/window checkpointing is introduced.
 
 Trash uses the same prior-valid read as Projects while rejecting future schemas. Revisions/schema stay unchanged. updatedAt is nondecreasing despite wall-clock rollback, title duplication retains the 256-character limit, timing Apply preserves untouched rational boundaries and is a no-op for identical intervals, and output basenames preserve the legacy 80-character rule while bounding 251 UTF-8 bytes plus the four-byte extension. Import rejects nonfinite/invalid dimensions before Int conversion. See handoffs/P7.md for exact limitations/user checks; no runtime verification occurred.
+
+## Pro follow-up ownership
+
+Pinned AF 0.1.8 owns verified StoreKit lifecycle, paywall/upsell and theme state/picker. IOSProAccess centralizes app gates and expiry; IOSCommerce owns approved policy/IDs. IOSProjectRepository exclusively owns a separate atomic schema-1 weekly usage ledger. Durable job reservations precede enqueue and successful recognition IDs reconcile exactly-once charges across interruption. Accepted job policy is captured in an optional payload flag, preserving old queues; project schema stays v5. New export access is checked before replacing the retained artifact. Theme chrome is independent of shared media/caption rendering. See handoffs/PRO for storage and expiry contracts.
