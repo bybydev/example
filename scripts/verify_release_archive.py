@@ -46,8 +46,8 @@ def main():
     ios = options.platform == 'iOS'
     resource_root = app if ios else app / 'Contents/Resources'
     info = plist(app / ('Info.plist' if ios else 'Contents/Info.plist'))
-    expected_id = 'com.hoangbkit.inkribe' + ('.ios' if ios else '')
-    if options.configuration == 'Debug':
+    expected_id = 'com.hoangbkit.inkribe'
+    if not ios and options.configuration == 'Debug':
         expected_id += '.debug'
     require(info['CFBundleIdentifier'] == expected_id, 'Wrong archived bundle identifier')
     require(app_settings['PRODUCT_BUNDLE_IDENTIFIER'] == expected_id, 'Wrong effective app identity')
@@ -60,6 +60,7 @@ def main():
     architectures = subprocess.check_output(['lipo', '-archs', str(executable)], text=True).split()
     if ios:
         require(info.get('CFBundleSupportedPlatforms') == ['iPhoneOS'], 'Expected an iOS device archive')
+        require(info.get('UIDeviceFamily') == [1], 'Expected iPhone-only device family')
         require('arm64' in architectures, 'Missing iOS arm64 slice')
         require(info.get('NSPhotoLibraryAddUsageDescription'), 'Missing Photos add-only usage description')
         flags = app_settings.get('OTHER_SWIFT_FLAGS', '')
@@ -77,14 +78,12 @@ def main():
         for asset in assets():
             verify(resource_root / 'Models' / asset['relativePath'], asset)
         require((resource_root / 'ThirdPartyNotices.txt').is_file(), 'Missing Mac third-party notices')
-    # The current repo has no app icon artwork. Do not fabricate it or treat an
-    # unsigned development build as App Store metadata validation.
+    # Both app targets compile the shared InkribeMac/AppIcon.icon resource.
+    # Verify the archive's declaration and compiled output, not source presence.
     icon_present = bool(info.get('CFBundleIconFile') or info.get('CFBundleIconName') or info.get('CFBundleIcons'))
-    if icon_present:
-        require((resource_root / 'Assets.car').is_file() or any(resource_root.glob('*.icns'))
-                or any(resource_root.glob('AppIcon*.png')), 'Declared app icon has no compiled output')
-    else:
-        print('::warning::No app icon is declared in this archive; artwork remains a production release input.')
+    require(icon_present, 'Archived app is missing its AppIcon declaration')
+    require((resource_root / 'Assets.car').is_file() or any(resource_root.glob('*.icns'))
+            or any(resource_root.glob('AppIcon*.png')), 'Declared app icon has no compiled output')
     print('Validated unsigned ' + options.platform + ' archive: ' + str(options.archive))
 
 

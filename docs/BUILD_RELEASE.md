@@ -12,7 +12,7 @@ The contract follows [hoangbkit/guidelines](https://github.com/hoangbkit/guideli
 | configuration | Debug / Release | Release |
 | ios_models | download / bundled; ignored for macOS-only | download |
 
-Choose the ref/branch in GitHub's dispatch UI. Checkout uses that selected ref; the prerelease points to the exact checked-out SHA. Debug respects existing `.debug` bundle IDs; Release respects existing production IDs. No CI identity override. One configuration per run.
+Choose the ref/branch in GitHub's dispatch UI. Checkout uses that selected ref; the prerelease points to the exact checked-out SHA. iOS uses `com.hoangbkit.inkribe` for both Debug and Release by explicit user request. Mac keeps `com.hoangbkit.inkribe.debug` for Debug and `com.hoangbkit.inkribe` for Release. No CI identity override. One configuration per run.
 
 GitHub requires the workflow definition on the repository's **default branch (currently master)** before its Run workflow control appears. This PR targets develop as requested; merging into develop alone does not expose the default-branch dispatch entry. Promote the workflow definition to master through the usual reviewed release process, then select develop/another branch to run. Do not change the default branch or merge automatically for this setup.
 
@@ -50,5 +50,5 @@ Published prerelease name/tag: `mycli-build-<run-id>-<attempt>`. These are dispo
 - No workflow, build/test/typecheck, XcodeGen, real-resource download, archive, local signing/deployment or device validation was run. Static YAML/Python/embedded-shell syntax inspection does not prove Xcode compilation or archive acceptance. The first manual run remains necessary.
 - The runner image documentation lists Xcode 26.3; the workflow checks the explicit path and fails if unavailable rather than silently switching compilers. Installed XcodeGen must satisfy project.yml's existing minimum version.
 - The five Mac weights total 2,212,332,186 bytes before compression, in addition to native binaries. Whether the final ZIP fits below 2 GiB is unmeasured. Oversized Mac output fails before publication; changing Mac resource policy or mycli's artifact contract needs a separate decision.
-- Current sources have no app icon artwork. A missing declared compiled icon is an error; an archive declaring no icon reports a warning. No placeholder artwork or App Store readiness claim is introduced. Product artwork/privacy/store metadata remain separate production work.
+- Both app targets use the same existing `InkribeMac/AppIcon.icon`, following Spokio's shared-resource setup. iOS includes that exact file in its resource build phase and selects `AppIcon` for Debug/Release; the bundled-model spec inherits it. Archive validation requires an icon declaration and compiled icon output. The icon is not copied or redesigned; actual compilation/device appearance remains unverified.
 - This is the mycli unsigned build lane, not App Store/TestFlight production signing. It does not apply a framework MinimumOSVersion patch, provision developer resources, run tests or upload to Apple.

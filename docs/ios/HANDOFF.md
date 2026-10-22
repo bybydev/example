@@ -13,3 +13,7 @@ The repository owns a separate atomic weekly usage ledger and durable job reserv
 Schema remains v5, reading v1–v4. Canonical timing, raw recognition and originals remain unchanged; retained-range preview/export mapping, bounded undo, serialized latest-draft saves, model selection/download/cache and export pins/delivery leases are retained. [MODELS.md](MODELS.md) and earlier handoffs retain these contracts. [handoffs/P7.md](handoffs/P7.md) records the previous source audit; its 28/29 accounting and Pro deferral are historical.
 
 No builds/typechecks/tests, CI setup/triggers, generation, model downloads, inference, media exports, deployment or native/device/UI validation were performed. User runs [Pro scenarios](handoffs/PRO.md) and existing VALIDATION/P7 scenarios before release.
+
+## Current naming and bundle correction — PR #33
+
+The iOS source root is now Inkribe/ and the entry point is InkribeApp. Redundant IOS type/file prefixes are removed (the domain canvas is ProjectCanvas). Project specs, resource/StoreKit paths and source references follow the move. Both iOS configurations use com.hoangbkit.inkribe. Two legacy JobQueue adapters retain IOSSpeechJob/IOSExportJob as persisted type names; new work uses SpeechJob/ExportJob. No storage/default keys, encoded document/queue payload fields, model IDs, product IDs or Mac files change. Source review only; no builds/tests/generation/workflow/device actions. Keep #33 open.

@@ -207,7 +207,7 @@ Post-v1 cleanup should consolidate existing ownership rather than weaken establi
 ## App targets after iOS P0
 
 - `InkribeMac` (macOS 15+, existing bundle IDs `com.hoangbkit.inkribe[.debug]`, existing purchases and data).
-- `Inkribe` (iOS 26+, new identifiers `com.hoangbkit.inkribe.ios[.debug]`, app sources in `InkribeIOS/`, AppFoundation 0.1.8). P1 Projects/import/storage UI is merged; P2 local transcription/read-only result UI is in open PR #25; its renderer is a source-only prototype, not finished video export.
+- `Inkribe` (iOS 26+, identifier `com.hoangbkit.inkribe` for both Debug and Release, app sources in `Inkribe/`, AppFoundation 0.1.8). P1 Projects/import/storage UI is merged; P2 local transcription/read-only result UI is in open PR #25; its renderer is a source-only prototype, not finished video export.
 - `project.yml` is authoritative; generated `.xcodeproj` is intentionally unchanged until the user chooses to regenerate it. Mac Makefile commands now explicitly use `InkribeMac`.
 
 ## Manual build releases for mycli

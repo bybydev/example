@@ -8,15 +8,15 @@ V1.PRO is source-integrated on feat/ios-pro-access-themes from merged develop eb
 
 | Owner | Entry points / responsibility |
 |---|---|
-| Pro/IOSCommerce.swift | Two approved IDs, 5-minute policy, four-benefit comparison/paywall, isolated Debug simulator catalog |
-| Pro/IOSProAccess.swift | AF verified monthly/lifetime state, expiration refresh timer, centralized style/action access |
-| Pro/IOSCaptionAllowance.swift | Validated schema-1 weekly usage, reservation model, full canonical audio duration and whole-second rounding |
-| Storage/IOSProjectRepository.swift | Sole ledger owner; reserve/authorize/reconcile/finish/release; atomic publication and recovery |
-| Transcription/IOSTranscriptionController.swift and IOSLocalTranscriber.swift | Serialize authorization/reconciliation, reserve before enqueue, captured policy in durable job, charge after saved result |
-| Editor/IOSEditorSession.swift and IOSCaptionStylePanel.swift | Gate new premium fonts/effects before mutation, free Basic reset, contextual upsell, preserve existing style/edit/undo |
-| Export/IOSExportController.swift, IOSExportRequest.swift, IOSExportView.swift | Default 720p; gate new 1080p before retained artifact replacement; saved job retry/delivery unchanged |
+| Pro/Commerce.swift | Two approved IDs, 5-minute policy, four-benefit comparison/paywall, isolated Debug simulator catalog |
+| Pro/ProAccess.swift | AF verified monthly/lifetime state, expiration refresh timer, centralized style/action access |
+| Pro/CaptionAllowance.swift | Validated schema-1 weekly usage, reservation model, full canonical audio duration and whole-second rounding |
+| Storage/ProjectRepository.swift | Sole ledger owner; reserve/authorize/reconcile/finish/release; atomic publication and recovery |
+| Transcription/TranscriptionController.swift and LocalTranscriber.swift | Serialize authorization/reconciliation, reserve before enqueue, captured policy in durable job, charge after saved result |
+| Editor/EditorSession.swift and CaptionStylePanel.swift | Gate new premium fonts/effects before mutation, free Basic reset, contextual upsell, preserve existing style/edit/undo |
+| Export/ExportController.swift, IOSExportRequest.swift, ExportView.swift | Default 720p; gate new 1080p before retained artifact replacement; saved job retry/delivery unchanged |
 | Pro/IOSProViews.swift | AF paywall/upsell/theme picker, plan/usage/restore, native subscription-management link and app surface tokens |
-| App/InkribeIOSApp.swift, IOSProjectsView.swift and other iOS surfaces | App-wide purchase lifecycle/transaction refresh and theme synchronization; Pro/Appearance entries |
+| App/InkribeApp.swift, ProjectsView.swift and other iOS surfaces | App-wide purchase lifecycle/transaction refresh and theme synchronization; Pro/Appearance entries |
 | Resources/Inkribe.storekit | iOS-only local monthly $6.99 and lifetime $24.99 offers |
 
 ## Allowance and interruption contract

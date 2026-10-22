@@ -39,7 +39,7 @@ URL import, combined/batch imports and advanced canvas controls already present 
 
 One PR per requested phase from latest develop, all passes in it. State included V1 IDs and a short plan first; do not start another phase automatically or expand scope. Follow WORKFLOW and relevant UI approval. Preserve Mac data/identity/purchases/behavior.
 
-P2 model packaging is now governed by MODELS. The subsequent user-approved [Pro phase](phases/PRO.md) implements free 5-minute weekly captioning/basic style/720p/default AF theme versus unlimited captioning/all styles/1080p/premium AF themes. Monthly $6.99 and lifetime $24.99 use the approved IDs in IOSCommerce. Core editing/media/SRT remain free. Existing saved content stays usable after expiry. No watermark/trial/credit backend. See handoffs/PRO for exact quota/recovery and production inputs.
+P2 model packaging is now governed by MODELS. The subsequent user-approved [Pro phase](phases/PRO.md) implements free 5-minute weekly captioning/basic style/720p/default AF theme versus unlimited captioning/all styles/1080p/premium AF themes. Monthly $6.99 and lifetime $24.99 use the approved IDs in Commerce. Core editing/media/SRT remain free. Existing saved content stays usable after expiry. No watermark/trial/credit backend. See handoffs/PRO for exact quota/recovery and production inputs.
 
 No builds/tests unless asked, CI setup/repair/triggers, Xcode project generation, model downloads, deployment or device validation. User tests afterward. Source integration is not compilation/runtime verification; missing required behavior remains incomplete.
 

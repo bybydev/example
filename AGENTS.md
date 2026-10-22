@@ -35,3 +35,15 @@ Optional bundle/download/cache and Tiny/Base/Small selection remain per docs/ios
 
 The user explicitly requested the GitHub Build Release workflow based on hoangbkit/guidelines. Keep it in one new chore/manual-build-release PR from latest develop targeting develop, open until asked to merge. This authorizes workflow/helper/docs source edits only, overriding the earlier no-CI-setup rule for this release lane. No workflow dispatch, agent builds/tests, project generation, model downloads or deployment. Do not add Fast/Full CI or change application UI/runtime/model policy. Read docs/BUILD_RELEASE.md. Only workflow_dispatch; unsigned selected-platform archives plus generated Xcode project ZIP; mycli-build prerelease tags. Preserve app identities, Mac resources and source.
 
+
+## Current iOS bundle identifier request
+
+PR #32 (manual release workflow) is squash merged as 990ef4b. The user explicitly requests a new PR changing the Inkribe iOS target to com.hoangbkit.inkribe in both Debug and Release. Keep this on chore/ios-bundle-identifier from latest develop targeting develop, open until asked to merge. Update the archive identity validator accordingly. Mac remains com.hoangbkit.inkribe.debug in Debug and com.hoangbkit.inkribe in Release. Keep existing iOS preference/storage keys, product IDs and entitlements unchanged. No builds/tests, workflow dispatch, generation, model downloads or device validation. Historical P0 bundle IDs are superseded by this request.
+
+## iOS source naming correction
+
+The user requires the iOS app source folder to be Inkribe/, matching its target, alongside InkribeMac/. App files/types use plain names without IOS prefixes; InkribeApp is the entry point and ProjectCanvas is the domain canvas. Only the two adapters in Inkribe/Storage/LegacyJobCompatibility.swift retain old type names because JobQueue 1.0 persists those names. Existing storage paths, defaults keys, model IDs, schema fields and queue payloads remain stable. Keep these changes in PR #33, open until asked to merge. No builds/tests, CI runs, Xcode generation, weights or device checks.
+
+The user requires iPhone-only support: TARGETED_DEVICE_FAMILY is 1 for both iOS configurations, inherited by the bundled-model spec. Do not re-enable iPad support.
+
+Both app targets must use the same existing InkribeMac/AppIcon.icon resource, following Spokio. iOS selects AppIcon and references that file directly; do not duplicate or redesign the artwork.

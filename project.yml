@@ -100,9 +100,10 @@ settingGroups:
       Release:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe
 
-  InkribeIOSApp:
+  InkribeApp:
     base:
-      CODE_SIGN_ENTITLEMENTS: InkribeIOS/Resources/Inkribe.entitlements
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      CODE_SIGN_ENTITLEMENTS: Inkribe/Resources/Inkribe.entitlements
       CODE_SIGN_STYLE: Automatic
       CURRENT_PROJECT_VERSION: 1
       GENERATE_INFOPLIST_FILE: YES
@@ -114,12 +115,12 @@ settingGroups:
       INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Inkribe adds finished videos to Photos only when you choose Save to Photos."
       SWIFT_STRICT_CONCURRENCY: complete
       SUPPORTS_MACCATALYST: NO
-      TARGETED_DEVICE_FAMILY: "1,2"
+      TARGETED_DEVICE_FAMILY: "1"
     configs:
       Debug:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe.ios.debug
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe
       Release:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe
 
   InkribeMacTest:
     base:
@@ -174,12 +175,14 @@ targets:
     platform: iOS
     deploymentTarget: "26.0"
     sources:
-      - path: InkribeIOS
+      - path: Inkribe
+      - path: InkribeMac/AppIcon.icon
+        buildPhase: resources
       # Optional iOS weights are added by project-ios-bundled.yml. Mac Models
       # membership is independent and stays unchanged.
     settings:
       groups:
-        - InkribeIOSApp
+        - InkribeApp
     dependencies:
       - package: AppFoundation
         product: AppFoundation
@@ -244,7 +247,7 @@ schemes:
         Inkribe: all
     run:
       config: Debug
-      storeKitConfiguration: InkribeIOS/Resources/Inkribe.storekit
+      storeKitConfiguration: Inkribe/Resources/Inkribe.storekit
     profile:
       config: Release
     analyze:

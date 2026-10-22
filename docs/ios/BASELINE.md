@@ -63,7 +63,7 @@ This baseline is source inspection only. No package resolution, builds, tests, m
 | Mac tests | `InkribeTests`, `@testable import Inkribe` | New target name `InkribeMacTests`; all seven app-module imports remain `Inkribe`; test bundle ID unchanged |
 | Mac test host | App product `Inkribe.app` / executable `Inkribe` | Explicit target `productName: Inkribe` keeps XcodeGen's generated host path aligned with `Inkribe.app/Contents/MacOS/Inkribe` |
 | Mac CLI references | Makefile build/test use old scheme | `InkribeMac` scheme in Makefile; no commands run |
-| iOS app | None | `Inkribe` target/scheme, `InkribeIOS/` sources, deployment iOS 26, iPhone/iPad; Release `com.hoangbkit.inkribe.ios`, Debug `.ios.debug` |
+| iOS app | None | `Inkribe` target/scheme, `Inkribe/` sources, deployment iOS 26, iPhone/iPad; Release `com.hoangbkit.inkribe.ios`, Debug `.ios.debug` |
 | iOS foundation | None | AppFoundation 0.1.8 linked only to iOS target; independent theme-state key; isolated empty StoreKit test config, asset catalog/entitlements, no feature UI |
 | Project file | Existing `Inkribe.xcodeproj` generated from project.yml | `project.yml` edited; .xcodeproj **not regenerated or modified** |
 
