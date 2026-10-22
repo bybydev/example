@@ -1,11 +1,13 @@
 # Live Inkribe iOS v1 handoff — 2026-10-22
 
-Scope: current PLAN/FEATURES, 29 items, P0–P7. Old exhaustive catalog is historical. No excluded services/features.
+Scope: current PLAN/FEATURES, 29 V1 items, P0–P7. Old exhaustive catalog is historical. No excluded services/features.
 
-P0 #23, P1 #24 and P2 #25 are squash merged. P2 merge: 97d647ec7a17b269ac4727dafe15db543613d801. The user requested P3 implementation next. [PR #26](https://github.com/hoangbkit/Inkribe/pull/26), branch feat/ios-p3-caption-editor, starts at that latest develop. **Leave PR #26 open for review; no merge/auto-merge until asked.**
+P0 #23, P1 #24, P2 #25 and P3 #26 are squash merged. P3 merge: 11902e67cc74321f4ae4530e4914db4203bec95a. The user requested P4 next. [PR #27](https://github.com/hoangbkit/Inkribe/pull/27), branch feat/ios-p4-caption-styles, starts at that latest develop. **Leave PR #27 open for review; no merge/auto-merge until asked.**
 
-P3 source integrates V1.TEXT, TIMING, SPLIT_MERGE, UNDO and PREVIEW: compact footage, one transport/project clock, cue overview/scrubber, caption selection/correction, cue/word timing, same-clip split/merge, session undo/redo and serialized title/caption autosave. Raw recognition/native word anchors/original media remain immutable. Schema v3 retains v1/v2 reads and adds optional manual timing; older clients reject new documents. Compilation/runtime remain unverified.
+P4 source integrates V1.STYLE, POSITION and PRESETS: four built-in fonts, size/text/accent/outline/background colors, normalized output position, four editable templates and timing-driven highlight/karaoke/pop/fade. The Style/Templates panels preserve the existing player/selection/clock. Style edits use the same serialized saves and bounded undo as caption edits. Schema v4 reads v1–v3, supplies defaults for missing styles and preserves styles on duplicate.
 
-Read [handoffs/P3.md](handoffs/P3.md) for exact behavior, source review, compatibility, P4/P5 input and pending user scenarios. [handoffs/P2.md](handoffs/P2.md) remains the model placement/hash and native-transcription reference; P2's old review hold is historical. No model downloads, builds/tests/typechecks, CI, Xcode generation, deployment or device validation occurred.
+One Core Text layout/draw path serves preview, transparent sRGB bitmap output and a concrete CI frame-composition adapter. No separate SwiftUI text/animation approximation remains in the shipping preview. Render data uses edited words/timing; native anchors/raw recognition/originals are preserved. Compilation, real shaping, memory/latency and pixel output remain unverified.
 
-Next action is source review/fixes in the P3 PR or user testing. Start P4 only on user request after P3 disposition. P4 owns fonts/styles/position/templates/motion and shared preview/export typography; P3's plain SwiftUI caption overlay is not a completed styled renderer/export path. P5 owns export/commerce; commercial policy remains undecided. Preserve Mac and the compact v1 boundaries.
+Read [handoffs/P4.md](handoffs/P4.md) for exact font/template values, renderer interfaces, bounds, compatibility and remaining user scenarios. [handoffs/P3.md](handoffs/P3.md) records editor/save contracts; its old review hold is historical. [handoffs/P2.md](handoffs/P2.md) retains exact model setup/hash. No builds/typechecks/tests, CI, project regeneration, model downloads, deployment or device validation occurred.
+
+Next action is P4 source review/fixes or user testing, not automatic P5. P5 must freeze the saved edited document, call the shared renderer, implement MP4/SRT/delivery/export jobs and resolve actual free/Pro policy/plans/prices with the user. P6 remains trim/crop/volume; no extra editor/service scope.

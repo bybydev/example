@@ -7,7 +7,7 @@
 - Stable identities/revisions, safe originals, atomic project persistence, honest raw/edited timing and deterministic preview/export.
 - P7 now means hardening. P8–P13 retired. Incoming share extension removed.
 - Existing P1 extras are recorded source, not requirements. This update removes no app/UI code.
-- PR #24 was subsequently squash merged; P2 #25 was subsequently squash merged. P3 stays open. No builds/tests/CI/project generation/model downloads/device checks.
+- PR #24 was subsequently squash merged; P2 #25 was subsequently squash merged. P3 #26 was subsequently squash merged; P4 stays open. No builds/tests/CI/project generation/model downloads/device checks.
 
 ## Necessary owning-phase choices
 
@@ -15,7 +15,7 @@
 |---|---|---|
 | P2 | Compatible local model, packaging and word-timing method | No automatic Mac Qwen/diarization or downloads |
 | P3 | Compact preview/transport, overview scrubber, correction/list, timing disclosures and undo | Source-integrated after user request/stated plan; runtime unverified |
-| P4 | Curated fonts/templates and four effect defaults | No marketplace/custom font/brand system |
+| P4 | Four built-in fonts and Spotlight/Karaoke/Pop/Soft Fade; shared Core Text renderer | Source-integrated, runtime unverified; no marketplace/custom fonts |
 | P5 | Free limits, offered plans, product IDs and prices | Actual user decision; no invented trials/watermarks/credits |
 | P6 | Trim boundary, crop/ratio and volume interactions | No advanced transforms/multi-track |
 
@@ -42,3 +42,13 @@ The user explicitly requested fixes for the autosave race and existing URL-downl
 - One session replaces the old detail viewer's separate title writer, owns atomic caption history and feeds one repository save drain. History stays in memory (50 commands), edited content is durable. No history/version product added.
 - One native composition/player remains stable across caption and panel edits; caption/list/timeline evaluation shares a pure project-time snapshot. P3 is plain-caption preview only; full styled preview/export parity belongs to P4/P5.
 - No Mac/shared-package/project.yml/generated-project/CI changes needed. No builds/tests/model downloads/device evidence.
+
+## P4 source decisions — 2026-10-22
+
+- User requested P4 after squash merging #26 as 11902e6. One branch feat/ios-p4-caption-styles from latest develop; leave the PR open for review, no auto-merge.
+- Four installed fonts only: AvenirNext-DemiBold, HelveticaNeue-Bold, Georgia-Bold and Menlo-Bold. Missing named faces use emphasized-system fallback; script/emoji cascades cover shaping without a bundled font download. Coverage is not runtime-tested.
+- Project-wide style values, not a per-cue styling catalog. Normalize font size/position to output canvas; preserve current placement when choosing a preset. Schema v4 prevents old clients silently ignoring styles; v1–v3 still read.
+- Extend one editor history/save owner for all style changes. Keep playback/selection and existing caption/raw timing independent.
+- Use Core Text for whole-string shaping/line wrapping and UTF-16 run geometry, a pure timestamp motion evaluator, and the same drawing path in UIKit and sRGB bitmap/CI adapters. No SwiftUI-only animation counted as an effect.
+- Bound active layout to 16,384 UTF-16 units/eight lines and a one-cue cache. Explicit render errors require splitting/reducing size; do not silently truncate. P5 owns actual exports and must surface the same errors.
+- No Mac/shared-package/project.yml/generated-project/CI changes, builds/tests or device/model operations.

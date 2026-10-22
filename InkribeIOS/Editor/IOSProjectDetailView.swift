@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 private enum IOSEditorField: Hashable { case title, word(UUID), timing(UUID, Bool) }
+private enum IOSEditorPanel: String, CaseIterable { case captions = "Captions", style = "Style", templates = "Templates" }
 
 struct IOSProjectDetailView: View {
     @Environment(IOSProjectsModel.self) private var model
@@ -16,6 +17,8 @@ struct IOSProjectDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var showReloadConfirmation = false
     @State private var isLeaving = false
+    @State private var panel = IOSEditorPanel.captions
+    @State private var captionRenderError: String?
     @FocusState private var focused: IOSEditorField?
 
     init(projectID: UUID) {
@@ -35,6 +38,13 @@ struct IOSProjectDetailView: View {
                         .padding(.horizontal, 16)
                 }
                 status
+                if document.recognition != nil {
+                    Picker("Caption tools", selection: $panel) {
+                        ForEach(IOSEditorPanel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                }
                 editorContent(document)
             } else if let error = session.loadError {
                 ContentUnavailableView("Cannot open project", systemImage: "exclamationmark.triangle",
@@ -110,6 +120,7 @@ struct IOSProjectDetailView: View {
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }
             else { session.endTyping(); if value != nil { session.beginTyping() } }
         }
+        .onChange(of: panel) { _, _ in focused = nil; session.endTyping(); session.endStyleEditing() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
@@ -120,30 +131,17 @@ struct IOSProjectDetailView: View {
     }
 
     private func preview(_ document: IOSProjectDocument) -> some View {
-        GeometryReader { geometry in
-            let ratio = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
-            let width = min(geometry.size.width, geometry.size.height * ratio)
-            let height = min(geometry.size.height, geometry.size.width / ratio)
+        GeometryReader { _ in
             ZStack {
                 Color.black
                 IOSPlayerSurface(player: session.player)
                 if document.assets.allSatisfy({ $0.kind == .audio }) {
                     Image(systemName: "waveform").font(.system(size: 40)).foregroundStyle(.white.opacity(0.45))
                 }
-                if let presentation = session.presentation {
-                    VStack {
-                        Spacer()
-                        Text(presentation.text)
-                            .font(.system(size: max(10, min(22, width / 13)), weight: .bold))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.white)
-                            .padding(4)
-                            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
-                            .padding(.horizontal, width * 0.05)
-                            .padding(.bottom, height * 0.1)
-                    }
-                    .frame(width: width, height: height)
-                    .accessibilityLabel("Caption preview: \(presentation.text)")
+                if let snapshot = session.snapshot {
+                    IOSStyledCaptionOverlay(snapshot: snapshot, time: session.time) { captionRenderError = $0 }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(session.presentation?.text ?? "No caption at playhead")
                 }
                 if session.isPreparingPreview { ProgressView("Preparing preview…").tint(.white).foregroundStyle(.white) }
             }
@@ -205,8 +203,15 @@ struct IOSProjectDetailView: View {
                         Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
                         Button("Retry preview") { Task { await session.retryPreview() } }
                     }
+                    if let error = captionRenderError {
+                        Label(error, systemImage: "captions.bubble").font(.footnote).foregroundStyle(.orange)
+                    }
                     if let result = document.recognition {
-                        if result.words.isEmpty {
+                        if panel == .style {
+                            IOSCaptionStylePanel(session: session)
+                        } else if panel == .templates {
+                            IOSCaptionTemplatesPanel(session: session)
+                        } else if result.words.isEmpty {
                             Text("No speech was detected in this media.").foregroundStyle(.secondary)
                         } else {
                             correctionPanel.id("correction")
@@ -232,7 +237,7 @@ struct IOSProjectDetailView: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: session.presentation?.cueID) { _, id in
                 // Playback follows footage without mutating selection or taking editing focus.
-                guard session.isPlaying, focused == nil, let id else { return }
+                guard panel == .captions, session.isPlaying, focused == nil, let id else { return }
                 if reduceMotion { scroll.scrollTo(id, anchor: .center) }
                 else { withAnimation { scroll.scrollTo(id, anchor: .center) } }
             }

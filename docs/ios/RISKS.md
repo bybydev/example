@@ -33,4 +33,13 @@ No cloud/team/publishing service risks need engineering because these features a
 - Text fields correspond to retained timed units. A corrected phrase shares that unit's interval; no fresh word alignment is inferred. Hidden text retains IDs/timing; overlapping native intervals remain and use a deterministic preview tie-break.
 - Undo is session-only, up to 50 changed-value patches and an estimated 8 MiB budget; one oversized command remains undoable. No persistent history feature. Validation/snapshot metadata still scales with transcript length.
 - Autosave is debounced; abrupt termination/suspension before commit can leave the previous saved revision. Atomic writes protect it, not unsaved keystrokes. Conflicts keep the draft and require retry or explicit discard/reload, with no blind rebase.
-- P3's plain text overlay is not styled export parity. P4/P5 must consume the edited snapshot and implement the shared renderer/profile before export claims.
+- P3's former plain text overlay is replaced in P4 by a shared Core Text preview/bitmap/composition path. Actual P5 file output/profile integration and pixel parity remain unverified.
+
+## P4 residual limitations — source integration only
+
+- Core Text/Core Graphics/SwiftUI API compilation and native glyph output were not executed. Installed font availability/fallback, Vietnamese combining marks, CJK, RTL, ligatures and color/ZWJ emoji require user validation. Intrinsically colored emoji keep their font colors; karaoke does not promise to recolor bitmap glyphs.
+- Word geometry/timing is inherited from P2/P3. A corrected phrase remains one timed unit; karaoke progression within that interval is a visual reveal, not new forced-alignment timestamps. Overlapping native intervals can highlight/reveal multiple words.
+- Text above 16,384 UTF-16 units or not fitting eight lines/the canvas reports a split/reduce-size error. Metadata still scales with transcript length; only active layout/cache and pixel output are bounded. One renderer instance belongs to one render owner/queue.
+- Actual memory/latency at the 20 Hz preview clock and future export frame rates are unmeasured. Bitmap allocation/per-frame integration needs P5 device assessment; no exported-file result is claimed.
+- The same draw/layout/effect path exists for preview and output, but real 720p/1080p wrapping, antialiasing/color, orientation, output-aspect letterboxing and native preview geometry still need pixel/device validation.
+- Caption styles are global for the project. Per-cue styles, imported fonts/brand libraries and custom effects remain outside v1.

@@ -18,9 +18,9 @@
 | V1.SPLIT_MERGE | P3 | Split/merge captions | Source-integrated in #26; compilation/runtime unverified |
 | V1.UNDO | P3 | Undo/redo caption edits | Source-integrated in #26; compilation/runtime unverified |
 | V1.PREVIEW | P3 | Synchronized footage/caption/selection/playback | Source-integrated in #26; compilation/runtime unverified |
-| V1.STYLE | P4 | Fonts, size, color, outline and background | Not started |
-| V1.POSITION | P4 | Caption position in output coordinates | Not started |
-| V1.PRESETS | P4 | Curated templates: highlighting, karaoke, pop and fade | Not started |
+| V1.STYLE | P4 | Fonts, size, color, outline and background | Source-integrated in #27; compilation/render/runtime unverified |
+| V1.POSITION | P4 | Caption position in output coordinates | Source-integrated in #27; compilation/render/runtime unverified |
+| V1.PRESETS | P4 | Curated templates: highlighting, karaoke, pop and fade | Source-integrated in #27; compilation/render/runtime unverified |
 | V1.MP4 | P5 | Captioned MP4 at 720p/1080p with source audio | Not started |
 | V1.SRT | P5 | Edited captions exported as SRT | Not started |
 | V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Not started |
@@ -53,3 +53,11 @@ No build/test/native inference/device evidence. Model weights were not downloade
 V1.TEXT/TIMING/SPLIT_MERGE/UNDO/PREVIEW are integrated in the iOS editor. Text correction works per timed unit, including a corrected phrase; clearing hides text while retaining word identity/timing. No new sub-word timing is invented. Timing fields use project seconds, preserve native source intervals, and explicitly record manual source intervals. Caption timing scales its word intervals as a user correction. Word timing expands its cue when necessary. Split at an existing word boundary; merge the next same-clip caption. Undo/redo keeps up to 50 commands for the open session and coalesces consecutive typing in one field; history itself is not persisted.
 
 One session serializes title and caption autosaves, preserves newer drafts across writes, reports conflicts without blind rebase and provides explicit saved-state reload. One stable AVPlayer composition maps clip source ranges, track offsets and orientation into project time. A pure immutable edited snapshot drives preview/list/timeline evaluation; selection seeks, playback highlights the active cue without taking editing focus. New media items are prepared only when media inputs change or preview is retried. No style/export, advanced timeline or extra services added. See handoffs/P3.md; no builds/tests/UI/device verification performed.
+
+## P4 source evidence
+
+V1.STYLE/POSITION/PRESETS integrate project-wide editable style values, normalized output position, Modern/Bold/Serif/Mono built-in font choices and Spotlight/Karaoke/Pop/Soft Fade presets. Controls live below the stable footage preview. Choosing a template preserves output placement; style controls/presets/reset participate in the existing autosave and undo/redo sequence. Native text/timing/raw recognition/originals remain unchanged.
+
+Schema v4 adds optional captionStyle; v1–v3 reads retain the default style without an eager rewrite. Duplicates preserve style values. A single Core Text renderer shapes/wraps text and draws base/outline/background, active-word highlight, progressive karaoke, word-triggered pop and word-envelope fade from project time. UIView preview, transparent bitmap and CI frame-composition adapters share this path. Unicode ranges use UTF-16 glyph-run mapping and explicit installed-font/system fallback. Layout is capped at 16,384 UTF-16 units and eight lines, with clear split/reduce-size errors, never silent truncation.
+
+P5 file export/audio/jobs/commerce remain unimplemented. The shared bitmap/composition interfaces are implemented source, not an exported-file or pixel-parity result. No builds/typechecks/tests, CI, generation, model downloads or device validation. See handoffs/P4.md for exact interfaces and pending user scenarios.

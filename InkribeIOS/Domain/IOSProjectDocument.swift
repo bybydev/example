@@ -3,7 +3,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum IOSProjectSchema {
-    static let current = 3
+    static let current = 4
 }
 
 enum IOSProjectStoreError: LocalizedError, Sendable {
@@ -155,6 +155,9 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var assets: [IOSSourceAsset]
     var clips: [IOSProjectClip]
     var recognition: IOSRecognition? = nil
+    var captionStyle: IOSCaptionStyle? = nil
+
+    var effectiveCaptionStyle: IOSCaptionStyle { captionStyle ?? .standard }
 
     func validate() throws {
         guard schemaVersion <= IOSProjectSchema.current else {
@@ -168,6 +171,10 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw IOSProjectStoreError.invalidDocument("Invalid project header or empty media graph")
         }
         try canvas.validate()
+        guard schemaVersion >= 4 || captionStyle == nil else {
+            throw IOSProjectStoreError.invalidDocument("Caption styles require schema v4")
+        }
+        try captionStyle?.validate()
         if let dimensions = preset.canvas, dimensions != canvas {
             throw IOSProjectStoreError.invalidDocument("Preset does not match canvas")
         }

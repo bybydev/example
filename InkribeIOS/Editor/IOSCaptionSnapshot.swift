@@ -3,9 +3,12 @@ import Foundation
 
 struct IOSCaptionPresentation: Sendable {
     let cueID: UUID
-    let text: String
     let words: [IOSCaptionWord]
     let activeWordIDs: Set<UUID>
+    var text: String {
+        words.map(\.text).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 /// Immutable, revision-tagged edited input for preview and the later style/export phases.
@@ -13,6 +16,8 @@ struct IOSCaptionPresentation: Sendable {
 struct IOSCaptionSnapshot: Sendable {
     let id = UUID()
     let revision: ProjectRevision
+    let canvas: IOSCanvas
+    let style: IOSCaptionStyle
     let wordsByID: [UUID: IOSCaptionWord]
     let cues: [IOSCaptionCue]
     private let ordered: [IOSCaptionCue]
@@ -20,6 +25,8 @@ struct IOSCaptionSnapshot: Sendable {
 
     init(_ document: IOSProjectDocument) {
         revision = ProjectRevision(projectID: document.id, contentRevision: document.contentRevision)
+        canvas = document.canvas
+        style = document.effectiveCaptionStyle
         wordsByID = Dictionary(uniqueKeysWithValues: (document.recognition?.words ?? []).map { ($0.id, $0) })
         cues = document.recognition?.cues ?? []
         ordered = cues.sorted {
@@ -50,9 +57,8 @@ struct IOSCaptionSnapshot: Sendable {
             let cue = ordered[index]
             if cue.interval.contains(time) {
                 let words = cue.wordIDs.compactMap { wordsByID[$0] }
-                let text = self.text(for: cue)
-                if !text.isEmpty {
-                    return IOSCaptionPresentation(cueID: cue.id, text: text, words: words,
+                if words.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                    return IOSCaptionPresentation(cueID: cue.id, words: words,
                         activeWordIDs: Set(words.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.projectInterval.contains(time) }.map(\.id)))
                 }
             }

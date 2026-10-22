@@ -35,6 +35,7 @@ final class IOSEditorSession {
     private var playbackGeneration = UUID()
     private var isSeeking = false
     private var typingWordID: UUID?
+    private var stylingControl: IOSCaptionStyleControl?
     private var past: [History] = []
     private var future: [History] = []
     @ObservationIgnored private var debounce: Task<Void, Never>?
@@ -46,9 +47,30 @@ final class IOSEditorSession {
 
     private struct Selection { let cue: UUID?; let word: UUID? }
     private struct History {
-        var patch: IOSCaptionEditPatch
+        var change: HistoryChange
         let selectionBefore: Selection
         var selectionAfter: Selection
+    }
+    private enum HistoryChange {
+        case caption(IOSCaptionEditPatch)
+        case style(before: IOSCaptionStyle?, after: IOSCaptionStyle?)
+
+        var estimatedBytes: Int {
+            switch self {
+            case .caption(let patch): patch.estimatedBytes
+            case .style: MemoryLayout<IOSCaptionStyle>.stride * 2
+            }
+        }
+        mutating func coalesceText(_ next: IOSCaptionEditPatch) -> Bool {
+            guard case .caption(var patch) = self, patch.coalesceText(next) else { return false }
+            self = .caption(patch)
+            return true
+        }
+        mutating func coalesceStyle(from previous: IOSCaptionStyle?, to next: IOSCaptionStyle) -> Bool {
+            guard case .style(let before, let after) = self, after == previous else { return false }
+            self = .style(before: before, after: next)
+            return true
+        }
     }
     private struct MediaKey: Equatable {
         let clips: [IOSProjectClip]
@@ -61,8 +83,8 @@ final class IOSEditorSession {
     var presentation: IOSCaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: IOSCaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
     var selectedWord: IOSCaptionWord? { selectedWordID.flatMap { snapshot?.wordsByID[$0] } }
-    var undoLabel: String { "Undo caption edit" }
-    var redoLabel: String { "Redo caption edit" }
+    var undoLabel: String { "Undo edit" }
+    var redoLabel: String { "Redo edit" }
 
     func open() async {
         isPresented = true
@@ -129,6 +151,7 @@ final class IOSEditorSession {
     func selectCue(_ id: UUID) {
         pause()
         typingWordID = nil
+        stylingControl = nil
         selectedCueID = id
         selectedWordID = snapshot?.cues.first { $0.id == id }?.wordIDs.first
         if let cue = selectedCue { seek(to: cue.interval.start) }
@@ -137,12 +160,39 @@ final class IOSEditorSession {
     func selectWord(_ id: UUID) {
         pause()
         typingWordID = nil
+        stylingControl = nil
         selectedWordID = id
         if let word = snapshot?.wordsByID[id] { seek(to: word.projectInterval.start) }
     }
 
     func beginTyping() { pause() }
     func endTyping() { typingWordID = nil }
+    func endStyleEditing() { stylingControl = nil }
+
+    func setCaptionStyle(_ style: IOSCaptionStyle, coalescing control: IOSCaptionStyleControl? = nil) {
+        guard var project = document, style != project.effectiveCaptionStyle else { return }
+        let before = project.captionStyle
+        do {
+            project.schemaVersion = IOSProjectSchema.current
+            project.captionStyle = style
+            try project.validate()
+            let selection = Selection(cue: selectedCueID, word: selectedWordID)
+            if let control, control == stylingControl, !past.isEmpty, future.isEmpty,
+               past[past.count - 1].change.coalesceStyle(from: before, to: style) {
+                past[past.count - 1].selectionAfter = selection
+            } else {
+                past.append(History(change: .style(before: before, after: style),
+                    selectionBefore: selection, selectionAfter: selection))
+            }
+            document = project
+            stylingControl = control
+            typingWordID = nil
+            finishHistoryEdit()
+            rebuildSnapshot()
+            commandError = nil
+            changed()
+        } catch { commandError = error.localizedDescription }
+    }
 
     func editText(wordID: UUID, value: String) {
         perform(coalescing: wordID) { state, _ in
@@ -178,6 +228,7 @@ final class IOSEditorSession {
                          _ edit: (inout IOSCaptionEditState, IOSProjectDocument) throws -> UUID?) {
         guard var project = document, let result = project.recognition else { return }
         pause()
+        stylingControl = nil
         let before = IOSCaptionEditState(result)
         var after = before
         let selection = Selection(cue: selectedCueID, word: selectedWordID)
@@ -194,18 +245,13 @@ final class IOSEditorSession {
             let finalSelection = Selection(cue: selectedCueID, word: selectedWordID)
             let patch = IOSCaptionEditPatch(before: before, after: after)
             if let wordID, typingWordID == wordID, !past.isEmpty, future.isEmpty,
-               past[past.count - 1].patch.coalesceText(patch) {
+               past[past.count - 1].change.coalesceText(patch) {
                 past[past.count - 1].selectionAfter = finalSelection
             } else {
-                past.append(History(patch: patch, selectionBefore: selection, selectionAfter: finalSelection))
+                past.append(History(change: .caption(patch), selectionBefore: selection, selectionAfter: finalSelection))
             }
-            // Keep one oversized command undoable; otherwise bound both count and estimated payload.
-            while past.count > 1 && (past.count > 50 || past.reduce(0, { $0 + $1.patch.estimatedBytes }) > 8 * 1_024 * 1_024) {
-                past.removeFirst()
-            }
-            future.removeAll()
             typingWordID = wordID
-            updateHistoryFlags()
+            finishHistoryEdit()
             commandError = nil
             changed()
         } catch { commandError = error.localizedDescription }
@@ -213,29 +259,44 @@ final class IOSEditorSession {
 
     func undo() {
         guard let history = past.last else { return }
-        if restore(history.patch, forward: false, selection: history.selectionBefore) {
+        if restore(history.change, forward: false, selection: history.selectionBefore) {
             past.removeLast(); future.append(history); updateHistoryFlags()
         }
     }
     func redo() {
         guard let history = future.last else { return }
-        if restore(history.patch, forward: true, selection: history.selectionAfter) {
+        if restore(history.change, forward: true, selection: history.selectionAfter) {
             future.removeLast(); past.append(history); updateHistoryFlags()
         }
     }
-    private func restore(_ patch: IOSCaptionEditPatch, forward: Bool, selection: Selection) -> Bool {
-        guard var project = document, let result = project.recognition else { return false }
+    private func restore(_ change: HistoryChange, forward: Bool, selection: Selection) -> Bool {
+        guard var project = document else { return false }
         do {
-            let state = try patch.applying(to: IOSCaptionEditState(result), forward: forward)
+            switch change {
+            case .caption(let patch):
+                guard let result = project.recognition else { throw IOSCaptionEditError.missingCaption }
+                let state = try patch.applying(to: IOSCaptionEditState(result), forward: forward)
+                project.recognition = state.applying(to: result)
+            case .style(let before, let after):
+                guard project.captionStyle == (forward ? before : after) else { throw IOSCaptionEditError.missingCaption }
+                project.captionStyle = forward ? after : before
+            }
             project.schemaVersion = IOSProjectSchema.current
-            project.recognition = state.applying(to: result)
             try project.validate()
-            pause(); typingWordID = nil
+            pause(); typingWordID = nil; stylingControl = nil
             document = project
             selectedCueID = selection.cue; selectedWordID = selection.word
             rebuildSnapshot(); repairSelection(); changed()
             return true
         } catch { commandError = error.localizedDescription; return false }
+    }
+    private func finishHistoryEdit() {
+        // Keep one oversized command undoable; otherwise bound count and estimated payload.
+        while past.count > 1 && (past.count > 50 || past.reduce(0, { $0 + $1.change.estimatedBytes }) > 8 * 1_024 * 1_024) {
+            past.removeFirst()
+        }
+        future.removeAll()
+        updateHistoryFlags()
     }
     private func updateHistoryFlags() { canUndo = !past.isEmpty; canRedo = !future.isEmpty }
     private func rebuildSnapshot() { snapshot = document.map(IOSCaptionSnapshot.init) }

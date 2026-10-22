@@ -5,8 +5,8 @@ import CoreText
 import CoreVideo
 import Foundation
 
-/// Bounded one-frame feasibility spike. Both future preview and writer adapters call
-/// this compositor with the same immutable snapshot and composition timestamp.
+/// Historical P0 feasibility spike. Shipping styled preview and P5 adapters use
+/// IOSCaptionRenderer with IOSCaptionSnapshot, not this fixture-only path.
 /// Frame decode/scheduling, audio, timeline effects and file export are NOT P0 features.
 struct ClipFrameCompositor {
     private let evaluator = CaptionSceneEvaluator()

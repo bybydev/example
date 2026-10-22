@@ -319,7 +319,8 @@ actor IOSProjectRepository {
                 id: UUID(), contentRevision: 1, title: original.title + " Copy",
                 createdAt: now, updatedAt: now, preset: original.preset,
                 canvas: original.canvas, assets: newAssets, clips: newClips,
-                recognition: original.recognition?.duplicated(assetClips: clipMapping))
+                recognition: original.recognition?.duplicated(assetClips: clipMapping),
+                captionStyle: original.captionStyle)
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)
