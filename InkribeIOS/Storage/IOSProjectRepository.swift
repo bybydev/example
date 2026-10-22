@@ -111,6 +111,15 @@ actor IOSProjectRepository {
                   proposed.completedAt == raw.completedAt else {
                 throw IOSProjectStoreError.invalidDocument("Raw recognition is immutable")
             }
+            let nativeWords = Dictionary(uniqueKeysWithValues: raw.words.map { ($0.id, $0) })
+            guard Set(proposed.words.map(\.id)) == Set(nativeWords.keys),
+                  proposed.words.allSatisfy({ word in
+                      guard let native = nativeWords[word.id] else { return false }
+                      return word.clipID == native.clipID && word.rawWindowID == native.rawWindowID &&
+                          word.sourceInterval == native.sourceInterval && word.timingProvenance == native.timingProvenance
+                  }) else {
+                throw IOSProjectStoreError.invalidDocument("Native word anchors are immutable")
+            }
         }
         let existing = Dictionary(uniqueKeysWithValues: current.assets.map { ($0.id, $0) })
         for asset in next.assets {

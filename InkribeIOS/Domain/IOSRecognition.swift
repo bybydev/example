@@ -33,6 +33,10 @@ struct IOSCaptionWord: Codable, Equatable, Sendable, Identifiable {
     var projectInterval: MediaInterval
     /// Token aggregation is approximate model timing, never forced alignment.
     let timingProvenance: String
+    /// Manual timing never rewrites the native interval or raw window. Missing in v2.
+    var adjustedSourceInterval: MediaInterval? = nil
+
+    var effectiveSourceInterval: MediaInterval { adjustedSourceInterval ?? sourceInterval }
 }
 
 struct IOSCaptionCue: Codable, Equatable, Sendable, Identifiable {
@@ -77,17 +81,18 @@ struct IOSRecognition: Codable, Equatable, Sendable, Identifiable {
         for word in words {
             guard let clip = clipIndex[word.clipID],
                   let window = windowIndex[word.rawWindowID], window.clipID == word.clipID,
-                  !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   word.sourceInterval.start >= window.sourceInterval.start,
                   word.sourceInterval.end <= window.sourceInterval.end,
                   word.sourceInterval.start >= clip.sourceInterval.start,
-                  word.sourceInterval.end <= clip.sourceInterval.end else {
+                  word.sourceInterval.end <= clip.sourceInterval.end,
+                  word.effectiveSourceInterval.start >= clip.sourceInterval.start,
+                  word.effectiveSourceInterval.end <= clip.sourceInterval.end else {
                 throw IOSProjectStoreError.invalidDocument("Invalid timed word")
             }
-            let offset = CMTimeSubtract(word.sourceInterval.start.cmTime, clip.sourceInterval.start.cmTime)
+            let offset = CMTimeSubtract(word.effectiveSourceInterval.start.cmTime, clip.sourceInterval.start.cmTime)
             let start = CMTimeAdd(clip.timelineInterval.start.cmTime, offset)
             guard CMTimeCompare(start, word.projectInterval.start.cmTime) == 0,
-                  CMTimeCompare(word.sourceInterval.duration, word.projectInterval.duration) == 0 else {
+                  CMTimeCompare(word.effectiveSourceInterval.duration, word.projectInterval.duration) == 0 else {
                 throw IOSProjectStoreError.invalidDocument("Word/source timing mapping differs")
             }
         }
@@ -95,7 +100,13 @@ struct IOSRecognition: Codable, Equatable, Sendable, Identifiable {
         for cue in cues {
             let linked = cue.wordIDs.compactMap { wordIndex[$0] }
             guard !linked.isEmpty, linked.count == cue.wordIDs.count,
+                  Set(linked.map(\.clipID)).count == 1,
                   linked.allSatisfy({ used.insert($0.id).inserted }),
+                  linked.allSatisfy({ word in
+                      guard let clip = clipIndex[word.clipID] else { return false }
+                      return cue.interval.start >= clip.timelineInterval.start &&
+                          cue.interval.end <= clip.timelineInterval.end
+                  }),
                   linked.allSatisfy({ cue.interval.start <= $0.projectInterval.start &&
                       cue.interval.end >= $0.projectInterval.end }) else {
                 throw IOSProjectStoreError.invalidDocument("Invalid caption cue references")
@@ -119,7 +130,7 @@ struct IOSRecognition: Codable, Equatable, Sendable, Identifiable {
                 IOSCaptionWord(id: wordIDs[$0.id]!, clipID: assetClips[$0.clipID]!,
                     rawWindowID: windowIDs[$0.rawWindowID]!, text: $0.text,
                     sourceInterval: $0.sourceInterval, projectInterval: $0.projectInterval,
-                    timingProvenance: $0.timingProvenance)
+                    timingProvenance: $0.timingProvenance, adjustedSourceInterval: $0.adjustedSourceInterval)
             }, cues: cues.map {
                 IOSCaptionCue(id: UUID(), wordIDs: $0.wordIDs.map { wordIDs[$0]! }, interval: $0.interval)
             })

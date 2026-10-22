@@ -12,6 +12,6 @@ Read docs/ios/README.md, PLAN.md, FEATURES.md, WORKFLOW.md, HANDOFF.md and the r
 - Do not add accounts/backends, cloud STT/AI/sync, teams, social integrations, credits, stock libraries, dubbing, share extension/App Group/inbox, camera/teleprompter, translation, automation or advanced editor features excluded by PLAN.
 - State included V1 IDs and short concrete plan before each requested phase. Obtain explicit approval for scope expansions; do not invent infrastructure or pricing.
 - Preserve Mac identity, purchases, entitlements, storage and behavior. AppFoundation for iOS; reuse useful portable code without forced abstractions.
-- One PR per requested phase from latest develop targeting develop; all passes in it. PR #24 was squash merged. P2 PR #25 stays open for review; no merge/auto-merge.
+- One PR per requested phase from latest develop targeting develop; all passes in it. P0–P2 are squash merged (#23/#24/#25). P3 PR #26 uses feat/ios-p3-caption-editor from develop 97d647e; leave its PR open, no merge/auto-merge until asked.
 - No CI setup/triggers, project regeneration, model downloads or device validation. User tests afterward.
-- Short UI plan/approval before new UI edits/tests. Existing routine P1 UI has approval. The current P2 request authorizes its scoped language/transcribe/status/read-only flow; routine details need no renewed approval. Other phase UI and excluded-feature work are not authorized.
+- Short UI plan/approval before new UI edits/tests. Existing routine P1 UI has approval. The user requested P3 implementation after merging P2. Its stated compact preview/transport/timeline/correction/undo plan covers routine P3 UI in that request; no renewed routine approval. Future phases and excluded-feature work need their own request.

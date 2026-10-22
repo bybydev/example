@@ -26,3 +26,11 @@ No cloud/team/publishing service risks need engineering because these features a
 - Recognition/raw text storage scales with transcript length; only decoded PCM/model execution concurrency is window-bounded.
 - Jobs interrupted by process death restart from the beginning. A result already published under that job ID is reused. No uninterrupted background-processing guarantee or checkpointed partial caption results.
 - Project revision changes during recognition cause explicit failure/retry; existing results/manual edits are preserved, not automatically rebased.
+
+## P3 residual limitations — source integration only
+
+- Editor/AVFoundation/SwiftUI APIs, schema migration, composition orientation/offsets and SE2 keyboard/accessibility remain uncompiled and unverified on device.
+- Text fields correspond to retained timed units. A corrected phrase shares that unit's interval; no fresh word alignment is inferred. Hidden text retains IDs/timing; overlapping native intervals remain and use a deterministic preview tie-break.
+- Undo is session-only, up to 50 changed-value patches and an estimated 8 MiB budget; one oversized command remains undoable. No persistent history feature. Validation/snapshot metadata still scales with transcript length.
+- Autosave is debounced; abrupt termination/suspension before commit can leave the previous saved revision. Atomic writes protect it, not unsaved keystrokes. Conflicts keep the draft and require retry or explicit discard/reload, with no blind rebase.
+- P3's plain text overlay is not styled export parity. P4/P5 must consume the edited snapshot and implement the shared renderer/profile before export claims.

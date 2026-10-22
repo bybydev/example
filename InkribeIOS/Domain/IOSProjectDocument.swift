@@ -3,7 +3,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum IOSProjectSchema {
-    static let current = 2
+    static let current = 3
 }
 
 enum IOSProjectStoreError: LocalizedError, Sendable {
@@ -178,6 +178,10 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
         for asset in assets { try asset.validate() }
         let index = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
         for clip in clips { try clip.validate(assets: index) }
+        guard schemaVersion >= 3 || recognition?.words.allSatisfy({ $0.adjustedSourceInterval == nil &&
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) != false else {
+            throw IOSProjectStoreError.invalidDocument("Manual captions require schema v3")
+        }
         try recognition?.validate(clips: clips, assets: assets)
         let ordered = clips.sorted { $0.timelineInterval.start < $1.timelineInterval.start }
         for pair in zip(ordered, ordered.dropFirst()) {

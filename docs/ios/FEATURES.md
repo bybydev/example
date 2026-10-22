@@ -13,11 +13,11 @@
 | V1.WORDS | P2 | Genuine word timestamps and stable identities | Source-integrated in #25; compilation/runtime unverified |
 | V1.JOB | P2 | Progress, cancel, retry and useful errors | Source-integrated in #25; compilation/runtime unverified |
 | V1.RESULT | P2 | Durable raw recognition and editable captions | Source-integrated in #25; compilation/runtime unverified |
-| V1.TEXT | P3 | Caption text correction | Not started |
-| V1.TIMING | P3 | Cue/word timing and simple timeline | Not started |
-| V1.SPLIT_MERGE | P3 | Split/merge captions | Not started |
-| V1.UNDO | P3 | Undo/redo caption edits | Not started |
-| V1.PREVIEW | P3 | Synchronized footage/caption/selection/playback | Not started |
+| V1.TEXT | P3 | Caption text correction | Source-integrated in #26; compilation/runtime unverified |
+| V1.TIMING | P3 | Cue/word timing and simple timeline | Source-integrated in #26; compilation/runtime unverified |
+| V1.SPLIT_MERGE | P3 | Split/merge captions | Source-integrated in #26; compilation/runtime unverified |
+| V1.UNDO | P3 | Undo/redo caption edits | Source-integrated in #26; compilation/runtime unverified |
+| V1.PREVIEW | P3 | Synchronized footage/caption/selection/playback | Source-integrated in #26; compilation/runtime unverified |
 | V1.STYLE | P4 | Fonts, size, color, outline and background | Not started |
 | V1.POSITION | P4 | Caption position in output coordinates | Not started |
 | V1.PRESETS | P4 | Curated templates: highlighting, karaoke, pop and fade | Not started |
@@ -47,3 +47,9 @@ Local Whisper Small Multilingual is bundled from the existing pinned asset. CPU 
 JobQueue 1.0.0 owns durable one-at-a-time execution, progress/cancel/retry and interrupted-job restoration. Schema-v2 projects atomically store raw windows, words/cues and job identity; v1 remains readable, older clients reject v2. Completion is idempotent and strict revisions protect edits. Duplicates remap recognition/clip/word/cue identities. P2 UI is language/start/status and read-only results, not P3 editing.
 
 No build/test/native inference/device evidence. Model weights were not downloaded; place the existing pinned file before user builds. See handoffs/P2.md for exact path/hash and pending checks. All four P2 items are source-integrated, not verified runtime-complete.
+
+## P3 source evidence
+
+V1.TEXT/TIMING/SPLIT_MERGE/UNDO/PREVIEW are integrated in the iOS editor. Text correction works per timed unit, including a corrected phrase; clearing hides text while retaining word identity/timing. No new sub-word timing is invented. Timing fields use project seconds, preserve native source intervals, and explicitly record manual source intervals. Caption timing scales its word intervals as a user correction. Word timing expands its cue when necessary. Split at an existing word boundary; merge the next same-clip caption. Undo/redo keeps up to 50 commands for the open session and coalesces consecutive typing in one field; history itself is not persisted.
+
+One session serializes title and caption autosaves, preserves newer drafts across writes, reports conflicts without blind rebase and provides explicit saved-state reload. One stable AVPlayer composition maps clip source ranges, track offsets and orientation into project time. A pure immutable edited snapshot drives preview/list/timeline evaluation; selection seeks, playback highlights the active cue without taking editing focus. New media items are prepared only when media inputs change or preview is retried. No style/export, advanced timeline or extra services added. See handoffs/P3.md; no builds/tests/UI/device verification performed.
