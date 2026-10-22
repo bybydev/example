@@ -1,7 +1,7 @@
 # Inkribe Working Rules
 
 - Do not fake completion. Source integration is not compilation or runtime evidence.
-- Do not run builds/typechecks/tests, CI setup/triggers, project generation, model downloads, deployment or device/UI validation. User tests afterward.
+- Do not run builds/typechecks/tests, workflow dispatches, project generation, model downloads, deployment or device/UI validation. User tests afterward. The current user request explicitly authorizes source-only setup of the manual Build Release workflow; other CI setup remains outside scope.
 - XcodeGen owns project.yml; do not modify generated .xcodeproj files.
 - Preserve Mac identity, source, purchases, catalog, storage, resources and behavior.
 
@@ -13,7 +13,11 @@ One PR per requested phase from latest develop targeting develop; keep all passe
 
 P0–P6 (#23–#29) and optional models plus P7 (#30) are squash merged. Latest phase baseline is eb89f0fb3cd0f67054e6d29de2375342718c1651. Historical PR review holds and P5 Pro deferral are superseded by the current request below.
 
-## Current authorized phase: Pro locking and AF themes
+## Pro phase — merged #31
+
+The Pro implementation below is squash merged as 76981dee7533aab9b1194eee7376bf0ebfc60efb; its earlier PR review hold is historical.
+
+### Approved Pro contract
 
 Implement V1.PRO plus access rules on V1.LOCAL_STT/JOB/STYLE/PRESETS/MP4. Use feat/ios-pro-access-themes, one new PR targeting develop, leave open. Read docs/ios/phases/PRO.md and handoffs/PRO.md.
 
@@ -26,3 +30,8 @@ Import/projects, caption text/timing/split/merge/undo, media tools and SRT remai
 Schema v5 reads v1–v4. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
 
 Optional bundle/download/cache and Tiny/Base/Small selection remain per docs/ios/MODELS.md. Default project.yml omits iOS weights; project-ios-bundled.yml requires Small and disables download/cache fallback through INKRIBE_IOS_BUNDLED_MODELS_ONLY. Release alone does not change packaging. No weights are to be downloaded by the agent.
+
+## Current release-workflow request
+
+The user explicitly requested the GitHub Build Release workflow based on hoangbkit/guidelines. Keep it in one new chore/manual-build-release PR from latest develop targeting develop, open until asked to merge. This authorizes workflow/helper/docs source edits only, overriding the earlier no-CI-setup rule for this release lane. No workflow dispatch, agent builds/tests, project generation, model downloads or deployment. Do not add Fast/Full CI or change application UI/runtime/model policy. Read docs/BUILD_RELEASE.md. Only workflow_dispatch; unsigned selected-platform archives plus generated Xcode project ZIP; mycli-build prerelease tags. Preserve app identities, Mac resources and source.
+

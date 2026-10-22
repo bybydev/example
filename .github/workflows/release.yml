@@ -1,0 +1,281 @@
+name: Build Release
+
+# Only an explicit dispatch can build or publish. No PR/push/tag automation.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        required: true
+        default: iOS
+        options: [iOS, macOS, both]
+      configuration:
+        description: Configuration
+        type: choice
+        required: true
+        default: Release
+        options: [Debug, Release]
+      ios_models:
+        description: iOS models (ignored for macOS-only builds)
+        type: choice
+        required: true
+        default: download
+        options: [download, bundled]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mycli-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      APP: Inkribe
+      PROJECT: Inkribe.xcodeproj
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      BUILD_PLATFORM: ${{ inputs.platform }}
+      BUILD_CONFIGURATION: ${{ inputs.configuration }}
+      IOS_MODELS: ${{ inputs.ios_models }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authenticate private dependencies (optional)
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$PRIVATE_REPO_TOKEN" ]]; then
+            git config --global \
+              url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf \
+              "https://github.com/"
+          else
+            echo "PRIVATE_REPO_TOKEN is not configured; using public dependency access."
+          fi
+
+      - name: Validate selection and report toolchain
+        id: selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BUILD_PLATFORM" in iOS|macOS|both) ;; *) exit 1 ;; esac
+          case "$BUILD_CONFIGURATION" in Debug|Release) ;; *) exit 1 ;; esac
+          case "$IOS_MODELS" in download|bundled) ;; *) exit 1 ;; esac
+          test -d "$DEVELOPER_DIR"
+          echo "Ref: $GITHUB_REF"
+          echo "Commit: $(git rev-parse HEAD)"
+          echo "Platform: $BUILD_PLATFORM; configuration: $BUILD_CONFIGURATION; iOS models: $IOS_MODELS"
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+          python3 --version
+          model_set=none
+          if [[ "$BUILD_PLATFORM" == macOS || "$BUILD_PLATFORM" == both ]]; then
+            model_set=all
+          elif [[ "$IOS_MODELS" == bundled ]]; then
+            model_set=small
+          fi
+          echo "model_set=$model_set" >> "$GITHUB_OUTPUT"
+          echo "tag=mycli-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # No restore-key fallback: only the exact pinned manifest/model set is reused.
+      - name: Restore real model cache
+        if: ${{ steps.selection.outputs.model_set != 'none' }}
+        id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: Models
+          key: inkribe-release-models-v1-${{ steps.selection.outputs.model_set }}-${{ hashFiles('Packages/InkribeModelAssets/Sources/InkribeModelAssets/Resources/ModelAssets.json', 'scripts/release_models.py') }}
+
+      - name: Stage and verify selected real resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release_models.py --platform "$BUILD_PLATFORM" \
+            --ios-models "$IOS_MODELS" --download
+
+      # Save before archive compilation, so a compiler failure does not discard
+      # successful multi-GB downloads. Cache hits are still fully verified above.
+      - name: Save verified real model cache
+        if: ${{ steps.selection.outputs.model_set != 'none' && steps.models.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: Models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+
+      - name: Install XcodeGen and generate selected project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen --version
+          spec=project.yml
+          if [[ "$BUILD_PLATFORM" != macOS && "$IOS_MODELS" == bundled ]]; then
+            spec=project-ios-bundled.yml
+          fi
+          xcodegen generate --spec "$spec"
+          test -f "$PROJECT/project.pbxproj"
+          for scheme in Inkribe InkribeMac; do
+            test -f "$PROJECT/xcshareddata/xcschemes/$scheme.xcscheme"
+          done
+          echo "Generated from $spec"
+
+      - name: Cache Swift package sources and binary artifacts
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/Inkribe-SourcePackages
+          key: inkribe-spm-${{ runner.os }}-${{ runner.arch }}-xcode26.3-${{ hashFiles('project*.yml', 'Packages/**/Package.swift', '**/Package.resolved') }}
+
+      - name: Archive unsigned iOS device app
+        if: ${{ inputs.platform == 'iOS' || inputs.platform == 'both' }}
+        shell: bash
+        env:
+          TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/Inkribe-iOS.xcarchive"
+          derived="$RUNNER_TEMP/Inkribe-iOS-DerivedData"
+          packages="$RUNNER_TEMP/Inkribe-SourcePackages"
+          xcodebuild -project "$PROJECT" -scheme Inkribe \
+            -configuration "$BUILD_CONFIGURATION" -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            -archivePath "$archive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
+          xcodebuild -project "$PROJECT" -scheme Inkribe \
+            -configuration "$BUILD_CONFIGURATION" -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -showBuildSettings -json > "$RUNNER_TEMP/Inkribe-iOS-settings.json"
+          python3 scripts/verify_release_archive.py "$archive" --platform iOS \
+            --configuration "$BUILD_CONFIGURATION" --ios-models "$IOS_MODELS" \
+            --settings "$RUNNER_TEMP/Inkribe-iOS-settings.json"
+          lower=$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$archive" \
+            "artifacts/${APP}-iOS-${lower}-unsigned-${TAG}.xcarchive.zip"
+          rm -rf "$archive" "$derived"
+
+      - name: Archive unsigned universal macOS app
+        if: ${{ inputs.platform == 'macOS' || inputs.platform == 'both' }}
+        shell: bash
+        env:
+          TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/Inkribe-macOS.xcarchive"
+          derived="$RUNNER_TEMP/Inkribe-macOS-DerivedData"
+          packages="$RUNNER_TEMP/Inkribe-SourcePackages"
+          xcodebuild -project "$PROJECT" -scheme InkribeMac \
+            -configuration "$BUILD_CONFIGURATION" -sdk macosx \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            -archivePath "$archive" ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
+          xcodebuild -project "$PROJECT" -scheme InkribeMac \
+            -configuration "$BUILD_CONFIGURATION" -sdk macosx \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -showBuildSettings -json > "$RUNNER_TEMP/Inkribe-macOS-settings.json"
+          python3 scripts/verify_release_archive.py "$archive" --platform macOS \
+            --configuration "$BUILD_CONFIGURATION" --ios-models "$IOS_MODELS" \
+            --settings "$RUNNER_TEMP/Inkribe-macOS-settings.json"
+          lower=$(echo "$BUILD_CONFIGURATION" | tr '[:upper:]' '[:lower:]')
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$archive" \
+            "artifacts/${APP}-macOS-universal-${lower}-unsigned-${TAG}.xcarchive.zip"
+          rm -rf "$archive" "$derived"
+
+      # Include the actual project used above, after resolution has recorded
+      # Package.resolved where applicable. mycli reads its signing/team settings.
+      - name: Package generated Xcode project
+        shell: bash
+        env:
+          TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$PROJECT" \
+            "artifacts/${APP}-xcodeproj-${TAG}.zip"
+
+      - name: Verify exact release assets
+        shell: bash
+        env:
+          TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import zipfile
+          app, tag = os.environ['APP'], os.environ['TAG']
+          platform = os.environ['BUILD_PLATFORM']
+          configuration = os.environ['BUILD_CONFIGURATION'].lower()
+          project = f'{app}-xcodeproj-{tag}.zip'
+          expected = {project}
+          if platform in ('iOS', 'both'):
+              expected.add(f'{app}-iOS-{configuration}-unsigned-{tag}.xcarchive.zip')
+          if platform in ('macOS', 'both'):
+              expected.add(f'{app}-macOS-universal-{configuration}-unsigned-{tag}.xcarchive.zip')
+          actual = {path.name for path in Path('artifacts').iterdir()}
+          if actual != expected:
+              raise ValueError(f'Release asset mismatch: {actual} versus {expected}')
+          for name in sorted(expected):
+              path = Path('artifacts') / name
+              if not 0 < path.stat().st_size < 2_147_483_648:
+                  raise ValueError(f'{name} is empty or exceeds the GitHub Release 2 GiB limit')
+              with zipfile.ZipFile(path) as archive:
+                  if archive.testzip() is not None:
+                      raise ValueError('Corrupt ZIP: ' + name)
+                  members = set(archive.namelist())
+                  if name == project:
+                      required = {f'{app}.xcodeproj/project.pbxproj'} | {
+                          f'{app}.xcodeproj/xcshareddata/xcschemes/{scheme}.xcscheme'
+                          for scheme in ('Inkribe', 'InkribeMac')}
+                      if not required.issubset(members):
+                          raise ValueError('Generated project ZIP lost project/shared schemes')
+                  else:
+                      roots = {member.split('/')[0] for member in members if not member.startswith('__MACOSX/')}
+                      roots.discard('__MACOSX')
+                      if len(roots) != 1 or not next(iter(roots)).endswith('.xcarchive'):
+                          raise ValueError('Expected exactly one xcarchive root')
+              print(f'{name}: {path.stat().st_size:,} bytes')
+          PY
+
+      - name: Publish disposable GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.selection.outputs.tag }}
+          SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" artifacts/*.zip --target "$SHA" \
+            --title "$TAG" --prerelease --generate-notes
+
+      - name: Remove optional dependency credentials
+        if: ${{ always() }}
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$PRIVATE_REPO_TOKEN" ]]; then
+            git config --global --unset-all \
+              url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf || true
+          fi

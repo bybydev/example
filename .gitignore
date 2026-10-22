@@ -6,3 +6,7 @@ Models/
 *.xcuserstate
 xcuserdata/
 *.xcodeproj/
+artifacts/
+*.xcarchive/
+__pycache__/
+

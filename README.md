@@ -209,3 +209,8 @@ Post-v1 cleanup should consolidate existing ownership rather than weaken establi
 - `InkribeMac` (macOS 15+, existing bundle IDs `com.hoangbkit.inkribe[.debug]`, existing purchases and data).
 - `Inkribe` (iOS 26+, new identifiers `com.hoangbkit.inkribe.ios[.debug]`, app sources in `InkribeIOS/`, AppFoundation 0.1.8). P1 Projects/import/storage UI is merged; P2 local transcription/read-only result UI is in open PR #25; its renderer is a source-only prototype, not finished video export.
 - `project.yml` is authoritative; generated `.xcodeproj` is intentionally unchanged until the user chooses to regenerate it. Mac Makefile commands now explicitly use `InkribeMac`.
+
+## Manual build releases for mycli
+
+[Build Release setup and inputs](docs/BUILD_RELEASE.md) documents the manual-only GitHub Actions lane, selected iOS/macOS unsigned archives, generated Xcode project ZIP, optional iOS model bundling and local mycli signing. It does not run on pushes/PRs/tags or publish App Store/TestFlight builds. No workflow run is claimed.
+
