@@ -1,3 +1,7 @@
+> Historical source evidence. Current compact v1 PLAN/FEATURES and WORKFLOW supersede old feature/phase obligations and outdated holds below. This record authorizes no features, commands or checks.
+
+**P1 refreshed baseline (2026-10-22):** develop at 57129f62abe1b01cc4052f58d1d9bdc25d79e831 already includes squash merges #22 and #23. The P1 branch starts exactly there. Inspected project.yml, P0 iOS app/domain contracts, Mac storage roots, InkribeAudio media store and the planning documents. P0 status and review-hold notes below are historical.
+
 # Inspected repository baseline
 
 Original planning baseline: **develop `e860f0fac71ce923ee594ac1a9e6dd636750e2d3`** (parent of the subsequently squash-merged PR #22). **P0 refreshed from develop `955196997b3fbc2683d59fcb44fbc4b11ec5ec9c` on 2026-10-22**, and branched to `feat/ios-p0-foundation` for draft PR #23. The pre-P0 source entry points below describe that branch's starting state; see the as-built audit below.
@@ -72,4 +76,3 @@ The target/source diff leaves `InkribeMac/` and `Packages/` unchanged; Mac runti
 - `WhisperRuntime` references a pinned remote whisper.cpp XCFramework (b5130), `LLMRuntime` a llama.cpp XCFramework (b10964), and `DiarizationRuntime` sherpa-onnx 1.13.8 native wrapper. Binary architectures, iOS deployment loadability, native link dependencies, codesigning, resource packaging, model memory and latency were **not** verified. No remote binaries or models were downloaded.
 - Microphone recorder contains macOS-specific CoreAudio paths under `#if os(macOS)` and an iOS capture-device path; permission/audio session and interruption handling are still unverified and are not included in P0 iOS target.
 - The feasibility renderer has a source-level identity clip mapping and bounded compositing API; it was not run. See [handoffs/P0.md](handoffs/P0.md) for user checks and limitations.
-

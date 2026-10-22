@@ -1,45 +1,29 @@
-# Working agreement
+# V1 working agreement
 
-## Current authorization
+## Scope
 
-Planning PR #22 was squash merged into develop before P0. The user explicitly authorized P0 in one new PR from the latest develop. [P0 PR #23](https://github.com/hoangbkit/Inkribe/pull/23) is **on review hold:** leave open, do not merge or enable auto-merge. All internal P0 passes must stay in #23. Do not start P1 without a separate request.
+Current user instructions, root AGENTS and PLAN/FEATURES control work. Only current V1 items in the requested phase are required. Old catalog/phase prompts, images, frameworks and existing extra code do not expand scope. State included IDs and concrete result before implementation; ask about actual scope expansions before adding them.
 
-For any later phase, refresh current user instructions and root [AGENTS.md](../../AGENTS.md). Session instructions take precedence over historical issue text.
+## PR procedure
 
-## One PR per phase
+1. Read current scope/architecture/design/handoff; refresh latest develop.
+2. Start one new branch and one PR targeting develop per requested phase.
+3. Keep all passes, fixes and integrations in that PR; no stacked PRs.
+4. Preserve Mac; no unrelated service/infrastructure work.
+5. Update FEATURES, phase brief, HANDOFF and handoffs/Pn with actual outcomes.
+6. Incorporate relevant latest develop and resolve conflicts. Honor explicit review holds first; otherwise standing workflow is squash merge when finished.
+7. Start no next phase without request.
 
-1. Read the relevant phase brief, architecture/design contracts, feature IDs and latest handoff.
-2. Refresh remote develop and branch from its latest head. Use a new phase branch and one PR with base develop.
-3. Keep every internal unit, pass, correction and dependency integration for that phase in the same PR. No stacked PRs or PR per pass. Do not reuse a completed phase's branch for the next phase.
-4. Focus on functioning implementation. Keep changes scoped; do not refactor the Mac app or add backend/accounts/infrastructure just because a later phase mentions them.
-5. Before merge, incorporate latest develop as necessary, resolve conflicts and review the complete diff. Do not force-update develop or overwrite someone else's work.
-6. Update FEATURES.md, the phase brief, HANDOFF.md and `handoffs/Pn.md` with actual outcomes, decisions, checks and remaining limitations.
-7. Squash merge when the requested phase is implementation-complete. The user's standing instruction authorizes this for implementation phases without a separate merge confirmation, unless a newer instruction puts that PR on hold.
-8. Do not advance to another phase until requested.
+Planning #22 and P0 #23 are merged. **PR #24 remains open, no merge/auto-merge until user instruction.** This scope reset changes documentation only.
 
-The planning PR is already merged; PR #23 has a newer explicit review hold and must not be merged, even when source implementation is ready.
+## Execution limits
 
-## Implementation and validation limits
+No builds/tests unless asked; no CI setup/repair/triggers, project generation, model downloads, deployment, paid services/media uploads or device validation. User tests afterward. Source inspection is not a test/build pass.
 
-- **No CI setup or triggers.** Do not add/configure/enable/dispatch/rerun CI or spend effort repairing workflows. Do not require CI results as a completion gate.
-- **No device validation.** No physical-device installation/testing, device benchmarks or performance campaigns. The user will test finished work.
-- **No builds/tests unless asked.** Root AGENTS.md is stricter than the historical issue's permission to use focused local compilation. Reading this plan is not a request to run a build/test. Report unrun checks honestly.
-- **UI changes/tests:** present the relevant layout or concise UI plan and obtain the user's approval before UI alterations or manual UI tests, consistent with the existing working agreement. An already-approved exact design need not be reapproved without a material change.
-- No unsolicited deployment, model downloads, paid cloud usage, source-media uploads or external publishing.
-- Respect XcodeGen ownership. Modify project.yml when target work is authorized; do not hand-edit generated .xcodeproj files.
+Present a short plan and obtain relevant new UI approval. Existing P1 approval covers routine implementation, not unrequested scope/UI removal. Do not re-ask for settled routine details.
 
-If a required integration is unavailable, do independent implementation that remains valid, document the blocker and report the incomplete portion. Do not fake completion, substitute demo outputs for functioning features, or weaken the feature inventory to make a phase appear finished.
+Blocked required behavior stays incomplete; no mock output, fake timestamps or extra services. Keep necessary model/commerce choices explicit rather than inventing them.
 
-## Review allocation
+## Fresh-agent prompt
 
-The user may use GPT-6 Sol High for implementation and GPT-6.1 Sol High for critical review/fixes. Suggested reviews: P0/P1 boundaries and persistence, P2 word timing/memory, P3 editor state, P4/P5 preview/export fidelity, P6 transformed timing, and P13 final hardening. This is a recommended allocation, not a mandatory model or an automatic requirement to spawn agents.
-
-PR #23 is already explicitly held open for review. If the user requests review before any other phase merges, keep that PR open until review and fixes finish. Do not infer that every phase requires a second model or additional permission to merge.
-
-## PR descriptions
-
-State the phase, user-visible result, feature IDs covered, shared/Mac impact, persistence changes, evidence actually collected and outstanding user testing. Link issue #21 without using a closing keyword that would close the entire roadmap after one phase. State whether the PR is on hold.
-
-## Fresh-session prompt
-
-> Implement only Inkribe iOS phase Pn from latest develop. Read AGENTS.md, docs/ios/README.md, WORKFLOW.md, HANDOFF.md and phases/Pn.md first. Keep all passes in one PR targeting develop. Do not set up/trigger CI, run builds/tests unless asked, or perform device validation; I will test after completion. Preserve Mac behavior and the full feature inventory. Follow any current hold/review instructions before merging.
+> Implement only current Inkribe iOS v1 phase Pn. Read AGENTS, docs/ios/README, PLAN, FEATURES, WORKFLOW, HANDOFF and phases/Pn first. State the V1 IDs and short plan. Old 467-item catalog is historical. One PR from latest develop targeting develop; all passes in it. Preserve Mac. No builds/tests, CI, project generation, model downloads or device validation. Follow current UI approval and merge hold. Do not expand scope or start another phase.

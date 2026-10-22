@@ -1,7 +1,7 @@
 import AppFoundation
 import SwiftUI
 
-/// P0 composition root only. Navigation and feature views belong to P1 and later.
+/// P1 approved Projects composition root; one process-wide repository.
 @main
 @MainActor
 struct InkribeIOSApp: App {
@@ -12,10 +12,12 @@ struct InkribeIOSApp: App {
         )
     )
 
+    @State private var projects = IOSProjectsModel()
+
     var body: some Scene {
         WindowGroup {
-            // Intentionally no feature UI until its phase-specific design is approved.
-            EmptyView()
+            IOSProjectsView()
+                .environment(projects)
                 .environment(themes)
                 .appFoundationTheme(themes)
         }

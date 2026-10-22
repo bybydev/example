@@ -1,13 +1,17 @@
 # Inkribe Working Rules
 
-- Do not fake completion, must stop and report problem.
-- Do not run build or tests unless being asked.
-- This project is using xcodegen, do not modify .xcodeproj file.
+- Do not fake completion; report problems honestly.
+- Do not run builds or tests unless asked.
+- XcodeGen owns project.yml; do not modify generated .xcodeproj files.
 
-## Planned iOS caption/video app
+## iOS v1.0 scope
 
-Before working on the new iOS roadmap, read [docs/ios/README.md](docs/ios/README.md), [WORKFLOW.md](docs/ios/WORKFLOW.md), [HANDOFF.md](docs/ios/HANDOFF.md) and the requested phase brief. The historical Mac v1 phases are a separate sequence.
+Read docs/ios/README.md, PLAN.md, FEATURES.md, WORKFLOW.md, HANDOFF.md and the requested phase brief first.
 
-- Do not set up or trigger CI or perform device validation; the user will test after implementation.
-- Existing no-build/no-test and XcodeGen rules above still apply.
-- Planning PR #22 was squash merged. P0 is in PR #23 (draft, targeting develop); leave it open for review, do not merge/auto-merge. The latest user instruction for each PR's merge status always wins.
+- The compact v1 scope dated 2026-10-22 supersedes the exhaustive 467-item catalog and P0–P13 plan. Only current V1 items and P0–P7 briefs define deliverables. Historical issue/handoffs and Mac capabilities do not authorize features.
+- Do not add accounts/backends, cloud STT/AI/sync, teams, social integrations, credits, stock libraries, dubbing, share extension/App Group/inbox, camera/teleprompter, translation, automation or advanced editor features excluded by PLAN.
+- State included V1 IDs and short concrete plan before each requested phase. Obtain explicit approval for scope expansions; do not invent infrastructure or pricing.
+- Preserve Mac identity, purchases, entitlements, storage and behavior. AppFoundation for iOS; reuse useful portable code without forced abstractions.
+- One PR per requested phase from latest develop targeting develop; all passes in it. PR #24 stays open; no merge/auto-merge.
+- No CI setup/triggers, project regeneration, model downloads or device validation. User tests afterward.
+- Short UI plan/approval before new UI edits/tests. Existing routine P1 UI has approval. This docs reset authorizes no UI/code removal and starts no new phase.

@@ -1,38 +1,21 @@
-# Live iOS handoff
+# Live v1 handoff — 2026-10-22
 
-Updated: 2026-10-22. Source of truth: [P0 handoff](handoffs/P0.md).
+Current PLAN/FEATURES and P0–P7 briefs supersede the old catalog. 29 V1 items. P7 is hardening; P8–P13 retired.
 
-## Current state and authority
+Planning #22 and P0 #23 merged. P1 PR #24, feat/ios-p1-media-projects, targets develop and **stays open; no merge/auto-merge**. P1 source includes local Projects/thumbnails, Photos/Files import, offline playback, rename, duplicate/delete, storage/cache/Trash and recovery. Source-integrated, uncompiled and runtime-unverified.
 
-- Issue [#21](https://github.com/hoangbkit/Inkribe/issues/21) is the complete 467-item roadmap; no user-feature checkbox is implemented in P0.
-- Planning PR [#22](https://github.com/hoangbkit/Inkribe/pull/22) was **squash merged**. Any instruction to wait for planning PR approval/merge is historical.
-- Develop at P0 branch creation: `955196997b3fbc2683d59fcb44fbc4b11ec5ec9c`.
-- P0 implementation branch: `feat/ios-p0-foundation`. Draft [PR #23](https://github.com/hoangbkit/Inkribe/pull/23) targets `develop`; **leave open for user review, do not merge or enable auto-merge**.
-- P0 source now includes Mac target/scheme rename, independent iOS target, AppFoundation composition root, rational time/edit metadata contracts and a bounded Core Text/Core Image compositing spike.
-- The iOS app entry scene deliberately has no feature UI; its Projects/import/editor workflows are not implemented. No native iOS inference target is linked.
-- No builds, tests, XcodeGen regeneration, CI setup/runs, model downloads, UI tests, device validation, media uploads or deployment were performed.
+## User-authorized correctness fixes
 
-## Next action
+- V1.RENAME: one writer drains the newest title draft, using committed revisions returned from the repository. Save responses update document metadata without assigning the draft or reloading the view. Debounce/submit/dismiss calls coalesce; cancellation of a debounce cannot drop an already-started writer's latest draft. Relink refresh preserves dirty/newer drafts and rejects older document revisions.
+- Existing URL import: replaced unrestricted completed-file download with ephemeral uncached streaming. Reject declared lengths over the existing 16 GiB cap; count actual bytes including unknown/misreported-length streams before buffering/writing. Use 64 KiB writes; cancel/invalidate the session and close/delete partial temporary output on errors/cancel. Preserve normal repository adoption and cleanup.
+- These two reported findings are corrected in source, not executed/compiled. No new feature/UI layout, persistence schema, target, entitlement, Mac or shared-package change.
 
-Review [PR #23](https://github.com/hoangbkit/Inkribe/pull/23), especially source-level target/scheme references, AppFoundation pin, rational-time validation, one-frame compositor and Mac preservation. The user will regenerate, build and test after implementation. Keep all P0 corrections in this same PR; never start P1 or merge until explicitly requested.
+URL/combined/batch/advanced canvas source remains outside v1 requirements. No incoming share extension/App Group/inbox. P5 owns native outbound sharing. P2 has no transcript-search, cloud-STT or diarization obligation. P2–P7 not started.
 
-## Phase progress
+No builds/tests, CI, project generation, model downloads or device validation. User tests afterward. Do not claim runtime release readiness.
 
-| Phase | Implementation | Source verification | User device testing |
-|---|---|---|---|
-| [P0](phases/P0.md) | Code authored, review pending, runtime unverified — [#23](https://github.com/hoangbkit/Inkribe/pull/23) | Source audit only | Pending user |
-| P1–P13 | Not started | Not run | Pending user |
+## Continue
 
-## P0 outcomes / caveats
+Current request authorized the two fixes in PR #24; it did not authorize merge or another phase. Read handoffs/P1.md and the actual diff before further work. User scenarios include rapid rename during a pending save, submit/dismiss before debounce, relink during typing, and URL oversized/unknown-length/cancel/error cleanup.
 
-- Mac release/debug bundle IDs and product/display name unchanged. StoreKit configuration, product IDs, entitlements and Application Support data paths unchanged. The application/test targets and schemes are renamed; the Swift app module stays `Inkribe`, explicitly pinned alongside the preserved XcodeGen product name. All Mac app-module test imports use `Inkribe`.
-- iOS uses a distinct bundle ID and source tree. AppFoundation version is pinned to `0.1.8`; iOS has an isolated empty StoreKit test file (zero products), empty entitlement dictionary (no permissions), and an empty asset catalog (no app icon); no paid IDs or UI assets were invented.
-- The preview/export seam shares a deterministic scene evaluator and one-frame Core Image compositor. This is not a media reader/player, live preview, AVAssetWriter export, P4 caption styling, or production AVFoundation composition.
-- Native XCFramework iOS slices, dynamic frameworks, model footprints/performance and device behavior remain **unverified**, regardless of package platform declarations.
-- P1 owns document persistence/migration and import; P2 owns bounded inference and word timing; P3 owns editor session commands; P4/P5 own production render/preview/export; P6 owns nonidentity clip timing and effects.
-
-## Resuming work
-
-Read root AGENTS.md, README/WORKFLOW, this HANDOFF, P0 brief and [handoffs/P0.md](handoffs/P0.md), then inspect the current PR head and latest develop. Do not rely on an earlier planning snapshot. Resolve concrete source-review findings in the same PR. Do not mark any feature complete without integrated behavior.
-
-**Review prompt:** Review PR #23 versus latest develop under the no-build/no-test/no-CI rules. Focus on Mac identity and storage/purchase regression risk, XcodeGen target membership and scheme paths, Swift 6/26 API assumptions, rational half-open intervals, CoreText/CoreImage frame layout and source-time mapping. Keep fixes on #23 and leave it open.
+If the user requests merge, keep it a squash merge into latest develop after normal source review/conflict handling. If P2 is then requested, use one new PR from latest develop and the narrowed phase brief. State V1 IDs and short plan; preserve Mac and avoid excluded services.
