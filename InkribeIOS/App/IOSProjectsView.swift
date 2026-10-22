@@ -116,7 +116,7 @@ struct IOSProjectsView: View {
             .onChange(of: model.cacheGeneration) { _, _ in attemptedThumbnails.removeAll() }
             .onChange(of: model.search) { _, _ in Task { await model.refresh() } }
             .onChange(of: model.filter) { _, _ in Task { await model.refresh() } }
-            .task { await model.refresh() }
+            .task { model.transcription.start(); await model.refresh() }
             .onChange(of: scenePhase) { _, value in
                 if value == .active { Task { await model.refresh() } }
             }
@@ -261,6 +261,8 @@ struct IOSProjectDetailView: View {
                     }
                     .font(.subheadline)
 
+                    IOSTranscriptionView(document: document)
+
                     Text("Original media").font(.headline)
                     ForEach(document.assets) { asset in
                         VStack(alignment: .leading, spacing: 6) {
@@ -339,6 +341,9 @@ struct IOSProjectDetailView: View {
             }
         }
         .task(id: projectID) { await load() }
+        .onChange(of: model.transcription.resultGeneration) { _, _ in
+            Task { await load(); await model.refresh() }
+        }
         .onDisappear {
             player?.pause()
             saveTask?.cancel()

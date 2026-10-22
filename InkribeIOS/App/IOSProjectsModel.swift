@@ -29,6 +29,7 @@ struct IOSPickedMovie: Transferable {
 @Observable
 final class IOSProjectsModel {
     let repository = IOSProjectRepository.shared
+    let transcription = IOSTranscriptionController()
     private let importer = IOSMediaImporter(repository: .shared)
     private let thumbnails = IOSProjectThumbnails(repository: .shared)
 
@@ -222,6 +223,10 @@ final class IOSProjectsModel {
     }
 
     func trash(_ id: UUID) async {
+        guard !transcription.isActive(id) else {
+            alertMessage = "Cancel this project's transcription before moving it to Trash."
+            return
+        }
         do { try await repository.moveToTrash(id); await refresh() }
         catch { alertMessage = error.localizedDescription }
     }

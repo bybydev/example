@@ -33,3 +33,13 @@ Freeze revision/assets/profile per export. MP4/H.264 720p/1080p, source audio an
 AppFoundation paywall/restore, one verified iOS StoreKit entitlement policy in app layer. User decides free limits/plans/prices. Keep projects readable after entitlement changes. No credits/account/server ledger. Scoped Photos/Files and native outbound share only; no extension/App Group.
 
 All code is source-reviewed, not runtime verified. No builds/tests/device checks authorized. See HANDOFF/RISKS.
+
+## P2 as-built contracts — PR #25
+
+- Link WhisperRuntime, InkribeModelAssets and existing JobQueue 1.0.0 directly to iOS. Do not link InkribeTranscription's Mac/diarization pipeline. Only Models/whisper/ggml-small.bin is an iOS model resource; optional source membership permits a clear missing-model runtime state rather than silent fallback.
+- IOSSpeechDecoder allocates one <=30-second Float buffer (normal read windows <=28 seconds), places PCM using source PTS and pads audio gaps with silence. One job/runtime executes at once; no audio-prefetch list/full-file PCM.
+- NativeWhisperRuntime's captureTokenBytes defaults false, preserving existing Mac behavior. iOS opts into raw BPE bytes and unclamped native timestamps/validity. Reconstruct Unicode before segmentation; do not split durations evenly among words.
+- 24-second ownership cores plus two seconds of context each side; retain words by actual midpoint, reconcile repeated cross-window acoustic intervals and store all raw windows separately. Approximate token-union timing and boundary recognition quality await user testing.
+- Schema v2 adds optional IOSRecognition. Read v1 without a destructive rewrite; first later mutation writes v2 with a prior-valid backup. Project repository enforces immutable raw recognition and original media. Words/cues are editable data for P3, with stable IDs and source/project intervals; raw windows remain bounded by original asset duration, allowing later non-destructive trims without rewriting raw recognition.
+- saveRecognition revision-checks the complete result and atomically publishes it before queue success. Same job ID is idempotent after interrupted queue completion. Explicit retries can refresh revision/language only while no result exists; existing recognition/manual edits are never silently replaced. Renaming during work may make its final revision stale and require explicit retry.
+- Duplicates copy recognition with fresh recognition/window/clip/word/cue IDs. Existing P1 rename returns full committed documents, preserving recognized content.

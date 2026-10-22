@@ -103,6 +103,15 @@ actor IOSProjectRepository {
         guard next.id == current.id, next.createdAt == current.createdAt else {
             throw IOSProjectStoreError.invalidDocument("Project identity cannot be rewritten")
         }
+        if let raw = current.recognition {
+            guard let proposed = next.recognition, proposed.id == raw.id,
+                  proposed.rawWindows == raw.rawWindows, proposed.modelID == raw.modelID,
+                  proposed.modelSHA256 == raw.modelSHA256,
+                  proposed.requestedLanguageCode == raw.requestedLanguageCode,
+                  proposed.completedAt == raw.completedAt else {
+                throw IOSProjectStoreError.invalidDocument("Raw recognition is immutable")
+            }
+        }
         let existing = Dictionary(uniqueKeysWithValues: current.assets.map { ($0.id, $0) })
         for asset in next.assets {
             guard existing[asset.id] == asset else {
@@ -123,6 +132,22 @@ actor IOSProjectRepository {
         try backup.write(to: previous, options: .atomic)
         try data.write(to: url, options: .atomic)
         return next
+    }
+
+    /// One atomic publication of raw output and editable captions. The job ID
+    /// handles a crash after publication but before JobQueue marks completion.
+    func saveRecognition(_ result: IOSRecognition, projectID: UUID,
+                         expectedRevision: UInt64) throws {
+        try Task.checkCancellation()
+        var current = try open(projectID)
+        if current.recognition?.id == result.id { return }
+        guard current.recognition == nil else { throw IOSSpeechError.alreadyTranscribed }
+        guard current.contentRevision == expectedRevision else {
+            throw IOSProjectStoreError.staleRevision(expected: expectedRevision,
+                                                      actual: current.contentRevision)
+        }
+        current.recognition = result
+        _ = try commitEdit(current, expectedRevision: expectedRevision)
     }
 
     func rename(_ id: UUID, title: String, expectedRevision: UInt64) throws -> IOSProjectDocument {
@@ -270,18 +295,22 @@ actor IOSProjectRepository {
                     kind: asset.kind, origin: asset.origin, displayName: asset.displayName,
                     byteCount: asset.byteCount, sha256: asset.sha256, metadata: asset.metadata))
             }
+            var clipMapping: [UUID: UUID] = [:]
             let newClips = try original.clips.map { clip -> IOSProjectClip in
                 guard let targetID = mapping[clip.sourceAssetID] else {
                     throw IOSProjectStoreError.invalidDocument("Missing duplicated asset mapping")
                 }
-                return IOSProjectClip(id: UUID(), sourceAssetID: targetID,
+                let clipID = UUID()
+                clipMapping[clip.id] = clipID
+                return IOSProjectClip(id: clipID, sourceAssetID: targetID,
                     sourceInterval: clip.sourceInterval, timelineInterval: clip.timelineInterval)
             }
             let now = Date()
             let copy = IOSProjectDocument(schemaVersion: IOSProjectSchema.current,
                 id: UUID(), contentRevision: 1, title: original.title + " Copy",
                 createdAt: now, updatedAt: now, preset: original.preset,
-                canvas: original.canvas, assets: newAssets, clips: newClips)
+                canvas: original.canvas, assets: newAssets, clips: newClips,
+                recognition: original.recognition?.duplicated(assetClips: clipMapping))
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)

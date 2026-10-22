@@ -3,7 +3,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum IOSProjectSchema {
-    static let current = ProjectSchemaContract.initialVersion
+    static let current = 2
 }
 
 enum IOSProjectStoreError: LocalizedError, Sendable {
@@ -154,12 +154,14 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var canvas: IOSCanvas
     var assets: [IOSSourceAsset]
     var clips: [IOSProjectClip]
+    var recognition: IOSRecognition? = nil
 
     func validate() throws {
         guard schemaVersion <= IOSProjectSchema.current else {
             throw IOSProjectStoreError.unsupportedSchema(schemaVersion)
         }
-        guard schemaVersion == IOSProjectSchema.current, contentRevision > 0,
+        guard (1...IOSProjectSchema.current).contains(schemaVersion),
+              (schemaVersion >= 2 || recognition == nil), contentRevision > 0,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               title.count <= 256, updatedAt >= createdAt,
               !assets.isEmpty, !clips.isEmpty else {
@@ -176,6 +178,7 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
         for asset in assets { try asset.validate() }
         let index = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
         for clip in clips { try clip.validate(assets: index) }
+        try recognition?.validate(clips: clips, assets: assets)
         let ordered = clips.sorted { $0.timelineInterval.start < $1.timelineInterval.start }
         for pair in zip(ordered, ordered.dropFirst()) {
             guard pair.0.timelineInterval.end <= pair.1.timelineInterval.start else {

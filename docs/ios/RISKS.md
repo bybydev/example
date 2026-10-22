@@ -16,3 +16,13 @@
 | Runtime correctness unverified | All | Honest source evidence; user tests afterward |
 
 No cloud/team/publishing service risks need engineering because these features are outside v1.
+
+## P2 residual limitations — source integration only
+
+- Whisper Small is ~488 MB on disk, with unmeasured native inference memory/latency. CPU policy and bounded PCM do not prove SE2 runtime suitability.
+- The pinned XCFramework's iOS slices, native links, Swift/API compilation and bundle resource copying have not been executed/verified.
+- Model integrity hashing and native model initialization are synchronous; cancellation requested during initialization is observed after that stage returns. Native inference itself uses the existing abort callback; window decode checks cancellation.
+- Word timing is approximate token-union timing, not forced alignment. Unicode/window seams, repeated speech and native timing availability need real samples/user testing.
+- Recognition/raw text storage scales with transcript length; only decoded PCM/model execution concurrency is window-bounded.
+- Jobs interrupted by process death restart from the beginning. A result already published under that job ID is reused. No uninterrupted background-processing guarantee or checkpointed partial caption results.
+- Project revision changes during recognition cause explicit failure/retry; existing results/manual edits are preserved, not automatically rebased.

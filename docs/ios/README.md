@@ -12,10 +12,12 @@ Read root AGENTS, WORKFLOW, HANDOFF, PLAN, FEATURES, ARCHITECTURE, DESIGN and th
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Local ownership, storage, timing and rendering |
 | [DESIGN.md](DESIGN.md) | Visual reference filtered to v1 screens |
 | [WORKFLOW.md](WORKFLOW.md) | Scope, PR and execution rules |
-| [HANDOFF.md](HANDOFF.md), [handoffs/P1.md](handoffs/P1.md) | Current source, findings and continuation |
+| [HANDOFF.md](HANDOFF.md), [handoffs/P2.md](handoffs/P2.md) | Current source, findings and continuation |
 | [DECISIONS.md](DECISIONS.md), [RISKS.md](RISKS.md), [VALIDATION.md](VALIDATION.md) | Necessary choices, source risks and user testing |
 | [BASELINE.md](BASELINE.md), [handoffs/P0.md](handoffs/P0.md) | Historical source evidence, not feature authority |
 | [ISSUE_21.md](ISSUE_21.md) | Original 467-item snapshot: historical only, not a backlog |
 | [phases/P0.md](phases/P0.md)–[P7.md](phases/P7.md) | Active briefs; P8–P13 retired |
 
-Planning #22 and P0 #23 merged. PR #24 stays open against develop; no merge/auto-merge. Source is uncompiled. The reported autosave race and URL size-limit findings were corrected in source after the scope reset; runtime verification is still pending. Preserve Mac. No builds/tests, CI, project generation, model downloads or device validation; user tests afterward.
+Planning #22 and P0 #23 merged. P1 PR #24 was squash merged as 97d3645. P2 PR #25 is open against develop for review; no merge/auto-merge. Source is uncompiled. The reported autosave race and URL size-limit findings were corrected in source after the scope reset; runtime verification is still pending. Preserve Mac. No builds/tests, CI, project generation, model downloads or device validation; user tests afterward.
+
+P2 source outcomes, model placement and native/runtime limitations: [handoffs/P2.md](handoffs/P2.md). Schema v1 reads remain supported; writes now use v2.

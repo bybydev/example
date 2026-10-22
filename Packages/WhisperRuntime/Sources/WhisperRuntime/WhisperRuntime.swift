@@ -77,11 +77,18 @@ public struct WhisperToken: Codable, Equatable, Sendable {
     public let startTime: TimeInterval
     public let endTime: TimeInterval
     public let text: String
+    /// Opt-in raw BPE bytes allow joining UTF-8 split across token boundaries.
+    /// Nil retains the original Mac runtime/serialization behavior.
+    public let utf8: Data?
+    public let hasValidTimestamps: Bool?
 
-    public init(startTime: TimeInterval, endTime: TimeInterval, text: String) {
-        self.startTime = max(0, startTime)
-        self.endTime = max(self.startTime, endTime)
+    public init(startTime: TimeInterval, endTime: TimeInterval, text: String,
+                utf8: Data? = nil, hasValidTimestamps: Bool? = nil) {
+        self.startTime = utf8 == nil ? max(0, startTime) : startTime
+        self.endTime = utf8 == nil ? max(self.startTime, endTime) : endTime
         self.text = text
+        self.utf8 = utf8
+        self.hasValidTimestamps = hasValidTimestamps
     }
 }
 

@@ -4,7 +4,7 @@ Inkribe is a macOS-first, fully offline speech-to-text workspace built around du
 
 ## iOS caption/video editor
 
-The focused iOS v1 scope, eight-phase plan and handoff live in [docs/ios/README.md](docs/ios/README.md). Current PLAN/FEATURES supersedes the old 467-item catalog. Planning #22 and P0 #23 are merged; P1 [PR #24](https://github.com/hoangbkit/Inkribe/pull/24) stays open for review. No builds/tests/device checks claimed.
+The focused iOS v1 scope, eight-phase plan and handoff live in [docs/ios/README.md](docs/ios/README.md). Current PLAN/FEATURES supersedes the old 467-item catalog. Planning #22 and P0 #23 are merged; P1 PR #24 was squash merged; P2 [PR #25](https://github.com/hoangbkit/Inkribe/pull/25) is open for review. No builds/tests/device checks claimed.
 
 The v1 implementation status and numbered handoffs below refer to the existing **Mac** product, not the new iOS phase sequence.
 
@@ -207,5 +207,5 @@ Post-v1 cleanup should consolidate existing ownership rather than weaken establi
 ## App targets after iOS P0
 
 - `InkribeMac` (macOS 15+, existing bundle IDs `com.hoangbkit.inkribe[.debug]`, existing purchases and data).
-- `Inkribe` (iOS 26+, new identifiers `com.hoangbkit.inkribe.ios[.debug]`, app sources in `InkribeIOS/`, AppFoundation 0.1.8). P1 Projects/import/storage UI is in open PR #24; its renderer is a source-only prototype, not finished video export.
+- `Inkribe` (iOS 26+, new identifiers `com.hoangbkit.inkribe.ios[.debug]`, app sources in `InkribeIOS/`, AppFoundation 0.1.8). P1 Projects/import/storage UI is merged; P2 local transcription/read-only result UI is in open PR #25; its renderer is a source-only prototype, not finished video export.
 - `project.yml` is authoritative; generated `.xcodeproj` is intentionally unchanged until the user chooses to regenerate it. Mac Makefile commands now explicitly use `InkribeMac`.

@@ -14,7 +14,7 @@ Current user instructions, root AGENTS and PLAN/FEATURES control work. Only curr
 6. Incorporate relevant latest develop and resolve conflicts. Honor explicit review holds first; otherwise standing workflow is squash merge when finished.
 7. Start no next phase without request.
 
-Planning #22 and P0 #23 are merged. **PR #24 remains open, no merge/auto-merge until user instruction.** This scope reset changes documentation only.
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645. **P2 PR #25 remains open, no merge/auto-merge.** The user requested P2 implementation after approving the compact v1 scope.
 
 ## Execution limits
 

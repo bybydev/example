@@ -5,6 +5,7 @@ import whisper
 
 public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
     private let modelURL: URL
+    private let captureTokenBytes: Bool
     private let configuration: WhisperRuntimeConfiguration
     private let logger = Logger(label: "Inkribe.WhisperRuntime")
 
@@ -13,10 +14,12 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
 
     public init(
         modelURL: URL,
-        configuration: WhisperRuntimeConfiguration = .recommended
+        configuration: WhisperRuntimeConfiguration = .recommended,
+        captureTokenBytes: Bool = false
     ) {
         self.modelURL = modelURL
         self.configuration = configuration
+        self.captureTokenBytes = captureTokenBytes
     }
 
     public static func bundled(
@@ -138,6 +141,14 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
                 "duration_ms": "\(Int(Date().timeIntervalSince(startedAt) * 1000))"
             ]
         )
+    }
+
+    /// String(cString:) replaces incomplete BPE UTF-8 sequences. Preserve
+    /// bytes only for callers that explicitly request caption word mapping.
+    private func rawTokenBytes(_ pointer: UnsafePointer<CChar>) -> Data {
+        var count = 0
+        while pointer[count] != 0 { count += 1 }
+        return Data(bytes: pointer, count: count)
     }
 
     private func performTranscription(
@@ -266,7 +277,9 @@ public actor NativeWhisperRuntime: WhisperRuntimeProtocol {
                     WhisperToken(
                         startTime: TimeInterval(data.t0) / 100.0,
                         endTime: TimeInterval(data.t1) / 100.0,
-                        text: text
+                        text: text,
+                        utf8: captureTokenBytes ? rawTokenBytes(tokenText) : nil,
+                        hasValidTimestamps: captureTokenBytes ? (data.t0 >= 0 && data.t1 > data.t0) : nil
                     )
                 )
             }

@@ -14,6 +14,9 @@ configs:
   Release: release
 
 packages:
+  JobQueue:
+    url: https://github.com/hoangbkit/JobQueue.git
+    exactVersion: 1.0.0
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation.git
     exactVersion: 0.1.8
@@ -171,12 +174,22 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: InkribeIOS
+      # Speech model only; never copy the entire Mac Models directory to iOS.
+      - path: Models/whisper/ggml-small.bin
+        buildPhase: resources
+        optional: true
     settings:
       groups:
         - InkribeIOSApp
     dependencies:
       - package: AppFoundation
         product: AppFoundation
+      - package: WhisperRuntime
+        product: WhisperRuntime
+      - package: InkribeModelAssets
+        product: InkribeModelAssets
+      - package: JobQueue
+        product: JobQueue
 
   InkribeMacTests:
     type: bundle.unit-test
