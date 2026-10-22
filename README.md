@@ -2,6 +2,12 @@
 
 Inkribe is a macOS-first, fully offline speech-to-text workspace built around durable transcript documents.
 
+## iOS caption/video editor planning
+
+The full iOS roadmap and fresh-agent handoff are in [docs/ios/README.md](docs/ios/README.md): architecture, design reference, all 467 issue #21 feature items, workflow and P0–P13 implementation briefs. This is planning only; no iOS phase has started. The planning PR must remain open until the user requests merge.
+
+The v1 implementation status and numbered handoffs below refer to the existing **Mac** product, not the new iOS phase sequence.
+
 **v1 implementation status:** Phases 0–9 are complete. The numbered phase handoffs are historical implementation records; current behavior is defined by the architecture/feature contracts linked below.
 
 The v1 product flow is:
