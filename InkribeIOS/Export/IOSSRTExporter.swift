@@ -6,9 +6,7 @@ enum IOSSRTExporter {
     /// Stream UTF-8 cues instead of collecting another complete transcript.
     /// Edits and genuine project intervals are exported, never raw recognition.
     static func write(_ snapshot: IOSCaptionSnapshot, to url: URL, progress: JobProgressReporter) async throws {
-        let cues = snapshot.cues.sorted {
-            $0.interval.start == $1.interval.start ? $0.id.uuidString < $1.id.uuidString : $0.interval.start < $1.interval.start
-        }
+        let cues = snapshot.chronologicalCues
         guard FileManager.default.createFile(atPath: url.path, contents: nil) else { throw IOSExportError.encoding }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }

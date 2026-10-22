@@ -46,6 +46,7 @@ enum IOSMP4Exporter {
                 AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
                 AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false])
             output.alwaysCopiesSampleData = false
+            output.audioMix = graph.audioMix
             guard reader.canAdd(output) else { throw IOSExportError.decoding }
             reader.add(output)
             audioOutput = output
@@ -234,7 +235,7 @@ enum IOSMP4Exporter {
         let size = try await video.load(.naturalSize)
         let formats = try await video.load(.formatDescriptions)
         let duration = try await asset.load(.duration)
-        let expected = document.clips.map(\.timelineInterval.end).max()?.cmTime ?? .zero
+        let expected = document.outputDuration.cmTime
         guard size.width.isFinite, size.height.isFinite,
               abs(size.width - CGFloat(canvas.width)) < 0.5, abs(size.height - CGFloat(canvas.height)) < 0.5,
               formats.contains(where: { CMFormatDescriptionGetMediaSubType($0) == kCMVideoCodecType_H264 }),

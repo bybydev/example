@@ -36,6 +36,8 @@ final class IOSEditorSession {
     private var isSeeking = false
     private var typingWordID: UUID?
     private var stylingControl: IOSCaptionStyleControl?
+    private var mediaControl: IOSMediaControl?
+    private var mediaURLs: [UUID: URL] = [:]
     private var past: [History] = []
     private var future: [History] = []
     @ObservationIgnored private var debounce: Task<Void, Never>?
@@ -44,6 +46,7 @@ final class IOSEditorSession {
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObserver: NSKeyValueObservation?
     @ObservationIgnored private var preparedMedia: MediaKey?
+    @ObservationIgnored private var mediaRefresh: Task<Void, Never>?
 
     private struct Selection { let cue: UUID?; let word: UUID? }
     private struct History {
@@ -54,11 +57,13 @@ final class IOSEditorSession {
     private enum HistoryChange {
         case caption(IOSCaptionEditPatch)
         case style(before: IOSCaptionStyle?, after: IOSCaptionStyle?)
+        case media(before: IOSMediaEditState, after: IOSMediaEditState)
 
         var estimatedBytes: Int {
             switch self {
             case .caption(let patch): patch.estimatedBytes
             case .style: MemoryLayout<IOSCaptionStyle>.stride * 2
+            case .media: MemoryLayout<IOSMediaEditState>.stride * 2
             }
         }
         mutating func coalesceText(_ next: IOSCaptionEditPatch) -> Bool {
@@ -71,20 +76,39 @@ final class IOSEditorSession {
             self = .style(before: before, after: next)
             return true
         }
+        mutating func coalesceMedia(from previous: IOSMediaEditState, to next: IOSMediaEditState) -> Bool {
+            guard case .media(let before, let after) = self, after == previous else { return false }
+            self = .media(before: before, after: next)
+            return true
+        }
     }
     private struct MediaKey: Equatable {
         let clips: [IOSProjectClip]
         let canvas: IOSCanvas
         let urls: [UUID: URL]
+        let edits: IOSMediaEdits
     }
 
     init(projectID: UUID) { self.projectID = projectID }
-    var duration: MediaTime { document?.clips.map(\.timelineInterval.end).max() ?? .zero }
+    var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: IOSCaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: IOSCaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
     var selectedWord: IOSCaptionWord? { selectedWordID.flatMap { snapshot?.wordsByID[$0] } }
+    /// Timing corrections retain the original project clock, even for a clipped
+    /// boundary unit. Transport/list/export use the retained, zero-based clock.
+    var timingCue: IOSCaptionCue? { document?.recognition?.cues.first { $0.id == selectedCueID } }
+    var timingWord: IOSCaptionWord? { document?.recognition?.words.first { $0.id == selectedWordID } }
     var undoLabel: String { "Undo edit" }
     var redoLabel: String { "Redo edit" }
+    var canMergeNext: Bool {
+        guard let result = document?.recognition,
+              let index = result.cues.firstIndex(where: { $0.id == selectedCueID }), index + 1 < result.cues.count,
+              snapshot?.cues.contains(where: { $0.id == result.cues[index + 1].id }) == true,
+              let a = result.cues[index].wordIDs.first, let b = result.cues[index + 1].wordIDs.first else { return false }
+        guard let first = result.words.first(where: { $0.id == a }),
+              let second = result.words.first(where: { $0.id == b }) else { return false }
+        return first.clipID == second.clipID
+    }
 
     func open() async {
         isPresented = true
@@ -134,7 +158,8 @@ final class IOSEditorSession {
             }
             guard generation == loadGeneration else { return }
             originalAvailable = Dictionary(uniqueKeysWithValues: loaded.assets.map { ($0.id, urls[$0.id] != nil) })
-            await preparePreview(document: loaded, urls: urls, generation: generation)
+            mediaURLs = urls
+            await preparePreview(document: document ?? loaded, urls: urls, generation: generation)
         } catch {
             guard generation == loadGeneration else { return }
             loadError = error.localizedDescription
@@ -144,6 +169,7 @@ final class IOSEditorSession {
     func setTitle(_ value: String) {
         guard var next = document, next.title != value else { return }
         next.title = value
+        stylingControl = nil; mediaControl = nil
         document = next
         changed()
     }
@@ -152,6 +178,7 @@ final class IOSEditorSession {
         pause()
         typingWordID = nil
         stylingControl = nil
+        mediaControl = nil
         selectedCueID = id
         selectedWordID = snapshot?.cues.first { $0.id == id }?.wordIDs.first
         if let cue = selectedCue { seek(to: cue.interval.start) }
@@ -161,6 +188,7 @@ final class IOSEditorSession {
         pause()
         typingWordID = nil
         stylingControl = nil
+        mediaControl = nil
         selectedWordID = id
         if let word = snapshot?.wordsByID[id] { seek(to: word.projectInterval.start) }
     }
@@ -168,6 +196,82 @@ final class IOSEditorSession {
     func beginTyping() { pause() }
     func endTyping() { typingWordID = nil }
     func endStyleEditing() { stylingControl = nil }
+    func endMediaEditing() { mediaControl = nil }
+
+    func setMediaPresentation(_ edits: IOSMediaEdits, canvas: IOSCanvas? = nil,
+                              preset: IOSCanvasPreset? = nil, coalescing control: IOSMediaControl? = nil) {
+        guard var project = document else { return }
+        let before = IOSMediaEditState(project)
+        let originalTime: MediaTime
+        do {
+            originalTime = try IOSOutputTimeline(project).originalTime(forOutput: min(time, project.outputDuration))
+            project.schemaVersion = IOSProjectSchema.current
+            project.mediaEdits = edits == .standard ? nil : edits
+            if let canvas { project.canvas = canvas }
+            if let preset { project.preset = preset }
+            try project.validate()
+            let after = IOSMediaEditState(project)
+            guard after != before else { return }
+            let outputTime = try IOSOutputTimeline(project).outputTime(clampingOriginal: originalTime)
+            let selection = Selection(cue: selectedCueID, word: selectedWordID)
+            if let control, control == mediaControl, !past.isEmpty, future.isEmpty,
+               past[past.count - 1].change.coalesceMedia(from: before, to: after) {
+                past[past.count - 1].selectionAfter = selection
+            } else {
+                past.append(History(change: .media(before: before, after: after),
+                    selectionBefore: selection, selectionAfter: selection))
+            }
+            document = project
+            time = outputTime
+            mediaControl = control
+            stylingControl = nil; typingWordID = nil
+            finishHistoryEdit()
+            rebuildSnapshot(); repairSelection()
+            if !past.isEmpty { past[past.count - 1].selectionAfter = Selection(cue: selectedCueID, word: selectedWordID) }
+            commandError = nil
+            changed()
+            if !updateVolumePreviewIfPossible(before: before) { pause(); refreshMediaPreview() }
+        } catch { commandError = error.localizedDescription }
+    }
+
+    private func updateVolumePreviewIfPossible(before: IOSMediaEditState) -> Bool {
+        guard let document, let key = preparedMedia, !isPreparingPreview,
+              key.canvas == before.canvas, key.edits == (before.edits ?? .standard),
+              before.canvas == document.canvas, before.preset == document.preset else { return false }
+        var old = before.edits ?? .standard
+        var next = document.effectiveMediaEdits
+        old.volume = 1; next.volume = 1
+        guard old == next else { return false }
+        if let item = player.currentItem, let trackID = item.audioMix?.inputParameters.first?.trackID {
+            item.audioMix = IOSPreviewComposition.originalAudioMix(trackID: trackID, volume: document.effectiveMediaEdits.volume)
+        }
+        preparedMedia = MediaKey(clips: key.clips, canvas: key.canvas, urls: key.urls, edits: document.effectiveMediaEdits)
+        return true
+    }
+
+    private func refreshMediaPreview() {
+        mediaRefresh?.cancel()
+        let generation = UUID()
+        loadGeneration = generation
+        seekGeneration = UUID()
+        playbackGeneration = UUID()
+        preparedMedia = nil
+        isSeeking = false
+        isLoading = false
+        isPreparingPreview = true
+        mediaRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            guard let self, self.isPresented, self.loadGeneration == generation, let document = self.document else { return }
+            var urls = self.mediaURLs
+            for asset in document.assets where urls[asset.id] == nil {
+                if let url = try? await self.repository.sourceURL(projectID: self.projectID, assetID: asset.id) { urls[asset.id] = url }
+            }
+            guard self.loadGeneration == generation else { return }
+            self.mediaURLs = urls
+            self.originalAvailable = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, urls[$0.id] != nil) })
+            await self.preparePreview(document: self.document ?? document, urls: urls, generation: generation)
+        }
+    }
 
     func setCaptionStyle(_ style: IOSCaptionStyle, coalescing control: IOSCaptionStyleControl? = nil) {
         guard var project = document, style != project.effectiveCaptionStyle else { return }
@@ -186,6 +290,7 @@ final class IOSEditorSession {
             }
             document = project
             stylingControl = control
+            mediaControl = nil
             typingWordID = nil
             finishHistoryEdit()
             rebuildSnapshot()
@@ -221,6 +326,7 @@ final class IOSEditorSession {
     }
     func mergeNext() {
         guard let id = selectedCueID else { return }
+        guard canMergeNext else { commandError = IOSCaptionEditError.mergeBoundary.localizedDescription; return }
         perform { state, _ in try IOSCaptionEdits.mergeNext(cueID: id, in: &state); return nil }
     }
 
@@ -229,6 +335,7 @@ final class IOSEditorSession {
         guard var project = document, let result = project.recognition else { return }
         pause()
         stylingControl = nil
+        mediaControl = nil
         let before = IOSCaptionEditState(result)
         var after = before
         let selection = Selection(cue: selectedCueID, word: selectedWordID)
@@ -272,6 +379,10 @@ final class IOSEditorSession {
     private func restore(_ change: HistoryChange, forward: Bool, selection: Selection) -> Bool {
         guard var project = document else { return false }
         do {
+            let oldTimeline = IOSOutputTimeline(project)
+            let previousMedia = IOSMediaEditState(project)
+            let originalTime = try oldTimeline.originalTime(forOutput: min(time, oldTimeline.duration))
+            var mediaChanged = false
             switch change {
             case .caption(let patch):
                 guard let result = project.recognition else { throw IOSCaptionEditError.missingCaption }
@@ -280,13 +391,22 @@ final class IOSEditorSession {
             case .style(let before, let after):
                 guard project.captionStyle == (forward ? before : after) else { throw IOSCaptionEditError.missingCaption }
                 project.captionStyle = forward ? after : before
+            case .media(let before, let after):
+                guard IOSMediaEditState(project) == (forward ? before : after) else { throw IOSMediaEditError.invalidSettings }
+                project = (forward ? after : before).applying(to: project)
+                mediaChanged = true
             }
             project.schemaVersion = IOSProjectSchema.current
             try project.validate()
-            pause(); typingWordID = nil; stylingControl = nil
+            let restoredTime: MediaTime
+            if mediaChanged { restoredTime = try IOSOutputTimeline(project).outputTime(clampingOriginal: originalTime) }
+            else { restoredTime = time }
+            pause(); typingWordID = nil; stylingControl = nil; mediaControl = nil
             document = project
+            time = restoredTime
             selectedCueID = selection.cue; selectedWordID = selection.word
             rebuildSnapshot(); repairSelection(); changed()
+            if mediaChanged, !updateVolumePreviewIfPossible(before: previousMedia) { refreshMediaPreview() }
             return true
         } catch { commandError = error.localizedDescription; return false }
     }
@@ -369,8 +489,11 @@ final class IOSEditorSession {
     }
 
     private func preparePreview(document: IOSProjectDocument, urls: [UUID: URL], generation: UUID) async {
-        let key = MediaKey(clips: document.clips, canvas: document.canvas, urls: urls)
-        guard key != preparedMedia else { return }
+        let key = MediaKey(clips: document.clips, canvas: document.canvas, urls: urls, edits: document.effectiveMediaEdits)
+        guard key != preparedMedia else {
+            if loadGeneration == generation { isPreparingPreview = false }
+            return
+        }
         pause()
         isPreparingPreview = true
         previewError = nil
@@ -401,6 +524,7 @@ final class IOSEditorSession {
                     self.time = self.duration
                 }
             }
+            isPreparingPreview = false
             seek(to: min(time, duration))
         } catch {
             guard loadGeneration == generation else { return }
@@ -414,13 +538,15 @@ final class IOSEditorSession {
         guard periodicObserver == nil else { return }
         periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.periodicObserver != nil, !self.isSeeking, let time = try? MediaTime(validating: self.player.currentTime()) else { return }
+                guard let self, self.periodicObserver != nil, !self.isSeeking, !self.isPreparingPreview,
+                      let time = try? MediaTime(validating: self.player.currentTime()) else { return }
                 self.time = min(time, self.duration)
             }
         }
     }
     func seek(to value: MediaTime) {
         let value = min(value, duration)
+        if isPreparingPreview { time = value; return }
         let generation = UUID()
         seekGeneration = generation
         isSeeking = true
@@ -441,7 +567,7 @@ final class IOSEditorSession {
     }
     func togglePlayback() {
         if isPlaying { pause(); return }
-        guard player.currentItem != nil, previewError == nil else { return }
+        guard player.currentItem != nil, previewError == nil, !isPreparingPreview else { return }
         endTyping()
         if time >= duration { seek(to: .zero) }
         isPlaying = true
@@ -452,6 +578,7 @@ final class IOSEditorSession {
     /// Explicit lifecycle teardown, before this session releases its AVPlayer.
     func stop() {
         isPresented = false
+        mediaRefresh?.cancel(); mediaRefresh = nil
         pause()
         loadGeneration = UUID()
         seekGeneration = UUID()

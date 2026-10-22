@@ -7,6 +7,7 @@ import UIKit
 struct IOSStyledCaptionOverlay: UIViewRepresentable {
     let snapshot: IOSCaptionSnapshot
     let time: MediaTime
+    let mediaSize: CGSize
     let onError: (String?) -> Void
 
     func makeUIView(context: Context) -> Surface {
@@ -19,9 +20,10 @@ struct IOSStyledCaptionOverlay: UIViewRepresentable {
     }
     func updateUIView(_ uiView: Surface, context: Context) {
         uiView.onError = onError
-        guard uiView.snapshot?.id != snapshot.id || uiView.time != time else { return }
+        guard uiView.snapshot?.id != snapshot.id || uiView.time != time || uiView.mediaSize != mediaSize else { return }
         uiView.snapshot = snapshot
         uiView.time = time
+        uiView.mediaSize = mediaSize
         uiView.generation = UUID()
         uiView.setNeedsDisplay()
     }
@@ -29,6 +31,7 @@ struct IOSStyledCaptionOverlay: UIViewRepresentable {
     final class Surface: UIView {
         var snapshot: IOSCaptionSnapshot?
         var time = MediaTime.zero
+        var mediaSize = CGSize.zero
         var onError: ((String?) -> Void)?
         var generation = UUID()
         private let renderer = IOSCaptionRenderer()
@@ -41,7 +44,14 @@ struct IOSStyledCaptionOverlay: UIViewRepresentable {
             context.translateBy(x: 0, y: bounds.height)
             context.scaleBy(x: 1, y: -1)
             do {
-                try renderer.draw(snapshot: snapshot, at: time, in: context, bounds: bounds)
+                guard mediaSize.width > 0, mediaSize.height > 0 else { throw IOSCaptionRenderError.invalidFrame }
+                // Match AVPlayerLayer's actual raster viewport before fitting the
+                // project canvas. Even-pixel rounding must not shift captions.
+                let fit = min(bounds.width / mediaSize.width, bounds.height / mediaSize.height)
+                let viewport = CGRect(x: bounds.midX - mediaSize.width * fit / 2,
+                    y: bounds.midY - mediaSize.height * fit / 2,
+                    width: mediaSize.width * fit, height: mediaSize.height * fit)
+                try renderer.draw(snapshot: snapshot, at: time, in: context, bounds: viewport)
                 message = nil
             } catch { message = error.localizedDescription }
             context.restoreGState()

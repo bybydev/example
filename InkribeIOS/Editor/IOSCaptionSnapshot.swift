@@ -20,6 +20,8 @@ struct IOSCaptionSnapshot: Sendable {
     let style: IOSCaptionStyle
     let wordsByID: [UUID: IOSCaptionWord]
     let cues: [IOSCaptionCue]
+    let timeline: IOSOutputTimeline
+    private let originalWordsByID: [UUID: IOSCaptionWord]
     private let ordered: [IOSCaptionCue]
     private let prefixEnd: [MediaTime]
 
@@ -27,19 +29,48 @@ struct IOSCaptionSnapshot: Sendable {
         revision = ProjectRevision(projectID: document.id, contentRevision: document.contentRevision)
         canvas = document.canvas
         style = document.effectiveCaptionStyle
-        wordsByID = Dictionary(uniqueKeysWithValues: (document.recognition?.words ?? []).map { ($0.id, $0) })
-        cues = document.recognition?.cues ?? []
+        let timeline = IOSOutputTimeline(document)
+        self.timeline = timeline
+        let originalWords = document.recognition?.words ?? []
+        originalWordsByID = Dictionary(uniqueKeysWithValues: originalWords.map { ($0.id, $0) })
+        let mappedWords = originalWords.compactMap { word -> IOSCaptionWord? in
+            guard let interval = timeline.outputInterval(word.projectInterval) else { return nil }
+            var copy = word
+            copy.projectInterval = interval
+            return copy
+        }
+        let mappedIndex = Dictionary(uniqueKeysWithValues: mappedWords.map { ($0.id, $0) })
+        wordsByID = mappedIndex
+        cues = (document.recognition?.cues ?? []).compactMap { cue in
+            guard let interval = timeline.outputInterval(cue.interval) else { return nil }
+            let ids = cue.wordIDs.filter { mappedIndex[$0] != nil }
+            guard !ids.isEmpty else { return nil }
+            return IOSCaptionCue(id: cue.id, wordIDs: ids, interval: interval)
+        }
+        let originalStarts = Dictionary(uniqueKeysWithValues: (document.recognition?.cues ?? []).map { ($0.id, $0.interval.start) })
         ordered = cues.sorted {
-            $0.interval.start == $1.interval.start ? $0.id.uuidString < $1.id.uuidString : $0.interval.start < $1.interval.start
+            if $0.interval.start != $1.interval.start { return $0.interval.start < $1.interval.start }
+            let a = originalStarts[$0.id] ?? .zero
+            let b = originalStarts[$1.id] ?? .zero
+            return a == b ? $0.id.uuidString < $1.id.uuidString : a < b
         }
         var maximum = MediaTime.zero
         prefixEnd = ordered.map { cue in maximum = max(maximum, cue.interval.end); return maximum }
     }
 
+    var chronologicalCues: [IOSCaptionCue] { ordered }
+
     func text(for cue: IOSCaptionCue) -> String {
         cue.wordIDs.compactMap { wordsByID[$0]?.text }
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Clip only the output view. Effects still use full original edited word
+    /// intervals, so trimming into a word doesn't restart karaoke/pop/fade.
+    func motionPresentation(_ visible: IOSCaptionPresentation) -> IOSCaptionPresentation {
+        IOSCaptionPresentation(cueID: visible.cueID,
+            words: visible.words.compactMap { originalWordsByID[$0.id] }, activeWordIDs: visible.activeWordIDs)
     }
 
     func evaluate(at time: MediaTime) -> IOSCaptionPresentation? {

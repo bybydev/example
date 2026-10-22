@@ -3,7 +3,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum IOSProjectSchema {
-    static let current = 4
+    static let current = 5
 }
 
 enum IOSProjectStoreError: LocalizedError, Sendable {
@@ -156,8 +156,12 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var clips: [IOSProjectClip]
     var recognition: IOSRecognition? = nil
     var captionStyle: IOSCaptionStyle? = nil
+    var mediaEdits: IOSMediaEdits? = nil
 
     var effectiveCaptionStyle: IOSCaptionStyle { captionStyle ?? .standard }
+    var effectiveMediaEdits: IOSMediaEdits { mediaEdits ?? .standard }
+    var sourceDuration: MediaTime { clips.map(\.timelineInterval.end).max() ?? .zero }
+    var outputDuration: MediaTime { IOSOutputTimeline(self).duration }
 
     func validate() throws {
         guard schemaVersion <= IOSProjectSchema.current else {
@@ -175,6 +179,11 @@ struct IOSProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw IOSProjectStoreError.invalidDocument("Caption styles require schema v4")
         }
         try captionStyle?.validate()
+        guard schemaVersion >= 5 || mediaEdits == nil else {
+            throw IOSProjectStoreError.invalidDocument("Media edits require schema v5")
+        }
+        try mediaEdits?.validate(sourceDuration: sourceDuration)
+        guard outputDuration > .zero else { throw IOSMediaEditError.invalidSettings }
         if let dimensions = preset.canvas, dimensions != canvas {
             throw IOSProjectStoreError.invalidDocument("Preset does not match canvas")
         }

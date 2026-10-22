@@ -66,7 +66,8 @@ final class IOSCaptionRenderer {
             }
         }
         let style = snapshot.style
-        let motion = IOSCaptionMotion.evaluate(presentation, style: style, at: time)
+        let motion = IOSCaptionMotion.evaluate(snapshot.motionPresentation(presentation), style: style,
+            at: try snapshot.timeline.originalTime(forOutput: time))
         let width = CGFloat(snapshot.canvas.width)
         let height = CGFloat(snapshot.canvas.height)
         let fit = min(bounds.width / width, bounds.height / height)

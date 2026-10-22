@@ -15,8 +15,8 @@ Focused native workflow: Photos/Files import → on-device recognition → capti
 | [P2](phases/P2.md) | On-device transcription and word timing | High | Essential | Merged #25 (97d647e); model/native/runtime checks unrun |
 | [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
 | [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
-| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Export source-integrated in open #28; Pro deferred by user; compilation/runtime unverified |
-| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Not started; depends on P5 |
+| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
+| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Source-integrated in open #29; compilation/runtime unverified |
 | [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Not started; final audit after P0–P6 |
 
 P0–P6 keep their broad historical roles with reduced scope. P7 now means v1 hardening, replacing its unstarted AI/localization role. P8–P13 are retired. Reliability applies throughout, not only in P7.
@@ -29,7 +29,7 @@ Also outside v1: advanced video effects/transitions/speed/reverse/tracking/maski
 
 ## Existing extras and status
 
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
+Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 #28 was squash merged as 3c09e32. P6 stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
 
 URL import, combined/batch imports and advanced canvas controls already present in P1 source are not v1 requirements. The scope-reset documentation removed no source/UI. A subsequent explicit user request authorized the two correctness fixes, including hardening the existing URL path; it did not add URL import to v1 requirements. Record them separately; obtain an actual fix/removal decision before changing them. Transcript search is no longer a P2 obligation. Incoming share extension was removed and must not return.
 

@@ -2,8 +2,8 @@ import CoreMedia
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum IOSEditorField: Hashable { case title, word(UUID), timing(UUID, Bool) }
-private enum IOSEditorPanel: String, CaseIterable { case captions = "Captions", style = "Style", templates = "Templates" }
+enum IOSEditorField: Hashable { case title, word(UUID), timing(UUID, Bool), trimStart, trimEnd }
+private enum IOSEditorPanel: String, CaseIterable { case captions = "Captions", style = "Style", templates = "Templates", media = "Media" }
 
 struct IOSProjectDetailView: View {
     @Environment(IOSProjectsModel.self) private var model
@@ -39,13 +39,13 @@ struct IOSProjectDetailView: View {
                         .padding(.horizontal, 16)
                 }
                 status
-                if document.recognition != nil {
-                    Picker("Caption tools", selection: $panel) {
-                        ForEach(IOSEditorPanel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                Picker("Editor tools", selection: $panel) {
+                    ForEach(IOSEditorPanel.allCases.filter { document.recognition != nil || $0 == .captions || $0 == .media }, id: \.self) {
+                        Text($0.rawValue).tag($0)
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
                 editorContent(document)
             } else if let error = session.loadError {
                 ContentUnavailableView("Cannot open project", systemImage: "exclamationmark.triangle",
@@ -73,6 +73,7 @@ struct IOSProjectDetailView: View {
                     session.pause()
                     session.endTyping()
                     session.endStyleEditing()
+                    session.endMediaEditing()
                     showExport = true
                 }
                 .disabled(session.document == nil)
@@ -130,7 +131,7 @@ struct IOSProjectDetailView: View {
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }
             else { session.endTyping(); if value != nil { session.beginTyping() } }
         }
-        .onChange(of: panel) { _, _ in focused = nil; session.endTyping(); session.endStyleEditing() }
+        .onChange(of: panel) { _, _ in focused = nil; session.endTyping(); session.endStyleEditing(); session.endMediaEditing() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
@@ -149,7 +150,8 @@ struct IOSProjectDetailView: View {
                     Image(systemName: "waveform").font(.system(size: 40)).foregroundStyle(.white.opacity(0.45))
                 }
                 if let snapshot = session.snapshot {
-                    IOSStyledCaptionOverlay(snapshot: snapshot, time: session.time) { captionRenderError = $0 }
+                    IOSStyledCaptionOverlay(snapshot: snapshot, time: session.time,
+                        mediaSize: IOSPreviewComposition.previewSize(for: document.canvas)) { captionRenderError = $0 }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(session.presentation?.text ?? "No caption at playhead")
                 }
@@ -216,13 +218,16 @@ struct IOSProjectDetailView: View {
                     if let error = captionRenderError {
                         Label(error, systemImage: "captions.bubble").font(.footnote).foregroundStyle(.orange)
                     }
-                    if let result = document.recognition {
+                    if panel == .media {
+                        IOSMediaPanel(session: session, focused: $focused)
+                    } else if let result = document.recognition {
                         if panel == .style {
                             IOSCaptionStylePanel(session: session)
                         } else if panel == .templates {
                             IOSCaptionTemplatesPanel(session: session)
-                        } else if result.words.isEmpty {
-                            Text("No speech was detected in this media.").foregroundStyle(.secondary)
+                        } else if session.snapshot?.cues.isEmpty != false {
+                            Text(result.words.isEmpty ? "No speech was detected in this media." : "No captions are inside the retained range. Adjust or reset trim in Media to restore them.")
+                                .foregroundStyle(.secondary)
                         } else {
                             correctionPanel.id("correction")
                             Text("Captions").font(.headline)
@@ -287,14 +292,14 @@ struct IOSProjectDetailView: View {
                     VStack(alignment: .leading) { splitButton; mergeButton }
                 }
                 DisclosureGroup("Caption timing") {
-                    IOSTimingFields(interval: cue.interval, identity: cue.id,
-                        detail: "Seconds on the project timeline. Applying caption timing scales its word intervals as a manual correction.",
+                    IOSTimingFields(interval: session.timingCue?.interval ?? cue.interval, identity: cue.id,
+                        detail: timingExplanation + " Applying caption timing scales its word intervals as a manual correction.",
                         apply: session.retimeCue, focused: $focused)
                 }
-                if let word = session.selectedWord {
+                if let word = session.timingWord {
                     DisclosureGroup("Selected word timing") {
                         IOSTimingFields(interval: word.projectInterval, identity: word.id,
-                            detail: "Seconds on the project timeline. Extending a word expands the caption if needed.",
+                            detail: timingExplanation + " Extending a word expands the caption if needed.",
                             apply: session.retimeWord, focused: $focused)
                     }
                 }
@@ -302,6 +307,11 @@ struct IOSProjectDetailView: View {
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var timingExplanation: String {
+        session.document?.mediaEdits?.trim == nil ? "Seconds on the project timeline." :
+            "Seconds on the original timeline, before trim. Playback and exported captions start at 0 for the retained range."
     }
 
     private var splitButton: some View {
@@ -312,6 +322,7 @@ struct IOSProjectDetailView: View {
     private var mergeButton: some View {
         Button("Merge next", systemImage: "arrow.triangle.merge") { focused = nil; session.mergeNext() }
             .buttonStyle(.bordered)
+            .disabled(!session.canMergeNext)
     }
 
     private func captionRow(_ cue: IOSCaptionCue, select: @escaping () -> Void) -> some View {

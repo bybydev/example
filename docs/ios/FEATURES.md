@@ -26,9 +26,9 @@
 | V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Source-integrated; permission/provider/runtime checks unrun |
 | V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Source-integrated; interruption/cleanup/runtime checks unrun |
 | V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Deferred by explicit user choice during P5; policy/prices undecided |
-| V1.TRIM | P6 | Non-destructive trim with caption mapping | Not started |
-| V1.CROP | P6 | Crop/aspect ratio in preview and export | Not started |
-| V1.VOLUME | P6 | Original-audio volume in preview and export | Not started |
+| V1.TRIM | P6 | Non-destructive trim with caption mapping | Source-integrated; compilation/timing/runtime unverified |
+| V1.CROP | P6 | Crop/aspect ratio in preview and export | Source-integrated; orientation/pixel/runtime unverified |
+| V1.VOLUME | P6 | Original-audio volume in preview and export | Source-integrated; mix/playback/runtime unverified |
 | V1.RECOVERY | P7 | Persistence and interruption/relaunch recovery | Continuous; final audit pending |
 | V1.BOUNDS | P7 | Bounded processing, stale-result protection and cleanup | Continuous; final audit pending |
 | V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | Continuous; final audit pending |
@@ -69,3 +69,13 @@ V1.MP4/SRT/DELIVERY/EXPORT_JOB are integrated in PR #28 on feat/ios-p5-export. A
 Progress/cancel/retry, restart after interruption, partial cleanup, one retained artifact, delivery leases, add-only Photos permission, provider copies and native outbound sharing are integrated. Current export is accessible from Projects even if its source project is trashed. Storage includes retained export bytes; successful publication releases source pins, and explicit discard/new export cleans the retained job. No batch pipeline or export history added.
 
 The user explicitly selected Defer Pro. V1.PRO remains deferred, not complete. No gates/plans/prices/watermarks/trials were invented. Schema remains v4. Source review only; no builds/typechecks/tests, CI, generation, models, deployment or device validation. See handoffs/P5.md for APIs, caveats and user scenarios.
+
+## P6 source evidence
+
+V1.TRIM/CROP/VOLUME are integrated in PR #29 on feat/ios-p6-media-editing. Schema v5 adds optional project-wide mediaEdits: original-project trim range, fit/fill, bounded zoom and normalized pan, volume 0–1. Missing edits preserve v1–v4 behavior without eager writes. Aspect changes use existing canvas/preset fields. Commands are atomic, undoable and use the existing serialized latest-draft save drain; duplicates preserve media values. No original clips/raw recognition/native or manual timing is rewritten by media commands.
+
+One rational retained-range map intersects clips/cues/words and subtracts trim start for zero-based preview/MP4/SRT. Fully outside timed units are omitted from output only; boundary units retain their text with clipped output intervals. Effects retain the original edited-word phase, and original cue priority survives clipped-start ties. Reset/undo restores omitted output content. Caption correction timing fields explicitly remain original project seconds, while transport/list/export are output seconds. Library duration follows the retained range.
+
+The shared AV composition maps retained source/track intersections, preferred orientation, crop transforms/source crop rectangles and project-aspect placement. Preview overlays fit the same rounded raster viewport. One audio-mix factory serves preview and export; volume-only edits replace the mix without a player rebuild. Other media changes pause and use a debounced generation-guarded rebuild preserving the source playhead. Empty retained gaps use a tiny held black clock frame; MP4 stays intentionally black/silent rather than requiring nonexistent source samples.
+
+P5 frozen exports now include schema-v5 media settings, pin only referenced retained assets, and validate retained duration. Existing version-1 export manifests remain readable; prior frozen exports never adopt later edits. Pro remains deferred. No builds/typechecks/tests, CI, generation, model downloads, runtime exports or device validation. See handoffs/P6.md for boundaries and pending user scenarios.

@@ -82,7 +82,8 @@ struct MediaInterval: Codable, Equatable, Sendable {
     }
 }
 
-/// P0 supports one identity-speed clip. P6 owns reverse, freeze and speed ramps.
+/// Canonical clips have identity speed. V1 media edits derive retained output
+/// without adding reverse, freeze frames or speed ramps.
 struct IdentityClipMapping: Codable, Equatable, Sendable {
     let clipID: UUID
     let sourceAssetID: UUID

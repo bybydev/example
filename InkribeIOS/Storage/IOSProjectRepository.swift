@@ -261,7 +261,7 @@ actor IOSProjectRepository {
                 }
                 guard matches, titleQuery.isEmpty ||
                       document.title.localizedStandardContains(titleQuery) else { continue }
-                let duration = document.clips.map(\.timelineInterval.end).max() ?? .zero
+                let duration = document.outputDuration
                 let cache = try? thumbnailURL(id: id)
                 projects.append(IOSProjectSummary(
                     id: id, title: document.title, updatedAt: document.updatedAt,
@@ -320,7 +320,7 @@ actor IOSProjectRepository {
                 createdAt: now, updatedAt: now, preset: original.preset,
                 canvas: original.canvas, assets: newAssets, clips: newClips,
                 recognition: original.recognition?.duplicated(assetClips: clipMapping),
-                captionStyle: original.captionStyle)
+                captionStyle: original.captionStyle, mediaEdits: original.mediaEdits)
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)
@@ -503,7 +503,8 @@ actor IOSProjectRepository {
             try files.createDirectory(at: media, withIntermediateDirectories: true)
             try files.createDirectory(at: folder.appendingPathComponent("Result", isDirectory: true), withIntermediateDirectories: true)
             if profile.format == .mp4 {
-                let used = Set(saved.clips.map(\.sourceAssetID))
+                let timeline = IOSOutputTimeline(saved)
+                let used = Set(saved.clips.filter { timeline.retained($0.timelineInterval) != nil }.map(\.sourceAssetID))
                 for asset in saved.assets where used.contains(asset.id) {
                     try Task.checkCancellation()
                     let source = try sourceURL(projectID: saved.id, assetID: asset.id)

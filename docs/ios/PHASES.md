@@ -9,8 +9,8 @@ This replaces the old P0–P13 roadmap. Difficulty/value are planning judgments 
 | [P2](phases/P2.md) | On-device transcription and word timing | High | Essential | Merged #25 (97d647e); model/native/runtime checks unrun |
 | [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
 | [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
-| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Export source-integrated in open #28; Pro deferred by user; compilation/runtime unverified |
-| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Not started; depends on P5 |
+| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
+| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Source-integrated in open #29; compilation/runtime unverified |
 | [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Not started; final audit after P0–P6 |
 
-Each phase is one PR from latest develop when requested. P1 #24 is merged; P2 #25 is merged; P3 #26 is merged; P4 #27 is merged; P5 stays open for review. P7 now means hardening; P8–P13 retired. No estimated runtime performance or time commitment is implied.
+Each phase is one PR from latest develop when requested. P1 #24 is merged; P2 #25 is merged; P3 #26 is merged; P4 #27 is merged; P5 #28 is merged; P6 stays open for review. P7 now means hardening; P8–P13 retired. No estimated runtime performance or time commitment is implied.

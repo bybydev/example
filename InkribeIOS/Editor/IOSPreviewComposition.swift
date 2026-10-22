@@ -10,28 +10,37 @@ struct IOSMediaGraph: @unchecked Sendable {
     let videoIntervals: [MediaInterval]
     let duration: CMTime
     let hasAudio: Bool
+    let audioMix: AVAudioMix?
 }
 
 /// One composition per media graph, never per caption keystroke, selection or panel.
 @MainActor
 enum IOSPreviewComposition {
     static func make(document: IOSProjectDocument, urls: [UUID: URL]) async throws -> AVPlayerItem {
-        let scale = min(1, 1_080 / CGFloat(max(document.canvas.width, document.canvas.height)))
-        let size = CGSize(width: max(2, (CGFloat(document.canvas.width) * scale / 2).rounded(.down) * 2),
-                          height: max(2, (CGFloat(document.canvas.height) * scale / 2).rounded(.down) * 2))
+        let size = previewSize(for: document.canvas)
         let graph = try await mediaGraph(document: document, urls: urls, size: size)
         let item = AVPlayerItem(asset: graph.asset)
         item.videoComposition = graph.videoComposition
+        item.audioMix = graph.audioMix
         return item
     }
 
+    static func previewSize(for canvas: IOSCanvas) -> CGSize {
+        let scale = min(1, 1_080 / CGFloat(max(canvas.width, canvas.height)))
+        return CGSize(width: max(2, (CGFloat(canvas.width) * scale / 2).rounded(.down) * 2),
+                      height: max(2, (CGFloat(canvas.height) * scale / 2).rounded(.down) * 2))
+    }
+
     /// P5 and preview share source/track intersections, placement and orientation.
-    /// P6 adds trim/crop/audio-mix changes here rather than in a second pipeline.
+    /// Trim, framing and original-audio mix are shared, not a second pipeline.
     static func mediaGraph(document: IOSProjectDocument, urls: [UUID: URL], size: CGSize) async throws -> IOSMediaGraph {
         try document.validate()
         let composition = AVMutableComposition()
-        let duration = document.clips.map(\.timelineInterval.end).max() ?? .zero
-        let hasVideo = document.assets.contains { $0.metadata.videoTrackCount > 0 }
+        let timeline = IOSOutputTimeline(document)
+        let duration = timeline.duration
+        let edits = document.effectiveMediaEdits
+        let used = Set(document.clips.filter { timeline.retained($0.timelineInterval) != nil }.map(\.sourceAssetID))
+        let hasVideo = document.assets.contains { used.contains($0.id) && $0.metadata.videoTrackCount > 0 }
         let video = hasVideo ? composition.addMutableTrack(withMediaType: .video,
             preferredTrackID: kCMPersistentTrackID_Invalid) : nil
         let audio = composition.addMutableTrack(withMediaType: .audio,
@@ -47,8 +56,17 @@ enum IOSPreviewComposition {
         let projectFit = min(size.width / CGFloat(document.canvas.width), size.height / CGFloat(document.canvas.height))
         let projectSize = CGSize(width: CGFloat(document.canvas.width) * projectFit,
                                  height: CGFloat(document.canvas.height) * projectFit)
-        for clip in document.clips.sorted(by: { $0.timelineInterval.start < $1.timelineInterval.start }) {
+        let projectBounds = CGRect(x: (size.width - projectSize.width) / 2, y: (size.height - projectSize.height) / 2,
+                                   width: projectSize.width, height: projectSize.height)
+        for original in document.clips.sorted(by: { $0.timelineInterval.start < $1.timelineInterval.start }) {
             try Task.checkCancellation()
+            guard let retained = timeline.retained(original.timelineInterval),
+                  let output = timeline.outputInterval(original.timelineInterval) else { continue }
+            let sourceStart = try MediaTime(validating: CMTimeAdd(original.sourceInterval.start.cmTime,
+                CMTimeSubtract(retained.start.cmTime, original.timelineInterval.start.cmTime)))
+            let clip = IOSProjectClip(id: original.id, sourceAssetID: original.sourceAssetID,
+                sourceInterval: try MediaInterval(start: sourceStart,
+                    end: MediaTime(validating: CMTimeAdd(sourceStart.cmTime, retained.duration))), timelineInterval: output)
             guard let url = urls[clip.sourceAssetID] else {
                 throw IOSProjectStoreError.missingOriginal(clip.sourceAssetID.uuidString)
             }
@@ -74,14 +92,13 @@ enum IOSPreviewComposition {
                     let bounds = CGRect(origin: .zero, size: natural).applying(transform)
                     guard bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
                           bounds.width > 0, bounds.height > 0 else { throw IOSExportError.decoding }
-                    let fit = min(projectSize.width / bounds.width, projectSize.height / bounds.height)
-                    let final = transform
-                        .concatenating(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
-                        .concatenating(CGAffineTransform(scaleX: fit, y: fit))
-                        .concatenating(CGAffineTransform(translationX: (size.width - bounds.width * fit) / 2,
-                                                        y: (size.height - bounds.height * fit) / 2))
+                    let final = try transform.concatenating(edits.placement(orientedBounds: bounds, target: projectBounds))
                     let value = AVMutableVideoCompositionLayerInstruction(assetTrack: video)
                     value.setTransform(final, at: interval.start.cmTime)
+                    let crop = projectBounds.applying(final.inverted())
+                        .intersection(CGRect(origin: .zero, size: natural))
+                    guard !crop.isNull, !crop.isEmpty else { throw IOSMediaEditError.invalidSettings }
+                    value.setCropRectangle(crop, at: interval.start.cmTime)
                     layer = value
                 }
             }
@@ -101,9 +118,28 @@ enum IOSPreviewComposition {
             }
             cursor = clip.timelineInterval.end
         }
-        guard inserted else { throw IOSProjectStoreError.unsupportedMedia }
+        if cursor < duration {
+            instructions.append(instruction(start: cursor, end: duration, layer: nil))
+        }
+        var finalMix: AVAudioMix?
+        if insertedAudio, let audio {
+            finalMix = originalAudioMix(trackID: audio.trackID, volume: edits.volume)
+        }
         if let video, !insertedVideo { composition.removeTrack(video) }
         if let audio, !insertedAudio { composition.removeTrack(audio) }
+        if !inserted {
+            // A valid trim can retain only an intentional gap. A held black
+            // frame gives AVPlayer a real clock; the export renderer stays black.
+            let seed = AVURLAsset(url: try await IOSBlackClockAsset.url())
+            guard let source = try await seed.loadTracks(withMediaType: .video).first,
+                  let clock = composition.addMutableTrack(withMediaType: .video,
+                    preferredTrackID: kCMPersistentTrackID_Invalid) else { throw IOSExportError.decoding }
+            let frame = CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 30))
+            try clock.insertTimeRange(frame, of: source, at: .zero)
+            clock.scaleTimeRange(frame, toDuration: duration.cmTime)
+            instructions = [instruction(start: .zero, end: duration, layer: nil)]
+            insertedVideo = true
+        }
         if CMTimeCompare(composition.duration, duration.cmTime) < 0 {
             composition.insertEmptyTimeRange(CMTimeRange(start: composition.duration,
                 duration: CMTimeSubtract(duration.cmTime, composition.duration)))
@@ -121,7 +157,16 @@ enum IOSPreviewComposition {
         }
         guard let asset = composition.copy() as? AVComposition else { throw IOSExportError.invalidRequest }
         return IOSMediaGraph(asset: asset, videoComposition: finalVideo, videoIntervals: videoIntervals,
-                             duration: duration.cmTime, hasAudio: insertedAudio)
+                             duration: duration.cmTime, hasAudio: insertedAudio, audioMix: finalMix)
+    }
+
+    static func originalAudioMix(trackID: CMPersistentTrackID, volume: Double) -> AVAudioMix {
+        let parameters = AVMutableAudioMixInputParameters()
+        parameters.trackID = trackID
+        parameters.setVolume(Float(volume), at: .zero)
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = [parameters]
+        return (mix.copy() as? AVAudioMix) ?? mix
     }
 
     private static func insert(track: AVAssetTrack, clip: IOSProjectClip,
