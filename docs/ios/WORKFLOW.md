@@ -1,5 +1,7 @@
 # V1 working agreement
 
+> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 ## Scope

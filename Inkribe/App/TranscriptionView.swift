@@ -2,41 +2,45 @@ import CoreMedia
 import JobQueue
 import SwiftUI
 
-/// P2 is language/start/status and read-only saved output, not the P3 editor.
+/// Language/model selection, durable job status and explicit empty-result recovery.
 struct TranscriptionView: View {
     @Environment(ProjectsModel.self) private var model
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
     @State private var showingModels = false
     @State private var upsell: ProFeature?
     let document: ProjectDocument
+    /// Drain the editor's pending title/media writes before capturing a job revision.
+    let prepareForTranscription: () async throws -> ProjectDocument
+    let onRequestFinished: () async -> Void
+    @Binding var isPreparingRequest: Bool
+    private var hasEmptyResult: Bool { document.recognition?.words.isEmpty == true }
 
     var body: some View {
         let speech = model.transcription
         VStack(alignment: .leading, spacing: 12) {
             Label("Captions", systemImage: "captions.bubble").font(.headline)
-            if let result = document.recognition {
+            if let result = document.recognition, !result.words.isEmpty {
                 Text("Transcription saved on this device")
                     .font(.caption).foregroundStyle(.secondary)
-                if result.words.isEmpty {
-                    Text("No speech was detected in this media.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    let wordIndex = Dictionary(uniqueKeysWithValues: result.words.map { ($0.id, $0) })
-                    // Lazy rows avoid constructing every caption view for long recordings.
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(result.cues) { cue in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(time(cue.interval.start)).font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                Text(cue.wordIDs.compactMap { wordIndex[$0]?.text }.joined()
-                                    .trimmingCharacters(in: .whitespacesAndNewlines))
-                                    .textSelection(.enabled)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                let wordIndex = Dictionary(uniqueKeysWithValues: result.words.map { ($0.id, $0) })
+                // Lazy rows avoid constructing every caption view for long recordings.
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(result.cues) { cue in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(time(cue.interval.start)).font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Text(cue.wordIDs.compactMap { wordIndex[$0]?.text }.joined()
+                                .trimmingCharacters(in: .whitespacesAndNewlines))
+                                .textSelection(.enabled)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             } else {
+                if hasEmptyResult {
+                    Text("The previous transcription saved no captions. Choose the spoken language or another model, then retry. Your weekly allowance is only used when captions are saved.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 let record = speech.record(for: document.id)
                 if !model.access.hasPro, let usage = speech.allowance {
                     Text("\(usage.remaining / 60)m \(usage.remaining % 60)s available this week")
@@ -57,16 +61,12 @@ struct TranscriptionView: View {
                 if let record {
                     status(record, speech: speech)
                 }
-                if !speech.isActive(document.id) && !(record?.status.isRetryable ?? false) {
-                    Button("Transcribe", systemImage: "waveform") {
-                        Task {
-                            do { try await speech.enqueue(projectID: document.id, language: language) }
-                            catch ProError.requiresPro(let feature) { upsell = feature }
-                            catch { model.alertMessage = error.localizedDescription }
-                        }
+                if !speech.isActive(document.id) && (hasEmptyResult || !(record?.status.isRetryable ?? false)) {
+                    Button(hasEmptyResult ? "Retry transcription" : "Transcribe", systemImage: "waveform") {
+                        startTranscription()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || model.access.isChecking)
+                    .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || isPreparingRequest || model.access.isChecking)
                 }
                 if !speech.modelAvailable {
                     Text("Select an available model or download one in Speech Models.")
@@ -77,7 +77,7 @@ struct TranscriptionView: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
                 Button("Retry local job storage") { speech.retryStorage() }
             }
-            if speech.isAuthorizing { ProgressView("Checking caption allowance…") }
+            if isPreparingRequest || speech.isAuthorizing { ProgressView("Preparing transcription…") }
             if !model.access.hasPro, let error = speech.allowanceError {
                 Text(error).font(.footnote).foregroundStyle(.red)
                 Button("Retry allowance storage") { Task { await speech.refreshAllowance() } }
@@ -116,17 +116,36 @@ struct TranscriptionView: View {
             Text(record.status == .cancelled ? "Transcription cancelled." :
                 record.error ?? "Transcription could not finish.")
                 .font(.footnote).foregroundStyle(.secondary)
-            Button("Retry", systemImage: "arrow.clockwise") {
-                Task {
-                    do { try await speech.retry(record, language: language) }
-                    catch ProError.requiresPro(let feature) { upsell = feature }
-                    catch { model.alertMessage = error.localizedDescription }
-                }
+            if !hasEmptyResult {
+                Button("Retry", systemImage: "arrow.clockwise") { startTranscription(record: record) }
+                    .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || isPreparingRequest || model.access.isChecking)
             }
-            .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || model.access.isChecking)
         } else if record.status == .unrecoverable {
             Text(record.error ?? "This saved job could not be restored. You can start a new transcription.")
                 .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private func startTranscription(record: JobRecord? = nil) {
+        guard !isPreparingRequest else { return }
+        isPreparingRequest = true
+        let requestedLanguage = language
+        Task { @MainActor in
+            defer { isPreparingRequest = false }
+            do {
+                let saved = try await prepareForTranscription()
+                if let result = saved.recognition, result.words.isEmpty {
+                    try await model.transcription.enqueue(projectID: saved.id, language: requestedLanguage,
+                        replacingEmptyResultID: result.id)
+                } else if let record {
+                    try await model.transcription.retry(record, language: requestedLanguage)
+                } else {
+                    try await model.transcription.enqueue(projectID: saved.id, language: requestedLanguage)
+                }
+            } catch ProError.requiresPro(let feature) { upsell = feature }
+            catch { model.alertMessage = error.localizedDescription }
+            // Await the external revision before allowing the editor to write again.
+            await onRequestFinished()
         }
     }
 

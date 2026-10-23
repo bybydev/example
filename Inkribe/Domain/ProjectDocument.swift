@@ -241,6 +241,13 @@ struct ProjectSummary: Identifiable, Sendable {
     let mediaKind: MediaKind
     let available: Bool
     let thumbnailURL: URL?
+    let contentRevision: UInt64
+    let captionState: ProjectCaptionState
+}
+
+/// Derived library metadata only; never persisted into the project schema.
+enum ProjectCaptionState: Sendable {
+    case needsTranscription, emptyResult, saved, noAudio
 }
 
 enum LibrarySort: String, Hashable, Sendable {

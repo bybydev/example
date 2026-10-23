@@ -18,6 +18,8 @@ struct ImportView: View {
     @State private var customHeight = "1920"
     @State private var mediaURL = ""
     @State private var confirmRights = false
+    @State private var handedOff = false
+    var onImported: ([UUID]) -> Void = { _ in }
 
     var body: some View {
         NavigationStack {
@@ -106,19 +108,21 @@ struct ImportView: View {
 
                 if model.selectedSources.isEmpty {
                     Section {
-                        TextField("https://example.com/video.mp4", text: $mediaURL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                        Toggle("I have the rights to import this media", isOn: $confirmRights)
-                        Button("Import direct media URL", systemImage: "arrow.down.circle") {
-                            model.beginURLImport(text: mediaURL, rightsConfirmed: confirmRights,
-                                                 preset: preset)
+                        DisclosureGroup("Import from a direct URL") {
+                            TextField("https://example.com/video.mp4", text: $mediaURL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .keyboardType(.URL)
+                            Toggle("I have the rights to import this media", isOn: $confirmRights)
+                            Button("Import direct media URL", systemImage: "arrow.down.circle") {
+                                model.beginURLImport(text: mediaURL, rightsConfirmed: confirmRights,
+                                                     preset: preset)
+                            }
+                            .disabled(model.isImporting || model.isPreparingPhotos || !confirmRights || mediaURL.isEmpty
+                                      || preset == .custom)
                         }
-                        .disabled(model.isImporting || model.isPreparingPhotos || !confirmRights || mediaURL.isEmpty
-                                  || preset == .custom)
                     } header: {
-                        Text("Direct HTTPS media URL")
+                        Text("Other sources")
                     } footer: {
                         Text("Only direct downloadable media. This does not download streaming services, DRM content or webpage videos.")
                     }
@@ -145,6 +149,11 @@ struct ImportView: View {
                         Text(message)
                             .font(.footnote)
                             .textSelection(.enabled)
+                        if let completion = model.importCompletion, !completion.projectIDs.isEmpty {
+                            Button(completion.projectIDs.count == 1 ? "Open imported project" : "View imported projects") {
+                                finish(completion)
+                            }
+                        }
                     }
                 }
             }
@@ -161,6 +170,11 @@ struct ImportView: View {
                 }
             }
             .interactiveDismissDisabled(model.isImporting)
+            .onChange(of: model.importCompletion?.id) { _, _ in
+                guard let completion = model.importCompletion, !completion.hasFailures,
+                      !completion.projectIDs.isEmpty else { return }
+                finish(completion)
+            }
             .onChange(of: photosSelection) { _, picked in
                 guard !picked.isEmpty else { return }
                 photosSelection = []
@@ -188,6 +202,13 @@ struct ImportView: View {
                 Text(model.alertMessage ?? "")
             }
         }
+    }
+
+    private func finish(_ completion: ImportCompletion) {
+        guard !handedOff else { return }
+        handedOff = true
+        onImported(completion.projectIDs)
+        dismiss()
     }
 
     private func submit() {

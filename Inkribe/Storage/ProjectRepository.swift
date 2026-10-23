@@ -94,6 +94,12 @@ actor ProjectRepository {
     /// Do not report a successful edit until the complete document was atomically
     /// committed. A previous valid JSON copy remains available for recovery.
     func commitEdit(_ proposed: ProjectDocument, expectedRevision: UInt64) throws -> ProjectDocument {
+        try writeEdit(proposed, expectedRevision: expectedRevision)
+    }
+
+    /// Only the explicit empty-result recovery operation may clear recognition.
+    private func writeEdit(_ proposed: ProjectDocument, expectedRevision: UInt64,
+                           clearingEmptyRecognitionID: UUID? = nil) throws -> ProjectDocument {
         let current = try open(proposed.id)
         guard current.contentRevision == expectedRevision else {
             throw ProjectStoreError.staleRevision(expected: expectedRevision,
@@ -107,7 +113,10 @@ actor ProjectRepository {
         guard next.id == current.id, next.createdAt == current.createdAt else {
             throw ProjectStoreError.invalidDocument("Project identity cannot be rewritten")
         }
-        if let raw = current.recognition {
+        let clearsEmptyRecognition = current.recognition.map {
+            $0.id == clearingEmptyRecognitionID && $0.words.isEmpty && $0.cues.isEmpty && next.recognition == nil
+        } ?? false
+        if let raw = current.recognition, !clearsEmptyRecognition {
             guard let proposed = next.recognition, proposed.id == raw.id,
                   proposed.rawWindows == raw.rawWindows, proposed.modelID == raw.modelID,
                   proposed.modelSHA256 == raw.modelSHA256,
@@ -152,6 +161,8 @@ actor ProjectRepository {
     func saveRecognition(_ result: Recognition, projectID: UUID,
                          expectedRevision: UInt64, chargeAllowance: Bool = false) throws {
         try Task.checkCancellation()
+        // Empty legacy results remain readable, but can never be newly published.
+        guard !result.words.isEmpty else { throw SpeechError.noRecognizedWords }
         var current = try open(projectID)
         if current.recognition?.id == result.id {
             if chargeAllowance { try finishSpeechAllowance(result.id) }
@@ -167,6 +178,47 @@ actor ProjectRepository {
         // The reservation remains durable if charging fails after publication.
         // Retrying/reconciling can settle it without running or charging twice.
         if chargeAllowance { try finishSpeechAllowance(result.id) }
+    }
+
+    /// User-requested retry of an empty legacy result. Preserve raw evidence and
+    /// all originals/style/media settings; never replace even one existing word.
+    func recoverEmptyRecognition(projectID: UUID, recognitionID: UUID,
+                                 expectedRevision: UInt64) throws -> ProjectDocument {
+        try Task.checkCancellation()
+        var project = try open(projectID)
+        guard project.contentRevision == expectedRevision else {
+            throw ProjectStoreError.staleRevision(expected: expectedRevision, actual: project.contentRevision)
+        }
+        guard let result = project.recognition, result.id == recognitionID,
+              result.words.isEmpty, result.cues.isEmpty else { throw SpeechError.alreadyTranscribed }
+        let folder = try projectDirectory(projectID).appendingPathComponent("RecognitionRecovery", isDirectory: true)
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        if try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+            throw ProjectStoreError.invalidPath(folder.path)
+        }
+        let archive = folder.appendingPathComponent(result.id.uuidString + ".json")
+        if !files.fileExists(atPath: archive.path) {
+            try encoder.encode(result).write(to: archive, options: .atomic)
+        }
+        // Refund before clearing the document: a crash can leave an empty result
+        // to retry again, but never lose the evidence needed for an exact refund.
+        try refundEmptySpeech(result, in: project)
+        project.recognition = nil
+        return try writeEdit(project, expectedRevision: expectedRevision, clearingEmptyRecognitionID: result.id)
+    }
+
+    private func refundEmptySpeech(_ result: Recognition, in project: ProjectDocument) throws {
+        guard result.words.isEmpty, result.cues.isEmpty,
+              files.fileExists(atPath: try speechAllowanceURL().path) else { return }
+        var value = try loadSpeechAllowance()
+        if value.charged.contains(result.id) {
+            let seconds = try CaptionAllowanceLedger.seconds(for: project)
+            guard value.used >= seconds else { throw ProError.allowanceStorage }
+            value.used -= seconds
+            value.charged.remove(result.id)
+        }
+        value.reservations.removeAll { $0.jobID == result.id }
+        try writeSpeechAllowance(value)
     }
 
     private func speechAllowanceURL() throws -> URL {
@@ -206,7 +258,7 @@ actor ProjectRepository {
         for folder in candidates where files.fileExists(atPath: folder.path) {
             let document = try readRecoverable(in: folder)
             guard document.id == reservation.projectID else { throw ProError.allowanceStorage }
-            return document.recognition?.id == reservation.jobID
+            return document.recognition.map { $0.id == reservation.jobID && !$0.words.isEmpty } ?? false
         }
         return false
     }
@@ -253,7 +305,12 @@ actor ProjectRepository {
         let url = try speechAllowanceURL()
         guard files.fileExists(atPath: url.path) else { return }
         var value = try loadSpeechAllowance()
-        guard value.reservations.contains(where: { $0.jobID == jobID }) else { return }
+        guard let reservation = value.reservations.first(where: { $0.jobID == jobID }) else { return }
+        guard try hasPublishedSpeech(reservation) else {
+            value.reservations.removeAll { $0.jobID == jobID }
+            try writeSpeechAllowance(value)
+            return
+        }
         value.finish(jobID)
         try writeSpeechAllowance(value)
     }
@@ -382,12 +439,20 @@ actor ProjectRepository {
                       document.title.localizedStandardContains(titleQuery) else { continue }
                 let duration = document.outputDuration
                 let cache = try? thumbnailURL(id: id)
+                let captionState: ProjectCaptionState
+                if let recognition = document.recognition {
+                    captionState = recognition.words.isEmpty ? .emptyResult : .saved
+                } else {
+                    captionState = document.assets.contains { $0.metadata.audioTrackCount > 0 } ? .needsTranscription : .noAudio
+                }
                 projects.append(ProjectSummary(
                     id: id, title: document.title, updatedAt: document.updatedAt,
                     duration: duration,
                     mediaKind: document.assets.contains { $0.kind == .video } ? .video : .audio,
                     available: available,
-                    thumbnailURL: cache.flatMap { files.fileExists(atPath: $0.path) ? $0 : nil }
+                    thumbnailURL: cache.flatMap { files.fileExists(atPath: $0.path) ? $0 : nil },
+                    contentRevision: document.contentRevision,
+                    captionState: captionState
                 ))
                 if !available { issues.append(LibraryIssue(id: id, description: "Original media is missing")) }
             } catch {

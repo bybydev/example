@@ -1,5 +1,7 @@
 # Inkribe iOS v1 design
 
+> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 ![Visual reference](assets/main-screens-reference.jpeg)
@@ -54,3 +56,23 @@ The authorized hardening pass adds visible Photos preparation, disables conflict
 ## Authorized Pro and appearance UI
 
 Projects settings adds Inkribe Pro (plan, usage, restore) and Appearance; a crown toolbar action explicitly opens the AF paywall. Locked captioning, font/effect/template, 1080p and premium theme actions present AF's contextual comparison/upsell before its paywall. Transcription shows remaining/reserved time and reset date. Style offers a free Basic reset and Pro labels; Export defaults to 720p and labels 1080p Pro. Appearance uses AF ThemePickerView, default Rose free, premium choices locked without timed trials. AF tokens paint app backgrounds, tint and selection while preserving media/caption artwork. The phase implementation request authorizes this stated UI; no new scope/redesign. See phases/PRO.
+
+## Editor redesign — PR #35 pass 2 (2026-10-23)
+
+This user-authorized pass supersedes the earlier P3 layout description. Footage uses a canvas/viewport-based preview with in-editor expansion; one transport area contains play, cue overview, scrubber and clocks. During text/timing/trim entry, a small footage thumbnail sits beside transport, tool choice/overview hide, and the focused field scrolls into the keyboard-reduced workspace. Short/landscape workspaces use the same compact strip while retaining tool choice; clocks can stack for larger text.
+
+Caption rows contain the selected cue's correction controls. Word chips select native timed units and one text field edits the selected word/phrase; no separate correction panel above the list. Timing disclosures, split/merge, hidden words and native separators/anchors stay intact. Canonical row ordering stays consistent with Merge next. Playback follows cues without stealing editing selection/focus. Large text uses a menu for tool choice. Style/Templates/Media keep their existing controls and gates.
+
+Back, Export and actions remain in the navigation bar. Actions includes undo/redo, save state and project details. Normal saved status no longer takes a fixed row. Error recovery remains visible. Rename/original-media/relink now live in a details sheet that owns picker/errors/save-discard UI. See handoffs/TRANSCRIPTION_WORKSPACE.md for exact behavior and unrun user checks. Source integration only; native small-screen fit, keyboard, presentation, VoiceOver and playback validation remain unverified.
+
+## Home/import redesign — PR #35 pass 3 (2026-10-23)
+
+The user authorized the next pass in the same PR. Project cards now show a bounded thumbnail, duration, title, real transcription/saved/retry/missing state and date, with visible/context rename/duplicate/Trash actions. Horizontal filter chips and wider accessibility cards avoid compressed labels. Search/filter/sort project cached summaries; actual library events refresh the cache. Known library issues link to their projects. Current export stays in content; project/settings routes keep root toolbars off pushed screens.
+
+All-success single/combined-project import dismisses before opening its editor. Multi-project import returns to a recent-first grid with search/filters cleared and a count notice. Partial failure/cancellation preserves committed data and retry identity; errors remain on the sheet, with an explicit Open/View imported projects action for a returned partial result. Direct URL is collapsed under Other sources. Thumbnails/storage are derived follow-up work. No importer options, models, gates or stored schemas are removed/changed. Source review only; native fit, actions, navigation, performance and failure flows remain user validation. See handoffs/TRANSCRIPTION_WORKSPACE.md.
+
+## Final integration review — PR #35 pass 4 (2026-10-23)
+
+The user authorized the fourth pass in the same PR (V1.PREVIEW/MP4/VOLUME/JOB/RECOVERY/BOUNDS/ACCESS/HANDOFF). Preview and MP4 now include every source audio track in independent composition lanes with the existing intersection/offset/trim mapping; original-audio volume updates every populated lane. This matches recognition's all-track source policy while recognition intentionally ignores output trim/volume. No track selector or advanced audio UI is added.
+
+Editor operation/transcription errors have a local alert presenter and the hidden home grid yields to its active sheet/destination. Back disables editor controls/actions while waiting for saves; failures preserve the draft and existing recovery. All four passes are source-implemented in open PR #35 targeting develop with auto-merge disabled. Original-video diagnosis, actual audio/pixel/output parity, layout, sheet/keyboard/accessibility and interruption behavior remain unverified. No builds/typechecks/tests, UI/device checks, CI, generation, weights or native execution. See handoffs/TRANSCRIPTION_WORKSPACE.md for source findings and prioritized user scenarios; no further phase is authorized.

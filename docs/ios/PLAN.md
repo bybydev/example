@@ -1,5 +1,7 @@
 # Inkribe iOS v1.0 — scoped plan
 
+> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 Updated 2026-10-22 following the user's compact v1 feature list. This supersedes the old 467-item catalog and P0–P13 roadmap. Only current FEATURES and active P0–P7 briefs define deliverables when the user requests a phase. Archived documents, reference images, Mac capabilities and existing extra source do not authorize features.

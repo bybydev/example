@@ -8,22 +8,25 @@ struct CaptionTimeline: View {
     let selectedCueID: UUID?
     let duration: Double
     let seconds: Double
+    var showsOverview = true
     let seek: (Double) -> Void
 
     var body: some View {
         VStack(spacing: 2) {
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    TimelineBars(snapshot: snapshot, selectedCueID: selectedCueID, duration: duration, accent: theme.accentColor)
-                        .equatable()
-                    Rectangle().fill(.primary)
-                        .frame(width: 2)
-                        .offset(x: max(0, min(geometry.size.width - 2,
-                            geometry.size.width * seconds / max(0.001, duration))))
+            if showsOverview {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        TimelineBars(snapshot: snapshot, selectedCueID: selectedCueID, duration: duration, accent: theme.accentColor)
+                            .equatable()
+                        Rectangle().fill(.primary)
+                            .frame(width: 2)
+                            .offset(x: max(0, min(geometry.size.width - 2,
+                                geometry.size.width * seconds / max(0.001, duration))))
+                    }
                 }
+                .frame(height: 16)
+                .accessibilityHidden(true)
             }
-            .frame(height: 16)
-            .accessibilityHidden(true)
             Slider(value: Binding(get: { min(max(0, seconds), max(0.001, duration)) }, set: seek),
                    in: 0...max(0.001, duration))
                 .accessibilityLabel("Project playhead")

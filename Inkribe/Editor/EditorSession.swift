@@ -244,8 +244,8 @@ final class EditorSession {
         var next = document.effectiveMediaEdits
         old.volume = 1; next.volume = 1
         guard old == next else { return false }
-        if let item = player.currentItem, let trackID = item.audioMix?.inputParameters.first?.trackID {
-            item.audioMix = PreviewComposition.originalAudioMix(trackID: trackID, volume: document.effectiveMediaEdits.volume)
+        if let item = player.currentItem, let trackIDs = item.audioMix?.inputParameters.map(\.trackID) {
+            item.audioMix = PreviewComposition.originalAudioMix(trackIDs: trackIDs, volume: document.effectiveMediaEdits.volume)
         }
         preparedMedia = MediaKey(clips: key.clips, canvas: key.canvas, urls: key.urls, edits: document.effectiveMediaEdits)
         return true

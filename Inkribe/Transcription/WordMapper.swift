@@ -45,6 +45,7 @@ enum WordMapper {
             ranges.append(range)
             return true
         }
+        guard !ranges.isEmpty else { throw SpeechError.wordTimingUnavailable }
         var output: [CaptionWord] = []
         for (index, range) in ranges.enumerated() {
             let startByte = text.utf8.distance(from: text.utf8.startIndex, to: range.lowerBound)

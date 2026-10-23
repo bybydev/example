@@ -1,5 +1,7 @@
 # Inkribe iOS v1.0 feature ledger
 
+> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 **29 acceptance items**, grouped from the user-approved compact list. This replaces the 466-active-item ledger. V1 IDs distinguish current requirements from historical Fxx entries. P0 owns foundations, no user feature items. Source status is not runtime verification.
@@ -91,3 +93,27 @@ V1.LOCAL_STT/JOB now include an iOS-only Tiny/Base/Small multilingual catalog wi
 The user explicitly included P7 in the optional-model PR. V1.RECOVERY fixes initial-queue-rewrite retry preservation, recoverable Trash listing and staging protection. V1.BOUNDS fixes stale library/storage publications, import-selection races, foreground transcription restart/cancellation and malformed-dimension conversion; reviewed existing bounded decode/render/download and export pin/delivery paths. V1.ACCESS adds Photos preparation/loading/disabled state, model selected/offline traits and canvas field labels, with actual UI/accessibility validation still unrun. V1.HANDOFF supplies handoffs/P7.md with all acceptance-item entry points, outcomes, exact user checks and remaining choices. Timing Apply preserves unchanged rational boundaries and does not invent manual edits; Unicode output basenames fit filesystem byte limits, long titles duplicate safely and updates tolerate clock rollback.
 
 Accounting: 28 of 29 current acceptance items are source-integrated; V1.PRO is explicitly deferred. None are claimed compilation/runtime/device verified. This is completion of the authorized source work, not a release-readiness certification. No tests/builds/typechecks, CI, generation, weights, media execution or device checks ran.
+
+## 2026-10-23 transcription repair — pass 1
+
+V1.LOCAL_STT/JOB/RECOVERY/PRO source correction on `fix/ios-transcription-and-workspace`: mix source audio tracks rather than ignore later ones; validate actual PCM and copied samples; distinguish digital silence, empty inference and unusable timing; reject empty publication/charging; archive and explicitly retry legacy zero-word results with a matching current-week refund. Flush/reload the editor around request/recovery so its draft cannot overwrite the external revision. Existing words, manual timing, raw provenance, originals, style/media settings and schema v5 remain preserved.
+
+Evidence is source inspection only. No builds/typechecks/tests, native inference, UI/device validation, CI, generation or downloads ran. The original affected-video failure remains unverified. See handoffs/TRANSCRIPTION_WORKSPACE.md. Passes 2–4 are pending; this entry does not claim the home/editor redesign is complete.
+
+## 2026-10-23 editor repair — pass 2 in PR #35
+
+V1.TEXT/TIMING/SPLIT_MERGE/UNDO/PREVIEW/ACCESS UI source update: viewport/canvas-based preview plus expansion, consolidated transport, compact keyboard layout and focused-field scrolling, inline selected-caption correction with word chips/one field, large-text tool choice, and details/relink sheet. Existing domain edits, stable native timing, canonical Merge next order, rendering/persistence, Style/Templates/Media and pass 1 recovery remain. Normal save state/undo/redo move to actions; visible errors retain retry/reload.
+
+Source/diff review only; no builds/typechecks/tests, UI/device/accessibility validation, CI, generation or downloads. User checks are in handoffs/TRANSCRIPTION_WORKSPACE.md. Home/import pass 3 and final review pass 4 remain pending in the same open PR targeting develop.
+
+## 2026-10-23 home/import repair — pass 3 in PR #35
+
+V1.PROJECTS/RENAME/DUPLICATE_DELETE/IMPORT/BOUNDS/ACCESS source update: cached in-memory title/media filtering and stable sorting, live card status, bounded async thumbnail reads, revision-aware and guarded card actions, adaptive cards/filter chips, explicit project/settings routes, and committed-ID import handoff after dismissal. Single-project success opens the editor; batches return to the recent grid. Partial failures retain input identities/errors/retry, and derived thumbnail/storage work does not delay success navigation. No stored schema or Mac changes.
+
+Source/diff review only. No builds/typechecks/tests, UI/device/performance validation, CI, generation or model downloads. See handoffs/TRANSCRIPTION_WORKSPACE.md for pending checks. Pass 4 remains pending in the same open PR targeting develop.
+
+## Final integration review — PR #35 pass 4 (2026-10-23)
+
+The user authorized the fourth pass in the same PR (V1.PREVIEW/MP4/VOLUME/JOB/RECOVERY/BOUNDS/ACCESS/HANDOFF). Preview and MP4 now include every source audio track in independent composition lanes with the existing intersection/offset/trim mapping; original-audio volume updates every populated lane. This matches recognition's all-track source policy while recognition intentionally ignores output trim/volume. No track selector or advanced audio UI is added.
+
+Editor operation/transcription errors have a local alert presenter and the hidden home grid yields to its active sheet/destination. Back disables editor controls/actions while waiting for saves; failures preserve the draft and existing recovery. All four passes are source-implemented in open PR #35 targeting develop with auto-merge disabled. Original-video diagnosis, actual audio/pixel/output parity, layout, sheet/keyboard/accessibility and interruption behavior remain unverified. No builds/typechecks/tests, UI/device checks, CI, generation, weights or native execution. See handoffs/TRANSCRIPTION_WORKSPACE.md for source findings and prioritized user scenarios; no further phase is authorized.

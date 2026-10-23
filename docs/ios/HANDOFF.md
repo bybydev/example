@@ -1,5 +1,45 @@
 # Live Inkribe iOS v1 handoff — 2026-10-22
 
+## CI follow-up — home type-check timeout and decoder label (2026-10-23)
+
+User-run [Build Release 39899733122](https://github.com/bybydev/example/actions/runs/39899733122) built head `7e074ca` and reported two iOS archive errors: a type-check timeout at `ProjectsView.swift:26:25` and a missing `otherRange:` label in `SpeechDecoder.swift:30`. The previous editor-body timeout is not reported in this run; the archive still failed with exit 65.
+
+The same PR now splits home layout, navigation, dialogs, lifecycle, toolbar, header, grid/cards, empty states and issues into separate opaque expressions while retaining the parent state, bindings, modifier order, cached query behavior and callbacks. The decoder uses `CMTimeRangeGetIntersection(trackRange, otherRange: range)`, matching the existing composition call. Source/diff/whitespace reviewed only; no agent build/typecheck/test or CI run. User rebuild confirmation remains pending; keep PR #35 open targeting develop with auto-merge disabled.
+
+## CI follow-up — editor type-check timeout (2026-10-23)
+
+The user asked to inspect failed [bybydev/example Build Release run 39896890203](https://github.com/bybydev/example/actions/runs/39896890203), building PR #35 head `0e30f68`. Dependency resolution/resource preparation completed, but the iOS archive failed with exit 65: `ProjectDetailView.swift:36:25`, compiler unable to type-check the body expression in reasonable time. This is observed user-run build failure, not runtime evidence.
+
+The same PR now splits the editor into opaque layout/navigation/dialog/presentation expressions plus a separate ToolbarContent builder and actions-menu expression. State/session ownership, modifier order and actions remain in the parent view. Source/diff/whitespace inspection only; no agent build/typecheck/test or CI rerun. A new user build is still required to confirm the compiler fix and reveal any subsequent diagnostics. PR #35 stays open targeting develop with auto-merge disabled.
+
+## Final integration review — pass 4 in PR #35 (2026-10-23)
+
+The user requested the next pass in the same PR, authorizing pass 4. All four repair passes are source-implemented on `fix/ios-transcription-and-workspace` → develop. Keep [PR #35](https://github.com/hoangbkit/Inkribe/pull/35) open with auto-merge disabled; no next phase/merge is authorized. Historical earlier pass holds below are superseded by this request.
+
+Pass 4 fixes recognition/playback audio policy parity: the shared preview/MP4 graph includes every source audio track in separate lanes with retained source offsets; volume changes update every included lane. Editor/transcription operation errors now have an editor presenter while the hidden home view yields; Back's save drain blocks new editor actions. Source review also covered import/cache/revision ordering, caption/trim/export boundaries and legacy-empty recovery/allowance. Mac, schema, originals, native word anchors, Pro policy, model assets and shared runtime are unchanged.
+
+Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) for the integration table and prioritized user validation. No builds/typechecks/tests, UI/device validation, native inference/exports, CI runs, generation or downloads ran. The affected video's exact no-words cause is still unverified; all-track mixing can mix alternate-language tracks. Start user validation with that file, the SE2 layout/keyboard workflow and later-track speech at mute/intermediate/full volume in preview/MP4.
+
+## Home and import redesign — pass 3 in PR #35 (2026-10-23)
+
+The user requested the next pass in the same PR. Pass 3 is source-implemented: summary-cache search/filter/sort with no per-keystroke disk/storage refresh, bounded card image loading, live transcription/saved/empty/missing states, revision-aware card rename/duplicate/Trash actions, accessible filters/grid, explicit project/settings routes and post-dismissal import navigation. A successful single project opens directly; a batch returns to a recent unfiltered grid. Partial failures keep error/retry controls and existing input identities; background thumbnails/storage do not delay success navigation.
+
+Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md). No builds/typechecks/tests, UI/device validation, CI, generation or downloads ran. Pass 4 remains pending. Keep PR #35 targeting develop open with auto-merge disabled. Historical pass-1/pass-2 scope holds below are superseded for pass 3 by this request; they do not authorize pass 4.
+
+## Editor redesign — pass 2 in PR #35 (2026-10-23)
+
+The user requested the next pass in the same PR. Pass 2 is source-implemented on `fix/ios-transcription-and-workspace`: canvas/viewport-based preview sizing and in-editor expansion, one transport area, compact keyboard thumbnail, inline selected-caption correction using word chips/one field, timing/split/merge retention, accessible panel picker, and a dedicated project-details/relink sheet. Undo/redo and normal save status move into the actions menu; error recovery stays visible. Canonical caption ordering preserves Merge next semantics. Existing session/player, commands, persistence, timing/rendering and pass 1 recovery remain.
+
+Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) for source behavior and pending user checks. No builds/typechecks/tests, UI/device validation, CI, generation or downloads ran. Passes 3 and 4 remain pending; keep PR #35 targeting develop open with auto-merge disabled.
+
+## Transcription and workspace repair — pass 1 (2026-10-23)
+
+At that point the user approved pass 1 of the four-pass review plan in one new PR from develop `565efe0`, branch `fix/ios-transcription-and-workspace`, targeting develop. Leave open without auto-merge. Continue future passes in this PR only when requested. IDs: V1.LOCAL_STT/JOB/RECOVERY/PRO; minimal retry/status UI belongs to this pass. That pass-1-only hold is superseded for pass 2 by the subsequent request above. Home/import redesign (pass 3) and final cross-surface review (pass 4) remain pending.
+
+See [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) for exact source changes, failure/recovery semantics, limitations and user validation. Empty output can no longer be published or charged. Existing zero-word/zero-cue results have an explicit archived/refunded retry path; nonempty recognition/manual edits remain immutable. PCM is mixed from source audio tracks, checked for actual Float32 mono 16 kHz output and placed by source PTS. Decode counts/levels and model/mapped counts go to local numeric-only diagnostics.
+
+No builds/typechecks/tests, UI/device validation, CI runs, project generation or model downloads were performed. This repairs confirmed source defects; it does not establish which native failure produced the user's particular empty transcript. Reproduce with the affected video and inspect the new failure classification/diagnostics. Mac/shared runtime and project schema remain unchanged.
+
 ## Settings and AppFoundation follow-up — PR #34
 
 Crown flow follow-up: the Projects crown uses Spokio's single Pro-sheet route. Free users see AF ProPaywallView; active Pro users see AF ProCelebrationView. A successful purchase or restore that grants Pro presents celebration after the paywall finishes dismissing; cancelling while still Free does not celebrate. The crown switches between outline/filled according to access. Settings' plan action uses the same root route, and Debug Developer Tools can replay both real screens. Source review only; purchase/restore/dismissal/device checks remain unrun.

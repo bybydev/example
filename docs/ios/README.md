@@ -1,8 +1,12 @@
 # Inkribe iOS v1.0 — start here
 
+## Current workspace repair — PR #35 (2026-10-23)
+
+All four user-requested repair passes are source-implemented on `fix/ios-transcription-and-workspace` → develop in [PR #35](https://github.com/hoangbkit/Inkribe/pull/35), open with auto-merge disabled. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) first for the current workflow, limitations and prioritized user checks. No builds/typechecks/tests, UI/device/native validation, CI, generation or downloads ran; the affected video's exact failure is unverified. No next phase or merge is authorized. Earlier Pro branch/review instructions below are historical.
+
 Current compact scope: 29 V1 acceptance items; P0–P7 source work is squash merged through [#30](https://github.com/hoangbkit/Inkribe/pull/30), commit eb89f0f. The user subsequently authorized **Pro locking and AppFoundation themes**. The earlier P5 Pro deferral and PR #30 review hold are historical.
 
-Read root AGENTS, PLAN, FEATURES, WORKFLOW, HANDOFF, ARCHITECTURE, DESIGN and [phases/PRO.md](phases/PRO.md). Current work is on feat/ios-pro-access-themes → develop; leave its PR open until asked to merge.
+Read root AGENTS, PLAN, FEATURES, WORKFLOW, HANDOFF, ARCHITECTURE, DESIGN and [phases/PRO.md](phases/PRO.md). The Pro phase was merged as #31; its branch/review hold is historical. Current repair work is PR #35 above.
 
 | Document | Role |
 |---|---|

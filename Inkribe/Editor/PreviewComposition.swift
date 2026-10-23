@@ -43,16 +43,17 @@ enum PreviewComposition {
         let hasVideo = document.assets.contains { used.contains($0.id) && $0.metadata.videoTrackCount > 0 }
         let video = hasVideo ? composition.addMutableTrack(withMediaType: .video,
             preferredTrackID: kCMPersistentTrackID_Invalid) : nil
-        let audio = composition.addMutableTrack(withMediaType: .audio,
-            preferredTrackID: kCMPersistentTrackID_Invalid)
-        guard (!hasVideo || video != nil), audio != nil else { throw ProjectStoreError.unsupportedMedia }
+        guard !hasVideo || video != nil else { throw ProjectStoreError.unsupportedMedia }
+        // Reuse one composition lane per source audio-track index across clips.
+        // Simultaneous source tracks must never be inserted into the same lane.
+        var audio: [AVMutableCompositionTrack] = []
+        var populatedAudio: Set<CMPersistentTrackID> = []
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var videoIntervals: [MediaInterval] = []
         var cursor = MediaTime.zero
         var inserted = false
         var insertedVideo = false
-        var insertedAudio = false
         let projectFit = min(size.width / CGFloat(document.canvas.width), size.height / CGFloat(document.canvas.height))
         let projectSize = CGSize(width: CGFloat(document.canvas.width) * projectFit,
                                  height: CGFloat(document.canvas.height) * projectFit)
@@ -102,8 +103,16 @@ enum PreviewComposition {
                     layer = value
                 }
             }
-            if let audio, let track = audioTracks.first {
-                if try await insert(track: track, clip: clip, into: audio) != nil { inserted = true; insertedAudio = true }
+            for (index, track) in audioTracks.enumerated() {
+                if index == audio.count {
+                    guard let lane = composition.addMutableTrack(withMediaType: .audio,
+                        preferredTrackID: kCMPersistentTrackID_Invalid) else { throw ExportError.decoding }
+                    audio.append(lane)
+                }
+                if try await insert(track: track, clip: clip, into: audio[index]) != nil {
+                    inserted = true
+                    populatedAudio.insert(audio[index].trackID)
+                }
             }
             if let videoInterval, let layer {
                 if clip.timelineInterval.start < videoInterval.start {
@@ -121,12 +130,11 @@ enum PreviewComposition {
         if cursor < duration {
             instructions.append(instruction(start: cursor, end: duration, layer: nil))
         }
-        var finalMix: AVAudioMix?
-        if insertedAudio, let audio {
-            finalMix = originalAudioMix(trackID: audio.trackID, volume: edits.volume)
-        }
+        let includedAudio = audio.filter { populatedAudio.contains($0.trackID) }
+        let finalMix = includedAudio.isEmpty ? nil : originalAudioMix(
+            trackIDs: includedAudio.map(\.trackID), volume: edits.volume)
         if let video, !insertedVideo { composition.removeTrack(video) }
-        if let audio, !insertedAudio { composition.removeTrack(audio) }
+        for lane in audio where !populatedAudio.contains(lane.trackID) { composition.removeTrack(lane) }
         if !inserted {
             // A valid trim can retain only an intentional gap. A held black
             // frame gives AVPlayer a real clock; the export renderer stays black.
@@ -157,15 +165,17 @@ enum PreviewComposition {
         }
         guard let asset = composition.copy() as? AVComposition else { throw ExportError.invalidRequest }
         return MediaGraph(asset: asset, videoComposition: finalVideo, videoIntervals: videoIntervals,
-                             duration: duration.cmTime, hasAudio: insertedAudio, audioMix: finalMix)
+                             duration: duration.cmTime, hasAudio: !includedAudio.isEmpty, audioMix: finalMix)
     }
 
-    static func originalAudioMix(trackID: CMPersistentTrackID, volume: Double) -> AVAudioMix {
-        let parameters = AVMutableAudioMixInputParameters()
-        parameters.trackID = trackID
-        parameters.setVolume(Float(volume), at: .zero)
+    static func originalAudioMix(trackIDs: [CMPersistentTrackID], volume: Double) -> AVAudioMix {
         let mix = AVMutableAudioMix()
-        mix.inputParameters = [parameters]
+        mix.inputParameters = trackIDs.map { trackID in
+            let parameters = AVMutableAudioMixInputParameters()
+            parameters.trackID = trackID
+            parameters.setVolume(Float(volume), at: .zero)
+            return parameters
+        }
         return (mix.copy() as? AVAudioMix) ?? mix
     }
 

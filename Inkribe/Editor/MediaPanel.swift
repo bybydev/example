@@ -24,11 +24,13 @@ struct MediaPanel: View {
                                 Text("Start (s)").font(.caption)
                                 TextField("Start", text: $start).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                                     .focused($focused, equals: .trimStart).accessibilityLabel("Trim start seconds")
+                                    .id(EditorField.trimStart)
                             }
                             VStack(alignment: .leading) {
                                 Text("End (s)").font(.caption)
                                 TextField("End", text: $end).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                                     .focused($focused, equals: .trimEnd).accessibilityLabel("Trim end seconds")
+                                    .id(EditorField.trimEnd)
                             }
                         }
                         ViewThatFits(in: .horizontal) {

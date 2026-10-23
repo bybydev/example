@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import OSLog
 import InkribeModelAssets
 import JobQueue
 import WhisperRuntime
@@ -8,6 +9,7 @@ import WhisperRuntime
 actor LocalTranscriber {
     private let repository: ProjectRepository
     private let decoder = SpeechDecoder()
+    private let logger = Logger(subsystem: "com.hoangbkit.inkribe", category: "LocalTranscriber")
 
     init(repository: ProjectRepository) {
         self.repository = repository
@@ -17,7 +19,8 @@ actor LocalTranscriber {
         try Task.checkCancellation()
         let project = try await repository.open(payload.projectID)
         // Do not erase a committed result if the process died before queue completion.
-        if project.recognition?.id == id {
+        if let saved = project.recognition, saved.id == id {
+            guard !saved.words.isEmpty else { throw SpeechError.noRecognizedWords }
             if payload.requiresAllowance == true { try await repository.finishSpeechAllowance(id) }
             return
         }
@@ -73,6 +76,8 @@ actor LocalTranscriber {
         guard total.isFinite, total > 0 else { throw SpeechError.noAudio }
         var completed = 0.0
         var index = 0
+        var copiedSampleCount = 0
+        var peak: Float = 0
         for clip in clips {
             guard assets[clip.sourceAssetID]?.metadata.audioTrackCount ?? 0 > 0 else { continue }
             let url = try await repository.sourceURL(projectID: project.id, assetID: clip.sourceAssetID)
@@ -92,20 +97,39 @@ actor LocalTranscriber {
                 let duration = CMTimeGetSeconds(core.duration)
                 let share = duration / total
                 await tracker.begin(window: windowIndex, base: base, share: share)
-                let samples = try await decoder.read(url: url, interval: readRange)
+                let decoded = try await decoder.read(url: url, interval: readRange)
+                copiedSampleCount += decoded.copiedSampleCount
+                peak = max(peak, decoded.peak)
+                // Skip digital silence and intentional track gaps without asking
+                // the model to hallucinate text. Quiet nonzero audio still runs.
+                if decoded.peak == 0 {
+                    completed += duration; index += 1; cursor = end
+                    continue
+                }
                 try Task.checkCancellation()
                 let relay = NativeProgressRelay(window: windowIndex, tracker: tracker)
-                let raw = try await runtime.transcribe(buffer: WhisperAudioBuffer(samples: samples),
+                let raw = try await runtime.transcribe(buffer: WhisperAudioBuffer(samples: decoded.samples),
                     requestedLanguageCode: language, progress: { value in relay.report(value) })
                 try Task.checkCancellation()
                 let window = WordMapper.rawWindow(raw, clipID: clip.id, interval: readRange)
+                logger.info("Speech inference window=\(windowIndex) segments=\(raw.segments.count) tokens=\(raw.tokens.count)")
                 let mapped = try WordMapper.words(in: window, clip: clip, core: core)
+                logger.info("Speech mapping window=\(windowIndex) words=\(mapped.count)")
                 WordMapper.append(mapped, to: &words)
                 windows.append(window)
                 completed += duration
                 index += 1
                 cursor = end
             }
+        }
+        guard copiedSampleCount > 0 else { throw SpeechError.emptyAudio }
+        guard peak > 0 else { throw SpeechError.silentAudio }
+        guard !words.isEmpty else {
+            let hasText = windows.contains { window in
+                window.segments.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ||
+                window.tokens.contains { !$0.utf8.isEmpty }
+            }
+            throw hasText ? SpeechError.wordTimingUnavailable : SpeechError.noRecognizedWords
         }
         // Stable ordering when a native token covers more than one lexical word.
         words = words.enumerated().sorted {

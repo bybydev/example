@@ -153,7 +153,7 @@ final class TranscriptionController {
         return !record.status.isTerminal
     }
 
-    func enqueue(projectID: UUID, language: String) async throws {
+    func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil) async throws {
         start()
         guard queueStarted, persistenceError == nil, let queue else { throw ProjectStoreError.unavailableRoot }
         guard !isAuthorizing else { throw SpeechError.busy }
@@ -164,10 +164,17 @@ final class TranscriptionController {
         await models.refresh()
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         guard !isActive(projectID) else { throw SpeechError.busy }
-        let project = try await repository.open(projectID)
+        var project = try await repository.open(projectID)
         // Recheck after suspension so rapid double taps cannot enqueue duplicates.
         guard !isActive(projectID) else { throw SpeechError.busy }
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
+        if let replacingEmptyResultID {
+            project = try await repository.recoverEmptyRecognition(projectID: projectID,
+                recognitionID: replacingEmptyResultID, expectedRevision: project.contentRevision)
+            // Refresh the open editor immediately, including when quota/model
+            // authorization later fails. Recovery itself is already durable.
+            resultGeneration += 1
+        }
         guard project.recognition == nil else { throw SpeechError.alreadyTranscribed }
         let code = SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
         let id = UUID()
@@ -197,7 +204,7 @@ final class TranscriptionController {
         guard !isActive(previous.payload.projectID) else { throw SpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
         guard !isActive(project.id) else { throw SpeechError.busy }
-        if project.recognition?.id == record.id {
+        if let saved = project.recognition, saved.id == record.id, !saved.words.isEmpty {
             // Job completion may have failed to persist after document publication.
             try queue.retry(id: record.id)
             return
