@@ -1,5 +1,13 @@
 # Live Inkribe iOS v1 handoff — 2026-10-22
 
+## Device-report follow-up — transcription still empty (2026-10-23)
+
+Native segment text/timing must remain usable when a word timestamp is unavailable. Mapping 2 uses exact segment/token byte associations, retains usable word unions, and falls back to one phrase at the model's actual segment interval. Mapping 1 remains reproducible for existing accepted IDs; schema v7 protects new mapping metadata. Failed-range errors include reasons/counts and explicitly identify zero saved captions. The user's screenshot confirms an empty transcript after 1 of 4 windows, but does not identify those failures or prove this source fix works on that video. See [the recovery handoff](handoffs/TRANSCRIPTION_RECOVERY.md). Source review only; device replay remains unrun.
+
+## Current work — caption editor and usable partial captions (2026-10-23)
+
+The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+
 ## CI follow-up — home type-check timeout and decoder label (2026-10-23)
 
 User-run [Build Release 39899733122](https://github.com/bybydev/example/actions/runs/39899733122) built head `7e074ca` and reported two iOS archive errors: a type-check timeout at `ProjectsView.swift:26:25` and a missing `otherRange:` label in `SpeechDecoder.swift:30`. The previous editor-body timeout is not reported in this run; the archive still failed with exit 65.

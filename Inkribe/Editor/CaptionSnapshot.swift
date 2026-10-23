@@ -11,6 +11,28 @@ struct CaptionPresentation: Sendable {
     }
 }
 
+struct CaptionGap: Sendable, Identifiable {
+    let id: Int
+    let clipNumber: Int
+    let interval: MediaInterval
+}
+
+enum CaptionTranscriptItem: Sendable, Identifiable {
+    case cue(CaptionCue), gap(CaptionGap)
+    var id: String {
+        switch self {
+        case .cue(let cue): "cue-" + cue.id.uuidString
+        case .gap(let gap): "gap-\(gap.id)"
+        }
+    }
+    var start: MediaTime {
+        switch self {
+        case .cue(let cue): cue.interval.start
+        case .gap(let gap): gap.interval.start
+        }
+    }
+}
+
 /// Immutable, revision-tagged edited input for preview and the later style/export phases.
 /// Time lookup is independent of selection, playback rate, UI focus and wall-clock time.
 struct CaptionSnapshot: Sendable {
@@ -21,6 +43,8 @@ struct CaptionSnapshot: Sendable {
     let wordsByID: [UUID: CaptionWord]
     let cues: [CaptionCue]
     let timeline: OutputTimeline
+    let gaps: [CaptionGap]
+    let transcriptItems: [CaptionTranscriptItem]
     private let originalWordsByID: [UUID: CaptionWord]
     private let ordered: [CaptionCue]
     private let prefixEnd: [MediaTime]
@@ -48,6 +72,31 @@ struct CaptionSnapshot: Sendable {
             return CaptionCue(id: cue.id, wordIDs: ids, interval: interval)
         }
         let originalStarts = Dictionary(uniqueKeysWithValues: (document.recognition?.cues ?? []).map { ($0.id, $0.interval.start) })
+        var missing: [CaptionGap] = []
+        if let progress = document.recognition?.progress, progress.isIncomplete,
+           let plan = try? SpeechCheckpoint.plan(clips: document.clips, assets: document.assets) {
+            let resolved = Set(progress.resolved.map(\.index))
+            for window in plan where !resolved.contains(window.index) {
+                let offset = CMTimeSubtract(window.core.start.cmTime, window.clip.sourceInterval.start.cmTime)
+                let start = CMTimeAdd(window.clip.timelineInterval.start.cmTime, offset)
+                if let interval = try? MediaInterval(start: MediaTime(validating: start),
+                    end: MediaTime(validating: CMTimeAdd(start, window.core.duration))),
+                   let output = timeline.outputInterval(interval) {
+                    missing.append(CaptionGap(id: window.index,
+                        clipNumber: (document.clips.firstIndex { $0.id == window.clip.id } ?? 0) + 1,
+                        interval: output))
+                }
+            }
+        }
+        gaps = missing
+        // Keep caption order consistent with Merge next. Insert gap rows without
+        // reordering existing captions after manual timing corrections.
+        var items = cues.map(CaptionTranscriptItem.cue)
+        for gap in missing {
+            let index = items.firstIndex { $0.start > gap.interval.start } ?? items.endIndex
+            items.insert(.gap(gap), at: index)
+        }
+        transcriptItems = items
         ordered = cues.sorted {
             if $0.interval.start != $1.interval.start { return $0.interval.start < $1.interval.start }
             let a = originalStarts[$0.id] ?? .zero
@@ -121,3 +170,4 @@ enum EditorTime {
         return try MediaInterval(start: parse(start, original: original?.start), end: parse(end, original: original?.end))
     }
 }
+

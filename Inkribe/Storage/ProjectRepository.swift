@@ -99,7 +99,8 @@ actor ProjectRepository {
 
     /// Only the explicit empty-result recovery operation may clear recognition.
     private func writeEdit(_ proposed: ProjectDocument, expectedRevision: UInt64,
-                           clearingEmptyRecognitionID: UUID? = nil) throws -> ProjectDocument {
+                           clearingEmptyRecognitionID: UUID? = nil,
+                           appendingRecognitionID: UUID? = nil) throws -> ProjectDocument {
         let current = try open(proposed.id)
         guard current.contentRevision == expectedRevision else {
             throw ProjectStoreError.staleRevision(expected: expectedRevision,
@@ -116,12 +117,12 @@ actor ProjectRepository {
         let clearsEmptyRecognition = current.recognition.map {
             $0.id == clearingEmptyRecognitionID && $0.words.isEmpty && $0.cues.isEmpty && next.recognition == nil
         } ?? false
-        if let raw = current.recognition, !clearsEmptyRecognition {
+        if let raw = current.recognition, !clearsEmptyRecognition, raw.id != appendingRecognitionID {
             guard let proposed = next.recognition, proposed.id == raw.id,
                   proposed.rawWindows == raw.rawWindows, proposed.modelID == raw.modelID,
                   proposed.modelSHA256 == raw.modelSHA256,
                   proposed.requestedLanguageCode == raw.requestedLanguageCode,
-                  proposed.completedAt == raw.completedAt else {
+                  proposed.completedAt == raw.completedAt, proposed.progress == raw.progress else {
                 throw ProjectStoreError.invalidDocument("Raw recognition is immutable")
             }
             let nativeWords = Dictionary(uniqueKeysWithValues: raw.words.map { ($0.id, $0) })
@@ -156,6 +157,62 @@ actor ProjectRepository {
         return next
     }
 
+    /// Only append-only inference publication may be rebased. Concurrent user
+    /// edits from another owner still fail instead of being silently overwritten.
+    func commitEditorEdit(_ proposed: ProjectDocument, basedOn base: ProjectDocument) throws -> ProjectDocument {
+        let current = try open(proposed.id)
+        if current.contentRevision == base.contentRevision {
+            return try commitEdit(proposed, expectedRevision: base.contentRevision)
+        }
+        guard current.isSpeechPublication(since: base) else {
+            throw ProjectStoreError.staleRevision(expected: base.contentRevision, actual: current.contentRevision)
+        }
+        var merged = proposed
+        merged.recognition = try current.recognition?.keepingEdits(from: proposed.recognition)
+        return try commitEdit(merged, expectedRevision: current.contentRevision)
+    }
+
+    /// Successful windows are immediately usable/editable on the video. This
+    /// repository transaction appends new units and preserves every existing edit.
+    /// Also exposes compatible work retained by the earlier complete-only build,
+    /// without loading a model or repeating inference when the editor opens.
+    func restoreRetainedCaptions(projectID: UUID) throws -> ProjectDocument {
+        let project = try open(projectID)
+        guard project.recognition == nil, let checkpoint = try readSpeechCheckpoint(projectID),
+              checkpoint.projectID == projectID, checkpoint.revision == project.contentRevision,
+              checkpoint.assets == project.assets, checkpoint.clips == project.clips,
+              checkpoint.usesCurrentModelAndRuntime else { return project }
+        try checkpoint.validate(recheckingMapping: true)
+        return try publishSpeechProgress(checkpoint, chargeOnCompletion: true)
+    }
+
+    /// Append accepted source units into the latest saved manual edits.
+    func publishSpeechProgress(_ checkpoint: SpeechCheckpoint,
+                               chargeOnCompletion: Bool) throws -> ProjectDocument {
+        try Task.checkCancellation()
+        var current = try open(checkpoint.projectID)
+        guard current.assets == checkpoint.assets, current.clips == checkpoint.clips else {
+            throw ProjectStoreError.invalidDocument("Transcription source graph changed")
+        }
+        if let existing = current.recognition {
+            guard existing.id == checkpoint.jobID else { throw SpeechError.alreadyTranscribed }
+            if !existing.isIncomplete {
+                if chargeOnCompletion { try finishSpeechAllowance(existing.id) }
+                return current
+            }
+        }
+        guard let result = try checkpoint.publication(merging: current.recognition) else { return current }
+        try result.validate(clips: current.clips, assets: current.assets)
+        if current.recognition != result {
+            let revision = current.contentRevision
+            let existingID = current.recognition?.id
+            current.recognition = result
+            current = try writeEdit(current, expectedRevision: revision, appendingRecognitionID: existingID)
+        }
+        if chargeOnCompletion, !result.isIncomplete { try finishSpeechAllowance(result.id) }
+        return current
+    }
+
     /// One atomic publication of raw output and editable captions. The job ID
     /// handles a crash after publication but before JobQueue marks completion.
     func saveRecognition(_ result: Recognition, projectID: UUID,
@@ -178,6 +235,135 @@ actor ProjectRepository {
         // The reservation remains durable if charging fails after publication.
         // Retrying/reconciling can settle it without running or charging twice.
         if chargeAllowance { try finishSpeechAllowance(result.id) }
+    }
+
+    /// Fixed sidecar inside the project: moves with Trash, is included in storage
+    /// accounting, is not derived cache, and is never copied by duplicate().
+    private func speechCheckpointURL(_ projectID: UUID) throws -> URL {
+        let project = try projectDirectory(projectID).standardizedFileURL
+        let url = project.appendingPathComponent("speech-checkpoint.json")
+        guard project.resolvingSymlinksInPath() == project,
+              url.resolvingSymlinksInPath() == url else { throw ProjectStoreError.invalidPath(url.path) }
+        return url
+    }
+
+    private func readSpeechCheckpoint(_ projectID: UUID) throws -> SpeechCheckpoint? {
+        let url = try speechCheckpointURL(projectID)
+        guard files.fileExists(atPath: url.path) else { return nil }
+        guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw SpeechRecoveryError.corrupt
+        }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        guard let data = try file.read(upToCount: SpeechCheckpoint.maximumBytes + 1),
+              data.count <= SpeechCheckpoint.maximumBytes else { throw SpeechRecoveryError.tooLarge }
+        do {
+            let value = try decoder.decode(SpeechCheckpoint.self, from: data)
+            guard value.projectID == projectID else { throw SpeechRecoveryError.corrupt }
+            try value.validate()
+            return value
+        } catch let error as SpeechRecoveryError { throw error }
+        catch { throw SpeechRecoveryError.corrupt }
+    }
+
+    func loadSpeechCheckpoint(matching fresh: SpeechCheckpoint) throws -> SpeechCheckpoint {
+        let project = try open(fresh.projectID)
+        guard project.recognition == nil ||
+                (project.recognition?.id == fresh.jobID && project.recognition?.isIncomplete == true) else {
+            throw SpeechError.alreadyTranscribed
+        }
+        guard project.contentRevision == fresh.revision else {
+            throw ProjectStoreError.staleRevision(expected: fresh.revision, actual: project.contentRevision)
+        }
+        var seeded = try fresh.seeded(from: project.recognition)
+        guard let saved = try readSpeechCheckpoint(fresh.projectID),
+              saved.matches(fresh) || (project.recognition?.isIncomplete == true && saved.matchesInputs(fresh)) else { return seeded }
+        do { try saved.validate(recheckingMapping: true) }
+        catch let error as SpeechRecoveryError { throw error }
+        catch { throw SpeechRecoveryError.corrupt }
+        var entries = Dictionary(uniqueKeysWithValues: saved.entries.map { ($0.index, $0) })
+        for entry in seeded.entries {
+            if let prior = entries[entry.index], prior != entry { throw SpeechRecoveryError.corrupt }
+            entries[entry.index] = entry
+        }
+        seeded.entries = entries.values.sorted { $0.index < $1.index }
+        return seeded
+    }
+
+    func saveSpeechCheckpoint(_ checkpoint: SpeechCheckpoint) throws -> SpeechCheckpoint {
+        try Task.checkCancellation()
+        var value = checkpoint
+        let project = try open(value.projectID)
+        guard project.recognition == nil ||
+                (project.recognition?.id == value.jobID && project.recognition?.isIncomplete == true) else {
+            throw SpeechError.alreadyTranscribed
+        }
+        guard project.assets == value.assets, project.clips == value.clips else {
+            throw ProjectStoreError.invalidDocument("Transcription source graph changed")
+        }
+        value.revision = project.contentRevision
+        try value.validate()
+        let data = try encoder.encode(value)
+        guard data.count <= SpeechCheckpoint.maximumBytes else { throw SpeechRecoveryError.tooLarge }
+        try data.write(to: speechCheckpointURL(value.projectID), options: .atomic)
+        return value
+    }
+
+    func speechRecovery(projectID: UUID) throws -> SpeechRecoverySummary? {
+        let project = try open(projectID)
+        guard project.recognition?.isIncomplete != false else { return nil }
+        guard let value = try readSpeechCheckpoint(projectID) else {
+            guard let recognition = project.recognition, let progress = recognition.progress else { return nil }
+            let plan = try SpeechCheckpoint.plan(clips: project.clips, assets: project.assets)
+            let resolved = Set(progress.resolved.map(\.index))
+            let unresolved = plan.filter { !resolved.contains($0.index) }.map { window in
+                SpeechRecoverySummary.Unresolved(id: window.index,
+                    clipNumber: (project.clips.firstIndex { $0.id == window.clip.id } ?? 0) + 1,
+                    source: window.core, reason: "Needs transcription")
+            }
+            return SpeechRecoverySummary(jobID: recognition.id, reusableRevision: true,
+                compatibleRuntime: SpeechCheckpoint.usesCurrentModelAndRuntime(modelID: recognition.modelID,
+                    hash: recognition.modelSHA256, revision: progress.runtimeRevision),
+                resolved: resolved.count, total: plan.count,
+                words: recognition.words.count, modelID: recognition.modelID,
+                language: recognition.requestedLanguageCode, unresolved: unresolved)
+        }
+        let plan = try SpeechCheckpoint.plan(clips: value.clips, assets: value.assets)
+        let entries = Dictionary(uniqueKeysWithValues: value.entries.map { ($0.index, $0) })
+        let unresolved = plan.compactMap { window -> SpeechRecoverySummary.Unresolved? in
+            let entry = entries[window.index]
+            guard entry == nil || entry?.failure != nil else { return nil }
+            return .init(id: window.index,
+                clipNumber: (value.clips.firstIndex(where: { $0.id == window.clip.id }) ?? 0) + 1,
+                source: window.core, reason: entry?.failure?.description ?? "Not processed yet")
+        }
+        return SpeechRecoverySummary(jobID: value.jobID,
+            reusableRevision: (value.revision == project.contentRevision || project.recognition?.id == value.jobID) &&
+                value.assets == project.assets && value.clips == project.clips,
+            compatibleRuntime: value.usesCurrentModelAndRuntime,
+            resolved: plan.count - unresolved.count, total: plan.count, words: value.wordCount,
+            modelID: value.modelID, language: value.language, unresolved: unresolved)
+    }
+
+    /// Explicit user action only, while the controller excludes active jobs.
+    /// Does not clear recognition, refund usage or mutate the project revision.
+    func discardSpeechCheckpoint(projectID: UUID, expectedRevision: UInt64) throws {
+        let project = try open(projectID)
+        guard project.contentRevision == expectedRevision else {
+            throw ProjectStoreError.staleRevision(expected: expectedRevision, actual: project.contentRevision)
+        }
+        guard project.recognition?.isIncomplete != false else { throw SpeechError.alreadyTranscribed }
+        let url = try speechCheckpointURL(projectID)
+        if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
+    }
+
+    /// Cleanup after publication is optional. A leftover checkpoint is ignored
+    /// once recognition exists, so a cleanup failure cannot undo saved captions.
+    func removePublishedSpeechCheckpoint(projectID: UUID, recognitionID: UUID) throws {
+        let recognition = try open(projectID).recognition
+        guard recognition?.id == recognitionID, recognition?.isIncomplete == false else { return }
+        let url = try speechCheckpointURL(projectID)
+        if files.fileExists(atPath: url.path) { try files.removeItem(at: url) }
     }
 
     /// User-requested retry of an empty legacy result. Preserve raw evidence and
@@ -258,7 +444,7 @@ actor ProjectRepository {
         for folder in candidates where files.fileExists(atPath: folder.path) {
             let document = try readRecoverable(in: folder)
             guard document.id == reservation.projectID else { throw ProError.allowanceStorage }
-            return document.recognition.map { $0.id == reservation.jobID && !$0.words.isEmpty } ?? false
+            return document.recognition.map { $0.id == reservation.jobID && !$0.words.isEmpty && !$0.isIncomplete } ?? false
         }
         return false
     }
@@ -279,7 +465,8 @@ actor ProjectRepository {
 
     func reserveSpeechAllowance(jobID: UUID, projectID: UUID, revision: UInt64) throws {
         let project = try open(projectID)
-        guard project.contentRevision == revision, project.recognition == nil else {
+        guard project.contentRevision == revision,
+              project.recognition == nil || (project.recognition?.id == jobID && project.recognition?.isIncomplete == true) else {
             throw ProjectStoreError.staleRevision(expected: revision, actual: project.contentRevision)
         }
         var value = try loadSpeechAllowance()
@@ -441,7 +628,7 @@ actor ProjectRepository {
                 let cache = try? thumbnailURL(id: id)
                 let captionState: ProjectCaptionState
                 if let recognition = document.recognition {
-                    captionState = recognition.words.isEmpty ? .emptyResult : .saved
+                    captionState = recognition.words.isEmpty ? .emptyResult : recognition.isIncomplete ? .incomplete : .saved
                 } else {
                     captionState = document.assets.contains { $0.metadata.audioTrackCount > 0 } ? .needsTranscription : .noAudio
                 }

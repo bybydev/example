@@ -45,6 +45,46 @@ struct CaptionCue: Codable, Equatable, Sendable, Identifiable {
     var interval: MediaInterval
 }
 
+/// Coverage describes real gaps; v7 also preserves each accepted mapping version.
+struct RecognitionProgress: Codable, Equatable, Sendable {
+    struct Resolved: Codable, Equatable, Sendable {
+        let index: Int
+        let attempts: Int
+        let recoveryReason: String?
+        let rawWindowIDs: [UUID]
+        let nativeWordIDs: [UUID]
+        let copiedSamples: Int
+        let peak: Float
+        /// Absent in v6: retain strict token-only mapping for those identities.
+        var mappingVersion: Int? = nil
+    }
+    let version: Int
+    let policy: Int
+    let runtimeRevision: String
+    let totalWindows: Int
+    let resolved: [Resolved]
+    var isIncomplete: Bool { resolved.count < totalWindows }
+
+    func validate(rawWindows: [RecognitionWindow], words: [CaptionWord],
+                  clips: [ProjectClip], assets: [SourceAsset]) throws {
+        let plan = try SpeechCheckpoint.plan(clips: clips, assets: assets)
+        let rawIDs = resolved.flatMap(\.rawWindowIDs)
+        let nativeIDs = resolved.flatMap(\.nativeWordIDs)
+        guard version == 1, policy == SpeechCheckpoint.currentPolicy,
+              runtimeRevision.count == 40, runtimeRevision.allSatisfy(\.isHexDigit),
+              totalWindows == plan.count, resolved.count <= totalWindows,
+              Set(resolved.map(\.index)).count == resolved.count,
+              resolved.allSatisfy({ plan.indices.contains($0.index) && (1...2).contains($0.attempts) &&
+                  $0.copiedSamples >= 0 && $0.peak.isFinite && $0.peak >= 0 &&
+                  (1...WordMapper.currentMappingVersion).contains($0.mappingVersion ?? 1) }),
+              Set(rawIDs).count == rawIDs.count, Set(nativeIDs).count == nativeIDs.count,
+              Set(rawIDs) == Set(rawWindows.map(\.id)),
+              Set(words.map(\.id)).isSubset(of: Set(nativeIDs)) else {
+            throw ProjectStoreError.invalidDocument("Invalid transcription coverage")
+        }
+    }
+}
+
 struct Recognition: Codable, Equatable, Sendable, Identifiable {
     /// The durable job ID makes completion idempotent after interrupted publication.
     let id: UUID
@@ -55,6 +95,8 @@ struct Recognition: Codable, Equatable, Sendable, Identifiable {
     let rawWindows: [RecognitionWindow]
     var words: [CaptionWord]
     var cues: [CaptionCue]
+    var progress: RecognitionProgress? = nil
+    var isIncomplete: Bool { progress?.isIncomplete == true }
 
     func validate(clips: [ProjectClip], assets: [SourceAsset]) throws {
         let assetIndex = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
@@ -115,11 +157,13 @@ struct Recognition: Codable, Equatable, Sendable, Identifiable {
         guard used == Set(words.map(\.id)) else {
             throw ProjectStoreError.invalidDocument("Words are missing caption cues")
         }
+        try progress?.validate(rawWindows: rawWindows, words: words, clips: clips, assets: assets)
     }
 
     func duplicated(assetClips: [UUID: UUID]) -> Self {
         let windowIDs = Dictionary(uniqueKeysWithValues: rawWindows.map { ($0.id, UUID()) })
-        let wordIDs = Dictionary(uniqueKeysWithValues: words.map { ($0.id, UUID()) })
+        let nativeIDs = Set(words.map(\.id) + (progress?.resolved.flatMap(\.nativeWordIDs) ?? []))
+        let wordIDs = Dictionary(uniqueKeysWithValues: nativeIDs.map { ($0, UUID()) })
         return Self(id: UUID(), modelID: modelID, modelSHA256: modelSHA256,
             requestedLanguageCode: requestedLanguageCode, completedAt: completedAt,
             rawWindows: rawWindows.map {
@@ -133,6 +177,15 @@ struct Recognition: Codable, Equatable, Sendable, Identifiable {
                     timingProvenance: $0.timingProvenance, adjustedSourceInterval: $0.adjustedSourceInterval)
             }, cues: cues.map {
                 CaptionCue(id: UUID(), wordIDs: $0.wordIDs.map { wordIDs[$0]! }, interval: $0.interval)
+            }, progress: progress.map { value in
+                RecognitionProgress(version: value.version, policy: value.policy,
+                    runtimeRevision: value.runtimeRevision, totalWindows: value.totalWindows,
+                    resolved: value.resolved.map {
+                        .init(index: $0.index, attempts: $0.attempts, recoveryReason: $0.recoveryReason,
+                              rawWindowIDs: $0.rawWindowIDs.map { windowIDs[$0]! },
+                              nativeWordIDs: $0.nativeWordIDs.map { wordIDs[$0]! },
+                              copiedSamples: $0.copiedSamples, peak: $0.peak, mappingVersion: $0.mappingVersion)
+                    })
             })
     }
 }
@@ -146,7 +199,7 @@ enum SpeechError: LocalizedError {
         case .emptyAudio: "The audio track could not be read into speech samples. No captions were saved. Try importing the original file again."
         case .silentAudio: "The decoded audio is silent. No captions were saved. Check the original audio, then retry."
         case .noRecognizedWords: "The speech model returned no words. No captions were saved. Try choosing the spoken language or another model, then retry."
-        case .wordTimingUnavailable: "The speech model did not return usable word timing. No caption result was saved."
+        case .wordTimingUnavailable: "That audio window did not return usable word timing. Previously saved captions remain available."
         case .invalidUTF8: "The speech model returned incomplete text. Retry transcription."
         case .invalidAudio: "The audio could not be decoded into a supported speech window."
         case .busy: "This project already has a transcription in progress."
@@ -154,3 +207,4 @@ enum SpeechError: LocalizedError {
         }
     }
 }
+

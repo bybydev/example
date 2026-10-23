@@ -3,7 +3,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 5
+    static let current = 7
 }
 
 enum ProjectStoreError: LocalizedError, Sendable {
@@ -199,6 +199,12 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw ProjectStoreError.invalidDocument("Manual captions require schema v3")
         }
         try recognition?.validate(clips: clips, assets: assets)
+        guard schemaVersion >= 6 || recognition?.progress == nil else {
+            throw ProjectStoreError.invalidDocument("Transcription coverage requires schema v6")
+        }
+        guard schemaVersion >= 7 || recognition?.progress?.resolved.allSatisfy({ $0.mappingVersion == nil }) != false else {
+            throw ProjectStoreError.invalidDocument("Caption mapping versions require schema v7")
+        }
         let ordered = clips.sorted { $0.timelineInterval.start < $1.timelineInterval.start }
         for pair in zip(ordered, ordered.dropFirst()) {
             guard pair.0.timelineInterval.end <= pair.1.timelineInterval.start else {
@@ -247,7 +253,7 @@ struct ProjectSummary: Identifiable, Sendable {
 
 /// Derived library metadata only; never persisted into the project schema.
 enum ProjectCaptionState: Sendable {
-    case needsTranscription, emptyResult, saved, noAudio
+    case needsTranscription, emptyResult, incomplete, saved, noAudio
 }
 
 enum LibrarySort: String, Hashable, Sendable {
@@ -267,3 +273,4 @@ struct LibrarySnapshot: Sendable {
     let projects: [ProjectSummary]
     let issues: [LibraryIssue]
 }
+

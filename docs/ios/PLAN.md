@@ -1,5 +1,11 @@
 # Inkribe iOS v1.0 — scoped plan
 
+The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+
+The earlier status paragraphs below are historical and superseded by this request.
+
+> Current request (2026-10-23): #35 is squash merged as 525fae4. Implement issue #36 in one new fix/ios-window-recovery PR targeting develop, left open without auto-merge. Scope and publication/checkpoint policy: [phases/TRANSCRIPTION_RECOVERY.md](phases/TRANSCRIPTION_RECOVERY.md). Source evidence and user checks: [handoffs/TRANSCRIPTION_RECOVERY.md](handoffs/TRANSCRIPTION_RECOVERY.md). No new phase/features or Mac changes; no builds/typechecks/tests, CI, generation, weights or UI/device validation. Older #35 holds below are historical.
+
 > Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
 
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.

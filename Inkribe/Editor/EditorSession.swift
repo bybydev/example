@@ -30,6 +30,7 @@ final class EditorSession {
     private let repository = ProjectRepository.shared
     private var isPresented = false
     private var committedRevision: UInt64 = 0
+    private var savedBase: ProjectDocument?
     private var editSequence: UInt64 = 0
     private var savedSequence: UInt64 = 0
     private var loadGeneration = UUID()
@@ -140,18 +141,34 @@ final class EditorSession {
         loadError = nil
         defer { if loadGeneration == generation { isLoading = false } }
         do {
-            let loaded = try await repository.open(projectID)
+            var loaded = try await repository.open(projectID)
+            if loaded.recognition == nil {
+                do { loaded = try await repository.restoreRetainedCaptions(projectID: projectID) }
+                catch is CancellationError { return }
+                catch { commandError = error.localizedDescription }
+            }
             guard generation == loadGeneration, sequence == editSequence else { return }
             if discardDraft || document == nil || loaded.contentRevision != committedRevision {
+                let appendOnly = savedBase.map { loaded.isSpeechPublication(since: $0) } ?? false
+                let hadWords = document?.recognition?.words.isEmpty == false
                 document = loaded
                 committedRevision = loaded.contentRevision
                 savedSequence = editSequence
                 hasPendingChanges = false
                 saveError = nil
-                past.removeAll(); future.removeAll(); updateHistoryFlags()
+                if discardDraft || !appendOnly { past.removeAll(); future.removeAll(); updateHistoryFlags() }
                 rebuildSnapshot()
                 repairSelection()
+                // A newly available transcript should be visible on the paused
+                // footage, even when the original starts with silence/fade-in.
+                if !hadWords, !isPlaying, snapshot?.evaluate(at: time) == nil,
+                   let cue = snapshot?.chronologicalCues.first,
+                   let reveal = try? EditorTime.stamp(min(EditorTime.seconds(cue.interval.end),
+                       EditorTime.seconds(cue.interval.start) + min(0.1, CMTimeGetSeconds(cue.interval.duration) / 2))) {
+                    time = reveal
+                }
             }
+            savedBase = loaded
             var urls: [UUID: URL] = [:]
             for asset in loaded.assets {
                 if let url = try? await repository.sourceURL(projectID: projectID, assetID: asset.id) {
@@ -162,6 +179,7 @@ final class EditorSession {
             originalAvailable = Dictionary(uniqueKeysWithValues: loaded.assets.map { ($0.id, urls[$0.id] != nil) })
             mediaURLs = urls
             await preparePreview(document: document ?? loaded, urls: urls, generation: generation)
+            if generation == loadGeneration, !isPlaying { seek(to: time) }
         } catch {
             guard generation == loadGeneration else { return }
             loadError = error.localizedDescription
@@ -183,7 +201,7 @@ final class EditorSession {
         mediaControl = nil
         selectedCueID = id
         selectedWordID = snapshot?.cues.first { $0.id == id }?.wordIDs.first
-        if let cue = selectedCue { seek(to: cue.interval.start) }
+        if let cue = selectedCue { reveal(cue.interval) }
     }
 
     func selectWord(_ id: UUID) {
@@ -192,7 +210,12 @@ final class EditorSession {
         stylingControl = nil
         mediaControl = nil
         selectedWordID = id
-        if let word = snapshot?.wordsByID[id] { seek(to: word.projectInterval.start) }
+        if let word = snapshot?.wordsByID[id] { reveal(word.projectInterval) }
+    }
+
+    private func reveal(_ interval: MediaInterval) {
+        let seconds = EditorTime.seconds(interval.start) + min(0.1, CMTimeGetSeconds(interval.duration) / 2)
+        if let value = try? EditorTime.stamp(seconds) { seek(to: value) }
     }
 
     func beginTyping() { pause() }
@@ -308,6 +331,13 @@ final class EditorSession {
     func editText(wordID: UUID, value: String) {
         perform(coalescing: wordID) { state, _ in
             try CaptionEdits.text(value, wordID: wordID, in: &state)
+            return nil
+        }
+    }
+
+    func editCueText(cueID: UUID, value: String) {
+        perform(coalescing: cueID) { state, _ in
+            try CaptionEdits.cueText(value, cueID: cueID, in: &state)
             return nil
         }
     }
@@ -469,18 +499,22 @@ final class EditorSession {
         while savedSequence != editSequence, let proposed = document {
             let capturedSequence = editSequence
             do {
-                let saved = try await repository.commitEdit(proposed, expectedRevision: committedRevision)
+                guard let base = savedBase else { throw ProjectStoreError.missingProject(projectID) }
+                let saved = try await repository.commitEditorEdit(proposed, basedOn: base)
                 committedRevision = saved.contentRevision
                 savedSequence = capturedSequence
                 if var latest = document {
+                    latest.recognition = try saved.recognition?.keepingEdits(from: latest.recognition)
                     latest.contentRevision = saved.contentRevision
                     latest.updatedAt = saved.updatedAt
                     latest.schemaVersion = saved.schemaVersion
                     document = latest
                 }
+                savedBase = saved
                 hasPendingChanges = savedSequence != editSequence
                 saveError = nil
                 rebuildSnapshot()
+                repairSelection()
             } catch {
                 saveError = error.localizedDescription
                 hasPendingChanges = true
@@ -599,3 +633,4 @@ final class EditorSession {
         player.replaceCurrentItem(with: nil)
     }
 }
+

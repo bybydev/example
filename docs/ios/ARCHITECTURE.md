@@ -1,5 +1,9 @@
 # Inkribe iOS v1 architecture
 
+## Issue #36 checkpoint ownership amendment
+
+The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+
 > Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 Current scope is PLAN/FEATURES. This replaces the broad product architecture. No account/provider/backend layer is needed.
@@ -43,7 +47,7 @@ All code is source-reviewed, not runtime verified. No builds/tests/device checks
 - NativeWhisperRuntime's captureTokenBytes defaults false, preserving existing Mac behavior. iOS opts into raw BPE bytes and unclamped native timestamps/validity. Reconstruct Unicode before segmentation; do not split durations evenly among words.
 - 24-second ownership cores plus two seconds of context each side; retain words by actual midpoint, reconcile repeated cross-window acoustic intervals and store all raw windows separately. Approximate token-union timing and boundary recognition quality await user testing.
 - Schema v2 adds optional Recognition. Read v1 without a destructive rewrite; first later mutation writes v2 with a prior-valid backup. Project repository enforces immutable raw recognition and original media. Words/cues are editable data for P3, with stable IDs and source/project intervals; raw windows remain bounded by original asset duration, allowing later non-destructive trims without rewriting raw recognition.
-- saveRecognition revision-checks the complete result and atomically publishes it before queue success. Same job ID is idempotent after interrupted queue completion. Explicit retries can refresh revision/language only while no result exists; existing recognition/manual edits are never silently replaced. Renaming during work may make its final revision stale and require explicit retry.
+- Current recovery uses publishSpeechProgress to append accepted source units atomically into the latest edited Recognition. commitEditorEdit permits a narrow rebase across append-only speech publications, preserving newer drafts and bounded undo. Existing source anchors/raw output remain immutable. Partial retries retain model/language/operation ID; complete publication is idempotent before queue success. Legacy saveRecognition remains available for old complete-result contracts.
 - Duplicates copy recognition with fresh recognition/window/clip/word/cue IDs. Existing P1 rename returns full committed documents, preserving recognized content.
 
 ## P3 as-built editor contracts

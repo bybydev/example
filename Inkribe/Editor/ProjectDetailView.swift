@@ -3,8 +3,7 @@ import SwiftUI
 import AppFoundation
 import UniformTypeIdentifiers
 
-enum EditorField: Hashable { case title, word(UUID), timing(UUID, Bool), trimStart, trimEnd }
-private enum EditorPanel: String, CaseIterable { case captions = "Captions", style = "Style", templates = "Templates", media = "Media" }
+enum EditorField: Hashable { case title, caption(UUID), word(UUID), timing(UUID, Bool), trimStart, trimEnd }
 
 struct ProjectDetailView: View {
     @Environment(ProjectsModel.self) private var model
@@ -20,7 +19,9 @@ struct ProjectDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var showReloadConfirmation = false
     @State private var isLeaving = false
-    @State private var panel = EditorPanel.captions
+    @State private var showStyleSheet = false
+    @State private var showTimingSheet = false
+    @State private var showMediaSheet = false
     @State private var captionRenderError: String?
     @State private var showExport = false
     @State private var preparingTranscription = false
@@ -43,12 +44,11 @@ struct ProjectDetailView: View {
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }
             else { session.endTyping(); if value != nil { session.beginTyping() } }
         }
-        .onChange(of: panel) { _, _ in focused = nil; session.endTyping(); session.endStyleEditing(); session.endMediaEditing() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
         .onDisappear {
-            guard !showProjectInfo, !showExport, session.proUpsell == nil else { return }
+            guard !showProjectInfo, !showExport, !showStyleSheet, !showTimingSheet, !showMediaSheet, session.proUpsell == nil else { return }
             session.stop()
             Task { await session.flush(); await model.refresh() }
         }
@@ -59,7 +59,10 @@ struct ProjectDetailView: View {
         .task { await session.open() }
         .sheet(isPresented: $showExport) { ExportView(session: session) }
         .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
-        .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
+        .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
+        .sheet(isPresented: $showTimingSheet, onDismiss: finishToolEditing) { timingSheet }
+        .sheet(isPresented: $showMediaSheet, onDismiss: finishToolEditing) { mediaSheet }
+        .sheet(item: Binding(get: { showStyleSheet ? nil : session.proUpsell }, set: { if !showStyleSheet { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
     }
 
     private var editorDialogs: some View {
@@ -90,6 +93,9 @@ struct ProjectDetailView: View {
 
     private var editorNavigation: some View {
         editorWorkspace
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if session.document != nil, !expandedPreview, focused == nil { editorToolBar }
+        }
         .disabled(preparingTranscription || isLeaving)
         .navigationTitle(session.document?.title ?? "Project")
         .themedSurface()
@@ -122,7 +128,6 @@ struct ProjectDetailView: View {
                             }
                         }
                     } else {
-                        if focused == nil { editorTools(document) }
                         editorContent(document, viewportHeight: geometry.size.height)
                             .layoutPriority(1)
                     }
@@ -147,6 +152,12 @@ struct ProjectDetailView: View {
             }
             .disabled(isLeaving || preparingTranscription)
         }
+        ToolbarItem(placement: .principal) {
+            VStack(spacing: 2) {
+                Text(session.document?.title ?? "Project").font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text(saveStatus).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button("Export") {
                 focused = nil
@@ -157,6 +168,7 @@ struct ProjectDetailView: View {
                 showExport = true
             }
             .font(.subheadline.weight(.semibold))
+            .buttonStyle(.borderedProminent).controlSize(.small)
             .disabled(session.document == nil || preparingTranscription || isLeaving)
             editorActions
         }
@@ -179,6 +191,9 @@ struct ProjectDetailView: View {
             Button(expandedPreview ? "Back to editor" : "Expand preview", systemImage: "arrow.up.left.and.arrow.down.right") {
                 focused = nil
                 expandedPreview.toggle()
+            }
+            Button("Media tools", systemImage: "crop.rotate") {
+                focused = nil; session.pause(); showMediaSheet = true
             }
             Button("Project details", systemImage: "info.circle") {
                 focused = nil
@@ -206,8 +221,8 @@ struct ProjectDetailView: View {
         }
         let width = max(0, size.width - 32)
         let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
-        let fraction: CGFloat = typeSize.isAccessibilitySize ? 0.30 : 0.46
-        return min(width / aspect, min(360, max(0, size.height * fraction)))
+        let fraction: CGFloat = typeSize.isAccessibilitySize ? 0.25 : 0.34
+        return min(width / aspect, min(220, max(0, size.height * fraction)))
     }
 
     private func preview(_ document: ProjectDocument, height: CGFloat, showsExpand: Bool = true) -> some View {
@@ -274,30 +289,38 @@ struct ProjectDetailView: View {
                 .font(.caption2.monospacedDigit())
                 .lineLimit(1)
             }
+            Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
+                .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44).disabled(!session.canUndo)
         }
     }
 
-    private func editorTools(_ document: ProjectDocument) -> some View {
-        let panels = EditorPanel.allCases.filter { document.recognition != nil || $0 == .captions || $0 == .media }
-        return Group {
-            if typeSize.isAccessibilitySize {
-                Picker("Editor tools", selection: $panel) {
-                    ForEach(panels, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Picker("Editor tools", selection: $panel) {
-                    ForEach(panels, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            }
+    private var editorToolBar: some View {
+        HStack(spacing: 8) {
+            toolButton("Captions", icon: "captions.bubble.fill", selected: true) { focused = nil }
+            toolButton("Style", icon: "textformat", selected: false) { focused = nil; session.pause(); showStyleSheet = true }
+                .disabled(session.document?.recognition?.words.isEmpty != false)
+            toolButton("Timing", icon: "timer", selected: false) { focused = nil; session.pause(); showTimingSheet = true }
+                .disabled(session.selectedCueID == nil)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        .background(theme.surfaceColor)
+    }
+
+    private func toolButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 19))
+                Text(title).font(.caption2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(selected ? theme.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain).foregroundStyle(selected ? theme.accentColor : .secondary)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var canPresentProjectError: Bool {
-        !showProjectInfo && !showExport && session.proUpsell == nil
+        !showProjectInfo && !showExport && !showStyleSheet && !showTimingSheet && !showMediaSheet && session.proUpsell == nil
     }
 
     private var hasEditorError: Bool {
@@ -354,31 +377,25 @@ struct ProjectDetailView: View {
                     if let error = captionRenderError {
                         Label(error, systemImage: "captions.bubble").font(.footnote).foregroundStyle(.orange)
                     }
-                    if panel == .media {
-                        MediaPanel(session: session, focused: $focused)
-                    } else if let result = document.recognition {
-                        if panel == .style {
-                            CaptionStylePanel(session: session)
-                        } else if panel == .templates {
-                            CaptionTemplatesPanel(session: session)
-                        } else if result.words.isEmpty {
-                            transcription(document)
-                        } else if session.snapshot?.cues.isEmpty != false {
-                            Text("No captions are inside the retained range. Adjust or reset trim in Media to restore them.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            let activeCueID = session.presentation?.cueID
-                            LazyVStack(alignment: .leading, spacing: 10) {
-                                ForEach(session.snapshot?.cues ?? []) { cue in
-                                    captionRow(cue, activeCueID: activeCueID)
-                                }
+                    if document.recognition?.words.isEmpty == false {
+                        transcriptHeader(document)
+                        if document.recognition?.isIncomplete == true {
+                            PartialCaptionStatus(document: document, preparing: preparingTranscription,
+                                retry: { retryMissing() }, reset: resetRetryProgress)
+                        }
+                        if let snapshot = session.snapshot {
+                            if snapshot.transcriptItems.isEmpty {
+                                Text("No captions are inside the retained range. Adjust trim in Media to restore them.")
+                                    .foregroundStyle(.secondary)
+                                Button("Media tools") { focused = nil; showMediaSheet = true }
                             }
+                            transcriptRows(snapshot)
                         }
                     } else {
                         transcription(document)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 12).padding(.vertical, 8)
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: focused) { _, value in
@@ -388,15 +405,50 @@ struct ProjectDetailView: View {
                 if let focused, !showProjectInfo { scroll.scrollTo(focused, anchor: .bottom) }
             }
             .onChange(of: session.selectedCueID) { _, id in
-                guard panel == .captions, !session.isPlaying, focused == nil, let id else { return }
+                guard !session.isPlaying, focused == nil, let id else { return }
                 scroll.scrollTo(id, anchor: .top)
             }
             .onChange(of: session.presentation?.cueID) { _, id in
                 // Playback follows footage without mutating selection or taking editing focus.
-                guard panel == .captions, session.isPlaying, focused == nil, let id else { return }
+                guard session.isPlaying, focused == nil, let id else { return }
                 if reduceMotion { scroll.scrollTo(id, anchor: .center) }
                 else { withAnimation { scroll.scrollTo(id, anchor: .center) } }
             }
+        }
+    }
+
+    private func transcriptRows(_ snapshot: CaptionSnapshot) -> some View {
+        LazyVStack(alignment: .leading, spacing: 5) {
+            ForEach(snapshot.transcriptItems) { item in transcriptRow(item) }
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptRow(_ item: CaptionTranscriptItem) -> some View {
+        switch item {
+        case .cue(let cue):
+            CaptionTranscriptRow(session: session, cue: cue,
+                active: session.presentation?.cueID == cue.id,
+                openWords: { focused = nil; showTimingSheet = true }, focused: $focused)
+        case .gap(let gap):
+            CaptionGapRow(gap: gap,
+                busy: model.transcription.isActive(projectID) || preparingTranscription || model.transcription.isAuthorizing,
+                seek: { focused = nil; session.seek(to: gap.interval.start) },
+                retry: { retryMissing(windowIndices: [gap.id]) })
+        }
+    }
+
+    private func resetRetryProgress() {
+        focused = nil
+        session.pause()
+        preparingTranscription = true
+        Task {
+            defer { preparingTranscription = false }
+            do {
+                let document = try await session.savedDocument()
+                try await model.transcription.discardSavedProgress(projectID: projectID, expectedRevision: document.contentRevision)
+            } catch { model.alertMessage = error.localizedDescription }
+            await session.refreshSaved()
         }
     }
 
@@ -413,7 +465,7 @@ struct ProjectDetailView: View {
     private var correctionPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let cue = session.selectedCue, let snapshot = session.snapshot {
-                Text("Edit words").font(.subheadline.weight(.semibold))
+                Text("Words & phrases").font(.subheadline.weight(.semibold))
                 Text("Select a word to correct it. Clear its text to hide it; timing stays unchanged.")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollViewReader { words in
@@ -448,6 +500,10 @@ struct ProjectDetailView: View {
                     }
                 }
                 if let id = session.selectedWordID, cue.wordIDs.contains(id) {
+                    if session.selectedWord?.timingProvenance == "whisper-segment" {
+                        Text("This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     TextField("Hidden word", text: Binding(
                         get: { (session.snapshot?.wordsByID[id]?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) },
                         set: { session.editText(wordID: id, value: $0) }), axis: .vertical)
@@ -498,43 +554,98 @@ struct ProjectDetailView: View {
             .disabled(!session.canMergeNext)
     }
 
-    private func captionRow(_ cue: CaptionCue, activeCueID: UUID?) -> some View {
-        let selected = cue.id == session.selectedCueID
-        return VStack(alignment: .leading, spacing: 12) {
-            Button {
-                focused = nil
-                session.selectCue(cue.id)
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("\(EditorTime.display(cue.interval.start)) – \(EditorTime.display(cue.interval.end))")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
-                        Image(systemName: selected ? "pencil.circle.fill" : "pencil.circle")
-                            .foregroundStyle(theme.accentColor)
-                    }
-                    let text = session.snapshot?.text(for: cue) ?? ""
-                    Text(text.isEmpty ? "Hidden caption" : text)
-                        .foregroundStyle(text.isEmpty ? .secondary : .primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Edit caption at " + EditorTime.display(cue.interval.start))
-            .accessibilityValue(session.snapshot?.text(for: cue) ?? "Hidden caption")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            if selected {
-                Divider()
-                correctionPanel
+    private func transcriptHeader(_ document: ProjectDocument) -> some View {
+        HStack(spacing: 8) {
+            Text("Captions").font(.headline)
+            Text("\(session.snapshot?.cues.count ?? 0)").font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            if let count = document.recognition?.progress.map({ $0.totalWindows - $0.resolved.count }), count > 0 {
+                Text(count == 1 ? "1 gap" : "\(count) gaps")
+                    .font(.caption2).foregroundStyle(.orange)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.orange.opacity(0.10), in: Capsule())
             }
         }
-        .padding(14)
-        .background(cue.id == activeCueID ? theme.accentColor.opacity(0.15) : theme.surfaceColor,
-            in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? theme.accentColor : .clear, lineWidth: 1.5))
-        .id(cue.id)
+        .padding(.horizontal, 8)
+    }
+
+    private func retryMissing(windowIndices: [Int]? = nil) {
+        guard !preparingTranscription else { return }
+        focused = nil; session.pause(); session.endTyping()
+        preparingTranscription = true
+        Task {
+            defer { preparingTranscription = false }
+            do {
+                _ = try await session.savedDocument()
+                try await model.transcription.retryMissing(projectID: projectID, windowIndices: windowIndices)
+            } catch ProError.requiresPro(let feature) { session.proUpsell = feature }
+            catch { model.alertMessage = error.localizedDescription }
+            await session.refreshSaved()
+        }
+    }
+
+    private func finishToolEditing() {
+        focused = nil
+        session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        Task { await session.flush() }
+    }
+
+    private var styleSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    CaptionStylePanel(session: session)
+                    Divider()
+                    CaptionTemplatesPanel(session: session)
+                }.padding(16)
+            }
+            .navigationTitle("Caption style").navigationBarTitleDisplayMode(.inline).themedSurface()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showStyleSheet = false } } }
+            .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var timingSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let error = session.commandError { Text(error).font(.footnote).foregroundStyle(.red) }
+                    correctionPanel
+                }.padding(16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Words & timing").navigationBarTitleDisplayMode(.inline).themedSurface()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { showTimingSheet = false } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var mediaSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let error = session.commandError { Text(error).font(.footnote).foregroundStyle(.red) }
+                    MediaPanel(session: session, focused: $focused)
+                }.padding(16)
+            }
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle("Media tools").navigationBarTitleDisplayMode(.inline).themedSurface()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { showMediaSheet = false } }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     private var projectInfoSheet: some View {
@@ -637,7 +748,7 @@ struct ProjectDetailView: View {
     }
 }
 
-private struct TimingFields: View {
+struct TimingFields: View {
     let interval: MediaInterval
     let identity: UUID
     let detail: String
@@ -677,3 +788,4 @@ private struct TimingFields: View {
     }
     private func reset() { start = EditorTime.field(interval.start); end = EditorTime.field(interval.end); error = nil }
 }
+

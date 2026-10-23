@@ -55,6 +55,15 @@ private struct TimelineBars: View, Equatable {
                 context.fill(Path(roundedRect: rect, cornerRadius: 2),
                     with: .color(cue.id == selectedCueID ? accent : accent.opacity(0.65)))
             }
+            for gap in snapshot.gaps {
+                let start = EditorTime.seconds(gap.interval.start) / duration * size.width
+                let end = EditorTime.seconds(gap.interval.end) / duration * size.width
+                let rect = CGRect(x: start, y: 2, width: max(1, end - start - 1), height: size.height - 4)
+                let path = Path(roundedRect: rect, cornerRadius: 2)
+                context.fill(path, with: .color(.orange.opacity(0.12)))
+                context.stroke(path, with: .color(.orange), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+            }
         }
     }
 }
+

@@ -31,6 +31,41 @@ enum CaptionEditError: LocalizedError {
 
 /// Atomic, value-only operations. The session validates the entire result before publishing a draft.
 enum CaptionEdits {
+    /// Changed characters stay on existing timed units. Inserted/replaced phrases
+    /// never manufacture new word IDs or evenly divided timestamp boundaries.
+    static func cueText(_ value: String, cueID: UUID, in state: inout CaptionEditState) throws {
+        guard value.count <= 4_096 else { throw CaptionEditError.invalidText }
+        guard let cue = state.cues.first(where: { $0.id == cueID }) else { throw CaptionEditError.missingCaption }
+        let wordIndex = Dictionary(uniqueKeysWithValues: state.words.enumerated().map { ($0.element.id, $0.offset) })
+        var old: [Character] = [], owners: [UUID] = []
+        for id in cue.wordIDs {
+            guard let index = wordIndex[id] else { throw CaptionEditError.missingCaption }
+            let characters = Array(state.words[index].text)
+            old.append(contentsOf: characters); owners.append(contentsOf: repeatElement(id, count: characters.count))
+        }
+        var leading: [(Character, UUID)] = [], trailing: [(Character, UUID)] = []
+        while old.first?.isWhitespace == true { leading.append((old.removeFirst(), owners.removeFirst())) }
+        while old.last?.isWhitespace == true { trailing.append((old.removeLast(), owners.removeLast())) }
+        let next = Array(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        var prefix = 0
+        while prefix < min(old.count, next.count), old[prefix] == next[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(old.count - prefix, next.count - prefix),
+              old[old.count - suffix - 1] == next[next.count - suffix - 1] { suffix += 1 }
+        guard let fallback = cue.wordIDs.first else { throw CaptionEditError.missingCaption }
+        let insertionOwner = owners.isEmpty ? fallback : owners[min(prefix, owners.count - 1)]
+        let newOwners = Array(owners.prefix(prefix)) +
+            Array(repeating: insertionOwner, count: next.count - prefix - suffix) + Array(owners.suffix(suffix))
+        var textByID: [UUID: String] = [:]
+        for (character, owner) in leading { textByID[owner, default: ""].append(character) }
+        for (character, owner) in zip(next, newOwners) { textByID[owner, default: ""].append(character) }
+        for (character, owner) in trailing.reversed() { textByID[owner, default: ""].append(character) }
+        for id in cue.wordIDs {
+            guard let index = wordIndex[id] else { throw CaptionEditError.missingCaption }
+            state.words[index].text = textByID[id] ?? ""
+        }
+    }
+
     static func text(_ value: String, wordID: UUID, in state: inout CaptionEditState) throws {
         guard value.count <= 4_096 else { throw CaptionEditError.invalidText }
         guard let index = state.words.firstIndex(where: { $0.id == wordID }) else {
@@ -188,8 +223,14 @@ struct CaptionEditPatch: Sendable {
         }
         guard appliedWords == replacements.count else { throw CaptionEditError.missingCaption }
         var index = Dictionary(uniqueKeysWithValues: result.cues.map { ($0.id, $0) })
-        if let expected = forward ? beforeOrder : afterOrder, expected != result.cues.map(\.id) {
-            throw CaptionEditError.missingCaption
+        let expectedOrder = forward ? beforeOrder : afterOrder
+        var addedCues: [CaptionCue] = []
+        if let expected = expectedOrder {
+            let known = Set(expected)
+            guard result.cues.filter({ known.contains($0.id) }).map(\.id) == expected else {
+                throw CaptionEditError.missingCaption
+            }
+            addedCues = result.cues.filter { !known.contains($0.id) }
         }
         for change in cues {
             guard index[change.id] == (forward ? change.before : change.after) else {
@@ -198,7 +239,7 @@ struct CaptionEditPatch: Sendable {
             index[change.id] = forward ? change.after : change.before
         }
         let order = (forward ? afterOrder : beforeOrder) ?? result.cues.map(\.id)
-        result.cues = order.compactMap { index[$0] }
+        result.cues = Recognition.inserting(addedCues, into: order.compactMap { index[$0] })
         guard result.cues.count == index.count else { throw CaptionEditError.missingCaption }
         return result
     }
@@ -232,3 +273,4 @@ struct CaptionEditPatch: Sendable {
         return wordStorageBytes + wordTextBytes + cueStorageBytes + cueWordIDBytes + orderBytes
     }
 }
+

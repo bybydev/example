@@ -1,5 +1,8 @@
 # Inkribe Working Rules
 
+## Issue #36 — current authorization
+
+The user requests updating #36 and implementing the approved editor visualization in existing PR #37 (fix/ios-window-recovery → develop, baseline 525fae4), left open without auto-merge. The latest explicit implementation request supersedes the earlier complete-only publication/schema-v5 restriction: publish available captions incrementally, keep transcript/footage editable and exportable with inline missing ranges, and retry gaps while preserving edits. Schema v7 records coverage/mapping versions and reads v1–v6. Use bounded window recovery and versioned sidecars; only complete nonempty recognition charges. Scope includes the existing editor/transcription/export surfaces; preserve Mac/shared runtime, purchases, originals, native/manual anchors and legacy empty recovery. Read docs/ios/phases/TRANSCRIPTION_RECOVERY.md and handoffs/TRANSCRIPTION_RECOVERY.md. No builds/typechecks/tests, workflow dispatch, generation, weights, deployment or UI/device validation. Routine implementation choices for the approved UI and partial publication are authorized. The user subsequently reported an empty transcript after 1 of 4 windows on device. Correct the strict word-timing gate: preserve native segment-timed phrases when precise word timing is unavailable; never invent word boundaries. Retain mapping 1 for existing identities and record mapping 2 per new accepted core (schema v7). Do not claim the original video is fixed without runtime evidence.
 - Do not fake completion. Source integration is not compilation or runtime evidence.
 - Do not run builds/typechecks/tests, workflow dispatches, project generation, model downloads, deployment or device/UI validation. User tests afterward. The current user request explicitly authorizes source-only setup of the manual Build Release workflow; other CI setup remains outside scope.
 - XcodeGen owns project.yml; do not modify generated .xcodeproj files.
@@ -27,7 +30,7 @@ Import/projects, caption text/timing/split/merge/undo, media tools and SRT remai
 
 ## Existing local contracts
 
-Schema v5 reads v1–v4. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
+Schema v7 reads v1–v6; absent recognition coverage means a legacy complete result. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
 
 Optional bundle/download/cache and Tiny/Base/Small selection remain per docs/ios/MODELS.md. Default project.yml omits iOS weights; project-ios-bundled.yml requires Small and disables download/cache fallback through INKRIBE_IOS_BUNDLED_MODELS_ONLY. Release alone does not change packaging. No weights are to be downloaded by the agent.
 

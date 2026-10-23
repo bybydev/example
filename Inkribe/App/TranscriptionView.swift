@@ -8,12 +8,26 @@ struct TranscriptionView: View {
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
     @State private var showingModels = false
     @State private var upsell: ProFeature?
+    @State private var recovery: SpeechRecoverySummary?
+    @State private var recoveryError: String?
+    @State private var confirmingDiscard = false
     let document: ProjectDocument
     /// Drain the editor's pending title/media writes before capturing a job revision.
     let prepareForTranscription: () async throws -> ProjectDocument
     let onRequestFinished: () async -> Void
     @Binding var isPreparingRequest: Bool
     private var hasEmptyResult: Bool { document.recognition?.words.isEmpty == true }
+    private var canReuseProgress: Bool {
+        guard let recovery else { return false }
+        return recovery.reusableRevision && recovery.compatibleRuntime &&
+            recovery.modelID == model.transcription.models.selectedID &&
+            recovery.language == (language == "auto" ? nil : language) && recovery.words > 0
+    }
+    private struct RecoveryKey: Hashable {
+        let projectID: UUID
+        let revision: UInt64
+        let generation: Int
+    }
 
     var body: some View {
         let speech = model.transcription
@@ -42,6 +56,9 @@ struct TranscriptionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 let record = speech.record(for: document.id)
+                SpeechRecoveryView(summary: recovery, error: recoveryError,
+                    canDiscard: !speech.isActive(document.id) && !speech.isAuthorizing &&
+                        !isPreparingRequest && speech.persistenceError == nil) { confirmingDiscard = true }
                 if !model.access.hasPro, let usage = speech.allowance {
                     Text("\(usage.remaining / 60)m \(usage.remaining % 60)s available this week")
                         .font(.caption).foregroundStyle(.secondary)
@@ -62,7 +79,7 @@ struct TranscriptionView: View {
                     status(record, speech: speech)
                 }
                 if !speech.isActive(document.id) && (hasEmptyResult || !(record?.status.isRetryable ?? false)) {
-                    Button(hasEmptyResult ? "Retry transcription" : "Transcribe", systemImage: "waveform") {
+                    Button(hasEmptyResult || recovery != nil ? "Retry transcription" : "Transcribe", systemImage: "waveform") {
                         startTranscription()
                     }
                     .buttonStyle(.borderedProminent)
@@ -86,6 +103,23 @@ struct TranscriptionView: View {
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .task { speech.start() }
+        .task(id: RecoveryKey(projectID: document.id, revision: document.contentRevision,
+                             generation: speech.resultGeneration)) {
+            recovery = nil; recoveryError = nil
+            do {
+                let value = try await ProjectRepository.shared.speechRecovery(projectID: document.id)
+                guard !Task.isCancelled else { return }
+                recovery = value
+            } catch {
+                guard !Task.isCancelled else { return }
+                recoveryError = error.localizedDescription
+            }
+        }
+        .confirmationDialog("Discard saved transcription progress?", isPresented: $confirmingDiscard) {
+            Button("Discard saved progress", role: .destructive) { discardProgress() }
+        } message: {
+            Text("The next attempt will process every window again. Your project and original media are preserved.")
+        }
         .sheet(isPresented: $showingModels) { SpeechModelsView() }
         .sheet(item: $upsell) { ProUpsell(feature: $0) }
     }
@@ -98,7 +132,7 @@ struct TranscriptionView: View {
                let variant = try? SpeechModelCatalog.descriptor(id) {
                 Text(variant.displayName).font(.caption).foregroundStyle(.secondary)
             }
-            Text(speech.queue?.isPaused == true ? "Paused. Return to Inkribe to restart transcription." :
+            Text(speech.queue?.isPaused == true ? "Paused. Return to Inkribe to resume from saved progress." :
                 record.status == .pending ? "Waiting to transcribe…" :
                 record.status == .cancelling ? "Cancelling…" : progress?.message ?? "Preparing transcription…")
                 .font(.subheadline)
@@ -117,12 +151,28 @@ struct TranscriptionView: View {
                 record.error ?? "Transcription could not finish.")
                 .font(.footnote).foregroundStyle(.secondary)
             if !hasEmptyResult {
-                Button("Retry", systemImage: "arrow.clockwise") { startTranscription(record: record) }
+                Button(canReuseProgress ? "Resume transcription" : "Retry",
+                       systemImage: "arrow.clockwise") { startTranscription(record: record) }
                     .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || isPreparingRequest || model.access.isChecking)
             }
         } else if record.status == .unrecoverable {
             Text(record.error ?? "This saved job could not be restored. You can start a new transcription.")
                 .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private func discardProgress() {
+        guard !isPreparingRequest else { return }
+        isPreparingRequest = true
+        Task { @MainActor in
+            defer { isPreparingRequest = false }
+            do {
+                let saved = try await prepareForTranscription()
+                try await model.transcription.discardSavedProgress(projectID: saved.id,
+                    expectedRevision: saved.contentRevision)
+                recovery = nil; recoveryError = nil
+            } catch { model.alertMessage = error.localizedDescription }
+            await onRequestFinished()
         }
     }
 

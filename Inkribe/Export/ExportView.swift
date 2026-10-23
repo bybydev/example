@@ -31,6 +31,11 @@ struct ExportView: View {
                 if let session {
                     Section("Export this project") {
                         Text(session.document?.title ?? "Project").font(.headline)
+                        if session.document?.recognition?.isIncomplete == true {
+                            Label("Some ranges have no captions yet. You can export the available captions now or retry the gaps in the editor.",
+                                  systemImage: "exclamationmark.bubble")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
                         Picker("Format", selection: $profile.format) {
                             ForEach(ExportFormat.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
@@ -243,3 +248,4 @@ struct ExportView: View {
         }
     }
 }
+

@@ -1,5 +1,13 @@
 # Inkribe iOS v1.0 — start here
 
+The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+
+The earlier status paragraphs below are historical and superseded by this request.
+
+## Current transcription recovery — issue #36 (2026-10-23)
+
+PR #35 was squash merged into develop as 525fae4. The user requested issue #36 recovery/checkpoints in one new fix/ios-window-recovery PR targeting develop, left open without auto-merge. Read [phases/TRANSCRIPTION_RECOVERY.md](phases/TRANSCRIPTION_RECOVERY.md), [handoffs/TRANSCRIPTION_RECOVERY.md](handoffs/TRANSCRIPTION_RECOVERY.md) and HANDOFF first. Source integration only; no builds/typechecks/tests, CI, generation, weights or device/UI validation. Earlier #35 open/continuation holds below are historical.
+
 ## Current workspace repair — PR #35 (2026-10-23)
 
 All four user-requested repair passes are source-implemented on `fix/ios-transcription-and-workspace` → develop in [PR #35](https://github.com/hoangbkit/Inkribe/pull/35), open with auto-merge disabled. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) first for the current workflow, limitations and prioritized user checks. No builds/typechecks/tests, UI/device/native validation, CI, generation or downloads ran; the affected video's exact failure is unverified. No next phase or merge is authorized. Earlier Pro branch/review instructions below are historical.

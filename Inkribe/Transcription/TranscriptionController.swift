@@ -11,6 +11,8 @@ struct SpeechJob: Job {
         var modelID: String? = nil
         /// Nil means accepted before the allowance policy; false is Pro-granted.
         var requiresAllowance: Bool? = nil
+        /// Nil retries all unresolved cores; a gap action can target one core.
+        var windowIndices: [Int]? = nil
         var resolvedModelID: String { modelID ?? SpeechModelCatalog.smallID }
     }
     static let maxConcurrentExecutions = 1
@@ -98,7 +100,9 @@ final class TranscriptionController {
                     try registry.register(IOSSpeechJob.self)
                     registered = true
                 }
-                SpeechEnvironment.shared.install(LocalTranscriber(repository: repository))
+                SpeechEnvironment.shared.install(LocalTranscriber(repository: repository, didPublish: { [weak self] in
+                    await self?.publishedWindow()
+                }))
                 let value = JobQueue(fileURL: root.appendingPathComponent("speech-jobs.json"),
                     policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
                     maxRecords: 100, autoCleanupEnabled: true)
@@ -119,6 +123,8 @@ final class TranscriptionController {
             Task { await refreshAllowance() }
         } catch { startupError = error.localizedDescription }
     }
+
+    private func publishedWindow() { resultGeneration += 1 }
 
     func retryStorage() {
         if let queue, queueStarted {
@@ -153,21 +159,20 @@ final class TranscriptionController {
         return !record.status.isTerminal
     }
 
-    func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil) async throws {
+    func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil,
+                 windowIndices: [Int]? = nil) async throws {
         start()
         guard queueStarted, persistenceError == nil, let queue else { throw ProjectStoreError.unavailableRoot }
         guard !isAuthorizing else { throw SpeechError.busy }
         isAuthorizing = true
         defer { needsAllowanceRefresh = true; endAuthorization() }
-        let chosenModelID = models.selectedID
+        var chosenModelID = models.selectedID
         await access.refreshForRequest()
         await models.refresh()
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         guard !isActive(projectID) else { throw SpeechError.busy }
         var project = try await repository.open(projectID)
         // Recheck after suspension so rapid double taps cannot enqueue duplicates.
         guard !isActive(projectID) else { throw SpeechError.busy }
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         if let replacingEmptyResultID {
             project = try await repository.recoverEmptyRecognition(projectID: projectID,
                 recognitionID: replacingEmptyResultID, expectedRevision: project.contentRevision)
@@ -175,9 +180,22 @@ final class TranscriptionController {
             // authorization later fails. Recovery itself is already durable.
             resultGeneration += 1
         }
-        guard project.recognition == nil else { throw SpeechError.alreadyTranscribed }
+        let partial = project.recognition.flatMap { $0.isIncomplete ? $0 : nil }
+        guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        if let partial { chosenModelID = partial.modelID }
+        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         let code = SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
-        let id = UUID()
+        // A terminal job can have aged out of JobQueue's bounded history while
+        // its project still owns valid unfinished work. Retain that operation ID.
+        let recovery = try await repository.speechRecovery(projectID: projectID)
+        let id: UUID
+        if let partial {
+            guard !queue.sortedRecords.contains(where: { $0.id == partial.id }) else { throw SpeechError.busy }
+            id = partial.id
+        } else if let recovery, recovery.reusableRevision,
+           !queue.sortedRecords.contains(where: { $0.id == recovery.jobID }) {
+            id = recovery.jobID
+        } else { id = UUID() }
         let free = !access.hasPro
         if free {
             allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
@@ -187,29 +205,52 @@ final class TranscriptionController {
         guard persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         try queue.enqueue(SpeechJob(id: id, payload: .init(projectID: projectID,
-            expectedRevision: project.contentRevision, languageCode: code, modelID: chosenModelID,
-            requiresAllowance: free)))
+            expectedRevision: project.contentRevision, languageCode: partial != nil ? partial!.requestedLanguageCode : code, modelID: chosenModelID,
+            requiresAllowance: free, windowIndices: windowIndices)))
     }
 
     func cancel(_ id: UUID) throws { try queue?.cancel(id: id) }
 
-    func retry(_ record: JobRecord, language: String) async throws {
+    func retryMissing(projectID: UUID, windowIndices: [Int]? = nil) async throws {
+        start()
+        let project = try await repository.open(projectID)
+        guard let result = project.recognition, result.isIncomplete else { throw SpeechError.alreadyTranscribed }
+        if let record = record(for: projectID), record.id == result.id, record.status.isRetryable {
+            try await retry(record, language: result.requestedLanguageCode ?? "auto", windowIndices: windowIndices)
+        } else {
+            try await enqueue(projectID: projectID, language: result.requestedLanguageCode ?? "auto", windowIndices: windowIndices)
+        }
+    }
+
+    func discardSavedProgress(projectID: UUID, expectedRevision: UInt64) async throws {
+        guard queueStarted, persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
+        guard !isAuthorizing, !isActive(projectID) else { throw SpeechError.busy }
+        isAuthorizing = true
+        defer { endAuthorization() }
+        try await repository.discardSpeechCheckpoint(projectID: projectID, expectedRevision: expectedRevision)
+        resultGeneration += 1
+    }
+
+    func retry(_ record: JobRecord, language: String, windowIndices: [Int]? = nil) async throws {
         guard queueStarted, persistenceError == nil, let queue else { throw ProjectStoreError.unavailableRoot }
         guard !isAuthorizing else { throw SpeechError.busy }
         isAuthorizing = true
         defer { needsAllowanceRefresh = true; endAuthorization() }
-        let chosenModelID = models.selectedID
+        var chosenModelID = models.selectedID
         await access.refreshForRequest()
+        await models.refresh()
         let previous = try record.decode(SpeechJob.self)
         guard !isActive(previous.payload.projectID) else { throw SpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
         guard !isActive(project.id) else { throw SpeechError.busy }
-        if let saved = project.recognition, saved.id == record.id, !saved.words.isEmpty {
+        if let saved = project.recognition, saved.id == record.id, !saved.words.isEmpty, !saved.isIncomplete {
             // Job completion may have failed to persist after document publication.
             try queue.retry(id: record.id)
             return
         }
-        guard project.recognition == nil else { throw SpeechError.alreadyTranscribed }
+        let partial = project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil }
+        guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        if let partial { chosenModelID = partial.modelID }
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
         let free = !access.hasPro
         if free {
@@ -221,12 +262,13 @@ final class TranscriptionController {
         try Task.checkCancellation()
         guard persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
         guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
-        // Explicit retry takes a new document revision only while there are no
-        // saved captions to overwrite. Reuse the durable operation identity.
+        // Retry captures the latest saved revision and preserves partial captions.
+        // The original model/language and durable operation identity stay fixed.
         try queue.replace(id: record.id, with: SpeechJob(id: record.id, payload: .init(
             projectID: project.id, expectedRevision: project.contentRevision,
-            languageCode: SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil,
-            modelID: chosenModelID, requiresAllowance: free)))
+            languageCode: partial != nil ? partial!.requestedLanguageCode :
+                (SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil),
+            modelID: chosenModelID, requiresAllowance: free, windowIndices: windowIndices)))
     }
 }
 

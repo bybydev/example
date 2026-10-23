@@ -3,9 +3,10 @@ import Foundation
 import NaturalLanguage
 import WhisperRuntime
 
-/// Joins raw UTF-8 BPE bytes before linguistic segmentation. Word intervals
-/// are unions of real overlapping token intervals, never evenly divided time.
+/// Prefer native token unions. Missing word timing falls back to the model's
+/// own segment text/interval as one timed phrase, never invented word boundaries.
 enum WordMapper {
+    static let currentMappingVersion = 2
     static func rawWindow(_ result: WhisperTranscriptionResult, clipID: UUID,
                           interval: MediaInterval) -> RecognitionWindow {
         RecognitionWindow(id: UUID(), clipID: clipID, sourceInterval: interval,
@@ -20,7 +21,85 @@ enum WordMapper {
     }
 
     static func words(in window: RecognitionWindow, clip: ProjectClip,
-                      core: MediaInterval) throws -> [CaptionWord] {
+                      core: MediaInterval, mappingVersion: Int = 1) throws -> [CaptionWord] {
+        guard (1...currentMappingVersion).contains(mappingVersion) else { throw SpeechRecoveryError.incompatible }
+        // Keep the original mapping reproducible for already accepted identities.
+        if mappingVersion == 1 { return try tokenWords(in: window, clip: clip, core: core) }
+        guard window.segments.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            return try tokenWords(in: window, clip: clip, core: core)
+        }
+
+        let segmentBytes = window.segments.map { Data($0.text.utf8) }
+        let text = segmentBytes.reduce(into: Data()) { $0.append($1) }
+        var bytes = Data()
+        var boundaries = [0]
+        for token in window.tokens { bytes.append(token.utf8); boundaries.append(bytes.count) }
+        // Native segment and token streams normally match exactly. Only then
+        // partition tokens; never guess text/byte associations across segments.
+        var segmentBoundaries = Set([0])
+        var byteCount = 0
+        for part in segmentBytes { byteCount += part.count; segmentBoundaries.insert(byteCount) }
+        let tokenBoundaries = Set(boundaries)
+        let canPartition = bytes == text && boundaries.count == tokenBoundaries.count &&
+            segmentBoundaries.isSubset(of: tokenBoundaries)
+        var offset = 0
+        var output: [CaptionWord] = []
+        for (index, segment) in window.segments.enumerated() {
+            let end = offset + segmentBytes[index].count
+            defer { offset = end }
+            if segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            if canPartition, let first = boundaries.firstIndex(of: offset), let last = boundaries.firstIndex(of: end) {
+                let part = RecognitionWindow(id: window.id, clipID: window.clipID,
+                    sourceInterval: window.sourceInterval, languageCode: window.languageCode,
+                    segments: [segment], tokens: Array(window.tokens[first..<last]))
+                do {
+                    output.append(contentsOf: try tokenWords(in: part, clip: clip, core: core))
+                    continue
+                } catch let error as SpeechError {
+                    switch error {
+                    case .wordTimingUnavailable, .invalidUTF8: break
+                    default: throw error
+                    }
+                } catch is MediaTimeError {
+                    // Try the independently reported native segment interval.
+                }
+            }
+            if let phrase = try segmentPhrase(segment, window: window, clip: clip, core: core) {
+                output.append(phrase)
+            }
+        }
+        return output
+    }
+
+    private static func segmentPhrase(_ segment: RawSpeechSegment, window: RecognitionWindow,
+                                      clip: ProjectClip, core: MediaInterval) throws -> CaptionWord? {
+        guard !segment.text.contains("\u{FFFD}") else { throw SpeechError.invalidUTF8 }
+        guard segment.startSeconds.isFinite, segment.endSeconds.isFinite,
+              segment.startSeconds >= 0, segment.endSeconds > segment.startSeconds else {
+            throw SpeechError.wordTimingUnavailable
+        }
+        let start = max(max(clip.sourceInterval.start, window.sourceInterval.start),
+            try MediaTime(validating: CMTimeAdd(window.sourceInterval.start.cmTime,
+                CMTime(seconds: segment.startSeconds, preferredTimescale: 16_000))))
+        let end = min(min(clip.sourceInterval.end, window.sourceInterval.end),
+            try MediaTime(validating: CMTimeAdd(window.sourceInterval.start.cmTime,
+                CMTime(seconds: segment.endSeconds, preferredTimescale: 16_000))))
+        guard start < end else { throw SpeechError.wordTimingUnavailable }
+        let interval = try MediaInterval(start: start, end: end)
+        let midpoint = CMTimeAdd(start.cmTime, CMTimeMultiplyByFloat64(interval.duration, multiplier: 0.5))
+        guard CMTimeCompare(midpoint, core.start.cmTime) >= 0,
+              CMTimeCompare(midpoint, core.end.cmTime) < 0 else { return nil }
+        let projectStart = CMTimeAdd(clip.timelineInterval.start.cmTime,
+            CMTimeSubtract(start.cmTime, clip.sourceInterval.start.cmTime))
+        return CaptionWord(id: UUID(), clipID: clip.id, rawWindowID: window.id,
+            text: segment.text, sourceInterval: interval,
+            projectInterval: try MediaInterval(start: MediaTime(validating: projectStart),
+                end: MediaTime(validating: CMTimeAdd(projectStart, interval.duration))),
+            timingProvenance: "whisper-segment")
+    }
+
+    private static func tokenWords(in window: RecognitionWindow, clip: ProjectClip,
+                                   core: MediaInterval) throws -> [CaptionWord] {
         var joined = Data()
         var tokenRanges: [Range<Int>] = []
         for token in window.tokens {
@@ -87,18 +166,24 @@ enum WordMapper {
     /// acoustic word predicted on opposite sides of a window boundary.
     static func append(_ incoming: [CaptionWord], to words: inout [CaptionWord]) {
         for word in incoming {
-            let duplicate = words.suffix(8).contains { previous in
-                guard previous.clipID == word.clipID, previous.rawWindowID != word.rawWindowID,
-                      normalized(previous.text) == normalized(word.text) else { return false }
-                let overlap = CMTimeGetSeconds(CMTimeSubtract(
-                    min(previous.sourceInterval.end, word.sourceInterval.end).cmTime,
-                    max(previous.sourceInterval.start, word.sourceInterval.start).cmTime))
-                let shortest = min(CMTimeGetSeconds(previous.sourceInterval.duration),
-                                   CMTimeGetSeconds(word.sourceInterval.duration))
-                return overlap > 0 && overlap >= shortest * 0.5
-            }
+            let duplicate = words.suffix(8).contains { duplicates(word, $0) }
             if !duplicate { words.append(word) }
         }
+    }
+
+    static func duplicateKey(_ word: CaptionWord) -> String {
+        word.clipID.uuidString + ":" + normalized(word.text)
+    }
+
+    static func duplicates(_ word: CaptionWord, _ previous: CaptionWord) -> Bool {
+        guard previous.clipID == word.clipID, previous.rawWindowID != word.rawWindowID,
+              normalized(previous.text) == normalized(word.text) else { return false }
+        let overlap = CMTimeGetSeconds(CMTimeSubtract(
+            min(previous.sourceInterval.end, word.sourceInterval.end).cmTime,
+            max(previous.sourceInterval.start, word.sourceInterval.start).cmTime))
+        let shortest = min(CMTimeGetSeconds(previous.sourceInterval.duration),
+                           CMTimeGetSeconds(word.sourceInterval.duration))
+        return overlap > 0 && overlap >= shortest * 0.5
     }
 
     private static func normalized(_ text: String) -> String {
@@ -128,3 +213,4 @@ enum WordMapper {
         return result
     }
 }
+

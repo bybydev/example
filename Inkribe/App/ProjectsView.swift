@@ -349,6 +349,7 @@ struct ProjectsView: View {
                 progress: working ? fraction.flatMap { $0.isFinite ? min(1, max(0, $0)) : nil } : nil, isWorking: working)
         }
         switch project.captionState {
+        case .incomplete: return .init(title: "Captions available · Incomplete", icon: "captions.bubble", needsAttention: true)
         case .saved: return .init(title: "Captions saved", icon: "captions.bubble.fill")
         case .emptyResult: return .init(title: "Retry transcription", icon: "arrow.clockwise", needsAttention: true)
         case .noAudio: return .init(title: "No audio track", icon: "speaker.slash")
@@ -394,3 +395,4 @@ private enum ProjectsRoute: Hashable {
     case project(UUID)
     case settings
 }
+
