@@ -31,6 +31,8 @@ The exact model-set/manifest/helper cache is separate from SwiftPM sources/binar
 
 `PRIVATE_REPO_TOKEN` is optional for private GitHub dependencies and must have access to the required dependency repos. Without it, normal public dependency access is used; an inaccessible private dependency fails visibly. Checkout credentials are not persisted; the optional dependency URL rewrite is removed at job end. No secret values are written into generated project/release assets. Use the existing configured DEVELOPMENT_TEAM from project.yml for local mycli signing; the runner never needs signing certificates/profiles.
 
+Archive and effective build-settings commands pass `-packageAuthorizationProvider netrc` so SwiftPM does not query macOS Keychain for binary-download credentials. This addresses the captured CI stall in `KeychainAuthorizationProvider` / `SecItemCopyMatching`. The public Whisper framework remains a pinned remote binary target; Git dependency access still uses the optional token URL rewrite. No Keychain changes are required.
+
 ## Assets and validation
 
 The workflow builds the actual Inkribe iOS device scheme and/or InkribeMac universal scheme with signing disabled. Separate DerivedData/archive paths are used per platform and cleaned after ZIP creation. Before packaging, `scripts/verify_release_archive.py` checks actual archive/app structure, bundle identity, effective project team/entitlement declarations, encryption declaration, executable CPU slices, iPhoneOS platform/Photos usage text, selected iOS build flag and exact copied model bytes. Mac verifies all five models and third-party notices. Unsigned archives have no final signature entitlements; mycli resolves them from the generated project and signs locally.

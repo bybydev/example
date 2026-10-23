@@ -2,6 +2,7 @@ import CoreTransferable
 import Foundation
 import Observation
 import PhotosUI
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// PhotosPicker's URL transfers are not durable. Copy while its

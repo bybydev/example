@@ -13,11 +13,8 @@ struct ProjectsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appFoundationTheme) private var theme
     @State private var showingImport = false
-    @State private var showingStorage = false
-    @State private var showingModels = false
-    @State private var showingAppearance = false
-    @State private var showingPlan = false
-    @State private var showingPaywall = false
+    @State private var proFlow: ProFlow?
+    @State private var proFlowStartedWithoutEntitlement = false
     @State private var showingExport = false
     @State private var attemptedThumbnails: Set<UUID> = []
 
@@ -95,12 +92,12 @@ struct ProjectsView: View {
                         prompt: "Search project titles")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button("Inkribe Pro", systemImage: "crown.fill") { showingPlan = true }
-                        Button("Appearance", systemImage: "paintpalette") { showingAppearance = true }
-                        Button("Speech Models", systemImage: "cpu") { showingModels = true }
-                        Button("Storage", systemImage: "internaldrive") { showingStorage = true }
-                    } label: { Label("Settings", systemImage: "gearshape") }
+                    NavigationLink {
+                        SettingsView(onShowPro: { presentProStatus() })
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("toolbar.settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if model.exports.record != nil || model.exports.persistenceError != nil {
@@ -108,7 +105,12 @@ struct ProjectsView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Inkribe Pro", systemImage: "crown.fill") { showingPaywall = true }
+                    Button {
+                        presentProStatus()
+                    } label: {
+                        Label("Inkribe Pro", systemImage: model.access.hasPro ? "crown.fill" : "crown")
+                    }
+                    .accessibilityIdentifier("toolbar.pro")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Add", systemImage: "plus") { showingImport = true }
@@ -121,14 +123,6 @@ struct ProjectsView: View {
                 ImportView()
                     .environment(model)
             }
-            .sheet(isPresented: $showingStorage) {
-                StorageView()
-                    .environment(model)
-            }
-            .sheet(isPresented: $showingModels) { SpeechModelsView() }
-            .sheet(isPresented: $showingAppearance) { AppearanceView() }
-            .sheet(isPresented: $showingPlan) { PlanView() }
-            .sheet(isPresented: $showingPaywall) { ProPaywall() }
             .alert("Inkribe", isPresented: Binding(
                 get: { model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } }
@@ -156,6 +150,30 @@ struct ProjectsView: View {
             }
             .refreshable { await model.refresh() }
 
+        }
+        .sheet(item: $proFlow, onDismiss: handleProFlowDismissal) { flow in
+            switch flow {
+            case .paywall: ProPaywall()
+            case .celebration: ProCelebration()
+            }
+        }
+    }
+
+    private func presentProStatus() {
+        proFlowStartedWithoutEntitlement = !model.access.hasPro
+        proFlow = model.access.hasPro ? .celebration : .paywall
+    }
+
+    private func handleProFlowDismissal() {
+        let shouldCelebrate = proFlowStartedWithoutEntitlement && model.access.hasPro
+        proFlowStartedWithoutEntitlement = false
+        guard shouldCelebrate else { return }
+
+        // Wait until the paywall has dismissed before presenting the celebration.
+        Task { @MainActor in
+            await Task.yield()
+            guard proFlow == nil, model.access.hasPro else { return }
+            proFlow = .celebration
         }
     }
 
@@ -233,4 +251,9 @@ struct ProjectsView: View {
         model.sort = value
         Task { await model.refresh() }
     }
+}
+
+private enum ProFlow: String, Identifiable {
+    case paywall, celebration
+    var id: String { rawValue }
 }

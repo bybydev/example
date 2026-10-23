@@ -38,7 +38,7 @@ private struct TimelineBars: View, Equatable {
     let selectedCueID: UUID?
     let duration: Double
     let accent: Color
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.snapshot?.id == rhs.snapshot?.id && lhs.selectedCueID == rhs.selectedCueID && lhs.duration == rhs.duration && lhs.accent == rhs.accent
     }
     var body: some View {

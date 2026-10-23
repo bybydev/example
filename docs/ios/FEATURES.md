@@ -27,7 +27,7 @@
 | V1.SRT | P5 | Edited captions exported as SRT | Source-integrated; compilation/runtime unverified |
 | V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Source-integrated; permission/provider/runtime checks unrun |
 | V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Source-integrated; interruption/cleanup/runtime checks unrun |
-| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Source-integrated in Pro follow-up: approved free/Pro policy, AF paywall/restore/themes; StoreKit/runtime unverified |
+| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Source-integrated: approved free/Pro policy; PR #34 adds Spokio-style Settings, AF 1.6.4 paywall/restore/themes and Debug Developer Tools/simulated purchases; StoreKit/runtime unverified |
 | V1.TRIM | P6 | Non-destructive trim with caption mapping | Source-integrated; compilation/timing/runtime unverified |
 | V1.CROP | P6 | Crop/aspect ratio in preview and export | Source-integrated; orientation/pixel/runtime unverified |
 | V1.VOLUME | P6 | Original-audio volume in preview and export | Source-integrated; mix/playback/runtime unverified |

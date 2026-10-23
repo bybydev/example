@@ -16,7 +16,7 @@ Products: com.hoangbkit.inkribe.pro.monthly and com.hoangbkit.inkribe.pro.lifeti
 
 ## Implementation contract
 
-- Use pinned AppFoundation 0.1.8 purchase lifecycle, verified entitlements, FoundationPaywallView, LimitReachedUpsellFlow and ThemePickerView. Keep iOS persistence isolated. Live prices come from StoreKit; the approved USD prices configure only the local iOS StoreKit file and opt-in Debug simulator in source.
+- Use pinned AppFoundation 1.6.4 (PR #34 settings follow-up) purchase lifecycle, verified entitlements, ProPaywallView, LimitReachedUpsellFlow and ThemePickerView. Keep iOS persistence isolated. Live prices come from StoreKit; the approved USD prices configure only the local iOS StoreKit file and opt-in Debug simulator in source.
 - Central access gates must run before new work or style mutation. Contextual locked actions show the AF comparison/upsell before its paywall. Projects has explicit Pro and Appearance entries; plan view shows usage, restore and subscription management.
 - Reserve canonical audio-bearing clip duration, rounded up to whole seconds per job. Reset Monday 00:00 UTC. Trim/context decode windows do not change the quota calculation. Durable reservation before queue publication; charge successful document publication only; release failed/cancelled/orphan reservations. Reconciliation handles interruption between project publication and usage write without double charging. Local enforcement has no server/device-clock tamper protection.
 - Preserve accepted jobs, saved premium styles, editable captions, original media and retained export delivery after expiry. New premium font/effect/1080p/theme choices require Pro. No destructive style migration. Pre-policy jobs remain supported.
@@ -24,4 +24,4 @@ Products: com.hoangbkit.inkribe.pro.monthly and com.hoangbkit.inkribe.pro.lifeti
 
 ## Evidence and remaining inputs
 
-Source integrated; read handoffs/PRO.md. No compile/build/typecheck/test, CI, project generation, weights, runtime export or device/UI verification. Actual App Store Connect product availability/pricing and Inkribe privacy URL remain user release inputs. Preserve Mac/catalog and keep PR open until asked to merge.
+Source integrated; read handoffs/PRO.md. No compile/build/typecheck/test, CI, project generation, weights, runtime export or device/UI verification. PR #34 adds Spokio-style Settings and Debug AF Developer Tools, retaining existing product IDs/prices and access rules. Actual App Store Connect product availability/pricing and replacing the user-requested dummy privacy URL remain release inputs. Preserve Mac/catalog and keep PR open until asked to merge.

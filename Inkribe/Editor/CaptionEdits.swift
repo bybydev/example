@@ -212,10 +212,23 @@ struct CaptionEditPatch: Sendable {
     }
 
     var estimatedBytes: Int {
-        words.count * MemoryLayout<WordChange>.stride +
-            words.reduce(0) { $0 + $1.before.text.utf8.count + $1.after.text.utf8.count } +
-            cues.count * MemoryLayout<CueChange>.stride +
-            cues.reduce(0) { $0 + (($1.before?.wordIDs.count ?? 0) + ($1.after?.wordIDs.count ?? 0)) * MemoryLayout<UUID>.stride } +
-            ((beforeOrder?.count ?? 0) + (afterOrder?.count ?? 0)) * MemoryLayout<UUID>.stride
+        let wordStorageBytes = words.count * MemoryLayout<WordChange>.stride
+        var wordTextBytes = 0
+        for change in words {
+            wordTextBytes += change.before.text.utf8.count
+            wordTextBytes += change.after.text.utf8.count
+        }
+
+        let cueStorageBytes = cues.count * MemoryLayout<CueChange>.stride
+        var cueWordIDBytes = 0
+        for change in cues {
+            let beforeCount = change.before?.wordIDs.count ?? 0
+            let afterCount = change.after?.wordIDs.count ?? 0
+            cueWordIDBytes += (beforeCount + afterCount) * MemoryLayout<UUID>.stride
+        }
+
+        let orderCount = (beforeOrder?.count ?? 0) + (afterOrder?.count ?? 0)
+        let orderBytes = orderCount * MemoryLayout<UUID>.stride
+        return wordStorageBytes + wordTextBytes + cueStorageBytes + cueWordIDBytes + orderBytes
     }
 }

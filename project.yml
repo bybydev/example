@@ -13,39 +13,18 @@ configs:
   Debug: debug
   Release: release
 
+# Keep only dependencies used by the current iOS build.
 packages:
   JobQueue:
     url: https://github.com/hoangbkit/JobQueue.git
     exactVersion: 1.0.0
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation.git
-    exactVersion: 0.1.8
-  MacAppFoundation:
-    url: https://github.com/hoangbkit/MacAppFoundation.git
-    exactVersion: 1.0.0
-  SwiftLog:
-    url: https://github.com/apple/swift-log
-    exactVersion: 1.11.0
-  InkribeCore:
-    path: Packages/InkribeCore
-  InkribeAudio:
-    path: Packages/InkribeAudio
-  InkribeTranscription:
-    path: Packages/InkribeTranscription
-  InkribeAI:
-    path: Packages/InkribeAI
-  InkribePersistence:
-    path: Packages/InkribePersistence
-  InkribeExport:
-    path: Packages/InkribeExport
+    exactVersion: 1.6.4
   InkribeModelAssets:
     path: Packages/InkribeModelAssets
   WhisperRuntime:
     path: Packages/WhisperRuntime
-  DiarizationRuntime:
-    path: Packages/DiarizationRuntime
-  LLMRuntime:
-    path: Packages/LLMRuntime
 
 fileGroups:
   - README.md
@@ -109,6 +88,7 @@ settingGroups:
       GENERATE_INFOPLIST_FILE: YES
       INFOPLIST_KEY_CFBundleDisplayName: Inkribe
       INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
       MARKETING_VERSION: "1.0"
       PRODUCT_NAME: Inkribe
       SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
@@ -144,31 +124,8 @@ targets:
     settings:
       groups:
         - InkribeMacApp
-    dependencies:
-      - package: MacAppFoundation
-        product: MacAppFoundation
-      - package: SwiftLog
-        product: Logging
-      - package: InkribeCore
-        product: InkribeCore
-      - package: InkribeAudio
-        product: InkribeAudio
-      - package: InkribeTranscription
-        product: InkribeTranscription
-      - package: InkribeAI
-        product: InkribeAI
-      - package: InkribePersistence
-        product: InkribePersistence
-      - package: InkribeExport
-        product: InkribeExport
-      - package: InkribeModelAssets
-        product: InkribeModelAssets
-      - package: WhisperRuntime
-        product: WhisperRuntime
-      - package: DiarizationRuntime
-        product: DiarizationRuntime
-      - package: LLMRuntime
-        product: LLMRuntime
+    # Mac dependency wiring is intentionally removed; only iOS is built.
+    dependencies: []
 
   Inkribe:
     type: application
@@ -204,16 +161,8 @@ targets:
         - InkribeMacTest
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.inkribe.tests
-    dependencies:
-      - target: InkribeMac
-      - package: InkribeCore
-        product: InkribeCore
-      - package: InkribeTranscription
-        product: InkribeTranscription
-      - package: InkribeAI
-        product: InkribeAI
-      - package: LLMRuntime
-        product: LLMRuntime
+    # Mac dependency wiring is intentionally removed; only iOS is built.
+    dependencies: []
 
 schemes:
   InkribeMac:

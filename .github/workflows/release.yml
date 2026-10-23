@@ -149,12 +149,14 @@ jobs:
           derived="$RUNNER_TEMP/Inkribe-iOS-DerivedData"
           packages="$RUNNER_TEMP/Inkribe-SourcePackages"
           xcodebuild -project "$PROJECT" -scheme Inkribe \
+            -packageAuthorizationProvider netrc \
             -configuration "$BUILD_CONFIGURATION" -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
             -archivePath "$archive" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
           xcodebuild -project "$PROJECT" -scheme Inkribe \
+            -packageAuthorizationProvider netrc \
             -configuration "$BUILD_CONFIGURATION" -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
@@ -180,12 +182,14 @@ jobs:
           derived="$RUNNER_TEMP/Inkribe-macOS-DerivedData"
           packages="$RUNNER_TEMP/Inkribe-SourcePackages"
           xcodebuild -project "$PROJECT" -scheme InkribeMac \
+            -packageAuthorizationProvider netrc \
             -configuration "$BUILD_CONFIGURATION" -sdk macosx \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \
             -archivePath "$archive" ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
           xcodebuild -project "$PROJECT" -scheme InkribeMac \
+            -packageAuthorizationProvider netrc \
             -configuration "$BUILD_CONFIGURATION" -sdk macosx \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$derived" -clonedSourcePackagesDirPath "$packages" \

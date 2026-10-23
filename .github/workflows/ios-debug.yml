@@ -1,0 +1,108 @@
+name: iOS Debug
+
+# Manual build only. No push/PR triggers, tests, archives or releases.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare toolchain and optional dependency access
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          if [[ -n "$PRIVATE_REPO_TOKEN" ]]; then
+            git config --global \
+              url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf \
+              "https://github.com/"
+          fi
+
+      - name: Generate project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build iOS Debug
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          diagnostics="$RUNNER_TEMP/ios-debug-diagnostics"
+          mkdir -p "$diagnostics"
+          xcodebuild \
+            -project Inkribe.xcodeproj \
+            -scheme Inkribe \
+            -packageAuthorizationProvider netrc \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build &
+          build_pid=$!
+
+          # Capture evidence while the build is still alive, before step timeout.
+          (
+            for ((tick=0; tick<18; tick++)); do
+              sleep 5
+              kill -0 "$build_pid" 2>/dev/null || exit 0
+            done
+            echo "::group::Build process snapshot after 90 seconds"
+            # Executable names only: do not expose credential-bearing arguments.
+            ps -axo pid,ppid,stat,etime,pcpu,comm > "$diagnostics/processes.txt"
+            cat "$diagnostics/processes.txt"
+            /usr/bin/sample "$build_pid" 5 \
+              -file "$diagnostics/xcodebuild.sample.txt" || true
+            if [[ -f "$diagnostics/xcodebuild.sample.txt" ]]; then
+              head -n 160 "$diagnostics/xcodebuild.sample.txt"
+            fi
+            echo "::endgroup::"
+          ) &
+          sampler_pid=$!
+          trap 'kill "$sampler_pid" "$build_pid" 2>/dev/null || true' EXIT
+
+          set +e
+          wait "$build_pid"
+          build_status=$?
+          set -e
+          exit "$build_status"
+
+      - name: Save generated project and process diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-debug-diagnostics
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            Inkribe.xcodeproj/project.pbxproj
+            Inkribe.xcodeproj/xcshareddata/xcschemes/*.xcscheme
+            ${{ runner.temp }}/ios-debug-diagnostics/
+
+      - name: Remove optional dependency credentials
+        if: ${{ always() }}
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [[ -n "$PRIVATE_REPO_TOKEN" ]]; then
+            git config --global --unset-all \
+              url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf || true
+          fi

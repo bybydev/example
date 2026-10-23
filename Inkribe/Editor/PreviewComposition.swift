@@ -174,7 +174,7 @@ enum PreviewComposition {
         // Track offsets/gaps remain at their source positions, rather than sliding audio to zero.
         let available = try await track.load(.timeRange)
         let requested = CMTimeRange(start: clip.sourceInterval.start.cmTime, duration: clip.sourceInterval.duration)
-        let range = CMTimeRangeGetIntersection(available, requested)
+        let range = CMTimeRangeGetIntersection(available, otherRange: requested)
         guard range.isValid, !range.isEmpty, CMTimeCompare(range.duration, .zero) > 0 else { return nil }
         let at = CMTimeAdd(clip.timelineInterval.start.cmTime,
             CMTimeSubtract(range.start, clip.sourceInterval.start.cmTime))

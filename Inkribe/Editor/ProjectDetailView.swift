@@ -353,7 +353,7 @@ struct ProjectDetailView: View {
     private func projectInfo(_ document: ProjectDocument) -> some View {
         DisclosureGroup("Project and original media") {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Project title", text: Binding(get: { session.document?.title ?? "" }, set: session.setTitle))
+                TextField("Project title", text: Binding(get: { session.document?.title ?? "" }, set: { session.setTitle($0) }))
                     .textFieldStyle(.roundedBorder).focused($focused, equals: .title)
                     .accessibilityLabel("Project title, saved automatically")
                 Text("\(document.clips.count) clips · \(document.canvas.width) × \(document.canvas.height)")

@@ -1,5 +1,15 @@
 # Pro phase source handoff
 
+## Settings and AppFoundation follow-up — PR #34
+
+The user requested iOS Settings matching Spokio, with AppFoundation paywall, simulated purchases and Developer Tools. The gear now pushes a native Settings list with AF's Pro plan/restore/subscription actions, weekly caption usage, inline theme picker, speech-model and storage sheets, support/legal links, version and a Debug Developer Tools destination. Appearance previews remain disabled and locked themes still show the contextual upsell.
+
+AppFoundation is pinned to 1.6.4, matching Spokio iOS. The real paywall uses AF ProPaywallView and the same shared PurchaseManager used by gates, settings, theme access and AF FoundationDeveloperView. Four PurchaseFeature definitions feed paywall, plan comparison and upsells. Existing monthly/lifetime IDs, local prices, persistence keys and live expiry rules are retained. Debug simulation uses AF's effective entitlement because its simulated monthly records have no real subscription expiry; Release still uses live StoreKit and contains no Developer Tools/simulation controls.
+
+Settings → Developer Tools provides AF's purchase mode toggle, simulated entitlement/catalog/price editing, pending/cancel/failure/restore controls, diagnostics and a replay of the real paywall. It starts in live mode unless the existing launch environment explicitly opts into simulation. The user explicitly requested a dummy privacy URL: https://example.com/inkribe/privacy is centralized in Commerce for Settings and paywall. Apple's standard EULA remains the terms destination. Replace the dummy before public release.
+
+Source/API review only. No agent builds/typechecks/tests, UI/device validation, workflow runs, project generation or downloads. User validation remains: compact iPhone Settings/navigation and sheet dismissal, Debug simulated Free/monthly/lifetime/reset and failure flows, shared gate/theme updates, and live StoreKit purchase/restore.
+
 ## Outcome
 
 V1.PRO is source-integrated on feat/ios-pro-access-themes from merged develop eb89f0f. All 29 V1 acceptance items now have source integration, with compilation/runtime/user validation still unrun. Earlier Pro deferral is historical. Leave the new PR targeting develop open until explicit merge instruction.
@@ -15,7 +25,7 @@ V1.PRO is source-integrated on feat/ios-pro-access-themes from merged develop eb
 | Transcription/TranscriptionController.swift and LocalTranscriber.swift | Serialize authorization/reconciliation, reserve before enqueue, captured policy in durable job, charge after saved result |
 | Editor/EditorSession.swift and CaptionStylePanel.swift | Gate new premium fonts/effects before mutation, free Basic reset, contextual upsell, preserve existing style/edit/undo |
 | Export/ExportController.swift, IOSExportRequest.swift, ExportView.swift | Default 720p; gate new 1080p before retained artifact replacement; saved job retry/delivery unchanged |
-| Pro/IOSProViews.swift | AF paywall/upsell/theme picker, plan/usage/restore, native subscription-management link and app surface tokens |
+| Pro/ProViews.swift and App/SettingsView.swift | AF ProPaywallView/upsell, native Settings plan/usage/restore/themes, Debug AF Developer Tools, support and app surface tokens |
 | App/InkribeApp.swift, ProjectsView.swift and other iOS surfaces | App-wide purchase lifecycle/transaction refresh and theme synchronization; Pro/Appearance entries |
 | Resources/Inkribe.storekit | iOS-only local monthly $6.99 and lifetime $24.99 offers |
 
@@ -39,8 +49,8 @@ Free can change basic style properties and edit the color/size/position of an ex
 
 - The approved monthly/lifetime strings also exist in Mac's local catalog, with different local prices. This phase preserves Mac source/configuration/catalog completely, and does not resolve or alter cross-platform App Store product ownership. Verify the intended iOS App Store Connect records and live USD prices ($6.99/month, $24.99 lifetime) before release. Source/local StoreKit configuration does not create or reprice live products.
 - The live paywall uses returned StoreKit prices; unavailable products show AF retry/error. The iOS StoreKit file is already referenced by the existing scheme. AF in-process simulation is opt-in Debug only, using a separate iOS persistence key; Release uses live StoreKit. No production Pro bypass.
-- Apple's standard EULA is linked for terms. No verified Inkribe privacy page exists in the inspected project/site sources; privacyURL is intentionally unset rather than linking Mac's example.com placeholder. Supply the actual Inkribe privacy destination before production submission. No website/store/account/signing changes were made.
-- No project.yml, dependency version, shared package, generated project, entitlement/App Group, model packaging or Mac file changed. Project schema remains v5 and export manifest remains v1.
+- Apple's standard EULA is linked for terms. No verified Inkribe privacy page exists in the inspected project/site sources; PR #34 now uses an explicit dummy privacyURL at the user's request. Supply the actual Inkribe privacy destination before production submission. No website/store/account/signing changes were made.
+- The original Pro phase changed no project.yml or dependency version. PR #34 upgrades AppFoundation in project.yml to 1.6.4 for Developer Tools. No shared-package source, generated project, entitlement/App Group, model packaging or Mac source is changed by this settings follow-up. Project schema remains v5 and export manifest remains v1.
 
 ## User validation (not run)
 
