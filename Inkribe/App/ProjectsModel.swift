@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 /// FileRepresentation callback owns the security scope; never load movie Data.
 struct PickedMovie: Transferable {
     let localURL: URL
+    let displayName: String
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .movie) { received in
@@ -26,7 +27,12 @@ struct PickedMovie: Transferable {
                 try? FileManager.default.removeItem(at: copy)
                 throw error
             }
-            return PickedMovie(localURL: copy)
+            // The owned copy has an intentionally opaque name. Keep the
+            // provider's display name separate from that storage identity.
+            let name = received.file.lastPathComponent
+            let stem = received.file.deletingPathExtension().lastPathComponent
+            let displayName = name.isEmpty || UUID(uuidString: stem) != nil ? "Imported Video" : name
+            return PickedMovie(localURL: copy, displayName: displayName)
         }
     }
 }
@@ -44,8 +50,10 @@ struct ImportCompletion: Identifiable, Sendable {
 final class ProjectsModel {
     let repository = ProjectRepository.shared
     let access: ProAccess
-    let transcription: TranscriptionController
-    let exports: ExportController
+    let processing: ProcessingCoordinator
+    let editors: EditorSessions
+    var transcription: TranscriptionController { processing.transcription }
+    var exports: ExportController { processing.exports }
     private let importer = MediaImporter(repository: .shared)
     private let thumbnails = ProjectThumbnails(repository: .shared)
 
@@ -76,6 +84,17 @@ final class ProjectsModel {
         }
     }
     var libraryIssues: [LibraryIssue] = []
+    private(set) var libraryError: String?
+    private(set) var storageError: String?
+    private(set) var recoveryIssue: String?
+    var pendingEdits: [ProjectSaveItem] {
+        editors.pending.filter { $0.saveError != nil }.map { session in
+            let title = session.document?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ProjectSaveItem(id: session.projectID,
+                title: title?.isEmpty == false ? title! : "Untitled project",
+                detail: "Couldn’t save changes. Open to try again.")
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
     var search = ""
     var sort: LibrarySort = .recent
     var filter: LibraryFilter = .all
@@ -91,7 +110,10 @@ final class ProjectsModel {
     var pendingStaging: [UUID] = []
     private var ownedPhotoURLs: Set<URL> = []
     private var selectionSession = UUID()
+    var importSelectionID: UUID { selectionSession }
     private var importTask: Task<Void, Never>?
+    private var importedInSession: [UUID] = []
+    private var photoTask: Task<Void, Never>?
     private var libraryGeneration = 0
     private var storageGeneration = 0
     private var thumbnailJobs: Set<UUID> = []
@@ -99,8 +121,8 @@ final class ProjectsModel {
     init() {
         let access = ProAccess()
         self.access = access
-        transcription = TranscriptionController(access: access)
-        exports = ExportController(access: access)
+        processing = ProcessingCoordinator(access: access)
+        editors = EditorSessions(access: access)
         // These ingress copies have no durable authority: committed projects
         // own their originals in the repository. Safe once, before new picks.
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
@@ -115,8 +137,9 @@ final class ProjectsModel {
     func refresh() async {
         do {
             _ = try await repository.recoverCommittedStaging()
+            recoveryIssue = nil
         } catch {
-            alertMessage = "An unfinished import could not be recovered: " + error.localizedDescription
+            recoveryIssue = "An unfinished import needs attention: " + error.localizedDescription
         }
         await refreshLibrary()
         await refreshStorage()
@@ -134,8 +157,9 @@ final class ProjectsModel {
             guard generation == libraryGeneration else { return }
             allProjects = snapshot.projects
             libraryIssues = snapshot.issues
+            libraryError = nil
         } catch {
-            if generation == libraryGeneration { alertMessage = error.localizedDescription }
+            if generation == libraryGeneration { libraryError = error.localizedDescription }
         }
     }
 
@@ -145,6 +169,7 @@ final class ProjectsModel {
         guard !isImporting, !isPreparingPhotos else { return }
         importCompletion = nil
         importMessage = nil
+        importedInSession = []
         clearSelection()
     }
 
@@ -157,26 +182,35 @@ final class ProjectsModel {
             let pending = try await repository.pendingStagingIDs()
             guard generation == storageGeneration else { return }
             storage = usage; trashed = trash; pendingStaging = pending
+            storageError = nil
         } catch {
-            if generation == storageGeneration { alertMessage = error.localizedDescription }
+            if generation == storageGeneration { storageError = error.localizedDescription }
         }
     }
 
-    func addFiles(_ urls: [URL]) {
-        guard !isImporting, !isPreparingPhotos else { return }
+    func addFiles(_ urls: [URL], selectionID: UUID) {
+        guard selectionID == selectionSession, !isImporting, !isPreparingPhotos else { return }
         selectedSources += urls.map {
             ImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent)
         }
     }
 
-    func addPhotos(_ items: [PhotosPickerItem]) async {
-        guard !isImporting, !isPreparingPhotos else { return }
+    func beginPhotoPreparation(_ items: [PhotosPickerItem]) {
+        guard !isImporting, !isPreparingPhotos, !items.isEmpty else { return }
         isPreparingPhotos = true
-        defer { isPreparingPhotos = false }
         let session = selectionSession
+        photoTask = Task { await addPhotos(items, session: session) }
+    }
+
+    private func addPhotos(_ items: [PhotosPickerItem], session: UUID) async {
+        guard selectionSession == session else { return }
+        defer {
+            if selectionSession == session { isPreparingPhotos = false; photoTask = nil }
+        }
         for item in items {
             do {
                 try Task.checkCancellation()
+                guard session == selectionSession else { return }
                 guard let file = try await item.loadTransferable(type: PickedMovie.self) else {
                     throw ProjectStoreError.unsupportedMedia
                 }
@@ -186,7 +220,7 @@ final class ProjectsModel {
                 }
                 ownedPhotoURLs.insert(file.localURL)
                 selectedSources.append(ImportInput(localURL: file.localURL, origin: .photos,
-                                                       displayName: file.localURL.lastPathComponent))
+                                                       displayName: file.displayName))
             } catch is CancellationError {
                 return
             } catch {
@@ -206,8 +240,14 @@ final class ProjectsModel {
         selectedSources.removeAll { $0.id == id }
     }
 
-    func clearSelection() {
+    func cancelPhotoPreparation() {
+        photoTask?.cancel(); photoTask = nil
         selectionSession = UUID()
+        isPreparingPhotos = false
+    }
+
+    func clearSelection() {
+        cancelPhotoPreparation()
         for url in ownedPhotoURLs { try? FileManager.default.removeItem(at: url) }
         ownedPhotoURLs.removeAll()
         selectedSources.removeAll()
@@ -227,19 +267,28 @@ final class ProjectsModel {
                     sources, disposition: disposition, preset: preset,
                     customCanvas: canvas
                 )
-                if result.failures.isEmpty {
-                    clearSelection()
-                    importMessage = "\(result.documents.count) project(s) imported."
-                } else {
-                    let saved = result.documents.isEmpty ? "" : "\(result.documents.count) project(s) saved.\n\n"
-                    importMessage = saved + result.failures.map {
-                        $0.filename + ": " + $0.reason
-                    }.joined(separator: "\n")
+                for document in result.documents where !importedInSession.contains(document.id) {
+                    importedInSession.append(document.id)
                 }
+                if disposition == .separateProjects {
+                    let committed = Set(result.documents.map(\.id))
+                    for source in selectedSources where committed.contains(source.id) {
+                        if ownedPhotoURLs.remove(source.localURL) != nil { try? FileManager.default.removeItem(at: source.localURL) }
+                    }
+                    selectedSources.removeAll { committed.contains($0.id) }
+                }
+                let stopped = result.wasCancelled || Task.isCancelled
+                if (result.failures.isEmpty && !stopped) || (disposition == .combineAsClips && !result.documents.isEmpty) {
+                    clearSelection()
+                }
+                let count = importedInSession.count
+                let saved = count == 1 ? "1 project saved." : "\(count) projects saved."
+                importMessage = (count > 0 ? saved + "\n" : "")
+                    + (stopped ? "Import stopped. Remaining files have not been imported.\n" : "")
+                    + result.failures.map { $0.filename + ": " + $0.reason }.joined(separator: "\n")
                 await refreshLibrary()
-                if Task.isCancelled { importMessage = "Import cancelled. Already committed projects are preserved." }
-                importCompletion = ImportCompletion(projectIDs: result.documents.map(\.id),
-                    hasFailures: !result.failures.isEmpty || Task.isCancelled)
+                importCompletion = ImportCompletion(projectIDs: importedInSession,
+                    hasFailures: !result.failures.isEmpty || stopped)
                 // Publication/navigation do not wait for derived JPEGs or storage accounting.
                 Task { await generateMissingThumbnails(for: result.documents); await refreshStorage() }
             } catch is CancellationError {
@@ -253,9 +302,11 @@ final class ProjectsModel {
     }
 
     func beginURLImport(text: String, rightsConfirmed: Bool,
-                        preset: CanvasPreset) {
+                        preset: CanvasPreset, canvas: ProjectCanvas? = nil) {
         guard !isImporting, !isPreparingPhotos else { return }
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https", url.host?.isEmpty == false,
+              url.user == nil, url.password == nil else {
             alertMessage = "Enter a valid HTTPS media URL."
             return
         }
@@ -266,13 +317,14 @@ final class ProjectsModel {
             defer { isImporting = false; importTask = nil }
             do {
                 let document = try await importer.importDirectURL(
-                    url, rightsConfirmed: rightsConfirmed, preset: preset
+                    url, rightsConfirmed: rightsConfirmed, preset: preset, customCanvas: canvas
                 )
                 importMessage = "Imported " + document.title
                 clearSelection()
                 await refreshLibrary()
                 if Task.isCancelled { importMessage = "Import stopped. The saved project is available." }
-                importCompletion = ImportCompletion(projectIDs: [document.id], hasFailures: Task.isCancelled)
+                if !importedInSession.contains(document.id) { importedInSession.append(document.id) }
+                importCompletion = ImportCompletion(projectIDs: importedInSession, hasFailures: Task.isCancelled)
                 Task { await generateMissingThumbnails(for: [document]); await refreshStorage() }
             } catch is CancellationError {
                 importMessage = "Download cancelled."
@@ -303,6 +355,7 @@ final class ProjectsModel {
     }
 
     func rename(_ summary: ProjectSummary, to title: String) async throws {
+        guard !editors.hasPending(summary.id) else { throw CaptionEditError.unsavedChanges }
         guard !transcription.isActive(summary.id), !mutatingProjectIDs.contains(summary.id) else { throw SpeechError.busy }
         mutatingProjectIDs.insert(summary.id)
         defer { mutatingProjectIDs.remove(summary.id) }
@@ -315,17 +368,11 @@ final class ProjectsModel {
         }
     }
 
-    /// Return the committed revision to the editor; refreshing/reopening here
-    /// must not replace a title draft that changed while the write was pending.
-    func rename(_ project: ProjectDocument, to title: String) async throws -> ProjectDocument {
-        try await repository.rename(project.id, title: title,
-                                    expectedRevision: project.contentRevision)
-    }
-
     func duplicate(_ id: UUID) async {
         guard mutatingProjectIDs.insert(id).inserted else { return }
         defer { mutatingProjectIDs.remove(id) }
         do {
+            guard !editors.hasPending(id) else { throw CaptionEditError.unsavedChanges }
             let copied = try await repository.duplicate(id)
             await refresh()
             await generateMissingThumbnails(for: [copied])
@@ -339,6 +386,10 @@ final class ProjectsModel {
             alertMessage = "Resolve the transcription storage problem before moving projects to Trash."
             return
         }
+        guard !editors.hasPending(id) else {
+            alertMessage = "This project has changes that couldn’t be saved. Open it and try saving again before moving it to Trash."
+            return
+        }
         guard !transcription.isActive(id) else {
             alertMessage = "Cancel this project's transcription before moving it to Trash."
             return
@@ -348,7 +399,11 @@ final class ProjectsModel {
     }
 
     func restore(_ id: UUID) async {
-        do { try await repository.restoreFromTrash(id); await refresh() }
+        do {
+            try await repository.restoreFromTrash(id)
+            cacheGeneration += 1
+            await refresh()
+        }
         catch { alertMessage = error.localizedDescription }
     }
 
@@ -383,4 +438,10 @@ final class ProjectsModel {
             await regenerateThumbnail(projectID)
         } catch { alertMessage = error.localizedDescription }
     }
+}
+
+struct ProjectSaveItem: Identifiable {
+    let id: UUID
+    let title: String
+    let detail: String
 }

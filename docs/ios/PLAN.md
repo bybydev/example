@@ -1,56 +1,50 @@
-# Inkribe iOS v1.0 — scoped plan
+# Inkribe iOS — current plan
 
-The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+2026-10-24. All five issue #38 source milestones are integrated in open PR #39 →
+develop. Consolidation fixes integration seams in that PR; it does not start a new
+feature phase. [FEATURES](FEATURES.md) retains the 29 approved V1 acceptance items.
 
-The earlier status paragraphs below are historical and superseded by this request.
+| Milestone | Integrated source result | Detail |
+|---|---|---|
+| 1. Project system | Wrapper-1 UUID packages, legacy adoption, safe paths/revisions, lifecycle/storage and recovery | [Phase](phases/PROJECT_SYSTEM.md) |
+| 2. Processing/delivery | Existing JobQueue stores/names behind one resource budget; independent frozen requests/results and per-output delivery | [Phase](phases/PROCESSING_DELIVERY.md) |
+| 3. Home/native flow | Scrolling creation hero, compact projects/activity/search, native Back/chrome and app-owned editing and automatic saving | [Phase](phases/HOME_NATIVE_FLOW.md) |
+| 4. Editor | One scrolling preview/transport/tools/workspace, direct corrections and preview-backed customization | [Phase](phases/EDITOR_EXPERIENCE.md) |
+| 5. Caption quality/finish | Versioned resolved values/catalog, ten looks, shared layout/motion and native renderer extensions, compatibility and readiness record | [Phase](phases/CAPTION_PRODUCTION.md) |
+| Consolidation | Strict new-style decoding, modal player-layer handoff, current render-error reporting and unified documentation | [Findings](CONSOLIDATION.md) |
 
-> Current request (2026-10-23): #35 is squash merged as 525fae4. Implement issue #36 in one new fix/ios-window-recovery PR targeting develop, left open without auto-merge. Scope and publication/checkpoint policy: [phases/TRANSCRIPTION_RECOVERY.md](phases/TRANSCRIPTION_RECOVERY.md). Source evidence and user checks: [handoffs/TRANSCRIPTION_RECOVERY.md](handoffs/TRANSCRIPTION_RECOVERY.md). No new phase/features or Mac changes; no builds/typechecks/tests, CI, generation, weights or UI/device validation. Older #35 holds below are historical.
+The latest user-directed simplification removes editor-sidecar dependencies and
+draft/recovery UI. Ordinary edits save directly to the project. See
+[the current follow-up](CONSOLIDATION.md#follow-up-simple-project-saving).
 
-> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+## Retained product contracts
 
-> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+Photos/Files/direct-media URL import → optional on-device Tiny/Base/Small
+recognition → incremental available captions and explicit missing-range retry →
+correction/timing/split/merge/undo → project-wide style/media edits → independent
+MP4/SRT exports and Photos/Files/Share delivery. Storage actions protect originals,
+unsaved edits in memory and frozen job inputs. No implicit re-inference or caption regrouping.
 
-Updated 2026-10-22 following the user's compact v1 feature list. This supersedes the old 467-item catalog and P0–P13 roadmap. Only current FEATURES and active P0–P7 briefs define deliverables when the user requests a phase. Archived documents, reference images, Mac capabilities and existing extra source do not authorize features.
+Free: five captioning minutes/week, basic style, 720p and the default AF app theme.
+Pro: unlimited captioning, all styles/animations, 1080p and premium app themes.
+Monthly/lifetime products remain $6.99/$24.99 in simulation; live records need owner
+verification. Core editing/media/SRT stay free; retained premium work survives expiry.
+No watermark, trial, credits, backend quota or new product is introduced.
 
-## Product
+Default model packaging retains the existing optional bundle/download/cache flow;
+the opt-in bundled-only spec remains explicit. Release configuration alone does not
+choose a model lane. iOS is iPhone-only; current Mac identity/data/APIs are preserved.
 
-Focused native workflow: Photos/Files import → on-device recognition → caption correction → styles/animations → MP4/SRT export. Local projects include thumbnails, rename/duplicate/delete, autosave, offline reopening and cleanup. Basic media tools are trim, crop/aspect ratio and original-audio volume. Simple Pro uses AppFoundation paywall/restore. Safe originals, recovery, accessible controls and clear errors apply throughout.
+## Outside scope
 
-## Eight phases
+No accounts/cloud inference/sync, teams/social publishing, stock library, dubbing,
+translation, camera, share extension/App Group/inbox, iPad workspace, per-caption
+style overrides, advanced multitrack/history or Mac feature expansion. Existing
+extras do not authorize new work. Historical P0–P7 delivery records remain in
+[the archive](archive/before-consolidation/PLAN.md) and phase handoffs.
 
-| Phase | Result | Difficulty | Value | Status |
-|---|---|---|---|---|
-| [P0](phases/P0.md) | Target isolation and foundations | High | Essential | Merged #23; source-only evidence |
-| [P1](phases/P1.md) | Local projects and import | Medium | Essential | Merged #24; reported source findings corrected, runtime unverified |
-| [P2](phases/P2.md) | On-device transcription and word timing | High | Essential | Merged #25 (97d647e); model/native/runtime checks unrun |
-| [P3](phases/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
-| [P4](phases/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
-| [P5](phases/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
-| [P6](phases/P6.md) | Basic media editing | Medium–High | High | Merged #29 (e2bb512); compilation/runtime unverified |
-| [P7](phases/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Source audit/fixes/handoff in open #30; compilation/runtime/user validation unrun |
+## Next gate
 
-P0–P6 keep their broad historical roles with reduced scope. P7 now means v1 hardening, replacing its unstarted AI/localization role. P8–P13 are retired. Reliability applies throughout, not only in P7.
-
-## Outside v1
-
-No accounts/backend, cloud transcription/AI/sync/backup, teams/collaboration/review links, social publishing/scheduling/analytics, AI credits/allowances, stock/music services, AI B-roll, eye-contact correction, dubbing/voice cloning/AI voiceovers, incoming share extension/App Group/inbox, camera/teleprompter, translation/bilingual workflows, automation API/Shortcuts/watch folders, or Mac feature expansion.
-
-Also outside v1: advanced video effects/transitions/speed/reverse/tracking/masking, multi-track production, waveform/music editing, custom font importer, brand kits/template marketplace, 4K/MOV/alpha/chroma/soft-subtitle outputs, export batch pipelines, specialized caption-mode catalog, advanced project history, iPad-specific workspace and external-display tools. Unicode-safe text and accessible controls still apply.
-
-## Existing extras and status
-
-Planning #22 and P0 #23 are merged. P1 PR #24 was squash merged as 97d3645; its former review hold is historical. P2 PR #25 was squash merged as 97d647e. P3 PR #26 was squash merged as 11902e6. P4 #27 was squash merged as ab67747. P5 #28 was squash merged as 3c09e32. P6 #29 was squash merged as e2bb512. The subsequent explicitly requested optional-model change stays open for review; no merge/auto-merge. The title-autosave race and post-download-only URL size check were corrected in source on 2026-10-22. Saves drain the latest draft with returned revisions; downloads enforce the existing 16 GiB cap on declared and actual streamed bytes. Runtime checks remain unrun.
-
-URL import, combined/batch imports and advanced canvas controls already present in P1 source are not v1 requirements. The scope-reset documentation removed no source/UI. A subsequent explicit user request authorized the two correctness fixes, including hardening the existing URL path; it did not add URL import to v1 requirements. Record them separately; obtain an actual fix/removal decision before changing them. Transcript search is no longer a P2 obligation. Incoming share extension was removed and must not return.
-
-## Execution and decisions
-
-One PR per requested phase from latest develop, all passes in it. State included V1 IDs and a short plan first; do not start another phase automatically or expand scope. Follow WORKFLOW and relevant UI approval. Preserve Mac data/identity/purchases/behavior.
-
-P2 model packaging is now governed by MODELS. The subsequent user-approved [Pro phase](phases/PRO.md) implements free 5-minute weekly captioning/basic style/720p/default AF theme versus unlimited captioning/all styles/1080p/premium AF themes. Monthly $6.99 and lifetime $24.99 use the approved IDs in Commerce. Core editing/media/SRT remain free. Existing saved content stays usable after expiry. No watermark/trial/credit backend. See handoffs/PRO for exact quota/recovery and production inputs.
-
-No builds/tests unless asked, CI setup/repair/triggers, Xcode project generation, model downloads, deployment or device validation. User tests afterward. Source integration is not compilation/runtime verification; missing required behavior remains incomplete.
-
-## Explicit model-flow amendment — after P6 merge
-
-The user requested optional bundling plus in-app download/cache and variant selection to speed development. This amends V1.LOCAL_STT/JOB without adding a phase or cloud transcription. Support Tiny, Base and Small multilingual GGML models. Default project.yml packages no iOS weights; the opt-in project-ios-bundled.yml requires Small and disables downloads/cache fallback for a future production choice. No production policy is switched automatically by Release configuration. See MODELS.md. By subsequent user request P7 source hardening is included in PR #30; Pro remains deferred. The agent still must not download weights itself.
+User-authorized compilation/regression/device/output/commerce acceptance and owner
+release inputs, listed in [PRODUCTION_READINESS](PRODUCTION_READINESS.md). None ran
+under this request. Keep PR open without auto-merge; do not start another phase.

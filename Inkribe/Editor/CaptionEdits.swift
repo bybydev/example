@@ -20,7 +20,7 @@ enum CaptionEditError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingCaption: "This caption is no longer available."
-        case .unsavedChanges: "Save the current changes before continuing."
+        case .unsavedChanges: "Your changes couldn’t be saved. Try saving again before continuing."
         case .invalidText: "Keep each timed text field within 4,096 characters."
         case .invalidTiming: "Use a positive interval inside this clip. Caption timing must contain its words."
         case .splitBoundary: "Choose a word after the first word to split before it."

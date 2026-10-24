@@ -1,12 +1,10 @@
 import Foundation
+import InkribeCore
 import JobQueue
 import Observation
 
 struct ExportJob: Job {
-    struct Payload: Codable, Sendable {
-        let projectID: UUID
-        let profile: ExportProfile
-    }
+    typealias Payload = InkribeCore.ExportRequest
     static let maxConcurrentExecutions = 1
     let id: UUID
     let payload: Payload
@@ -14,6 +12,13 @@ struct ExportJob: Job {
     var priority: JobPriority { .userInitiated }
 
     func execute(progress: JobProgressReporter) async throws {
+        await progress.report(message: "Waiting for processing capacity…")
+        try await ProcessingRuntime.shared.run {
+            try await render(progress: progress)
+        }
+    }
+
+    private func render(progress: JobProgressReporter) async throws {
         let repository = ProjectRepository.shared
         do {
             let request = try await repository.frozenExport(id)
@@ -53,32 +58,51 @@ struct ExportJob: Job {
     }
 }
 
-/// One app-wide, durable export. Keeping one request bounds retained originals
-/// and artifacts without adding batch rendering or an export-history product.
+struct ExportArtifact: Identifiable, Sendable {
+    let id: UUID
+    let projectID: UUID?
+    let title: String
+    let revision: UInt64?
+    let profile: ExportProfile?
+    let outputURL: URL?
+    let bytes: Int64
+    let issue: String?
+}
+
+/// Stable per-job requests/results. Nothing is evicted to admit a newer export.
 @MainActor
 @Observable
 final class ExportController {
+    nonisolated static let retainedRecordLimit = 100
     private let access: ProAccess
-    init(access: ProAccess) { self.access = access }
-    private(set) var queue: JobQueue?
-    private(set) var startupError: String?
-    private(set) var isPreparing = false
-    private(set) var completedURL: URL?
-    private(set) var frozenTitle: String?
-    private(set) var frozenRevision: UInt64?
-    private(set) var deliveryTokens: Set<UUID> = []
+    private let lifecycle: ProcessingLifecycle
     private let registry = JobRegistry()
     private let repository = ProjectRepository.shared
     private var startup: Task<Void, Never>?
     private var ready = false
     private var registered = false
     private var queueStarted = false
-    private var foreground = true
+    private(set) var queue: JobQueue?
+    private(set) var startupError: String?
+    private(set) var isPreparing = false
+    private(set) var artifacts: [UUID: ExportArtifact] = [:]
+    private(set) var inventoryError: String?
+    private(set) var deliveryTokens: [UUID: UUID] = [:]
+    private(set) var mutatingIDs: Set<UUID> = []
+    private var inventoryGeneration = 0
 
-    var record: JobRecord? { queue?.sortedRecords.first }
-    var isActive: Bool { record.map { !$0.status.isTerminal } ?? false }
-    var isDelivering: Bool { !deliveryTokens.isEmpty }
+    init(access: ProAccess, lifecycle: ProcessingLifecycle) {
+        self.access = access
+        self.lifecycle = lifecycle
+    }
+
     var persistenceError: String? { startupError ?? queue?.persistenceIssue?.errorDescription }
+    var isDelivering: Bool { !deliveryTokens.isEmpty }
+    var orphanedArtifacts: [ExportArtifact] {
+        artifacts.values.filter { queue?.records[$0.id] == nil }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+    func isDelivering(_ id: UUID) -> Bool { deliveryTokens.values.contains(id) }
 
     func start() async {
         if let startup { await startup.value; return }
@@ -103,115 +127,142 @@ final class ExportController {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 let value = JobQueue(fileURL: root.appendingPathComponent("export-jobs.json"),
                     policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
-                    maxRecords: 1, autoCleanupEnabled: false)
+                    maxRecords: Self.retainedRecordLimit, autoCleanupEnabled: false)
                 value.eventHandler = { [weak self] event in
-                    if case .jobCompleted = event { Task { await self?.refreshArtifact() } }
+                    switch event {
+                    case .jobCompleted, .jobFailed, .jobCancelled:
+                        Task { await self?.refreshArtifacts() }
+                    default: break
+                    }
                 }
                 queue = value
             }
             try queue?.start()
             queueStarted = true
-            if !foreground { try queue?.pause() }
-            let ids = Set(queue?.records.keys.map { $0 } ?? [])
-            try await repository.removeOrphanedExports(keeping: ids)
+            if !lifecycle.canRun { try queue?.pause() }
             ready = true
             startupError = nil
-            await refreshArtifact()
-        } catch { startupError = error.localizedDescription }
+            // Never delete orphaned requests/results on startup. They may be the
+            // only surviving publication after a crash or queue-file recovery.
+            await refreshArtifacts()
+        } catch {
+            startupError = error.localizedDescription
+            await refreshArtifacts()
+        }
     }
 
     func retryStorage() async {
         do {
-            // A failed initial rewrite has not published loaded records into
-            // memory. Retry start/load rather than saving an empty record set.
             if let queue, queueStarted { try queue.perform(.retryPersistence) }
             ready = false
             await start()
+            applyLifecycle()
         } catch { startupError = error.localizedDescription }
     }
 
-    func setForeground(_ value: Bool) {
-        foreground = value
+    func applyLifecycle() {
         guard ready, let queue else { return }
         do {
-            if value { try queue.resume() }
-            else { try queue.pause() }
+            if lifecycle.canRun { try queue.resume() } else { try queue.pause() }
         } catch { startupError = error.localizedDescription }
     }
 
-    func enqueue(document: ProjectDocument, profile: ExportProfile) async throws {
-        guard !isPreparing, !isDelivering else { throw ExportError.busy }
+    @discardableResult
+    func enqueue(document: ProjectDocument, profile: ExportProfile) async throws -> UUID {
+        guard !isPreparing else { throw ExportError.busy }
         isPreparing = true
         defer { isPreparing = false }
         await start()
         await access.refreshForRequest()
         if profile.format == .mp4 && profile.resolution == .fullHD { try access.require(.fullHD) }
-        guard ready, persistenceError == nil, let queue else { throw ExportError.invalidRequest }
-        guard !isActive, !queue.isProcessing else { throw ExportError.busy }
-        if let old = record {
-            try queue.remove(id: old.id)
-            completedURL = nil
-            try await repository.discardExport(old.id)
-        }
+        guard lifecycle.error == nil, ready, persistenceError == nil, let queue else { throw ExportError.invalidRequest }
+        // This is a bounded local retention store, not a purchase/active-job quota.
+        guard queue.records.count < Self.retainedRecordLimit else { throw ProcessingError.retentionFull }
         let id = UUID()
         try await repository.prepareExport(document: document, profile: profile, id: id)
         do {
             try Task.checkCancellation()
+            guard lifecycle.error == nil, persistenceError == nil else { throw ExportError.invalidRequest }
             try queue.enqueue(ExportJob(id: id, payload: .init(projectID: document.id, profile: profile)))
-            frozenTitle = document.title
-            frozenRevision = document.contentRevision
         } catch {
+            // A failed cleanup stays discoverable in retained requests on refresh.
             try? await repository.discardExport(id)
+            await refreshArtifacts()
             throw error
         }
+        await refreshArtifacts()
+        return id
     }
 
-    func cancel() throws {
-        if let id = record?.id { try queue?.cancel(id: id) }
+    func cancel(_ id: UUID) throws { try queue?.cancel(id: id) }
+
+    func retry(_ id: UUID) throws {
+        guard lifecycle.error == nil, persistenceError == nil, let queue,
+              let record = queue.records[id], record.status.isRetryable,
+              !mutatingIDs.contains(id), !isDelivering(id) else { throw ExportError.busy }
+        // Accepted frozen input is reused, including after an entitlement change.
+        try queue.retry(id: id)
     }
 
-    func retry() throws {
-        guard !isPreparing, !isDelivering, let record, record.status.isRetryable else { throw ExportError.busy }
-        try queue?.retry(id: record.id)
+    func recover(_ id: UUID) async throws {
+        guard ready, lifecycle.error == nil, persistenceError == nil, let queue,
+              queue.records[id] == nil, !mutatingIDs.contains(id), !isDelivering(id) else { throw ExportError.busy }
+        guard queue.records.count < Self.retainedRecordLimit else { throw ProcessingError.retentionFull }
+        mutatingIDs.insert(id)
+        defer { mutatingIDs.remove(id) }
+        let request = try await repository.frozenExport(id)
+        guard persistenceError == nil, queue.records[id] == nil else { throw ExportError.busy }
+        try queue.enqueue(ExportJob(id: id, payload: .init(
+            projectID: request.manifest.document.id, profile: request.manifest.profile)))
+        await refreshArtifacts()
     }
 
-    func discard() async throws {
-        guard !isPreparing, !isDelivering, !isActive, queue?.isProcessing != true else { throw ExportError.busy }
-        isPreparing = true
-        defer { isPreparing = false }
-        if let record {
-            try queue?.remove(id: record.id)
-            completedURL = nil
-            frozenTitle = nil
-            frozenRevision = nil
-            try await repository.discardExport(record.id)
-        }
+    /// Record removal preserves the frozen request/result, visible in Retained files.
+    func removeRecord(_ id: UUID) throws {
+        guard let queue, let record = queue.records[id], record.status.isTerminal,
+              !queue.executingJobIDs.contains(id), !mutatingIDs.contains(id) else { throw ExportError.busy }
+        try queue.remove(id: id)
     }
 
-    func refreshArtifact() async {
-        guard let record else { completedURL = nil; return }
-        let id = record.id
+    /// Explicit file deletion removes just this job's inputs/result and its record.
+    func discard(_ id: UUID) async throws {
+        guard ready, persistenceError == nil, let queue, !mutatingIDs.contains(id), !isDelivering(id),
+              !queue.executingJobIDs.contains(id), queue.records[id]?.status.isTerminal != false else { throw ExportError.busy }
+        mutatingIDs.insert(id)
+        defer { mutatingIDs.remove(id) }
+        // Persist removal first. If deletion fails, the intact orphan remains
+        // visible and removable; no active request can begin using its sources.
+        try queue.remove(id: id)
+        do { try await repository.discardExport(id) }
+        catch { await refreshArtifacts(); throw error }
+        await refreshArtifacts()
+    }
+
+    func refreshArtifacts() async {
+        inventoryGeneration += 1
+        let generation = inventoryGeneration
         do {
-            let request = try await repository.frozenExport(id)
-            guard self.record?.id == id else { return }
-            frozenTitle = request.manifest.document.title
-            frozenRevision = request.manifest.document.contentRevision
-            completedURL = self.record?.status == .completed
-                && FileManager.default.fileExists(atPath: request.outputURL.path) ? request.outputURL : nil
+            let values = try await repository.exportArtifacts()
+            guard generation == inventoryGeneration else { return }
+            artifacts = Dictionary(uniqueKeysWithValues: values.map { ($0.id, $0) })
+            inventoryError = nil
         } catch {
-            guard self.record?.id == id else { return }
-            completedURL = nil
+            guard generation == inventoryGeneration else { return }
+            inventoryError = error.localizedDescription
         }
     }
 
-    /// A document picker/share service/Photos write may read after presentation.
-    /// Block replacement and cleanup until the destination has finished with it.
-    func beginDelivery() throws -> (token: UUID, url: URL) {
-        guard !isPreparing, !isDelivering, record?.status == .completed, let completedURL,
-              FileManager.default.fileExists(atPath: completedURL.path) else { throw ExportError.invalidOutput }
+    /// A lease pins this exact immutable URL through native completion/cancel.
+    func beginDelivery(_ id: UUID) throws -> (token: UUID, url: URL) {
+        guard !mutatingIDs.contains(id),
+              (queue?.records[id] == nil || queue?.records[id]?.status == .completed),
+              let url = artifacts[id]?.outputURL else { throw ExportError.invalidOutput }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              (values.fileSize ?? 0) > 0 else { throw ExportError.invalidOutput }
         let token = UUID()
-        deliveryTokens.insert(token)
-        return (token, completedURL)
+        deliveryTokens[token] = id
+        return (token, url)
     }
-    func endDelivery(_ token: UUID) { deliveryTokens.remove(token) }
+    func endDelivery(_ token: UUID) { deliveryTokens.removeValue(forKey: token) }
 }

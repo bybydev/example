@@ -10,37 +10,39 @@ struct ProjectDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appFoundationTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
     let projectID: UUID
+    private let sessions: EditorSessions
+    private let renameOnOpen: Bool
     @State private var session: EditorSession
+    @State private var presentationID = UUID()
     @State private var relinkAsset: UUID?
     @State private var isRelinking = false
     @State private var showDeleteConfirmation = false
-    @State private var showReloadConfirmation = false
-    @State private var isLeaving = false
     @State private var showStyleSheet = false
-    @State private var showTimingSheet = false
-    @State private var showMediaSheet = false
     @State private var captionRenderError: String?
     @State private var showExport = false
+    @State private var showQueue = false
     @State private var preparingTranscription = false
-    @State private var expandedPreview = false
     @State private var showProjectInfo = false
+    @State private var didRequestInitialRename = false
+    @State private var focusTitleOnPresentation = false
     @FocusState private var focused: EditorField?
 
-    init(projectID: UUID, access: ProAccess) {
-        self.projectID = projectID
-        _session = State(initialValue: EditorSession(projectID: projectID, access: access))
+    init(session: EditorSession, sessions: EditorSessions, renameOnOpen: Bool = false) {
+        self.projectID = session.projectID
+        self.sessions = sessions
+        self.renameOnOpen = renameOnOpen
+        _session = State(initialValue: session)
     }
 
     // Keep layout, toolbar and presentation as separate opaque expressions.
     // A single modifier chain exceeded Swift's type-checking budget in CI.
     var body: some View {
         editorPresentation
+        .onAppear { sessions.attach(session, owner: presentationID) }
         .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await session.refreshSaved() } }
         .onChange(of: focused) { _, value in
-            if value != nil { expandedPreview = false }
+            if value != nil { session.workspace.expandedPreview = false }
             if case .word(let id)? = value { session.selectWord(id); session.beginTyping() }
             else { session.endTyping(); if value != nil { session.beginTyping() } }
         }
@@ -48,20 +50,25 @@ struct ProjectDetailView: View {
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
         .onDisappear {
-            guard !showProjectInfo, !showExport, !showStyleSheet, !showTimingSheet, !showMediaSheet, session.proUpsell == nil else { return }
-            session.stop()
-            Task { await session.flush(); await model.refresh() }
+            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, session.proUpsell == nil else { return }
+            sessions.detach(session, owner: presentationID)
+            Task { await session.flush(); await model.refreshLibrary() }
         }
     }
 
     private var editorPresentation: some View {
         editorDialogs
-        .task { await session.open() }
+        .task {
+            await session.open()
+            if !Task.isCancelled, renameOnOpen, !didRequestInitialRename, session.document != nil {
+                didRequestInitialRename = true
+                beginRenaming()
+            }
+        }
         .sheet(isPresented: $showExport) { ExportView(session: session) }
+        .sheet(isPresented: $showQueue, onDismiss: { Task { await session.refreshSaved() } }) { ProcessingQueueSheet() }
         .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
         .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
-        .sheet(isPresented: $showTimingSheet, onDismiss: finishToolEditing) { timingSheet }
-        .sheet(isPresented: $showMediaSheet, onDismiss: finishToolEditing) { mediaSheet }
         .sheet(item: Binding(get: { showStyleSheet ? nil : session.proUpsell }, set: { if !showStyleSheet { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
     }
 
@@ -77,13 +84,6 @@ struct ProjectDetailView: View {
                 }
             }
         } message: { Text("Original files are preserved in Trash until you empty it.") }
-        .confirmationDialog("Discard unsaved changes and reload?", isPresented: Binding(
-            get: { showReloadConfirmation && !showProjectInfo }, set: { showReloadConfirmation = $0 })) {
-            Button("Discard and reload", role: .destructive) {
-                focused = nil
-                Task { await session.reloadDiscardingDraft() }
-            }
-        } message: { Text("Only the last saved project will be kept. This also clears this session's undo history.") }
         .alert("Project", isPresented: Binding(
             get: { canPresentProjectError && model.alertMessage != nil },
             set: { if !$0 && canPresentProjectError { model.alertMessage = nil } })) {
@@ -93,65 +93,130 @@ struct ProjectDetailView: View {
 
     private var editorNavigation: some View {
         editorWorkspace
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if session.document != nil, !expandedPreview, focused == nil { editorToolBar }
-        }
-        .disabled(preparingTranscription || isLeaving)
+        .disabled(preparingTranscription || (session.document != nil && !session.isReadyToEdit))
         .navigationTitle(session.document?.title ?? "Project")
         .themedSurface()
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden()
         .toolbar { editorToolbar }
     }
 
     private var editorWorkspace: some View {
         GeometryReader { geometry in
-            VStack(spacing: 10) {
-                if let document = session.document {
-                    if !expandedPreview && ((focused != nil && !showProjectInfo) || geometry.size.height < 420) {
-                        HStack(spacing: 12) {
-                            preview(document, height: 64, showsExpand: false)
-                                .frame(width: 64)
-                            transport(showsOverview: false)
-                        }
-                        .padding(.horizontal, 16)
+            ScrollViewReader { scroll in
+                ScrollView {
+                    if let document = session.document {
+                        scrollingWorkspace(document, size: geometry.size)
+                    } else if let error = session.loadError {
+                        ContentUnavailableView("Cannot open project", systemImage: "exclamationmark.triangle",
+                            description: Text(error))
+                        Button("Retry") { Task { await session.open() } }
                     } else {
-                        preview(document, height: previewHeight(document, in: geometry.size))
-                            .padding(.horizontal, 16)
-                        transport(showsOverview: !expandedPreview)
-                            .padding(.horizontal, 16)
+                        ProgressView("Opening project…").padding(40)
                     }
-                    if expandedPreview {
-                        if hasEditorError {
-                            Button("Review editor errors", systemImage: "exclamationmark.triangle") {
-                                expandedPreview = false
-                            }
-                        }
-                    } else {
-                        editorContent(document, viewportHeight: geometry.size.height)
-                            .layoutPriority(1)
-                    }
-                } else if let error = session.loadError {
-                    ContentUnavailableView("Cannot open project", systemImage: "exclamationmark.triangle",
-                        description: Text(error))
-                    Button("Retry") { Task { await session.open() } }
-                } else {
-                    ProgressView("Opening project…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .scrollPosition(id: scrollBinding(for: session.workspace.tool))
+                .id(session.workspace.tool)
+                .onChange(of: focused) { _, field in
+                    if let field, !showProjectInfo { scroll.scrollTo(field, anchor: .center) }
+                }
+                .onChange(of: geometry.size.height) { _, _ in
+                    if let focused, !showProjectInfo { scroll.scrollTo(focused, anchor: .center) }
+                }
+                .onChange(of: session.workspace.tool) { _, _ in
+                    scroll.scrollTo(session.workspace.scrollAnchor ?? "tools", anchor: .top)
+                }
+                .onChange(of: session.presentation?.cueID) { _, id in
+                    // Following is explicit. Playback never changes editing selection or focus.
+                    guard session.workspace.followsPlayback, session.workspace.tool == .captions,
+                          session.isPlaying, focused == nil, let id else { return }
+                    scroll.scrollTo("cue-" + id.uuidString, anchor: .center)
                 }
             }
-            .padding(.top, 8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    private func scrollingWorkspace(_ document: ProjectDocument, size: CGSize) -> some View {
+        LazyVStack(alignment: .leading, spacing: 18) {
+            preview(document, height: previewHeight(document, in: size))
+                .id("preview")
+            transport(showsOverview: true).id("transport")
+            editorToolBar.id("tools")
+            editorErrors
+            if document.recognition?.isIncomplete == true {
+                PartialCaptionStatus(document: document, preparing: preparingTranscription,
+                    retry: { retryMissing() }, reset: resetRetryProgress)
+            }
+            activeWorkspace(document)
+        }
+        .scrollTargetLayout()
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 32)
+    }
+
+    @ViewBuilder
+    private var editorErrors: some View {
+        if hasStatusError { status }
+        if let error = session.previewError {
+            Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+            Button("Retry preview") { Task { await session.retryPreview() } }
+        }
+        if let error = captionRenderError {
+            Label(error, systemImage: "captions.bubble").font(.footnote).foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private func activeWorkspace(_ document: ProjectDocument) -> some View {
+        switch session.workspace.tool {
+        case .captions:
+            if document.recognition?.words.isEmpty == false {
+                transcriptHeader(document)
+                Toggle("Follow captions during playback", isOn: $session.workspace.followsPlayback)
+                    .font(.subheadline)
+                if let snapshot = session.snapshot {
+                    if snapshot.transcriptItems.isEmpty {
+                        Text("No captions are inside the retained range. Adjust trim in Media to restore them.")
+                            .foregroundStyle(.secondary)
+                        Button("Media tools") { switchTool(.media) }
+                    }
+                    ForEach(snapshot.transcriptItems) { item in
+                        transcriptRow(item).id(item.id)
+                    }
+                }
+            } else { transcription(document) }
+        case .style:
+            CaptionTemplatesPanel(session: session, isComparing: !showStyleSheet, customize: { showStyleSheet = true },
+                showPreview: { session.workspace.scrollAnchor = "preview" })
+        case .timing:
+            if session.selectedCue != nil {
+                correctionPanel
+                Button("Return to caption correction", systemImage: "captions.bubble") { switchTool(.captions) }
+            } else {
+                ContentUnavailableView("Select a caption", systemImage: "timer",
+                    description: Text("Choose a caption in Captions to correct words, split, merge or adjust timing."))
+                Button("Choose a caption") { switchTool(.captions) }
+            }
+        case .media:
+            MediaPanel(session: session, focused: $focused)
+        }
+    }
+
+    private func scrollBinding(for tool: EditorTool) -> Binding<String?> {
+        // Capture the tool identity so a retiring scroll view cannot write its
+        // last caption anchor into the newly selected tool's context.
+        Binding(get: { session.workspace.anchor(for: tool) },
+            set: { session.workspace.setAnchor($0, for: tool) })
+    }
+
+    private func switchTool(_ tool: EditorTool) {
+        focused = nil
+        session.pause()
+        session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        session.workspace.select(tool)
     }
 
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button(expandedPreview ? "Done" : "Back", systemImage: expandedPreview ? "chevron.down" : "chevron.left") {
-                if expandedPreview { expandedPreview = false } else { leave() }
-            }
-            .disabled(isLeaving || preparingTranscription)
-        }
         ToolbarItem(placement: .principal) {
             VStack(spacing: 2) {
                 Text(session.document?.title ?? "Project").font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -159,6 +224,10 @@ struct ProjectDetailView: View {
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            if session.workspace.expandedPreview {
+                Button("Close expanded preview", systemImage: "arrow.down.right.and.arrow.up.left") { session.workspace.expandedPreview = false }
+                    .labelStyle(.iconOnly)
+            }
             Button("Export") {
                 focused = nil
                 session.pause()
@@ -169,7 +238,7 @@ struct ProjectDetailView: View {
             }
             .font(.subheadline.weight(.semibold))
             .buttonStyle(.borderedProminent).controlSize(.small)
-            .disabled(session.document == nil || preparingTranscription || isLeaving)
+            .disabled(!session.isReadyToEdit || preparingTranscription)
             editorActions
         }
         ToolbarItemGroup(placement: .keyboard) {
@@ -183,17 +252,20 @@ struct ProjectDetailView: View {
         Menu {
             Label(saveStatus, systemImage: hasStatusError ? "exclamationmark.triangle" : "checkmark.circle")
             Divider()
+            Button("Rename", systemImage: "pencil") { beginRenaming() }
+            Divider()
             Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
                 .disabled(!session.canUndo)
             Button(session.redoLabel, systemImage: "arrow.uturn.forward") { focused = nil; session.redo() }
                 .disabled(!session.canRedo)
             Divider()
-            Button(expandedPreview ? "Back to editor" : "Expand preview", systemImage: "arrow.up.left.and.arrow.down.right") {
+            Button(session.workspace.expandedPreview ? "Reduce preview" : "Expand preview", systemImage: "arrow.up.left.and.arrow.down.right") {
                 focused = nil
-                expandedPreview.toggle()
+                session.workspace.expandedPreview.toggle()
             }
+            Button("Queue", systemImage: "list.bullet.rectangle") { openQueue() }
             Button("Media tools", systemImage: "crop.rotate") {
-                focused = nil; session.pause(); showMediaSheet = true
+                switchTool(.media)
             }
             Button("Project details", systemImage: "info.circle") {
                 focused = nil
@@ -211,24 +283,42 @@ struct ProjectDetailView: View {
                 .disabled(model.transcription.isActive(projectID))
         } label: { Image(systemName: hasEditorError ? "exclamationmark.circle" : "ellipsis.circle") }
         .accessibilityLabel("Editor actions, " + saveStatus)
-        .disabled(session.document == nil || preparingTranscription || isLeaving)
+        .disabled(!session.isReadyToEdit || preparingTranscription)
+    }
+
+    private func openQueue() {
+        guard !preparingTranscription else { return }
+        focused = nil
+        session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        preparingTranscription = true
+        Task {
+            defer { preparingTranscription = false }
+            do { _ = try await session.savedDocument(); showQueue = true }
+            catch { model.alertMessage = error.localizedDescription }
+        }
+    }
+
+    private func beginRenaming() {
+        focused = nil
+        session.pause()
+        session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        focusTitleOnPresentation = true
+        showProjectInfo = true
     }
 
     private func previewHeight(_ document: ProjectDocument, in size: CGSize) -> CGFloat {
-        if expandedPreview {
-            let controls: CGFloat = typeSize.isAccessibilitySize ? 160 : 100
-            return max(0, size.height - controls - (hasEditorError ? 80 : 0))
-        }
         let width = max(0, size.width - 32)
         let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
-        let fraction: CGFloat = typeSize.isAccessibilitySize ? 0.25 : 0.34
-        return min(width / aspect, min(220, max(0, size.height * fraction)))
+        // The footage remains in the page even when expanded or the keyboard opens.
+        return min(width / aspect, session.workspace.expandedPreview ? 560 : 360)
     }
 
     private func preview(_ document: ProjectDocument, height: CGFloat, showsExpand: Bool = true) -> some View {
         ZStack {
             Color.black
-            PlayerSurface(player: session.player)
+            // Export/Queue can push another editor for this same app-owned
+            // session. Remove the covered layer before a modal takes the player.
+            if !showStyleSheet && !showExport && !showQueue { PlayerSurface(player: session.player) }
             if document.assets.allSatisfy({ $0.kind == .audio }) {
                 Image(systemName: "waveform").font(.system(size: 40)).foregroundStyle(.white.opacity(0.45))
             }
@@ -247,80 +337,45 @@ struct ProjectDetailView: View {
             if showsExpand {
                 Button {
                     focused = nil
-                    expandedPreview.toggle()
+                    session.workspace.expandedPreview.toggle()
                 } label: {
-                    Image(systemName: expandedPreview ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    Image(systemName: session.workspace.expandedPreview ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                         .frame(width: 44, height: 44)
                         .foregroundStyle(.white)
                         .background(.black.opacity(0.55), in: Circle())
                 }
-                .accessibilityLabel(expandedPreview ? "Back to editor" : "Expand preview")
+                .accessibilityLabel(session.workspace.expandedPreview ? "Reduce preview" : "Expand preview")
                 .padding(8)
             }
         }
     }
 
     private func transport(showsOverview: Bool) -> some View {
-        HStack(spacing: 12) {
-            Button(session.isPlaying ? "Pause" : "Play", systemImage: session.isPlaying ? "pause.fill" : "play.fill") {
-                focused = nil
-                session.togglePlayback()
-            }
-            .labelStyle(.iconOnly)
-            .font(.title3)
-            .frame(minWidth: 44, minHeight: 44)
-            .disabled(session.isPreparingPreview || session.previewError != nil)
-            VStack(spacing: 0) {
-                CaptionTimeline(snapshot: session.snapshot, selectedCueID: session.selectedCueID,
-                    duration: EditorTime.seconds(session.duration), seconds: EditorTime.seconds(session.time),
-                    showsOverview: showsOverview, seek: session.scrub)
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        Text(EditorTime.display(session.time)).fixedSize()
-                        Spacer()
-                        Text(EditorTime.display(session.duration)).foregroundStyle(.secondary).fixedSize()
-                    }
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(EditorTime.display(session.time))
-                        Text(EditorTime.display(session.duration)).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.caption2.monospacedDigit())
-                .lineLimit(1)
-            }
-            Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
-                .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44).disabled(!session.canUndo)
-        }
+        EditorPlaybackControls(session: session, showsOverview: showsOverview, onInteraction: { focused = nil })
     }
 
     private var editorToolBar: some View {
-        HStack(spacing: 8) {
-            toolButton("Captions", icon: "captions.bubble.fill", selected: true) { focused = nil }
-            toolButton("Style", icon: "textformat", selected: false) { focused = nil; session.pause(); showStyleSheet = true }
-                .disabled(session.document?.recognition?.words.isEmpty != false)
-            toolButton("Timing", icon: "timer", selected: false) { focused = nil; session.pause(); showTimingSheet = true }
-                .disabled(session.selectedCueID == nil)
-        }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
-        .background(theme.surfaceColor)
-    }
-
-    private func toolButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 19))
-                Text(title).font(.caption2)
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(EditorTool.allCases) { tool in
+                    Button { switchTool(tool) } label: {
+                        Label(tool.title, systemImage: tool.symbol)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14).frame(minHeight: 44)
+                            .background(session.workspace.tool == tool ? theme.accentColor.opacity(0.14) : theme.surfaceColor,
+                                in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(session.workspace.tool == tool ? theme.accentColor : theme.primaryForegroundColor)
+                    .accessibilityAddTraits(session.workspace.tool == tool ? .isSelected : [])
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(selected ? theme.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 12))
         }
-        .buttonStyle(.plain).foregroundStyle(selected ? theme.accentColor : .secondary)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .scrollIndicators(.hidden)
     }
 
     private var canPresentProjectError: Bool {
-        !showProjectInfo && !showExport && !showStyleSheet && !showTimingSheet && !showMediaSheet && session.proUpsell == nil
+        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && session.proUpsell == nil
     }
 
     private var hasEditorError: Bool {
@@ -330,96 +385,30 @@ struct ProjectDetailView: View {
         session.saveError != nil || session.loadError != nil || session.commandError != nil
     }
     private var saveStatus: String {
-        session.saveError != nil ? "Changes not saved" : session.hasPendingChanges ? "Saving changes…" : "Saved on this device"
+        if session.document == nil { return session.isLoading ? "Opening…" : "Couldn’t open project" }
+        if session.saveError != nil { return "Couldn’t save changes" }
+        return session.hasPendingChanges || session.isSaving ? "Saving…" : "Saved"
     }
 
     private var status: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                if session.isSaving { ProgressView().controlSize(.mini) }
-                Text(saveStatus)
-                    .font(.caption).foregroundStyle(session.saveError != nil ? .red : .secondary)
-                Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            if let error = session.saveError {
+                Label("Couldn’t save changes", systemImage: "exclamationmark.circle")
+                    .font(.subheadline.weight(.semibold))
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+                Button("Try again") { Task { await session.retrySave() } }
+                    .disabled(session.isSaving)
+            } else if let error = session.loadError {
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+                Button("Try again") { Task { await session.open() } }
             }
-            if session.saveError != nil {
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        Button("Retry save") { Task { await session.flush() } }
-                        Button("Reload") { showReloadConfirmation = true }
-                    }
-                    VStack(alignment: .leading) {
-                        Button("Retry save") { Task { await session.flush() } }
-                        Button("Reload") { showReloadConfirmation = true }
-                    }
-                }
-            }
-            if let error = session.saveError { Text(error).font(.footnote).foregroundStyle(.red) }
-            if let error = session.loadError { Text(error).font(.footnote).foregroundStyle(.red) }
-            if let error = session.commandError {
+            if let error = session.commandError, session.saveError == nil {
                 HStack(alignment: .top) {
-                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Text(error).font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Button("Dismiss", systemImage: "xmark.circle") { session.commandError = nil }.labelStyle(.iconOnly)
                 }
             }
-        }
-    }
-
-    private func editorContent(_ document: ProjectDocument, viewportHeight: CGFloat) -> some View {
-        ScrollViewReader { scroll in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if hasStatusError { status }
-                    if let error = session.previewError {
-                        Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
-                        Button("Retry preview") { Task { await session.retryPreview() } }
-                    }
-                    if let error = captionRenderError {
-                        Label(error, systemImage: "captions.bubble").font(.footnote).foregroundStyle(.orange)
-                    }
-                    if document.recognition?.words.isEmpty == false {
-                        transcriptHeader(document)
-                        if document.recognition?.isIncomplete == true {
-                            PartialCaptionStatus(document: document, preparing: preparingTranscription,
-                                retry: { retryMissing() }, reset: resetRetryProgress)
-                        }
-                        if let snapshot = session.snapshot {
-                            if snapshot.transcriptItems.isEmpty {
-                                Text("No captions are inside the retained range. Adjust trim in Media to restore them.")
-                                    .foregroundStyle(.secondary)
-                                Button("Media tools") { focused = nil; showMediaSheet = true }
-                            }
-                            transcriptRows(snapshot)
-                        }
-                    } else {
-                        transcription(document)
-                    }
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .onChange(of: focused) { _, value in
-                if let value, !showProjectInfo { scroll.scrollTo(value, anchor: .bottom) }
-            }
-            .onChange(of: viewportHeight) { _, _ in
-                if let focused, !showProjectInfo { scroll.scrollTo(focused, anchor: .bottom) }
-            }
-            .onChange(of: session.selectedCueID) { _, id in
-                guard !session.isPlaying, focused == nil, let id else { return }
-                scroll.scrollTo(id, anchor: .top)
-            }
-            .onChange(of: session.presentation?.cueID) { _, id in
-                // Playback follows footage without mutating selection or taking editing focus.
-                guard session.isPlaying, focused == nil, let id else { return }
-                if reduceMotion { scroll.scrollTo(id, anchor: .center) }
-                else { withAnimation { scroll.scrollTo(id, anchor: .center) } }
-            }
-        }
-    }
-
-    private func transcriptRows(_ snapshot: CaptionSnapshot) -> some View {
-        LazyVStack(alignment: .leading, spacing: 5) {
-            ForEach(snapshot.transcriptItems) { item in transcriptRow(item) }
         }
     }
 
@@ -429,7 +418,7 @@ struct ProjectDetailView: View {
         case .cue(let cue):
             CaptionTranscriptRow(session: session, cue: cue,
                 active: session.presentation?.cueID == cue.id,
-                openWords: { focused = nil; showTimingSheet = true }, focused: $focused)
+                openWords: { switchTool(.timing) }, focused: $focused)
         case .gap(let gap):
             CaptionGapRow(gap: gap,
                 busy: model.transcription.isActive(projectID) || preparingTranscription || model.transcription.isAuthorizing,
@@ -465,7 +454,11 @@ struct ProjectDetailView: View {
     private var correctionPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let cue = session.selectedCue, let snapshot = session.snapshot {
-                Text("Words & phrases").font(.subheadline.weight(.semibold))
+                Text("Words & phrases").font(.headline)
+                Text(snapshot.text(for: cue).isEmpty ? "Hidden caption" : snapshot.text(for: cue))
+                    .font(.body).textSelection(.enabled)
+                Text(EditorTime.display(cue.interval.start) + "–" + EditorTime.display(cue.interval.end))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 Text("Select a word to correct it. Clear its text to hide it; timing stays unchanged.")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollViewReader { words in
@@ -505,10 +498,17 @@ struct ProjectDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     TextField("Hidden word", text: Binding(
-                        get: { (session.snapshot?.wordsByID[id]?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) },
-                        set: { session.editText(wordID: id, value: $0) }), axis: .vertical)
+                        get: {
+                            let canonical = session.snapshot?.wordsByID[id]?.text ?? ""
+                            return session.workspace.wordDraft?.value(for: id, canonical: canonical)
+                                ?? canonical.trimmingCharacters(in: .whitespacesAndNewlines)
+                        },
+                        set: { value in
+                            guard session.editText(wordID: id, value: value) else { return }
+                            session.workspace.wordDraft = EditorTextDraft(id: id, text: value,
+                                canonical: session.snapshot?.wordsByID[id]?.text ?? "")
+                        }), axis: .vertical)
                         .textFieldStyle(.roundedBorder)
-                        .lineLimit(1...4)
                         .focused($focused, equals: .word(id))
                         .id(EditorField.word(id))
                         .accessibilityLabel("Selected word or corrected phrase")
@@ -520,13 +520,13 @@ struct ProjectDetailView: View {
                 DisclosureGroup("Caption timing") {
                     TimingFields(interval: session.timingCue?.interval ?? cue.interval, identity: cue.id,
                         detail: timingExplanation + " Applying caption timing scales its word intervals as a manual correction.",
-                        apply: session.retimeCue, focused: $focused)
+                        apply: session.retimeCue, workspace: $session.workspace, focused: $focused)
                 }
                 if let word = session.timingWord {
                     DisclosureGroup("Selected word timing") {
                         TimingFields(interval: word.projectInterval, identity: word.id,
                             detail: timingExplanation + " Extending a word expands the caption if needed.",
-                            apply: session.retimeWord, focused: $focused)
+                            apply: session.retimeWord, workspace: $session.workspace, focused: $focused)
                     }
                 }
             }
@@ -591,61 +591,7 @@ struct ProjectDetailView: View {
     }
 
     private var styleSheet: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    CaptionStylePanel(session: session)
-                    Divider()
-                    CaptionTemplatesPanel(session: session)
-                }.padding(16)
-            }
-            .navigationTitle("Caption style").navigationBarTitleDisplayMode(.inline).themedSurface()
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showStyleSheet = false } } }
-            .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var timingSheet: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let error = session.commandError { Text(error).font(.footnote).foregroundStyle(.red) }
-                    correctionPanel
-                }.padding(16)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Words & timing").navigationBarTitleDisplayMode(.inline).themedSurface()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { showTimingSheet = false } }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var mediaSheet: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let error = session.commandError { Text(error).font(.footnote).foregroundStyle(.red) }
-                    MediaPanel(session: session, focused: $focused)
-                }.padding(16)
-            }
-                .scrollDismissesKeyboard(.interactively)
-                .navigationTitle("Media tools").navigationBarTitleDisplayMode(.inline).themedSurface()
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { showMediaSheet = false } }
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
-                    }
-                }
-        }
-        .presentationDetents([.medium, .large])
+        CaptionStyleInspector(session: session)
     }
 
     private var projectInfoSheet: some View {
@@ -663,15 +609,19 @@ struct ProjectDetailView: View {
             .navigationTitle("Project details")
             .navigationBarTitleDisplayMode(.inline)
             .themedSurface()
+            .task {
+                if focusTitleOnPresentation {
+                    focusTitleOnPresentation = false
+                    focused = .title
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         focused = nil
                         session.endTyping()
-                        Task {
-                            await session.flush()
-                            if !session.hasPendingChanges { showProjectInfo = false }
-                        }
+                        showProjectInfo = false
+                        Task { await session.flush() }
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -693,18 +643,10 @@ struct ProjectDetailView: View {
                 }
             }
         }
-        .confirmationDialog("Discard unsaved changes and reload?", isPresented: Binding(
-            get: { showReloadConfirmation && showProjectInfo }, set: { showReloadConfirmation = $0 })) {
-            Button("Discard and reload", role: .destructive) {
-                focused = nil
-                Task { await session.reloadDiscardingDraft() }
-            }
-        } message: { Text("Only the last saved project will be kept. This also clears this session's undo history.") }
         .alert("Project details", isPresented: Binding(
             get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
             Button("OK", role: .cancel) { model.alertMessage = nil }
         } message: { Text(model.alertMessage ?? "") }
-        .interactiveDismissDisabled(session.hasPendingChanges)
         .onDisappear { focused = nil; session.endTyping(); Task { await session.flush() } }
     }
 
@@ -735,17 +677,6 @@ struct ProjectDetailView: View {
             }
         }
     }
-
-    private func leave() {
-        focused = nil
-        session.pause()
-        isLeaving = true
-        Task {
-            await session.flush()
-            isLeaving = false
-            if !session.hasPendingChanges { dismiss() }
-        }
-    }
 }
 
 struct TimingFields: View {
@@ -753,6 +684,7 @@ struct TimingFields: View {
     let identity: UUID
     let detail: String
     let apply: (MediaInterval) -> Void
+    @Binding var workspace: EditorWorkspace
     @FocusState.Binding var focused: EditorField?
     @State private var start = ""
     @State private var end = ""
@@ -764,13 +696,13 @@ struct TimingFields: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text("Start (s)").font(.caption)
-                    TextField("Start seconds", text: $start).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                    TextField("Start seconds", text: field(isStart: true)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                         .focused($focused, equals: .timing(identity, false)).accessibilityLabel("Start seconds")
                         .id(EditorField.timing(identity, false))
                 }
                 VStack(alignment: .leading) {
                     Text("End (s)").font(.caption)
-                    TextField("End seconds", text: $end).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                    TextField("End seconds", text: field(isStart: false)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                         .focused($focused, equals: .timing(identity, true)).accessibilityLabel("End seconds")
                         .id(EditorField.timing(identity, true))
                 }
@@ -785,7 +717,19 @@ struct TimingFields: View {
         .onAppear { reset() }
         .onChange(of: identity) { _, _ in reset() }
         .onChange(of: interval) { _, _ in reset() }
+        .onChange(of: workspace.fieldResetGeneration) { _, _ in reset() }
     }
-    private func reset() { start = EditorTime.field(interval.start); end = EditorTime.field(interval.end); error = nil }
+    private func field(isStart: Bool) -> Binding<String> {
+        Binding(get: { isStart ? start : end }, set: { value in
+            if isStart { start = value } else { end = value }
+            workspace.timingDrafts[identity] = EditorTimingDraft(id: identity, interval: interval, start: start, end: end)
+        })
+    }
+    private func reset() {
+        if let draft = workspace.timingDrafts[identity], draft.interval == interval {
+            start = draft.start; end = draft.end
+        } else { start = EditorTime.field(interval.start); end = EditorTime.field(interval.end) }
+        error = nil
+    }
 }
 

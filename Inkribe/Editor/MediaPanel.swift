@@ -22,13 +22,13 @@ struct MediaPanel: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text("Start (s)").font(.caption)
-                                TextField("Start", text: $start).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                TextField("Start", text: trimField(isStart: true)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                                     .focused($focused, equals: .trimStart).accessibilityLabel("Trim start seconds")
                                     .id(EditorField.trimStart)
                             }
                             VStack(alignment: .leading) {
                                 Text("End (s)").font(.caption)
-                                TextField("End", text: $end).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                TextField("End", text: trimField(isStart: false)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
                                     .focused($focused, equals: .trimEnd).accessibilityLabel("Trim end seconds")
                                     .id(EditorField.trimEnd)
                             }
@@ -83,6 +83,7 @@ struct MediaPanel: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .onAppear { resetFields() }
         .onChange(of: edits.trim) { _, _ in resetFields() }
+        .onChange(of: session.workspace.fieldResetGeneration) { _, _ in resetFields() }
         .onDisappear { session.endMediaEditing() }
     }
 
@@ -115,9 +116,25 @@ struct MediaPanel: View {
         }
         .buttonStyle(.bordered)
     }
+    private var trimInterval: MediaInterval? {
+        guard let document = session.document else { return nil }
+        return edits.trim ?? (try? MediaInterval(start: .zero, end: document.sourceDuration))
+    }
+    private func trimField(isStart: Bool) -> Binding<String> {
+        Binding(get: { isStart ? start : end }, set: { value in
+            if isStart { start = value } else { end = value }
+            if let interval = trimInterval {
+                session.workspace.trimDraft = EditorTimingDraft(id: session.projectID, interval: interval, start: start, end: end)
+            }
+        })
+    }
     private func resetFields() {
-        start = EditorTime.field(edits.trim?.start ?? .zero)
-        end = EditorTime.field(edits.trim?.end ?? session.document?.sourceDuration ?? .zero)
+        if let draft = session.workspace.trimDraft, draft.interval == trimInterval {
+            start = draft.start; end = draft.end
+        } else {
+            start = EditorTime.field(edits.trim?.start ?? .zero)
+            end = EditorTime.field(edits.trim?.end ?? session.document?.sourceDuration ?? .zero)
+        }
         trimError = nil
     }
     private func slider(_ title: String, key: WritableKeyPath<MediaEdits, Double>, control: MediaControl,

@@ -1,13 +1,16 @@
 import CoreMedia
 import Foundation
+import InkribeCore
 
-enum ExportFormat: String, Codable, CaseIterable, Sendable {
-    case mp4, srt
+typealias ExportFormat = InkribeCore.ExportFormat
+typealias ExportResolution = InkribeCore.ExportResolution
+typealias ExportProfile = InkribeCore.ExportProfile
+
+extension ExportFormat {
     var title: String { self == .mp4 ? "Captioned video" : "SRT subtitles" }
 }
 
-enum ExportResolution: Int, Codable, CaseIterable, Sendable {
-    case hd = 720, fullHD = 1080
+extension ExportResolution {
     var title: String { "\(rawValue)p" }
 
     /// The selected short edge for 16:9; square/custom canvases fit inside the
@@ -22,11 +25,6 @@ enum ExportResolution: Int, Codable, CaseIterable, Sendable {
         let height = max(2, Int((Double(project.height) * scale / 2).rounded(.down)) * 2)
         return try RenderCanvas(width: width, height: height)
     }
-}
-
-struct ExportProfile: Codable, Equatable, Sendable {
-    var format: ExportFormat = .mp4
-    var resolution: ExportResolution = .hd
 }
 
 /// This file is durable input; the small JobQueue payload only identifies it.
@@ -65,7 +63,7 @@ enum ExportError: LocalizedError, Sendable {
     case busy, noCaptions, invalidRequest, unavailableEncoder, decoding, encoding, stalled, invalidOutput, noSpace
     var errorDescription: String? {
         switch self {
-        case .busy: "Finish or cancel the current export first."
+        case .busy: "This export is being prepared or delivered. Try again when that operation finishes."
         case .noCaptions: "There are no visible edited captions to export."
         case .invalidRequest: "This saved export request is unavailable. Start a new export."
         case .unavailableEncoder: "The requested H.264/AAC export is unavailable on this device."

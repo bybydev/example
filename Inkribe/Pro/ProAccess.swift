@@ -50,10 +50,6 @@ final class ProAccess {
     }
 
     func canChangeStyle(from before: CaptionStyle, to next: CaptionStyle) -> Bool {
-        if hasPro { return true }
-        // Preserve existing looks after expiry. New premium font/effect choices
-        // require Pro; free color/size/position changes and a reset remain possible.
-        return (next.font == .modern || next.font == before.font)
-            && (next.effect == .none || next.effect == before.effect)
+        CaptionStyleAccess.canChange(from: before, to: next, hasPro: hasPro)
     }
 }

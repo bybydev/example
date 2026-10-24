@@ -30,6 +30,7 @@ struct ImportFailure: Sendable, Identifiable {
 struct ImportResult: Sendable {
     let documents: [ProjectDocument]
     let failures: [ImportFailure]
+    var wasCancelled = false
 }
 
 /// Non-UI ingress for Files, iCloud/document providers, Photos transferable
@@ -66,7 +67,7 @@ actor MediaImporter {
             var completed: [ProjectDocument] = []
             var failures: [ImportFailure] = []
             for input in inputs {
-                try Task.checkCancellation()
+                if Task.isCancelled { return ImportResult(documents: completed, failures: failures, wasCancelled: true) }
                 do {
                     if let existing = try? await repository.open(input.id) {
                         completed.append(existing)
@@ -76,7 +77,7 @@ actor MediaImporter {
                                                customCanvas: customCanvas, title: nil,
                                                projectID: input.id))
                 } catch is CancellationError {
-                    throw CancellationError()
+                    return ImportResult(documents: completed, failures: failures, wasCancelled: true)
                 } catch {
                     failures.append(ImportFailure(id: input.id,
                                                     filename: input.displayName,
@@ -90,7 +91,7 @@ actor MediaImporter {
     /// No streaming site scraping or DRM bypass: this is direct HTTPS media only.
     /// Caller must obtain explicit media rights confirmation before this is called.
     func importDirectURL(_ remoteURL: URL, rightsConfirmed: Bool,
-                         preset: CanvasPreset = .original) async throws -> ProjectDocument {
+                         preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil) async throws -> ProjectDocument {
         guard rightsConfirmed else { throw ProjectStoreError.rightsNotConfirmed }
         guard remoteURL.scheme?.lowercased() == "https",
               remoteURL.host != nil, remoteURL.user == nil,
@@ -157,7 +158,7 @@ actor MediaImporter {
                     ? "Imported Media" : remoteURL.lastPathComponent
                 return try await createProject(
                     [ImportInput(localURL: temporary, origin: .directURL, displayName: name)],
-                    preset: preset, customCanvas: nil, title: name
+                    preset: preset, customCanvas: customCanvas, title: name
                 )
             } onCancel: {
                 session.invalidateAndCancel()

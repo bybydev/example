@@ -1,31 +1,28 @@
-# Inkribe iOS v1.0 — start here
+# Inkribe iOS — start here
 
-The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](phases/TRANSCRIPTION_RECOVERY.md) and [handoff](handoffs/TRANSCRIPTION_RECOVERY.md).
+2026-10-24. Issue #38's five source passes and consolidation are in
+[PR #39](https://github.com/hoangbkit/Inkribe/pull/39),
+`feat/ios-project-packages` → `develop`. Leave open without auto-merge.
 
-The earlier status paragraphs below are historical and superseded by this request.
+The iPhone app uses UUID project packages, automatic project saving, durable
+multi-job processing, a native project home and one scrolling editor with ten
+versioned caption looks. Canonical schema 8 reads 1–7; package/queue/request
+contracts and working transcription are retained. Mac source/config/APIs stay intact.
 
-## Current transcription recovery — issue #36 (2026-10-23)
+**Source reviewed; production acceptance pending.** No builds/typechecks/tests/
+fixtures, CI setup/triggers/runs, generation, model downloads, native inference/
+exports, UI/device/accessibility or deployment is authorized by this work.
 
-PR #35 was squash merged into develop as 525fae4. The user requested issue #36 recovery/checkpoints in one new fix/ios-window-recovery PR targeting develop, left open without auto-merge. Read [phases/TRANSCRIPTION_RECOVERY.md](phases/TRANSCRIPTION_RECOVERY.md), [handoffs/TRANSCRIPTION_RECOVERY.md](handoffs/TRANSCRIPTION_RECOVERY.md) and HANDOFF first. Source integration only; no builds/typechecks/tests, CI, generation, weights or device/UI validation. Earlier #35 open/continuation holds below are historical.
-
-## Current workspace repair — PR #35 (2026-10-23)
-
-All four user-requested repair passes are source-implemented on `fix/ios-transcription-and-workspace` → develop in [PR #35](https://github.com/hoangbkit/Inkribe/pull/35), open with auto-merge disabled. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](HANDOFF.md) first for the current workflow, limitations and prioritized user checks. No builds/typechecks/tests, UI/device/native validation, CI, generation or downloads ran; the affected video's exact failure is unverified. No next phase or merge is authorized. Earlier Pro branch/review instructions below are historical.
-
-Current compact scope: 29 V1 acceptance items; P0–P7 source work is squash merged through [#30](https://github.com/hoangbkit/Inkribe/pull/30), commit eb89f0f. The user subsequently authorized **Pro locking and AppFoundation themes**. The earlier P5 Pro deferral and PR #30 review hold are historical.
-
-Read root AGENTS, PLAN, FEATURES, WORKFLOW, HANDOFF, ARCHITECTURE, DESIGN and [phases/PRO.md](phases/PRO.md). The Pro phase was merged as #31; its branch/review hold is historical. Current repair work is PR #35 above.
-
-| Document | Role |
+| Read | Purpose |
 |---|---|
-| [PLAN.md](PLAN.md), [FEATURES.md](FEATURES.md) | Current scope and 29 acceptance items |
-| [PHASES.md](PHASES.md) | Delivery history and assessment |
-| [phases/PRO.md](phases/PRO.md), [handoffs/PRO.md](handoffs/PRO.md) | Approved commercial policy, source integration, remaining user checks |
-| [HANDOFF.md](HANDOFF.md), [handoffs/P7.md](handoffs/P7.md) | Live continuation and prior final audit |
-| [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md) | Ownership and UI contracts |
-| [MODELS.md](MODELS.md) | Optional development download/cache versus bundled-only production packaging |
-| [WORKFLOW.md](WORKFLOW.md) | PR, scope and execution rules |
-| [DECISIONS.md](DECISIONS.md), [RISKS.md](RISKS.md), [VALIDATION.md](VALIDATION.md) | Decisions, risks and user-run scenarios |
-| [ISSUE_21.md](ISSUE_21.md), phases/P0–P7 and earlier handoffs | Historical source evidence; not authority to expand scope |
+| [PLAN](PLAN.md), [FEATURES](FEATURES.md) | Current scope and the 29 acceptance items |
+| [WORKFLOW](WORKFLOW.md), root AGENTS.md | Authorization, execution and PR rules |
+| [ARCHITECTURE](ARCHITECTURE.md), [DESIGN](DESIGN.md) | Current ownership, data and interaction contracts |
+| [HANDOFF](HANDOFF.md), [CONSOLIDATION](CONSOLIDATION.md) | Integrated source status, fixes and next user checks |
+| [PRODUCTION_READINESS](PRODUCTION_READINESS.md) | Release gates and owner inputs; actual privacy URL, live commerce and execution evidence remain pending |
+| [MODELS](MODELS.md) | Existing optional-download versus bundled-only model lanes |
+| [Historical records](archive/before-consolidation/README.md) | Superseded status and delivery history; not current scope/authorization |
 
-The Pro source now integrates all 29 V1 items. Compilation, native runtime, StoreKit, rendering, accessibility and device behavior remain unverified. No builds/typechecks/tests, CI, generation, weights, deployment or device validation were run. User tests afterward. Preserve Mac.
+The phase/handoff index is in HANDOFF. Preserve the user's confirmed successful
+caption quality, partial publication, genuine word/phrase intervals, edits, undo,
+allowance and independent exports. Never infer acceptance from source integration.

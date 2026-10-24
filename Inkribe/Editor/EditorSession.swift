@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
+import InkribeCore
 import Observation
 
 /// A single owner for the working document, save revision, undo, selection and playback.
@@ -10,6 +11,8 @@ final class EditorSession {
     var proUpsell: ProFeature?
     let projectID: UUID
     let player = AVPlayer()
+    var workspace = EditorWorkspace()
+    private(set) var previewGeneration = UUID()
     private(set) var document: ProjectDocument?
     private(set) var snapshot: CaptionSnapshot?
     private(set) var originalAvailable: [UUID: Bool] = [:]
@@ -41,8 +44,10 @@ final class EditorSession {
     private var stylingControl: CaptionStyleControl?
     private var mediaControl: MediaControl?
     private var mediaURLs: [UUID: URL] = [:]
-    private var past: [History] = []
-    private var future: [History] = []
+    private var editHistory = EditorHistory()
+    private typealias Selection = EditorSelection
+    private typealias History = EditorHistoryEntry
+    private typealias HistoryChange = EditorHistoryChange
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private var writer: Task<Void, Never>?
     @ObservationIgnored private var periodicObserver: Any?
@@ -51,40 +56,6 @@ final class EditorSession {
     @ObservationIgnored private var preparedMedia: MediaKey?
     @ObservationIgnored private var mediaRefresh: Task<Void, Never>?
 
-    private struct Selection { let cue: UUID?; let word: UUID? }
-    private struct History {
-        var change: HistoryChange
-        let selectionBefore: Selection
-        var selectionAfter: Selection
-    }
-    private enum HistoryChange {
-        case caption(CaptionEditPatch)
-        case style(before: CaptionStyle?, after: CaptionStyle?)
-        case media(before: MediaEditState, after: MediaEditState)
-
-        var estimatedBytes: Int {
-            switch self {
-            case .caption(let patch): patch.estimatedBytes
-            case .style: MemoryLayout<CaptionStyle>.stride * 2
-            case .media: MemoryLayout<MediaEditState>.stride * 2
-            }
-        }
-        mutating func coalesceText(_ next: CaptionEditPatch) -> Bool {
-            guard case .caption(var patch) = self, patch.coalesceText(next) else { return false }
-            self = .caption(patch)
-            return true
-        }
-        mutating func coalesceStyle(from previous: CaptionStyle?, to next: CaptionStyle) -> Bool {
-            guard case .style(let before, let after) = self, after == previous else { return false }
-            self = .style(before: before, after: next)
-            return true
-        }
-        mutating func coalesceMedia(from previous: MediaEditState, to next: MediaEditState) -> Bool {
-            guard case .media(let before, let after) = self, after == previous else { return false }
-            self = .media(before: before, after: next)
-            return true
-        }
-    }
     private struct MediaKey: Equatable {
         let clips: [ProjectClip]
         let canvas: ProjectCanvas
@@ -93,6 +64,7 @@ final class EditorSession {
     }
 
     init(projectID: UUID, access: ProAccess) { self.projectID = projectID; self.access = access }
+    var isReadyToEdit: Bool { document != nil }
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: CaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: CaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
@@ -119,20 +91,14 @@ final class EditorSession {
         if document == nil || preparedMedia == nil { await readSaved() }
     }
 
-    /// Call after an external result/relink; never throw away a dirty editor draft.
+    /// Call after an external result/relink; never throw away unsaved changes.
     func refreshSaved() async {
         await flush()
         guard isPresented, !hasPendingChanges else { return }
         await readSaved()
     }
 
-    func reloadDiscardingDraft() async {
-        debounce?.cancel()
-        if let writer { await writer.value }
-        await readSaved(discardDraft: true)
-    }
-
-    private func readSaved(discardDraft: Bool = false) async {
+    private func readSaved() async {
         guard isPresented else { return }
         let generation = UUID()
         loadGeneration = generation
@@ -145,10 +111,14 @@ final class EditorSession {
             if loaded.recognition == nil {
                 do { loaded = try await repository.restoreRetainedCaptions(projectID: projectID) }
                 catch is CancellationError { return }
-                catch { commandError = error.localizedDescription }
+                catch {
+                    // Transcription controls report unavailable saved progress.
+                    // It must not turn opening an otherwise valid project into
+                    // a second, duplicate editor warning.
+                }
             }
             guard generation == loadGeneration, sequence == editSequence else { return }
-            if discardDraft || document == nil || loaded.contentRevision != committedRevision {
+            if !hasPendingChanges && (document == nil || loaded.contentRevision != committedRevision) {
                 let appendOnly = savedBase.map { loaded.isSpeechPublication(since: $0) } ?? false
                 let hadWords = document?.recognition?.words.isEmpty == false
                 document = loaded
@@ -156,7 +126,7 @@ final class EditorSession {
                 savedSequence = editSequence
                 hasPendingChanges = false
                 saveError = nil
-                if discardDraft || !appendOnly { past.removeAll(); future.removeAll(); updateHistoryFlags() }
+                if !appendOnly { editHistory.reset(); workspace.clearFieldDrafts(); updateHistoryFlags() }
                 rebuildSnapshot()
                 repairSelection()
                 // A newly available transcript should be visible on the paused
@@ -168,7 +138,7 @@ final class EditorSession {
                     time = reveal
                 }
             }
-            savedBase = loaded
+            if !hasPendingChanges { savedBase = loaded }
             var urls: [UUID: URL] = [:]
             for asset in loaded.assets {
                 if let url = try? await repository.sourceURL(projectID: projectID, assetID: asset.id) {
@@ -239,11 +209,11 @@ final class EditorSession {
             guard after != before else { return }
             let outputTime = try OutputTimeline(project).outputTime(clampingOriginal: originalTime)
             let selection = Selection(cue: selectedCueID, word: selectedWordID)
-            if let control, control == mediaControl, !past.isEmpty, future.isEmpty,
-               past[past.count - 1].change.coalesceMedia(from: before, to: after) {
-                past[past.count - 1].selectionAfter = selection
+            if let control, control == mediaControl, !editHistory.past.isEmpty, editHistory.future.isEmpty,
+               editHistory.past[editHistory.past.count - 1].change.coalesceMedia(from: before, to: after) {
+                editHistory.past[editHistory.past.count - 1].selectionAfter = selection
             } else {
-                past.append(History(change: .media(before: before, after: after),
+                editHistory.past.append(History(change: .media(before: before, after: after),
                     selectionBefore: selection, selectionAfter: selection))
             }
             document = project
@@ -252,7 +222,7 @@ final class EditorSession {
             stylingControl = nil; typingWordID = nil
             finishHistoryEdit()
             rebuildSnapshot(); repairSelection()
-            if !past.isEmpty { past[past.count - 1].selectionAfter = Selection(cue: selectedCueID, word: selectedWordID) }
+            if !editHistory.past.isEmpty { editHistory.past[editHistory.past.count - 1].selectionAfter = Selection(cue: selectedCueID, word: selectedWordID) }
             commandError = nil
             changed()
             if !updateVolumePreviewIfPossible(before: before) { pause(); refreshMediaPreview() }
@@ -298,7 +268,12 @@ final class EditorSession {
         }
     }
 
-    func setCaptionStyle(_ style: CaptionStyle, coalescing control: CaptionStyleControl? = nil) {
+    func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil) {
+        var style = value
+        if style.formatVersion == 1 && (style.hasExtendedValues || [.condensed, .rounded].contains(style.font) ||
+            [.emphasis, .underline, .rise].contains(style.effect)) {
+            style.formatVersion = 2
+        }
         guard var project = document, style != project.effectiveCaptionStyle else { return }
         guard access.canChangeStyle(from: project.effectiveCaptionStyle, to: style) else {
             proUpsell = .styles
@@ -310,11 +285,11 @@ final class EditorSession {
             project.captionStyle = style
             try project.validate()
             let selection = Selection(cue: selectedCueID, word: selectedWordID)
-            if let control, control == stylingControl, !past.isEmpty, future.isEmpty,
-               past[past.count - 1].change.coalesceStyle(from: before, to: style) {
-                past[past.count - 1].selectionAfter = selection
+            if let control, control == stylingControl, !editHistory.past.isEmpty, editHistory.future.isEmpty,
+               editHistory.past[editHistory.past.count - 1].change.coalesceStyle(from: before, to: style) {
+                editHistory.past[editHistory.past.count - 1].selectionAfter = selection
             } else {
-                past.append(History(change: .style(before: before, after: style),
+                editHistory.past.append(History(change: .style(before: before, after: style),
                     selectionBefore: selection, selectionAfter: selection))
             }
             document = project
@@ -328,14 +303,16 @@ final class EditorSession {
         } catch { commandError = error.localizedDescription }
     }
 
-    func editText(wordID: UUID, value: String) {
+    @discardableResult
+    func editText(wordID: UUID, value: String) -> Bool {
         perform(coalescing: wordID) { state, _ in
             try CaptionEdits.text(value, wordID: wordID, in: &state)
             return nil
         }
     }
 
-    func editCueText(cueID: UUID, value: String) {
+    @discardableResult
+    func editCueText(cueID: UUID, value: String) -> Bool {
         perform(coalescing: cueID) { state, _ in
             try CaptionEdits.cueText(value, cueID: cueID, in: &state)
             return nil
@@ -366,9 +343,10 @@ final class EditorSession {
         perform { state, _ in try CaptionEdits.mergeNext(cueID: id, in: &state); return nil }
     }
 
+    @discardableResult
     private func perform(coalescing wordID: UUID? = nil,
-                         _ edit: (inout CaptionEditState, ProjectDocument) throws -> UUID?) {
-        guard var project = document, let result = project.recognition else { return }
+                         _ edit: (inout CaptionEditState, ProjectDocument) throws -> UUID?) -> Bool {
+        guard var project = document, let result = project.recognition else { return false }
         pause()
         stylingControl = nil
         mediaControl = nil
@@ -377,7 +355,7 @@ final class EditorSession {
         let selection = Selection(cue: selectedCueID, word: selectedWordID)
         do {
             let newCue = try edit(&after, project)
-            guard after != before else { return }
+            guard after != before else { commandError = nil; return true }
             project.schemaVersion = ProjectSchema.current
             project.recognition = after.applying(to: result)
             try project.validate()
@@ -387,29 +365,30 @@ final class EditorSession {
             repairSelection()
             let finalSelection = Selection(cue: selectedCueID, word: selectedWordID)
             let patch = CaptionEditPatch(before: before, after: after)
-            if let wordID, typingWordID == wordID, !past.isEmpty, future.isEmpty,
-               past[past.count - 1].change.coalesceText(patch) {
-                past[past.count - 1].selectionAfter = finalSelection
+            if let wordID, typingWordID == wordID, !editHistory.past.isEmpty, editHistory.future.isEmpty,
+               editHistory.past[editHistory.past.count - 1].change.coalesceText(patch) {
+                editHistory.past[editHistory.past.count - 1].selectionAfter = finalSelection
             } else {
-                past.append(History(change: .caption(patch), selectionBefore: selection, selectionAfter: finalSelection))
+                editHistory.past.append(History(change: .caption(patch), selectionBefore: selection, selectionAfter: finalSelection))
             }
             typingWordID = wordID
             finishHistoryEdit()
             commandError = nil
             changed()
-        } catch { commandError = error.localizedDescription }
+            return true
+        } catch { commandError = error.localizedDescription; return false }
     }
 
     func undo() {
-        guard let history = past.last else { return }
+        guard let history = editHistory.past.last else { return }
         if restore(history.change, forward: false, selection: history.selectionBefore) {
-            past.removeLast(); future.append(history); updateHistoryFlags()
+            editHistory.past.removeLast(); editHistory.future.append(history); updateHistoryFlags()
         }
     }
     func redo() {
-        guard let history = future.last else { return }
+        guard let history = editHistory.future.last else { return }
         if restore(history.change, forward: true, selection: history.selectionAfter) {
-            future.removeLast(); past.append(history); updateHistoryFlags()
+            editHistory.future.removeLast(); editHistory.past.append(history); updateHistoryFlags()
         }
     }
     private func restore(_ change: HistoryChange, forward: Bool, selection: Selection) -> Bool {
@@ -418,26 +397,13 @@ final class EditorSession {
             let oldTimeline = OutputTimeline(project)
             let previousMedia = MediaEditState(project)
             let originalTime = try oldTimeline.originalTime(forOutput: min(time, oldTimeline.duration))
-            var mediaChanged = false
-            switch change {
-            case .caption(let patch):
-                guard let result = project.recognition else { throw CaptionEditError.missingCaption }
-                let state = try patch.applying(to: CaptionEditState(result), forward: forward)
-                project.recognition = state.applying(to: result)
-            case .style(let before, let after):
-                guard project.captionStyle == (forward ? before : after) else { throw CaptionEditError.missingCaption }
-                project.captionStyle = forward ? after : before
-            case .media(let before, let after):
-                guard MediaEditState(project) == (forward ? before : after) else { throw MediaEditError.invalidSettings }
-                project = (forward ? after : before).applying(to: project)
-                mediaChanged = true
-            }
-            project.schemaVersion = ProjectSchema.current
-            try project.validate()
+            let mediaChanged = change.changesMedia
+            project = try change.applying(to: project, forward: forward)
             let restoredTime: MediaTime
             if mediaChanged { restoredTime = try OutputTimeline(project).outputTime(clampingOriginal: originalTime) }
             else { restoredTime = time }
             pause(); typingWordID = nil; stylingControl = nil; mediaControl = nil
+            workspace.clearFieldDrafts()
             document = project
             time = restoredTime
             selectedCueID = selection.cue; selectedWordID = selection.word
@@ -447,14 +413,10 @@ final class EditorSession {
         } catch { commandError = error.localizedDescription; return false }
     }
     private func finishHistoryEdit() {
-        // Keep one oversized command undoable; otherwise bound count and estimated payload.
-        while past.count > 1 && (past.count > 50 || past.reduce(0, { $0 + $1.change.estimatedBytes }) > 8 * 1_024 * 1_024) {
-            past.removeFirst()
-        }
-        future.removeAll()
+        editHistory.finishEdit()
         updateHistoryFlags()
     }
-    private func updateHistoryFlags() { canUndo = !past.isEmpty; canRedo = !future.isEmpty }
+    private func updateHistoryFlags() { canUndo = !editHistory.past.isEmpty; canRedo = !editHistory.future.isEmpty }
     private func rebuildSnapshot() { snapshot = document.map(CaptionSnapshot.init) }
     private func repairSelection() {
         if snapshot?.cues.contains(where: { $0.id == selectedCueID }) != true {
@@ -475,18 +437,22 @@ final class EditorSession {
         }
     }
 
-    /// One writer drains the newest complete draft. Returned metadata never replaces newer text.
+    /// One writer drains the newest complete project. Returned metadata never replaces newer text.
     /// Once a write starts, debounce cancellation cannot cancel it.
     func flush() async {
         debounce?.cancel(); debounce = nil
-        if let writer { await writer.value; return }
+        if let writer {
+            await writer.value
+            if hasPendingChanges && saveError == nil { await flush() }
+            return
+        }
         guard hasPendingChanges else { return }
         isSaving = true
         let task = Task { await drainSaves() }
         writer = task
         await task.value
     }
-    /// Later style/export adapters freeze this value only after the latest draft is durable.
+    /// Later style/export adapters freeze this value only after the latest changes are saved.
     func savedDocument() async throws -> ProjectDocument {
         await flush()
         guard !hasPendingChanges else { throw CaptionEditError.unsavedChanges }
@@ -501,8 +467,6 @@ final class EditorSession {
             do {
                 guard let base = savedBase else { throw ProjectStoreError.missingProject(projectID) }
                 let saved = try await repository.commitEditorEdit(proposed, basedOn: base)
-                committedRevision = saved.contentRevision
-                savedSequence = capturedSequence
                 if var latest = document {
                     latest.recognition = try saved.recognition?.keepingEdits(from: latest.recognition)
                     latest.contentRevision = saved.contentRevision
@@ -510,18 +474,46 @@ final class EditorSession {
                     latest.schemaVersion = saved.schemaVersion
                     document = latest
                 }
+                committedRevision = saved.contentRevision
+                savedSequence = capturedSequence
                 savedBase = saved
                 hasPendingChanges = savedSequence != editSequence
                 saveError = nil
                 rebuildSnapshot()
                 repairSelection()
             } catch {
-                saveError = error.localizedDescription
                 hasPendingChanges = true
-                return // Preserve draft/history; never blindly rebase over someone else's saved revision.
+                // Input may have changed while the failed write awaited the
+                // repository (for example an unfinished name became valid).
+                // Try that newer value before presenting the older failure.
+                if editSequence != capturedSequence { continue }
+                saveError = saveMessage(for: error, project: document ?? proposed)
+                return // Keep the latest document and undo history in this app-owned session.
             }
         }
     }
+
+    private func saveMessage(for error: Error, project: ProjectDocument) -> String {
+        let title = project.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Enter a project name to save your changes." }
+        if project.title.count > 256 { return "Keep the project name within 256 characters." }
+        let underlying = error as NSError
+        if underlying.domain == NSCocoaErrorDomain && underlying.code == NSFileWriteOutOfSpaceError {
+            return "Your device is low on storage. Free up some space, then try again."
+        }
+        if let error = error as? ProjectStoreError {
+            switch error {
+            case .staleRevision:
+                return "The saved project changed while you were editing. Your latest changes are still open in Inkribe."
+            case .missingOriginal:
+                return "The original media is unavailable. Your latest changes are still open in Inkribe."
+            default: break
+            }
+        }
+        return "Your latest changes are still open in Inkribe. Try saving again."
+    }
+
+    func retrySave() async { await flush() }
 
     func retryPreview() async {
         preparedMedia = nil
@@ -546,6 +538,7 @@ final class EditorSession {
             let playbackID = UUID()
             playbackGeneration = playbackID
             player.replaceCurrentItem(with: item)
+            previewGeneration = UUID()
             preparedMedia = key
             statusObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
                 let message = item.status == .failed ? item.error?.localizedDescription ?? "This media could not be played." : nil
@@ -569,6 +562,7 @@ final class EditorSession {
         } catch {
             guard loadGeneration == generation else { return }
             player.replaceCurrentItem(with: nil)
+            previewGeneration = UUID()
             preparedMedia = nil
             previewError = error.localizedDescription
         }
@@ -631,6 +625,7 @@ final class EditorSession {
         playbackGeneration = UUID()
         preparedMedia = nil
         player.replaceCurrentItem(with: nil)
+        previewGeneration = UUID()
     }
 }
 

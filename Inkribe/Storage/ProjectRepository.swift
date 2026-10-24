@@ -1,3 +1,4 @@
+import InkribeCore
 import CryptoKit
 import Foundation
 
@@ -29,25 +30,16 @@ actor ProjectRepository {
         return appSupport.appendingPathComponent("InkribeIOSProjects", isDirectory: true)
     }
 
+    private func packageStore() throws -> ProjectPackageStore<ProjectDocument> {
+        ProjectPackageStore(rootURL: try root())
+    }
+
     private func directory(_ name: String) throws -> URL {
-        let url = try root().appendingPathComponent(name, isDirectory: true)
-        try files.createDirectory(at: url, withIntermediateDirectories: true)
-        if try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-            throw ProjectStoreError.invalidPath(url.path)
-        }
-        return url
+        try packageStore().directory(name)
     }
 
     private func projectDirectory(_ id: UUID) throws -> URL {
-        try directory("Projects").appendingPathComponent(id.uuidString, isDirectory: true)
-    }
-
-    private func documentURL(in project: URL) -> URL {
-        project.appendingPathComponent("document.json")
-    }
-
-    private func recoveryURL(in project: URL) -> URL {
-        project.appendingPathComponent("document.previous.json")
+        try packageStore().packageURL(for: id)
     }
 
     func makeStagingDirectory() throws -> URL {
@@ -71,22 +63,7 @@ actor ProjectRepository {
     /// The staging directory is on the same volume as Projects. One final rename
     /// publishes a complete immutable set of originals and a validated document.
     func commitNew(_ document: ProjectDocument, stagedAt staging: URL) throws -> ProjectDocument {
-        try Task.checkCancellation()
-        try document.validate()
-        let pending = try directory("Pending").resolvingSymlinksInPath().standardizedFileURL
-        guard staging.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == pending,
-              UUID(uuidString: staging.lastPathComponent) != nil else {
-            throw ProjectStoreError.invalidPath(staging.path)
-        }
-        let destination = try projectDirectory(document.id)
-        guard !files.fileExists(atPath: destination.path) else {
-            throw ProjectStoreError.duplicateProject(document.id)
-        }
-        try verifyOriginals(of: document, in: staging)
-        let encoded = try encoder.encode(document)
-        try encoded.write(to: documentURL(in: staging), options: .atomic)
-        try Task.checkCancellation()
-        try files.moveItem(at: staging, to: destination)
+        _ = try packageStore().commitNew(document, stagedAt: staging)
         if let id = UUID(uuidString: staging.lastPathComponent) { activeStaging.remove(id) }
         return document
     }
@@ -145,15 +122,7 @@ actor ProjectRepository {
             throw ProjectStoreError.invalidDocument("Use the importer to add originals")
         }
         try next.validate()
-        let directory = try projectDirectory(next.id)
-        try verifyOriginals(of: next, in: directory)
-        let url = documentURL(in: directory)
-        let previous = recoveryURL(in: directory)
-        // Never replace the prior recovery point before a valid new document is ready.
-        let data = try encoder.encode(next)
-        let backup = try encoder.encode(current)
-        try backup.write(to: previous, options: .atomic)
-        try data.write(to: url, options: .atomic)
+        try packageStore().save(next, replacing: current)
         return next
     }
 
@@ -162,6 +131,9 @@ actor ProjectRepository {
     func commitEditorEdit(_ proposed: ProjectDocument, basedOn base: ProjectDocument) throws -> ProjectDocument {
         let current = try open(proposed.id)
         if current.contentRevision == base.contentRevision {
+            guard try encoder.encode(current) == encoder.encode(base) else {
+                throw ProjectStoreError.invalidDocument("The saved project changed outside this editor. Your latest changes are still open in Inkribe.")
+            }
             return try commitEdit(proposed, expectedRevision: base.contentRevision)
         }
         guard current.isSpeechPublication(since: base) else {
@@ -240,11 +212,8 @@ actor ProjectRepository {
     /// Fixed sidecar inside the project: moves with Trash, is included in storage
     /// accounting, is not derived cache, and is never copied by duplicate().
     private func speechCheckpointURL(_ projectID: UUID) throws -> URL {
-        let project = try projectDirectory(projectID).standardizedFileURL
-        let url = project.appendingPathComponent("speech-checkpoint.json")
-        guard project.resolvingSymlinksInPath() == project,
-              url.resolvingSymlinksInPath() == url else { throw ProjectStoreError.invalidPath(url.path) }
-        return url
+        let package = try projectDirectory(projectID)
+        return try packageStore().file(ProjectPackageLayout.checkpointName, in: package)
     }
 
     private func readSpeechCheckpoint(_ projectID: UUID) throws -> SpeechCheckpoint? {
@@ -377,8 +346,11 @@ actor ProjectRepository {
         }
         guard let result = project.recognition, result.id == recognitionID,
               result.words.isEmpty, result.cues.isEmpty else { throw SpeechError.alreadyTranscribed }
-        let folder = try projectDirectory(projectID).appendingPathComponent("RecognitionRecovery", isDirectory: true)
-        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        let package = try projectDirectory(projectID)
+        let folder = try packageStore().file("RecognitionRecovery", in: package)
+        if !files.fileExists(atPath: folder.path) {
+            try files.createDirectory(at: folder, withIntermediateDirectories: false)
+        }
         if try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
             throw ProjectStoreError.invalidPath(folder.path)
         }
@@ -439,11 +411,14 @@ actor ProjectRepository {
     }
 
     private func hasPublishedSpeech(_ reservation: CaptionAllowanceLedger.Reservation) throws -> Bool {
-        let candidates = [try projectDirectory(reservation.projectID),
-            try directory("Trash").appendingPathComponent(reservation.projectID.uuidString)]
-        for folder in candidates where files.fileExists(atPath: folder.path) {
-            let document = try readRecoverable(in: folder)
-            guard document.id == reservation.projectID else { throw ProError.allowanceStorage }
+        let store = try packageStore()
+        if try store.contains(reservation.projectID, in: .projects),
+           try store.contains(reservation.projectID, in: .trash) {
+            throw ProjectStoreError.packageConflict(reservation.projectID)
+        }
+        for location in [ProjectPackageLocation.projects, .trash] {
+            guard try store.contains(reservation.projectID, in: location) else { continue }
+            let document = try store.load(reservation.projectID, in: location)
             return document.recognition.map { $0.id == reservation.jobID && !$0.words.isEmpty && !$0.isIncomplete } ?? false
         }
         return false
@@ -526,38 +501,8 @@ actor ProjectRepository {
     }
 
     func open(_ id: UUID) throws -> ProjectDocument {
-        let directory = try projectDirectory(id)
-        guard files.fileExists(atPath: directory.path) else { throw ProjectStoreError.missingProject(id) }
-        let document = try readRecoverable(in: directory)
-        guard document.id == id else {
-            throw ProjectStoreError.invalidDocument("Directory and document identities differ")
-        }
-        return document
+        try packageStore().load(id)
     }
-
-    private func readRecoverable(in directory: URL) throws -> ProjectDocument {
-        do {
-            return try read(documentURL(in: directory))
-        } catch ProjectStoreError.unsupportedSchema(let version) {
-            throw ProjectStoreError.unsupportedSchema(version)
-        } catch {
-            // A corrupt last write never causes an implicit destructive reset.
-            return try read(recoveryURL(in: directory))
-        }
-    }
-
-    private func read(_ url: URL) throws -> ProjectDocument {
-        let data = try Data(contentsOf: url)
-        if let header = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let version = header["schemaVersion"] as? Int,
-           version > ProjectSchema.current {
-            throw ProjectStoreError.unsupportedSchema(version)
-        }
-        let document = try decoder.decode(ProjectDocument.self, from: data)
-        try document.validate()
-        return document
-    }
-
 
     /// Explicit integrity review (not on every library list/launch). Hash
     /// verification is streamed and cannot silently rewrite corrupted media.
@@ -596,25 +541,29 @@ actor ProjectRepository {
         guard let asset = project.assets.first(where: { $0.id == assetID }) else {
             throw ProjectStoreError.invalidDocument("Asset is not in this project")
         }
-        let url = try OwnedPath.secureURL(for: asset.relativeOriginalPath,
-                                             base: "Originals", in: projectDirectory(projectID))
+        try OwnedPath.validate(asset.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
+        let url = try packageStore().file(asset.relativeOriginalPath, in: projectDirectory(projectID))
         guard files.fileExists(atPath: url.path) else {
             throw ProjectStoreError.missingOriginal(asset.displayName)
+        }
+        let attributes = try files.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.size] as? NSNumber)?.int64Value == asset.byteCount else {
+            throw ProjectStoreError.invalidDocument("Original media file size changed: " + asset.displayName)
         }
         return url
     }
 
     func list(titleQuery: String = "", sort: LibrarySort = .recent,
               filter: LibraryFilter = .all) throws -> LibrarySnapshot {
-        let base = try directory("Projects")
-        let children = try files.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
+        let identities = try packageStore().identities()
         var projects: [ProjectSummary] = []
         var issues: [LibraryIssue] = []
-        for child in children where child.hasDirectoryPath {
-            guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
+        for id in identities {
             do {
                 let document = try open(id)
-                let available = (try? originalsExist(of: document, in: child)) ?? false
+                let package = try projectDirectory(id)
+                let available = (try? originalsExist(of: document, in: package)) ?? false
                 let matches: Bool
                 switch filter {
                 case .all: matches = true
@@ -641,7 +590,7 @@ actor ProjectRepository {
                     contentRevision: document.contentRevision,
                     captionState: captionState
                 ))
-                if !available { issues.append(LibraryIssue(id: id, description: "Original media is missing")) }
+                if !available { issues.append(LibraryIssue(id: id, description: "Original media is missing or changed")) }
             } catch {
                 issues.append(LibraryIssue(id: id, description: error.localizedDescription))
             }
@@ -651,7 +600,10 @@ actor ProjectRepository {
         case .oldest: projects.sort { $0.updatedAt < $1.updatedAt }
         case .title: projects.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         }
-        return LibrarySnapshot(projects: projects, issues: issues)
+        let combined = Dictionary(grouping: issues, by: \.id).map { id, values in
+            LibraryIssue(id: id, description: values.map(\.description).joined(separator: "\n"))
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+        return LibrarySnapshot(projects: projects, issues: combined)
     }
 
     /// Duplicates own physical originals. Clip and asset instance IDs never alias
@@ -704,46 +656,18 @@ actor ProjectRepository {
     func moveToTrash(_ id: UUID) throws {
         try settlePublishedSpeechAllowance()
         _ = try open(id)
-        let destination = try directory("Trash").appendingPathComponent(id.uuidString)
-        guard !files.fileExists(atPath: destination.path) else {
-            throw ProjectStoreError.duplicateProject(id)
-        }
-        try files.moveItem(at: projectDirectory(id), to: destination)
+        try packageStore().move(id, from: .projects, to: .trash)
         let thumbnail = try thumbnailURL(id: id)
         try? files.removeItem(at: thumbnail)
     }
 
     func restoreFromTrash(_ id: UUID) throws {
-        let source = try directory("Trash").appendingPathComponent(id.uuidString)
-        let destination = try projectDirectory(id)
-        guard !files.fileExists(atPath: destination.path) else {
-            throw ProjectStoreError.duplicateProject(id)
-        }
-        guard files.fileExists(atPath: source.path) else {
-            throw ProjectStoreError.missingProject(id)
-        }
-        try files.moveItem(at: source, to: destination)
-        _ = try open(id)
+        try packageStore().move(id, from: .trash, to: .projects)
     }
 
-    /// Recover fully committed staging documents left between atomic JSON
-    /// publication and the directory rename. Incomplete copies stay quarantined
-    /// for explicit cleanup; nothing is silently deleted at startup.
+    /// Recovery shares the package publication path and excludes live imports.
     func recoverCommittedStaging() throws -> [UUID] {
-        let pending = try directory("Pending")
-        let entries = try files.contentsOfDirectory(at: pending, includingPropertiesForKeys: nil)
-        var recovered: [UUID] = []
-        for staging in entries where staging.hasDirectoryPath {
-            guard let stagingID = UUID(uuidString: staging.lastPathComponent), !activeStaging.contains(stagingID),
-                  files.fileExists(atPath: documentURL(in: staging).path),
-                  let document = try? read(documentURL(in: staging)),
-                  (try? verifyOriginals(of: document, in: staging)) != nil else { continue }
-            let destination = try projectDirectory(document.id)
-            guard !files.fileExists(atPath: destination.path) else { continue }
-            try files.moveItem(at: staging, to: destination)
-            recovered.append(document.id)
-        }
-        return recovered
+        try packageStore().recoverCommittedStaging(excluding: activeStaging)
     }
 
     /// Explicitly discard incomplete imports by their staging UUID after
@@ -766,29 +690,29 @@ actor ProjectRepository {
     struct TrashedProject: Identifiable, Sendable {
         let id: UUID
         let title: String
+        let issue: String?
     }
 
     func trashedProjects() throws -> [TrashedProject] {
-        let trash = try directory("Trash")
-        return try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil)
-            .compactMap { entry -> TrashedProject? in
-                guard let id = UUID(uuidString: entry.lastPathComponent),
-                      let document = try? readRecoverable(in: entry),
-                      document.id == id else { return nil }
-                return TrashedProject(id: id, title: document.title)
+        let store = try packageStore()
+        return try store.identities(in: .trash).map { id in
+            do {
+                let document = try store.load(id, in: .trash)
+                return TrashedProject(id: id, title: document.title, issue: nil)
+            } catch {
+                // Corrupt/future packages stay visible instead of disappearing
+                // from storage management or being silently reset/restored.
+                return TrashedProject(id: id, title: "Project " + String(id.uuidString.prefix(8)),
+                                      issue: error.localizedDescription)
             }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
     /// Explicitly destructive action, called only after user confirmation.
     func emptyTrash() throws {
         try settlePublishedSpeechAllowance()
-        let trash = try directory("Trash")
-        for child in try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil) {
-            guard UUID(uuidString: child.lastPathComponent) != nil,
-                  child.deletingLastPathComponent() == trash else { continue }
-            try files.removeItem(at: child)
-        }
+        let store = try packageStore()
+        for id in try store.identities(in: .trash) { try store.removeFromTrash(id) }
     }
 
     /// Restore only byte-identical originals. Never silently replace a
@@ -800,13 +724,19 @@ actor ProjectRepository {
         guard let source = document.assets.first(where: { $0.id == assetID }) else {
             throw ProjectStoreError.invalidDocument("Unknown media identity")
         }
-        let destination = try OwnedPath.secureURL(for: source.relativeOriginalPath,
-                                                     base: "Originals",
-                                                     in: projectDirectory(projectID))
+        try OwnedPath.validate(source.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
+        let destination = try packageStore().file(source.relativeOriginalPath, in: projectDirectory(projectID))
         guard !files.fileExists(atPath: destination.path) else {
             throw ProjectStoreError.invalidDocument("The original still exists; it was not replaced")
         }
         guard externalURL.isFileURL else { throw ProjectStoreError.unsupportedURL }
+        // Relink can reconstruct the missing Originals directory, but never
+        // recreate the package itself or traverse a symlinked parent.
+        let package = try projectDirectory(projectID)
+        let originals = try packageStore().file(ProjectPackageLayout.originalsName, in: package)
+        if !files.fileExists(atPath: originals.path) {
+            try files.createDirectory(at: originals, withIntermediateDirectories: false)
+        }
         let temp = destination.deletingLastPathComponent()
             .appendingPathComponent("." + UUID().uuidString + ".relink")
         let granted = externalURL.startAccessingSecurityScopedResource()
@@ -868,6 +798,7 @@ actor ProjectRepository {
         if profile.format == .srt, !snapshot.cues.contains(where: { !snapshot.text(for: $0).isEmpty }) {
             throw ExportError.noCaptions
         }
+        guard try retainedExportIDs().count < ExportController.retainedRecordLimit else { throw ProcessingError.retentionFull }
         let folder = try exportDirectory(id)
         guard !files.fileExists(atPath: folder.path) else { throw ExportError.invalidRequest }
         try files.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -896,7 +827,9 @@ actor ProjectRepository {
             }
             try Task.checkCancellation()
             let manifest = ExportManifest(version: 1, jobID: id, document: saved, profile: profile)
-            try encoder.encode(manifest).write(to: folder.appendingPathComponent("request.json"), options: .atomic)
+            let metadata = try encoder.encode(manifest)
+            guard metadata.count <= 256 * 1024 * 1024 else { throw ProjectStoreError.oversizedProjectMetadata }
+            try metadata.write(to: folder.appendingPathComponent("request.json"), options: .atomic)
         } catch {
             try? files.removeItem(at: folder)
             throw error
@@ -904,27 +837,45 @@ actor ProjectRepository {
     }
 
     private func exportDirectory(_ id: UUID) throws -> URL {
-        let folder = try directory("Exports").appendingPathComponent(id.uuidString, isDirectory: true)
-        if files.fileExists(atPath: folder.path),
-           try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
-            throw ExportError.invalidRequest
+        let parent = try directory("Exports")
+        let matches = try files.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .filter { UUID(uuidString: $0.lastPathComponent) == id }
+        guard matches.count <= 1 else { throw ExportError.invalidRequest }
+        let folder = matches.first ?? parent.appendingPathComponent(id.uuidString, isDirectory: true)
+        if files.fileExists(atPath: folder.path) {
+            let values = try folder.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            guard values.isSymbolicLink != true, values.isDirectory == true else { throw ExportError.invalidRequest }
         }
         return folder
     }
 
     func frozenExport(_ id: UUID) throws -> FrozenExport {
         let folder = try exportDirectory(id)
-        let manifest = try decoder.decode(ExportManifest.self,
-            from: Data(contentsOf: folder.appendingPathComponent("request.json")))
+        let store = try packageStore()
+        let metadata = try store.file("request.json", in: folder)
+        let values = try metadata.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true, let size = values.fileSize,
+              size <= 256 * 1024 * 1024 else { throw ExportError.invalidRequest }
+        let input = try FileHandle(forReadingFrom: metadata)
+        defer { try? input.close() }
+        var data = Data()
+        let limit = 256 * 1024 * 1024
+        while let part = try input.read(upToCount: min(1_048_576, limit + 1 - data.count)), !part.isEmpty {
+            data.append(part)
+            guard data.count <= limit else { throw ProjectStoreError.oversizedProjectMetadata }
+        }
+        let manifest = try decoder.decode(ExportManifest.self, from: data)
         guard manifest.version == 1, manifest.jobID == id else { throw ExportError.invalidRequest }
         try manifest.document.validate()
         var urls: [UUID: URL] = [:]
         for asset in manifest.document.assets where manifest.profile.format == .mp4 {
             let ext = URL(fileURLWithPath: asset.relativeOriginalPath).pathExtension
-            urls[asset.id] = folder.appendingPathComponent("Media", isDirectory: true)
-                .appendingPathComponent(asset.id.uuidString + "." + ext)
+            urls[asset.id] = try store.file("Media/" + asset.id.uuidString + "." + ext, in: folder)
         }
-        return FrozenExport(manifest: manifest, directory: folder, urls: urls)
+        let result = FrozenExport(manifest: manifest, directory: folder, urls: urls)
+        _ = try store.file("Result/" + result.outputURL.lastPathComponent, in: folder)
+        _ = try store.file("partial." + manifest.profile.format.rawValue, in: folder)
+        return result
     }
 
     func removeExportPartial(_ id: UUID) throws {
@@ -953,11 +904,30 @@ actor ProjectRepository {
         if files.fileExists(atPath: folder.path) { try files.removeItem(at: folder) }
     }
 
-    /// Queue publication can be interrupted after staging but before enqueue.
-    /// Retain only the one durable job; never touch project originals/cache.
-    func removeOrphanedExports(keeping ids: Set<UUID>) throws {
-        for folder in try files.contentsOfDirectory(at: directory("Exports"), includingPropertiesForKeys: nil) {
-            if let id = UUID(uuidString: folder.lastPathComponent), !ids.contains(id) { try discardExport(id) }
+    /// Disk inventory is independent of queue metadata. Never auto-delete an
+    /// unrepresented result: it can be the survivor of a queue recovery/crash.
+    private func retainedExportIDs() throws -> [UUID] {
+        let ids = try files.contentsOfDirectory(at: directory("Exports"), includingPropertiesForKeys: nil)
+            .compactMap { UUID(uuidString: $0.lastPathComponent) }
+        return Set(ids).sorted { $0.uuidString < $1.uuidString }
+    }
+
+    func exportArtifacts() throws -> [ExportArtifact] {
+        try retainedExportIDs().map { id in
+            do {
+                let request = try frozenExport(id)
+                let bytes = try folderSize(request.directory)
+                let values = try? request.outputURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                let available = values?.isRegularFile == true && values?.isSymbolicLink != true && (values?.fileSize ?? 0) > 0
+                return ExportArtifact(id: id, projectID: request.manifest.document.id,
+                    title: request.manifest.document.title, revision: request.manifest.document.contentRevision,
+                    profile: request.manifest.profile, outputURL: available ? request.outputURL : nil,
+                    bytes: bytes, issue: nil)
+            } catch {
+                return ExportArtifact(id: id, projectID: nil, title: "Unreadable export " + id.uuidString.prefix(8),
+                    revision: nil, profile: nil, outputURL: nil,
+                    bytes: (try? folderSize(exportDirectory(id))) ?? 0, issue: error.localizedDescription)
+            }
         }
     }
 
@@ -970,10 +940,29 @@ actor ProjectRepository {
         return cache.appendingPathComponent(id.uuidString + ".jpg")
     }
 
+    /// Publish a derived preview only while its original project/source still
+    /// exists. A late image task cannot resurrect cache for a trashed project.
+    func publishThumbnail(_ data: Data, projectID: UUID, assetID: UUID, sourceHash: String) throws -> URL {
+        let project = try open(projectID)
+        guard project.assets.contains(where: { $0.id == assetID && $0.sha256 == sourceHash }) else {
+            throw ProjectStoreError.invalidDocument("The preview source changed")
+        }
+        _ = try sourceURL(projectID: projectID, assetID: assetID)
+        let url = try thumbnailURL(id: projectID)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
     func purgeDerivedCache() throws {
         let cache = try directory("Cache")
         let items = try files.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)
         for item in items { try files.removeItem(at: item) }
+    }
+
+    struct ProjectStorageUsage: Identifiable, Sendable {
+        let id: UUID
+        let title: String
+        let bytes: ProjectPackageStorage
     }
 
     struct StorageUsage: Sendable {
@@ -982,48 +971,48 @@ actor ProjectRepository {
         let pendingBytes: Int64
         let trashBytes: Int64
         let exportBytes: Int64
+        let projects: [ProjectStorageUsage]
+        let issues: [LibraryIssue]
     }
 
     func storageUsage() throws -> StorageUsage {
-        StorageUsage(projectBytes: try folderSize(try directory("Projects")),
-                     cacheBytes: try folderSize(try directory("Cache")),
-                     pendingBytes: try folderSize(try directory("Pending")),
-                     trashBytes: try folderSize(try directory("Trash")),
-                     exportBytes: try folderSize(try directory("Exports")))
+        let store = try packageStore()
+        var projects: [ProjectStorageUsage] = []
+        var issues: [LibraryIssue] = []
+        for id in try store.identities() {
+            do {
+                let document = try store.load(id)
+                let usage = try store.storage(of: id)
+                projects.append(ProjectStorageUsage(id: id, title: document.title, bytes: usage))
+            } catch {
+                // Keep aggregate bytes and report the failed breakdown instead
+                // of hiding damaged/future packages from storage management.
+                issues.append(LibraryIssue(id: id, description: error.localizedDescription))
+            }
+        }
+        projects.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        return StorageUsage(projectBytes: try folderSize(try directory("Projects")),
+                            cacheBytes: try folderSize(try directory("Cache")),
+                            pendingBytes: try folderSize(try directory("Pending")),
+                            trashBytes: try folderSize(try directory("Trash")),
+                            exportBytes: try folderSize(try directory("Exports")),
+                            projects: projects, issues: issues)
     }
 
     private func folderSize(_ root: URL) throws -> Int64 {
-        guard let walker = files.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
-                                           options: [.skipsHiddenFiles]) else { return 0 }
-        var total: Int64 = 0
-        for case let url as URL in walker {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true { walker.skipDescendants(); continue }
-            if values.isRegularFile == true { total += Int64(values.fileSize ?? 0) }
-        }
-        return total
+        try ProjectStorageScanner.byteCount(at: root)
     }
 
     private func originalsExist(of project: ProjectDocument, in folder: URL) throws -> Bool {
         for asset in project.assets {
-            let url = try OwnedPath.secureURL(for: asset.relativeOriginalPath,
-                                                 base: "Originals", in: folder)
+            try OwnedPath.validate(asset.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
+            let url = try packageStore().file(asset.relativeOriginalPath, in: folder)
             guard files.fileExists(atPath: url.path) else { return false }
+            let attributes = try files.attributesOfItem(atPath: url.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.size] as? NSNumber)?.int64Value == asset.byteCount else { return false }
         }
         return true
     }
 
-    private func verifyOriginals(of document: ProjectDocument, in folder: URL) throws {
-        for asset in document.assets {
-            let url = try OwnedPath.secureURL(for: asset.relativeOriginalPath,
-                                                 base: "Originals", in: folder)
-            guard files.fileExists(atPath: url.path) else {
-                throw ProjectStoreError.missingOriginal(asset.displayName)
-            }
-            let attributes = try files.attributesOfItem(atPath: url.path)
-            guard (attributes[.size] as? NSNumber)?.int64Value == asset.byteCount else {
-                throw ProjectStoreError.invalidDocument("Original media file size changed")
-            }
-        }
-    }
 }

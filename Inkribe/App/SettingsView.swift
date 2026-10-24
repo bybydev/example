@@ -8,9 +8,7 @@ struct SettingsView: View {
     @Environment(ThemeManager.self) private var themes
     @Environment(\.appFoundationTheme) private var theme
     let onShowPro: () -> Void
-    @State private var showingThemeUpsell = false
-    @State private var showingModels = false
-    @State private var showingStorage = false
+    @State private var sheet: SettingsSheet?
 
     var body: some View {
         List {
@@ -35,21 +33,26 @@ struct SettingsView: View {
                     manager: themes,
                     title: nil,
                     showsCountdown: false,
-                    onRequestUpgrade: { showingThemeUpsell = true }
+                    onRequestUpgrade: { sheet = .themes }
                 )
                 .padding(.vertical, 6)
             }
             .listRowBackground(theme.surfaceColor)
             .listRowSeparatorTint(theme.borderColor)
 
-            Section("Media & Storage") {
+            Section("Projects & Processing") {
+                NavigationLink {
+                    ProcessingQueueView()
+                } label: {
+                    Label("Queue", systemImage: "list.bullet.rectangle")
+                }
                 Button {
-                    showingModels = true
+                    sheet = .models
                 } label: {
                     Label("Speech Models", systemImage: "cpu")
                 }
                 Button {
-                    showingStorage = true
+                    sheet = .storage
                 } label: {
                     Label("Storage", systemImage: "internaldrive")
                 }
@@ -98,9 +101,13 @@ struct SettingsView: View {
         .themedSurface()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showingThemeUpsell) { ProUpsell(feature: .themes) }
-        .sheet(isPresented: $showingModels) { SpeechModelsView() }
-        .sheet(isPresented: $showingStorage) { StorageView() }
+        .sheet(item: $sheet) { destination in
+            switch destination {
+            case .themes: ProUpsell(feature: .themes)
+            case .models: SpeechModelsView()
+            case .storage: StorageView()
+            }
+        }
         .task { await model.transcription.refreshAllowance() }
         .onChange(of: model.access.hasPro) { _, _ in
             Task { await model.transcription.refreshAllowance() }
@@ -132,8 +139,12 @@ struct SettingsView: View {
                 Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
+            } else if model.transcription.allowanceError == nil && model.transcription.persistenceError == nil {
                 ProgressView("Loading allowance…")
+            }
+            if let issue = model.transcription.persistenceError {
+                Text(issue).foregroundStyle(.red).textSelection(.enabled)
+                Button("Retry processing storage") { model.transcription.retryStorage() }
             }
             if let error = model.transcription.allowanceError {
                 Text(error).foregroundStyle(.red)
@@ -170,4 +181,9 @@ struct SettingsView: View {
         )
     }
     #endif
+}
+
+private enum SettingsSheet: String, Identifiable {
+    case themes, models, storage
+    var id: Self { self }
 }

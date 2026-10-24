@@ -1,0 +1,206 @@
+> Historical snapshot before the 2026-10-24 consolidation. Current contracts are in [README](../../README.md); instructions and status here are superseded.
+
+# Inkribe iOS v1.0 feature ledger
+
+## Current work — issue #38 production passes 1–5 (2026-10-24)
+
+The user authorized pass 5 in existing [PR #39](https://github.com/hoangbkit/Inkribe/pull/39)
+(`feat/ios-project-packages` → develop), retaining passes 1–4. All five source passes
+are integrated: packages, processing, home/native flow, scrolling editor and now
+versioned caption values/catalog, ten curated looks, renderer/layout/motion extensions,
+independent resets, compatibility/access and production metadata source review.
+Read [phase](../../phases/CAPTION_PRODUCTION.md), [handoff](../../handoffs/CAPTION_PRODUCTION.md)
+and [readiness record](../../PRODUCTION_READINESS.md). Canonical schema 8 reads 1–7;
+existing queue/checkpoint/request wrappers and working transcription are retained.
+Shared style/catalog/motion values are consumed by iOS without changing Mac APIs.
+
+Source/call-site/diff/whitespace and publication review only. Shared regression
+specifications are authored, unexecuted. No builds/typechecks/tests/fixtures, CI,
+generation, model downloads, native inference/exports, UI/device/accessibility or
+deployment. Production verification and owner inputs remain pending, including the
+placeholder privacy URL, live commerce, licensed footage/device/preview-export
+acceptance and archive privacy report. Leave PR open without auto-merge. Earlier
+pass-specific holds below are historical; source integration is not release readiness.
+
+## Issue #38 — caption quality source evidence
+
+| IDs | Pass-5 integration | Evidence |
+|---|---|---|
+| STYLE / PRESETS / BOUNDS | Shared versioned resolved values/catalog; ten looks; weight, shadow, line backdrops, direction/layout/fitting and motion; real-content browser | Source reviewed; all native shaping/appearance/performance unrun |
+| TEXT / TIMING / UNDO / RECOVERY | Visual wrapping independent of canonical cues, phrase-aware motion, frozen legacy values, schema 8 reads 1–7 and future-format non-fallback | 11 shared regression specs authored, unrun; upgrade/device recovery unverified |
+| ACCESS / PRO / AUTOSAVE / MP4 / SRT | Shared retained-style/reset access policy; independent resets/placement; existing history/journal and saved-style export freeze | Source/call-site reviewed; commerce/undo/native outputs unrun |
+| HANDOFF / PRODUCTION | iOS API-reason manifest, exact resource membership, metadata/owner-input/readiness record | Archive privacy report, actual policy URL/live products and release acceptance pending |
+
+Current V1 scope/count remains unchanged. All source passes are integrated; runtime
+acceptance is pending. See [handoff](../../handoffs/CAPTION_PRODUCTION.md).
+
+## Issue #38 — editor experience source evidence
+
+| IDs | Pass-4 integration | Evidence |
+|---|---|---|
+| TEXT / TIMING / UNDO | One scrolling editor, inline whole-caption/word/phrase/timing/split/merge, explicit follow, retained field/tool context | Source/call-site reviewed; native keyboard/gestures/IME/partial publication unrun |
+| STYLE / PRESETS / ACCESS / PRO | Real shared comparison frame, five existing looks, Customized/placement state, named resets, preview-backed focused controls and unchanged access predicate | Source-reviewed; frames/rendering/expiry/performance unrun |
+| RECOVERY / AUTOSAVE / MEDIA / MP4 / SRT | Existing journal/writer/media clock and frozen multi-job requests retained; portable value-only history extracted | Source-reviewed; compile/native/disk/export acceptance unrun |
+
+See [phase](../../phases/EDITOR_EXPERIENCE.md) and [handoff](../../handoffs/EDITOR_EXPERIENCE.md).
+Existing 29-item scope/count remains; final model/catalog expansion is pass 5.
+
+## Issue #38 — home and native flow source evidence
+
+| IDs | Pass-3 integration | Evidence |
+|---|---|---|
+| PROJECTS / RENAME / DUPLICATE_DELETE | Scrolling creation hero, compact project rows, search/sort/filter, draft-aware actions | Source-reviewed; small-iPhone/theme/VoiceOver checks unrun |
+| IMPORT / RECOVERY | One creation route, partial/cancelled committed-ID handoff, retry remaining files, cancellable Photos generation, custom URL canvas validation | Source-reviewed; Photos/Files/provider/network execution unrun |
+| TEXT / TIMING / UNDO / RECOVERY | Native Back/edge-swipe eligibility, one app session/writer per project, atomic write-ahead draft and explicit retry/discard | Source-reviewed; native gestures/crash/low-disk acceptance unrun |
+| JOB / MP4 / SRT / DELIVERY / PRO / ACCESS | Scrollable queue activity, coherent themed surrounding lists, single sheet route per owner, retained AF purchase/theme flows | Source-reviewed; runtime integration unverified |
+| STORAGE / BOUNDS / HANDOFF | Draft counts as durable project bytes, conditional ownership cleanup, pending-edit safeguards and user scenarios | Shared recovery specifications authored, not executed |
+
+These refer to existing V1 IDs; the 29-item scope/count and access policy remain.
+
+## Issue #38 — processing and delivery source evidence
+
+| ID | Pass-2 result | Evidence |
+|---|---|---|
+| V1.JOB / LOCAL_STT / RECOVERY | Durable queues behind one lifecycle/action coordinator; one heavy native operation; captured retry bindings and allowance checks | Source-reviewed; native interruption/concurrency unverified |
+| V1.MP4 / SRT | Multiple frozen requests/results coexist; no automatic replacement or orphan deletion | Source-integrated; rendering/export checks unrun |
+| V1.DELIVERY | Per-output leases through Photos/Files/Share; separate record removal and file deletion | Source-integrated; permissions/provider callbacks unverified |
+| V1.STORAGE / BOUNDS | Explicit 100-export retention, retained-request recovery and per-output bytes; no automatic unsaved-result eviction | Source-integrated; low-disk/retention/device scenarios pending |
+| V1.HANDOFF | Queue ownership, cancellation/recovery/action matrix and user scenarios | PROCESSING_DELIVERY phase/handoff; unrun shared regression specs |
+
+This extends the existing 29-item V1 ledger, with no new purchase gate or pricing.
+
+## Issue #38 — production project system source evidence
+
+| ID | Pass-1 result | Evidence |
+|---|---|---|
+| V1.PROJECTS/RENAME | Formal packages, legacy adoption, validated version/identity/revision saves, derived library summaries | Source-integrated; compilation/device checks unrun |
+| V1.DUPLICATE_DELETE | Existing fresh-ID/media duplicate and package Trash/restore; corrupt/future Trash stays visible | Source-integrated; real-project scenarios pending |
+| V1.IMPORT/RECOVERY | Validated staging publication/recovery via shared store, live staging excluded | Source-integrated; interruption/low-disk scenarios pending |
+| V1.STORAGE/BOUNDS | Source/durable/cache/temp breakdowns, safe cleanup, explicit accounting errors, stale-thumbnail publication guard | Source-integrated; storage/UI measurements pending |
+| V1.HANDOFF | Format, shared/native boundary, migration/rollback, queue/export bindings and user scenario matrix | phases/PROJECT_SYSTEM.md + handoffs/PROJECT_SYSTEM.md |
+
+This adds issue #38's production pass-1 evidence without changing the historical
+29-item V1 accounting. Shared-core regression specifications are authored but not
+executed. Passes 2–3 are now source-integrated; passes 4–5 remain pending.
+
+## Issue #36 — window recovery and durable unfinished work (2026-10-23)
+
+The user explicitly requested implementation of the visualized editor in PR #37 (fix/ios-window-recovery → develop), based on 525fae4. Accepted windows now publish usable captions incrementally; the visible transcript edits whole captions, footage previews real text, and inline gaps retry without replacing edits. Partial MP4/SRT export is allowed with a notice; only complete nonempty recognition charges. Schema v7 reads v1–v6 and records coverage/mapping versions; the version-1 sidecar remains for inference recovery. This supersedes the earlier complete-only policy and panel hierarchy. PR stays open without auto-merge. Source/diff/whitespace review only: no builds/typechecks/tests, CI/workflow triggers, generation, weights, inference or UI/device validation. See [phase](../../phases/TRANSCRIPTION_RECOVERY.md) and [handoff](../../handoffs/TRANSCRIPTION_RECOVERY.md).
+
+> Current repair (2026-10-23): all four requested passes are source-implemented in open PR #35 targeting develop; no auto-merge. Read [handoffs/TRANSCRIPTION_WORKSPACE.md](../../handoffs/TRANSCRIPTION_WORKSPACE.md) and [HANDOFF.md](../../HANDOFF.md) for current behavior and user validation. Builds/runtime/device checks are unrun. Earlier phase/Pro branch holds below are historical; no next phase or merge is authorized.
+
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](../../phases/PRO.md) and [handoffs/PRO.md](../../handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+
+**29 acceptance items**, grouped from the user-approved compact list. This replaces the 466-active-item ledger. V1 IDs distinguish current requirements from historical Fxx entries. P0 owns foundations, no user feature items. Source status is not runtime verification.
+
+| ID | Owner | Requirement | Status |
+|---|---|---|---|
+| V1.PROJECTS | P1 | Thumbnail library and offline reopening | Source-integrated; runtime unverified |
+| V1.RENAME | P1 | Rename and durable autosave | Source-integrated; serialized latest-draft saves; runtime unverified |
+| V1.DUPLICATE_DELETE | P1 | Safe project duplicate/delete | Source-integrated; runtime unverified |
+| V1.IMPORT | P1 | Photos/Files video and audio import | Source-integrated; runtime unverified |
+| V1.STORAGE | P1 | Storage cleanup and safe originals | Source-integrated; runtime unverified |
+| V1.LOCAL_STT | P2 | On-device recognition, language/model selection and optional download/cache | P2 plus explicit post-P6 amendment; source-integrated, compilation/runtime unverified |
+| V1.WORDS | P2 | Genuine word timestamps and stable identities | Source-integrated in #25; compilation/runtime unverified |
+| V1.JOB | P2 | Progress, cancel, retry and useful errors | Source-integrated in #25; compilation/runtime unverified |
+| V1.RESULT | P2 | Durable raw recognition and editable captions | Source-integrated in #25; compilation/runtime unverified |
+| V1.TEXT | P3 | Caption text correction | Source-integrated in #26; compilation/runtime unverified |
+| V1.TIMING | P3 | Cue/word timing and simple timeline | Source-integrated in #26; compilation/runtime unverified |
+| V1.SPLIT_MERGE | P3 | Split/merge captions | Source-integrated in #26; compilation/runtime unverified |
+| V1.UNDO | P3 | Undo/redo caption edits | Source-integrated in #26; compilation/runtime unverified |
+| V1.PREVIEW | P3 | Synchronized footage/caption/selection/playback | Source-integrated in #26; compilation/runtime unverified |
+| V1.STYLE | P4 | Fonts, size, color, outline and background | Source-integrated in #27; compilation/render/runtime unverified |
+| V1.POSITION | P4 | Caption position in output coordinates | Source-integrated in #27; compilation/render/runtime unverified |
+| V1.PRESETS | P4 | Curated templates: highlighting, karaoke, pop and fade | Source-integrated in #27; compilation/render/runtime unverified |
+| V1.MP4 | P5 | Captioned MP4 at 720p/1080p with source audio | Source-integrated; compilation/runtime unverified |
+| V1.SRT | P5 | Edited captions exported as SRT | Source-integrated; compilation/runtime unverified |
+| V1.DELIVERY | P5 | Save to Photos/Files and native export sharing | Source-integrated; permission/provider/runtime checks unrun |
+| V1.EXPORT_JOB | P5 | Export progress/cancel and failure cleanup | Source-integrated; interruption/cleanup/runtime checks unrun |
+| V1.PRO | P5 | Simple free/Pro, AppFoundation paywall and restore | Source-integrated: approved free/Pro policy; PR #34 adds Spokio-style Settings, AF 1.6.4 paywall/restore/themes and Debug Developer Tools/simulated purchases; StoreKit/runtime unverified |
+| V1.TRIM | P6 | Non-destructive trim with caption mapping | Source-integrated; compilation/timing/runtime unverified |
+| V1.CROP | P6 | Crop/aspect ratio in preview and export | Source-integrated; orientation/pixel/runtime unverified |
+| V1.VOLUME | P6 | Original-audio volume in preview and export | Source-integrated; mix/playback/runtime unverified |
+| V1.RECOVERY | P7 | Persistence and interruption/relaunch recovery | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.BOUNDS | P7 | Bounded processing, stale-result protection and cleanup | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | P7 source audit and concrete fixes in #30; runtime unverified |
+| V1.HANDOFF | P7 | End-to-end source audit and user-testing handoff | Source audit and handoff in #30; user validation unrun |
+
+## Accounting
+
+PLAN defines exclusions. Legacy Fxx items and ISSUE_21.md are historical, not requirements. Old 18/19 P1 totals are superseded. V1.RENAME now serializes writes, keeps the latest draft and consumes returned revisions; no save-triggered reload replaces typing. Source review only. Existing search/sort/filter, URL and combined imports do not expand scope. Transcript search is not required. Incoming share extension remains removed; V1.DELIVERY is outbound native sharing.
+
+Update each item only from actual integration; report source review, unrun checks and user validation separately. Do not require diarization, full forced alignment or cloud providers to complete this ledger. Never fabricate word timing. New features need an explicit user scope change.
+
+## P2 source evidence — PR #25
+
+Historical P2 used bundled Whisper Small Multilingual. The explicit post-P6 amendment now supports optional bundle/download/cache and Tiny/Base/Small selection; MODELS.md supersedes the old placement instructions. CPU execution uses <=4 threads. AVFoundation reads <=28-second windows around 24-second ownership cores; PCM is never accumulated across windows. Raw UTF-8 tokens are joined before NLTokenizer word segmentation; word intervals aggregate actual native token intervals, with midpoint core ownership and conservative acoustic-overlap reconciliation. Token timing is approximate, not forced alignment; unavailable timing fails without fake output.
+
+JobQueue 1.0.0 owns durable one-at-a-time execution, progress/cancel/retry and interrupted-job restoration. Schema-v2 projects atomically store raw windows, words/cues and job identity; v1 remains readable, older clients reject v2. Completion is idempotent and strict revisions protect edits. Duplicates remap recognition/clip/word/cue identities. P2 UI is language/start/status and read-only results, not P3 editing.
+
+No build/test/native inference/device evidence. Model weights were not downloaded by the agent. Default development builds need no weight file; opt-in bundled packaging requires the pinned Small file before user generation/build. See handoffs/P2.md for exact path/hash and pending checks. All four P2 items are source-integrated, not verified runtime-complete.
+
+## P3 source evidence
+
+V1.TEXT/TIMING/SPLIT_MERGE/UNDO/PREVIEW are integrated in the iOS editor. Text correction works per timed unit, including a corrected phrase; clearing hides text while retaining word identity/timing. No new sub-word timing is invented. Timing fields use project seconds, preserve native source intervals, and explicitly record manual source intervals. Caption timing scales its word intervals as a user correction. Word timing expands its cue when necessary. Split at an existing word boundary; merge the next same-clip caption. Undo/redo keeps up to 50 commands for the open session and coalesces consecutive typing in one field; history itself is not persisted.
+
+One session serializes title and caption autosaves, preserves newer drafts across writes, reports conflicts without blind rebase and provides explicit saved-state reload. One stable AVPlayer composition maps clip source ranges, track offsets and orientation into project time. A pure immutable edited snapshot drives preview/list/timeline evaluation; selection seeks, playback highlights the active cue without taking editing focus. New media items are prepared only when media inputs change or preview is retried. No style/export, advanced timeline or extra services added. See handoffs/P3.md; no builds/tests/UI/device verification performed.
+
+## P4 source evidence
+
+V1.STYLE/POSITION/PRESETS integrate project-wide editable style values, normalized output position, Modern/Bold/Serif/Mono built-in font choices and Spotlight/Karaoke/Pop/Soft Fade presets. Controls live below the stable footage preview. Choosing a template preserves output placement; style controls/presets/reset participate in the existing autosave and undo/redo sequence. Native text/timing/raw recognition/originals remain unchanged.
+
+Schema v4 adds optional captionStyle; v1–v3 reads retain the default style without an eager rewrite. Duplicates preserve style values. A single Core Text renderer shapes/wraps text and draws base/outline/background, active-word highlight, progressive karaoke, word-triggered pop and word-envelope fade from project time. UIView preview, transparent bitmap and CI frame-composition adapters share this path. Unicode ranges use UTF-16 glyph-run mapping and explicit installed-font/system fallback. Layout is capped at 16,384 UTF-16 units and eight lines, with clear split/reduce-size errors, never silent truncation.
+
+P4 did not implement P5 files/audio/jobs/commerce; subsequent export integration is recorded below. The shared bitmap/composition interfaces are implemented source, not an exported-file or pixel-parity result. No builds/typechecks/tests, CI, generation, model downloads or device validation. See handoffs/P4.md for exact interfaces and pending user scenarios.
+
+## P5 source evidence
+
+V1.MP4/SRT/DELIVERY/EXPORT_JOB are integrated in PR #28 on feat/ios-p5-export. A single JobQueue operation uses a frozen saved document/profile and pinned immutable media. Preview/export share source-range/orientation/track-offset composition; H.264 output uses an even-dimension 720p/1080p envelope at 30 fps, the exact P4 overlay at each output PTS, AAC source audio and black audio-only/gap frames. The finalized file is checked for size/duration/video codec/dimensions and expected AAC audio before atomic publication. SRT streams edited, visible cues as UTF-8 with stable ordering and outward millisecond rounding. No raw recognition or original media is rewritten.
+
+Progress/cancel/retry, restart after interruption, partial cleanup, one retained artifact, delivery leases, add-only Photos permission, provider copies and native outbound sharing are integrated. Current export is accessible from Projects even if its source project is trashed. Storage includes retained export bytes; successful publication releases source pins, and explicit discard/new export cleans the retained job. No batch pipeline or export history added.
+
+The user explicitly selected Defer Pro. V1.PRO remains deferred, not complete. No gates/plans/prices/watermarks/trials were invented. Schema remains v4. Source review only; no builds/typechecks/tests, CI, generation, models, deployment or device validation. See handoffs/P5.md for APIs, caveats and user scenarios.
+
+## P6 source evidence
+
+V1.TRIM/CROP/VOLUME are integrated in PR #29 on feat/ios-p6-media-editing. Schema v5 adds optional project-wide mediaEdits: original-project trim range, fit/fill, bounded zoom and normalized pan, volume 0–1. Missing edits preserve v1–v4 behavior without eager writes. Aspect changes use existing canvas/preset fields. Commands are atomic, undoable and use the existing serialized latest-draft save drain; duplicates preserve media values. No original clips/raw recognition/native or manual timing is rewritten by media commands.
+
+One rational retained-range map intersects clips/cues/words and subtracts trim start for zero-based preview/MP4/SRT. Fully outside timed units are omitted from output only; boundary units retain their text with clipped output intervals. Effects retain the original edited-word phase, and original cue priority survives clipped-start ties. Reset/undo restores omitted output content. Caption correction timing fields explicitly remain original project seconds, while transport/list/export are output seconds. Library duration follows the retained range.
+
+The shared AV composition maps retained source/track intersections, preferred orientation, crop transforms/source crop rectangles and project-aspect placement. Preview overlays fit the same rounded raster viewport. One audio-mix factory serves preview and export; volume-only edits replace the mix without a player rebuild. Other media changes pause and use a debounced generation-guarded rebuild preserving the source playhead. Empty retained gaps use a tiny held black clock frame; MP4 stays intentionally black/silent rather than requiring nonexistent source samples.
+
+P5 frozen exports now include schema-v5 media settings, pin only referenced retained assets, and validate retained duration. Existing version-1 export manifests remain readable; prior frozen exports never adopt later edits. Pro remains deferred. No builds/typechecks/tests, CI, generation, model downloads, runtime exports or device validation. See handoffs/P6.md for boundaries and pending user scenarios.
+
+## Explicit post-P6 model-flow amendment
+
+V1.LOCAL_STT/JOB now include an iOS-only Tiny/Base/Small multilingual catalog with immutable upstream revision, exact bytes and SHA-256; a bounded disk download with progress/cancel/retry, verification and atomic publication; durable app-private storage excluded from backup; variant selection; cache usage/removal; and optional bundled-first resolution. Saved jobs carry model ID; old payloads without it mean Small. Result provenance uses the actual chosen ID/hash. Existing results/canonical media are unchanged. Active/pending jobs protect model removal and native execution holds a store lease. Mac defaults/catalog/resource membership remain unchanged; its runtime gets only an optional descriptor parameter that defaults to the previous behavior. Source review only. See MODELS.md; P7 was subsequently requested in #30, Pro deferred.
+
+## P7 source audit — PR #30
+
+The user explicitly included P7 in the optional-model PR. V1.RECOVERY fixes initial-queue-rewrite retry preservation, recoverable Trash listing and staging protection. V1.BOUNDS fixes stale library/storage publications, import-selection races, foreground transcription restart/cancellation and malformed-dimension conversion; reviewed existing bounded decode/render/download and export pin/delivery paths. V1.ACCESS adds Photos preparation/loading/disabled state, model selected/offline traits and canvas field labels, with actual UI/accessibility validation still unrun. V1.HANDOFF supplies handoffs/P7.md with all acceptance-item entry points, outcomes, exact user checks and remaining choices. Timing Apply preserves unchanged rational boundaries and does not invent manual edits; Unicode output basenames fit filesystem byte limits, long titles duplicate safely and updates tolerate clock rollback.
+
+Accounting: 28 of 29 current acceptance items are source-integrated; V1.PRO is explicitly deferred. None are claimed compilation/runtime/device verified. This is completion of the authorized source work, not a release-readiness certification. No tests/builds/typechecks, CI, generation, weights, media execution or device checks ran.
+
+## 2026-10-23 transcription repair — pass 1
+
+V1.LOCAL_STT/JOB/RECOVERY/PRO source correction on `fix/ios-transcription-and-workspace`: mix source audio tracks rather than ignore later ones; validate actual PCM and copied samples; distinguish digital silence, empty inference and unusable timing; reject empty publication/charging; archive and explicitly retry legacy zero-word results with a matching current-week refund. Flush/reload the editor around request/recovery so its draft cannot overwrite the external revision. Existing words, manual timing, raw provenance, originals, style/media settings and schema v5 remain preserved.
+
+Evidence is source inspection only. No builds/typechecks/tests, native inference, UI/device validation, CI, generation or downloads ran. The original affected-video failure remains unverified. See handoffs/TRANSCRIPTION_WORKSPACE.md. Passes 2–4 are pending; this entry does not claim the home/editor redesign is complete.
+
+## 2026-10-23 editor repair — pass 2 in PR #35
+
+V1.TEXT/TIMING/SPLIT_MERGE/UNDO/PREVIEW/ACCESS UI source update: viewport/canvas-based preview plus expansion, consolidated transport, compact keyboard layout and focused-field scrolling, inline selected-caption correction with word chips/one field, large-text tool choice, and details/relink sheet. Existing domain edits, stable native timing, canonical Merge next order, rendering/persistence, Style/Templates/Media and pass 1 recovery remain. Normal save state/undo/redo move to actions; visible errors retain retry/reload.
+
+Source/diff review only; no builds/typechecks/tests, UI/device/accessibility validation, CI, generation or downloads. User checks are in handoffs/TRANSCRIPTION_WORKSPACE.md. Home/import pass 3 and final review pass 4 remain pending in the same open PR targeting develop.
+
+## 2026-10-23 home/import repair — pass 3 in PR #35
+
+V1.PROJECTS/RENAME/DUPLICATE_DELETE/IMPORT/BOUNDS/ACCESS source update: cached in-memory title/media filtering and stable sorting, live card status, bounded async thumbnail reads, revision-aware and guarded card actions, adaptive cards/filter chips, explicit project/settings routes, and committed-ID import handoff after dismissal. Single-project success opens the editor; batches return to the recent grid. Partial failures retain input identities/errors/retry, and derived thumbnail/storage work does not delay success navigation. No stored schema or Mac changes.
+
+Source/diff review only. No builds/typechecks/tests, UI/device/performance validation, CI, generation or model downloads. See handoffs/TRANSCRIPTION_WORKSPACE.md for pending checks. Pass 4 remains pending in the same open PR targeting develop.
+
+## Final integration review — PR #35 pass 4 (2026-10-23)
+
+The user authorized the fourth pass in the same PR (V1.PREVIEW/MP4/VOLUME/JOB/RECOVERY/BOUNDS/ACCESS/HANDOFF). Preview and MP4 now include every source audio track in independent composition lanes with the existing intersection/offset/trim mapping; original-audio volume updates every populated lane. This matches recognition's all-track source policy while recognition intentionally ignores output trim/volume. No track selector or advanced audio UI is added.
+
+Editor operation/transcription errors have a local alert presenter and the hidden home grid yields to its active sheet/destination. Back disables editor controls/actions while waiting for saves; failures preserve the draft and existing recovery. All four passes are source-implemented in open PR #35 targeting develop with auto-merge disabled. Original-video diagnosis, actual audio/pixel/output parity, layout, sheet/keyboard/accessibility and interruption behavior remain unverified. No builds/typechecks/tests, UI/device checks, CI, generation, weights or native execution. See handoffs/TRANSCRIPTION_WORKSPACE.md for source findings and prioritized user scenarios; no further phase is authorized.

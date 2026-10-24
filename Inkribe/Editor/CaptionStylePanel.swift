@@ -2,64 +2,143 @@ import SwiftUI
 import AppFoundation
 import UIKit
 
+enum CaptionStyleSection: String, CaseIterable, Hashable, Identifiable {
+    case typography = "Text", colors = "Colors", outline = "Backdrop", layout = "Layout", position = "Position", motion = "Motion"
+    var id: Self { self }
+}
+
 struct CaptionStylePanel: View {
     let session: EditorSession
+    let section: CaptionStyleSection
     private var style: CaptionStyle { session.document?.effectiveCaptionStyle ?? .standard }
+    private var baseline: CaptionStyle { CaptionPreset.definition(for: style.preset)?.style ?? .standard }
+    private var resetName: String { CaptionPreset.definition(for: style.preset)?.name ?? "Basic" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Caption style").font(.headline)
+            Text(section.rawValue).font(.headline)
+            controls
+            Button("Reset \(section.rawValue.lowercased()) to \(resetName)", systemImage: "arrow.counterclockwise") { resetSection() }
+        }
+        .studioCard()
+        .onDisappear { session.endStyleEditing() }
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        switch section {
+        case .typography:
             Picker("Font", selection: value(\.font)) {
                 ForEach(CaptionFont.allCases, id: \.self) { font in
                     Text(font.name + (!session.access.hasPro && font != .modern ? " · Pro" : "")).tag(font)
                 }
             }
-            .pickerStyle(.segmented)
             .disabled(session.access.isChecking)
+            Picker("Weight", selection: value(\.weight)) {
+                ForEach(CaptionFontWeight.allCases, id: \.self) { weight in
+                    Text(weight.name + (!session.access.hasPro && weight != .original ? " · Pro" : "")).tag(weight)
+                }
+            }
+            .disabled(session.access.isChecking)
+            slider("Letter spacing · Pro", value: value(\.tracking, control: .tracking), range: -0.02...0.1,
+                display: "\(Int((style.tracking * 100).rounded()))%")
             slider("Size", value: value(\.fontSize, control: .size), range: 0.025...0.12,
-                   display: "\(Int((style.fontSize * 100).rounded()))%")
+                display: "\(Int((style.fontSize * 100).rounded()))%")
+        case .colors:
             ColorPicker("Text color", selection: color(\.textColor, control: .textColor), supportsOpacity: true)
-            Picker("Animation", selection: value(\.effect)) {
+            if [.highlight, .karaoke, .emphasis, .underline].contains(style.effect) {
+                ColorPicker("Highlight color", selection: color(\.accentColor, control: .accentColor), supportsOpacity: true)
+            }
+        case .outline: backdropControls
+        case .layout: layoutControls
+        case .position:
+            ViewThatFits(in: .horizontal) {
+                HStack { placementButtons }
+                VStack(alignment: .leading) { placementButtons }
+            }
+            slider("Horizontal", value: value(\.positionX, control: .horizontalPosition), range: 0...1,
+                display: "\(Int((style.positionX * 100).rounded()))%")
+            slider("Vertical", value: value(\.positionY, control: .verticalPosition), range: 0...1,
+                display: "\(Int((style.positionY * 100).rounded()))%")
+        case .motion:
+            Picker("Animation", selection: value(\.effect, modern: true)) {
                 ForEach(CaptionEffect.allCases, id: \.self) { effect in
                     Text(effect.name + (!session.access.hasPro && effect != .none ? " · Pro" : "")).tag(effect)
                 }
             }
             .disabled(session.access.isChecking)
-            if style.effect == .highlight || style.effect == .karaoke {
-                ColorPicker("Highlight color", selection: color(\.accentColor, control: .accentColor), supportsOpacity: true)
-            }
-            DisclosureGroup("Outline and background") {
-                VStack(spacing: 14) {
-                    slider("Outline", value: value(\.outlineWidth, control: .outlineWidth), range: 0...0.12,
-                           display: style.outlineWidth == 0 ? "Off" : "\(Int((style.outlineWidth * 100).rounded()))%")
-                    if style.outlineWidth > 0 {
-                        ColorPicker("Outline color", selection: color(\.outlineColor, control: .outlineColor), supportsOpacity: true)
-                    }
-                    Toggle("Background", isOn: value(\.backgroundEnabled))
-                    if style.backgroundEnabled {
-                        ColorPicker("Background color", selection: color(\.backgroundColor, control: .backgroundColor), supportsOpacity: true)
-                    }
-                }
-                .padding(.top, 12)
-            }
-            DisclosureGroup("Position") {
-                VStack(alignment: .leading, spacing: 14) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack { placementButtons }
-                        VStack(alignment: .leading) { placementButtons }
-                    }
-                    slider("Horizontal", value: value(\.positionX, control: .horizontalPosition), range: 0...1,
-                           display: "\(Int((style.positionX * 100).rounded()))%")
-                    slider("Vertical", value: value(\.positionY, control: .verticalPosition), range: 0...1,
-                           display: "\(Int((style.positionY * 100).rounded()))%")
-                }
-                .padding(.top, 12)
-            }
-            Button("Reset style", systemImage: "arrow.counterclockwise") { session.setCaptionStyle(.standard) }
+            Text("Play or scrub to inspect motion. Phrase-timed captions animate as whole phrases.")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .onDisappear { session.endStyleEditing() }
+    }
+
+    private var backdropControls: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            slider("Outline", value: value(\.outlineWidth, control: .outlineWidth), range: 0...0.12,
+                display: style.outlineWidth == 0 ? "Off" : "\(Int((style.outlineWidth * 100).rounded()))%")
+            if style.outlineWidth > 0 {
+                ColorPicker("Outline color", selection: color(\.outlineColor, control: .outlineColor), supportsOpacity: true)
+            }
+            Toggle("Background", isOn: value(\.backgroundEnabled))
+            if style.backgroundEnabled {
+                ColorPicker("Background color", selection: color(\.backgroundColor, control: .backgroundColor), supportsOpacity: true)
+            }
+            Picker("Background shape · Pro", selection: value(\.backgroundMode)) {
+                ForEach(CaptionBackgroundMode.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            slider("Box padding · Pro", value: value(\.backgroundPadding, control: .backgroundPadding), range: 0...0.6,
+                display: "\(Int((style.backgroundPadding * 100).rounded()))%")
+            slider("Corner radius · Pro", value: value(\.backgroundRadius, control: .backgroundRadius), range: 0...1,
+                display: "\(Int((style.backgroundRadius * 100).rounded()))%")
+            Toggle("Text shadow · Pro", isOn: value(\.shadowEnabled))
+            if style.shadowEnabled {
+                ColorPicker("Shadow color", selection: color(\.shadowColor, control: .shadowColor), supportsOpacity: true)
+                slider("Shadow softness", value: value(\.shadowBlur, control: .shadowBlur), range: 0...1,
+                    display: "\(Int((style.shadowBlur * 100).rounded()))%")
+                slider("Shadow horizontal", value: value(\.shadowOffsetX, control: .shadowX), range: -1...1,
+                    display: "\(Int((style.shadowOffsetX * 100).rounded()))%")
+                slider("Shadow vertical", value: value(\.shadowOffsetY, control: .shadowY), range: -1...1,
+                    display: "\(Int((style.shadowOffsetY * 100).rounded()))%")
+            }
+        }
+    }
+
+    private var layoutControls: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if !session.access.hasPro { Label("Pro layout controls", systemImage: "lock").font(.caption).foregroundStyle(.secondary) }
+            Picker("Alignment", selection: value(\.alignment)) {
+                ForEach(CaptionAlignment.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            Picker("Maximum lines", selection: value(\.maximumLines)) {
+                ForEach(1...8, id: \.self) { Text("\($0)").tag($0) }
+            }
+            slider("Text width", value: value(\.lineWidth, control: .lineWidth), range: 0.4...1,
+                display: "\(Int((style.lineWidth * 100).rounded()))%")
+            slider("Line spacing", value: value(\.lineSpacing, control: .lineSpacing), range: 0...0.8,
+                display: "\(Int((style.lineSpacing * 100).rounded()))%")
+            Toggle("Fit long captions · Pro", isOn: Binding(get: { style.minimumScale < 1 }, set: {
+                var next = style; next.minimumScale = $0 ? 0.65 : 1; session.setCaptionStyle(next)
+            }))
+            if style.minimumScale < 1 {
+                slider("Minimum size", value: value(\.minimumScale, control: .minimumScale), range: 0.5...1,
+                    display: "\(Int((style.minimumScale * 100).rounded()))% of chosen size")
+            }
+            Text("Wrapping changes the look without splitting your captions. Long captions stop shrinking at the minimum size.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func resetSection() {
+        let reset: CaptionStyleReset
+        switch section {
+        case .typography: reset = .typography
+        case .colors: reset = .colors
+        case .outline: reset = .backdrop
+        case .layout: reset = .layout
+        case .position: reset = .placement
+        case .motion: reset = .motion
+        }
+        session.setCaptionStyle(style.resetting(reset, to: baseline))
     }
 
     private var placementButtons: some View {
@@ -83,10 +162,11 @@ struct CaptionStylePanel: View {
                 .accessibilityValue(display)
         }
     }
-    private func value<T>(_ key: WritableKeyPath<CaptionStyle, T>, control: CaptionStyleControl? = nil) -> Binding<T> {
+    private func value<T>(_ key: WritableKeyPath<CaptionStyle, T>, control: CaptionStyleControl? = nil, modern: Bool = false) -> Binding<T> {
         Binding(get: { style[keyPath: key] }, set: { newValue in
             var next = style
             next[keyPath: key] = newValue
+            if modern { next.formatVersion = 2 }
             session.setCaptionStyle(next, coalescing: control)
         })
     }
@@ -103,60 +183,5 @@ struct CaptionStylePanel: View {
                 alpha: min(1, max(0, Double(alpha))))
             session.setCaptionStyle(next, coalescing: control)
         })
-    }
-}
-
-struct CaptionTemplatesPanel: View {
-    @Environment(\.appFoundationTheme) private var theme
-    let session: EditorSession
-    private var style: CaptionStyle { session.document?.effectiveCaptionStyle ?? .standard }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Caption templates").font(.headline)
-            Text("Choose a look, then play to preview it on your video.")
-                .font(.caption).foregroundStyle(.secondary)
-            Button("Basic · Free", systemImage: "textformat") {
-                var basic = CaptionStyle.standard
-                basic.positionX = style.positionX; basic.positionY = style.positionY
-                session.setCaptionStyle(basic)
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
-                ForEach(CaptionTemplate.allCases) { template in
-                    let look = positioned(template)
-                    Button {
-                        session.setCaptionStyle(look)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Image(systemName: "captions.bubble.fill")
-                                    .foregroundStyle(Color(.sRGB, red: look.accentColor.red,
-                                        green: look.accentColor.green, blue: look.accentColor.blue, opacity: 1))
-                                Spacer()
-                                if style == look { Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.accentColor) }
-                                else if !session.access.hasPro { Image(systemName: "lock.fill").accessibilityLabel("Pro") }
-                            }
-                            Text(template.name).font(.headline)
-                            Text("\(look.font.name) · \(look.effect.name)").font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(style == look ? theme.accentColor : .clear, lineWidth: 2))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(template.name), \(look.effect.name)")
-                    .accessibilityAddTraits(style == look ? .isSelected : [])
-                }
-            }
-        }
-        .onDisappear { session.endStyleEditing() }
-        .disabled(session.access.isChecking)
-    }
-    private func positioned(_ template: CaptionTemplate) -> CaptionStyle {
-        var look = template.style
-        // Changing the look preserves the user's chosen output placement.
-        look.positionX = style.positionX; look.positionY = style.positionY
-        return look
     }
 }

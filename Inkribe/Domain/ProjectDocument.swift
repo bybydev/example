@@ -1,44 +1,13 @@
+import InkribeCore
 import CoreMedia
 import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 7
+    static let current = 8
 }
 
-enum ProjectStoreError: LocalizedError, Sendable {
-    case unavailableRoot
-    case invalidDocument(String)
-    case unsupportedSchema(Int)
-    case missingProject(UUID)
-    case staleRevision(expected: UInt64, actual: UInt64)
-    case invalidPath(String)
-    case missingOriginal(String)
-    case insufficientSpace
-    case unsupportedMedia
-    case rightsNotConfirmed
-    case unsupportedURL
-    case oversizedImport
-    case duplicateProject(UUID)
-
-    var errorDescription: String? {
-        switch self {
-        case .unavailableRoot: "The app's local project storage is unavailable."
-        case .invalidDocument(let reason): "The project could not be read: \(reason)"
-        case .unsupportedSchema(let version): "This project uses a newer document version (\(version)). Update Inkribe to open it."
-        case .missingProject: "The project is unavailable."
-        case .staleRevision: "The project changed since this edit began. Reload it before saving."
-        case .invalidPath: "An unsafe media path was rejected."
-        case .missingOriginal: "A required original media file is missing."
-        case .insufficientSpace: "Not enough device storage is available for this import."
-        case .unsupportedMedia: "This file has no supported audio or video track."
-        case .rightsNotConfirmed: "Confirm that you have permission to import this media."
-        case .unsupportedURL: "Only HTTPS direct media links are supported."
-        case .oversizedImport: "This file exceeds the supported import size."
-        case .duplicateProject: "A project with this identity already exists."
-        }
-    }
-}
+typealias ProjectStoreError = InkribeCore.ProjectStoreError
 
 struct ProjectCanvas: Codable, Equatable, Sendable {
     var width: Int
@@ -179,6 +148,9 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw ProjectStoreError.invalidDocument("Caption styles require schema v4")
         }
         try captionStyle?.validate()
+        guard schemaVersion >= 8 || captionStyle?.requiresSchema8 != true else {
+            throw ProjectStoreError.invalidDocument("Versioned caption styles require schema v8")
+        }
         guard schemaVersion >= 5 || mediaEdits == nil else {
             throw ProjectStoreError.invalidDocument("Media edits require schema v5")
         }
@@ -228,14 +200,7 @@ enum OwnedPath {
 
     static func secureURL(for relativePath: String, base: String, in project: URL) throws -> URL {
         try validate(relativePath, base: base)
-        let root = project.resolvingSymlinksInPath().standardizedFileURL
-        let candidate = project.appendingPathComponent(relativePath).standardizedFileURL
-        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
-        guard resolved.path.hasPrefix(root.path + "/"),
-              candidate.path.hasPrefix(project.standardizedFileURL.path + "/") else {
-            throw ProjectStoreError.invalidPath(relativePath)
-        }
-        return candidate
+        return try ProjectFilePath.url(for: relativePath, in: project)
     }
 }
 

@@ -3,13 +3,14 @@ import CoreImage
 import CoreMedia
 import CoreText
 import Foundation
+import InkribeCore
 
 enum CaptionRenderError: LocalizedError {
     case oversizedCaption, doesNotFit, unavailableContext, invalidFrame
     var errorDescription: String? {
         switch self {
         case .oversizedCaption: "This caption is too long to render. Split it into shorter captions."
-        case .doesNotFit: "This caption does not fit. Reduce its size or split it into shorter captions."
+        case .doesNotFit: "This caption does not fit. Allow more lines, reduce its size or split it into shorter captions."
         case .unavailableContext: "The caption image could not be prepared."
         case .invalidFrame: "This video frame could not be composed."
         }
@@ -36,6 +37,7 @@ final class CaptionRenderer {
         let fontSize: CGFloat
         let lines: [Line]
         let fragments: [UUID: [Fragment]]
+        let backgrounds: [CGRect]
     }
     private struct Cache {
         let snapshotID: UUID
@@ -72,7 +74,7 @@ final class CaptionRenderer {
         let height = CGFloat(snapshot.canvas.height)
         let fit = min(bounds.width / width, bounds.height / height)
         let margin = min(width, height) * 0.02
-        let maximumScale: CGFloat = style.effect == .pop ? 1.12 : 1
+        let maximumScale = CGFloat(CaptionLayoutPolicy.maximumScale(for: style))
         let halfWidth = layout.size.width * maximumScale / 2
         let halfHeight = layout.size.height * maximumScale / 2
         let center = CGPoint(
@@ -86,7 +88,8 @@ final class CaptionRenderer {
         context.scaleBy(x: fit, y: fit)
         context.translateBy(x: center.x, y: center.y)
         context.scaleBy(x: CGFloat(motion.scale), y: CGFloat(motion.scale))
-        context.translateBy(x: -layout.size.width / 2, y: -layout.size.height / 2)
+        context.translateBy(x: -layout.size.width / 2,
+            y: -layout.size.height / 2 + layout.fontSize * CGFloat(motion.verticalOffset))
         context.setAlpha(CGFloat(motion.opacity))
         // A transparency layer applies opacity once, including overlapping glyph
         // outlines/backgrounds, rather than accumulating alpha at every overlap.
@@ -97,9 +100,11 @@ final class CaptionRenderer {
         context.setShouldSmoothFonts(false)
         if style.backgroundEnabled {
             context.setFillColor(style.backgroundColor.cgColor)
-            context.addPath(CGPath(roundedRect: CGRect(origin: .zero, size: layout.size),
-                cornerWidth: layout.fontSize * 0.22, cornerHeight: layout.fontSize * 0.22, transform: nil))
-            context.fillPath()
+            for rect in layout.backgrounds {
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: layout.fontSize * CGFloat(style.backgroundRadius),
+                    cornerHeight: layout.fontSize * CGFloat(style.backgroundRadius), transform: nil))
+                context.fillPath()
+            }
         }
         let highlighted = motion.highlighted.flatMap { layout.fragments[$0] ?? [] }
         if !highlighted.isEmpty {
@@ -110,7 +115,26 @@ final class CaptionRenderer {
                 context.fillPath()
             }
         }
+        context.saveGState()
+        if style.shadowEnabled {
+            context.setShadow(offset: CGSize(width: layout.fontSize * CGFloat(style.shadowOffsetX),
+                height: -layout.fontSize * CGFloat(style.shadowOffsetY)),
+                blur: layout.fontSize * CGFloat(style.shadowBlur), color: style.shadowColor.cgColor)
+        }
         paint(layout.lines, variant: 0, in: context)
+        context.restoreGState()
+        if !motion.emphasized.isEmpty {
+            let rects = motion.emphasized.flatMap { layout.fragments[$0] ?? [] }.map(\.rect)
+            if !rects.isEmpty {
+                context.saveGState(); context.clip(to: rects)
+                paint(layout.lines, variant: 1, in: context); context.restoreGState()
+            }
+        }
+        context.setFillColor(style.accentColor.cgColor)
+        for fragment in motion.underlined.flatMap({ layout.fragments[$0] ?? [] }) {
+            context.fill(CGRect(x: fragment.rect.minX, y: fragment.rect.minY - layout.fontSize * 0.08,
+                width: fragment.rect.width, height: layout.fontSize * 0.055))
+        }
         if !highlighted.isEmpty {
             context.saveGState()
             context.clip(to: highlighted.map(\.rect))
@@ -198,11 +222,20 @@ final class CaptionRenderer {
         }
     }
 
-    private func makeFont(_ choice: CaptionFont, size: CGFloat) -> CTFont {
+    private func makeFont(_ choice: CaptionFont, weight: CaptionFontWeight, size: CGFloat) -> CTFont {
         let requested = CTFontCreateWithName(choice.postScriptName as CFString, size, nil)
         let system = CTFontCreateUIFontForLanguage(.emphasizedSystem, size, nil) ?? requested
         let name = CTFontCopyPostScriptName(requested) as String
-        let base = name.caseInsensitiveCompare(choice.postScriptName) == .orderedSame ? requested : system
+        var base = name.caseInsensitiveCompare(choice.postScriptName) == .orderedSame ? requested : system
+        if let trait = weight.trait {
+            let traits = [kCTFontWeightTrait as String: trait]
+            // Match the family with a weight trait rather than pinning the
+            // original PostScript face, which could override the requested weight.
+            let attributes: [String: Any] = [kCTFontFamilyNameAttribute as String: CTFontCopyFamilyName(base),
+                kCTFontTraitsAttribute as String: traits]
+            let descriptor = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
+            base = CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        }
         // Explicit installed-script/emoji cascade, with system fallback last.
         let names = ["PingFangSC-Semibold", "HiraginoSans-W6", "AppleSDGothicNeo-Bold", "Thonburi-Bold", "AppleColorEmoji"]
         let cascade = names.map { CTFontDescriptorCreateWithNameAndSize($0 as CFString, size) } + [CTFontCopyFontDescriptor(system)]
@@ -211,16 +244,32 @@ final class CaptionRenderer {
     }
 
     private func makeLayout(_ presentation: CaptionPresentation, style: CaptionStyle, canvas: ProjectCanvas) throws -> Layout {
+        do { return try measure(presentation, style: style, canvas: canvas, fraction: style.fontSize) }
+        catch CaptionRenderError.doesNotFit {
+            let minimum = CaptionLayoutPolicy.minimumFontFraction(for: style)
+            guard minimum < style.fontSize else { throw CaptionRenderError.doesNotFit }
+            var low = minimum, high = style.fontSize
+            var best = try measure(presentation, style: style, canvas: canvas, fraction: minimum)
+            for _ in 0..<CaptionLayoutPolicy.refinementCount {
+                let middle = (low + high) / 2
+                do { best = try measure(presentation, style: style, canvas: canvas, fraction: middle); low = middle }
+                catch CaptionRenderError.doesNotFit { high = middle }
+            }
+            return best
+        }
+    }
+
+    private func measure(_ presentation: CaptionPresentation, style: CaptionStyle, canvas: ProjectCanvas, fraction: Double) throws -> Layout {
         let words = presentation.words.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         var joined = ""
         var units = 0
         for word in words {
             units += word.text.utf16.count
-            guard units <= 16_384 else { throw CaptionRenderError.oversizedCaption }
+            guard units <= CaptionLayoutPolicy.maximumUTF16Count else { throw CaptionRenderError.oversizedCaption }
             joined += word.text
         }
         let text = joined.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.utf16.count <= 16_384 else { throw CaptionRenderError.oversizedCaption }
+        guard !text.isEmpty, text.utf16.count <= CaptionLayoutPolicy.maximumUTF16Count else { throw CaptionRenderError.oversizedCaption }
         let trim = (joined as NSString).range(of: text, options: .literal)
         var spans: [Span] = []
         var cursor = 0
@@ -234,19 +283,23 @@ final class CaptionRenderer {
         }
         let width = CGFloat(canvas.width)
         let height = CGFloat(canvas.height)
-        let fontSize = CGFloat(style.fontSize) * min(width, height)
-        let font = makeFont(style.font, size: fontSize)
-        let padding = fontSize * (0.28 + CGFloat(style.outlineWidth))
+        let fontSize = CGFloat(fraction) * min(width, height)
+        let font = makeFont(style.font, weight: style.weight, size: fontSize)
+        let padding = fontSize * (CGFloat(style.backgroundPadding) + CGFloat(style.outlineWidth))
+        let outerInset = fontSize * CGFloat(CaptionLayoutPolicy.outerInsetInFontUnits(for: style))
+        let inset = padding + outerInset
         let margin = min(width, height) * 0.02
-        let maximumScale: CGFloat = style.effect == .pop ? 1.12 : 1
-        let maximumWidth = (width - margin * 2) / maximumScale - padding * 2
+        let maximumScale = CGFloat(CaptionLayoutPolicy.maximumScale(for: style))
+        let maximumWidth = (width - margin * 2) * CGFloat(style.lineWidth) / maximumScale - inset * 2
+        guard maximumWidth > 0 else { throw CaptionRenderError.doesNotFit }
         func typesetter(color: CaptionColor) -> CTTypesetter {
-            let attributes: [NSAttributedString.Key: Any] = [
+            var attributes: [NSAttributedString.Key: Any] = [
                 NSAttributedString.Key(kCTFontAttributeName as String): font,
                 NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor,
                 NSAttributedString.Key(kCTStrokeColorAttributeName as String): style.outlineColor.cgColor,
                 NSAttributedString.Key(kCTStrokeWidthAttributeName as String): -style.outlineWidth * 100
             ]
+            if style.tracking != 0 { attributes[NSAttributedString.Key(kCTKernAttributeName as String)] = fontSize * CGFloat(style.tracking) }
             return CTTypesetterCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes) as CFAttributedString)
         }
         let base = typesetter(color: style.textColor)
@@ -261,7 +314,7 @@ final class CaptionRenderer {
         var textWidth: CGFloat = 0
         var textHeight: CGFloat = 0
         while start < text.utf16.count {
-            guard measured.count < 8 else { throw CaptionRenderError.doesNotFit }
+            guard measured.count < style.maximumLines else { throw CaptionRenderError.doesNotFit }
             var count = CTTypesetterSuggestLineBreak(base, start, Double(maximumWidth))
             if count == 0 { count = CTTypesetterSuggestClusterBreak(base, start, Double(maximumWidth)) }
             guard count > 0 else { throw CaptionRenderError.doesNotFit }
@@ -278,21 +331,37 @@ final class CaptionRenderer {
             textHeight += ascent + descent + max(0, leading)
             start += count
         }
-        let gap = fontSize * 0.1
+        let gap = fontSize * CGFloat(style.lineSpacing)
         textHeight += gap * CGFloat(max(0, measured.count - 1))
-        let size = CGSize(width: textWidth + padding * 2, height: textHeight + padding * 2)
+        let size = CGSize(width: textWidth + inset * 2, height: textHeight + inset * 2)
         guard size.height * maximumScale <= height - margin * 2 else { throw CaptionRenderError.doesNotFit }
         var lines: [Line] = []
         var fragments: [UUID: [Fragment]] = [:]
-        var top = size.height - padding
+        var backgrounds: [CGRect] = []
+        var top = size.height - inset
         for line in measured {
-            let origin = CGPoint(x: padding + CGFloat(CTLineGetPenOffsetForFlush(line.base, 0.5, Double(textWidth))), y: top - line.ascent)
+            let rtl = (CTLineGetGlyphRuns(line.base) as! [CTRun]).first.map { CTRunGetStatus($0).contains(.rightToLeft) } ?? false
+            let flush: CGFloat
+            switch style.alignment {
+            case .center: flush = 0.5
+            case .leading: flush = rtl ? 1 : 0
+            case .trailing: flush = rtl ? 0 : 1
+            }
+            let origin = CGPoint(x: inset + CGFloat(CTLineGetPenOffsetForFlush(line.base, flush, Double(textWidth))), y: top - line.ascent)
+            if style.backgroundMode == .lines {
+                let vertical = measured.count > 1 ? min(padding, gap / 2) : padding
+                backgrounds.append(CGRect(x: origin.x - padding, y: origin.y - line.descent - vertical,
+                    width: line.width + padding * 2, height: line.ascent + line.descent + vertical * 2))
+            }
             lines.append(Line(base: line.base, accent: CTTypesetterCreateLine(accent, line.range),
                 contrast: CTTypesetterCreateLine(contrast, line.range), origin: origin))
             collectFragments(line.base, origin: origin, spans: spans, fontSize: fontSize, into: &fragments)
             top -= line.ascent + line.descent + line.leading + gap
         }
-        return Layout(size: size, fontSize: fontSize, lines: lines, fragments: fragments)
+        if style.backgroundMode == .block {
+            backgrounds = [CGRect(origin: .zero, size: size).insetBy(dx: outerInset, dy: outerInset)]
+        }
+        return Layout(size: size, fontSize: fontSize, lines: lines, fragments: fragments, backgrounds: backgrounds)
     }
 
     private func collectFragments(_ line: CTLine, origin: CGPoint, spans: [Span], fontSize: CGFloat,

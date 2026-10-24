@@ -28,6 +28,11 @@ struct StyledCaptionOverlay: UIViewRepresentable {
         uiView.setNeedsDisplay()
     }
 
+    static func dismantleUIView(_ uiView: Surface, coordinator: ()) {
+        uiView.generation = UUID()
+        uiView.onError = nil
+    }
+
     final class Surface: UIView {
         var snapshot: CaptionSnapshot?
         var time = MediaTime.zero
@@ -36,9 +41,12 @@ struct StyledCaptionOverlay: UIViewRepresentable {
         var generation = UUID()
         private let renderer = CaptionRenderer()
         private var reportedError: String?
+        private var hasReported = false
 
         override func draw(_ rect: CGRect) {
             guard let snapshot, let context = UIGraphicsGetCurrentContext() else { return }
+            // A bounds-only redraw also supersedes queued error callbacks.
+            generation = UUID()
             let message: String?
             context.saveGState()
             context.translateBy(x: 0, y: bounds.height)
@@ -55,12 +63,13 @@ struct StyledCaptionOverlay: UIViewRepresentable {
                 message = nil
             } catch { message = error.localizedDescription }
             context.restoreGState()
-            guard message != reportedError else { return }
+            guard !hasReported || message != reportedError else { return }
             let expected = generation
             // Never mutate SwiftUI state during drawing or publish a stale frame's error.
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == expected else { return }
                 self.reportedError = message
+                self.hasReported = true
                 self.onError?(message)
             }
         }

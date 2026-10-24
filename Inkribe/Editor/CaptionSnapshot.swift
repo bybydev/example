@@ -36,10 +36,10 @@ enum CaptionTranscriptItem: Sendable, Identifiable {
 /// Immutable, revision-tagged edited input for preview and the later style/export phases.
 /// Time lookup is independent of selection, playback rate, UI focus and wall-clock time.
 struct CaptionSnapshot: Sendable {
-    let id = UUID()
+    private(set) var id = UUID()
     let revision: ProjectRevision
     let canvas: ProjectCanvas
-    let style: CaptionStyle
+    private(set) var style: CaptionStyle
     let wordsByID: [UUID: CaptionWord]
     let cues: [CaptionCue]
     let timeline: OutputTimeline
@@ -105,6 +105,15 @@ struct CaptionSnapshot: Sendable {
         }
         var maximum = MediaTime.zero
         prefixEnd = ordered.map { cue in maximum = max(maximum, cue.interval.end); return maximum }
+    }
+
+    /// Share immutable indexes/timing for bounded preset comparisons. No recognition
+    /// mapping, native timing, selection or saved document is changed by browsing.
+    func styled(_ style: CaptionStyle) -> Self {
+        var copy = self
+        copy.id = UUID()
+        copy.style = style
+        return copy
     }
 
     var chronologicalCues: [CaptionCue] { ordered }

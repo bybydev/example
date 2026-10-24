@@ -1,5 +1,51 @@
 # Inkribe Working Rules
 
+
+## Current project-saving simplification
+
+The user rejects a separate draft/recovery workflow and asks for a friendly single
+project experience in PR #39. This supersedes earlier editor-journal requirements:
+remove the app's editor sidecar dependency, readiness checks, discard/reload flows
+and sidecar-driven library/action gates. Save directly through the sole repository
+with the existing serialized writer and atomic/revision checks; retain failed edits
+in app-owned memory across navigation. Show one friendly save failure with Retry.
+Rename remains accessible. Do not add legacy migration work or delete existing
+files. Transcription checkpoints/partial publication, processing queues, frozen
+exports, originals, undo/access and Mac behavior remain protected. No builds/tests,
+CI/generation/models/native/UI/device execution or deployment; leave PR open.
+
+## Current consolidation authorization
+
+The user requests a consolidation pass across issue #38's five source passes in
+existing PR #39 → develop. Fix supported integration defects and duplication;
+consolidate current docs while preserving historical evidence. Read docs/ios/
+CONSOLIDATION.md and current entry points. Do not expand feature scope, alter
+working transcription/data/access contracts or run restricted execution. The
+source-only checks and open/no-auto-merge rules below remain in force.
+
+## Issue #38 — current production passes 1–5 authorization
+
+The user explicitly authorized pass 5 in existing PR #39
+(`feat/ios-project-packages` → develop), retaining passes 1–4. Implement versioned
+shared style/catalog/resolved values, ten distinctive looks, native renderer weight/
+shadow/background/layout/motion extensions and pass-4 browser/customization/reset/
+access integration, compatibility and supported production source fixes. Read
+phases/CAPTION_PRODUCTION, handoffs/CAPTION_PRODUCTION and PRODUCTION_READINESS
+under docs/ios plus prior pass records. Preserve successful transcription/partial
+publication, raw/native IDs/timing, corrections/undo/allowance, packages/jobs/frozen
+outputs/journals and current Mac source/config/Transcript APIs. Canonical schema 8
+reads 1–7; package/job/checkpoint/request wrappers remain stable. Opening legacy
+looks does not resolve current catalog defaults. Keep the approved one-scroll
+editor and iPhone-only support. Routine settled UI details are authorized after
+the short plan. Leave PR open without auto-merge. Production acceptance remains
+pending; do not manufacture device/footage/rendering/store evidence.
+
+No builds, typechecks, tests, fixture execution, CI setup/triggers/runs, project
+generation, model downloads, native inference/exports, deployment or UI/device/
+accessibility execution. User tests afterward. Meaningful regression source may
+be authored but must not be executed. Source integration is not production
+verification. Earlier pass-only/PR holds below are historical for this scope.
+
 ## Issue #36 — current authorization
 
 The user requests updating #36 and implementing the approved editor visualization in existing PR #37 (fix/ios-window-recovery → develop, baseline 525fae4), left open without auto-merge. The latest explicit implementation request supersedes the earlier complete-only publication/schema-v5 restriction: publish available captions incrementally, keep transcript/footage editable and exportable with inline missing ranges, and retry gaps while preserving edits. Schema v7 records coverage/mapping versions and reads v1–v6. Use bounded window recovery and versioned sidecars; only complete nonempty recognition charges. Scope includes the existing editor/transcription/export surfaces; preserve Mac/shared runtime, purchases, originals, native/manual anchors and legacy empty recovery. Read docs/ios/phases/TRANSCRIPTION_RECOVERY.md and handoffs/TRANSCRIPTION_RECOVERY.md. No builds/typechecks/tests, workflow dispatch, generation, weights, deployment or UI/device validation. Routine implementation choices for the approved UI and partial publication are authorized. The user subsequently reported an empty transcript after 1 of 4 windows on device. Correct the strict word-timing gate: preserve native segment-timed phrases when precise word timing is unavailable; never invent word boundaries. Retain mapping 1 for existing identities and record mapping 2 per new accepted core (schema v7). Do not claim the original video is fixed without runtime evidence.
@@ -30,7 +76,7 @@ Import/projects, caption text/timing/split/merge/undo, media tools and SRT remai
 
 ## Existing local contracts
 
-Schema v7 reads v1–v6; absent recognition coverage means a legacy complete result. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
+Schema v8 reads v1–v7; absent recognition coverage means a legacy complete result. Keep original clips/raw recognition/native/manual timing canonical. One retained-range map drives preview/MP4/SRT; trimming does not reduce recognition work. One renderer/media graph/audio mix serves preview and export. Keep bounded undo and serialized latest-draft persistence.
 
 Optional bundle/download/cache and Tiny/Base/Small selection remain per docs/ios/MODELS.md. Default project.yml omits iOS weights; project-ios-bundled.yml requires Small and disables download/cache fallback through INKRIBE_IOS_BUNDLED_MODELS_ONLY. Release alone does not change packaging. No weights are to be downloaded by the agent.
 

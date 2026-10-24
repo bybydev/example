@@ -31,8 +31,7 @@ actor ProjectThumbnails {
         )
         let (image, _) = try await generator.image(at: sampleTime)
         try Task.checkCancellation()
-        let output = try await repository.thumbnailURL(id: projectID)
-        let temporary = output.deletingLastPathComponent()
+        let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".jpg")
         defer { try? FileManager.default.removeItem(at: temporary) }
         guard let encoder = CGImageDestinationCreateWithURL(temporary as CFURL,
@@ -45,7 +44,7 @@ actor ProjectThumbnails {
             throw ProjectStoreError.unavailableRoot
         }
         // Small derived cache file; atomic replacement avoids partial JPEGs.
-        try Data(contentsOf: temporary).write(to: output, options: .atomic)
-        return output
+        return try await repository.publishThumbnail(Data(contentsOf: temporary), projectID: projectID,
+                                                     assetID: source.id, sourceHash: source.sha256)
     }
 }

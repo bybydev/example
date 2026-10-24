@@ -7,6 +7,7 @@ struct TranscriptionView: View {
     @Environment(ProjectsModel.self) private var model
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
     @State private var showingModels = false
+    @State private var showingQueue = false
     @State private var upsell: ProFeature?
     @State private var recovery: SpeechRecoverySummary?
     @State private var recoveryError: String?
@@ -90,6 +91,16 @@ struct TranscriptionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            Button("Open Queue", systemImage: "list.bullet.rectangle") {
+                guard !isPreparingRequest else { return }
+                isPreparingRequest = true
+                Task {
+                    defer { isPreparingRequest = false }
+                    do { _ = try await prepareForTranscription(); showingQueue = true }
+                    catch { model.alertMessage = error.localizedDescription }
+                }
+            }
+            .disabled(isPreparingRequest)
             if let error = speech.persistenceError {
                 Text(error).font(.footnote).foregroundStyle(.red)
                 Button("Retry local job storage") { speech.retryStorage() }
@@ -115,12 +126,13 @@ struct TranscriptionView: View {
                 recoveryError = error.localizedDescription
             }
         }
-        .confirmationDialog("Discard saved transcription progress?", isPresented: $confirmingDiscard) {
-            Button("Discard saved progress", role: .destructive) { discardProgress() }
+        .confirmationDialog("Start transcription over?", isPresented: $confirmingDiscard) {
+            Button("Start over", role: .destructive) { discardProgress() }
         } message: {
-            Text("The next attempt will process every window again. Your project and original media are preserved.")
+            Text("The next attempt will process the full clip again. Your project and original media are kept.")
         }
         .sheet(isPresented: $showingModels) { SpeechModelsView() }
+        .sheet(isPresented: $showingQueue, onDismiss: { Task { await onRequestFinished() } }) { ProcessingQueueSheet() }
         .sheet(item: $upsell) { ProUpsell(feature: $0) }
     }
 
@@ -132,7 +144,7 @@ struct TranscriptionView: View {
                let variant = try? SpeechModelCatalog.descriptor(id) {
                 Text(variant.displayName).font(.caption).foregroundStyle(.secondary)
             }
-            Text(speech.queue?.isPaused == true ? "Paused. Return to Inkribe to resume from saved progress." :
+            Text(speech.queue?.isPaused == true ? model.processing.lifecycle.userPaused ? "Paused by you. Resume in Queue." : "Paused outside the foreground. Saved progress will resume when Inkribe can run." :
                 record.status == .pending ? "Waiting to transcribe…" :
                 record.status == .cancelling ? "Cancelling…" : progress?.message ?? "Preparing transcription…")
                 .font(.subheadline)

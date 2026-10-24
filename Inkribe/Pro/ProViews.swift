@@ -52,7 +52,9 @@ private struct ThemedSurface: ViewModifier {
             .background { AppThemeBackground(theme: theme) }
             .foregroundStyle(theme.primaryForegroundColor)
             .tint(theme.accentColor)
-            .toolbarBackground(theme.backgroundColor, for: .navigationBar)
+            // Keep the native bar/Back gesture over the continuous themed page.
+            // A flat theme.backgroundColor caused the black strip after scrolling.
+            .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 

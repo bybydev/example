@@ -12,78 +12,60 @@ struct ProjectCardStatus {
     var needsAttention = false
 }
 
-/// Card imagery loads once per URL/cache generation, never from the view body.
-struct ProjectCard: View {
+/// Compact project identity; the navigation link and action menu are siblings.
+struct ProjectRow: View {
     @Environment(\.appFoundationTheme) private var theme
+    @Environment(\.dynamicTypeSize) private var typeSize
     let project: ProjectSummary
     let status: ProjectCardStatus
     let cacheGeneration: Int
     @State private var thumbnail: UIImage?
 
-    private struct ImageKey: Hashable {
-        let url: URL?
-        let generation: Int
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            if !typeSize.isAccessibilitySize { artwork }
+            VStack(alignment: .leading, spacing: 7) {
+                Text(project.title).font(.headline)
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    .foregroundStyle(.primary)
+                Text("\(project.mediaKind == .audio ? "Audio" : "Video") · \(duration)")
+                    .font(.caption).foregroundStyle(.secondary)
+                Label(status.title, systemImage: status.icon)
+                    .font(.caption).foregroundStyle(theme.accentColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                if status.isWorking, let progress = status.progress {
+                    ProgressView(value: progress).accessibilityLabel("Transcription progress")
+                }
+                Text(project.updatedAt, format: .dateTime.month(.abbreviated).day())
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Updated \(project.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            theme.accentColor.opacity(0.12)
-                .aspectRatio(4.0 / 3.0, contentMode: .fit)
-                .overlay {
-                    GeometryReader { geometry in
-                        if let thumbnail {
-                            Image(uiImage: thumbnail)
-                                .resizable().scaledToFill()
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                                .clipped()
-                        } else {
-                            Image(systemName: project.mediaKind == .audio ? "waveform" : "film")
-                                .font(.system(size: 34, weight: .light))
-                                .foregroundStyle(theme.accentColor)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    }
-                    .accessibilityHidden(true)
-                }
-                .overlay(alignment: .bottomLeading) {
-                    Text(duration)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(8)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .task(id: ImageKey(url: project.thumbnailURL, generation: cacheGeneration)) {
-                    thumbnail = nil
-                    let data = await ProjectThumbnailData.shared.load(project.thumbnailURL)
-                    guard !Task.isCancelled else { return }
-                    thumbnail = data.flatMap { UIImage(data: $0) }
-                }
-            Text(project.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(2)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Label(status.title, systemImage: status.icon)
-                .font(.caption)
-                .foregroundStyle(status.needsAttention ? .orange : theme.accentColor)
-                .lineLimit(2)
-            if status.isWorking {
-                if let progress = status.progress {
-                    ProgressView(value: progress)
+    private var artwork: some View {
+        RoundedRectangle(cornerRadius: 14).fill(theme.accentColor.opacity(0.12))
+            .frame(width: 72, height: 90)
+            .overlay {
+                if let thumbnail {
+                    Image(uiImage: thumbnail).resizable().scaledToFill()
+                        .frame(width: 72, height: 90).clipped()
                 } else {
-                    ProgressView().progressViewStyle(.linear)
+                    Image(systemName: project.mediaKind == .audio ? "waveform" : "film")
+                        .font(.title2).foregroundStyle(theme.accentColor)
                 }
             }
-            Text(project.updatedAt, style: .date)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 16))
-        .accessibilityElement(children: .combine)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .accessibilityHidden(true)
+            .task(id: "\(project.thumbnailURL?.path ?? "")-\(cacheGeneration)") {
+                thumbnail = nil
+                let data = await ProjectThumbnailData.shared.load(project.thumbnailURL)
+                guard !Task.isCancelled else { return }
+                thumbnail = data.flatMap { UIImage(data: $0) }
+            }
     }
 
     private var duration: String {
@@ -94,7 +76,7 @@ struct ProjectCard: View {
     }
 }
 
-private actor ProjectThumbnailData {
+actor ProjectThumbnailData {
     static let shared = ProjectThumbnailData()
 
     func load(_ url: URL?) -> Data? {
