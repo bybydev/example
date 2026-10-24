@@ -4,7 +4,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 8
+    static let current = 9
 }
 
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
@@ -126,6 +126,7 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var recognition: Recognition? = nil
     var captionStyle: CaptionStyle? = nil
     var mediaEdits: MediaEdits? = nil
+    var clipSettings: [ClipSettings]? = nil
 
     var effectiveCaptionStyle: CaptionStyle { captionStyle ?? .standard }
     var effectiveMediaEdits: MediaEdits { mediaEdits ?? .standard }
@@ -155,6 +156,17 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw ProjectStoreError.invalidDocument("Media edits require schema v5")
         }
         try mediaEdits?.validate(sourceDuration: sourceDuration)
+        if let clipSettings {
+            guard schemaVersion >= 9, clipSettings.count <= clips.count,
+                  Set(clipSettings.map(\.id)).count == clipSettings.count,
+                  clipSettings.allSatisfy({ value in clips.contains { $0.id == value.id } }) else {
+                throw ProjectStoreError.invalidDocument("Invalid clip settings")
+            }
+            for settings in clipSettings {
+                try settings.captions.resolved(over: effectiveCaptionStyle).validate()
+                try settings.media.resolved(over: effectiveMediaEdits).validate(sourceDuration: sourceDuration)
+            }
+        }
         guard outputDuration > .zero else { throw MediaEditError.invalidSettings }
         if let dimensions = preset.canvas, dimensions != canvas {
             throw ProjectStoreError.invalidDocument("Preset does not match canvas")

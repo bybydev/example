@@ -37,6 +37,13 @@ struct PickedMovie: Transferable {
     }
 }
 
+struct PhotoPreparationFailure: Identifiable {
+    let id: UUID
+    let item: PhotosPickerItem
+    let name: String
+    var message: String
+}
+
 struct ImportCompletion: Identifiable, Sendable {
     let id = UUID()
     let projectIDs: [UUID]
@@ -104,7 +111,18 @@ final class ProjectsModel {
     private(set) var isPreparingPhotos = false
     var alertMessage: String?
     var importMessage: String?
-    var selectedSources: [ImportInput] = []
+    private(set) var selectedSources: [ImportInput] = []
+    private(set) var sourceReviews: [UUID: ImportSourceReview] = [:]
+    private(set) var reviewingSources: Set<UUID> = []
+    private(set) var photoFailures: [PhotoPreparationFailure] = []
+    private let reviewer = ImportMediaReviewer()
+    private var reviewTask: Task<Void, Never>?
+    private var creationID = UUID()
+    private var selectionOrder: [UUID] = []
+    var canCreateProject: Bool {
+        !selectedSources.isEmpty && !isImporting && !isPreparingPhotos && photoFailures.isEmpty &&
+            reviewingSources.isEmpty && selectedSources.allSatisfy { sourceReviews[$0.id]?.metadata != nil }
+    }
     var storage: ProjectRepository.StorageUsage?
     var trashed: [ProjectRepository.TrashedProject] = []
     var pendingStaging: [UUID] = []
@@ -170,6 +188,7 @@ final class ProjectsModel {
         importCompletion = nil
         importMessage = nil
         importedInSession = []
+        creationID = UUID()
         clearSelection()
     }
 
@@ -190,42 +209,84 @@ final class ProjectsModel {
 
     func addFiles(_ urls: [URL], selectionID: UUID) {
         guard selectionID == selectionSession, !isImporting, !isPreparingPhotos else { return }
-        selectedSources += urls.map {
-            ImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent)
+        let additions = urls.map { ImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent) }
+        selectedSources += additions
+        selectionOrder += additions.map(\.id)
+        reviewSources()
+    }
+
+    func moveSource(_ id: UUID, offset: Int) {
+        guard !isImporting, !isPreparingPhotos, let index = selectedSources.firstIndex(where: { $0.id == id }),
+              selectedSources.indices.contains(index + offset) else { return }
+        selectedSources.swapAt(index, index + offset)
+        selectionOrder = selectedSources.map(\.id)
+    }
+
+    func reviewSources(retry id: UUID? = nil) {
+        if let id { sourceReviews.removeValue(forKey: id) }
+        reviewTask?.cancel()
+        let session = selectionSession
+        let sources = selectedSources.filter { sourceReviews[$0.id] == nil }
+        reviewingSources = Set(sources.map(\.id))
+        reviewTask = Task {
+            for source in sources {
+                guard session == selectionSession, !Task.isCancelled else { return }
+                let review = await reviewer.review(source)
+                guard session == selectionSession, !Task.isCancelled else { return }
+                if selectedSources.contains(where: { $0.id == source.id }) { sourceReviews[source.id] = review }
+                reviewingSources.remove(source.id)
+            }
         }
     }
 
     func beginPhotoPreparation(_ items: [PhotosPickerItem]) {
         guard !isImporting, !isPreparingPhotos, !items.isEmpty else { return }
-        isPreparingPhotos = true
-        let session = selectionSession
-        photoTask = Task { await addPhotos(items, session: session) }
+        let additions = items.enumerated().map { index, item in
+            PhotoPreparationFailure(id: UUID(), item: item, name: "Selected video \(index + 1)", message: "Not prepared yet")
+        }
+        photoFailures.append(contentsOf: additions)
+        selectionOrder += additions.map(\.id)
+        preparePhotos(additions)
     }
 
-    private func addPhotos(_ items: [PhotosPickerItem], session: UUID) async {
-        guard selectionSession == session else { return }
-        defer {
-            if selectionSession == session { isPreparingPhotos = false; photoTask = nil }
-        }
-        for item in items {
-            do {
-                try Task.checkCancellation()
-                guard session == selectionSession else { return }
-                guard let file = try await item.loadTransferable(type: PickedMovie.self) else {
-                    throw ProjectStoreError.unsupportedMedia
+    func retryPhotoPreparation(_ id: UUID) {
+        guard !isImporting, !isPreparingPhotos, let failure = photoFailures.first(where: { $0.id == id }) else { return }
+        preparePhotos([failure])
+    }
+
+    func removePhotoFailure(_ id: UUID) {
+        guard !isImporting, !isPreparingPhotos else { return }
+        photoFailures.removeAll { $0.id == id }
+    }
+
+    private func preparePhotos(_ items: [PhotoPreparationFailure]) {
+        isPreparingPhotos = true
+        let session = selectionSession
+        photoTask = Task {
+            defer { if session == selectionSession { isPreparingPhotos = false; photoTask = nil; reviewSources() } }
+            for failure in items {
+                do {
+                    try Task.checkCancellation()
+                    guard session == selectionSession else { return }
+                    guard let file = try await failure.item.loadTransferable(type: PickedMovie.self) else {
+                        throw ProjectStoreError.unsupportedMedia
+                    }
+                    guard session == selectionSession, !Task.isCancelled else {
+                        try? FileManager.default.removeItem(at: file.localURL)
+                        return
+                    }
+                    ownedPhotoURLs.insert(file.localURL)
+                    selectedSources.append(ImportInput(id: failure.id, localURL: file.localURL, origin: .photos, displayName: file.displayName))
+                    let positions = Dictionary(uniqueKeysWithValues: selectionOrder.enumerated().map { ($0.element, $0.offset) })
+                    selectedSources.sort { (positions[$0.id] ?? Int.max) < (positions[$1.id] ?? Int.max) }
+                    photoFailures.removeAll { $0.id == failure.id }
+                } catch is CancellationError { return }
+                catch {
+                    guard session == selectionSession else { return }
+                    if let index = photoFailures.firstIndex(where: { $0.id == failure.id }) {
+                        photoFailures[index].message = error.localizedDescription
+                    }
                 }
-                guard selectionSession == session else {
-                    try? FileManager.default.removeItem(at: file.localURL)
-                    return
-                }
-                ownedPhotoURLs.insert(file.localURL)
-                selectedSources.append(ImportInput(localURL: file.localURL, origin: .photos,
-                                                       displayName: file.displayName))
-            } catch is CancellationError {
-                return
-            } catch {
-                guard selectionSession == session else { return }
-                alertMessage = "A Photos video could not be prepared: " + error.localizedDescription
             }
         }
     }
@@ -238,12 +299,15 @@ final class ProjectsModel {
             }
         }
         selectedSources.removeAll { $0.id == id }
+        sourceReviews.removeValue(forKey: id)
+        reviewSources()
     }
 
     func cancelPhotoPreparation() {
         photoTask?.cancel(); photoTask = nil
         selectionSession = UUID()
         isPreparingPhotos = false
+        reviewSources()
     }
 
     func clearSelection() {
@@ -251,58 +315,39 @@ final class ProjectsModel {
         for url in ownedPhotoURLs { try? FileManager.default.removeItem(at: url) }
         ownedPhotoURLs.removeAll()
         selectedSources.removeAll()
+        sourceReviews.removeAll(); photoFailures.removeAll(); reviewingSources.removeAll(); selectionOrder.removeAll()
+        reviewTask?.cancel(); reviewTask = nil
     }
 
-    func beginImport(disposition: ImportDisposition, preset: CanvasPreset,
-                     canvas: ProjectCanvas? = nil) {
-        guard !isImporting, !isPreparingPhotos, !selectedSources.isEmpty else { return }
+    func beginImport(preset: CanvasPreset, canvas: ProjectCanvas? = nil, title: String) {
+        guard canCreateProject else { return }
         let sources = selectedSources
-        isImporting = true
-        importMessage = nil
-        importCompletion = nil
+        let projectID = creationID
+        isImporting = true; importMessage = nil; importCompletion = nil
         importTask = Task {
             defer { isImporting = false; importTask = nil }
             do {
-                let result = try await importer.importFiles(
-                    sources, disposition: disposition, preset: preset,
-                    customCanvas: canvas
-                )
-                for document in result.documents where !importedInSession.contains(document.id) {
-                    importedInSession.append(document.id)
-                }
-                if disposition == .separateProjects {
-                    let committed = Set(result.documents.map(\.id))
-                    for source in selectedSources where committed.contains(source.id) {
-                        if ownedPhotoURLs.remove(source.localURL) != nil { try? FileManager.default.removeItem(at: source.localURL) }
-                    }
-                    selectedSources.removeAll { committed.contains($0.id) }
-                }
-                let stopped = result.wasCancelled || Task.isCancelled
-                if (result.failures.isEmpty && !stopped) || (disposition == .combineAsClips && !result.documents.isEmpty) {
-                    clearSelection()
-                }
-                let count = importedInSession.count
-                let saved = count == 1 ? "1 project saved." : "\(count) projects saved."
-                importMessage = (count > 0 ? saved + "\n" : "")
-                    + (stopped ? "Import stopped. Remaining files have not been imported.\n" : "")
-                    + result.failures.map { $0.filename + ": " + $0.reason }.joined(separator: "\n")
+                let document = try await importer.importFiles(sources, projectID: projectID,
+                    preset: preset, customCanvas: canvas, title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title)
+                importedInSession = [document.id]
+                let stopped = Task.isCancelled
+                clearSelection()
                 await refreshLibrary()
-                importCompletion = ImportCompletion(projectIDs: importedInSession,
-                    hasFailures: !result.failures.isEmpty || stopped)
-                // Publication/navigation do not wait for derived JPEGs or storage accounting.
-                Task { await generateMissingThumbnails(for: result.documents); await refreshStorage() }
+                importMessage = stopped ? "Your project was saved before cancellation. Open it below." : "Project saved."
+                importCompletion = ImportCompletion(projectIDs: [document.id], hasFailures: stopped)
+                Task { await generateMissingThumbnails(for: [document]); await refreshStorage() }
             } catch is CancellationError {
-                importMessage = "Import cancelled. Already committed projects are preserved."
+                importMessage = "Creation cancelled. Your selected files are kept for another attempt."
                 await refresh()
             } catch {
-                alertMessage = error.localizedDescription
+                importMessage = error.localizedDescription
                 await refresh()
             }
         }
     }
 
     func beginURLImport(text: String, rightsConfirmed: Bool,
-                        preset: CanvasPreset, canvas: ProjectCanvas? = nil) {
+                        preset: CanvasPreset, canvas: ProjectCanvas? = nil, title: String) {
         guard !isImporting, !isPreparingPhotos else { return }
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme?.lowercased() == "https", url.host?.isEmpty == false,
@@ -317,7 +362,7 @@ final class ProjectsModel {
             defer { isImporting = false; importTask = nil }
             do {
                 let document = try await importer.importDirectURL(
-                    url, rightsConfirmed: rightsConfirmed, preset: preset, customCanvas: canvas
+                    url, rightsConfirmed: rightsConfirmed, preset: preset, customCanvas: canvas, title: title, projectID: creationID
                 )
                 importMessage = "Imported " + document.title
                 clearSelection()

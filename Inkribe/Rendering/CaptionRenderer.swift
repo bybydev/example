@@ -54,20 +54,20 @@ final class CaptionRenderer {
               bounds.width > 0, bounds.height > 0 else { return }
         guard let presentation = snapshot.evaluate(at: time) else { cached = nil; return }
         try snapshot.canvas.validate()
-        try snapshot.style.validate()
+        let style = snapshot.style(for: presentation)
+        try style.validate()
         let layout: Layout
         if let cached, cached.snapshotID == snapshot.id, cached.cueID == presentation.cueID {
             layout = try cached.result.get()
         } else {
             do {
-                layout = try makeLayout(presentation, style: snapshot.style, canvas: snapshot.canvas)
+                layout = try makeLayout(presentation, style: style, canvas: snapshot.canvas)
                 cached = Cache(snapshotID: snapshot.id, cueID: presentation.cueID, result: .success(layout))
             } catch let error as CaptionRenderError {
                 cached = Cache(snapshotID: snapshot.id, cueID: presentation.cueID, result: .failure(error))
                 throw error
             }
         }
-        let style = snapshot.style
         let motion = CaptionMotion.evaluate(snapshot.motionPresentation(presentation), style: style,
             at: try snapshot.timeline.originalTime(forOutput: time))
         let width = CGFloat(snapshot.canvas.width)

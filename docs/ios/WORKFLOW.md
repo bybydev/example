@@ -1,53 +1,31 @@
 # Inkribe iOS — current working agreement
 
 2026-10-24. Latest user instructions and root AGENTS.md control authorization.
-Current work is consolidation of the five implemented source passes in existing
-PR #39, `feat/ios-project-packages` → develop. Earlier phase-only holds/Pro deferral
-and references to old open PRs are historical, preserved in
-[the archive](archive/before-consolidation/WORKFLOW.md).
+Current work is all of expanded Pass 1 (#41, parent #40), one new PR from latest
+develop 4a9780f on feat/ios-pass1-project-experience targeting develop.
+Older PR #39 source/merge holds and #41's planning-only wording are superseded.
 
-The latest project-saving instruction supersedes editor-journal requirements in
-older phase records. Remove the app sidecar dependency and recovery-management UI;
-retain serialized atomic saves and unsaved edits in app-owned memory. No legacy
-migration work or destructive cleanup is requested.
+Read README, PLAN, FEATURES, HANDOFF, ARCHITECTURE, DESIGN and
+[PROJECT_EXPERIENCE](phases/PROJECT_EXPERIENCE.md) plus its detailed handoff.
+The latest implementation request authorizes the discussed UI and routine details.
+Preserve transcription, native IDs/timing, partial captions, corrections/undo,
+allowance, originals, independent outputs and current Mac identity/configuration.
 
-## Scope and PR procedure
+No builds/typechecks/tests/fixtures, CI setup/triggers/runs, Xcode generation, model
+downloads, native inference/exports, UI/device/accessibility execution or deployment.
+User validates afterward. Regression source may be authored but not executed.
+Use source/call-site/diff/whitespace and publication consistency review only.
 
-1. Read README, PLAN, FEATURES, HANDOFF, ARCHITECTURE, DESIGN and the relevant
-   phase/handoff. Inspect current source and refresh actual develop/PR heads.
-2. Preserve all work in PR #39 for this requested scope. Use a short concrete plan
-   before changes; settled interaction details and supported integration fixes are
-   authorized. Ask only about actual scope expansion.
-3. Preserve working transcription/partial publication, raw/native IDs/timing,
-   caption edits/undo/allowance, packages/queue/frozen outputs, original
-   media and existing Mac identity/config/resources/APIs.
-4. Review complete call paths and failure/retention behavior. Source fixtures or
-   meaningful regression specifications may be authored but must not be executed.
-5. Update current handoff, source evidence and issue/PR metadata honestly. Distinguish
-   integration, source checks, executed validation and owner inputs.
-6. Keep PR open with auto-merge disabled. Merge/release/deployment and another phase
-   require explicit instructions.
+Keep the PR open without auto-merge. No release or automatic next parent pass.
+Finish with marked todo status distinguishing source work, execution and acceptance.
+Do not provision signing/store/website resources or invent policy URLs.
 
-## Execution limits
+XcodeGen owns project.yml; do not edit generated projects. iOS remains Inkribe/,
+target Inkribe, iPhone only. Mac remains InkribeMac/. Existing icon, dependency,
+model and purchase ownership stay unchanged. No separate draft/recovery workflow.
 
-No builds, typechecks, tests, fixture execution, CI setup/triggers/runs, Xcode project
-generation, model downloads, native inference/exports, UI/device/accessibility
-execution or deployment. User tests afterward. Source review is not runtime evidence.
-Do not provision signing/store/website resources or invent policy URLs/disclosures.
-
-XcodeGen owns project.yml; never hand-edit generated .xcodeproj files. iOS remains
-Inkribe/, target Inkribe, iPhone only. Mac remains InkribeMac/. Only the two legacy
-JobQueue adapters retain IOS-prefixed names because their persisted type names
-are part of the upgrade contract. Shared AppIcon.icon/resource ownership is retained.
-
-This workspace is a partial review snapshot with synthetic local git history.
-Publish only changed blobs onto the full remote base tree; never push/replace the
-remote tree from this snapshot. Verify changed hashes, unchanged remote blobs and
-an expected-head branch lease, then final PR state/base/head. This applies while
-that snapshot remains in use; a future real clone should verify its own history.
-
-## Continuation
-
-Use HANDOFF for the current source milestone and PRODUCTION_READINESS for pending
-acceptance. Original phases and archived status do not authorize extra features,
-execution or resources. Never claim production readiness without the evidence.
+This checkout is a partial review snapshot with synthetic local git history.
+Publish only changed blobs onto the full verified remote base tree. Never push
+this snapshot's root tree/history. Verify unchanged remote blobs, changed hashes,
+expected-head lease and final PR base/head/state. A future real clone should check
+its own history before applying this snapshot-specific procedure.

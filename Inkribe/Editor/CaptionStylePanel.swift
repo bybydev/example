@@ -10,7 +10,7 @@ enum CaptionStyleSection: String, CaseIterable, Hashable, Identifiable {
 struct CaptionStylePanel: View {
     let session: EditorSession
     let section: CaptionStyleSection
-    private var style: CaptionStyle { session.document?.effectiveCaptionStyle ?? .standard }
+    private var style: CaptionStyle { session.editingCaptionStyle }
     private var baseline: CaptionStyle { CaptionPreset.definition(for: style.preset)?.style ?? .standard }
     private var resetName: String { CaptionPreset.definition(for: style.preset)?.name ?? "Basic" }
 
@@ -18,7 +18,16 @@ struct CaptionStylePanel: View {
         VStack(alignment: .leading, spacing: 18) {
             Text(section.rawValue).font(.headline)
             controls
-            Button("Reset \(section.rawValue.lowercased()) to \(resetName)", systemImage: "arrow.counterclockwise") { resetSection() }
+            if let id = session.editingClipID, let document = session.document {
+                Label(document.settings(for: id).captions.isCustomized(resetKind) ? "Customized" : "Using project defaults",
+                      systemImage: document.settings(for: id).captions.isCustomized(resetKind) ? "slider.horizontal.3" : "link")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Reset section to project defaults", systemImage: "arrow.counterclockwise") {
+                    session.resetClipSettings(captions: resetKind)
+                }
+            } else {
+                Button("Reset \(section.rawValue.lowercased()) to \(resetName)", systemImage: "arrow.counterclockwise") { resetSection() }
+            }
         }
         .studioCard()
         .onDisappear { session.endStyleEditing() }
@@ -128,18 +137,17 @@ struct CaptionStylePanel: View {
         }
     }
 
-    private func resetSection() {
-        let reset: CaptionStyleReset
+    private var resetKind: CaptionStyleReset {
         switch section {
-        case .typography: reset = .typography
-        case .colors: reset = .colors
-        case .outline: reset = .backdrop
-        case .layout: reset = .layout
-        case .position: reset = .placement
-        case .motion: reset = .motion
+        case .typography: .typography
+        case .colors: .colors
+        case .outline: .backdrop
+        case .layout: .layout
+        case .position: .placement
+        case .motion: .motion
         }
-        session.setCaptionStyle(style.resetting(reset, to: baseline))
     }
+    private func resetSection() { session.setCaptionStyle(style.resetting(resetKind, to: baseline)) }
 
     private var placementButtons: some View {
         Group {

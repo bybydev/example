@@ -1,6 +1,6 @@
 # Inkribe iOS — current architecture
 
-2026-10-24. Source contracts for issue #38/PR #39 and consolidation. Existing Mac
+2026-10-24. Source contracts through expanded Pass 1 (#41), based on merged #39. Existing Mac
 source/configuration/Transcript APIs remain intact; shared extraction does not
 establish Mac feature/rendering parity.
 
@@ -15,7 +15,7 @@ establish Mac feature/rendering parity.
 
 ## Persistence and concurrency
 
-Internal UUID.inkribe packages use wrapper 1 and document schema 8 (reads 1–7).
+Internal UUID.inkribe packages use wrapper 1 and document schema 9 (reads 1–8).
 ApplicationSupport/InkribeIOSProjects and existing originals/checkpoints/usage/
 exports/cache ownership remain. Relative paths, identity, versions, bounds and
 regular-file checks apply on read and publication. Atomic same-directory legacy
@@ -40,6 +40,25 @@ existing 50-command/8MiB budget (one oversized command retained). Native playbac
 focus, scroll and entitlement adapters remain separate; snapshot/time lookup is
 independent of selection and does not dirty the project.
 
+## Project experience and inherited settings
+
+One import transaction publishes one project with one/multiple ordered sources.
+ProjectDetailView is the overview; ProjectEditorView retains the scrolling editor.
+Both share one EditorSession and writer, with owner IDs and covered-layer handoff.
+Stable clip IDs drive route seeking, caption groups and override membership.
+
+Optional clipSettings (schema 9) stores sparse CaptionStyleOverrides from InkribeCore
+and iOS framing/audio overrides. Missing fields inherit current project defaults;
+reset removes fields. Preset application intentionally pins its styling. Validate
+effective values and clip membership, remap IDs on duplicate, and compare settings
+when deciding whether a concurrent revision is append-only speech publication.
+Bounded expected-state settings history excludes recognition/media bytes.
+
+CaptionSnapshot caches resolved styles/groups. Native drawing selects style by
+the cue's clip identity. Media graph applies clip placement and volume events per
+inserted audio-lane interval. Caption-only patches do not change the media key.
+Project trim and output canvas/30fps remain global. No post-creation sequencing.
+
 ## Recognition, media and jobs
 
 Original clips/raw recognition/native timestamps and IDs remain canonical. Bounded
@@ -61,6 +80,10 @@ new background entitlement. Speech retries always retain model/revision/allowanc
 checks. Frozen export wrapper 1 captures document/profile/media; workers never read
 current catalog defaults or live editor drafts. Per-output leases pin exact URLs;
 record removal, orphan recovery and explicit file deletion remain distinct.
+Project Exports uses that same inventory for queued/in-place requests. Manifests add
+an optional creation date; old requests omit it. Preview and delivery acquire the
+same immutable-file lease. Export now follows its durable job without bypassing the
+resource gate, user pause or foreground requirement.
 
 ## Style and presentation
 

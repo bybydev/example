@@ -9,10 +9,12 @@ struct EditorHistoryEntry: Sendable {
 }
 enum EditorHistoryChange: Sendable {
     case caption(CaptionEditPatch)
-    case style(before: CaptionStyle?, after: CaptionStyle?)
-    case media(before: MediaEditState, after: MediaEditState)
+    case settings(before: ProjectSettingsState, after: ProjectSettingsState)
 
-    var changesMedia: Bool { if case .media = self { true } else { false } }
+    var changesMedia: Bool {
+        if case .settings(let before, let after) = self { return after.changesMedia(from: before) }
+        return false
+    }
 
     /// Compare the expected edited state before applying; stale history must not
     /// overwrite new speech publication, another revision or a newer correction.
@@ -23,11 +25,8 @@ enum EditorHistoryChange: Sendable {
             guard let result = project.recognition else { throw CaptionEditError.missingCaption }
             let state = try patch.applying(to: CaptionEditState(result), forward: forward)
             project.recognition = state.applying(to: result)
-        case .style(let before, let after):
-            guard project.captionStyle == (forward ? before : after) else { throw CaptionEditError.missingCaption }
-            project.captionStyle = forward ? after : before
-        case .media(let before, let after):
-            guard MediaEditState(project) == (forward ? before : after) else { throw MediaEditError.invalidSettings }
+        case .settings(let before, let after):
+            guard ProjectSettingsState(project) == (forward ? before : after) else { throw MediaEditError.invalidSettings }
             project = (forward ? after : before).applying(to: project)
         }
         project.schemaVersion = ProjectSchema.current
@@ -38,8 +37,8 @@ enum EditorHistoryChange: Sendable {
     var estimatedBytes: Int {
         switch self {
         case .caption(let patch): patch.estimatedBytes
-        case .style: MemoryLayout<CaptionStyle>.stride * 2
-        case .media: MemoryLayout<MediaEditState>.stride * 2
+        case .settings(let before, let after):
+            1_024 + ((before.clipSettings?.count ?? 0) + (after.clipSettings?.count ?? 0)) * 2_048
         }
     }
     mutating func coalesceText(_ next: CaptionEditPatch) -> Bool {
@@ -47,14 +46,9 @@ enum EditorHistoryChange: Sendable {
         self = .caption(patch)
         return true
     }
-    mutating func coalesceStyle(from previous: CaptionStyle?, to next: CaptionStyle) -> Bool {
-        guard case .style(let before, let after) = self, after == previous else { return false }
-        self = .style(before: before, after: next)
-        return true
-    }
-    mutating func coalesceMedia(from previous: MediaEditState, to next: MediaEditState) -> Bool {
-        guard case .media(let before, let after) = self, after == previous else { return false }
-        self = .media(before: before, after: next)
+    mutating func coalesceSettings(from previous: ProjectSettingsState, to next: ProjectSettingsState) -> Bool {
+        guard case .settings(let before, let after) = self, after == previous else { return false }
+        self = .settings(before: before, after: next)
         return true
     }
 }

@@ -67,6 +67,9 @@ struct ExportArtifact: Identifiable, Sendable {
     let outputURL: URL?
     let bytes: Int64
     let issue: String?
+    let createdAt: Date?
+    let duration: MediaTime?
+    let outputBytes: Int64?
 }
 
 /// Stable per-job requests/results. Nothing is evicted to admit a newer export.

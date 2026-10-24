@@ -38,7 +38,6 @@ enum PreviewComposition {
         let composition = AVMutableComposition()
         let timeline = OutputTimeline(document)
         let duration = timeline.duration
-        let edits = document.effectiveMediaEdits
         let used = Set(document.clips.filter { timeline.retained($0.timelineInterval) != nil }.map(\.sourceAssetID))
         let hasVideo = document.assets.contains { used.contains($0.id) && $0.metadata.videoTrackCount > 0 }
         let video = hasVideo ? composition.addMutableTrack(withMediaType: .video,
@@ -48,6 +47,7 @@ enum PreviewComposition {
         // Simultaneous source tracks must never be inserted into the same lane.
         var audio: [AVMutableCompositionTrack] = []
         var populatedAudio: Set<CMPersistentTrackID> = []
+        var volumeSegments: [CMPersistentTrackID: [(MediaInterval, Double)]] = [:]
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var videoIntervals: [MediaInterval] = []
@@ -61,6 +61,7 @@ enum PreviewComposition {
                                    width: projectSize.width, height: projectSize.height)
         for original in document.clips.sorted(by: { $0.timelineInterval.start < $1.timelineInterval.start }) {
             try Task.checkCancellation()
+            let edits = document.mediaEdits(for: original.id)
             guard let retained = timeline.retained(original.timelineInterval),
                   let output = timeline.outputInterval(original.timelineInterval) else { continue }
             let sourceStart = try MediaTime(validating: CMTimeAdd(original.sourceInterval.start.cmTime,
@@ -109,9 +110,10 @@ enum PreviewComposition {
                         preferredTrackID: kCMPersistentTrackID_Invalid) else { throw ExportError.decoding }
                     audio.append(lane)
                 }
-                if try await insert(track: track, clip: clip, into: audio[index]) != nil {
+                if let interval = try await insert(track: track, clip: clip, into: audio[index]) {
                     inserted = true
                     populatedAudio.insert(audio[index].trackID)
+                    volumeSegments[audio[index].trackID, default: []].append((interval, edits.volume))
                 }
             }
             if let videoInterval, let layer {
@@ -131,8 +133,19 @@ enum PreviewComposition {
             instructions.append(instruction(start: cursor, end: duration, layer: nil))
         }
         let includedAudio = audio.filter { populatedAudio.contains($0.trackID) }
-        let finalMix = includedAudio.isEmpty ? nil : originalAudioMix(
-            trackIDs: includedAudio.map(\.trackID), volume: edits.volume)
+        let finalMix: AVAudioMix?
+        if includedAudio.isEmpty { finalMix = nil }
+        else {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = includedAudio.map { lane in
+                let parameters = AVMutableAudioMixInputParameters(track: lane)
+                for (interval, volume) in volumeSegments[lane.trackID] ?? [] {
+                    parameters.setVolume(Float(volume), at: interval.start.cmTime)
+                }
+                return parameters
+            }
+            finalMix = mix.copy() as? AVAudioMix
+        }
         if let video, !insertedVideo { composition.removeTrack(video) }
         for lane in audio where !populatedAudio.contains(lane.trackID) { composition.removeTrack(lane) }
         if !inserted {

@@ -61,6 +61,7 @@ final class EditorSession {
         let canvas: ProjectCanvas
         let urls: [UUID: URL]
         let edits: MediaEdits
+        let clipMedia: [UUID: ClipMediaOverrides]
     }
 
     init(projectID: UUID, access: ProAccess) { self.projectID = projectID; self.access = access }
@@ -73,6 +74,38 @@ final class EditorSession {
     /// boundary unit. Transport/list/export use the retained, zero-based clock.
     var timingCue: CaptionCue? { document?.recognition?.cues.first { $0.id == selectedCueID } }
     var timingWord: CaptionWord? { document?.recognition?.words.first { $0.id == selectedWordID } }
+    var currentClip: ProjectClip? {
+        guard let document else { return nil }
+        let original = try? OutputTimeline(document).originalTime(forOutput: min(time, duration))
+        guard let original else { return nil }
+        return document.orderedClips.first { $0.timelineInterval.contains(original) } ??
+            (time == duration ? document.orderedClips.last : nil)
+    }
+    var editingClipID: UUID? {
+        if case .clip(let id) = workspace.settingsScope { return id }
+        return nil
+    }
+    var editingCaptionStyle: CaptionStyle {
+        guard let document else { return .standard }
+        return editingClipID.map { document.captionStyle(for: $0) } ?? document.effectiveCaptionStyle
+    }
+    var editingMediaEdits: MediaEdits {
+        guard let document else { return .standard }
+        return editingClipID.map { document.mediaEdits(for: $0) } ?? document.effectiveMediaEdits
+    }
+    func seekToClip(_ id: UUID) {
+        guard let document, let clip = document.clips.first(where: { $0.id == id }),
+              let interval = OutputTimeline(document).outputInterval(clip.timelineInterval) else { return }
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        if editingClipID != nil { workspace.settingsScope = .clip(id) }
+        seek(to: interval.start)
+    }
+    func selectSettingsScope(_ scope: EditorSettingsScope) {
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        workspace.settingsScope = scope
+        if case .clip(let id) = scope { seekToClip(id) }
+    }
+
     var undoLabel: String { "Undo edit" }
     var redoLabel: String { "Redo edit" }
     var canMergeNext: Bool {
@@ -196,52 +229,60 @@ final class EditorSession {
     func setMediaPresentation(_ edits: MediaEdits, canvas: ProjectCanvas? = nil,
                               preset: CanvasPreset? = nil, coalescing control: MediaControl? = nil) {
         guard var project = document else { return }
-        let before = MediaEditState(project)
-        let originalTime: MediaTime
-        do {
-            originalTime = try OutputTimeline(project).originalTime(forOutput: min(time, project.outputDuration))
-            project.schemaVersion = ProjectSchema.current
+        let before = ProjectSettingsState(project)
+        if let id = editingClipID {
+            var settings = project.settings(for: id)
+            settings.media.recordChanges(from: project.mediaEdits(for: id), to: edits)
+            project.setSettings(settings)
+        } else {
             project.mediaEdits = edits == .standard ? nil : edits
             if let canvas { project.canvas = canvas }
             if let preset { project.preset = preset }
+        }
+        commitSettings(project, before: before, coalescing: control != nil && control == mediaControl)
+        mediaControl = control; stylingControl = nil
+    }
+
+    private func commitSettings(_ value: ProjectDocument, before: ProjectSettingsState, coalescing: Bool) {
+        var project = value
+        project.schemaVersion = ProjectSchema.current
+        do {
             try project.validate()
-            let after = MediaEditState(project)
+            let after = ProjectSettingsState(project)
             guard after != before else { return }
-            let outputTime = try OutputTimeline(project).outputTime(clampingOriginal: originalTime)
+            let originalTime = try OutputTimeline(document ?? project).originalTime(forOutput: min(time, duration))
             let selection = Selection(cue: selectedCueID, word: selectedWordID)
-            if let control, control == mediaControl, !editHistory.past.isEmpty, editHistory.future.isEmpty,
-               editHistory.past[editHistory.past.count - 1].change.coalesceMedia(from: before, to: after) {
+            if coalescing, !editHistory.past.isEmpty, editHistory.future.isEmpty,
+               editHistory.past[editHistory.past.count - 1].change.coalesceSettings(from: before, to: after) {
                 editHistory.past[editHistory.past.count - 1].selectionAfter = selection
             } else {
-                editHistory.past.append(History(change: .media(before: before, after: after),
+                editHistory.past.append(History(change: .settings(before: before, after: after),
                     selectionBefore: selection, selectionAfter: selection))
             }
             document = project
-            time = outputTime
-            mediaControl = control
-            stylingControl = nil; typingWordID = nil
-            finishHistoryEdit()
-            rebuildSnapshot(); repairSelection()
-            if !editHistory.past.isEmpty { editHistory.past[editHistory.past.count - 1].selectionAfter = Selection(cue: selectedCueID, word: selectedWordID) }
-            commandError = nil
-            changed()
-            if !updateVolumePreviewIfPossible(before: before) { pause(); refreshMediaPreview() }
+            time = try OutputTimeline(project).outputTime(clampingOriginal: originalTime)
+            typingWordID = nil
+            finishHistoryEdit(); rebuildSnapshot(); repairSelection()
+            commandError = nil; changed()
+            if after.changesMedia(from: before) { pause(); refreshMediaPreview() }
         } catch { commandError = error.localizedDescription }
     }
 
-    private func updateVolumePreviewIfPossible(before: MediaEditState) -> Bool {
-        guard let document, let key = preparedMedia, !isPreparingPreview,
-              key.canvas == before.canvas, key.edits == (before.edits ?? .standard),
-              before.canvas == document.canvas, before.preset == document.preset else { return false }
-        var old = before.edits ?? .standard
-        var next = document.effectiveMediaEdits
-        old.volume = 1; next.volume = 1
-        guard old == next else { return false }
-        if let item = player.currentItem, let trackIDs = item.audioMix?.inputParameters.map(\.trackID) {
-            item.audioMix = PreviewComposition.originalAudioMix(trackIDs: trackIDs, volume: document.effectiveMediaEdits.volume)
-        }
-        preparedMedia = MediaKey(clips: key.clips, canvas: key.canvas, urls: key.urls, edits: document.effectiveMediaEdits)
-        return true
+    /// Reset removes presence fields; it never copies defaults into the clip.
+    /// Returning to already saved project defaults is permitted after Pro expires.
+    func resetClipSettings(captions section: CaptionStyleReset? = nil, media: Bool = false, framing: Bool = false, volume: Bool = false, all: Bool = false) {
+        guard var project = document, let id = editingClipID else { return }
+        let before = ProjectSettingsState(project)
+        var settings = project.settings(for: id)
+        if all { settings = ClipSettings(id: id) }
+        else if let section { settings.captions.reset(section) }
+        else if media { settings.media = .init() }
+        else if framing { settings.media.fit = nil; settings.media.zoom = nil; settings.media.positionX = nil; settings.media.positionY = nil }
+        else if volume { settings.media.volume = nil }
+        else { settings.captions = .init() }
+        project.setSettings(settings)
+        endStyleEditing(); endMediaEditing()
+        commitSettings(project, before: before, coalescing: false)
     }
 
     private func refreshMediaPreview() {
@@ -268,39 +309,23 @@ final class EditorSession {
         }
     }
 
-    func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil) {
+    func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil,
+                         applyingPreset: Bool = false, preservingPlacement: Bool = true) {
         var style = value
         if style.formatVersion == 1 && (style.hasExtendedValues || [.condensed, .rounded].contains(style.font) ||
-            [.emphasis, .underline, .rise].contains(style.effect)) {
-            style.formatVersion = 2
-        }
-        guard var project = document, style != project.effectiveCaptionStyle else { return }
-        guard access.canChangeStyle(from: project.effectiveCaptionStyle, to: style) else {
-            proUpsell = .styles
-            return
-        }
-        let before = project.captionStyle
-        do {
-            project.schemaVersion = ProjectSchema.current
-            project.captionStyle = style
-            try project.validate()
-            let selection = Selection(cue: selectedCueID, word: selectedWordID)
-            if let control, control == stylingControl, !editHistory.past.isEmpty, editHistory.future.isEmpty,
-               editHistory.past[editHistory.past.count - 1].change.coalesceStyle(from: before, to: style) {
-                editHistory.past[editHistory.past.count - 1].selectionAfter = selection
-            } else {
-                editHistory.past.append(History(change: .style(before: before, after: style),
-                    selectionBefore: selection, selectionAfter: selection))
-            }
-            document = project
-            stylingControl = control
-            mediaControl = nil
-            typingWordID = nil
-            finishHistoryEdit()
-            rebuildSnapshot()
-            commandError = nil
-            changed()
-        } catch { commandError = error.localizedDescription }
+            [.emphasis, .underline, .rise].contains(style.effect)) { style.formatVersion = 2 }
+        guard var project = document else { return }
+        let previous = editingCaptionStyle
+        guard access.canChangeStyle(from: previous, to: style) else { proUpsell = .styles; return }
+        let before = ProjectSettingsState(project)
+        if let id = editingClipID {
+            var settings = project.settings(for: id)
+            if applyingPreset { settings.captions.applyPreset(style, preservingPlacement: preservingPlacement) }
+            else { settings.captions.recordChanges(from: previous, to: style) }
+            project.setSettings(settings)
+        } else { project.captionStyle = style }
+        commitSettings(project, before: before, coalescing: control != nil && control == stylingControl)
+        stylingControl = control; mediaControl = nil
     }
 
     @discardableResult
@@ -395,7 +420,6 @@ final class EditorSession {
         guard var project = document else { return false }
         do {
             let oldTimeline = OutputTimeline(project)
-            let previousMedia = MediaEditState(project)
             let originalTime = try oldTimeline.originalTime(forOutput: min(time, oldTimeline.duration))
             let mediaChanged = change.changesMedia
             project = try change.applying(to: project, forward: forward)
@@ -408,7 +432,7 @@ final class EditorSession {
             time = restoredTime
             selectedCueID = selection.cue; selectedWordID = selection.word
             rebuildSnapshot(); repairSelection(); changed()
-            if mediaChanged, !updateVolumePreviewIfPossible(before: previousMedia) { refreshMediaPreview() }
+            if mediaChanged { refreshMediaPreview() }
             return true
         } catch { commandError = error.localizedDescription; return false }
     }
@@ -521,7 +545,8 @@ final class EditorSession {
     }
 
     private func preparePreview(document: ProjectDocument, urls: [UUID: URL], generation: UUID) async {
-        let key = MediaKey(clips: document.clips, canvas: document.canvas, urls: urls, edits: document.effectiveMediaEdits)
+        let key = MediaKey(clips: document.clips, canvas: document.canvas, urls: urls,
+            edits: document.effectiveMediaEdits, clipMedia: Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) }))
         guard key != preparedMedia else {
             if loadGeneration == generation { isPreparingPreview = false }
             return

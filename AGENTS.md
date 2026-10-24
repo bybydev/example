@@ -1,5 +1,23 @@
 # Inkribe Working Rules
 
+## Current issue #41 implementation authorization
+
+The user authorizes the entire expanded Pass 1 in a new PR from latest develop,
+branch `feat/ios-pass1-project-experience` targeting develop, left open with no
+auto-merge. This supersedes issue #41's planning-only status and old PR #39 holds.
+Read docs/ios/phases/PROJECT_EXPERIENCE.md and handoffs/PROJECT_EXPERIENCE.md.
+Implement one-project creation (one/multiple files; no separate-project import),
+project details and multi-clip editor, sparse per-setting clip overrides/reset,
+project exports with queued/in-place generation and preview/save/share, and simple
+automatic saving. The user approved the settled UI through this conversation.
+Preserve native recognition/IDs/timing, allowance, originals, independent frozen
+outputs and Mac behavior. Schema 9 reads 1–8; package/job/checkpoint wrappers remain.
+No builds/typechecks/tests/fixtures, CI setup/triggers/runs, generation, model
+downloads, native inference/exports, UI/device/accessibility execution or deployment.
+Source/diff/whitespace/publication review only; user validates afterward. Finish
+with a marked todo list distinguishing source integration from runtime acceptance.
+Earlier scope/PR instructions below are historical where superseded by this task.
+
 
 ## Current project-saving simplification
 

@@ -1,50 +1,42 @@
 # Inkribe iOS — current plan
 
-2026-10-24. All five issue #38 source milestones are integrated in open PR #39 →
-develop. Consolidation fixes integration seams in that PR; it does not start a new
-feature phase. [FEATURES](FEATURES.md) retains the 29 approved V1 acceptance items.
+2026-10-24. Expanded Pass 1 of #40 is tracked by #41. The user authorized all source
+implementation in one new PR from develop 4a9780f, left open targeting develop.
 
-| Milestone | Integrated source result | Detail |
-|---|---|---|
-| 1. Project system | Wrapper-1 UUID packages, legacy adoption, safe paths/revisions, lifecycle/storage and recovery | [Phase](phases/PROJECT_SYSTEM.md) |
-| 2. Processing/delivery | Existing JobQueue stores/names behind one resource budget; independent frozen requests/results and per-output delivery | [Phase](phases/PROCESSING_DELIVERY.md) |
-| 3. Home/native flow | Scrolling creation hero, compact projects/activity/search, native Back/chrome and app-owned editing and automatic saving | [Phase](phases/HOME_NATIVE_FLOW.md) |
-| 4. Editor | One scrolling preview/transport/tools/workspace, direct corrections and preview-backed customization | [Phase](phases/EDITOR_EXPERIENCE.md) |
-| 5. Caption quality/finish | Versioned resolved values/catalog, ten looks, shared layout/motion and native renderer extensions, compatibility and readiness record | [Phase](phases/CAPTION_PRODUCTION.md) |
-| Consolidation | Strict new-style decoding, modal player-layer handoff, current render-error reporting and unified documentation | [Findings](CONSOLIDATION.md) |
+| Work | Source status |
+|---|---|
+| One-project creation | Photos/Files/direct URL; review/remove/order; failed-item handling; atomic single project |
+| Project details/editor | Shared session; combined preview; clip strip/transcript groups; explicit entry points |
+| Defaults/overrides | Sparse caption/framing/audio patches; section/all inheritance reset; bounded undo; preview/export wiring |
+| Project exports | Existing durable inventory; in-place/queued generation; real-file preview and native delivery |
+| Saving/consolidation | Existing atomic writer/error retention across routes; docs and six unrun regression specifications |
 
-The latest user-directed simplification removes editor-sidecar dependencies and
-draft/recovery UI. Ordinary edits save directly to the project. See
-[the current follow-up](CONSOLIDATION.md#follow-up-simple-project-saving).
+All rows are source-integrated, **not compiled or accepted on device**. Exact files,
+limits and pending user scenarios are in [the marked handoff](handoffs/PROJECT_EXPERIENCE.md).
 
-## Retained product contracts
+## Product contracts
 
-Photos/Files/direct-media URL import → optional on-device Tiny/Base/Small
-recognition → incremental available captions and explicit missing-range retry →
-correction/timing/split/merge/undo → project-wide style/media edits → independent
-MP4/SRT exports and Photos/Files/Share delivery. Storage actions protect originals,
-unsaved edits in memory and frozen job inputs. No implicit re-inference or caption regrouping.
+New Project always creates one project with one/multiple ordered files. No separate
+projects option. Project defaults update inheriting fields; explicit clip overrides
+remain. Reset removes overrides without touching text, timing, original media or trim.
+Output aspect, resolution and existing 30fps stay project/output-wide.
 
-Free: five captioning minutes/week, basic style, 720p and the default AF app theme.
-Pro: unlimited captioning, all styles/animations, 1080p and premium app themes.
-Monthly/lifetime products remain $6.99/$24.99 in simulation; live records need owner
-verification. Core editing/media/SRT stay free; retained premium work survives expiry.
-No watermark, trial, credits, backend quota or new product is introduced.
+Both export entry points capture the saved document and use the same durable queue,
+worker and resource gate. Export now follows progress in-place; it does not bypass
+accepted work, user pause or foreground requirements. Completed files share one
+project export collection and remain immutable after later edits.
 
-Default model packaging retains the existing optional bundle/download/cache flow;
-the opt-in bundled-only spec remains explicit. Release configuration alone does not
-choose a model lane. iOS is iPhone-only; current Mac identity/data/APIs are preserved.
+Keep the approved Free/Pro rules and pricing. Existing saved premium work survives
+expiry; no new watermark, trial, backend quota or product is introduced. Canonical
+schema 9 reads 1–8; no migration job or editor-sidecar workflow is added.
 
-## Outside scope
+## Remaining parent passes
 
-No accounts/cloud inference/sync, teams/social publishing, stock library, dubbing,
-translation, camera, share extension/App Group/inbox, iPad workspace, per-caption
-style overrides, advanced multitrack/history or Mac feature expansion. Existing
-extras do not authorize new work. Historical P0–P7 delivery records remain in
-[the archive](archive/before-consolidation/PLAN.md) and phase handoffs.
+#40 Pass 2: deeper transcription/queue reliability. Pass 3: manual missing captions
+and correction/style quality. Pass 4: output/audio/timing parity and delivery acceptance.
+Pass 5: first-use, accessibility, commerce and supported-iPhone performance acceptance.
+Do not automatically start another pass. Metadata remains excluded.
 
-## Next gate
-
-User-authorized compilation/regression/device/output/commerce acceptance and owner
-release inputs, listed in [PRODUCTION_READINESS](PRODUCTION_READINESS.md). None ran
-under this request. Keep PR open without auto-merge; do not start another phase.
+No post-creation sequencing, new per-clip trim, transitions, multitrack, accounts,
+cloud inference/sync, dubbing/translation, share extension, iPad or Mac expansion.
+Existing model packaging policy remains unchanged. See [readiness](PRODUCTION_READINESS.md).

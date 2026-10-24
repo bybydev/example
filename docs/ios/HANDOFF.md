@@ -1,66 +1,33 @@
 # Inkribe iOS — current handoff
 
-2026-10-24. PR #39 is open on `feat/ios-project-packages` → develop, auto-merge off.
-All five implementation passes are source-integrated, followed by consolidation.
-The latest exact source head is in the PR. No production-ready claim is made.
+2026-10-24. Expanded Pass 1 (#41, parent #40) is source-integrated in
+feat/ios-pass1-project-experience → develop, based on 4a9780f. Leave the new PR open
+without auto-merge. #39 is already merged in that base; its old open-PR holds are historical.
 
-The latest user-directed change is simple project saving. Ordinary edits now save
-directly to the project through one serialized writer and atomic repository save.
-The app no longer reads/writes editor-draft.json, checks it before opening/renaming,
-or presents recovery/discard/reload management. Existing sidecars are left untouched.
-Unsaved changes and undo stay in the app-owned session across navigation, with one
-friendly failure and Try again. They are not guaranteed after process termination
-before a successful save. Transcription checkpoints/jobs/frozen exports stay durable.
+See [the complete marked handoff](handoffs/PROJECT_EXPERIENCE.md) for source ownership,
+six implemented areas, compatibility limits, six authored/unrun specifications and
+the pending build/device/output acceptance checklist.
 
-Rename remains explicit in editor actions and Home. Pending changes, unavailable
-media or an active speech job route Home Rename through the same editor title field
-instead of disabling the action. Leaving Project details never waits for storage.
-See [the current follow-up](CONSOLIDATION.md#follow-up-simple-project-saving).
+- One creation makes one project with one/multiple ordered clips. Failed selection
+  items require retry/removal; no separate-project option or silent subset publication.
+- Project details and the scrolling editor share one app-owned session/writer. Clip
+  entry points and caption groups use stable identities and the existing output clock.
+- Schema 9 adds sparse clip overrides and reads 1–8. Reset restores live inheritance,
+  preserving text/timing/trim. Duplicate remaps clip IDs. Caption-only changes do not
+  invalidate media composition. Preview/MP4 resolve the same effective clip settings.
+- Both export entry points use the existing durable worker/gate. Export now follows
+  progress in-place. Project exports show retained results, actual-file preview and
+  native delivery; immutable requests include their saved defaults and clip overrides.
+- Existing atomic saves retain failed changes in memory across navigation, with one
+  friendly failure/retry. Unwritten changes are not guaranteed across process death.
+- No Mac source/config, purchases, model policy, native recognition or allowance rules
+  are changed. No legacy conversion job, editor sidecar or advanced sequencing is added.
 
-| Source milestone | Commit | Detailed handoff |
-|---|---|---|
-| Project packages | a035dd3 | [PROJECT_SYSTEM](handoffs/PROJECT_SYSTEM.md) |
-| Processing/delivery | f598376 | [PROCESSING_DELIVERY](handoffs/PROCESSING_DELIVERY.md) |
-| Home/native flow | b040816 | [HOME_NATIVE_FLOW](handoffs/HOME_NATIVE_FLOW.md) |
-| Scrolling editor | 31763bb | [EDITOR_EXPERIENCE](handoffs/EDITOR_EXPERIENCE.md) |
-| Caption quality | cb594c3 | [CAPTION_PRODUCTION](handoffs/CAPTION_PRODUCTION.md) |
-| Consolidation | See PR head | [CONSOLIDATION](CONSOLIDATION.md) |
+Source/call-site/diff/whitespace/publication review only. No builds/typechecks/tests/
+fixtures, CI/generation/models/native inference/exports/UI/device/accessibility/deployment
+ran. Compilation, strict concurrency, real media/output parity, provider/delivery,
+save-failure, entitlement and supported-phone behavior remain unverified.
 
-## Current contracts
-
-- Canonical schema 8 reads 1–7; package/processing-control/export-request
-  wrappers and JobQueue names/IDs/files remain stable. Old apps reject schema 8.
-  Use a pre-upgrade stopped-app container backup for rollback.
-- Working local transcription, accepted partial captions, native word/phrase
-  intervals/IDs, corrected text, gap retry, undo and allowance remain protected.
-  Style/visual wrapping never rewrites grouping/timing or starts inference.
-- One app-owned session/writer per project; direct atomic saves retain revision
-  and append-only speech rebase checks. Failed changes stay in memory across
-  navigation. Home only shows a save warning for an actual failed write.
-- Ten versioned looks render from saved resolved values. Legacy defaults/motion
-  stay frozen. Unknown preset ancestry preserves values; unsupported future style
-  formats do not trigger older-document fallback. Version-2 resolved fields are
-  required; legacy omissions retain their original defaults.
-- One main scrolling editor. Modal style/export/queue routes relinquish the
-  covered native player layer; render errors report only current surfaces/draws.
-  Native gesture/focus/layout/output behavior still needs device evidence.
-- Jobs own independent frozen requests/results with explicit retention/recovery
-  and per-output delivery leases. No automatic unsaved-result eviction.
-
-## Validation and next steps
-
-Source/call-site/diff/whitespace and publication consistency review only. Twelve
-shared caption regression specifications are authored, unrun, plus prior shared
-package/processing/recovery specifications. Two additional direct-save specifications
-are authored but unrun; source review is not behavioral validation. No builds/typechecks/tests/fixtures,
-CI/generation/models/native inference/exports/UI/device/accessibility/deployment ran.
-
-[PRODUCTION_READINESS](PRODUCTION_READINESS.md) is the release gate/owner-input
-record. Actual privacy URL, live commerce/signing/model lane, licensed controlled
-footage, compilation, SE2/larger-iPhone behavior, upgrade/recovery/queue acceptance
-and preview/MP4/SRT parity remain pending. Execute only after user authorization;
-record exact commit/input/device/output evidence. Keep the PR and issue open.
-
-Historical status and CI reports are preserved in
-[the archive](archive/before-consolidation/HANDOFF.md). Their earlier open-PR,
-schema, tool-layout or Pro-deferral statements do not override these contracts.
+[Production readiness](PRODUCTION_READINESS.md) still owns release gates. Parent
+passes 2–5 remain separate; no next pass or merge is authorized automatically.
+Historical source evidence remains in CONSOLIDATION, earlier phase handoffs and archive.

@@ -1,9 +1,9 @@
 # Inkribe iOS — current feature ledger
 
-2026-10-24. These are the **29 approved V1 acceptance items**, with source work
-through issue #38 passes 1–5 and consolidation in open PR #39 → develop. The Owner
-column records the original delivery phase; it does not request another PR/phase.
-Source integration is not compilation or production acceptance.
+2026-10-24. The original 29 V1 acceptance items below retain their delivery owners.
+Expanded Pass 1 (#41, parent #40) adds the project experience tracked separately here.
+All implementation status means source integration only; compilation/runtime acceptance
+is pending. Base develop 4a9780f includes merged #39.
 
 | ID | Owner | Requirement | Status |
 |---|---|---|---|
@@ -36,6 +36,19 @@ Source integration is not compilation or production acceptance.
 | V1.BOUNDS | P7 | Bounded processing, stale-result protection and cleanup | Source-integrated; execution/acceptance unverified |
 | V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | Source-integrated; execution/acceptance unverified |
 | V1.HANDOFF | P7 | End-to-end source audit and user-testing handoff | Source-integrated; execution/acceptance unverified |
+
+## Expanded Pass 1 (#41)
+
+| ID | Requirement | Status |
+|---|---|---|
+| PROJECT.ONE_CREATION | One project, one/multiple ordered files, visual review and retry | Source-integrated; unverified execution |
+| PROJECT.DETAILS | Combined overview, ordered clips, defaults and retained exports | Source-integrated; unverified execution |
+| PROJECT.CLIP_EDITOR | Continuous clock, clip navigation and grouped captions | Source-integrated; unverified execution |
+| PROJECT.CLIP_SETTINGS | Per-setting overrides/reset, history and effective output | Source-integrated; unverified execution |
+| PROJECT.EXPORTS | Queued/in-place generation, actual-file preview/save/share | Source-integrated; unverified execution |
+| PROJECT.SAVING | Shared atomic writer across details/editor/export routes | Source-integrated; unverified execution |
+
+Details and pending acceptance: [PROJECT_EXPERIENCE](handoffs/PROJECT_EXPERIENCE.md).
 
 ## Current implementation evidence
 
