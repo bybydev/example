@@ -2,7 +2,7 @@ import Foundation
 
 /// Presentation context belongs to the app-owned session, never the saved project.
 /// Switching tools neither seeks playback nor creates an edit/undo entry.
-enum EditorTool: String, CaseIterable, Identifiable, Sendable {
+enum EditorTool: String, CaseIterable, Identifiable, Hashable, Sendable {
     case captions, style, timing, media
     var id: Self { self }
     var title: String {
@@ -13,7 +13,10 @@ enum EditorTool: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum EditorSettingsScope: Hashable, Sendable { case project, clip(UUID) }
+
 struct EditorWorkspace: Sendable {
+    var settingsScope = EditorSettingsScope.project
     private(set) var tool = EditorTool.captions
     private var anchors: [EditorTool: String] = [:]
     var followsPlayback = false

@@ -33,6 +33,7 @@ struct ExportManifest: Codable, Sendable {
     let jobID: UUID
     let document: ProjectDocument
     let profile: ExportProfile
+    let createdAt: Date?
 }
 
 struct FrozenExport: Sendable {

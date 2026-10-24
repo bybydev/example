@@ -6,77 +6,19 @@ struct MediaPanel: View {
     @State private var start = ""
     @State private var end = ""
     @State private var trimError: String?
-    private var edits: MediaEdits { session.document?.effectiveMediaEdits ?? .standard }
+    private var edits: MediaEdits { session.editingMediaEdits }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let document = session.document {
+                SettingsScopePicker(session: session)
                 Text("Media").font(.headline)
-                Text("Changes apply to this project's output. Your originals are kept.")
+                Text("Your originals are kept. Framing and audio follow the selected settings scope.")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("Trim").font(.headline)
-                Group {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Choose start and end seconds on the original timeline. The retained video starts at 0.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text("Start (s)").font(.caption)
-                                TextField("Start", text: trimField(isStart: true)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
-                                    .focused($focused, equals: .trimStart).accessibilityLabel("Trim start seconds")
-                                    .id(EditorField.trimStart)
-                            }
-                            VStack(alignment: .leading) {
-                                Text("End (s)").font(.caption)
-                                TextField("End", text: trimField(isStart: false)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
-                                    .focused($focused, equals: .trimEnd).accessibilityLabel("Trim end seconds")
-                                    .id(EditorField.trimEnd)
-                            }
-                        }
-                        ViewThatFits(in: .horizontal) {
-                            HStack { trimButtons }
-                            VStack(alignment: .leading) { trimButtons }
-                        }
-                        Text("Output length: \(EditorTime.display(document.outputDuration))")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let trimError { Text(trimError).font(.footnote).foregroundStyle(.red) }
-                    }
-                    .padding(.top, 8)
-                }
+                if session.editingClipID == nil { trimSection(document); Divider() }
+                framingSection(document)
                 Divider()
-                Text("Framing").font(.headline)
-                Menu {
-                    if let original = originalCanvas(document) {
-                        Button("Original video aspect") { aspect(original, preset: .original) }
-                    }
-                    Button("Portrait · 9:16") { aspect(ProjectCanvas(width: 1080, height: 1920), preset: .portrait) }
-                    Button("Square · 1:1") { aspect(ProjectCanvas(width: 1080, height: 1080), preset: .square) }
-                    Button("Landscape · 16:9") { aspect(ProjectCanvas(width: 1920, height: 1080), preset: .landscape) }
-                } label: { Label("Aspect ratio · \(document.canvas.width) × \(document.canvas.height)", systemImage: "aspectratio") }
-                Picker("Framing", selection: value(\.fit)) {
-                    ForEach(MediaFit.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                slider("Zoom", key: \.zoom, control: .zoom, range: 1...3, display: String(format: "%.2f×", edits.zoom))
-                slider("Horizontal crop", key: \.positionX, control: .x, range: 0...1,
-                    display: "\(Int((edits.positionX * 100).rounded()))%")
-                slider("Vertical crop", key: \.positionY, control: .y, range: 0...1,
-                    display: "\(Int((edits.positionY * 100).rounded()))%")
-                Text("Position moves the part that extends beyond the frame. Fit keeps the whole image; Fill crops to the chosen aspect. Captions stay positioned on the output canvas.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Reset crop", systemImage: "arrow.counterclockwise") {
-                    var next = edits
-                    next.fit = .fit; next.zoom = 1; next.positionX = 0.5; next.positionY = 0.5
-                    session.setMediaPresentation(next)
-                }
-                Divider()
-                Text("Original audio").font(.headline)
-                slider("Volume", key: \.volume, control: .volume, range: 0...1,
-                    display: edits.volume == 0 ? "Muted" : "\(Int((edits.volume * 100).rounded()))%")
-                Button("Reset volume") {
-                    var next = edits; next.volume = 1
-                    session.setMediaPresentation(next)
-                }
+                audioSection
             }
         }
         .padding(14)
@@ -86,6 +28,94 @@ struct MediaPanel: View {
         .onChange(of: session.workspace.fieldResetGeneration) { _, _ in resetFields() }
         .onDisappear { session.endMediaEditing() }
     }
+
+    private func trimSection(_ document: ProjectDocument) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Trim").font(.headline)
+            Group {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Choose start and end seconds on the original timeline. The retained video starts at 0.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Start (s)").font(.caption)
+                            TextField("Start", text: trimField(isStart: true)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                .focused($focused, equals: .trimStart).accessibilityLabel("Trim start seconds")
+                                .id(EditorField.trimStart)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("End (s)").font(.caption)
+                            TextField("End", text: trimField(isStart: false)).keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                                .focused($focused, equals: .trimEnd).accessibilityLabel("Trim end seconds")
+                                .id(EditorField.trimEnd)
+                        }
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack { trimButtons }
+                        VStack(alignment: .leading) { trimButtons }
+                    }
+                    Text("Output length: \(EditorTime.display(document.outputDuration))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let trimError { Text(trimError).font(.footnote).foregroundStyle(.red) }
+                }
+                .padding(.top, 8)
+            }
+
+            }
+    }
+
+
+    private func framingSection(_ document: ProjectDocument) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Framing").font(.headline)
+            if session.editingClipID == nil {
+            Menu {
+                if let original = originalCanvas(document) {
+                    Button("Original video aspect") { aspect(original, preset: .original) }
+                }
+                Button("Portrait · 9:16") { aspect(ProjectCanvas(width: 1080, height: 1920), preset: .portrait) }
+                Button("Square · 1:1") { aspect(ProjectCanvas(width: 1080, height: 1080), preset: .square) }
+                Button("Landscape · 16:9") { aspect(ProjectCanvas(width: 1920, height: 1080), preset: .landscape) }
+            } label: { Label("Aspect ratio · \(document.canvas.width) × \(document.canvas.height)", systemImage: "aspectratio") }
+            }
+            Picker("Framing", selection: value(\.fit)) {
+                ForEach(MediaFit.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            slider("Zoom", key: \.zoom, control: .zoom, range: 1...3, display: String(format: "%.2f×", edits.zoom))
+            slider("Horizontal crop", key: \.positionX, control: .x, range: 0...1,
+                display: "\(Int((edits.positionX * 100).rounded()))%")
+            slider("Vertical crop", key: \.positionY, control: .y, range: 0...1,
+                display: "\(Int((edits.positionY * 100).rounded()))%")
+            Text("Position moves the part that extends beyond the frame. Fit keeps the whole image; Fill crops to the chosen aspect. Captions stay positioned on the output canvas.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button(session.editingClipID == nil ? "Reset crop" : "Reset framing to project defaults", systemImage: "arrow.counterclockwise") {
+                if session.editingClipID != nil { session.resetClipSettings(framing: true); return }
+                var next = edits
+                next.fit = .fit; next.zoom = 1; next.positionX = 0.5; next.positionY = 0.5
+                session.setMediaPresentation(next)
+            }
+
+            }
+    }
+
+
+    private var audioSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Original audio").font(.headline)
+            slider("Volume", key: \.volume, control: .volume, range: 0...1,
+                display: edits.volume == 0 ? "Muted" : "\(Int((edits.volume * 100).rounded()))%")
+            if session.editingClipID != nil {
+                Button("Reset media to project defaults") { session.resetClipSettings(media: true) }
+            }
+            Button(session.editingClipID == nil ? "Reset volume" : "Reset volume to project defaults") {
+                if session.editingClipID != nil { session.resetClipSettings(volume: true); return }
+                var next = edits; next.volume = 1
+                session.setMediaPresentation(next)
+            }
+            }
+    }
+
 
     private var trimButtons: some View {
         Group {

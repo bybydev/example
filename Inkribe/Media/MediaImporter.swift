@@ -2,11 +2,6 @@ import AVFoundation
 import CryptoKit
 import Foundation
 
-enum ImportDisposition: String, Hashable, Sendable {
-    case separateProjects
-    case combineAsClips
-}
-
 struct ImportInput: Sendable, Identifiable {
     let id: UUID
     let localURL: URL
@@ -21,16 +16,10 @@ struct ImportInput: Sendable, Identifiable {
     }
 }
 
-struct ImportFailure: Sendable, Identifiable {
-    let id: UUID
-    let filename: String
-    let reason: String
-}
-
-struct ImportResult: Sendable {
-    let documents: [ProjectDocument]
-    let failures: [ImportFailure]
-    var wasCancelled = false
+struct ImportItemError: LocalizedError {
+    let name: String
+    let detail: String
+    var errorDescription: String? { "Couldn’t import \(name). \(detail) Retry, or remove this file before creating the project." }
 }
 
 /// Non-UI ingress for Files, iCloud/document providers, Photos transferable
@@ -44,54 +33,23 @@ actor MediaImporter {
         self.repository = repository
     }
 
-    func importFiles(
-        _ inputs: [ImportInput], disposition: ImportDisposition,
-        preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
-        title: String? = nil
-    ) async throws -> ImportResult {
-        guard !inputs.isEmpty else {
-            throw ProjectStoreError.invalidDocument("No media selected")
-        }
+    func importFiles(_ inputs: [ImportInput], projectID: UUID,
+                     preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
+                     title: String? = nil) async throws -> ProjectDocument {
+        guard !inputs.isEmpty else { throw ProjectStoreError.invalidDocument("No media selected") }
         if preset == .custom {
-            guard let customCanvas else {
-                throw ProjectStoreError.invalidDocument("Custom project dimensions are required")
-            }
+            guard let customCanvas else { throw ProjectStoreError.invalidDocument("Custom project dimensions are required") }
             try customCanvas.validate()
         }
-        switch disposition {
-        case .combineAsClips:
-            let document = try await createProject(inputs, preset: preset,
-                                                   customCanvas: customCanvas, title: title)
-            return ImportResult(documents: [document], failures: [])
-        case .separateProjects:
-            var completed: [ProjectDocument] = []
-            var failures: [ImportFailure] = []
-            for input in inputs {
-                if Task.isCancelled { return ImportResult(documents: completed, failures: failures, wasCancelled: true) }
-                do {
-                    if let existing = try? await repository.open(input.id) {
-                        completed.append(existing)
-                        continue
-                    }
-                    completed.append(try await createProject([input], preset: preset,
-                                               customCanvas: customCanvas, title: nil,
-                                               projectID: input.id))
-                } catch is CancellationError {
-                    return ImportResult(documents: completed, failures: failures, wasCancelled: true)
-                } catch {
-                    failures.append(ImportFailure(id: input.id,
-                                                    filename: input.displayName,
-                                                    reason: error.localizedDescription))
-                }
-            }
-            return ImportResult(documents: completed, failures: failures)
-        }
+        return try await createProject(inputs, preset: preset, customCanvas: customCanvas,
+                                       title: title, projectID: projectID)
     }
 
     /// No streaming site scraping or DRM bypass: this is direct HTTPS media only.
     /// Caller must obtain explicit media rights confirmation before this is called.
     func importDirectURL(_ remoteURL: URL, rightsConfirmed: Bool,
-                         preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil) async throws -> ProjectDocument {
+                         preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
+                         title: String? = nil, projectID: UUID) async throws -> ProjectDocument {
         guard rightsConfirmed else { throw ProjectStoreError.rightsNotConfirmed }
         guard remoteURL.scheme?.lowercased() == "https",
               remoteURL.host != nil, remoteURL.user == nil,
@@ -158,7 +116,7 @@ actor MediaImporter {
                     ? "Imported Media" : remoteURL.lastPathComponent
                 return try await createProject(
                     [ImportInput(localURL: temporary, origin: .directURL, displayName: name)],
-                    preset: preset, customCanvas: customCanvas, title: name
+                    preset: preset, customCanvas: customCanvas, title: title?.isEmpty == false ? title : name, projectID: projectID
                 )
             } onCancel: {
                 session.invalidateAndCancel()
@@ -184,8 +142,15 @@ actor MediaImporter {
             var end = MediaTime.zero
             for input in inputs {
                 try Task.checkCancellation()
-                let adopted = try copySource(input, into: staging)
-                let (kind, metadata) = try await MediaInspector.inspect(url: adopted.url)
+                let adopted: CopiedMedia
+                let kind: MediaKind
+                let metadata: MediaMetadata
+                do {
+                    adopted = try copySource(input, into: staging)
+                    let inspected = try await MediaInspector.inspect(url: adopted.url)
+                    kind = inspected.0; metadata = inspected.1
+                } catch is CancellationError { throw CancellationError() }
+                catch { throw ImportItemError(name: input.displayName, detail: error.localizedDescription) }
                 let asset = SourceAsset(
                     id: adopted.id, relativeOriginalPath: adopted.path, kind: kind,
                     origin: input.origin, displayName: String(input.displayName.prefix(512)),

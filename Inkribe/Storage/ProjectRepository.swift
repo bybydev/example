@@ -643,7 +643,11 @@ actor ProjectRepository {
                 createdAt: now, updatedAt: now, preset: original.preset,
                 canvas: original.canvas, assets: newAssets, clips: newClips,
                 recognition: original.recognition?.duplicated(assetClips: clipMapping),
-                captionStyle: original.captionStyle, mediaEdits: original.mediaEdits)
+                captionStyle: original.captionStyle, mediaEdits: original.mediaEdits,
+                clipSettings: original.clipSettings?.compactMap { settings in
+                    guard let id = clipMapping[settings.id] else { return nil }
+                    var copy = settings; copy.id = id; return copy
+                })
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)
@@ -826,7 +830,7 @@ actor ProjectRepository {
                 }
             }
             try Task.checkCancellation()
-            let manifest = ExportManifest(version: 1, jobID: id, document: saved, profile: profile)
+            let manifest = ExportManifest(version: 1, jobID: id, document: saved, profile: profile, createdAt: Date())
             let metadata = try encoder.encode(manifest)
             guard metadata.count <= 256 * 1024 * 1024 else { throw ProjectStoreError.oversizedProjectMetadata }
             try metadata.write(to: folder.appendingPathComponent("request.json"), options: .atomic)
@@ -922,11 +926,14 @@ actor ProjectRepository {
                 return ExportArtifact(id: id, projectID: request.manifest.document.id,
                     title: request.manifest.document.title, revision: request.manifest.document.contentRevision,
                     profile: request.manifest.profile, outputURL: available ? request.outputURL : nil,
-                    bytes: bytes, issue: nil)
+                    bytes: bytes, issue: nil,
+                    createdAt: request.manifest.createdAt ?? (try? request.directory.appendingPathComponent("request.json").resourceValues(forKeys: [.creationDateKey]).creationDate),
+                    duration: request.manifest.document.outputDuration, outputBytes: (values?.fileSize).map { Int64($0) })
             } catch {
                 return ExportArtifact(id: id, projectID: nil, title: "Unreadable export " + id.uuidString.prefix(8),
                     revision: nil, profile: nil, outputURL: nil,
-                    bytes: (try? folderSize(exportDirectory(id))) ?? 0, issue: error.localizedDescription)
+                    bytes: (try? folderSize(exportDirectory(id))) ?? 0, issue: error.localizedDescription,
+                    createdAt: nil, duration: nil, outputBytes: nil)
             }
         }
     }

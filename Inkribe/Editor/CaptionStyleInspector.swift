@@ -29,6 +29,7 @@ struct CaptionStyleInspector: View {
                         EditorPlaybackControls(session: session)
                         Text("Changes appear immediately in this preview. Scroll back to play or scrub at any time.")
                             .font(.caption).foregroundStyle(.secondary)
+                        SettingsScopePicker(session: session)
                         sectionPicker
                         CaptionStylePanel(session: session, section: section)
                         Button("Back to preview", systemImage: "play.rectangle") { scroll.scrollTo("preview", anchor: .top) }

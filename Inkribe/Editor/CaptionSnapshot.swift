@@ -14,6 +14,7 @@ struct CaptionPresentation: Sendable {
 struct CaptionGap: Sendable, Identifiable {
     let id: Int
     let clipNumber: Int
+    let clipID: UUID
     let interval: MediaInterval
 }
 
@@ -40,11 +41,14 @@ struct CaptionSnapshot: Sendable {
     let revision: ProjectRevision
     let canvas: ProjectCanvas
     private(set) var style: CaptionStyle
+    private var clipStyles: [UUID: CaptionStyle]
+    private let clipOverrides: [UUID: CaptionStyleOverrides]
     let wordsByID: [UUID: CaptionWord]
     let cues: [CaptionCue]
     let timeline: OutputTimeline
     let gaps: [CaptionGap]
     let transcriptItems: [CaptionTranscriptItem]
+    let transcriptItemsByClip: [UUID: [CaptionTranscriptItem]]
     private let originalWordsByID: [UUID: CaptionWord]
     private let ordered: [CaptionCue]
     private let prefixEnd: [MediaTime]
@@ -53,6 +57,8 @@ struct CaptionSnapshot: Sendable {
         revision = ProjectRevision(projectID: document.id, contentRevision: document.contentRevision)
         canvas = document.canvas
         style = document.effectiveCaptionStyle
+        clipStyles = Dictionary(uniqueKeysWithValues: document.clips.map { ($0.id, document.captionStyle(for: $0.id)) })
+        clipOverrides = Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).map { ($0.id, $0.captions) })
         let timeline = OutputTimeline(document)
         self.timeline = timeline
         let originalWords = document.recognition?.words ?? []
@@ -83,7 +89,8 @@ struct CaptionSnapshot: Sendable {
                     end: MediaTime(validating: CMTimeAdd(start, window.core.duration))),
                    let output = timeline.outputInterval(interval) {
                     missing.append(CaptionGap(id: window.index,
-                        clipNumber: (document.clips.firstIndex { $0.id == window.clip.id } ?? 0) + 1,
+                        clipNumber: (document.orderedClips.firstIndex { $0.id == window.clip.id } ?? 0) + 1,
+                        clipID: window.clip.id,
                         interval: output))
                 }
             }
@@ -97,6 +104,16 @@ struct CaptionSnapshot: Sendable {
             items.insert(.gap(gap), at: index)
         }
         transcriptItems = items
+        var grouped: [UUID: [CaptionTranscriptItem]] = [:]
+        for item in items {
+            let clipID: UUID?
+            switch item {
+            case .cue(let cue): clipID = cue.wordIDs.first.flatMap { mappedIndex[$0]?.clipID }
+            case .gap(let gap): clipID = gap.clipID
+            }
+            if let clipID { grouped[clipID, default: []].append(item) }
+        }
+        transcriptItemsByClip = grouped
         ordered = cues.sorted {
             if $0.interval.start != $1.interval.start { return $0.interval.start < $1.interval.start }
             let a = originalStarts[$0.id] ?? .zero
@@ -109,13 +126,22 @@ struct CaptionSnapshot: Sendable {
 
     /// Share immutable indexes/timing for bounded preset comparisons. No recognition
     /// mapping, native timing, selection or saved document is changed by browsing.
-    func styled(_ style: CaptionStyle) -> Self {
+    func styled(_ style: CaptionStyle, scope: EditorSettingsScope = .project) -> Self {
         var copy = self
         copy.id = UUID()
-        copy.style = style
+        switch scope {
+        case .project:
+            copy.style = style
+            copy.clipStyles = clipStyles.mapValues { _ in style }
+            for (id, overrides) in clipOverrides { copy.clipStyles[id] = overrides.resolved(over: style) }
+        case .clip(let id): copy.clipStyles[id] = style
+        }
         return copy
     }
 
+    func style(for presentation: CaptionPresentation) -> CaptionStyle {
+        presentation.words.first.flatMap { clipStyles[$0.clipID] } ?? style
+    }
     var chronologicalCues: [CaptionCue] { ordered }
 
     func text(for cue: CaptionCue) -> String {

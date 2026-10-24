@@ -42,6 +42,7 @@ extension ProjectDocument {
         guard id == base.id, createdAt == base.createdAt, title == base.title,
               canvas == base.canvas, preset == base.preset, assets == base.assets,
               clips == base.clips, captionStyle == base.captionStyle, mediaEdits == base.mediaEdits,
+              clipSettings == base.clipSettings,
               let current = recognition, current.progress != nil else { return false }
         guard let old = base.recognition else { return true }
         guard old.isIncomplete, current.id == old.id, current.modelID == old.modelID,

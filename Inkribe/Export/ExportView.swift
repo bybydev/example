@@ -14,6 +14,7 @@ struct ExportView: View {
     @State private var message: String?
     @State private var upsell: ProFeature?
     @State private var path: [ProcessingJobKey] = []
+    @State private var immediateJobID: UUID?
     private var exports: ExportController { model.exports }
 
     var body: some View {
@@ -50,7 +51,11 @@ struct ExportView: View {
                                 Text("UTF-8 subtitles with your edited text and project timing. Fonts and animations are part of video exports.")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
-                            Button(action: launch) {
+                            Button { launch(immediate: true) } label: {
+                                Label("Export now", systemImage: "play.circle")
+                            }.buttonStyle(.borderedProminent)
+                            .disabled(launching || exports.isPreparing || exports.persistenceError != nil || model.processing.lifecycle.error != nil || session.document == nil || model.access.isChecking || (profile.format == .srt && !hasCaptions))
+                            Button { launch(immediate: false) } label: {
                                 if launching || exports.isPreparing { ProgressView("Preparing export…") }
                                 else { Label("Queue export", systemImage: "square.and.arrow.up") }
                             }
@@ -61,12 +66,15 @@ struct ExportView: View {
                                 Text("Transcribe the media and keep at least one visible caption to export SRT.")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
-                            Text("Each export keeps its own saved revision and file. Other exports continue in Queue, and you can keep editing.")
+                            Text("Each export keeps its own saved version and file. Export now follows progress here; queued exports continue while you edit. Both appear under this project’s Exports.")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if launching {
                                 Button("Cancel preparation", role: .cancel) { launchTask?.cancel() }
                             }
                         }
+                    }
+                    if let immediateJobID {
+                        Section("Current export") { ImmediateExportStatus(jobID: immediateJobID) }
                     }
                     Section {
                         NavigationLink { ProcessingQueueView() } label: {
@@ -112,7 +120,7 @@ struct ExportView: View {
         guard let snapshot = session?.snapshot else { return false }
         return snapshot.cues.contains { !snapshot.text(for: $0).isEmpty }
     }
-    private func launch() {
+    private func launch(immediate: Bool) {
         guard let session, !launching else { return }
         launching = true; error = nil; message = nil
         session.pause(); session.endTyping(); session.endStyleEditing()
@@ -123,7 +131,8 @@ struct ExportView: View {
                 let document = try await session.savedDocument()
                 try Task.checkCancellation()
                 let id = try await exports.enqueue(document: document, profile: selected)
-                path.append(.init(kind: .export, jobID: id))
+                if immediate { immediateJobID = id; message = "Your export stays available in this project and Queue." }
+                else { path.append(.init(kind: .export, jobID: id)) }
                 await model.refreshStorage()
             } catch is CancellationError { message = "Export preparation cancelled." }
             catch ProError.requiresPro(let feature) { upsell = feature }

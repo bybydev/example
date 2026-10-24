@@ -1,8 +1,9 @@
 @preconcurrency import Photos
 import SwiftUI
+import AVKit
 
 private struct ExportDeliveryPresentation: Identifiable {
-    enum Kind { case files, share }
+    enum Kind { case files, share, preview }
     let id = UUID()
     let kind: Kind
     let url: URL
@@ -25,6 +26,8 @@ struct ExportResultView: View {
                 Label("Ready to save or share", systemImage: "checkmark.circle")
                 Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
                 if artifact.profile?.format == .mp4 {
+                    Button("Preview video", systemImage: "play.rectangle") { present(.preview) }
+                        .disabled(savingPhotos || delivery != nil)
                     Button("Save to Photos", systemImage: "photo.on.rectangle", action: saveToPhotos)
                         .disabled(savingPhotos || delivery != nil)
                 }
@@ -42,9 +45,11 @@ struct ExportResultView: View {
         }
         .buttonStyle(.borderless)
         .sheet(item: $delivery, onDismiss: endDelivery) { destination in
-            if destination.kind == .files {
+            if destination.kind == .preview {
+                ExportVideoPreview(url: destination.url)
+            } else if destination.kind == .files {
                 ExportFilesPicker(url: destination.url) { saved in
-                    if saved { message = "Saved to Files." }
+                    message = saved ? "Saved to Files." : "Save to Files cancelled."
                     endDelivery()
                     delivery = nil
                 }
@@ -52,7 +57,7 @@ struct ExportResultView: View {
             } else {
                 ExportShareSheet(url: destination.url) { completed, failure in
                     if let failure { error = failure }
-                    else if completed { message = "Sharing finished." }
+                    else { message = completed ? "Sharing finished." : "Sharing cancelled." }
                     endDelivery()
                     delivery = nil
                 }
@@ -94,5 +99,39 @@ struct ExportResultView: View {
                 } catch { self.error = error.localizedDescription }
             }
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+/// Owns playback of the immutable completed file; the presenter holds its lease.
+private struct ExportVideoPreview: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var player: AVPlayer
+    @State private var playbackError: String?
+    @State private var observer: NSKeyValueObservation?
+    @State private var generation = UUID()
+    init(url: URL) { _player = State(initialValue: AVPlayer(url: url)) }
+    var body: some View {
+        NavigationStack {
+            VideoPlayer(player: player).background(.black)
+                .overlay(alignment: .bottom) {
+                    if let playbackError {
+                        Text(playbackError).font(.footnote).padding().background(.regularMaterial)
+                    }
+                }
+                .navigationTitle("Exported video")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { player.pause(); dismiss() } } }
+        }
+        .onAppear {
+            let token = generation
+            observer = player.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
+                let failure = item.status == .failed ? item.error?.localizedDescription ?? "This exported file could not be played." : nil
+                Task { @MainActor in if token == generation { playbackError = failure } }
+            }
+        }
+        .onDisappear { generation = UUID(); observer = nil; player.pause(); player.replaceCurrentItem(with: nil) }
+        .onChange(of: scenePhase) { _, value in if value != .active { player.pause() } }
     }
 }

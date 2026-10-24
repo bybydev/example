@@ -1,6 +1,7 @@
 # Inkribe iOS — current design contract
 
-2026-10-24. Adapt the inspected AppShot editor and AppShot/AppReel home hierarchy
+2026-10-24. Expanded Pass 1 (#41) adds the discussed project experience to the
+AppShot-inspired editor and AppShot/AppReel home hierarchy
 to Inkribe's actual caption workflow and AppFoundation themes. These are integrated
 source directions; device-rendered visual/interaction acceptance remains pending.
 
@@ -10,8 +11,10 @@ One scrolling home: New Project hero/CTA → save-failure/queue/model activity �
 header/filters/sort → compact thumbnail rows with sibling actions. Search hides the
 hero/filter strip while retaining results/sort and clear-filter controls. Empty,
 loading, failure, missing-original and save-failure states use actual data.
-Hero/toolbar enter the same guarded importer; partial/cancelled imports retain their
-committed project IDs and route only after dismissal. Surrounding settings/storage/
+Hero/toolbar enter the same guarded importer. One or multiple files always create
+one project. Review thumbnails/durations/order, remove or retry failed selections,
+then create atomically. No separate/combined selector or silent subset publication.
+Successful creation routes to project details only after importer dismissal. Surrounding settings/storage/
 models/queue/export views share AF surfaces, borders, accent and semantic text.
 
 Native Back/edge swipe and continuous themed chrome remain installed. A completed
@@ -19,10 +22,24 @@ pop does not discard failed saves or block on persistence. A genuine save failur
 does not create an attention card. Rename opens the existing project title field.
 There is no user-facing draft/recovery/discard/reload workflow. No sticky home/activity component or UIKit gesture override.
 
+## Project details
+
+One scrolling overview: combined preview/Edit → ordered Clips → Project defaults →
+Exports newest first. Clip rows seek the shared editor at that clip. Rename, duplicate
+and Trash remain plain actions. Save-failure and missing-media messages use actual state.
+
+Exports includes active/failed work with Queue access and retained completed MP4/SRT
+files with format/size/date, optional artwork, actual-file playback, Photos/Files/Share
+and explicit local deletion. Old outputs remain immutable; changed revisions can show
+Created before your latest changes and Export again. Export now follows progress in-place;
+Queue export opens job detail. Both publish to the same collection.
+
 ## Editor and customization
 
 One main vertical scroll: actual video/audio canvas → transport/timeline → horizontal
-Captions/Style/Timing/Media choices → active workspace. Expansion grows footage
+Captions/Style/Timing/Media choices → active workspace. A compact clip strip identifies
+the current clip and seeks across one continuous output clock. Transcript groups use
+clip identity without introducing another vertical scroll. Expansion grows footage
 within that page. No pinned preview, bottom-inset editor tools, floating duplicate
 or nested vertical transcript scroll. Native navigation and keyboard Done remain.
 
@@ -32,6 +49,10 @@ Playback-follow is explicit/off initially, never changes editing selection/focus
 and pauses on correction/tool selection. Field focus/geometry changes reveal inputs;
 accepted text, timing/trim drafts and per-tool anchors remain app-owned context.
 Unapplied timing/trim needs explicit Apply; UI-only context is not durable project data.
+
+Style/Media expose Project defaults versus an explicitly selected clip. Missing override
+fields follow current defaults. Mark customized sections; section/all reset removes
+overrides without changing text, timing or trim. Aspect/resolution/frame rate stay global.
 
 Style leads with real-footage/caption comparisons. Basic, Spotlight, Karaoke, Pop,
 Soft Fade, Punch, Podcast, Cinema, Classroom and Editorial use different typography,

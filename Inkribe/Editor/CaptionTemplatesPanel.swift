@@ -11,7 +11,7 @@ struct CaptionTemplatesPanel: View {
     let showPreview: () -> Void
     @State private var frame = CaptionPreviewFrame()
     @State private var refreshID = UUID()
-    private var style: CaptionStyle { session.document?.effectiveCaptionStyle ?? .standard }
+    private var style: CaptionStyle { session.editingCaptionStyle }
     private var audioOnly: Bool { session.document?.assets.allSatisfy { $0.kind == .audio } == true }
     private var request: CaptionFrameRequest {
         CaptionFrameRequest(generation: session.previewGeneration,
@@ -33,8 +33,9 @@ struct CaptionTemplatesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            SettingsScopePicker(session: session)
             Text("Choose a caption look").font(.headline)
-            Text("Apply a look to every caption, keeping your chosen position.")
+            Text("Apply a look in the selected scope, keeping your chosen position.")
                 .font(.subheadline).foregroundStyle(.secondary)
             comparisonStatus
             categoryPicker
@@ -68,13 +69,16 @@ struct CaptionTemplatesPanel: View {
             Button("Customize", systemImage: "slider.horizontal.3", action: customize)
                 .buttonStyle(.borderedProminent).frame(minHeight: 44)
             Button("Reset look to \(reference.name)", systemImage: "arrow.counterclockwise") {
-                session.setCaptionStyle(reference.preservingPosition(of: style))
+                session.setCaptionStyle(reference.preservingPosition(of: style), applyingPreset: true)
             }
             .disabled(!session.access.canChangeStyle(from: style, to: reference.preservingPosition(of: style)))
             Button("Use \(reference.name) placement", systemImage: "viewfinder") {
                 session.setCaptionStyle(style.resetting(.placement, to: reference.style))
             }
-            Button("Reset full style to Basic") { session.setCaptionStyle(CaptionPreset.basic.resolved) }
+            if session.editingClipID != nil {
+                Button("Reset captions to project defaults") { session.resetClipSettings() }
+            }
+            Button("Reset full style to Basic") { session.setCaptionStyle(CaptionPreset.basic.resolved, applyingPreset: true, preservingPlacement: false) }
         }
         .studioCard()
     }
@@ -130,10 +134,10 @@ struct CaptionTemplatesPanel: View {
         let locked = !session.access.canChangeStyle(from: style, to: look)
         return Button {
             session.endStyleEditing()
-            session.setCaptionStyle(look)
+            session.setCaptionStyle(look, applyingPreset: true)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
-                CaptionPresetPreview(frame: frame, snapshot: session.snapshot, style: look, audioOnly: audioOnly)
+                CaptionPresetPreview(frame: frame, snapshot: session.snapshot, style: look, audioOnly: audioOnly, scope: session.workspace.settingsScope)
                 HStack(alignment: .firstTextBaseline) {
                     Text(preset.name).font(.headline)
                     Spacer(minLength: 4)

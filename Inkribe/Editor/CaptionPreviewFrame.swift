@@ -100,6 +100,7 @@ struct CaptionStillPreview: View {
 private struct CaptionStylePreviewKey: Equatable {
     let snapshotID: UUID?
     let style: CaptionStyle
+    let scope: EditorSettingsScope
 }
 
 /// Retain one styled snapshot/index per card instead of relaying out every
@@ -109,11 +110,12 @@ struct CaptionPresetPreview: View {
     let snapshot: CaptionSnapshot?
     let style: CaptionStyle
     let audioOnly: Bool
+    var scope = EditorSettingsScope.project
     @State private var styled: CaptionSnapshot?
     var body: some View {
         CaptionStillPreview(frame: frame, snapshot: styled, audioOnly: audioOnly)
-            .task(id: CaptionStylePreviewKey(snapshotID: snapshot?.id, style: style)) {
-                styled = snapshot?.styled(style)
+            .task(id: CaptionStylePreviewKey(snapshotID: snapshot?.id, style: style, scope: scope)) {
+                styled = snapshot?.styled(style, scope: scope)
             }
     }
 }
