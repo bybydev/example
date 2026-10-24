@@ -30,7 +30,7 @@ executed or device-accepted**. All execution acceptance remains unchecked.
   and show conservative revision-based freshness when the project subsequently changes.
 - [x] Existing direct atomic writer/Back/background flush/error retention integrated with
   overview/editor routes. Speech publication checks now also compare clip settings.
-- [x] Six shared override regression specifications authored, not executed.
+- [x] Eight shared override regression specifications authored, not executed.
 - [x] Current phase/architecture/design/feature/workflow/readiness documentation updated.
 
 ## Ownership and implementation notes
@@ -81,7 +81,7 @@ after termination before a successful atomic save. No separate recovery/discard 
 Source/call-site/diff/whitespace review and remote publication consistency checks only.
 No builds/typechecks/tests/fixture execution, CI setup/triggers/runs, project generation,
 model downloads, inference/native exports, UI/device/accessibility execution or deployment.
-The six new shared specifications are unrun. No output artifacts/performance numbers claimed.
+The eight new shared specifications are unrun. No output artifacts/performance numbers claimed.
 
 ### Required user acceptance (all pending)
 

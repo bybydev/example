@@ -9,7 +9,7 @@ implementation in one new PR from develop 4a9780f, left open targeting develop.
 | Project details/editor | Shared session; combined preview; clip strip/transcript groups; explicit entry points |
 | Defaults/overrides | Sparse caption/framing/audio patches; section/all inheritance reset; bounded undo; preview/export wiring |
 | Project exports | Existing durable inventory; in-place/queued generation; real-file preview and native delivery |
-| Saving/consolidation | Existing atomic writer/error retention across routes; docs and six unrun regression specifications |
+| Saving/consolidation | Existing atomic writer/error retention across routes; docs and eight unrun regression specifications |
 
 All rows are source-integrated, **not compiled or accepted on device**. Exact files,
 limits and pending user scenarios are in [the marked handoff](handoffs/PROJECT_EXPERIENCE.md).

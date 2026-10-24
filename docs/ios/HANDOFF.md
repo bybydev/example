@@ -5,7 +5,7 @@ feat/ios-pass1-project-experience → develop, based on 4a9780f. Leave the new P
 without auto-merge. #39 is already merged in that base; its old open-PR holds are historical.
 
 See [the complete marked handoff](handoffs/PROJECT_EXPERIENCE.md) for source ownership,
-six implemented areas, compatibility limits, six authored/unrun specifications and
+six implemented areas, compatibility limits, eight authored/unrun specifications and
 the pending build/device/output acceptance checklist.
 
 - One creation makes one project with one/multiple ordered clips. Failed selection

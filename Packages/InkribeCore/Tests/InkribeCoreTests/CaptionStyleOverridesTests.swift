@@ -61,6 +61,19 @@ final class CaptionStyleOverridesTests: XCTestCase {
         try resolved.validate()
     }
 
+    func testExplicitModernAnimationKeepsItsRenderingVersionOverLegacyDefaults() throws {
+        var overrides = CaptionStyleOverrides()
+        var modern = CaptionStyle.standard
+        modern.formatVersion = 2; modern.effect = .pop
+        overrides.recordChanges(from: .standard, to: modern)
+        let resolved = overrides.resolved(over: .standard)
+        XCTAssertEqual(resolved.effect, .pop)
+        XCTAssertEqual(resolved.formatVersion, 2)
+        try resolved.validate()
+        overrides.reset(.motion)
+        XCTAssertEqual(overrides.resolved(over: .standard).formatVersion, 1)
+    }
+
     func testModernClipTypographyRemainsValidAfterProjectReturnsToBasic() throws {
         var overrides = CaptionStyleOverrides()
         var modern = CaptionStyle.standard
@@ -70,6 +83,14 @@ final class CaptionStyleOverridesTests: XCTestCase {
         XCTAssertEqual(resolved.weight, .heavy)
         XCTAssertEqual(resolved.formatVersion, 2)
         try resolved.validate()
+    }
+
+    func testFutureOverrideFormatIsNotSilentlyNormalizedByModernFields() {
+        var overrides = CaptionStyleOverrides()
+        overrides.formatVersion = 99; overrides.weight = .heavy
+        let resolved = overrides.resolved(over: .standard)
+        XCTAssertEqual(resolved.formatVersion, 99)
+        XCTAssertThrowsError(try resolved.validate())
     }
 
     func testApplyingPresetKeepsPlacementInheritedUntilExplicitlyCustomized() throws {

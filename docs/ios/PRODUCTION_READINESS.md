@@ -5,7 +5,7 @@
 Expanded Pass 1 is source-integrated on feat/ios-pass1-project-experience from
 develop 4a9780f. Schema 9 reads 1–8 and adds sparse clip settings. Details/editor
 routes, inherited rendering, queued/in-place project exports and delivery require
-compilation and actual device/output acceptance. Six new override specifications
+compilation and actual device/output acceptance. Eight new override specifications
 are authored and unrun. See handoffs/PROJECT_EXPERIENCE.md for the marked checklist.
 No additional runtime/store/signing/device evidence has been produced.
 

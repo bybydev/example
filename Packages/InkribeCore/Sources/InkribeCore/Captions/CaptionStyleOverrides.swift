@@ -14,6 +14,8 @@ public struct CaptionStyleOverrides: Codable, Equatable, Sendable {
     public var positionX: Double? = nil
     public var positionY: Double? = nil
     public var effect: CaptionEffect? = nil
+    /// Rendering provenance for an explicitly chosen animation/preset.
+    public var formatVersion: Int? = nil
     public var weight: CaptionFontWeight? = nil
     public var tracking: Double? = nil
     public var lineWidth: Double? = nil
@@ -61,6 +63,10 @@ public struct CaptionStyleOverrides: Codable, Equatable, Sendable {
     }
     public func resolved(over defaults: CaptionStyle) -> CaptionStyle {
         var value = defaults
+        if let formatVersion { value.formatVersion = formatVersion }
+        // Keep unsupported provenance visible to validation; never normalize a
+        // future format into a supported one because another field needs v2.
+        guard (1...2).contains(value.formatVersion) else { return value }
         if let font { value.font = font }
         if let fontSize { value.fontSize = fontSize }
         if let textColor { value.textColor = textColor }
@@ -95,6 +101,7 @@ public struct CaptionStyleOverrides: Codable, Equatable, Sendable {
     }
     /// Keep previous overrides, record only fields the user actually changed.
     public mutating func recordChanges(from before: CaptionStyle, to next: CaptionStyle) {
+        if before.formatVersion != next.formatVersion { formatVersion = next.formatVersion }
         if before.font != next.font { font = next.font }
         if before.fontSize != next.fontSize { fontSize = next.fontSize }
         if before.textColor != next.textColor { textColor = next.textColor }
@@ -125,6 +132,7 @@ public struct CaptionStyleOverrides: Codable, Equatable, Sendable {
     }
     /// Applying a preset intentionally overrides its styling, while placement can inherit.
     public mutating func applyPreset(_ value: CaptionStyle, preservingPlacement: Bool = true) {
+        formatVersion = value.formatVersion
         font = value.font
         fontSize = value.fontSize
         textColor = value.textColor
@@ -162,6 +170,7 @@ public struct CaptionStyleOverrides: Codable, Equatable, Sendable {
         case .motion: effect = nil
         }
         preset = nil
+        if effect == nil { formatVersion = nil }
     }
     public func isCustomized(_ section: CaptionStyleReset) -> Bool {
         switch section {
