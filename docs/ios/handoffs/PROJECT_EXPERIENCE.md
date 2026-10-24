@@ -30,6 +30,10 @@ executed or device-accepted**. All execution acceptance remains unchecked.
   and show conservative revision-based freshness when the project subsequently changes.
 - [x] Existing direct atomic writer/Back/background flush/error retention integrated with
   overview/editor routes. Speech publication checks now also compare clip settings.
+- [x] Individual clip rename from visible menus in details and editor; cancellable name
+  entry, original-name restoration, trimmed length validation, shared atomic save/history,
+  duplicate remapping and consistent labels across captions/clip strip/settings scope.
+  Settings resets preserve names; name-only records do not show Customized.
 - [x] Eight shared override regression specifications authored, not executed.
 - [x] Current phase/architecture/design/feature/workflow/readiness documentation updated.
 
@@ -46,6 +50,11 @@ executed or device-accepted**. All execution acceptance remains unchecked.
 - InkribeCore adds portable `CaptionStyleOverrides`. iOS `ClipSettings` holds clip IDs,
   caption patches and sparse framing/audio patches. No Mac source/config/API is changed.
   Schema 9 validates membership, uniqueness and effective values; duplicate remaps clip IDs.
+  Optional displayName persists clip labels independently of captions/media. Canonical
+  clip/source identities and checkpoint equality remain unchanged. Resetting all settings
+  clears only overrides; returning to the original name clears only displayName.
+  Rename Clip uses existing expected-state settings history and never rebuilds the media
+  graph. Save/reopen/duplicate wiring is source-reviewed, not runtime-verified.
 - CaptionSnapshot caches effective styles and transcript groups. Caption-only overrides
   do not change the media key. Framing/volume changes rebuild the shared media graph after
   the existing debounce; no new per-caption player or native inference path is introduced.
@@ -92,6 +101,10 @@ The eight new shared specifications are unrun. No output artifacts/performance n
   cancellation; nested export/queue/project routes; native video layers/keyboard on SE2.
 - [ ] Default font/color, Clip 2 color-only override, later project font change, section/all
   reset, later default update, undo/redo, save/relaunch and duplicate. Verify persisted IDs.
+- [ ] Rename Clip 2 from details and editor; Cancel/swipe without Save; whitespace/blank/
+  overlong names; undo/redo, Back/reopen/relaunch and duplicate; original-name restoration;
+  section/all settings reset preserves the name, and name alone leaves settings inherited.
+  Verify renaming during transcription retains native IDs/timing, checkpoints and originals.
 - [ ] Existing premium defaults/work after expiry; new premium choices remain gated.
 - [ ] Mixed video/audio, multiple source audio lanes, per-clip framing/volume and project
   trim; compare actual preview/MP4 captions, crop, orientation and sync at clip boundaries.

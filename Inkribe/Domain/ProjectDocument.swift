@@ -163,6 +163,12 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
                 throw ProjectStoreError.invalidDocument("Invalid clip settings")
             }
             for settings in clipSettings {
+                if let name = settings.displayName {
+                    guard !name.isEmpty, name.count <= 256,
+                          name == name.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                        throw ProjectStoreError.invalidDocument("Keep clip names within 1–256 characters")
+                    }
+                }
                 try settings.captions.resolved(over: effectiveCaptionStyle).validate()
                 try settings.media.resolved(over: effectiveMediaEdits).validate(sourceDuration: sourceDuration)
             }

@@ -13,7 +13,7 @@ struct SettingsScopePicker: View {
                     }
                 }
                 if let id = session.editingClipID {
-                    let customized = !document.settings(for: id).isEmpty
+                    let customized = document.settings(for: id).hasOverrides
                     Label(customized ? "Customized" : "Using project defaults", systemImage: customized ? "slider.horizontal.3" : "link")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Reset all settings to project defaults", systemImage: "arrow.counterclockwise") {

@@ -44,6 +44,7 @@ is pending. Base develop 4a9780f includes merged #39.
 | PROJECT.ONE_CREATION | One project, one/multiple ordered files, visual review and retry | Source-integrated; unverified execution |
 | PROJECT.DETAILS | Combined overview, ordered clips, defaults and retained exports | Source-integrated; unverified execution |
 | PROJECT.CLIP_EDITOR | Continuous clock, clip navigation and grouped captions | Source-integrated; unverified execution |
+| PROJECT.CLIP_NAMES | Individual clip labels, original-name restoration, persistence/duplicate and undo | Source-integrated; unverified execution |
 | PROJECT.CLIP_SETTINGS | Per-setting overrides/reset, history and effective output | Source-integrated; unverified execution |
 | PROJECT.EXPORTS | Queued/in-place generation, actual-file preview/save/share | Source-integrated; unverified execution |
 | PROJECT.SAVING | Shared atomic writer across details/editor/export routes | Source-integrated; unverified execution |

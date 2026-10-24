@@ -31,9 +31,12 @@ struct ClipMediaOverrides: Codable, Equatable, Sendable {
 
 struct ClipSettings: Codable, Equatable, Sendable, Identifiable {
     var id: UUID
+    /// A user-facing label only; source names, media paths and clip identity stay fixed.
+    var displayName: String? = nil
     var captions: CaptionStyleOverrides = .init()
     var media: ClipMediaOverrides = .init()
-    var isEmpty: Bool { captions.isEmpty && media.isEmpty }
+    var hasOverrides: Bool { !captions.isEmpty || !media.isEmpty }
+    var isEmpty: Bool { displayName == nil && !hasOverrides }
 }
 
 extension ProjectDocument {
@@ -56,6 +59,9 @@ extension ProjectDocument {
         settings(for: clipID).media.resolved(over: effectiveMediaEdits)
     }
     func clipName(_ clip: ProjectClip) -> String {
+        settings(for: clip.id).displayName ?? originalClipName(clip)
+    }
+    func originalClipName(_ clip: ProjectClip) -> String {
         assets.first { $0.id == clip.sourceAssetID }?.displayName ?? "Clip"
     }
 }

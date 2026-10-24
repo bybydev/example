@@ -52,7 +52,12 @@ and iOS framing/audio overrides. Missing fields inherit current project defaults
 reset removes fields. Preset application intentionally pins its styling. Validate
 effective values and clip membership, remap IDs on duplicate, and compare settings
 when deciding whether a concurrent revision is append-only speech publication.
-Bounded expected-state settings history excludes recognition/media bytes.
+Bounded expected-state settings history excludes recognition/media bytes. Optional
+ClipSettings.displayName holds the user-facing clip label (trimmed, 1–256 characters);
+absence uses the original source name. Name-only records survive pruning and duplicate
+remaps, but do not count as caption/media overrides. All settings resets retain names;
+explicit original-name restoration removes the label. Naming uses the same writer and
+settings history without changing canonical clips, checkpoint matching or the media key.
 
 CaptionSnapshot caches resolved styles/groups. Native drawing selects style by
 the cue's clip identity. Media graph applies clip placement and volume events per

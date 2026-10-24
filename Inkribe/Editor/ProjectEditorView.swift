@@ -18,6 +18,7 @@ struct ProjectEditorView: View {
     @State private var didApplyInitialRoute = false
     @State private var session: EditorSession
     @State private var presentationID = UUID()
+    @State private var renamingClip: ProjectClip?
     @State private var relinkAsset: UUID?
     @State private var isRelinking = false
     @State private var showDeleteConfirmation = false
@@ -55,7 +56,7 @@ struct ProjectEditorView: View {
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
         .onDisappear {
-            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, session.proUpsell == nil else { return }
+            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, renamingClip == nil, session.proUpsell == nil else { return }
             sessions.detach(session, owner: presentationID)
             Task { await session.flush(); await model.refreshLibrary() }
         }
@@ -78,6 +79,7 @@ struct ProjectEditorView: View {
         .sheet(isPresented: $showExport) { ExportView(session: session) }
         .sheet(isPresented: $showQueue, onDismiss: { Task { await session.refreshSaved() } }) { ProcessingQueueSheet() }
         .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
+        .sheet(item: $renamingClip) { clip in ClipRenameView(session: session, clipID: clip.id) }
         .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
         .sheet(item: Binding(get: { showStyleSheet ? nil : session.proUpsell }, set: { if !showStyleSheet { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
     }
@@ -151,7 +153,7 @@ struct ProjectEditorView: View {
             preview(document, height: previewHeight(document, in: size))
                 .id("preview")
             transport(showsOverview: true).id("transport")
-            ClipStrip(session: session)
+            ClipStrip(session: session) { clip in focused = nil; session.pause(); renamingClip = clip }
             editorToolBar.id("tools")
             editorErrors
             if document.recognition?.isIncomplete == true {
@@ -401,7 +403,7 @@ struct ProjectEditorView: View {
     }
 
     private var canPresentProjectError: Bool {
-        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && session.proUpsell == nil
+        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && renamingClip == nil && session.proUpsell == nil
     }
 
     private var hasEditorError: Bool {

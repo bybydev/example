@@ -17,11 +17,12 @@ struct ProjectDetailView: View {
     @State private var owner = UUID()
     @State private var editorIntent: ProjectEditorIntent?
     @State private var renaming = false
+    @State private var renamingClip: ProjectClip?
     @State private var exporting = false
     @State private var trashConfirmation = false
     @State private var didRename = false
     @State private var renderError: String?
-    private var covered: Bool { editorIntent != nil || renaming || exporting }
+    private var covered: Bool { editorIntent != nil || renaming || renamingClip != nil || exporting }
 
     private var navigation: some View {
         overview
@@ -35,6 +36,7 @@ struct ProjectDetailView: View {
     private var presentation: some View {
         navigation
             .sheet(isPresented: $renaming) { ProjectNameView(session: session) }
+            .sheet(item: $renamingClip) { clip in ClipRenameView(session: session, clipID: clip.id) }
             .sheet(isPresented: $exporting) { ExportView(session: session) }
             .confirmationDialog("Move this project to Trash?", isPresented: $trashConfirmation) {
                 Button("Move to Trash", role: .destructive) {
@@ -133,21 +135,32 @@ struct ProjectDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Clips").font(.title3.weight(.semibold))
             ForEach(Array(document.orderedClips.enumerated()), id: \.element.id) { index, clip in
-                Button { editorIntent = ProjectEditorIntent(clipID: clip.id) } label: {
-                    HStack(spacing: 12) {
-                        ClipThumbnail(projectID: document.id, clip: clip, source: document.assets.first { $0.id == clip.sourceAssetID })
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("\(index + 1). \(document.clipName(clip))").font(.subheadline).foregroundStyle(.primary)
-                            Text("\(EditorTime.display(clip.timelineInterval.durationTime)) · " + (OutputTimeline(document).outputInterval(clip.timelineInterval).map { "In video " + EditorTime.display($0.start) } ?? "Outside trim"))
-                                .font(.caption).foregroundStyle(.secondary)
-                            if session.originalAvailable[clip.sourceAssetID] == false { Text("Original unavailable").font(.caption).foregroundStyle(.orange) }
-                        }
-                        Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain)
+                clipRow(clip, index: index, document: document)
             }
             Text("Your clips play together as one video.").font(.caption).foregroundStyle(.secondary)
         }.studioCard()
+    }
+
+    private func clipRow(_ clip: ProjectClip, index: Int, document: ProjectDocument) -> some View {
+        HStack(spacing: 8) {
+            Button { editorIntent = ProjectEditorIntent(clipID: clip.id) } label: {
+                HStack(spacing: 12) {
+                    ClipThumbnail(projectID: document.id, clip: clip, source: document.assets.first { $0.id == clip.sourceAssetID })
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("\(index + 1). \(document.clipName(clip))").font(.subheadline).foregroundStyle(.primary)
+                        Text("\(EditorTime.display(clip.timelineInterval.durationTime)) · " + (OutputTimeline(document).outputInterval(clip.timelineInterval).map { "In video " + EditorTime.display($0.start) } ?? "Outside trim"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        if session.originalAvailable[clip.sourceAssetID] == false { Text("Original unavailable").font(.caption).foregroundStyle(.orange) }
+                    }
+                    Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.plain)
+            Menu {
+                Button("Rename clip", systemImage: "pencil") { session.pause(); renamingClip = clip }
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
+            }.accessibilityLabel("Actions for clip \(index + 1), \(document.clipName(clip))")
+        }
     }
 
     private func defaults(_ document: ProjectDocument) -> some View {

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ClipStrip: View {
     let session: EditorSession
+    let onRename: (ProjectClip) -> Void
     var body: some View {
         if let document = session.document {
             let current = session.currentClip
@@ -16,23 +17,39 @@ struct ClipStrip: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(Array(document.orderedClips.enumerated()), id: \.element.id) { index, clip in
-                            Button { session.seekToClip(clip.id) } label: {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    ClipThumbnail(projectID: document.id, clip: clip,
-                                        source: document.assets.first { $0.id == clip.sourceAssetID })
-                                    Text("\(index + 1) · \(EditorTime.display(clip.timelineInterval.durationTime))")
-                                        .font(.caption2).monospacedDigit()
-                                }.padding(6).background(current?.id == clip.id ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.06),
-                                    in: RoundedRectangle(cornerRadius: 10))
-                            }.buttonStyle(.plain)
-                            .disabled(OutputTimeline(document).outputInterval(clip.timelineInterval) == nil)
-                            .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
-                            .accessibilityAddTraits(current?.id == clip.id ? .isSelected : [])
+                            clipCard(clip, index: index, current: current, document: document)
                         }
                     }
                 }.scrollIndicators(.hidden)
             }
         }
+    }
+
+    private func clipCard(_ clip: ProjectClip, index: Int, current: ProjectClip?, document: ProjectDocument) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { session.seekToClip(clip.id) } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    ClipThumbnail(projectID: document.id, clip: clip,
+                        source: document.assets.first { $0.id == clip.sourceAssetID })
+                    Text("\(index + 1) · \(EditorTime.display(clip.timelineInterval.durationTime))")
+                        .font(.caption2).monospacedDigit()
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .disabled(OutputTimeline(document).outputInterval(clip.timelineInterval) == nil)
+                .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
+                .accessibilityAddTraits(current?.id == clip.id ? .isSelected : [])
+            HStack(spacing: 2) {
+                Text(document.clipName(clip)).font(.caption2).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Menu {
+                    Button("Rename clip", systemImage: "pencil") { onRename(clip) }
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
+                }.accessibilityLabel("Actions for clip \(index + 1), \(document.clipName(clip))")
+            }
+        }.padding(6).frame(width: 136)
+            .background(current?.id == clip.id ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

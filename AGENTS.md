@@ -10,6 +10,8 @@ Implement one-project creation (one/multiple files; no separate-project import),
 project details and multi-clip editor, sparse per-setting clip overrides/reset,
 project exports with queued/in-place generation and preview/save/share, and simple
 automatic saving. The user approved the settled UI through this conversation.
+The user also authorizes clip renaming in this same PR: visible details/editor menus,
+persisted labels, original-name restoration and undo; settings resets preserve names.
 Preserve native recognition/IDs/timing, allowance, originals, independent frozen
 outputs and Mac behavior. Schema 9 reads 1–8; package/job/checkpoint wrappers remain.
 No builds/typechecks/tests/fixtures, CI setup/triggers/runs, generation, model

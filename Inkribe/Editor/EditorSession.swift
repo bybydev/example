@@ -197,6 +197,29 @@ final class EditorSession {
         changed()
     }
 
+    /// Nil restores the imported name. Labels share atomic saves and bounded undo,
+    /// without changing media identity, recognition checkpoints or the preview graph.
+    @discardableResult
+    func renameClip(_ id: UUID, to value: String?) -> Bool {
+        guard var project = document, project.clips.contains(where: { $0.id == id }) else {
+            commandError = "This clip is no longer available."
+            return false
+        }
+        let name = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let name, name.isEmpty || name.count > 256 {
+            commandError = "Enter a clip name with 1–256 characters."
+            return false
+        }
+        var settings = project.settings(for: id)
+        guard settings.displayName != name else { commandError = nil; return true }
+        let before = ProjectSettingsState(project)
+        settings.displayName = name
+        project.setSettings(settings)
+        endTyping(); endStyleEditing(); endMediaEditing()
+        commitSettings(project, before: before, coalescing: false)
+        return commandError == nil
+    }
+
     func selectCue(_ id: UUID) {
         pause()
         typingWordID = nil
@@ -274,7 +297,7 @@ final class EditorSession {
         guard var project = document, let id = editingClipID else { return }
         let before = ProjectSettingsState(project)
         var settings = project.settings(for: id)
-        if all { settings = ClipSettings(id: id) }
+        if all { settings.captions = .init(); settings.media = .init() }
         else if let section { settings.captions.reset(section) }
         else if media { settings.media = .init() }
         else if framing { settings.media.fit = nil; settings.media.zoom = nil; settings.media.positionX = nil; settings.media.positionY = nil }
