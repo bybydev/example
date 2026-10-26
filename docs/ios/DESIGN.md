@@ -40,8 +40,10 @@ One main vertical scroll: actual video/audio canvas → transport/timeline → h
 Captions/Style/Timing/Media choices → active workspace. A compact clip strip identifies
 the current clip and seeks across one continuous output clock. Transcript groups use
 clip identity without introducing another vertical scroll. Expansion grows footage
-within that page. No pinned preview, bottom-inset editor tools, floating duplicate
-or nested vertical transcript scroll. Native navigation and keyboard Done remain.
+within that page. The animated Styles browser temporarily anchors a compact real
+preview/transport above its medium sheet; closing it restores this scrolling page.
+No floating duplicate or nested vertical transcript scroll. Native navigation and
+keyboard Done remain outside that focused modal.
 
 Whole-caption text is the primary correction field. Selected word/phrase text,
 original-clock timing, split/merge, undo/redo and missing-range retry remain inline.
@@ -54,12 +56,17 @@ Style/Media expose Project defaults versus an explicitly selected clip. Missing 
 fields follow current defaults. Mark customized sections; section/all reset removes
 overrides without changing text, timing or trim. Aspect/resolution/frame rate stay global.
 
-Style leads with real-footage/caption comparisons. Basic, Spotlight, Karaoke, Pop,
-Soft Fade, Punch, Podcast, Cinema, Classroom and Editorial use different typography,
-layout, contrast/background/emphasis and motion combinations. Categories, selection,
-saved version, Customized/custom-position state, access locks and named resets are
-explicit. Saved values do not change because catalog defaults evolve. Apply keeps
-placement; recommended placement is a separate undoable action.
+Style opens a medium/large sheet with one animated, authored sample at a time.
+Swipe or Previous/Next browses the unchanged ten-style catalog without modifying
+user input. Explicit Use style applies through the existing session/access/history
+path and preserves chosen placement. Sample scenery is procedural and silent;
+caption typography/motion uses the actual renderer. It is distinct from user footage.
+Project defaults are labeled honestly: customized clip overrides remain. Named clip
+scopes, caption-only reset, Pro gates, saved/customized/version state and all named
+resets remain accessible. Detail customization stays in its separate actual-preview
+sheet. The medium browser allows playback/scrubbing above it; its content scrolls
+with an accessible apply footer, while large text opens expanded. All device layout,
+performance and native presentation acceptance is pending. See handoffs/ANIMATED_STYLES.md.
 
 Text/Colors/Backdrop/Layout/Position/Motion detail controls include scrollable real
 preview/playback. Typography/colors/backdrop/layout/placement/motion reset independently.

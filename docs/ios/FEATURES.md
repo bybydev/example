@@ -37,6 +37,15 @@ is pending. Base develop 4a9780f includes merged #39.
 | V1.ACCESS | P7 | Accessible controls and clear loading/error/empty states | Source-integrated; execution/acceptance unverified |
 | V1.HANDOFF | P7 | End-to-end source audit and user-testing handoff | Source-integrated; execution/acceptance unverified |
 
+## Animated Styles sheet (2026-10-26)
+
+| ID | Requirement | Status |
+|---|---|---|
+| V1.PRESETS / V1.STYLE | Animated sample carousel sheet, explicit apply, inherited/clip scope, compact real preview | Source-integrated; compilation/device/output acceptance pending |
+
+See [animated styles handoff](handoffs/ANIMATED_STYLES.md). All ten catalog definitions,
+recognition, entitlement rules and multi-clip support remain unchanged.
+
 ## Expanded Pass 1 (#41)
 
 | ID | Requirement | Status |

@@ -102,10 +102,14 @@ also advance the canonical schema. Unknown catalog references retain known value
 Core Text handles installed closest weights, script/emoji fallback, clusters and
 bidi. Layout fitting is bounded at six measurements, eight lines and 16,384 UTF-16
 units per cue; failure is explicit. Word/phrase-aware motion uses actual original
-edited intervals, including trim into a unit. One capped asynchronous media frame
-feeds at most ten retained preset snapshots/layouts; no per-card player/decoder.
+edited intervals, including trim into a unit. The animated Styles browser retains
+one authored sample snapshot/layout, shares the same native renderer, and clocks
+only the displayed demo. Samples never enter project storage or recognition. The
+old comparison-frame helper is no longer used by the style browsing route; no user
+video frame extraction or additional player/decoder is needed for sample browsing.
 
-A modal style/export/queue route detaches the covered editor player layer before
+The sample browser leaves the sole real player in the compact underlying editor.
+Detailed customization/export/queue routes detach the covered editor player layer before
 another route can present that session's player. Overlay error reporting invalidates
 queued callbacks on any newer draw or dismantle and reports initial success too.
 Native focus/scroll/layer transitions remain unexecuted acceptance scenarios.

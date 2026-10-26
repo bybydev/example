@@ -6,10 +6,10 @@ enum EditorTool: String, CaseIterable, Identifiable, Hashable, Sendable {
     case captions, style, timing, media
     var id: Self { self }
     var title: String {
-        switch self { case .captions: "Captions"; case .style: "Style"; case .timing: "Timing"; case .media: "Media" }
+        switch self { case .captions: "Captions"; case .style: "Styles"; case .timing: "Timing"; case .media: "Media" }
     }
     var symbol: String {
-        switch self { case .captions: "captions.bubble"; case .style: "textformat"; case .timing: "timer"; case .media: "crop.rotate" }
+        switch self { case .captions: "captions.bubble"; case .style: "sparkles"; case .timing: "timer"; case .media: "crop.rotate" }
     }
 }
 

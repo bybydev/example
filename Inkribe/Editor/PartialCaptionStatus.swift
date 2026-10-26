@@ -17,10 +17,10 @@ struct PartialCaptionStatus: View {
         VStack(alignment: .leading, spacing: 8) {
             if let record, !record.status.isTerminal {
                 let progress = speech.queue?.liveProgress[record.id]
-                HStack {
+                CaptionStatusRow {
                     Text(speech.queue?.isPaused == true ? "Transcription paused" : progress?.message ?? "Transcribing…")
                         .font(.caption).foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
+                } action: {
                     Button("Cancel") {
                         do { try speech.cancel(record.id) }
                         catch { model.alertMessage = error.localizedDescription }
@@ -29,10 +29,10 @@ struct PartialCaptionStatus: View {
                 }
                 if let value = progress?.fractionCompleted { ProgressView(value: value) }
             } else {
-                HStack {
+                CaptionStatusRow {
                     Label("Incomplete", systemImage: "exclamationmark.bubble")
                         .font(.caption).foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
+                } action: {
                     Button("Retry missing ranges", systemImage: "arrow.clockwise", action: retry)
                         .font(.caption)
                         .disabled(preparing || speech.isAuthorizing || speech.persistenceError != nil)
@@ -61,6 +61,29 @@ struct PartialCaptionStatus: View {
             Button("Reset retry progress", action: reset)
         } message: {
             Text("Your available captions and edits stay saved. Retry will rebuild progress from them and transcribe only missing ranges. This does not change model or runtime compatibility.")
+        }
+    }
+}
+
+/// Measure the complete row first; wrap status and action vertically when their
+/// natural widths do not fit. Never shrink text or remove the retry/cancel action.
+private struct CaptionStatusRow<Status: View, Action: View>: View {
+    let status: Status
+    let action: Action
+    init(@ViewBuilder status: () -> Status, @ViewBuilder action: () -> Action) {
+        self.status = status(); self.action = action()
+    }
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                status.fixedSize(horizontal: true, vertical: true)
+                Spacer(minLength: 8)
+                action.fixedSize(horizontal: true, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                status.fixedSize(horizontal: false, vertical: true)
+                action.fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

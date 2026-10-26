@@ -23,6 +23,7 @@ struct ProjectEditorView: View {
     @State private var isRelinking = false
     @State private var showDeleteConfirmation = false
     @State private var showStyleSheet = false
+    @State private var showStyleBrowser = false
     @State private var captionRenderError: String?
     @State private var showExport = false
     @State private var showQueue = false
@@ -56,7 +57,7 @@ struct ProjectEditorView: View {
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
         .onDisappear {
-            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, renamingClip == nil, session.proUpsell == nil else { return }
+            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, !showStyleBrowser, renamingClip == nil, session.proUpsell == nil else { return }
             sessions.detach(session, owner: presentationID)
             Task { await session.flush(); await model.refreshLibrary() }
         }
@@ -69,7 +70,11 @@ struct ProjectEditorView: View {
             if !didApplyInitialRoute, session.document != nil {
                 didApplyInitialRoute = true
                 if let initialClipID { session.seekToClip(initialClipID) }
-                if let initialTool { session.selectSettingsScope(.project); session.workspace.select(initialTool) }
+                if let initialTool {
+                    session.selectSettingsScope(.project)
+                    if initialTool == .style { openStyleBrowser() }
+                    else { session.workspace.select(initialTool) }
+                }
             }
             if !Task.isCancelled, renameOnOpen, !didRequestInitialRename, session.document != nil {
                 didRequestInitialRename = true
@@ -81,7 +86,9 @@ struct ProjectEditorView: View {
         .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
         .sheet(item: $renamingClip) { clip in ClipRenameView(session: session, clipID: clip.id) }
         .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
-        .sheet(item: Binding(get: { showStyleSheet ? nil : session.proUpsell }, set: { if !showStyleSheet { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
+        .sheet(isPresented: $showStyleBrowser, onDismiss: finishToolEditing) { CaptionStylesSheet(session: session) }
+        .sheet(item: Binding(get: { showStyleSheet || showStyleBrowser ? nil : session.proUpsell },
+            set: { if !showStyleSheet && !showStyleBrowser { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
     }
 
     private var editorDialogs: some View {
@@ -115,7 +122,7 @@ struct ProjectEditorView: View {
     private var editorWorkspace: some View {
         GeometryReader { geometry in
             ScrollViewReader { scroll in
-                ScrollView {
+                ScrollView(.vertical) {
                     if let document = session.document {
                         scrollingWorkspace(document, size: geometry.size)
                     } else if let error = session.loadError {
@@ -149,10 +156,10 @@ struct ProjectEditorView: View {
     }
 
     private func scrollingWorkspace(_ document: ProjectDocument, size: CGSize) -> some View {
-        LazyVStack(alignment: .leading, spacing: 18) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             preview(document, height: previewHeight(document, in: size))
                 .id("preview")
-            transport(showsOverview: true).id("transport")
+            transport(showsOverview: false).id("transport")
             ClipStrip(session: session) { clip in focused = nil; session.pause(); renamingClip = clip }
             editorToolBar.id("tools")
             editorErrors
@@ -163,6 +170,7 @@ struct ProjectEditorView: View {
             activeWorkspace(document)
         }
         .scrollTargetLayout()
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 32)
     }
 
@@ -198,8 +206,7 @@ struct ProjectEditorView: View {
                 }
             } else { transcription(document) }
         case .style:
-            CaptionTemplatesPanel(session: session, isComparing: !showStyleSheet, customize: { showStyleSheet = true },
-                showPreview: { session.workspace.scrollAnchor = "preview" })
+            CaptionTemplatesPanel(session: session, browse: openStyleBrowser, customize: { showStyleSheet = true })
         case .timing:
             if session.selectedCue != nil {
                 correctionPanel
@@ -217,14 +224,16 @@ struct ProjectEditorView: View {
     @ViewBuilder
     private func captionGroup(_ clip: ProjectClip, number: Int, snapshot: CaptionSnapshot, document: ProjectDocument) -> some View {
         if let items = snapshot.transcriptItemsByClip[clip.id], !items.isEmpty {
-            Button { focused = nil; session.seekToClip(clip.id) } label: {
-                HStack {
-                    Label("Clip \(number) · \(document.clipName(clip))", systemImage: "film")
-                    Spacer(minLength: 4)
-                    Text(OutputTimeline(document).outputInterval(clip.timelineInterval).map { EditorTime.display($0.start) } ?? "Outside trim")
-                        .monospacedDigit()
-                }.font(.caption).foregroundStyle(.secondary).frame(minHeight: 44)
-            }.buttonStyle(.plain)
+            if document.clips.count > 1 {
+                Button { focused = nil; session.seekToClip(clip.id) } label: {
+                    HStack {
+                        Label(document.editorClipTitle(clip), systemImage: "film").lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(OutputTimeline(document).outputInterval(clip.timelineInterval).map { EditorTime.display($0.start) } ?? "Outside trim")
+                            .monospacedDigit()
+                    }.font(.caption).foregroundStyle(.secondary).frame(minHeight: 44)
+                }.buttonStyle(.plain)
+            }
             ForEach(items) { item in transcriptRow(item).id(item.id) }
         }
     }
@@ -237,10 +246,18 @@ struct ProjectEditorView: View {
     }
 
     private func switchTool(_ tool: EditorTool) {
+        // Opening a picker must not replace the active workspace/scroll identity.
+        if tool == .style { openStyleBrowser(); return }
         focused = nil
         session.pause()
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
         session.workspace.select(tool)
+    }
+
+    private func openStyleBrowser() {
+        focused = nil
+        session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        showStyleBrowser = true
     }
 
     @ToolbarContentBuilder
@@ -265,8 +282,8 @@ struct ProjectEditorView: View {
                 showExport = true
             }
             .font(.subheadline.weight(.semibold))
-            .buttonStyle(.borderedProminent).controlSize(.small)
-            .disabled(!session.isReadyToEdit || preparingTranscription)
+            .buttonStyle(.plain).frame(minHeight: 44).tint(theme.accentColor)
+            .disabled(!session.isReadyToEdit || preparingTranscription || showStyleBrowser)
             editorActions
         }
         ToolbarItemGroup(placement: .keyboard) {
@@ -281,6 +298,11 @@ struct ProjectEditorView: View {
             Label(saveStatus, systemImage: hasStatusError ? "exclamationmark.triangle" : "checkmark.circle")
             Divider()
             Button("Rename", systemImage: "pencil") { beginRenaming() }
+            if let document = session.document, document.clips.count == 1, let clip = document.clips.first {
+                Button("Rename clip", systemImage: "film") {
+                    focused = nil; session.pause(); renamingClip = clip
+                }
+            }
             Divider()
             Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
                 .disabled(!session.canUndo)
@@ -292,6 +314,11 @@ struct ProjectEditorView: View {
                 session.workspace.expandedPreview.toggle()
             }
             Button("Queue", systemImage: "list.bullet.rectangle") { openQueue() }
+            Button("Style settings & resets", systemImage: "slider.horizontal.3") {
+                focused = nil
+                session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+                session.workspace.select(.style)
+            }
             Button("Media tools", systemImage: "crop.rotate") {
                 switchTool(.media)
             }
@@ -311,7 +338,7 @@ struct ProjectEditorView: View {
                 .disabled(model.transcription.isActive(projectID))
         } label: { Image(systemName: hasEditorError ? "exclamationmark.circle" : "ellipsis.circle") }
         .accessibilityLabel("Editor actions, " + saveStatus)
-        .disabled(!session.isReadyToEdit || preparingTranscription)
+        .disabled(!session.isReadyToEdit || preparingTranscription || showStyleBrowser)
     }
 
     private func openQueue() {
@@ -383,27 +410,35 @@ struct ProjectEditorView: View {
     }
 
     private var editorToolBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(EditorTool.allCases) { tool in
-                    Button { switchTool(tool) } label: {
-                        Label(tool.title, systemImage: tool.symbol)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14).frame(minHeight: 44)
-                            .background(session.workspace.tool == tool ? theme.accentColor.opacity(0.14) : theme.surfaceColor,
-                                in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(session.workspace.tool == tool ? theme.accentColor : theme.primaryForegroundColor)
-                    .accessibilityAddTraits(session.workspace.tool == tool ? .isSelected : [])
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                ForEach(EditorTool.allCases) { tool in toolButton(tool) }
+            }
+            LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
+                ForEach(EditorTool.allCases) { tool in toolButton(tool, wrapsLabel: true) }
             }
         }
-        .scrollIndicators(.hidden)
+    }
+
+    private func toolButton(_ tool: EditorTool, wrapsLabel: Bool = false) -> some View {
+        Button { switchTool(tool) } label: {
+            VStack(spacing: 5) {
+                Image(systemName: tool.symbol).font(.body.weight(.medium))
+                Text(tool.title).font(.caption.weight(.medium)).lineLimit(wrapsLabel ? nil : 1)
+                    .fixedSize(horizontal: !wrapsLabel, vertical: true)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .foregroundStyle(session.workspace.tool == tool ? theme.accentColor : theme.secondaryForegroundColor)
+            .background(session.workspace.tool == tool ? theme.accentColor.opacity(0.12) : theme.surfaceColor,
+                in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(session.workspace.tool == tool ? .isSelected : [])
     }
 
     private var canPresentProjectError: Bool {
-        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && renamingClip == nil && session.proUpsell == nil
+        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && !showStyleBrowser && renamingClip == nil && session.proUpsell == nil
     }
 
     private var hasEditorError: Bool {

@@ -1,5 +1,25 @@
 # Inkribe Working Rules
 
+## Current animated Styles sheet authorization
+
+The user also authorizes polishing the supplied editor screenshot in this PR:
+bounded content width/insets, compact playback/tool controls, hidden redundant
+single-clip navigation and compact multi-clip cards with readable labels. Keep
+single-clip rename reachable and do not change source names, timestamps, rendering
+or persistence. Existing no-execution restrictions and sheet-layout rules remain.
+
+2026-10-26. The user approved the animated-demo Styles sheet and requests one new
+PR from latest develop (81b8207), branch feat/ios-animated-style-sheet, targeting
+develop; leave open without auto-merge. Scope is V1.PRESETS/V1.STYLE presentation:
+sample carousel, explicit Apply and project-default/clip scope. Latest user
+corrections require a large-only sheet and no editor-preview movement: preserve
+the scrolling workspace, active tool, scroll identity and expanded preview state
+when opening it. Do not replace the editor with a compact preview. Keep multiple clips, the existing
+catalog/renderer, recognition/timing, Pro gates, overrides, undo, saving and Mac
+behavior. No builds/typechecks/tests/fixtures, CI/generation/models/native exports
+or UI/device execution. See docs/ios/handoffs/ANIMATED_STYLES.md for source evidence
+and pending acceptance. Prior completed phase instructions below are historical.
+
 ## Current issue #41 implementation authorization
 
 The user authorizes the entire expanded Pass 1 in a new PR from latest develop,

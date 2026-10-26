@@ -1,5 +1,11 @@
 # Inkribe iOS — current handoff
 
+2026-10-26 update: current work is the approved animated Styles sheet in
+`feat/ios-animated-style-sheet` → develop, based on 81b8207 (merged #42).
+See [source checklist and pending acceptance](handoffs/ANIMATED_STYLES.md).
+Keep the PR open. Source-only checks; all existing execution restrictions remain.
+Earlier phase descriptions below are completed history.
+
 2026-10-24. Expanded Pass 1 (#41, parent #40) is source-integrated in
 feat/ios-pass1-project-experience → develop, based on 4a9780f. Leave the new PR open
 without auto-merge. #39 is already merged in that base; its old open-PR holds are historical.
