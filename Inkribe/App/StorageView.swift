@@ -58,9 +58,15 @@ struct StorageView: View {
                         }
                     }
                     Section("Project Trash") {
-                        if model.trashed.isEmpty {
+                        if let issue = model.trashError {
+                            Text(issue).font(.footnote).foregroundStyle(.secondary)
+                            Button("Retry Trash") { Task { await model.refreshTrash() } }
+                        }
+                        if model.isLoadingTrash && model.trashed.isEmpty {
+                            ProgressView("Loading Trash…")
+                        } else if model.trashed.isEmpty && model.trashError == nil {
                             Text("Nothing in Trash").foregroundStyle(.secondary)
-                        } else {
+                        } else if !model.trashed.isEmpty {
                             ForEach(model.trashed) { item in
                                 trashedProjectRow(item)
                             }
@@ -190,3 +196,4 @@ private enum StorageSheet: String, Identifiable {
     case queue
     var id: Self { self }
 }
+

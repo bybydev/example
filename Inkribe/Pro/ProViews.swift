@@ -19,6 +19,7 @@ struct ProUpsell: View {
     @Environment(ProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let feature: ProFeature
+    var isUsageOverview = false
     var body: some View {
         LimitReachedUpsellFlow(configuration: configuration) { ProPaywall() }
             .onChange(of: model.access.hasPro) { _, hasPro in if hasPro { dismiss() } }
@@ -29,7 +30,11 @@ struct ProUpsell: View {
         case .captioning:
             let usage = model.transcription.allowance
             let reset = usage?.resetsAt.formatted(date: .abbreviated, time: .shortened) ?? "the next weekly reset"
-            message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. This video needs more time than is available. Your allowance resets \(reset). Existing captions and editing stay available."
+            if isUsageOverview {
+                message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. Upgrade to Pro for unlimited captioning. Your allowance resets \(reset). Existing captions and editing stay available."
+            } else {
+                message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. This video needs more time than is available. Your allowance resets \(reset). Existing captions and editing stay available."
+            }
         case .styles:
             message = "Unlock every caption font, template and animation. Basic styling and all your existing captions stay available."
         case .fullHD:
@@ -61,3 +66,4 @@ private struct ThemedSurface: ViewModifier {
 extension View {
     func themedSurface() -> some View { modifier(ThemedSurface()) }
 }
+

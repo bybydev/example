@@ -1,4 +1,5 @@
 import CoreTransferable
+import CoreMedia
 import Foundation
 import Observation
 import PhotosUI
@@ -67,27 +68,93 @@ final class ProjectsModel {
     private(set) var allProjects: [ProjectSummary] = []
     private(set) var mutatingProjectIDs: Set<UUID> = []
     private(set) var importCompletion: ImportCompletion?
-    var isFiltering: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || filter != .all }
+    private(set) var folders: [LibraryFolder] = []
+    private(set) var placements: [UUID: LibraryProjectPlacement] = [:]
+    private(set) var organizationError: String?
+    private(set) var trashError: String?
+    private(set) var isLoadingTrash = false
+    private(set) var isUpdatingOrganization = false
+    private(set) var didLoadOrganization = false
+    private var organizationGeneration = 0
+    private var trashGeneration = 0
+    var organizationReady: Bool { didLoadOrganization && organizationError == nil && !isUpdatingOrganization }
+    var isFiltering: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || scope != .all }
+    var selectedFolder: LibraryFolder? {
+        guard case .folder(let id) = scope else { return nil }
+        return folders.first { $0.id == id }
+    }
+    func isFavorite(_ id: UUID) -> Bool { placements[id]?.isFavorite == true }
+    func folderID(for id: UUID) -> UUID? { placements[id]?.folderID }
+    func projectCount(in scope: LibraryScope) -> Int {
+        switch scope {
+        case .all: return allProjects.count
+        case .favorites: return allProjects.filter { isFavorite($0.id) }.count
+        case .folder(let id): return allProjects.filter { folderID(for: $0.id) == id }.count
+        case .trash: return trashed.count
+        }
+    }
     var projects: [ProjectSummary] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return allProjects.filter { project in
             let matches: Bool
-            switch filter {
+            switch scope {
             case .all: matches = true
-            case .video: matches = project.mediaKind == .video
-            case .audio: matches = project.mediaKind == .audio
-            case .missingMedia: matches = !project.available
+            case .favorites: matches = isFavorite(project.id)
+            case .folder(let id): matches = folderID(for: project.id) == id
+            case .trash: matches = false
             }
             return matches && (query.isEmpty || project.title.localizedStandardContains(query))
         }.sorted { a, b in
             switch sort {
-            case .recent: if a.updatedAt != b.updatedAt { return a.updatedAt > b.updatedAt }
-            case .oldest: if a.updatedAt != b.updatedAt { return a.updatedAt < b.updatedAt }
-            case .title:
+            case .dateCreated:
+                if let result = sortsBefore(a.createdAt, b.createdAt) { return result }
+            case .dateUpdated:
+                if let result = sortsBefore(a.updatedAt, b.updatedAt) { return result }
+            case .name:
                 let order = a.title.localizedStandardCompare(b.title)
-                if order != .orderedSame { return order == .orderedAscending }
+                if order != .orderedSame { return isSortAscending ? order == .orderedAscending : order == .orderedDescending }
+            case .duration:
+                if let result = durationsBefore(a.duration, b.duration) { return result }
             }
             return a.id.uuidString < b.id.uuidString
+        }
+    }
+    var visibleTrashed: [ProjectRepository.TrashedProject] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trashed.filter { query.isEmpty || $0.title.localizedStandardContains(query) }.sorted { a, b in
+            switch sort {
+            case .dateCreated:
+                if let result = sortsBefore(a.createdAt, b.createdAt) { return result }
+            case .dateUpdated:
+                if let result = sortsBefore(a.updatedAt, b.updatedAt) { return result }
+            case .name:
+                let order = a.title.localizedStandardCompare(b.title)
+                if order != .orderedSame { return isSortAscending ? order == .orderedAscending : order == .orderedDescending }
+            case .duration:
+                if let result = durationsBefore(a.duration, b.duration) { return result }
+            }
+            return a.id.uuidString < b.id.uuidString
+        }
+    }
+
+    /// Missing metadata sorts last in both directions; nil means a tied field.
+    private func sortsBefore<Value: Comparable>(_ a: Value?, _ b: Value?) -> Bool? {
+        switch (a, b) {
+        case let (a?, b?): return a == b ? nil : (isSortAscending ? a < b : a > b)
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return nil
+        }
+    }
+
+    private func durationsBefore(_ a: MediaTime?, _ b: MediaTime?) -> Bool? {
+        switch (a, b) {
+        case let (a?, b?):
+            let order = CMTimeCompare(a.cmTime, b.cmTime)
+            return order == 0 ? nil : (isSortAscending ? order < 0 : order > 0)
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return nil
         }
     }
     var libraryIssues: [LibraryIssue] = []
@@ -103,8 +170,13 @@ final class ProjectsModel {
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
     var search = ""
-    var sort: LibrarySort = .recent
-    var filter: LibraryFilter = .all
+    var sort = ProjectSortField(rawValue: UserDefaults.standard.string(forKey: "com.hoangbkit.inkribe.ios.library.sort") ?? "") ?? .dateUpdated {
+        didSet { UserDefaults.standard.set(sort.rawValue, forKey: "com.hoangbkit.inkribe.ios.library.sort") }
+    }
+    var isSortAscending = UserDefaults.standard.bool(forKey: "com.hoangbkit.inkribe.ios.library.sortAscending") {
+        didSet { UserDefaults.standard.set(isSortAscending, forKey: "com.hoangbkit.inkribe.ios.library.sortAscending") }
+    }
+    var scope: LibraryScope = .all
     var cacheGeneration = 0
     var isLoading = false
     var isImporting = false
@@ -179,9 +251,89 @@ final class ProjectsModel {
         } catch {
             if generation == libraryGeneration { libraryError = error.localizedDescription }
         }
+        await refreshOrganization()
     }
 
-    func clearLibraryFilters() { search = ""; filter = .all }
+    func clearLibraryFilters() { search = ""; scope = .all }
+
+    private func applyOrganization(_ value: LibraryOrganization) {
+        folders = value.folders.sorted {
+            let order = $0.name.localizedStandardCompare($1.name)
+            return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+        }
+        placements = Dictionary(uniqueKeysWithValues: value.projects.map { ($0.id, $0) })
+        if case .folder(let id) = scope, !folders.contains(where: { $0.id == id }) { scope = .all }
+        didLoadOrganization = true
+        organizationError = nil
+    }
+
+    func refreshOrganization() async {
+        guard !isUpdatingOrganization else { return }
+        organizationGeneration += 1
+        let generation = organizationGeneration
+        do {
+            let value = try await repository.libraryOrganization()
+            guard generation == organizationGeneration else { return }
+            applyOrganization(value)
+        } catch {
+            if generation == organizationGeneration { organizationError = error.localizedDescription }
+        }
+    }
+
+    private func updateOrganization(_ operation: () async throws -> LibraryOrganization) async -> Bool {
+        guard organizationReady else {
+            alertMessage = "Folders and favorites are unavailable. Your projects are kept in All. Retry loading the library."
+            return false
+        }
+        isUpdatingOrganization = true
+        organizationGeneration += 1
+        defer { isUpdatingOrganization = false }
+        do { applyOrganization(try await operation()); return true }
+        catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func createFolder(name: String) async -> Bool {
+        let id = UUID()
+        let saved = await updateOrganization { try await repository.createLibraryFolder(name: name, id: id) }
+        if saved { scope = .folder(id); search = "" }
+        return saved
+    }
+
+    func renameFolder(_ id: UUID, to name: String) async -> Bool {
+        await updateOrganization { try await repository.renameLibraryFolder(id, to: name) }
+    }
+
+    func deleteFolder(_ id: UUID) async {
+        _ = await updateOrganization { try await repository.deleteLibraryFolder(id) }
+    }
+
+    func moveProjects(_ ids: [UUID], to folderID: UUID?) async -> Bool {
+        guard !ids.contains(where: { mutatingProjectIDs.contains($0) }) else { return false }
+        return await updateOrganization { try await repository.moveLibraryProjects(ids, to: folderID) }
+    }
+
+    func toggleFavorite(_ id: UUID) async {
+        let favorite = !isFavorite(id)
+        guard !mutatingProjectIDs.contains(id) else { return }
+        _ = await updateOrganization { try await repository.setLibraryFavorite(id, isFavorite: favorite) }
+    }
+
+    func refreshTrash() async {
+        trashGeneration += 1
+        let generation = trashGeneration
+        isLoadingTrash = true
+        defer { if generation == trashGeneration { isLoadingTrash = false } }
+        do {
+            let value = try await repository.trashedProjects()
+            guard generation == trashGeneration else { return }
+            trashed = value; trashError = nil
+        } catch {
+            if generation == trashGeneration { trashError = error.localizedDescription }
+        }
+    }
 
     func prepareImport() {
         guard !isImporting, !isPreparingPhotos else { return }
@@ -197,14 +349,14 @@ final class ProjectsModel {
         let generation = storageGeneration
         do {
             let usage = try await repository.storageUsage()
-            let trash = try await repository.trashedProjects()
             let pending = try await repository.pendingStagingIDs()
             guard generation == storageGeneration else { return }
-            storage = usage; trashed = trash; pendingStaging = pending
+            storage = usage; pendingStaging = pending
             storageError = nil
         } catch {
             if generation == storageGeneration { storageError = error.localizedDescription }
         }
+        await refreshTrash()
     }
 
     func addFiles(_ urls: [URL], selectionID: UUID) {
@@ -419,6 +571,9 @@ final class ProjectsModel {
         do {
             guard !editors.hasPending(id) else { throw CaptionEditError.unsavedChanges }
             let copied = try await repository.duplicate(id)
+            if organizationReady, let folder = folderID(for: id) {
+                _ = await moveProjects([copied.id], to: folder)
+            }
             await refresh()
             await generateMissingThumbnails(for: [copied])
         } catch { alertMessage = error.localizedDescription }
@@ -444,12 +599,25 @@ final class ProjectsModel {
     }
 
     func restore(_ id: UUID) async {
+        guard mutatingProjectIDs.insert(id).inserted else { return }
+        defer { mutatingProjectIDs.remove(id) }
         do {
             try await repository.restoreFromTrash(id)
             cacheGeneration += 1
             await refresh()
         }
         catch { alertMessage = error.localizedDescription }
+    }
+
+    func permanentlyDelete(_ id: UUID) async {
+        guard mutatingProjectIDs.insert(id).inserted else { return }
+        defer { mutatingProjectIDs.remove(id) }
+        guard transcription.persistenceError == nil, !transcription.isActive(id), !editors.hasPending(id) else {
+            alertMessage = "Resolve this project's pending changes or transcription before deleting it permanently."
+            return
+        }
+        do { try await repository.permanentlyDeleteProject(id); await refresh() }
+        catch { alertMessage = error.localizedDescription; await refreshTrash() }
     }
 
     func purgeCache() async {
@@ -490,3 +658,5 @@ struct ProjectSaveItem: Identifiable {
     let title: String
     let detail: String
 }
+
+

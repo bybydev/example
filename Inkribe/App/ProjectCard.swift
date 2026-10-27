@@ -19,46 +19,68 @@ struct ProjectRow: View {
     let project: ProjectSummary
     let status: ProjectCardStatus
     let cacheGeneration: Int
+    var isFavorite = false
+    var isCompact = false
     @State private var thumbnail: UIImage?
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             if !typeSize.isAccessibilitySize { artwork }
-            VStack(alignment: .leading, spacing: 7) {
-                Text(project.title).font(.headline)
-                    .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
-                    .foregroundStyle(.primary)
-                Text("\(project.mediaKind == .audio ? "Audio" : "Video") · \(duration)")
-                    .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: isCompact ? 5 : 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(project.title).font(.headline)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                        .foregroundStyle(.primary)
+                    if isFavorite {
+                        Image(systemName: "star.fill").font(.caption).foregroundStyle(theme.accentColor)
+                            .accessibilityLabel("Favorite")
+                    }
+                }
+                HStack(spacing: 4) {
+                    Text("\(project.mediaKind == .audio ? "Audio" : "Video") · \(duration)")
+                    if isCompact {
+                        Text("·")
+                        updatedDate
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
                 Label(status.title, systemImage: status.icon)
                     .font(.caption).foregroundStyle(theme.accentColor)
                     .fixedSize(horizontal: false, vertical: true)
                 if status.isWorking, let progress = status.progress {
                     ProgressView(value: progress).accessibilityLabel("Transcription progress")
                 }
-                Text(project.updatedAt, format: .dateTime.month(.abbreviated).day())
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityLabel("Updated \(project.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                if !isCompact { updatedDate.font(.caption).foregroundStyle(.secondary) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 64 : 84, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 
+    private var updatedDate: some View {
+        Text(project.updatedAt, format: .dateTime.month(.abbreviated).day())
+            .accessibilityLabel("Updated \(project.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+    }
+
+    private var artworkSize: CGSize {
+        let side: CGFloat = isCompact ? 64 : 80
+        return CGSize(width: side, height: side)
+    }
+
     private var artwork: some View {
-        RoundedRectangle(cornerRadius: 14).fill(theme.accentColor.opacity(0.12))
-            .frame(width: 72, height: 90)
+        RoundedRectangle(cornerRadius: isCompact ? 10 : 14).fill(Color(uiColor: .secondarySystemFill))
+            .frame(width: artworkSize.width, height: artworkSize.height)
             .overlay {
                 if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFill()
-                        .frame(width: 72, height: 90).clipped()
+                    Image(uiImage: thumbnail).resizable().scaledToFit()
+                        .frame(width: artworkSize.width, height: artworkSize.height).clipped()
                 } else {
                     Image(systemName: project.mediaKind == .audio ? "waveform" : "film")
-                        .font(.title2).foregroundStyle(theme.accentColor)
+                        .font(isCompact ? .title3 : .title2).foregroundStyle(.secondary)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: isCompact ? 10 : 14))
             .accessibilityHidden(true)
             .task(id: "\(project.thumbnailURL?.path ?? "")-\(cacheGeneration)") {
                 thumbnail = nil
@@ -91,3 +113,5 @@ actor ProjectThumbnailData {
         return data
     }
 }
+
+

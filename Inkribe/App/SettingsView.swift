@@ -24,15 +24,11 @@ struct SettingsView: View {
             .listRowBackground(theme.surfaceColor)
             .listRowSeparatorTint(theme.borderColor)
 
-            usageSection
-                .listRowBackground(theme.surfaceColor)
-                .listRowSeparatorTint(theme.borderColor)
-
             Section("Appearance") {
                 ThemePickerView(
                     manager: themes,
                     title: nil,
-                    showsCountdown: false,
+                    showsCountdown: true,
                     onRequestUpgrade: { sheet = .themes }
                 )
                 .padding(.vertical, 6)
@@ -41,11 +37,6 @@ struct SettingsView: View {
             .listRowSeparatorTint(theme.borderColor)
 
             Section("Projects & Processing") {
-                NavigationLink {
-                    ProcessingQueueView()
-                } label: {
-                    Label("Queue", systemImage: "list.bullet.rectangle")
-                }
                 Button {
                     sheet = .models
                 } label: {
@@ -113,55 +104,12 @@ struct SettingsView: View {
             case .storage: StorageView()
             }
         }
-        .task { await model.transcription.refreshAllowance() }
-        .onChange(of: model.access.hasPro) { _, _ in
-            Task { await model.transcription.refreshAllowance() }
-        }
     }
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
         return "\(version) (\(build))"
-    }
-
-    private var usageSection: some View {
-        Section {
-            if model.access.hasPro {
-                LabeledContent("Captioning", value: "Unlimited")
-            } else if let usage = model.transcription.allowance {
-                Text(usage.summary)
-                ProgressView(
-                    value: Double(min(usage.used + usage.reserved, Commerce.weeklySeconds)),
-                    total: Double(Commerce.weeklySeconds)
-                )
-                .accessibilityLabel("Weekly caption allowance")
-                .accessibilityValue(usage.summary)
-                if usage.reserved > 0 {
-                    Text("\(usage.reserved)s reserved for queued work")
-                        .font(.caption)
-                }
-                Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if model.transcription.allowanceError == nil && model.transcription.persistenceError == nil {
-                ProgressView("Loading allowance…")
-            }
-            if let issue = model.transcription.persistenceError {
-                Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                Button("Retry processing storage") { model.transcription.retryStorage() }
-            }
-            if let error = model.transcription.allowanceError {
-                Text(error).foregroundStyle(.red)
-                Button("Retry allowance storage") {
-                    Task { await model.transcription.refreshAllowance() }
-                }
-            }
-        } header: {
-            Text("Usage")
-        } footer: {
-            Text("Only successful transcription uses your caption allowance. Editing and exporting existing captions do not use more time.")
-        }
     }
 
     #if DEBUG

@@ -553,6 +553,121 @@ actor ProjectRepository {
         return url
     }
 
+    // One atomically saved index; folder moves never move media or revise captions.
+    private func libraryOrganizationURL() throws -> URL {
+        let libraryURL = try directory("Library")
+        return try packageStore().file("organization-v1.json", in: libraryURL)
+    }
+
+    func libraryOrganization() throws -> LibraryOrganization {
+        let url = try libraryOrganizationURL()
+        guard files.fileExists(atPath: url.path) else { return LibraryOrganization() }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size <= 8 * 1024 * 1024 else {
+            throw ProjectStoreError.invalidDocument("Library organization could not be read. The saved file has been kept.")
+        }
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        let data = try input.read(upToCount: 8 * 1024 * 1024 + 1) ?? Data()
+        guard data.count <= 8 * 1024 * 1024 else {
+            throw ProjectStoreError.invalidDocument("Library organization is too large to read safely.")
+        }
+        let value = try decoder.decode(LibraryOrganization.self, from: data)
+        try validateOrganization(value)
+        return value
+    }
+
+    private func validateOrganization(_ value: LibraryOrganization) throws {
+        let folderIDs = Set(value.folders.map(\.id))
+        guard value.version == 1, value.folders.count <= 1_000, value.projects.count <= 100_000,
+              folderIDs.count == value.folders.count,
+              Set(value.projects.map(\.id)).count == value.projects.count,
+              value.folders.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 256 }),
+              value.projects.allSatisfy({ $0.folderID.map { folderIDs.contains($0) } ?? true }) else {
+            throw ProjectStoreError.invalidDocument("Library organization is invalid. The saved file has been kept.")
+        }
+    }
+
+    private func saveOrganization(_ value: LibraryOrganization) throws -> LibraryOrganization {
+        try validateOrganization(value)
+        let data = try encoder.encode(value)
+        guard data.count <= 8 * 1024 * 1024 else {
+            throw ProjectStoreError.invalidDocument("Library organization is too large to save safely.")
+        }
+        try data.write(to: libraryOrganizationURL(), options: .atomic)
+        return value
+    }
+
+    private func folderName(_ raw: String, excluding id: UUID?, in value: LibraryOrganization) throws -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 256 else {
+            throw ProjectStoreError.invalidDocument("Enter a folder name up to 256 characters.")
+        }
+        guard !value.folders.contains(where: { $0.id != id && $0.name.localizedStandardCompare(name) == .orderedSame }) else {
+            throw ProjectStoreError.invalidDocument("A folder with this name already exists.")
+        }
+        return name
+    }
+
+    func createLibraryFolder(name: String, id: UUID) throws -> LibraryOrganization {
+        var value = try libraryOrganization()
+        guard !value.folders.contains(where: { $0.id == id }) else { return value }
+        value.folders.append(LibraryFolder(id: id, name: try folderName(name, excluding: nil, in: value)))
+        return try saveOrganization(value)
+    }
+
+    func renameLibraryFolder(_ id: UUID, to name: String) throws -> LibraryOrganization {
+        var value = try libraryOrganization()
+        guard let index = value.folders.firstIndex(where: { $0.id == id }) else {
+            throw ProjectStoreError.invalidDocument("This folder is no longer available.")
+        }
+        value.folders[index].name = try folderName(name, excluding: id, in: value)
+        return try saveOrganization(value)
+    }
+
+    func deleteLibraryFolder(_ id: UUID) throws -> LibraryOrganization {
+        var value = try libraryOrganization()
+        value.folders.removeAll { $0.id == id }
+        // Also clear membership for trashed projects so Restore cannot revive a deleted folder.
+        for index in value.projects.indices where value.projects[index].folderID == id {
+            value.projects[index].folderID = nil
+        }
+        return try saveOrganization(value)
+    }
+
+    func moveLibraryProjects(_ ids: [UUID], to folderID: UUID?) throws -> LibraryOrganization {
+        var value = try libraryOrganization()
+        guard folderID == nil || value.folders.contains(where: { $0.id == folderID }) else {
+            throw ProjectStoreError.invalidDocument("This folder is no longer available.")
+        }
+        let store = try packageStore()
+        for id in Set(ids) {
+            guard try store.contains(id, in: .projects) else {
+                throw ProjectStoreError.invalidDocument("This project is no longer in the library.")
+            }
+            if let index = value.projects.firstIndex(where: { $0.id == id }) {
+                value.projects[index].folderID = folderID
+            } else {
+                value.projects.append(LibraryProjectPlacement(id: id, folderID: folderID))
+            }
+        }
+        return try saveOrganization(value)
+    }
+
+    func setLibraryFavorite(_ id: UUID, isFavorite: Bool) throws -> LibraryOrganization {
+        var value = try libraryOrganization()
+        guard try packageStore().contains(id, in: .projects) else {
+            throw ProjectStoreError.invalidDocument("This project is no longer in the library.")
+        }
+        if let index = value.projects.firstIndex(where: { $0.id == id }) {
+            value.projects[index].isFavorite = isFavorite
+        } else {
+            value.projects.append(LibraryProjectPlacement(id: id, isFavorite: isFavorite))
+        }
+        return try saveOrganization(value)
+    }
+
     func list(titleQuery: String = "", sort: LibrarySort = .recent,
               filter: LibraryFilter = .all) throws -> LibrarySnapshot {
         let identities = try packageStore().identities()
@@ -585,7 +700,7 @@ actor ProjectRepository {
                     captionState = document.assets.contains { $0.metadata.audioTrackCount > 0 } ? .needsTranscription : .noAudio
                 }
                 projects.append(ProjectSummary(
-                    id: id, title: document.title, updatedAt: document.updatedAt,
+                    id: id, title: document.title, createdAt: document.createdAt, updatedAt: document.updatedAt,
                     duration: duration,
                     mediaKind: document.assets.contains { $0.kind == .video } ? .video : .audio,
                     available: available,
@@ -675,6 +790,11 @@ actor ProjectRepository {
         try packageStore().move(id, from: .trash, to: .projects)
     }
 
+    func permanentlyDeleteProject(_ id: UUID) throws {
+        try settlePublishedSpeechAllowance()
+        try packageStore().removeFromTrash(id)
+    }
+
     /// Recovery shares the package publication path and excludes live imports.
     func recoverCommittedStaging() throws -> [UUID] {
         try packageStore().recoverCommittedStaging(excluding: activeStaging)
@@ -701,6 +821,9 @@ actor ProjectRepository {
         let id: UUID
         let title: String
         let issue: String?
+        let updatedAt: Date?
+        let createdAt: Date?
+        let duration: MediaTime?
     }
 
     func trashedProjects() throws -> [TrashedProject] {
@@ -708,12 +831,13 @@ actor ProjectRepository {
         return try store.identities(in: .trash).map { id in
             do {
                 let document = try store.load(id, in: .trash)
-                return TrashedProject(id: id, title: document.title, issue: nil)
+                return TrashedProject(id: id, title: document.title, issue: nil, updatedAt: document.updatedAt,
+                                      createdAt: document.createdAt, duration: document.outputDuration)
             } catch {
                 // Corrupt/future packages stay visible instead of disappearing
                 // from storage management or being silently reset/restored.
                 return TrashedProject(id: id, title: "Project " + String(id.uuidString.prefix(8)),
-                                      issue: error.localizedDescription)
+                                      issue: error.localizedDescription, updatedAt: nil, createdAt: nil, duration: nil)
             }
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
@@ -1029,3 +1153,5 @@ actor ProjectRepository {
     }
 
 }
+
+

@@ -1,5 +1,22 @@
 # Inkribe Working Rules
 
+## Current iOS library organization pass
+
+2026-10-27. The user approved implementation in existing PR #46,
+`fix/ios-improvements` → develop. Replace the home media-type strip with All,
+Favorites, custom folders and Trash, using Spokio iOS's outlined icon/label/count
+pills. Remove the Projects header count; keep Sort and Options close to the label.
+The floating + offers New Project and New Folder. Add folder create/rename/delete,
+project membership/favorites, and Trash restore/confirmed permanent deletion.
+Deleting a folder preserves its active and trashed projects. New projects created
+within a folder join it. These organization features are Free.
+Keep the earlier hero, subtitle and crown/settings toolbar. Paper is first,
+default and the only Free iOS theme; other themes require Pro. Preserve captions,
+revision/job/allowance contracts, frozen exports and Mac behavior. Library metadata
+belongs to ProjectRepository independently of project document revisions.
+Source review only; no builds, typechecks, tests, generation, CI or UI execution.
+Keep the PR open without auto-merge. See handoffs/LIBRARY_ORGANIZATION under docs/ios.
+
 ## Current shared speech engine and active model
 
 2026-10-26. In PR #44 the user explicitly supersedes per-job/original-model
@@ -174,3 +191,4 @@ The user requires the iOS app source folder to be Inkribe/, matching its target,
 The user requires iPhone-only support: TARGETED_DEVICE_FAMILY is 1 for both iOS configurations, inherited by the bundled-model spec. Do not re-enable iPad support.
 
 Both app targets must use the same existing InkribeMac/AppIcon.icon resource, following Spokio. iOS selects AppIcon and references that file directly; do not duplicate or redesign the artwork.
+

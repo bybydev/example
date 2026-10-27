@@ -241,6 +241,7 @@ enum OwnedPath {
 struct ProjectSummary: Identifiable, Sendable {
     let id: UUID
     let title: String
+    let createdAt: Date
     let updatedAt: Date
     let duration: MediaTime
     let mediaKind: MediaKind
@@ -259,8 +260,44 @@ enum LibrarySort: String, Hashable, Sendable {
     case recent, oldest, title
 }
 
+/// Home display order is independent of the repository's query defaults.
+enum ProjectSortField: String, CaseIterable, Identifiable, Sendable {
+    case dateCreated, dateUpdated, name, duration
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .dateCreated: "Date Created"
+        case .dateUpdated: "Date Updated"
+        case .name: "Name"
+        case .duration: "Duration"
+        }
+    }
+}
+
 enum LibraryFilter: String, Hashable, Sendable {
     case all, video, audio, missingMedia
+}
+
+enum LibraryScope: Hashable, Sendable {
+    case all, favorites, folder(UUID), trash
+}
+
+struct LibraryFolder: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    var name: String
+}
+
+struct LibraryProjectPlacement: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    var folderID: UUID? = nil
+    var isFavorite = false
+}
+
+/// Library organization is independent of caption revisions and media packages.
+struct LibraryOrganization: Codable, Sendable {
+    var version = 1
+    var folders: [LibraryFolder] = []
+    var projects: [LibraryProjectPlacement] = []
 }
 
 struct LibraryIssue: Identifiable, Sendable {
@@ -272,4 +309,6 @@ struct LibrarySnapshot: Sendable {
     let projects: [ProjectSummary]
     let issues: [LibraryIssue]
 }
+
+
 

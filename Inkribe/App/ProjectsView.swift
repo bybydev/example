@@ -13,6 +13,7 @@ struct ProjectsView: View {
     @State private var path: [ProjectsRoute] = []
     @State private var importedProjectIDs: [UUID] = []
     @State private var importPresented = false
+    @State private var importFolderID: UUID?
     @State private var importNoticeCount = 0
     @State private var renameTarget: ProjectSummary?
     @State private var renamedTitle = ""
@@ -20,6 +21,8 @@ struct ProjectsView: View {
     @State private var trashTarget: ProjectSummary?
     @State private var showingTrash = false
     @State private var searchPresented = false
+    @State private var folderToDelete: LibraryFolder?
+    @State private var projectToDelete: ProjectRepository.TrashedProject?
     private var searching: Bool { searchPresented || !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
@@ -29,7 +32,9 @@ struct ProjectsView: View {
                 case .newProject: ImportView(onImported: { importedProjectIDs = $0 })
                 case .paywall: ProPaywall()
                 case .celebration: ProCelebration()
+                case .captionUsage: ProUpsell(feature: .captioning, isUsageOverview: true)
                 case .storage: StorageView()
+                case .folder(let folder): LibraryFolderEditor(folder: folder, onSaved: { searchPresented = false })
                 }
             }
     }
@@ -73,7 +78,29 @@ struct ProjectsView: View {
             } message: { _ in Text("Enter a name up to 256 characters.") }
             .confirmationDialog("Move project to Trash?", isPresented: $showingTrash, presenting: trashTarget) { project in
                 Button("Move to Trash", role: .destructive) { Task { await model.trash(project.id) } }
-            } message: { project in Text("\(project.title) can be restored from Storage until you empty Trash.") }
+            } message: { project in Text("\(project.title) can be restored from the Trash pill or Storage.") }
+            .confirmationDialog("Delete folder?", isPresented: Binding(
+                get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } }
+            ), presenting: folderToDelete) { folder in
+                Button("Delete Folder", role: .destructive) {
+                    folderToDelete = nil
+                    Task { await model.deleteFolder(folder.id) }
+                }
+                Button("Cancel", role: .cancel) { folderToDelete = nil }
+            } message: { folder in
+                Text("Delete “\(folder.name)”? Its projects stay in All. Projects in Trash are kept too.")
+            }
+            .confirmationDialog("Delete project forever?", isPresented: Binding(
+                get: { projectToDelete != nil }, set: { if !$0 { projectToDelete = nil } }
+            ), presenting: projectToDelete) { project in
+                Button("Delete Forever", role: .destructive) {
+                    projectToDelete = nil
+                    Task { await model.permanentlyDelete(project.id) }
+                }
+                Button("Cancel", role: .cancel) { projectToDelete = nil }
+            } message: { project in
+                Text("“\(project.title)” and its original media, captions and edits will be permanently removed. Completed export files are kept.")
+            }
             .alert("Inkribe", isPresented: Binding(
                 get: { canPresentLibraryError && model.alertMessage != nil },
                 set: { if !$0 && canPresentLibraryError { model.alertMessage = nil } }
@@ -86,10 +113,11 @@ struct ProjectsView: View {
         @Bindable var binding = model
         return libraryScroll
             .navigationTitle("Inkribe")
+            .navigationSubtitle("Your caption studio")
             .themedSurface()
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $binding.search, isPresented: $searchPresented,
-                        placement: .navigationBarDrawer(displayMode: .always), prompt: "Search projects")
+                        placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
             .toolbar { libraryToolbar }
             .navigationDestination(for: ProjectsRoute.self) { route in
                 switch route {
@@ -103,16 +131,14 @@ struct ProjectsView: View {
 
     private var libraryScroll: some View {
         let projects = model.projects
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+        return List {
+            VStack(alignment: .leading, spacing: 20) {
                 if !searching {
-                    ProjectCreationHero(isEmpty: model.allProjects.isEmpty && model.libraryError == nil,
-                        isBusy: model.isImporting || model.isPreparingPhotos, create: beginImport)
+                    libraryHero
                     importSummary
                     saveActivity
-                    queueActivity
                     if !model.transcription.modelAvailable && !model.transcription.models.isLoading {
-                        NavigationLink(value: ProjectsRoute.settings) {
+                        Button { path.append(.settings) } label: {
                             StudioActivityLabel(title: "Transcription setup needed",
                                 detail: "Open Settings to prepare on-device transcription.",
                                 icon: "gearshape")
@@ -120,27 +146,211 @@ struct ProjectsView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                libraryHeader(count: projects.count)
-                if !searching { filterBar }
-                else if model.filter != .all {
-                    Button("Clear project filters", systemImage: "line.3.horizontal.decrease.circle") { model.filter = .all }
+                libraryHeader
+                if !searching { folderStrip }
+                else if model.scope != .all {
+                    Button("Search all projects", systemImage: "rectangle.stack") { model.scope = .all }
                         .font(.subheadline).frame(minHeight: 44)
                 }
-                if projects.isEmpty { emptyLibrary }
-                else { projectList(projects) }
-                libraryIssues
             }
-            .padding(.horizontal, 16)
             .padding(.top, 12)
-            .padding(.bottom, 28)
+            .padding(.bottom, 8)
+            .buttonStyle(.borderless)
+            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
+            if model.scope == .trash {
+                if model.visibleTrashed.isEmpty { emptyLibrary.libraryChromeRow() }
+                else { trashList }
+            } else if projects.isEmpty { emptyLibrary.libraryChromeRow() }
+            else { projectList(projects) }
+            libraryIssues.libraryChromeRow()
+
+            // Keep the final row reachable above the floating Add button.
+            Color.clear.frame(height: 88)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .accessibilityHidden(true)
         }
+        .listStyle(.plain)
         .scrollDismissesKeyboard(.interactively)
+        .overlay(alignment: .bottomTrailing) {
+            if path.isEmpty {
+                floatingNewProjectButton
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 12)
+            }
+        }
+    }
+
+    private var floatingNewProjectButton: some View {
+        Menu {
+            Button("New Project", systemImage: "plus.rectangle", action: beginImport)
+                .disabled(model.isImporting || model.isPreparingPhotos)
+            Button("New Folder", systemImage: "folder.badge.plus") { present(.folder(nil)) }
+                .disabled(!model.organizationReady)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(theme.appearance.preferredColorScheme == .dark ? theme.backgroundColor : Color.white)
+                .frame(width: 56, height: 56)
+                .background(theme.accentColor, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
+        .disabled(model.isImporting || model.isPreparingPhotos)
+        .accessibilityLabel("Add")
+        .accessibilityHint("Create a project or folder")
+        .accessibilityIdentifier("home.add")
+    }
+
+    /// Browsing filters and sort order never change the featured project.
+    private var recentProject: ProjectSummary? {
+        model.allProjects.max { a, b in
+            if a.updatedAt != b.updatedAt { return a.updatedAt < b.updatedAt }
+            return a.id.uuidString > b.id.uuidString
+        }
+    }
+
+    private var libraryHero: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if let project = recentProject {
+                    recentProjectSection(project)
+                } else if model.isLoading {
+                    ProgressView("Loading projects…")
+                        .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+                        .padding(20)
+                } else {
+                    ProjectCreationHero(isBusy: model.isImporting || model.isPreparingPhotos, create: beginImport)
+                        .padding(20)
+                }
+            }
+
+            if !model.access.hasPro {
+                heroDivider
+                captionUsage
+            }
+
+            heroDivider
+            queueSummary
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(theme.borderColor, lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
+        .accessibilityIdentifier("home.hero")
+    }
+
+    private var heroDivider: some View {
+        Divider()
+            .overlay(theme.borderColor)
+            .padding(.horizontal, 20)
+            .accessibilityHidden(true)
+    }
+
+    private func recentProjectSection(_ project: ProjectSummary) -> some View {
+        Button { path.append(.project(project.id)) } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Recent Project", systemImage: "clock.arrow.circlepath")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    ProjectRow(project: project, status: projectStatus(project), cacheGeneration: model.cacheGeneration,
+                               isFavorite: model.isFavorite(project.id))
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(20)
+            .contentShape(Rectangle())
+        }
+        // Explicit non-row button style confines activation to this section.
+        .buttonStyle(.borderless)
+        .disabled(model.mutatingProjectIDs.contains(project.id))
+        .accessibilityHint("Opens the most recently updated project")
+        .accessibilityIdentifier("home.recentProject")
+        .task(id: "\(project.id)-\(model.cacheGeneration)") {
+            await prepareThumbnail(for: project)
+        }
+    }
+
+    private var captionUsage: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let speech = model.transcription
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    guard !model.access.hasPro else { return }
+                    present(.captionUsage)
+                } label: {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Captioning This Week", systemImage: "waveform")
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            if speech.allowanceError != nil || speech.persistenceError != nil {
+                                Text("Usage is unavailable. Retry to load your weekly allowance.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if let usage = speech.allowance {
+                                Text(usage.summary).font(.caption).foregroundStyle(.secondary)
+                                ProgressView(value: min(1, max(0, Double(usage.used + usage.reserved) / Double(Commerce.weeklySeconds))))
+                                    .tint(theme.accentColor)
+                                    .accessibilityLabel("Weekly captioning allowance used or reserved")
+                                if usage.reserved > 0 {
+                                    Text("\(usage.reserved / 60)m \(usage.reserved % 60)s reserved for queued work")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            } else {
+                                ProgressView("Loading usage…").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text("Unlock unlimited captioning")
+                                .font(.caption.weight(.medium)).foregroundStyle(theme.accentColor)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .multilineTextAlignment(.leading)
+                    .padding(20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Shows upgrade options for unlimited captioning")
+
+                if speech.allowanceError != nil || speech.persistenceError != nil {
+                    // A separate sibling button; never nest Retry inside the upsell button.
+                    Button("Retry usage") {
+                        if speech.persistenceError != nil { speech.retryStorage() }
+                        else { Task { await speech.refreshAllowance() } }
+                    }
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Refresh an open home screen when the weekly allowance rolls over.
+            .task(id: CaptionAllowanceLedger.week(containing: context.date)) {
+                await speech.refreshAllowance()
+            }
+        }
+        .accessibilityIdentifier("home.captionUsage")
     }
 
     @ViewBuilder private var importSummary: some View {
         if importNoticeCount > 0 {
             HStack {
-                Label("\(importNoticeCount) projects added", systemImage: "checkmark.circle.fill").font(.subheadline)
+                Label("\(importNoticeCount) project\(importNoticeCount == 1 ? "" : "s") added", systemImage: "checkmark.circle.fill").font(.subheadline)
                 Spacer(minLength: 8)
                 Button("Dismiss import notice", systemImage: "xmark") { importNoticeCount = 0 }
                     .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
@@ -166,104 +376,231 @@ struct ProjectsView: View {
                 Text("Your latest changes are still open in Inkribe. Open the project to try saving again.")
                     .font(.footnote).foregroundStyle(.secondary)
                 ForEach(pending) { item in
-                    NavigationLink(value: ProjectsRoute.project(item.id)) {
+                    Button { path.append(.project(item.id)) } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title).font(.subheadline.weight(.semibold))
                             Text(item.detail).font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .studioCard()
         }
     }
 
-    @ViewBuilder private var queueActivity: some View {
+    private var queueSummary: some View {
         let processing = model.processing
+        let entries = processing.entries
+        let processingCount = entries.filter(\.processing).count
+        let pendingCount = entries.filter(\.pending).count
         let completed = model.exports.artifacts.values.filter { $0.outputURL != nil }.count
-        let failures = processing.entries.filter { $0.record.status == .failed || $0.record.status == .unrecoverable }.count
-        let storageProblem = model.transcription.persistenceError != nil || model.exports.persistenceError != nil || processing.lifecycle.error != nil
-        if processing.activeCount > 0 || completed > 0 || failures > 0 || storageProblem || processing.lifecycle.userPaused {
-            NavigationLink(value: ProjectsRoute.queue) {
-                StudioActivityLabel(title: storageProblem ? "Queue needs attention" : processing.lifecycle.userPaused ? "Queue paused by you" : "Your processing queue",
-                    detail: "\(processing.processingCount) processing · \(processing.pendingCount) pending · \(completed) files ready" + (failures > 0 ? " · \(failures) need retry" : ""),
-                    icon: storageProblem ? "exclamationmark.triangle" : processing.lifecycle.userPaused ? "pause.circle" : "list.bullet.rectangle")
+        let failures = entries.filter { $0.record.status == .failed || $0.record.status == .unrecoverable }.count
+        let storageProblem = model.transcription.persistenceError != nil || model.exports.persistenceError != nil
+            || model.exports.inventoryError != nil || processing.lifecycle.error != nil
+        let paused = processing.lifecycle.userPaused || (!processing.lifecycle.foreground && processing.activeCount > 0)
+        let needsAttention = storageProblem || failures > 0
+        let title = needsAttention ? "Queue needs attention" : paused ? "Queue paused" : "Processing Queue"
+        let detail = "\(processingCount) processing · \(pendingCount) waiting · \(completed) files ready"
+            + (failures > 0 ? " · \(failures) need retry" : "")
+
+        return Button { path.append(.queue) } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: needsAttention ? "exclamationmark.triangle" : paused ? "pause.circle" : "list.bullet.rectangle")
+                    .font(.headline).foregroundStyle(theme.accentColor).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
-            .buttonStyle(.plain)
+            .frame(minHeight: 44, alignment: .center)
+            .padding(20)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens processing jobs and completed files")
+        .accessibilityIdentifier("home.queue")
     }
 
-    private func libraryHeader(count: Int) -> some View {
+    private var libraryHeader: some View {
         @Bindable var binding = model
-        return HStack(alignment: .firstTextBaseline) {
-            Text(searching ? "Results" : "Projects").font(.title2.weight(.bold))
-            Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+        return HStack(spacing: 4) {
+            Text(searching ? "Results" : model.scope == .trash ? "Trash" : "Projects")
+                .font(.title2.weight(.bold)).fixedSize(horizontal: false, vertical: true)
             Menu {
-                Picker("Sort projects", selection: $binding.sort) {
-                    Text("Recently updated").tag(LibrarySort.recent)
-                    Text("Oldest updated").tag(LibrarySort.oldest)
-                    Text("Title").tag(LibrarySort.title)
+                Picker("Sort By", selection: $binding.sort) {
+                    ForEach(ProjectSortField.allCases) { field in
+                        Text(field.title).tag(field)
+                    }
                 }
-            } label: { Label("Sort", systemImage: "arrow.up.arrow.down").font(.subheadline).frame(minHeight: 44) }
+                Picker("Order", selection: $binding.isSortAscending) {
+                    Text("Ascending").tag(true)
+                    Text("Descending").tag(false)
+                }
+            } label: { Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44) }
+            .accessibilityLabel("Sort projects")
+            Menu {
+                if let folder = model.selectedFolder {
+                    Button("Rename Folder", systemImage: "pencil") { present(.folder(folder)) }
+                        .disabled(!model.organizationReady)
+                    Button("Delete Folder", systemImage: "trash", role: .destructive) { folderToDelete = folder }
+                        .disabled(!model.organizationReady)
+                    Divider()
+                }
+                Button("Manage Storage", systemImage: "internaldrive") { present(.storage) }
+            } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+            .accessibilityLabel("Project options")
+            Spacer(minLength: 0)
         }
     }
 
     @ViewBuilder private var emptyLibrary: some View {
-        if model.isLoading && model.allProjects.isEmpty {
+        if model.scope == .trash && model.isLoadingTrash {
+            ProgressView("Loading Trash…").frame(maxWidth: .infinity, minHeight: 120)
+        } else if model.isLoading && model.allProjects.isEmpty && model.scope != .trash {
             ProgressView("Loading projects…").frame(maxWidth: .infinity, minHeight: 120)
-        } else if model.libraryError != nil {
+        } else if model.scope == .trash && model.trashError != nil {
+            Text("Trash could not be refreshed. Retry below; no projects have been removed.")
+                .font(.subheadline).foregroundStyle(.secondary).studioCard()
+        } else if model.scope != .trash && model.libraryError != nil {
             Text("Your library could not be refreshed. Retry below; saved projects have not been removed.")
                 .font(.subheadline).foregroundStyle(.secondary).studioCard()
-        } else if !model.isFiltering && model.libraryIssues.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("A place for every project", systemImage: "folder").font(.headline)
-                Text("Your video, captions and edits stay together. Choose New Project above to get started.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            .studioCard()
         } else {
             ContentUnavailableView {
-                Label(model.isFiltering ? "No matching projects" : "Projects need attention", systemImage: "folder.badge.questionmark")
+                Label(emptyTitle, systemImage: model.scope == .trash ? "trash" : "folder")
             } description: {
-                Text(model.isFiltering ? "Try another title or clear your filters." : "Review the issues below or refresh the library.")
-            } actions: {
-                if model.isFiltering {
-                    Button("Clear search and filters") { model.clearLibraryFilters(); searchPresented = false }
-                } else { Button("Refresh") { Task { await model.refreshLibrary() } } }
+                Text(emptyDescription)
             }
+        }
+    }
+
+    private var emptyTitle: String {
+        if searching { return "No matching projects" }
+        switch model.scope {
+        case .all: return "No projects yet"
+        case .favorites: return "No favorites yet"
+        case .folder: return "Folder is empty"
+        case .trash: return "Trash is empty"
+        }
+    }
+
+    private var emptyDescription: String {
+        if searching { return "Try another title or search All projects." }
+        switch model.scope {
+        case .all: return "Use + to create a project from video or audio."
+        case .favorites: return "Add a project to Favorites from its actions menu."
+        case .folder: return "Move projects here from their actions menu, or use + to create one in this folder."
+        case .trash: return "Projects moved to Trash stay here until you restore or permanently delete them."
         }
     }
 
     private func projectList(_ projects: [ProjectSummary]) -> some View {
-        LazyVStack(spacing: 12) {
-            ForEach(projects) { project in
-                HStack(alignment: .top, spacing: 4) {
-                    NavigationLink(value: ProjectsRoute.project(project.id)) {
-                        ProjectRow(project: project, status: projectStatus(project), cacheGeneration: model.cacheGeneration)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+        ForEach(projects) { project in
+            NavigationLink(value: ProjectsRoute.project(project.id)) {
+                ProjectRow(project: project, status: projectStatus(project), cacheGeneration: model.cacheGeneration,
+                           isFavorite: model.isFavorite(project.id), isCompact: true)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .disabled(model.mutatingProjectIDs.contains(project.id))
+            .contextMenu { projectActions(project) }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button("Move to Trash", systemImage: "trash", role: .destructive) {
+                    trashTarget = project; showingTrash = true
+                }
+                .disabled(!canTrash(project))
+                Button("Rename", systemImage: "pencil") { beginRename(project) }
+                    .tint(theme.accentColor)
                     .disabled(model.mutatingProjectIDs.contains(project.id))
-                    Menu { projectActions(project) } label: {
-                        Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
-                    }
-                    .accessibilityLabel("Actions for " + project.title)
-                }
-                .studioCard()
-                .contextMenu { projectActions(project) }
-                .task(id: "\(project.id)-\(model.cacheGeneration)") {
-                    guard project.thumbnailURL == nil, project.mediaKind == .video, project.available,
-                          attemptedThumbnails.insert(project.id).inserted else { return }
-                    await model.regenerateThumbnail(project.id)
-                }
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                favoriteAction(project).tint(.orange)
+            }
+            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparatorTint(theme.borderColor)
+            .task(id: "\(project.id)-\(model.cacheGeneration)") {
+                await prepareThumbnail(for: project)
             }
         }
     }
 
+    private func prepareThumbnail(for project: ProjectSummary) async {
+        guard project.thumbnailURL == nil, project.mediaKind == .video, project.available,
+              attemptedThumbnails.insert(project.id).inserted else { return }
+        await model.regenerateThumbnail(project.id)
+    }
+
+    private var trashList: some View {
+        ForEach(model.visibleTrashed) { project in
+            VStack(alignment: .leading, spacing: 12) {
+                Text(project.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                if let issue = project.issue {
+                    Text(issue).font(.caption).foregroundStyle(.secondary)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack { trashActions(project) }
+                    VStack(alignment: .leading) { trashActions(project) }
+                }
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .contextMenu { trashActions(project) }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                restoreAction(project).tint(theme.accentColor)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                permanentlyDeleteAction(project)
+            }
+            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparatorTint(theme.borderColor)
+        }
+    }
+
+    @ViewBuilder private func trashActions(_ project: ProjectRepository.TrashedProject) -> some View {
+        restoreAction(project)
+        permanentlyDeleteAction(project)
+    }
+
+    private func restoreAction(_ project: ProjectRepository.TrashedProject) -> some View {
+        Button("Restore", systemImage: "arrow.uturn.backward") { Task { await model.restore(project.id) } }
+            .disabled(project.issue != nil || model.mutatingProjectIDs.contains(project.id))
+    }
+
+    private func permanentlyDeleteAction(_ project: ProjectRepository.TrashedProject) -> some View {
+        Button("Delete Forever", systemImage: "trash", role: .destructive) { projectToDelete = project }
+            .disabled(model.mutatingProjectIDs.contains(project.id) || model.transcription.persistenceError != nil
+                      || model.transcription.isActive(project.id) || model.editors.hasPending(project.id))
+    }
+
     @ViewBuilder private var libraryIssues: some View {
-        if let error = model.libraryError {
+        if let error = model.organizationError {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Folders and favorites need attention", systemImage: "exclamationmark.triangle").font(.headline)
+                Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                Button("Retry folders and favorites") { Task { await model.refreshOrganization() } }
+            }
+            .studioCard()
+        }
+        if let error = model.trashError {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Trash unavailable", systemImage: "exclamationmark.triangle").font(.headline)
+                Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                Button("Retry Trash") { Task { await model.refreshTrash() } }
+            }
+            .studioCard()
+        }
+        if model.scope != .trash, let error = model.libraryError {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Library unavailable", systemImage: "exclamationmark.triangle").font(.headline)
                 Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
@@ -288,47 +625,43 @@ struct ProjectsView: View {
         }
     }
 
-    private var filterBar: some View {
+    private var folderStrip: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                filterButton("All", .all)
-                filterButton("Video", .video)
-                filterButton("Audio", .audio)
-                filterButton("Missing media", .missingMedia)
+            HStack(spacing: 10) {
+                scopePill("All", icon: "rectangle.stack.fill", scope: .all)
+                scopePill("Favorites", icon: "star.fill", scope: .favorites)
+                    .disabled(!model.organizationReady)
+                ForEach(model.folders) { folder in
+                    scopePill(folder.name, icon: "folder.fill", scope: .folder(folder.id))
+                        .disabled(!model.organizationReady)
+                }
+                scopePill("Trash", icon: "trash", scope: .trash)
             }
+            .padding(.vertical, 2)
         }
         .scrollIndicators(.hidden)
-        .accessibilityLabel("Project filters")
+        .accessibilityLabel("Project folders")
     }
-    private func filterButton(_ title: String, _ filter: LibraryFilter) -> some View {
-        Button { model.filter = filter } label: {
-            Text(title).font(.subheadline.weight(model.filter == filter ? .semibold : .regular))
-                .padding(.horizontal, 14).frame(minHeight: 44)
-                .background(model.filter == filter ? theme.accentColor.opacity(0.18) : theme.surfaceColor, in: Capsule())
+    private func scopePill(_ title: String, icon: String, scope: LibraryScope) -> some View {
+        Button { model.scope = scope } label: {
+            LibraryScopePill(title: title, systemImage: icon, count: model.projectCount(in: scope),
+                             isSelected: model.scope == scope)
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(model.filter == filter ? .isSelected : [])
+        .accessibilityAddTraits(model.scope == scope ? .isSelected : [])
     }
 
     @ToolbarContentBuilder private var libraryToolbar: some ToolbarContent {
         if path.isEmpty {
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(value: ProjectsRoute.settings) { Label("Settings", systemImage: "gearshape") }
-                    .accessibilityIdentifier("toolbar.settings")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink(value: ProjectsRoute.queue) { Label("Queue", systemImage: "list.bullet.rectangle") }
-                    .accessibilityIdentifier("toolbar.queue")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: presentProStatus) {
                     Label("Inkribe Pro", systemImage: model.access.hasPro ? "crown.fill" : "crown")
                 }
+                .labelStyle(.iconOnly)
                 .accessibilityIdentifier("toolbar.pro")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New Project", systemImage: "plus", action: beginImport)
-                    .disabled(model.isImporting || model.isPreparingPhotos)
+                NavigationLink(value: ProjectsRoute.settings) { Label("Settings", systemImage: "gearshape") }
+                    .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("toolbar.settings")
             }
         }
     }
@@ -336,19 +669,50 @@ struct ProjectsView: View {
     @ViewBuilder private func projectActions(_ project: ProjectSummary) -> some View {
         let busy = model.mutatingProjectIDs.contains(project.id)
         let pending = model.editors.hasPending(project.id)
-        Button("Rename", systemImage: "pencil") {
-            if pending || !project.available || model.transcription.isActive(project.id) {
-                // Rename through the existing editor when it has unsaved changes.
-                path.append(.renameProject(project.id))
-            } else {
-                renameTarget = project; renamedTitle = project.title; showingRename = true
+        favoriteAction(project)
+        Menu {
+            Button {
+                Task { _ = await model.moveProjects([project.id], to: nil) }
+            } label: {
+                Label("None", systemImage: model.folderID(for: project.id) == nil ? "checkmark" : "folder")
             }
-        }
-        .disabled(busy)
+            ForEach(model.folders) { folder in
+                Button {
+                    Task { _ = await model.moveProjects([project.id], to: folder.id) }
+                } label: {
+                    Label(folder.name, systemImage: model.folderID(for: project.id) == folder.id ? "checkmark" : "folder")
+                }
+            }
+        } label: { Label("Move to Folder", systemImage: "folder") }
+        .disabled(busy || !model.organizationReady)
+        Divider()
+        Button("Rename", systemImage: "pencil") { beginRename(project) }.disabled(busy)
         Button("Duplicate", systemImage: "plus.square.on.square") { Task { await model.duplicate(project.id) } }
             .disabled(busy || pending || !project.available)
         Button("Move to Trash", systemImage: "trash", role: .destructive) { trashTarget = project; showingTrash = true }
-            .disabled(busy || pending || model.transcription.isActive(project.id) || model.transcription.persistenceError != nil)
+            .disabled(!canTrash(project))
+    }
+
+    private func favoriteAction(_ project: ProjectSummary) -> some View {
+        Button(model.isFavorite(project.id) ? "Remove from Favorites" : "Add to Favorites",
+               systemImage: model.isFavorite(project.id) ? "star.slash" : "star") {
+            Task { await model.toggleFavorite(project.id) }
+        }
+        .disabled(model.mutatingProjectIDs.contains(project.id) || !model.organizationReady)
+    }
+
+    private func canTrash(_ project: ProjectSummary) -> Bool {
+        !model.mutatingProjectIDs.contains(project.id) && !model.editors.hasPending(project.id)
+            && !model.transcription.isActive(project.id) && model.transcription.persistenceError == nil
+    }
+
+    private func beginRename(_ project: ProjectSummary) {
+        guard !model.mutatingProjectIDs.contains(project.id) else { return }
+        if model.editors.hasPending(project.id) || !project.available || model.transcription.isActive(project.id) {
+            path.append(.renameProject(project.id))
+        } else {
+            renameTarget = project; renamedTitle = project.title; showingRename = true
+        }
     }
 
     private func projectStatus(_ project: ProjectSummary) -> ProjectCardStatus {
@@ -385,7 +749,9 @@ struct ProjectsView: View {
         }
     }
 
-    private var canPresentLibraryError: Bool { path.isEmpty && sheet == nil && !showingRename && !showingTrash }
+    private var canPresentLibraryError: Bool {
+        path.isEmpty && sheet == nil && !showingRename && !showingTrash && folderToDelete == nil && projectToDelete == nil
+    }
     private func present(_ destination: LibrarySheet) { guard sheet == nil else { return }; sheet = destination }
     private func presentProStatus() {
         guard sheet == nil else { return }
@@ -395,6 +761,7 @@ struct ProjectsView: View {
     private func beginImport() {
         guard path.isEmpty, sheet == nil, !model.isImporting, !model.isPreparingPhotos else { return }
         model.prepareImport()
+        importFolderID = model.selectedFolder?.id
         importedProjectIDs = []
         importPresented = true
         sheet = .newProject
@@ -407,11 +774,17 @@ struct ProjectsView: View {
         let celebrate = proStartedWithoutEntitlement && model.access.hasPro
         proStartedWithoutEntitlement = false
         let ids = importedProjectIDs
+        let folder = importFolderID
+        importFolderID = nil
         importedProjectIDs = []
         if !ids.isEmpty {
-            model.clearLibraryFilters(); searchPresented = false; model.sort = .recent
-            if ids.count == 1 { path.append(.project(ids[0])) }
-            else { importNoticeCount = ids.count }
+            Task {
+                let filed = if let folder { await model.moveProjects(ids, to: folder) } else { true }
+                model.clearLibraryFilters(); searchPresented = false
+                if filed, let folder { model.scope = .folder(folder) }
+                if filed && ids.count == 1 && path.isEmpty && sheet == nil { path.append(.project(ids[0])) }
+                else { importNoticeCount = ids.count }
+            }
         } else if celebrate {
             Task {
                 await Task.yield()
@@ -422,8 +795,30 @@ struct ProjectsView: View {
     }
 }
 
-private enum LibrarySheet: String, Identifiable {
-    case newProject, paywall, celebration, storage
-    var id: Self { self }
+private enum LibrarySheet: Identifiable {
+    case newProject, paywall, celebration, storage, captionUsage
+    case folder(LibraryFolder?)
+    var id: String {
+        switch self {
+        case .newProject: "newProject"
+        case .paywall: "paywall"
+        case .celebration: "celebration"
+        case .storage: "storage"
+        case .captionUsage: "captionUsage"
+        case .folder(let folder): "folder-" + (folder?.id.uuidString ?? "new")
+        }
+    }
 }
 private enum ProjectsRoute: Hashable { case project(UUID), renameProject(UUID), settings, queue }
+
+private extension View {
+    func libraryChromeRow() -> some View {
+        self
+            .buttonStyle(.borderless)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+}
+
+

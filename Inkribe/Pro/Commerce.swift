@@ -22,15 +22,14 @@ enum Commerce {
         .init(id: "fullHD", systemImage: "film", title: "Full HD Exports",
               message: "Save your captioned videos in 1080p.", freeValue: "720p", proValue: "1080p"),
         .init(id: "themes", systemImage: "paintpalette.fill", title: "All Premium Themes",
-              message: "Make Inkribe yours with every app theme.", freeValue: "Default", proValue: "All")
+              message: "Make Inkribe yours with every app theme.", freeValue: "Paper", proValue: "All")
     ]
     @MainActor static var comparison: [LimitReachedComparisonRow] {
         features.map { LimitReachedComparisonRow($0) }
     }
-    // Development placeholder requested by the user; replace before publishing.
-    static let privacyURL = URL(string: "https://example.com/inkribe/privacy")!
-    static let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
-    static let supportURL = URL(string: "mailto:hi@spokio.pro")!
+    static let privacyURL = URL(string: "https://spokiostudio.com/inkribe/privacy")!
+    static let termsURL = URL(string: "https://spokiostudio.com/inkribe/terms")!
+    static let supportURL = URL(string: "https://spokiostudio.com/inkribe/contact")!
 
     @MainActor static let paywall = FoundationPaywallConfiguration(badge: "INKRIBE PRO",
         title: "Make every video yours",

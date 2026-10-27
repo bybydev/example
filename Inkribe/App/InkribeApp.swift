@@ -6,11 +6,11 @@ import SwiftUI
 @MainActor
 struct InkribeApp: App {
     @State private var themes = ThemeManager(
-        catalog: .foundationDefaults,
+        catalog: InkribeThemes.catalog,
         stateStore: UserDefaultsThemeStateStore(
             storageKey: "com.hoangbkit.inkribe.ios.theme-state"
         ),
-        previewBehavior: .disabled
+        previewBehavior: .miLoveStyle
     )
 
     @State private var projects = ProjectsModel()
@@ -30,4 +30,14 @@ struct InkribeApp: App {
                 }
         }
     }
+}
+
+/// App-owned access and ordering; palette definitions remain in AppFoundation.
+private enum InkribeThemes {
+    static let catalog = ThemeCatalog(
+        themes: [FoundationThemes.paper.withAccess(.free)]
+            + FoundationThemes.all.filter { $0.id != FoundationThemes.paper.id }
+                .map { $0.withAccess(.pro) },
+        fallbackThemeID: FoundationThemes.paper.id
+    )
 }
