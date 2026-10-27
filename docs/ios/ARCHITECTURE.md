@@ -1,5 +1,66 @@
 # Inkribe iOS — current architecture
 
+## Timeline editor pass 3 (2026-10-27)
+
+TimelineCaptionTiming captures one cue/manual value, linked editable words, its
+clip/trim map and previously reviewed replacement cues. UIKit retains only a
+transient proposal during a gesture. No document, history or save changes occur
+until release. Expected-state comparison permits unrelated metadata/speech changes;
+a changed target/clip/trim cancels. Release rechecks current overlap/bounds and uses
+EditorSession's existing atomic native/manual edit patch and serialized writer.
+One accepted gesture is one undo entry; cancelled/rejected proposals publish none.
+
+CaptionEdits.moveCue translates linked words by an exact rational delta, preserving
+duration and immutable native source anchors. Edge resize reuses cueTiming's explicit
+affine manual adjustment and full project validation. The output projection does
+not rewrite original clocks. Manual gestures retain only previously reviewed native
+replacements; new manual overlaps/replacements are rejected, including those from
+concurrent publication. Extreme word compression is limited and validated atomically.
+
+TimelineViewport owns selected-body/edge pan and hold-to-move recognition, exclusive
+scroll/pinch ownership, coalesced frame audition and a weak-target edge-scroll clock.
+Gesture cancellation/cover/background/layout change/teardown invalidates the clock
+and pending seeks. Canvas draws handles/proposed timing only; export/renderer sees
+only committed document state. VoiceOver retiming shares the same transaction path.
+No schema, queue, speech, purchase, native output renderer or Mac changes.
+
+## Timeline editor pass 2 (2026-10-27)
+
+ProjectTimelineSnapshot derives trimmed output-clock clip/caption/gap geometry
+once per CaptionSnapshot generation. Prefix-max interval indexes bound lookups
+to the visible time range, including overlapping native captions. Source sample
+time equals retained clip source start plus the tile's offset within that clip.
+EditorWorkspace retains navigation scale/selection only; project schema 10 and
+native timing remain unchanged. EditorSession retains the same composed AVPlayer.
+
+ProjectTimelineView bridges a UIScrollView with a viewport-sized TimelineTrackCanvas.
+The center playhead is a sibling overlay; half-viewport project padding permits
+seeking to both endpoints. Programmatic offsets never emit seeks; user scrubs are
+coalesced to ~30Hz with a final exact seek. Pinch zoom anchors the touched time.
+Selection/sheets/playback start invalidate pending momentum seeks. Covered or
+background timelines disable interaction/frame work; dismantle cancels requests.
+
+TimelineThumbnailLoader prioritizes visible/nearby tiles, retains at most two live
+generators through cancellation teardown, and budgets 12 MiB for normalized 192px
+frames. Cache keys include project/asset/hash/path/source-time/size. Failed artwork
+is optional and cannot fail project opening. Playback ticks do not rebuild the
+project projection. No queue, renderer/export, purchase or speech behavior changes.
+
+## Timeline editor pass 1 (2026-10-27)
+
+ProjectEditorView owns the fixed four-area workspace and modal tool routes.
+EditorPlaybackControls can omit its legacy scrubber, allowing transport to precede
+the timeline area. Fullscreen/detail customization/manual/export presentations
+relinquish the covered main player layer; no new playback engine is introduced.
+EditorPreparationPresentation delays its visual overlay 180ms and keeps Cancel
+outside disabled content. The view owns/cancels its opening Task; EditorSession
+checks cancellation after repository/media awaits and invalidates load generations
+on Cancel/Back. Saves, processing queues and source files are outside that teardown.
+Schema 10, recognition/word timing, shared engine/model, output clock/renderer,
+writer/history, settings and frozen exports remain unchanged. Frame tracks and
+interactive timing gestures remain future passes in issue #47.
+
+
 ## Shared active speech engine (2026-10-26)
 
 SpeechEngine.shared owns one active model and one retained native context for all

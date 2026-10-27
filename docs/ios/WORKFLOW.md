@@ -1,5 +1,19 @@
 # Inkribe iOS — current working agreement
 
+2026-10-27 — Issue #47, timeline editor **passes 1–3 source-integrated** in
+PR #48, `feat/ios-timeline-editor` → develop. Pass 3 extends head `95628a7`.
+The fixed editor includes real multi-clip frame/caption tracks, ruler, center
+playhead, scrubbing/playback, anchored zoom, selection and caption move/resize.
+Drag a selected block or its edge handles; hold any block to select/move it.
+A temporary block/readout and frame audition precede one validated undoable commit
+on release. Cancel/interruption does not publish the proposed timing. Existing
+native intervals stay immutable; moved words translate and resized words scale.
+Sheets, preview geometry, cancellable opening, cache/queue/Pro contracts remain.
+See [scope](phases/TIMELINE_EDITOR.md) and [source handoff](handoffs/TIMELINE_EDITOR.md).
+Keep PR #48 open without auto-merge. Source review only; compilation and native
+acceptance are unverified. Existing no-build/test/CI/UI/device restrictions remain.
+
+
 2026-10-26 update: current work is **Add missing caption**, branch
 `feat/ios-manual-captions` → develop, based on f0eb80c (merged #43).
 See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).

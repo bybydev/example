@@ -15,6 +15,7 @@ final class EditorSession {
     private(set) var previewGeneration = UUID()
     private(set) var document: ProjectDocument?
     private(set) var snapshot: CaptionSnapshot?
+    private(set) var timelineSnapshot: ProjectTimelineSnapshot?
     private(set) var originalAvailable: [UUID: Bool] = [:]
     private(set) var isLoading = false
     private(set) var isSaving = false
@@ -66,6 +67,7 @@ final class EditorSession {
 
     init(projectID: UUID, access: ProAccess) { self.projectID = projectID; self.access = access }
     var isReadyToEdit: Bool { document != nil }
+    var timelineSourceURLs: [UUID: URL] { mediaURLs }
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: CaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: CaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
@@ -101,6 +103,8 @@ final class EditorSession {
         guard let document, let clip = document.clips.first(where: { $0.id == id }),
               let interval = OutputTimeline(document).outputInterval(clip.timelineInterval) else { return }
         pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        workspace.timelineClipID = id
+        workspace.timelineCueID = nil
         if editingClipID != nil { workspace.settingsScope = .clip(id) }
         seek(to: interval.start)
     }
@@ -122,7 +126,9 @@ final class EditorSession {
         return first.clipID == second.clipID
     }
 
-    func open() async {
+    func open(rebuildPreview: Bool = false) async {
+        guard !Task.isCancelled else { return }
+        if rebuildPreview { preparedMedia = nil }
         isPresented = true
         observeTimeIfNeeded()
         if document == nil || preparedMedia == nil { await readSaved() }
@@ -131,7 +137,7 @@ final class EditorSession {
     /// Call after an external result/relink; never throw away unsaved changes.
     func refreshSaved() async {
         await flush()
-        guard isPresented, !hasPendingChanges else { return }
+        guard !Task.isCancelled, isPresented, !hasPendingChanges else { return }
         await readSaved()
     }
 
@@ -144,7 +150,10 @@ final class EditorSession {
         loadError = nil
         defer { if loadGeneration == generation { isLoading = false } }
         do {
+            try Task.checkCancellation()
             var loaded = try await repository.open(projectID)
+            try Task.checkCancellation()
+            guard generation == loadGeneration else { return }
             if loaded.recognition == nil {
                 do { loaded = try await repository.restoreRetainedCaptions(projectID: projectID) }
                 catch is CancellationError { return }
@@ -154,6 +163,7 @@ final class EditorSession {
                     // a second, duplicate editor warning.
                 }
             }
+            try Task.checkCancellation()
             guard generation == loadGeneration, sequence == editSequence else { return }
             if !hasPendingChanges && (document == nil || loaded.contentRevision != committedRevision) {
                 let appendOnly = savedBase.map { loaded.isSpeechPublication(since: $0) } ?? false
@@ -178,17 +188,22 @@ final class EditorSession {
             if !hasPendingChanges { savedBase = loaded }
             var urls: [UUID: URL] = [:]
             for asset in loaded.assets {
+                try Task.checkCancellation()
+                guard generation == loadGeneration else { return }
                 if let url = try? await repository.sourceURL(projectID: projectID, assetID: asset.id) {
                     urls[asset.id] = url
                 }
             }
+            try Task.checkCancellation()
             guard generation == loadGeneration else { return }
             originalAvailable = Dictionary(uniqueKeysWithValues: loaded.assets.map { ($0.id, urls[$0.id] != nil) })
             mediaURLs = urls
             await preparePreview(document: document ?? loaded, urls: urls, generation: generation)
-            if generation == loadGeneration, !isPlaying { seek(to: time) }
+            if !Task.isCancelled, generation == loadGeneration, !isPlaying { seek(to: time) }
+        } catch is CancellationError {
+            // Back/Cancel is navigation, not a project failure.
         } catch {
-            guard generation == loadGeneration else { return }
+            guard !Task.isCancelled, generation == loadGeneration else { return }
             loadError = error.localizedDescription
         }
     }
@@ -230,6 +245,9 @@ final class EditorSession {
         stylingControl = nil
         mediaControl = nil
         selectedCueID = id
+        workspace.timelineCueID = id
+        workspace.timelineClipID = snapshot?.cues.first(where: { $0.id == id })?.wordIDs.first
+            .flatMap { snapshot?.wordsByID[$0]?.clipID }
         selectedWordID = snapshot?.cues.first { $0.id == id }?.wordIDs.first
         if let cue = selectedCue { reveal(cue.interval) }
     }
@@ -375,6 +393,41 @@ final class EditorSession {
             try CaptionEdits.cueText(value, cueID: cueID, in: &state)
             return nil
         }
+    }
+
+    func beginTimelineTiming(cueID: UUID, operation: TimelineTimingOperation) -> TimelineCaptionTiming? {
+        guard let project = document else { return nil }
+        do {
+            let edit = try TimelineCaptionTiming(cueID: cueID, operation: operation, project: project)
+            pause(); endTyping(); endStyleEditing(); endMediaEditing()
+            selectedCueID = cueID
+            selectedWordID = snapshot?.cues.first(where: { $0.id == cueID })?.wordIDs.first
+            workspace.timelineCueID = cueID; workspace.timelineClipID = edit.clip.id
+            commandError = nil
+            return edit
+        } catch { commandError = error.localizedDescription; return nil }
+    }
+    func timelineTimingIsCurrent(_ edit: TimelineCaptionTiming) -> Bool {
+        document.map(edit.matches) ?? false
+    }
+    @discardableResult
+    func commitTimelineTiming(_ edit: TimelineCaptionTiming, interval: MediaInterval) -> Bool {
+        guard let project = document else { return false }
+        do {
+            guard edit.matches(project), selectedCueID == edit.cueID,
+                  workspace.timelineCueID == edit.cueID else { throw TimelineTimingError.changed }
+            if interval == edit.original { commandError = nil; return true }
+            try edit.validate(interval, in: project)
+            if var manual = edit.manual {
+                manual.interval = interval
+                return performManual(ManualCaptionPatch(id: manual.id, before: edit.manual, after: manual))
+            }
+            return perform { state, project in
+                if edit.operation == .move { try CaptionEdits.moveCue(interval, cueID: edit.cueID, project: project, in: &state) }
+                else { try CaptionEdits.cueTiming(interval, cueID: edit.cueID, project: project, in: &state) }
+                return nil
+            }
+        } catch { commandError = error.localizedDescription; return false }
     }
 
     func retimeCue(_ interval: MediaInterval) {
@@ -527,8 +580,18 @@ final class EditorSession {
         updateHistoryFlags()
     }
     private func updateHistoryFlags() { canUndo = !editHistory.past.isEmpty; canRedo = !editHistory.future.isEmpty }
-    private func rebuildSnapshot() { snapshot = document.map(CaptionSnapshot.init) }
+    private func rebuildSnapshot() {
+        snapshot = document.map(CaptionSnapshot.init)
+        if let document, let snapshot { timelineSnapshot = ProjectTimelineSnapshot(document: document, captions: snapshot) }
+        else { timelineSnapshot = nil }
+    }
     private func repairSelection() {
+        if timelineSnapshot?.captions.contains(where: { $0.id == workspace.timelineCueID }) != true {
+            workspace.timelineCueID = nil
+        }
+        if timelineSnapshot?.clips.contains(where: { $0.id == workspace.timelineClipID }) != true {
+            workspace.timelineClipID = nil
+        }
         if snapshot?.cues.contains(where: { $0.id == selectedCueID }) != true {
             selectedCueID = snapshot?.cues.first?.id
         }
@@ -642,7 +705,9 @@ final class EditorSession {
         previewError = nil
         defer { if loadGeneration == generation { isPreparingPreview = false } }
         do {
+            try Task.checkCancellation()
             let item = try await PreviewComposition.make(document: document, urls: urls)
+            try Task.checkCancellation()
             guard loadGeneration == generation else { return }
             statusObserver = nil
             if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
@@ -670,8 +735,10 @@ final class EditorSession {
             }
             isPreparingPreview = false
             seek(to: min(time, duration))
+        } catch is CancellationError {
+            // Never attach a cancelled composition or present a spurious error.
         } catch {
-            guard loadGeneration == generation else { return }
+            guard !Task.isCancelled, loadGeneration == generation else { return }
             player.replaceCurrentItem(with: nil)
             previewGeneration = UUID()
             preparedMedia = nil
@@ -720,16 +787,22 @@ final class EditorSession {
     }
     func pause() { player.pause(); isPlaying = false }
 
+    /// Invalidate editor-owned work immediately. Never touches the processing
+    /// coordinator, transcription engine, export jobs, saves or project storage.
+    func cancelPreparation() {
+        mediaRefresh?.cancel(); mediaRefresh = nil
+        loadGeneration = UUID()
+        isPreparingPreview = false
+        isLoading = false
+        pause()
+    }
+
     /// Explicit lifecycle teardown, before this session releases its AVPlayer.
     func stop() {
         isPresented = false
-        mediaRefresh?.cancel(); mediaRefresh = nil
-        pause()
-        loadGeneration = UUID()
+        cancelPreparation()
         seekGeneration = UUID()
         isSeeking = false
-        isPreparingPreview = false
-        isLoading = false
         if let periodicObserver { player.removeTimeObserver(periodicObserver); self.periodicObserver = nil }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
         statusObserver = nil

@@ -1,5 +1,21 @@
 # Inkribe Working Rules
 
+## Current timeline editor authorization
+
+2026-10-27. The user requests **pass 3** of issue #47 in existing PR #48,
+`feat/ios-timeline-editor` → develop, extending pass-2 head `95628a7`.
+Implement caption block move/edge-resize, explicit word timing rules, one undoable
+commit per completed gesture, autosave, overlap/bounds/concurrency checks and final
+gesture integration. Keep the four-area editor, action sheets, stable preview,
+cancellable opening, real multi-clip frames/ruler/scrub/playback/pinch selection.
+Preserve native timestamps/IDs, raw results, hidden trim portions, media/clip
+identity, shared engine, queue/frozen outputs, allowance/Pro, home and Mac behavior.
+Read docs/ios/phases/TIMELINE_EDITOR.md and handoffs/TIMELINE_EDITOR.md.
+No schema change, clip sequencing, transitions or music tracks. Source-only:
+no builds/typechecks/tests/fixtures, CI, generation/models/native processing,
+UI/device execution or deployment. Keep PR #48 open without auto-merge.
+Earlier scope/PR instructions below are historical where superseded.
+
 ## Current iOS library organization pass
 
 2026-10-27. The user approved implementation in existing PR #46,

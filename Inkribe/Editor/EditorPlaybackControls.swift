@@ -4,24 +4,29 @@ import Foundation
 struct EditorPlaybackControls: View {
     let session: EditorSession
     var showsOverview = true
+    var showsTimeline = true
     var onInteraction: () -> Void = {}
+    var onExpand: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
-            CaptionTimeline(snapshot: session.snapshot, selectedCueID: session.selectedCueID,
-                duration: EditorTime.seconds(session.duration), seconds: EditorTime.seconds(session.time),
-                showsOverview: showsOverview, seek: { endEditing(); session.scrub(seconds: $0) })
+            if showsTimeline {
+                CaptionTimeline(snapshot: session.snapshot, selectedCueID: session.selectedCueID,
+                    duration: EditorTime.seconds(session.duration), seconds: EditorTime.seconds(session.time),
+                    showsOverview: showsOverview, seek: { endEditing(); session.scrub(seconds: $0) })
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     playButton
                     Spacer(minLength: 0)
                     readout.fixedSize(horizontal: true, vertical: true)
                     Spacer(minLength: 0)
-                    undoButton
+                    historyButtons
+                    expandButton
                 }
                 VStack(spacing: 4) {
                     readout.fixedSize(horizontal: false, vertical: true)
-                    HStack { playButton; Spacer(minLength: 0); undoButton }
+                    HStack { playButton; Spacer(minLength: 0); historyButtons; expandButton }
                 }
             }
             .buttonStyle(.plain)
@@ -40,9 +45,19 @@ struct EditorPlaybackControls: View {
         .labelStyle(.iconOnly).font(.title3).frame(width: 44, height: 44)
         .disabled(session.isPreparingPreview || session.previewError != nil)
     }
-    private var undoButton: some View {
-        Button(session.undoLabel, systemImage: "arrow.uturn.backward") { endEditing(); session.undo() }
-            .labelStyle(.iconOnly).font(.body).frame(width: 44, height: 44).disabled(!session.canUndo)
+    private var historyButtons: some View {
+        HStack(spacing: 0) {
+            Button(session.undoLabel, systemImage: "arrow.uturn.backward") { endEditing(); session.undo() }
+                .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(!session.canUndo)
+            Button(session.redoLabel, systemImage: "arrow.uturn.forward") { endEditing(); session.redo() }
+                .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(!session.canRedo)
+        }
+    }
+    @ViewBuilder private var expandButton: some View {
+        if let onExpand {
+            Button("Fullscreen preview", systemImage: "arrow.up.left.and.arrow.down.right") { endEditing(); onExpand() }
+                .labelStyle(.iconOnly).frame(width: 44, height: 44)
+        }
     }
 
     private func playbackTime(_ time: MediaTime) -> String {
@@ -58,3 +73,4 @@ struct EditorPlaybackControls: View {
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
     }
 }
+

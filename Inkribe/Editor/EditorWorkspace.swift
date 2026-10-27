@@ -19,6 +19,10 @@ struct EditorWorkspace: Sendable {
     var settingsScope = EditorSettingsScope.project
     private(set) var tool = EditorTool.captions
     private var anchors: [EditorTool: String] = [:]
+    // Timeline navigation/selection is presentation state, never a saved edit.
+    var timelineScale = 48.0
+    var timelineCueID: UUID?
+    var timelineClipID: UUID?
     var followsPlayback = false
     var expandedPreview = false
     var presetCategory: CaptionPresetCategory?

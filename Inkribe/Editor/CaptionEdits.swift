@@ -99,6 +99,25 @@ enum CaptionEdits {
             end: max(state.cues[cueIndex].interval.end, linked.map(\.projectInterval.end).max() ?? interval.end))
     }
 
+    /// A body drag translates every existing word by one rational offset. It
+    /// never stretches inter-word pauses or touches immutable native anchors.
+    static func moveCue(_ interval: MediaInterval, cueID: UUID, project: ProjectDocument,
+                        in state: inout CaptionEditState) throws {
+        guard let index = state.cues.firstIndex(where: { $0.id == cueID }) else { throw CaptionEditError.missingCaption }
+        let cue = state.cues[index]
+        guard interval != cue.interval else { return }
+        guard CMTimeCompare(interval.duration, cue.interval.duration) == 0 else { throw CaptionEditError.invalidTiming }
+        let delta = CMTimeSubtract(interval.start.cmTime, cue.interval.start.cmTime)
+        let ids = Set(cue.wordIDs)
+        for wordIndex in state.words.indices where ids.contains(state.words[wordIndex].id) {
+            let word = state.words[wordIndex]
+            let shifted = try MediaInterval(start: MediaTime(validating: CMTimeAdd(word.projectInterval.start.cmTime, delta)),
+                end: MediaTime(validating: CMTimeAdd(word.projectInterval.end.cmTime, delta)))
+            try retime(&state.words[wordIndex], to: shifted, project: project)
+        }
+        state.cues[index].interval = interval
+    }
+
     static func cueTiming(_ interval: MediaInterval, cueID: UUID, project: ProjectDocument,
                           in state: inout CaptionEditState) throws {
         guard let index = state.cues.firstIndex(where: { $0.id == cueID }) else {

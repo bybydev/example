@@ -34,45 +34,80 @@ and explicit local deletion. Old outputs remain immutable; changed revisions can
 Created before your latest changes and Export again. Export now follows progress in-place;
 Queue export opens job detail. Both publish to the same collection.
 
-## Editor and customization
+## Timeline editor — issue #47 (2026-10-27)
 
-One main vertical scroll: actual video/audio canvas → transport/timeline → horizontal
-Captions/Style/Timing/Media choices → active workspace. A compact clip strip identifies
-the current clip and seeks across one continuous output clock. Transcript groups use
-clip identity without introducing another vertical scroll. Expansion grows footage
-within that page. The animated Styles browser temporarily anchors a compact real
-preview/transport above its medium sheet; closing it restores this scrolling page.
-No floating duplicate or nested vertical transcript scroll. Native navigation and
-keyboard Done remain outside that focused modal.
+Fixed editor composition: actual media player → transport → remaining timeline
+area → horizontally scrolling action buttons pinned above the bottom safe area.
+The main editor contains no caption list or inline configuration workspace.
+Preview sizing depends on viewport/canvas only; sheet, focus and keyboard state
+must not shrink or move it. Fullscreen is a separate preview presentation and
+relinquishes the underlying player layer while retaining the same session/clock.
 
-Whole-caption text is the primary correction field. Selected word/phrase text,
-original-clock timing, split/merge, undo/redo and missing-range retry remain inline.
-Playback-follow is explicit/off initially, never changes editing selection/focus,
-and pauses on correction/tool selection. Field focus/geometry changes reveal inputs;
-accepted text, timing/trim drafts and per-tool anchors remain app-owned context.
-Unapplied timing/trim needs explicit Apply; UI-only context is not durable project data.
+Pass 2 replaces the overview/clip strip in the main editor with one continuous
+project timeline: ruler → real frame strip with clip boundaries → caption blocks
+and unfinished ranges. Frame tiles/captions align on the same output-clock axis.
+The center playhead stays fixed while the content scrolls beneath it. Playback
+follows that clock across clip boundaries; dragging pauses playback and seeks,
+with a final exact seek on release. Pinch zoom preserves time beneath the fingers.
+Leading/trailing padding allows the project start/end to meet the center playhead.
 
-Style/Media expose Project defaults versus an explicitly selected clip. Missing override
-fields follow current defaults. Mark customized sections; section/all reset removes
-overrides without changing text, timing or trim. Aspect/resolution/frame rate stay global.
+Tap a clip to select/seek it. The current/selected clip's header menu retains
+rename and Go to clip start. Tap a caption to select/reveal it; tap it again to
+open text and word/phrase timing in a large sheet, preserving the playhead on the
+second tap. Selection remains separate from playback-follow. Project trim and
+source offsets map frame samples correctly without rewriting clip/caption times.
+Audio-only/missing/failed frame samples have explicit neutral placeholders.
 
-Style opens a medium/large sheet with one animated, authored sample at a time.
-Swipe or Previous/Next browses the unchanged ten-style catalog without modifying
-user input. Explicit Use style applies through the existing session/access/history
-path and preserves chosen placement. Sample scenery is procedural and silent;
-caption typography/motion uses the actual renderer. It is distinct from user footage.
-Project defaults are labeled honestly: customized clip overrides remain. Named clip
-scopes, caption-only reset, Pro gates, saved/customized/version state and all named
-resets remain accessible. Detail customization stays in its separate actual-preview
-sheet. The medium browser allows playback/scrubbing above it; its content scrolls
-with an accessible apply footer, while large text opens expanded. All device layout,
-performance and native presentation acceptance is pending. See handoffs/ANIMATED_STYLES.md.
+Frame requests prioritize the visible window with nearby prefetch, two cancellable
+decoders and a 12 MiB cache budget; no per-frame players or whole-video bitmaps.
+Leaving, covering, zooming or moving the viewport cancels obsolete work. Seek
+callbacks from cancelled scrolls cannot continue behind an inspector. Native
+VoiceOver elements expose clip/caption activation, adjustable playhead and zoom.
+Pass 3 adds direct dragging of a selected caption's body to move it, and edge
+handles to resize it. Holding any caption selects it for movement, including
+very narrow blocks. Other drags scroll; pinch is unavailable during a timing drag.
+Edge scrolling follows a held gesture across the viewport, constrained to its clip.
+A temporary block/readout and video-frame audition show the proposal; caption
+render timing is applied on release, not written for every pointer update.
 
-Text/Colors/Backdrop/Layout/Position/Motion detail controls include scrollable real
-preview/playback. Typography/colors/backdrop/layout/placement/motion reset independently.
-Covered main player layers relinquish presentation during style/export/queue modals;
-newly attached overlays clear stale errors and old callbacks cannot replace current
-status. Preserve current free/Pro/expiry/restore behavior and AF upsells/themes.
+A completed valid gesture creates one undoable edit and autosaves through the
+existing writer. Cancel, navigation, backgrounding, rotation, playback start or a
+changed target cancels the proposal. Unrelated saves/append-only speech publication
+do not invalidate unchanged target data. Rejected edits restore the initial playhead.
+Moves shift all linked word intervals equally; edge resizing scales existing
+intervals explicitly without inventing word boundaries or modifying native anchors.
+Positive-duration/precision and clip/trim bounds are enforced before publication.
+
+An edge hidden by project trim has no timeline handle; its original timing remains
+editable in the Timing sheet. Body movement preserves already-hidden portions.
+Existing native overlap behavior remains; timeline gestures cannot overlap another
+manual caption or silently replace additional recognized captions. Such proposals
+show a red block/readout and require the existing Add Caption replacement review.
+VoiceOver provides 0.1-second move/start/end actions through the same edit path.
+Native execution/performance are unverified.
+
+Bottom actions are Captions, Styles, Timing, Media, Customize and Export. Each opens
+a sheet. Captions retains transcript correction, manual caption creation, overlap
+review, generation, gaps/retry and explicit playback-follow. Timing retains word/
+phrase correction, split/merge and original-project-clock timing fields. Media
+retains trim/framing/audio and project/clip scope. Customize retains the existing
+actual-preview inspector and reset controls. Styles retains the large-only animated
+sample browser with explicit Apply and existing Pro rules. Export keeps the durable
+queue/delivery flow. Sheet closing clears focus/coalescing and requests a save,
+while retaining playhead, selection, accepted text/drafts and per-tool scroll context.
+Child Add Caption and upsell sheets are presented from the visible tool sheet.
+
+When project opening takes longer than 180ms, blur the editor content and show a
+custom progress ring, Preparing project… and Cancel. Before that delay, preparation
+still disables editor content; native Back remains available. Cancel is outside the
+disabled/accessibility-hidden editor subtree, cancels the opening task, invalidates
+late callbacks and returns promptly. It never cancels queue work or discards edits.
+Errors offer retry/navigation; quick opening skips the indicator. Spinner respects
+Reduce Motion. This is editor-local presentation, not an application-window blocker.
+
+The older one-scroll editor, inline caption list and no-sticky editor directions
+are superseded for this scope. Home search/layout and project details are unchanged.
+Source integration does not establish rendered device/keyboard/gesture acceptance.
 
 ## Output and accessibility
 
@@ -90,3 +125,4 @@ from source inspection. See [readiness](PRODUCTION_READINESS.md) and
 
 Earlier imagery/layout directions are preserved in
 [the archive](archive/before-consolidation/DESIGN.md) and do not authorize new scope.
+

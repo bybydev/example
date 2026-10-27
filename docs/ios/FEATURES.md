@@ -1,5 +1,21 @@
 # Inkribe iOS — current feature ledger
 
+## Timeline editor passes 1–3 — issue #47 (2026-10-27)
+
+| ID | Requirement | Status |
+|---|---|---|
+| EDITOR.STRUCTURE | Fixed player/controls/timeline area and sticky horizontal actions | Source-integrated |
+| EDITOR.SHEETS | Caption/transcription/timing/media tools in sheets; large animated Styles; existing Customize/Export | Source-integrated |
+| EDITOR.PREPARATION | Delayed custom indicator, blurred editor, Cancel/Back and stale-result rejection | Source-integrated |
+| EDITOR.FRAME_TIMELINE | Multi-clip frame tracks, ruler, centered playhead and zoom | Source-integrated in pass 2; native execution unverified |
+| EDITOR.TIMING_GESTURES | Caption move/resize and associated timing/history integration | Source-integrated in pass 3; native execution unverified |
+
+Pass 2 replaces the main overview/clip strip with multi-clip frame/caption tracks.
+The existing overview remains available in focused inspector transport only.
+Source evidence: [timeline handoff](handoffs/TIMELINE_EDITOR.md). No runtime evidence.
+Older descriptions of a one-scroll inline caption workspace below are superseded.
+
+
 ## Manual caption authoring (2026-10-26)
 
 | ID | Requirement | Status |
