@@ -5,9 +5,12 @@ extension Recognition {
     /// text/timing/group edit, including edits made while awaiting a disk write.
     func keepingEdits(from draft: Recognition?) throws -> Recognition {
         guard let draft else { return self }
-        guard id == draft.id, modelID == draft.modelID, modelSHA256 == draft.modelSHA256,
-              requestedLanguageCode == draft.requestedLanguageCode else {
+        guard id == draft.id, requestedLanguageCode == draft.requestedLanguageCode else {
             throw ProjectStoreError.invalidDocument("Different transcription publication")
+        }
+        let raw = Dictionary(uniqueKeysWithValues: rawWindows.map { ($0.id, $0) })
+        guard draft.rawWindows.allSatisfy({ raw[$0.id] == $0 }) else {
+            throw ProjectStoreError.invalidDocument("Published native anchors changed")
         }
         let published = Dictionary(uniqueKeysWithValues: words.map { ($0.id, $0) })
         for word in draft.words {
@@ -42,11 +45,10 @@ extension ProjectDocument {
         guard id == base.id, createdAt == base.createdAt, title == base.title,
               canvas == base.canvas, preset == base.preset, assets == base.assets,
               clips == base.clips, captionStyle == base.captionStyle, mediaEdits == base.mediaEdits,
-              clipSettings == base.clipSettings,
+              clipSettings == base.clipSettings, manualCaptions == base.manualCaptions,
               let current = recognition, current.progress != nil else { return false }
         guard let old = base.recognition else { return true }
-        guard old.isIncomplete, current.id == old.id, current.modelID == old.modelID,
-              current.modelSHA256 == old.modelSHA256,
+        guard old.isIncomplete, current.id == old.id,
               current.requestedLanguageCode == old.requestedLanguageCode,
               current.completedAt == old.completedAt else { return false }
         let raw = Dictionary(uniqueKeysWithValues: current.rawWindows.map { ($0.id, $0) })

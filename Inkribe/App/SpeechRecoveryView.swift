@@ -15,16 +15,16 @@ struct SpeechRecoveryView: View {
                     .font(.subheadline.weight(.semibold))
                 Text("\(summary.resolved) of \(summary.total) sections processed")
                     .font(.caption)
-                Text(modelName(summary.modelID) + " · " + SpeechLanguage.name(summary.language ?? "auto"))
+                Text(SpeechLanguage.name(summary.language ?? "auto"))
                     .font(.caption).foregroundStyle(.secondary)
                 if !summary.reusableRevision {
                     Text("The project changed. The next attempt will process the full clip.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if !summary.compatibleRuntime {
-                    Text("The speech model changed. The next attempt will process the full clip.")
+                    Text("Transcription setup changed. The next attempt will process the full clip.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Text("Use the same model and language to continue where you left off. Captions appear as they’re ready. Your allowance is used only when transcription completes.")
+                    Text("Compatible saved progress is reused when you retry. Captions appear as they’re ready. Your allowance is used only when transcription completes.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if summary.words == 0 {
@@ -65,10 +65,6 @@ struct SpeechRecoveryView: View {
     private var discardButton: some View {
         Button("Start over", role: .destructive, action: onDiscard)
             .font(.footnote).disabled(!canDiscard)
-    }
-
-    private func modelName(_ id: String) -> String {
-        (try? SpeechModelCatalog.descriptor(id).displayName) ?? id
     }
 
     private func seconds(_ time: MediaTime) -> String {

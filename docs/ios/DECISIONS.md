@@ -77,3 +77,25 @@ The user explicitly requested fixes for the autosave race and existing URL-downl
 ## User-approved Pro amendment
 
 The user approved four benefits (unlimited captioning, all current caption styles/animations, 1080p and AF premium themes), free 5 minutes/week/basic/720p/default, monthly $6.99 and lifetime $24.99, and the existing com.hoangbkit.inkribe.pro.monthly/lifetime product format. The implementation request supersedes the P5 deferral. Use existing AF 0.1.8 APIs, no dependency bump or infrastructure. See phases/PRO and handoffs/PRO for explicit implementation/reset/recovery choices and production inputs. PR #30 was squash merged as eb89f0f before this separate phase.
+
+
+## 2026-10-26 — generous free captioning allowance
+
+The user raised Free from 5 to **30 minutes per week** in PR #44. Pro remains
+unlimited. Commerce.weeklyMinutes is the single source for the 1,800-second gate,
+comparison, usage summary and contextual upsell. Retain the current week, used
+seconds, charged job IDs and accepted reservations; increasing the ceiling makes
+the extra 25 minutes immediately available without a ledger migration or reset.
+Earlier five-minute descriptions above record the superseded original decision.
+
+
+## 2026-10-26 — one shared engine and active model
+
+The user rejects per-job/original-model behavior. The app owns one shared speech
+engine and active model exposed in Settings. A confirmed switch cancels queued/
+running transcription and model downloads, drains speech execution and unloads
+before activation. Export preparation, queued/running exports and export controls
+remain unaffected; model switching does not wait for export completion.
+New and resumed inference uses the active model. Accepted captions/edits remain;
+old payload model fields never select an engine. This supersedes pinned-model and
+Settings-default-only descriptions earlier in the delivery history.

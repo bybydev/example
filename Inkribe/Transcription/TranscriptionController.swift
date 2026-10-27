@@ -14,7 +14,7 @@ struct SpeechJob: Job {
     func execute(progress: JobProgressReporter) async throws {
         guard let executor = SpeechEnvironment.shared.executor else { throw SpeechError.missingModel }
         await progress.report(message: "Waiting for processing capacity…")
-        try await ProcessingRuntime.shared.run {
+        try await ProcessingRuntime.shared.run(kind: .transcription) {
             try await executor.execute(id: id, payload: payload, progress: progress)
         }
     }
@@ -47,12 +47,8 @@ final class TranscriptionController {
     private var queueStarted = false
     private let lifecycle: ProcessingLifecycle
     let models = SpeechModels()
-    var modelAvailable: Bool { models.available }
-    var protectedModelIDs: Set<String> {
-        Set((queue?.sortedRecords ?? []).filter { !$0.status.isTerminal }.compactMap {
-            (try? $0.decode(SpeechJob.self))?.payload.resolvedModelID
-        })
-    }
+    var modelAvailable: Bool { !lifecycle.isSwitchingModel && models.available }
+    var protectedModelIDs: Set<String> { Set(SpeechEngine.shared.loadedModelID.map { [$0] } ?? []) }
     var persistenceError: String? { startupError ?? queue?.persistenceIssue?.errorDescription }
 
     init(access: ProAccess, lifecycle: ProcessingLifecycle) {
@@ -124,7 +120,7 @@ final class TranscriptionController {
             }
             try queue?.start()
             queueStarted = true
-            if !lifecycle.canRun { try queue?.pause() }
+            if !lifecycle.canTranscribe { try queue?.pause() }
             startupError = nil
             Task { await refreshAllowance() }
         } catch { startupError = error.localizedDescription }
@@ -136,7 +132,7 @@ final class TranscriptionController {
         if let queue, queueStarted {
             do {
                 try queue.perform(.retryPersistence)
-                if lifecycle.canRun { try queue.resume() } else { try queue.pause() }
+                if lifecycle.canTranscribe { try queue.resume() } else { try queue.pause() }
                 startupError = nil
                 Task { await refreshAllowance() }
             }
@@ -147,7 +143,7 @@ final class TranscriptionController {
     func applyLifecycle() {
         guard queueStarted, let queue else { return }
         do {
-            if lifecycle.canRun { try queue.resume() } else { try queue.pause() }
+            if lifecycle.canTranscribe { try queue.resume() } else { try queue.pause() }
         } catch { startupError = error.localizedDescription }
     }
 
@@ -166,12 +162,13 @@ final class TranscriptionController {
 
     func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil,
                  windowIndices: [Int]? = nil) async throws {
+        let generation = lifecycle.workGeneration
+        try lifecycle.requireAdmission(generation)
         start()
         guard lifecycle.error == nil, queueStarted, persistenceError == nil, let queue else { throw ProjectStoreError.unavailableRoot }
         guard !isAuthorizing else { throw SpeechError.busy }
         isAuthorizing = true
         defer { needsAllowanceRefresh = true; endAuthorization() }
-        var chosenModelID = models.selectedID
         await access.refreshForRequest()
         await models.refresh()
         guard !isActive(projectID) else { throw SpeechError.busy }
@@ -187,8 +184,7 @@ final class TranscriptionController {
         }
         let partial = project.recognition.flatMap { $0.isIncomplete ? $0 : nil }
         guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
-        if let partial { chosenModelID = partial.modelID }
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
+        guard models.available else { throw SpeechError.missingModel }
         let code = SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
         // A terminal job can have aged out of JobQueue's bounded history while
         // its project still owns valid unfinished work. Retain that operation ID.
@@ -208,9 +204,10 @@ final class TranscriptionController {
         }
         try Task.checkCancellation()
         guard lifecycle.error == nil, persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
+        guard models.available else { throw SpeechError.missingModel }
+        try lifecycle.requireAdmission(generation)
         try queue.enqueue(SpeechJob(id: id, payload: .init(projectID: projectID,
-            expectedRevision: project.contentRevision, languageCode: partial != nil ? partial!.requestedLanguageCode : code, modelID: chosenModelID,
+            expectedRevision: project.contentRevision, languageCode: partial != nil ? partial!.requestedLanguageCode : code,
             requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
     }
 
@@ -245,6 +242,8 @@ final class TranscriptionController {
     }
 
     func retry(_ record: JobRecord, language: String, windowIndices: [Int]? = nil) async throws {
+        let generation = lifecycle.workGeneration
+        try lifecycle.requireAdmission(generation)
         guard lifecycle.error == nil, queueStarted, persistenceError == nil, let queue else { throw ProjectStoreError.unavailableRoot }
         guard !isAuthorizing else { throw SpeechError.busy }
         isAuthorizing = true
@@ -254,19 +253,18 @@ final class TranscriptionController {
         guard let current = queue.records[record.id], current.status.isRetryable,
               current.hasSamePayload(as: record) else { throw SpeechError.busy }
         let previous = try current.decode(SpeechJob.self)
-        var chosenModelID = previous.payload.resolvedModelID
         guard !isActive(previous.payload.projectID) else { throw SpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
         guard !isActive(project.id) else { throw SpeechError.busy }
         if let saved = project.recognition, saved.id == record.id, !saved.words.isEmpty, !saved.isIncomplete {
             // Job completion may have failed to persist after document publication.
+            try lifecycle.requireAdmission(generation)
             try queue.retry(id: record.id)
             return
         }
         let partial = project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil }
         guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
-        if let partial { chosenModelID = partial.modelID }
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
+        guard models.available else { throw SpeechError.missingModel }
         let free = !access.hasPro
         if free {
             allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
@@ -276,14 +274,16 @@ final class TranscriptionController {
         }
         try Task.checkCancellation()
         guard lifecycle.error == nil, persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
-        guard !models.isRemoving, models.isAvailable(chosenModelID) else { throw SpeechError.missingModel }
+        guard models.available else { throw SpeechError.missingModel }
         // Retry captures the latest saved revision and preserves partial captions.
-        // The original model/language and durable operation identity stay fixed.
+        // Every retry uses the shared active model. Language and operation identity
+        // retain the saved caption mapping; the old payload model ID is ignored.
+        try lifecycle.requireAdmission(generation)
         try queue.replace(id: record.id, with: SpeechJob(id: record.id, payload: .init(
             projectID: project.id, expectedRevision: project.contentRevision,
             languageCode: partial != nil ? partial!.requestedLanguageCode :
                 previous.payload.languageCode,
-            modelID: chosenModelID, requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
+            requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
     }
 }
 
@@ -294,8 +294,4 @@ enum SpeechLanguage {
     static func name(_ code: String) -> String {
         code == "auto" ? "Automatic" : (Locale.current.localizedString(forLanguageCode: code) ?? code)
     }
-}
-
-extension TranscriptionRequest {
-    var resolvedModelID: String { modelID ?? SpeechModelCatalog.smallID }
 }

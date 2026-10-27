@@ -6,7 +6,7 @@ The user approved four Pro benefits, monthly $6.99, lifetime $24.99, and explici
 
 | Capability | Free | Pro |
 |---|---|---|
-| Captioning | 5 minutes/week | Unlimited |
+| Captioning | 30 minutes/week | Unlimited |
 | Caption styling | Basic Modern font, no animation; color/size/outline/background/position | All existing fonts, four templates and animations |
 | New MP4 export | 720p | 720p/1080p |
 | App appearance | AF default Rose theme | All AF premium themes |

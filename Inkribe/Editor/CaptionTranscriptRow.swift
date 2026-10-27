@@ -76,7 +76,8 @@ struct CaptionTranscriptRow: View {
     }
 
     private var editingLabel: some View {
-        Label("Editing caption", systemImage: "pencil").foregroundStyle(theme.accentColor)
+        Label(session.snapshot?.manualCaptionIDs.contains(cue.id) == true ? "Manual caption" : "Editing caption", systemImage: "pencil")
+            .foregroundStyle(theme.accentColor)
     }
 
     private var correctionActions: some View {
@@ -85,7 +86,11 @@ struct CaptionTranscriptRow: View {
                 focused = nil
                 session.workspace.expandedCaptionTiming = session.workspace.expandedCaptionTiming == cue.id ? nil : cue.id
             }
-            Button("Split / Words", systemImage: "scissors") { focused = nil; openWords() }
+            if session.snapshot?.manualCaptionIDs.contains(cue.id) == true {
+                Button("Delete", systemImage: "trash", role: .destructive) { focused = nil; session.deleteManualCaption(cue.id) }
+            } else {
+                Button("Split / Words", systemImage: "scissors") { focused = nil; openWords() }
+            }
         }
         .frame(minHeight: 44)
     }
@@ -101,24 +106,29 @@ struct CaptionGapRow: View {
     let busy: Bool
     let seek: () -> Void
     let retry: () -> Void
+    let add: () -> Void
     var body: some View {
         HStack(spacing: 12) {
             Button(action: seek) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(EditorTime.display(gap.interval.start) + "–" + EditorTime.display(gap.interval.end))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                    Text("Captions missing here").font(.subheadline).foregroundStyle(.primary)
+                    Text("Transcription unfinished here").font(.subheadline).foregroundStyle(.primary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Button("Retry", systemImage: "arrow.clockwise", action: retry)
-                .font(.caption).frame(minHeight: 44).disabled(busy)
+            VStack(alignment: .trailing, spacing: 0) {
+                Button("Add caption", systemImage: "plus", action: add)
+                    .font(.caption).frame(minHeight: 44)
+                Button("Retry", systemImage: "arrow.clockwise", action: retry)
+                    .font(.caption).frame(minHeight: 44).disabled(busy)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 4)
         .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Missing captions, clip \(gap.clipNumber)")
+        .accessibilityLabel("Unfinished transcription, clip \(gap.clipNumber)")
     }
 }

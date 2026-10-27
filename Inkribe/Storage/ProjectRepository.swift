@@ -153,7 +153,7 @@ actor ProjectRepository {
         guard project.recognition == nil, let checkpoint = try readSpeechCheckpoint(projectID),
               checkpoint.projectID == projectID, checkpoint.revision == project.contentRevision,
               checkpoint.assets == project.assets, checkpoint.clips == project.clips,
-              checkpoint.usesCurrentModelAndRuntime else { return project }
+              checkpoint.usesCurrentRuntime else { return project }
         try checkpoint.validate(recheckingMapping: true)
         return try publishSpeechProgress(checkpoint, chargeOnCompletion: true)
     }
@@ -291,10 +291,9 @@ actor ProjectRepository {
                     source: window.core, reason: "Needs transcription")
             }
             return SpeechRecoverySummary(jobID: recognition.id, reusableRevision: true,
-                compatibleRuntime: SpeechCheckpoint.usesCurrentModelAndRuntime(modelID: recognition.modelID,
-                    hash: recognition.modelSHA256, revision: progress.runtimeRevision),
+                compatibleRuntime: SpeechCheckpoint.usesCurrentRuntime(revision: progress.runtimeRevision),
                 resolved: resolved.count, total: plan.count,
-                words: recognition.words.count, modelID: recognition.modelID,
+                words: recognition.words.count,
                 language: recognition.requestedLanguageCode, unresolved: unresolved)
         }
         let plan = try SpeechCheckpoint.plan(clips: value.clips, assets: value.assets)
@@ -309,9 +308,9 @@ actor ProjectRepository {
         return SpeechRecoverySummary(jobID: value.jobID,
             reusableRevision: (value.revision == project.contentRevision || project.recognition?.id == value.jobID) &&
                 value.assets == project.assets && value.clips == project.clips,
-            compatibleRuntime: value.usesCurrentModelAndRuntime,
+            compatibleRuntime: value.usesCurrentRuntime,
             resolved: plan.count - unresolved.count, total: plan.count, words: value.wordCount,
-            modelID: value.modelID, language: value.language, unresolved: unresolved)
+            language: value.language, unresolved: unresolved)
     }
 
     /// Explicit user action only, while the controller excludes active jobs.
@@ -576,7 +575,11 @@ actor ProjectRepository {
                 let duration = document.outputDuration
                 let cache = try? thumbnailURL(id: id)
                 let captionState: ProjectCaptionState
-                if let recognition = document.recognition {
+                if document.recognition?.isIncomplete == true {
+                    captionState = .incomplete
+                } else if document.manualCaptions?.isEmpty == false {
+                    captionState = .saved
+                } else if let recognition = document.recognition {
                     captionState = recognition.words.isEmpty ? .emptyResult : recognition.isIncomplete ? .incomplete : .saved
                 } else {
                     captionState = document.assets.contains { $0.metadata.audioTrackCount > 0 } ? .needsTranscription : .noAudio
@@ -647,6 +650,9 @@ actor ProjectRepository {
                 clipSettings: original.clipSettings?.compactMap { settings in
                     guard let id = clipMapping[settings.id] else { return nil }
                     var copy = settings; copy.id = id; return copy
+                }, manualCaptions: try original.manualCaptions?.map { caption in
+                    guard let clipID = clipMapping[caption.clipID] else { throw ManualCaptionError.invalidCaption }
+                    return ManualCaption(id: UUID(), clipID: clipID, text: caption.text, interval: caption.interval)
                 })
             return try commitNew(copy, stagedAt: staging)
         } catch {

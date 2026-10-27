@@ -13,7 +13,7 @@ struct ExportJob: Job {
 
     func execute(progress: JobProgressReporter) async throws {
         await progress.report(message: "Waiting for processing capacity…")
-        try await ProcessingRuntime.shared.run {
+        try await ProcessingRuntime.shared.run(kind: .export) {
             try await render(progress: progress)
         }
     }

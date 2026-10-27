@@ -18,7 +18,7 @@ V1.PRO is source-integrated on feat/ios-pro-access-themes from merged develop eb
 
 | Owner | Entry points / responsibility |
 |---|---|
-| Pro/Commerce.swift | Two approved IDs, 5-minute policy, four-benefit comparison/paywall, isolated Debug simulator catalog |
+| Pro/Commerce.swift | Two approved IDs, 30-minute policy, four-benefit comparison/paywall, isolated Debug simulator catalog |
 | Pro/ProAccess.swift | AF verified monthly/lifetime state, expiration refresh timer, centralized style/action access |
 | Pro/CaptionAllowance.swift | Validated schema-1 weekly usage, reservation model, full canonical audio duration and whole-second rounding |
 | Storage/ProjectRepository.swift | Sole ledger owner; reserve/authorize/reconcile/finish/release; atomic publication and recovery |
@@ -33,7 +33,7 @@ V1.PRO is source-integrated on feat/ios-pro-access-themes from merged develop eb
 
 Application Support/InkribeIOSProjects/Usage/caption-allowance-v1.json stores weekStart, used seconds, charged operation IDs and reservations (job/project/revision/week/seconds). It is separate from schema-v5 projects, cache cleanup and Trash. Reads are capped at 1 MiB and validated; writes are atomic. Corrupt/unwritable quota storage shows retry/error rather than silently granting a new allowance or destroying projects.
 
-Weeks start Monday 00:00 UTC. Each free job reserves ceil(sum of canonical audio-bearing clip source durations), at least one second, up to the remaining 300 seconds. Gaps, silent-only clips and overlapping decode context do not add usage; trims do not reduce recognition work. Clock rollback does not reset the stored week. Advancing a week clears charged/used totals while keeping earlier accepted reservations valid; old-week work completes against its original grant, not the new week's allowance. This is local policy, not a tamper-resistant/server quota.
+Weeks start Monday 00:00 UTC. Each free job reserves ceil(sum of canonical audio-bearing clip source durations), at least one second, up to the remaining 1,800 seconds. Gaps, silent-only clips and overlapping decode context do not add usage; trims do not reduce recognition work. Clock rollback does not reset the stored week. Advancing a week clears charged/used totals while keeping earlier accepted reservations valid; old-week work completes against its original grant, not the new week's allowance. This is local policy, not a tamper-resistant/server quota.
 
 One controller guard serializes ledger reconciliation and request publication. It rechecks queue/model state after suspensions, disables removal during authorization and protects accepted model dependencies. A reservation is durable before queue enqueue. Terminal failed/cancelled or unpublished orphan jobs release reserved time. A saved recognition ID is the idempotency receipt: if charging fails after document publication, the reservation remains; reconcile, acknowledgment retry or Trash settlement finishes it once without native work or a second charge. Trash operations settle published receipts before removal. Queue-storage failure blocks reconciliation until recovery so unknown pending jobs do not lose authorization.
 
@@ -55,7 +55,7 @@ Free can change basic style properties and edit the color/size/position of an ex
 ## User validation (not run)
 
 1. Regenerate/build yourself. Exercise local StoreKit then real Sandbox offers/restore, canceled and pending purchases, failed load/restore, offline relaunch, refund/revocation and accelerated monthly expiry. Confirm only approved plans and localized live billing/renewal copy. Lifetime must unlock the same four benefits.
-2. Free usage: successful 60-second job leaves 240 seconds; cancel/fail/retry does not charge failed work; simultaneous taps cannot over-reserve. A >remaining/full >300-second project offers Pro before native work. Multi-clip audio counts its canonical duration despite trimming. Pro ignores the weekly cap.
+2. Free usage: successful 60-second job leaves 1,740 seconds; cancel/fail/retry does not charge failed work; simultaneous taps cannot over-reserve. A >remaining/full >1,800-second project offers Pro before native work. Multi-clip audio counts its canonical duration despite trimming. Pro ignores the weekly cap.
 3. Terminate before/after reservation/enqueue, recognition publication, charge and queue acknowledgment. Reopen/retry must preserve saved captions, release true orphans and charge once. Exercise full disk/corrupt ledger/job store, storage retry and Trash/empty Trash after a published result. Weekly rollover/old queued work/clock rollback must follow the contract above.
 4. Choose all caption fonts/effects/templates as Pro; expire access with an existing premium project. Reopen, edit text/timing/basic style properties, reset/undo and export 720p/SRT; selecting a different premium look offers the AF upsell and leaves data unchanged. Repeat for new 1080p versus saved export retry/delivery.
 5. Free default theme and locked premium AF picker → contextual upsell → AF paywall; purchase/restore applies verified access. Choose each dark/light premium theme, relaunch, expire/revoke, restore. Confirm surfaces/controls/timeline respond while footage/caption output remains identical. Check small iPhone, Dynamic Type, VoiceOver and nested sheet dismissals.

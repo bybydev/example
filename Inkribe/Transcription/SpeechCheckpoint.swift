@@ -15,6 +15,7 @@ struct SpeechCheckpoint: Codable, Sendable {
     let jobID: UUID
     let projectID: UUID
     var revision: UInt64
+    /// Metadata of the latest attempt, not an engine selection or a resume lock.
     let modelID: String
     let modelSHA256: String
     let runtimeRevision: String
@@ -87,7 +88,7 @@ struct SpeechCheckpoint: Codable, Sendable {
     func matchesInputs(_ other: Self) -> Bool {
         version == other.version && policy == other.policy && jobID == other.jobID &&
             projectID == other.projectID &&
-            modelID == other.modelID && modelSHA256 == other.modelSHA256 && runtimeRevision == other.runtimeRevision &&
+            runtimeRevision == other.runtimeRevision &&
             language == other.language && assets == other.assets && clips == other.clips
     }
 
@@ -95,8 +96,7 @@ struct SpeechCheckpoint: Codable, Sendable {
     /// duplication. Raw text recreates native values; edited text is never inferred again.
     func seeded(from recognition: Recognition?) throws -> Self {
         guard let recognition else { return self }
-        guard recognition.id == jobID, recognition.modelID == modelID,
-              recognition.modelSHA256 == modelSHA256, recognition.requestedLanguageCode == language,
+        guard recognition.id == jobID, recognition.requestedLanguageCode == language,
               let progress = recognition.progress, progress.policy == policy,
               progress.runtimeRevision == runtimeRevision else { throw SpeechRecoveryError.incompatible }
         let plan = try Self.plan(clips: clips, assets: assets)
@@ -143,8 +143,7 @@ struct SpeechCheckpoint: Codable, Sendable {
         let nativeIndex = Dictionary(uniqueKeysWithValues: native.map { ($0.id, $0) })
         guard existingIDs.isSubset(of: Set(nativeIndex.keys)) else { throw SpeechRecoveryError.corrupt }
         if let existing {
-            guard existing.id == jobID, existing.modelID == modelID, existing.modelSHA256 == modelSHA256,
-                  existing.requestedLanguageCode == language else { throw SpeechError.alreadyTranscribed }
+            guard existing.id == jobID, existing.requestedLanguageCode == language else { throw SpeechError.alreadyTranscribed }
             let rawIndex = Dictionary(uniqueKeysWithValues: raw.map { ($0.id, $0) })
             guard existing.rawWindows.allSatisfy({ rawIndex[$0.id] == $0 }) else { throw SpeechRecoveryError.corrupt }
         }
@@ -301,14 +300,10 @@ struct SpeechCheckpoint: Codable, Sendable {
     }
 
     var wordCount: Int { entries.reduce(0) { $0 + $1.words.count } }
-    var usesCurrentModelAndRuntime: Bool {
-        Self.usesCurrentModelAndRuntime(modelID: modelID, hash: modelSHA256, revision: runtimeRevision)
-    }
-
-    static func usesCurrentModelAndRuntime(modelID: String, hash: String, revision: String) -> Bool {
-        revision == WhisperRuntimeRelease.revision &&
-            (try? SpeechModelCatalog.descriptor(modelID).sha256) == hash
-    }
+    /// Accepted raw intervals and mapping versions are reusable with any active
+    /// model. Only runtime/mapping compatibility controls whether work can resume.
+    var usesCurrentRuntime: Bool { Self.usesCurrentRuntime(revision: runtimeRevision) }
+    static func usesCurrentRuntime(revision: String) -> Bool { revision == WhisperRuntimeRelease.revision }
 
     /// A fully empty run must infer again on retry; its empty responses are not
     /// permanent evidence that the source contains no speech. Digital silence is reusable.
@@ -330,7 +325,6 @@ struct SpeechRecoverySummary: Sendable {
     let resolved: Int
     let total: Int
     let words: Int
-    let modelID: String
     let language: String?
     let unresolved: [Unresolved] // UI displays a bounded prefix.
 }

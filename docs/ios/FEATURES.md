@@ -1,5 +1,17 @@
 # Inkribe iOS — current feature ledger
 
+## Manual caption authoring (2026-10-26)
+
+| ID | Requirement | Status |
+|---|---|---|
+| V1.MANUAL_CAPTIONS | Explicit user text/timing, correction/hide/delete/undo, saving/duplicate, shared preview/export, retry overlap review | Source-integrated; compilation/device/output acceptance pending |
+
+See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).
+Schema 10 reads 1–9. Phrase timing does not create model word timestamps, charge
+speech usage or mark recognition gaps complete. Whole-cue overlap replacement is
+explicitly warned and reversible. Earlier rows remain delivery history.
+
+
 2026-10-24. The original 29 V1 acceptance items below retain their delivery owners.
 Expanded Pass 1 (#41, parent #40) adds the project experience tracked separately here.
 All implementation status means source integration only; compilation/runtime acceptance

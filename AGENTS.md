@@ -1,5 +1,43 @@
 # Inkribe Working Rules
 
+## Current shared speech engine and active model
+
+2026-10-26. In PR #44 the user explicitly supersedes per-job/original-model
+binding: the whole iOS app has one shared engine and active model. Settings alone
+exposes its name and choice. Switching requires confirmation, cancels all queued
+and running transcription tasks plus model downloads, waits for speech teardown, and
+then changes the active model. Exports, including preparation, queue admission and
+running exports, are unaffected by model switching. New, restored and resumed
+transcription jobs use that active model; old payload model fields are decode-only compatibility data. Retain saved
+captions, edits, accepted raw intervals and completed exports. Resume unfinished
+ranges with the active model without overwriting earlier accepted edits. No new
+migration or original-model UI. Existing source-only execution restrictions and
+open-PR/no-auto-merge requirements remain. This overrides prior pinned-model rules.
+
+## Current free captioning allowance
+
+2026-10-26. The user requests raising Free to 30 minutes/week in the current PR
+#44, feat/ios-manual-captions → develop. This supersedes the earlier 5-minute
+allowance. Preserve existing usage/reservations and weekly reset/accounting;
+Pro remains unlimited. Keep allowance and comparison/upsell copy consistent.
+User-facing completion checklists should cover requested implementation work,
+without adding build or device validation items.
+
+## Current manual-caption authorization
+
+2026-10-26. The user requests implementing the discussed Add missing caption
+feature in a new PR from latest develop f0eb80c targeting develop, branch
+feat/ios-manual-captions. This authorizes the discussed UI and necessary source
+integration: text/user timing, saving/reopen, undo/redo, styles/trim/MP4/SRT,
+duplication and preservation during transcription retries with explicit overlap
+review. See docs/ios/phases/MANUAL_CAPTIONS.md and handoffs/MANUAL_CAPTIONS.md.
+Keep native recognition/IDs/timing, allowance, multi-clip projects, automatic
+saving, independent outputs and Mac behavior. Schema 10 reads 1–9; wrappers stay.
+No builds/typechecks/tests/fixtures, CI setup/triggers/runs, generation/models,
+native inference/exports, UI/device execution or deployment. Source checks only;
+leave the PR open without auto-merge. Earlier phase authorizations are historical.
+
+
 ## Current animated Styles sheet authorization
 
 The user also authorizes polishing the supplied editor screenshot in this PR:
@@ -110,7 +148,7 @@ The Pro implementation below is squash merged as 76981dee7533aab9b1194eee7376bf0
 
 Implement V1.PRO plus access rules on V1.LOCAL_STT/JOB/STYLE/PRESETS/MP4. Use feat/ios-pro-access-themes, one new PR targeting develop, leave open. Read docs/ios/phases/PRO.md and handoffs/PRO.md.
 
-The user approved: free 5 minutes captioning/week versus unlimited Pro; basic free caption style versus all fonts/templates/animations; free 720p versus Pro 1080p; default free app theme versus all premium AppFoundation themes. Monthly $6.99 and lifetime $24.99 use com.hoangbkit.inkribe.pro.monthly and com.hoangbkit.inkribe.pro.lifetime. AppFoundation owns paywall, contextual upsell, restore, verified purchase state and theme picker/state. No watermark, trial, credit backend or new products.
+The user approved: free 30 minutes captioning/week versus unlimited Pro; basic free caption style versus all fonts/templates/animations; free 720p versus Pro 1080p; default free app theme versus all premium AppFoundation themes. Monthly $6.99 and lifetime $24.99 use com.hoangbkit.inkribe.pro.monthly and com.hoangbkit.inkribe.pro.lifetime. AppFoundation owns paywall, contextual upsell, restore, verified purchase state and theme picker/state. No watermark, trial, credit backend or new products.
 
 Import/projects, caption text/timing/split/merge/undo, media tools and SRT remain free. Keep existing projects/captions/styles/export files usable after expiry; new premium choices require Pro. Failed/cancelled recognition is not charged; publication/retry is idempotent. Preserve accepted durable work across expiry and pre-policy jobs across upgrade.
 

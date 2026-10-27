@@ -30,7 +30,6 @@ struct ProjectsView: View {
                 case .paywall: ProPaywall()
                 case .celebration: ProCelebration()
                 case .storage: StorageView()
-                case .models: SpeechModelsView()
                 }
             }
     }
@@ -113,10 +112,10 @@ struct ProjectsView: View {
                     saveActivity
                     queueActivity
                     if !model.transcription.modelAvailable && !model.transcription.models.isLoading {
-                        Button { present(.models) } label: {
-                            StudioActivityLabel(title: "Speech model needed",
-                                detail: SpeechModelCatalog.downloadsEnabled ? "Choose a model to create captions on this device." : "Review the models included in this build.",
-                                icon: "cpu")
+                        NavigationLink(value: ProjectsRoute.settings) {
+                            StudioActivityLabel(title: "Transcription setup needed",
+                                detail: "Open Settings to prepare on-device transcription.",
+                                icon: "gearshape")
                         }
                         .buttonStyle(.plain)
                     }
@@ -424,7 +423,7 @@ struct ProjectsView: View {
 }
 
 private enum LibrarySheet: String, Identifiable {
-    case newProject, paywall, celebration, storage, models
+    case newProject, paywall, celebration, storage
     var id: Self { self }
 }
 private enum ProjectsRoute: Hashable { case project(UUID), renameProject(UUID), settings, queue }

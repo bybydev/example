@@ -49,7 +49,12 @@ struct SettingsView: View {
                 Button {
                     sheet = .models
                 } label: {
-                    Label("Speech Models", systemImage: "cpu")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Active speech model", systemImage: "cpu")
+                        Text(model.transcription.models.activeName)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 Button {
                     sheet = .storage

@@ -6,7 +6,6 @@ import SwiftUI
 struct TranscriptionView: View {
     @Environment(ProjectsModel.self) private var model
     @AppStorage("com.hoangbkit.inkribe.ios.speech-language") private var language = "auto"
-    @State private var showingModels = false
     @State private var showingQueue = false
     @State private var upsell: ProFeature?
     @State private var recovery: SpeechRecoverySummary?
@@ -21,7 +20,6 @@ struct TranscriptionView: View {
     private var canReuseProgress: Bool {
         guard let recovery else { return false }
         return recovery.reusableRevision && recovery.compatibleRuntime &&
-            recovery.modelID == model.transcription.models.selectedID &&
             recovery.language == (language == "auto" ? nil : language) && recovery.words > 0
     }
     private struct RecoveryKey: Hashable {
@@ -53,7 +51,7 @@ struct TranscriptionView: View {
                 }
             } else {
                 if hasEmptyResult {
-                    Text("The previous transcription saved no captions. Choose the spoken language or another model, then retry. Your weekly allowance is only used when captions are saved.")
+                    Text("The previous transcription saved no captions. Check the spoken language, then retry. Your weekly allowance is only used when captions are saved.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 let record = speech.record(for: document.id)
@@ -69,7 +67,6 @@ struct TranscriptionView: View {
                 }
                 Text("Transcription uses the full original clip, including media outside your trim.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Model: \(speech.models.selectedName)", systemImage: "cpu") { showingModels = true }
                 Picker("Language", selection: $language) {
                     ForEach(SpeechLanguage.codes, id: \.self) { code in
                         Text(SpeechLanguage.name(code)).tag(code)
@@ -87,7 +84,7 @@ struct TranscriptionView: View {
                     .disabled(!speech.modelAvailable || speech.persistenceError != nil || speech.isAuthorizing || isPreparingRequest || model.access.isChecking)
                 }
                 if !speech.modelAvailable {
-                    Text("Select an available model or download one in Speech Models.")
+                    Text("Speech recognition is unavailable. Open Settings to prepare transcription, then try again.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -131,7 +128,6 @@ struct TranscriptionView: View {
         } message: {
             Text("The next attempt will process the full clip again. Your project and original media are kept.")
         }
-        .sheet(isPresented: $showingModels) { SpeechModelsView() }
         .sheet(isPresented: $showingQueue, onDismiss: { Task { await onRequestFinished() } }) { ProcessingQueueSheet() }
         .sheet(item: $upsell) { ProUpsell(feature: $0) }
     }
@@ -140,10 +136,6 @@ struct TranscriptionView: View {
     private func status(_ record: JobRecord, speech: TranscriptionController) -> some View {
         let progress = speech.queue?.liveProgress[record.id]
         if !record.status.isTerminal {
-            if let id = (try? record.decode(SpeechJob.self))?.payload.resolvedModelID,
-               let variant = try? SpeechModelCatalog.descriptor(id) {
-                Text(variant.displayName).font(.caption).foregroundStyle(.secondary)
-            }
             Text(speech.queue?.isPaused == true ? model.processing.lifecycle.userPaused ? "Paused by you. Resume in Queue." : "Paused outside the foreground. Saved progress will resume when Inkribe can run." :
                 record.status == .pending ? "Waiting to transcribe…" :
                 record.status == .cancelling ? "Cancelling…" : progress?.message ?? "Preparing transcription…")

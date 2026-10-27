@@ -69,11 +69,15 @@ final class EditorSession {
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: CaptionPresentation? { snapshot?.evaluate(at: time) }
     var selectedCue: CaptionCue? { snapshot?.cues.first { $0.id == selectedCueID } }
-    var selectedWord: CaptionWord? { selectedWordID.flatMap { snapshot?.wordsByID[$0] } }
+    var selectedWord: CaptionUnit? { selectedWordID.flatMap { snapshot?.wordsByID[$0] } }
     /// Timing corrections retain the original project clock, even for a clipped
     /// boundary unit. Transport/list/export use the retained, zero-based clock.
-    var timingCue: CaptionCue? { document?.recognition?.cues.first { $0.id == selectedCueID } }
+    var timingCue: CaptionCue? {
+        if let manual = selectedManualCaption { return CaptionCue(id: manual.id, wordIDs: [manual.id], interval: manual.interval) }
+        return document?.recognition?.cues.first { $0.id == selectedCueID }
+    }
     var timingWord: CaptionWord? { document?.recognition?.words.first { $0.id == selectedWordID } }
+    var selectedManualCaption: ManualCaption? { document?.manualCaptions?.first { $0.id == selectedCueID } }
     var currentClip: ProjectClip? {
         guard let document else { return nil }
         let original = try? OutputTimeline(document).originalTime(forOutput: min(time, duration))
@@ -109,7 +113,7 @@ final class EditorSession {
     var undoLabel: String { "Undo edit" }
     var redoLabel: String { "Redo edit" }
     var canMergeNext: Bool {
-        guard let result = document?.recognition,
+        guard selectedManualCaption == nil, let result = document?.recognition,
               let index = result.cues.firstIndex(where: { $0.id == selectedCueID }), index + 1 < result.cues.count,
               snapshot?.cues.contains(where: { $0.id == result.cues[index + 1].id }) == true,
               let a = result.cues[index].wordIDs.first, let b = result.cues[index + 1].wordIDs.first else { return false }
@@ -153,7 +157,7 @@ final class EditorSession {
             guard generation == loadGeneration, sequence == editSequence else { return }
             if !hasPendingChanges && (document == nil || loaded.contentRevision != committedRevision) {
                 let appendOnly = savedBase.map { loaded.isSpeechPublication(since: $0) } ?? false
-                let hadWords = document?.recognition?.words.isEmpty == false
+                let hadWords = document?.hasCaptionUnits == true
                 document = loaded
                 committedRevision = loaded.contentRevision
                 savedSequence = editSequence
@@ -353,7 +357,10 @@ final class EditorSession {
 
     @discardableResult
     func editText(wordID: UUID, value: String) -> Bool {
-        perform(coalescing: wordID) { state, _ in
+        if let caption = document?.manualCaptions?.first(where: { $0.id == wordID }) {
+            return editManualText(caption, value: value)
+        }
+        return perform(coalescing: wordID) { state, _ in
             try CaptionEdits.text(value, wordID: wordID, in: &state)
             return nil
         }
@@ -361,13 +368,17 @@ final class EditorSession {
 
     @discardableResult
     func editCueText(cueID: UUID, value: String) -> Bool {
-        perform(coalescing: cueID) { state, _ in
+        if let caption = document?.manualCaptions?.first(where: { $0.id == cueID }) {
+            return editManualText(caption, value: value)
+        }
+        return perform(coalescing: cueID) { state, _ in
             try CaptionEdits.cueText(value, cueID: cueID, in: &state)
             return nil
         }
     }
 
     func retimeCue(_ interval: MediaInterval) {
+        if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedCueID else { return }
         perform { state, project in
             try CaptionEdits.cueTiming(interval, cueID: id, project: project, in: &state)
@@ -375,6 +386,7 @@ final class EditorSession {
         }
     }
     func retimeWord(_ interval: MediaInterval) {
+        if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedWordID else { return }
         perform { state, project in
             try CaptionEdits.wordTiming(interval, wordID: id, project: project, in: &state)
@@ -389,6 +401,57 @@ final class EditorSession {
         guard let id = selectedCueID else { return }
         guard canMergeNext else { commandError = CaptionEditError.mergeBoundary.localizedDescription; return }
         perform { state, _ in try CaptionEdits.mergeNext(cueID: id, in: &state); return nil }
+    }
+
+    @discardableResult
+    func addManualCaption(text: String, clipID: UUID, interval: MediaInterval) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { commandError = ManualCaptionError.emptyText.localizedDescription; return false }
+        guard (document?.manualCaptions?.count ?? 0) < 10_000 else {
+            commandError = ManualCaptionError.limit.localizedDescription; return false
+        }
+        let value = ManualCaption(id: UUID(), clipID: clipID, text: text, interval: interval)
+        return performManual(ManualCaptionPatch(id: value.id, before: nil, after: value))
+    }
+
+    func deleteManualCaption(_ id: UUID) {
+        guard let caption = document?.manualCaptions?.first(where: { $0.id == id }) else { return }
+        _ = performManual(ManualCaptionPatch(id: id, before: caption, after: nil))
+    }
+
+    private func editManualText(_ caption: ManualCaption, value: String) -> Bool {
+        var next = caption; next.text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return performManual(ManualCaptionPatch(id: caption.id, before: caption, after: next), coalescingText: true)
+    }
+    private func retimeManual(_ caption: ManualCaption, to interval: MediaInterval) {
+        var next = caption; next.interval = interval
+        _ = performManual(ManualCaptionPatch(id: caption.id, before: caption, after: next))
+    }
+
+    @discardableResult
+    private func performManual(_ patch: ManualCaptionPatch, coalescingText: Bool = false) -> Bool {
+        guard let project = document else { return false }
+        guard patch.before != patch.after else { commandError = nil; return true }
+        do {
+            var next = try patch.applying(to: project, forward: true)
+            next.schemaVersion = ProjectSchema.current
+            try next.validate()
+            pause(); endStyleEditing(); endMediaEditing()
+            let selection = Selection(cue: selectedCueID, word: selectedWordID)
+            document = next
+            if patch.after != nil { selectedCueID = patch.id; selectedWordID = patch.id }
+            rebuildSnapshot(); repairSelection()
+            let finalSelection = Selection(cue: selectedCueID, word: selectedWordID)
+            if coalescingText, typingWordID == patch.id, !editHistory.past.isEmpty, editHistory.future.isEmpty,
+               editHistory.past[editHistory.past.count - 1].change.coalesceManualText(patch) {
+                editHistory.past[editHistory.past.count - 1].selectionAfter = finalSelection
+            } else {
+                editHistory.past.append(History(change: .manual(patch), selectionBefore: selection, selectionAfter: finalSelection))
+            }
+            typingWordID = coalescingText ? patch.id : nil
+            finishHistoryEdit(); commandError = nil; changed()
+            return true
+        } catch { commandError = error.localizedDescription; return false }
     }
 
     @discardableResult

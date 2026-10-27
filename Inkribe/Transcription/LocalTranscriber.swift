@@ -38,29 +38,13 @@ actor LocalTranscriber {
         }
         let tracker = SpeechProgress(reporter: progress)
         await tracker.stage("Loading speech model…", fraction: 0)
-        let lease = UUID()
-        let model = try await SpeechModelStore.shared.acquire(payload.resolvedModelID, lease: lease)
-        let runtime = NativeWhisperRuntime(modelURL: model.url,
-            configuration: .init(threadCount: Int32(max(1, min(4, ProcessInfo.processInfo.processorCount - 1))),
-                                 useGPU: false, flashAttention: false),
-            captureTokenBytes: true, modelDescriptor: model.descriptor)
-        do {
-            try Task.checkCancellation()
-            try await runtime.loadModel()
-            try Task.checkCancellation()
-            try await recognize(project, id: id, language: payload.languageCode,
-                                runtime: runtime, model: model.descriptor, tracker: tracker,
-                                chargeAllowance: payload.requiresAllowance == true, windowIndices: payload.windowIndices)
-            // Publication precedes queue success, with no cancellation check in between.
-            try? await repository.removePublishedSpeechCheckpoint(projectID: project.id, recognitionID: id)
-            await runtime.unloadModel()
-            await SpeechModelStore.shared.release(lease)
+        try await SpeechEngine.shared.withModel { runtime, model in
+            try await self.recognize(project, id: id, language: payload.languageCode,
+                runtime: runtime, model: model, tracker: tracker,
+                chargeAllowance: payload.requiresAllowance == true, windowIndices: payload.windowIndices)
+            // Publication precedes queue success. Saved work survives cancellation.
+            try? await self.repository.removePublishedSpeechCheckpoint(projectID: project.id, recognitionID: id)
             await tracker.stage("Captions saved", fraction: 1)
-        } catch {
-            await runtime.unloadModel()
-            await SpeechModelStore.shared.release(lease)
-            if Task.isCancelled { throw CancellationError() }
-            throw error
         }
     }
 

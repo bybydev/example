@@ -25,9 +25,13 @@ struct ExportView: View {
                         Section("Export this project") {
                             Text(session.document?.title ?? "Project").font(.headline)
                             if session.document?.recognition?.isIncomplete == true {
-                                Label("Some ranges have no captions yet. Export the available captions now or retry the gaps in the editor.",
+                                Label("Some ranges have unfinished transcription. Export available and manual captions now, or retry those ranges in the editor.",
                                       systemImage: "exclamationmark.bubble")
                                     .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            if session.snapshot?.manualConflicts.isEmpty == false {
+                                Label("Manual captions replace overlapping recognized captions in this export. Review them in Captions before continuing.", systemImage: "exclamationmark.bubble")
+                                    .font(.footnote).foregroundStyle(.orange)
                             }
                             Picker("Format", selection: $profile.format) {
                                 ForEach(ExportFormat.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -63,7 +67,7 @@ struct ExportView: View {
                                 || model.processing.lifecycle.error != nil || session.document == nil
                                 || model.access.isChecking || (profile.format == .srt && !hasCaptions))
                             if profile.format == .srt && !hasCaptions {
-                                Text("Transcribe the media and keep at least one visible caption to export SRT.")
+                                Text("Add or transcribe at least one visible caption to export SRT.")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                             Text("Each export keeps its own saved version and file. Export now follows progress here; queued exports continue while you edit. Both appear under this project’s Exports.")

@@ -22,7 +22,6 @@ struct StorageView: View {
                     }
                     Section("On-device usage") {
                         usageRow("Downloaded speech models", model.transcription.models.inventory.cachedBytes)
-                        Button("Manage speech models") { sheet = .models }
                         if let usage = model.storage {
                             usageRow("Projects and originals", usage.projectBytes)
                             usageRow("Rebuildable cache", usage.cacheBytes)
@@ -82,7 +81,6 @@ struct StorageView: View {
             .task { await model.refreshStorage(); await model.transcription.models.refresh() }
             .sheet(item: $sheet) { destination in
                 switch destination {
-                case .models: SpeechModelsView()
                 case .queue: ProcessingQueueSheet()
                 }
             }
@@ -189,6 +187,6 @@ struct StorageView: View {
 }
 
 private enum StorageSheet: String, Identifiable {
-    case models, queue
+    case queue
     var id: Self { self }
 }

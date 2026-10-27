@@ -6,6 +6,7 @@ struct SpeechModelsView: View {
     @Environment(ProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var pendingRemoval: String?
+    @State private var pendingSelection: String?
 
     var body: some View {
         let speech = model.transcription
@@ -14,20 +15,21 @@ struct SpeechModelsView: View {
             List {
                 Group {
                     Section {
-                        Text("Selected: \(models.selectedName)")
-                        Text(SpeechModelCatalog.downloadsEnabled ? "Models run on this device. Download once, then transcribe offline. Your selection is used for new transcription requests." : "Speech models are included in this build and run entirely on this device.")
+                        Text("Active: \(models.activeName)")
+                        Text(SpeechModelCatalog.downloadsEnabled ? "Models run on this device. Download once, then transcribe offline. All transcription uses the active model." : "Speech models are included in this build and run entirely on this device.")
                             .font(.footnote).foregroundStyle(.secondary)
-                        Text("Queued jobs and retries keep their original model. Changing this selection does not change saved captions.")
+                        Text("New and resumed transcription use the active model. Switching cancels queued and running transcription; saved captions and edits stay available.")
                             .font(.footnote).foregroundStyle(.secondary)
                         if !SpeechModelCatalog.downloadsEnabled {
                             Text("This build uses bundled models only.").font(.footnote)
                         }
                         if models.isLoading { ProgressView("Checking model storage…") }
+                        if model.processing.lifecycle.isSwitchingModel { ProgressView("Switching model…") }
                     }
                     ForEach(SpeechModelCatalog.all) { variant in
                         Section {
                             Button {
-                                models.select(variant.id)
+                                if variant.id != models.activeID { pendingSelection = variant.id }
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) {
@@ -36,13 +38,13 @@ struct SpeechModelsView: View {
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
-                                    if models.selectedID == variant.id {
-                                        Image(systemName: "checkmark.circle.fill").accessibilityLabel("Selected")
+                                    if models.activeID == variant.id {
+                                        Image(systemName: "checkmark.circle.fill").accessibilityLabel("Active")
                                     }
                                 }
                             }
-                            .disabled(models.isRemoving || (!SpeechModelCatalog.downloadsEnabled && !models.inventory.bundled.contains(variant.id)))
-                            .accessibilityAddTraits(models.selectedID == variant.id ? .isSelected : [])
+                            .disabled(models.isRemoving || model.processing.lifecycle.isSwitchingModel || !models.isAvailable(variant.id))
+                            .accessibilityAddTraits(models.activeID == variant.id ? .isSelected : [])
                             .accessibilityHint(models.isAvailable(variant.id) ? "Available offline" :
                                 SpeechModelCatalog.downloadsEnabled ? "Download this model before transcription" : "Not included in this build")
                             if models.inventory.bundled.contains(variant.id) {
@@ -62,13 +64,13 @@ struct SpeechModelsView: View {
                                 Button("Cancel download", role: .cancel) { models.cancelDownload() }
                             } else if !models.isAvailable(variant.id) && SpeechModelCatalog.downloadsEnabled {
                                 Button("Download model", systemImage: "arrow.down.circle") { models.download(variant.id) }
-                                    .disabled(models.downloadingID != nil || models.isRemoving || speech.protectedModelIDs.contains(variant.id))
+                                    .disabled(model.processing.lifecycle.isSwitchingModel || models.downloadingID != nil || models.isRemoving || speech.protectedModelIDs.contains(variant.id))
                             }
                             if models.inventory.cached.contains(variant.id) {
                                 Button(role: .destructive) { pendingRemoval = variant.id } label: {
                                     Label("Remove download", systemImage: "trash")
                                 }
-                                    .disabled(models.isRemoving || models.downloadingID == variant.id || speech.protectedModelIDs.contains(variant.id) || speech.persistenceError != nil || speech.isAuthorizing)
+                                    .disabled(model.processing.lifecycle.isSwitchingModel || models.isRemoving || models.downloadingID == variant.id || speech.protectedModelIDs.contains(variant.id) || speech.persistenceError != nil || speech.isAuthorizing)
                             }
                         }
                     }
@@ -93,8 +95,28 @@ struct SpeechModelsView: View {
             }
             .navigationTitle("Speech Models")
             .themedSurface()
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }.disabled(model.processing.lifecycle.isSwitchingModel)
+                }
+            }
+            .interactiveDismissDisabled(model.processing.lifecycle.isSwitchingModel)
             .task { speech.start(); await models.refresh() }
+            .confirmationDialog("Switch active speech model?", isPresented: Binding(
+                get: { pendingSelection != nil }, set: { if !$0 { pendingSelection = nil } }
+            )) {
+                Button("Switch model and cancel transcription", role: .destructive) {
+                    guard let id = pendingSelection else { return }
+                    pendingSelection = nil
+                    Task {
+                        do { try await model.processing.switchSpeechModel(to: id) }
+                        catch { models.errorMessage = error.localizedDescription }
+                    }
+                }
+                Button("Cancel", role: .cancel) { pendingSelection = nil }
+            } message: {
+                Text("All queued and running transcription tasks will be cancelled, and model downloads will stop. Exports continue unchanged. Saved captions and edits are kept. New and resumed transcription will use the active model.")
+            }
             .confirmationDialog("Remove downloaded model?", isPresented: Binding(
                 get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
             )) {

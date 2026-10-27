@@ -5,8 +5,7 @@ import Observation
 @MainActor
 @Observable
 final class SpeechModels {
-    private static let selectionKey = "com.hoangbkit.inkribe.ios.speech-model"
-    private(set) var selectedID: String
+    var activeID: String { SpeechEngine.shared.activeModelID }
     private(set) var inventory = SpeechModelInventory(bundled: [], cached: [], downloaded: [], cachedBytes: 0)
     private(set) var downloadingID: String?
     private(set) var fraction = 0.0
@@ -18,29 +17,11 @@ final class SpeechModels {
     private var downloadToken: UUID?
     private var inventoryGeneration = 0
 
-    init() {
-        let saved = UserDefaults.standard.string(forKey: Self.selectionKey)
-        let bundled = SpeechModelCatalog.all.filter { SpeechModelCatalog.bundledURL($0) != nil }
-        if let saved, SpeechModelCatalog.all.contains(where: { $0.id == saved }),
-           SpeechModelCatalog.downloadsEnabled || bundled.contains(where: { $0.id == saved }) {
-            selectedID = saved
-        } else {
-            selectedID = bundled.first?.id ?? SpeechModelCatalog.all[0].id
-        }
-    }
-
-    var selectedName: String { (try? SpeechModelCatalog.descriptor(selectedID).displayName) ?? "Speech model" }
-    var available: Bool { !isRemoving && isAvailable(selectedID) }
+    var activeName: String { (try? SpeechModelCatalog.descriptor(activeID).displayName) ?? "Speech model" }
+    var available: Bool { !isRemoving && isAvailable(activeID) }
 
     func isAvailable(_ id: String) -> Bool {
         inventory.bundled.contains(id) || (SpeechModelCatalog.downloadsEnabled && inventory.downloaded.contains(id))
-    }
-
-    func select(_ id: String) {
-        guard !isRemoving, SpeechModelCatalog.all.contains(where: { $0.id == id }),
-              SpeechModelCatalog.downloadsEnabled || inventory.bundled.contains(id) else { return }
-        selectedID = id
-        UserDefaults.standard.set(id, forKey: Self.selectionKey)
     }
 
     func start() {
@@ -90,6 +71,12 @@ final class SpeechModels {
     }
 
     func cancelDownload() { downloadTask?.cancel() }
+
+    func cancelDownloadAndWait() async {
+        let task = downloadTask
+        task?.cancel()
+        await task?.value
+    }
 
     func remove(_ id: String, protectedIDs: Set<String>, jobStorageError: String?) async {
         guard jobStorageError == nil else {

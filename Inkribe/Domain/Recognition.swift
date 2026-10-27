@@ -88,6 +88,8 @@ struct RecognitionProgress: Codable, Equatable, Sendable {
 struct Recognition: Codable, Equatable, Sendable, Identifiable {
     /// The durable job ID makes completion idempotent after interrupted publication.
     let id: UUID
+    /// Latest transcription attempt metadata; accepted raw windows may have been
+    /// retained from an earlier active model. These fields never select an engine.
     let modelID: String
     let modelSHA256: String
     let requestedLanguageCode: String?
@@ -194,11 +196,11 @@ enum SpeechError: LocalizedError {
     case missingModel, noAudio, emptyAudio, silentAudio, noRecognizedWords, wordTimingUnavailable, invalidUTF8, invalidAudio, busy, alreadyTranscribed
     var errorDescription: String? {
         switch self {
-        case .missingModel: "The selected speech model is unavailable. Open Speech Models to download it, or select an available model."
+        case .missingModel: "Speech recognition is unavailable. Review Speech Models in Settings, then retry."
         case .noAudio: "This project has no audio track to transcribe."
         case .emptyAudio: "The audio track could not be read into speech samples. No captions were saved. Try importing the original file again."
         case .silentAudio: "The decoded audio is silent. No captions were saved. Check the original audio, then retry."
-        case .noRecognizedWords: "The speech model returned no words. No captions were saved. Try choosing the spoken language or another model, then retry."
+        case .noRecognizedWords: "No speech was recognized. No captions were saved. Check the audio and spoken language, then retry."
         case .wordTimingUnavailable: "That audio window did not return usable word timing. Previously saved captions remain available."
         case .invalidUTF8: "The speech model returned incomplete text. Retry transcription."
         case .invalidAudio: "The audio could not be decoded into a supported speech window."

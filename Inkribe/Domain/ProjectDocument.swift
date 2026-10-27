@@ -4,7 +4,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 9
+    static let current = 10
 }
 
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
@@ -127,6 +127,9 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var captionStyle: CaptionStyle? = nil
     var mediaEdits: MediaEdits? = nil
     var clipSettings: [ClipSettings]? = nil
+    var manualCaptions: [ManualCaption]? = nil
+
+    var hasCaptionUnits: Bool { recognition?.words.isEmpty == false || manualCaptions?.isEmpty == false }
 
     var effectiveCaptionStyle: CaptionStyle { captionStyle ?? .standard }
     var effectiveMediaEdits: MediaEdits { mediaEdits ?? .standard }
@@ -187,6 +190,19 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
         guard schemaVersion >= 3 || recognition?.words.allSatisfy({ $0.adjustedSourceInterval == nil &&
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) != false else {
             throw ProjectStoreError.invalidDocument("Manual captions require schema v3")
+        }
+        if let manualCaptions {
+            let nativeIDs = Set((recognition?.words.map(\.id) ?? []) + (recognition?.cues.map(\.id) ?? []))
+            guard schemaVersion >= 10, manualCaptions.count <= 10_000,
+                  Set(manualCaptions.map(\.id)).count == manualCaptions.count,
+                  manualCaptions.allSatisfy({ !nativeIDs.contains($0.id) }) else {
+                throw ProjectStoreError.invalidDocument("Invalid manual caption identities or schema")
+            }
+            for caption in manualCaptions { try caption.validate(clips: clips) }
+            let visible = ManualCaptionIndex(manualCaptions).captions
+            for pair in zip(visible, visible.dropFirst()) where ManualCaption.overlaps(pair.0.interval, pair.1.interval) {
+                throw ManualCaptionError.overlap
+            }
         }
         try recognition?.validate(clips: clips, assets: assets)
         guard schemaVersion >= 6 || recognition?.progress == nil else {

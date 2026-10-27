@@ -1,5 +1,30 @@
 # Inkribe iOS — current architecture
 
+## Shared active speech engine (2026-10-26)
+
+SpeechEngine.shared owns one active model and one retained native context for all
+iOS projects. Settings switching confirms, cancels/drains transcription work,
+unloads the old engine and activates the new model. ProcessingLifecycle blocks
+and invalidates concurrent speech preparation during that transition. Export
+preparation, queued/running exports and export controls remain unaffected.
+Job payload model fields are legacy decode-only data; every new/resumed inference uses the active
+engine. Accepted windows and edits remain reusable across model switches. See
+[model ownership](MODELS.md) and the [current handoff](handoffs/MANUAL_CAPTIONS.md).
+This supersedes older descriptions of per-job model ownership below.
+
+
+## Manual-caption extension (2026-10-26)
+
+Schema 10 adds optional `manualCaptions` (stable ID, clip ID, text, original-project
+interval), separate from immutable native recognition. `CaptionUnit` is a transient
+render/display adapter for native words and user-timed phrases; native model fields
+and checkpoint mapping are unchanged. `ManualCaptionPatch` integrates into the
+existing bounded history/writer. Speech-only rebase requires unchanged manual data.
+`CaptionSnapshot` owns manual precedence and overlap review for every output path.
+See [scope](phases/MANUAL_CAPTIONS.md) and [handoff](handoffs/MANUAL_CAPTIONS.md).
+Earlier schema descriptions below are historical where superseded.
+
+
 2026-10-24. Source contracts through expanded Pass 1 (#41), based on merged #39. Existing Mac
 source/configuration/Transcript APIs remain intact; shared extraction does not
 establish Mac feature/rendering parity.

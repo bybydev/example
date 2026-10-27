@@ -29,7 +29,7 @@ struct ProUpsell: View {
         case .captioning:
             let usage = model.transcription.allowance
             let reset = usage?.resetsAt.formatted(date: .abbreviated, time: .shortened) ?? "the next weekly reset"
-            message = "Free includes 5 minutes of captioning each week. This video needs more time than is available. Your allowance resets \(reset). Existing captions and editing stay available."
+            message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. This video needs more time than is available. Your allowance resets \(reset). Existing captions and editing stay available."
         case .styles:
             message = "Unlock every caption font, template and animation. Basic styling and all your existing captions stay available."
         case .fullHD:

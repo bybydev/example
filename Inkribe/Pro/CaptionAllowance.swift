@@ -6,7 +6,7 @@ struct CaptionAllowance: Sendable {
     let reserved: Int
     let resetsAt: Date
     var remaining: Int { max(0, Commerce.weeklySeconds - used - reserved) }
-    var summary: String { "\(used / 60)m \(used % 60)s of 5 min used this week" }
+    var summary: String { "\(used / 60)m \(used % 60)s of \(Commerce.weeklyMinutes) min used this week" }
 }
 
 /// Owned exclusively by ProjectRepository. Reservations protect queued work;

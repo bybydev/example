@@ -11,7 +11,20 @@ final class ProcessingLifecycle {
     private(set) var error: String?
     private var fileURL: URL?
     private var pendingPause: Bool?
+    private(set) var isSwitchingModel = false
+    private(set) var workGeneration = UUID()
     var canRun: Bool { foreground && !userPaused && error == nil }
+    var canTranscribe: Bool { canRun && !isSwitchingModel }
+
+    func beginModelSwitch() throws {
+        guard !isSwitchingModel else { throw SpeechError.busy }
+        isSwitchingModel = true
+        workGeneration = UUID()
+    }
+    func endModelSwitch() { isSwitchingModel = false }
+    func requireAdmission(_ generation: UUID) throws {
+        guard !isSwitchingModel, generation == workGeneration else { throw CancellationError() }
+    }
 
     init() { reload() }
 

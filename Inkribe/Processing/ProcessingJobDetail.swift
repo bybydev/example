@@ -9,7 +9,6 @@ struct ProcessingJobDetail: View {
     @State private var pendingAction: ProcessingAction?
     @State private var confirming = false
     @State private var recovering = false
-    @State private var showingModels = false
     private var processing: ProcessingCoordinator { model.processing }
     private var entry: ProcessingEntry? { processing.entry(key) }
     private var artifact: ExportArtifact? { key.kind == .export ? model.exports.artifacts[key.jobID] : nil }
@@ -57,7 +56,6 @@ struct ProcessingJobDetail: View {
         .navigationBarTitleDisplayMode(.inline)
         .themedSurface()
         .task { if key.kind == .export { await model.exports.refreshArtifacts() } }
-        .sheet(isPresented: $showingModels) { SpeechModelsView() }
         .confirmationDialog(confirmationTitle, isPresented: $confirming) {
             if let pendingAction {
                 Button(confirmationTitle, role: .destructive) { perform(pendingAction) }
@@ -69,18 +67,16 @@ struct ProcessingJobDetail: View {
         if let entry, key.kind == .transcription,
            let request = try? entry.record.decode(SpeechJob.self).payload {
             Section("Captured transcription request") {
-                LabeledContent("Model", value: (try? SpeechModelCatalog.descriptor(request.resolvedModelID))?.displayName ?? request.resolvedModelID)
                 LabeledContent("Language", value: SpeechLanguage.name(request.languageCode ?? "auto"))
                 LabeledContent("Saved revision", value: String(request.expectedRevision))
                 if let windows = request.windowIndices {
                     Text("Targeted retry: \(windows.count) ranges").font(.footnote)
                 }
-                if !model.transcription.models.isAvailable(request.resolvedModelID) {
-                    Text("The captured model is not available. Install that model before retrying.")
+                if !model.transcription.modelAvailable {
+                    Text("Speech recognition for this retry is unavailable. Review Speech Models in Settings, then try again.")
                         .foregroundStyle(.secondary)
-                    Button("Manage speech models", systemImage: "cpu") { showingModels = true }
                 }
-                Text("Retry keeps the captured model and language, rechecks the current project and allowance, and preserves accepted captions and edits.")
+                Text("Retry uses the active speech model, rechecks the current project and allowance, and preserves accepted captions and edits.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

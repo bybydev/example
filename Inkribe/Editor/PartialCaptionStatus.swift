@@ -8,7 +8,6 @@ struct PartialCaptionStatus: View {
     let preparing: Bool
     let retry: () -> Void
     let reset: () -> Void
-    @State private var showingModels = false
     @State private var confirmReset = false
 
     var body: some View {
@@ -46,9 +45,9 @@ struct PartialCaptionStatus: View {
                 }
                 .font(.caption)
             }
-            if let modelID = document.recognition?.modelID, !speech.models.isAvailable(modelID) {
-                Button("Download the original speech model", systemImage: "cpu") { showingModels = true }
-                    .font(.caption)
+            if !speech.modelAvailable {
+                Text("Speech recognition for this retry is unavailable. Review Speech Models in Settings, then try again.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let error = speech.persistenceError {
                 Text(error).font(.caption).foregroundStyle(.red)
@@ -56,7 +55,6 @@ struct PartialCaptionStatus: View {
             }
             if preparing { ProgressView("Preparing retry…").font(.caption) }
         }
-        .sheet(isPresented: $showingModels) { SpeechModelsView() }
         .confirmationDialog("Reset saved retry progress?", isPresented: $confirmReset) {
             Button("Reset retry progress", action: reset)
         } message: {

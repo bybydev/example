@@ -124,8 +124,38 @@ final class ProcessingCoordinator {
         exports.applyLifecycle()
     }
 
+    /// A model switch cancels transcription only. Exports keep running or
+    /// waiting at the shared gate; accepted captions and edits are retained.
+    func switchSpeechModel(to id: String) async throws {
+        guard id != SpeechEngine.shared.activeModelID else { return }
+        guard !transcription.models.isRemoving else { throw SpeechError.busy }
+        try lifecycle.beginModelSwitch()
+        ProcessingRuntime.shared.cancelTranscription()
+        transcription.applyLifecycle()
+        defer { lifecycle.endModelSwitch(); transcription.applyLifecycle() }
+        transcription.start()
+        await transcription.waitForAuthorization()
+        await transcription.models.cancelDownloadAndWait()
+        var cancellationError: Error?
+        for entry in entries where entry.id.kind == .transcription &&
+            !entry.record.status.isTerminal && entry.record.status != .cancelling {
+            do { try transcription.cancel(entry.id.jobID) }
+            catch { if cancellationError == nil { cancellationError = error } }
+        }
+        ProcessingRuntime.shared.cancelTranscription()
+        await ProcessingRuntime.shared.waitForTranscriptionIdle()
+        if let cancellationError { throw cancellationError }
+        guard transcription.persistenceError == nil else {
+            throw ProjectStoreError.unavailableRoot
+        }
+        try await SpeechEngine.shared.activate(id)
+        await transcription.models.refresh()
+        await transcription.refreshAllowance()
+    }
+
     func can(_ action: ProcessingAction, _ key: ProcessingJobKey) -> Bool {
-        guard let entry = entry(key), !acting.contains(key),
+        guard (key.kind != .transcription || !lifecycle.isSwitchingModel),
+              let entry = entry(key), !acting.contains(key),
               queue(for: key.kind)?.persistenceIssue == nil else { return false }
         let executing = queue(for: key.kind)?.executingJobIDs.contains(key.jobID) == true
         switch action {

@@ -1,5 +1,14 @@
 # Inkribe iOS — start here
 
+2026-10-26 update: current work is **Add missing caption**, branch
+`feat/ios-manual-captions` → develop, based on f0eb80c (merged #43).
+See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).
+Manual phrases are separate project data; schema 10 reads 1–9. Native recognition,
+working styles, Mac behavior and existing wrappers are preserved. Source-only
+review; compilation/device/output acceptance pending. Keep the new PR open with
+no auto-merge. Earlier current-phase entries below describe completed history.
+
+
 2026-10-26 update: current work is the approved animated Styles sheet in
 `feat/ios-animated-style-sheet` → develop, based on 81b8207 (merged #42).
 See [source checklist and pending acceptance](handoffs/ANIMATED_STYLES.md).

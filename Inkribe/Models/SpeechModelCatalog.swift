@@ -51,7 +51,7 @@ enum ModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unknownVariant: "This speech model variant is not supported by this version of Inkribe."
-        case .missing(let name): "\(name) is unavailable. Open Speech Models to download it, or select an available model."
+        case .missing(_): "Speech recognition is unavailable. Review Speech Models in Settings, then retry."
         case .downloadsDisabled: "This build uses bundled speech models. Downloads are disabled."
         case .busy: "Wait for the current model operation to finish, or cancel it."
         case .inUse: "This model is used by a queued or running transcription. Cancel that transcription before removing it."

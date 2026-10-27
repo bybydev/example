@@ -19,6 +19,7 @@ struct ProjectEditorView: View {
     @State private var session: EditorSession
     @State private var presentationID = UUID()
     @State private var renamingClip: ProjectClip?
+    @State private var addingCaption: ManualCaptionDraft?
     @State private var relinkAsset: UUID?
     @State private var isRelinking = false
     @State private var showDeleteConfirmation = false
@@ -57,7 +58,7 @@ struct ProjectEditorView: View {
             if phase != .active { session.pause(); Task { await session.flush() } }
         }
         .onDisappear {
-            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, !showStyleBrowser, renamingClip == nil, session.proUpsell == nil else { return }
+            guard !showProjectInfo, !showExport, !showQueue, !showStyleSheet, !showStyleBrowser, renamingClip == nil, addingCaption == nil, session.proUpsell == nil else { return }
             sessions.detach(session, owner: presentationID)
             Task { await session.flush(); await model.refreshLibrary() }
         }
@@ -84,6 +85,7 @@ struct ProjectEditorView: View {
         .sheet(isPresented: $showExport) { ExportView(session: session) }
         .sheet(isPresented: $showQueue, onDismiss: { Task { await session.refreshSaved() } }) { ProcessingQueueSheet() }
         .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
+        .sheet(item: $addingCaption, onDismiss: finishToolEditing) { draft in ManualCaptionSheet(session: session, draft: draft) }
         .sheet(item: $renamingClip) { clip in ClipRenameView(session: session, clipID: clip.id) }
         .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
         .sheet(isPresented: $showStyleBrowser, onDismiss: finishToolEditing) { CaptionStylesSheet(session: session) }
@@ -190,8 +192,9 @@ struct ProjectEditorView: View {
     private func activeWorkspace(_ document: ProjectDocument) -> some View {
         switch session.workspace.tool {
         case .captions:
-            if document.recognition?.words.isEmpty == false {
-                transcriptHeader(document)
+            transcriptHeader(document)
+            ManualCaptionConflictReview(session: session)
+            if document.hasCaptionUnits {
                 Toggle("Follow captions during playback", isOn: $session.workspace.followsPlayback)
                     .font(.subheadline)
                 if let snapshot = session.snapshot {
@@ -204,6 +207,7 @@ struct ProjectEditorView: View {
                         captionGroup(clip, number: index + 1, snapshot: snapshot, document: document)
                     }
                 }
+                if document.recognition == nil { transcription(document) }
             } else { transcription(document) }
         case .style:
             CaptionTemplatesPanel(session: session, browse: openStyleBrowser, customize: { showStyleSheet = true })
@@ -373,7 +377,7 @@ struct ProjectEditorView: View {
             Color.black
             // Export/Queue can push another editor for this same app-owned
             // session. Remove the covered layer before a modal takes the player.
-            if !showStyleSheet && !showExport && !showQueue { PlayerSurface(player: session.player) }
+            if !showStyleSheet && !showExport && !showQueue && addingCaption == nil { PlayerSurface(player: session.player) }
             if document.assets.allSatisfy({ $0.kind == .audio }) {
                 Image(systemName: "waveform").font(.system(size: 40)).foregroundStyle(.white.opacity(0.45))
             }
@@ -438,7 +442,7 @@ struct ProjectEditorView: View {
     }
 
     private var canPresentProjectError: Bool {
-        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && !showStyleBrowser && renamingClip == nil && session.proUpsell == nil
+        !showProjectInfo && !showExport && !showQueue && !showStyleSheet && !showStyleBrowser && renamingClip == nil && addingCaption == nil && session.proUpsell == nil
     }
 
     private var hasEditorError: Bool {
@@ -486,7 +490,8 @@ struct ProjectEditorView: View {
             CaptionGapRow(gap: gap,
                 busy: model.transcription.isActive(projectID) || preparingTranscription || model.transcription.isAuthorizing,
                 seek: { focused = nil; session.seek(to: gap.interval.start) },
-                retry: { retryMissing(windowIndices: [gap.id]) })
+                retry: { retryMissing(windowIndices: [gap.id]) },
+                add: { beginAddingCaption(gap: gap) })
         }
     }
 
@@ -517,12 +522,12 @@ struct ProjectEditorView: View {
     private var correctionPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let cue = session.selectedCue, let snapshot = session.snapshot {
-                Text("Words & phrases").font(.headline)
+                Text(session.selectedManualCaption == nil ? "Words & phrases" : "Manual caption").font(.headline)
                 Text(snapshot.text(for: cue).isEmpty ? "Hidden caption" : snapshot.text(for: cue))
                     .font(.body).textSelection(.enabled)
                 Text(EditorTime.display(cue.interval.start) + "–" + EditorTime.display(cue.interval.end))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Text("Select a word to correct it. Clear its text to hide it; timing stays unchanged.")
+                Text(session.selectedManualCaption == nil ? "Select a word to correct it. Clear its text to hide it; timing stays unchanged." : "This phrase uses timing you chose. Clear its text to hide it; no word timings are generated.")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollViewReader { words in
                     ScrollView(.horizontal) {
@@ -576,16 +581,20 @@ struct ProjectEditorView: View {
                         .id(EditorField.word(id))
                         .accessibilityLabel("Selected word or corrected phrase")
                 }
-                ViewThatFits(in: .horizontal) {
-                    HStack { splitButton; mergeButton }
-                    VStack(alignment: .leading) { splitButton; mergeButton }
+                if session.selectedManualCaption == nil {
+                    ViewThatFits(in: .horizontal) {
+                        HStack { splitButton; mergeButton }
+                        VStack(alignment: .leading) { splitButton; mergeButton }
+                    }
+                } else if let manual = session.selectedManualCaption {
+                    Button("Delete manual caption", role: .destructive) { focused = nil; session.deleteManualCaption(manual.id) }
                 }
                 DisclosureGroup("Caption timing") {
                     TimingFields(interval: session.timingCue?.interval ?? cue.interval, identity: cue.id,
-                        detail: timingExplanation + " Applying caption timing scales its word intervals as a manual correction.",
+                        detail: timingExplanation + (session.selectedManualCaption == nil ? " Applying caption timing scales its word intervals as a manual correction." : " This is a manually timed phrase."),
                         apply: session.retimeCue, workspace: $session.workspace, focused: $focused)
                 }
-                if let word = session.timingWord {
+                if session.selectedManualCaption == nil, let word = session.timingWord {
                     DisclosureGroup("Selected word timing") {
                         TimingFields(interval: word.projectInterval, identity: word.id,
                             detail: timingExplanation + " Extending a word expands the caption if needed.",
@@ -596,7 +605,7 @@ struct ProjectEditorView: View {
         }
     }
 
-    private func wordLabel(_ word: CaptionWord) -> String {
+    private func wordLabel(_ word: CaptionUnit) -> String {
         let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "Hidden word" : text
     }
@@ -618,18 +627,56 @@ struct ProjectEditorView: View {
     }
 
     private func transcriptHeader(_ document: ProjectDocument) -> some View {
-        HStack(spacing: 8) {
-            Text("Captions").font(.headline)
-            Text("\(session.snapshot?.cues.count ?? 0)").font(.caption).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            if let count = document.recognition?.progress.map({ $0.totalWindows - $0.resolved.count }), count > 0 {
-                Text(count == 1 ? "1 gap" : "\(count) gaps")
-                    .font(.caption2).foregroundStyle(.orange)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.orange.opacity(0.10), in: Capsule())
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                captionSummary(document).fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 8)
+                addCaptionButton.fixedSize(horizontal: true, vertical: false)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                captionSummary(document)
+                addCaptionButton
             }
         }
         .padding(.horizontal, 8)
+    }
+
+    private var addCaptionButton: some View {
+        Button("Add caption", systemImage: "plus") { beginAddingCaption() }
+            .font(.subheadline).frame(minHeight: 44)
+    }
+
+    private func captionSummary(_ document: ProjectDocument) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Captions").font(.headline)
+                Text("\(session.snapshot?.cues.count ?? 0)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let count = document.recognition?.progress.map({ $0.totalWindows - $0.resolved.count }), count > 0 {
+                Text(count == 1 ? "1 gap" : "\(count) gaps")
+                    .font(.caption2).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func beginAddingCaption(gap: CaptionGap? = nil) {
+        guard let document = session.document else { return }
+        focused = nil
+        session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        let timeline = OutputTimeline(document)
+        let candidates = document.orderedClips.filter { timeline.outputInterval($0.timelineInterval) != nil }
+        let preferred = gap?.clipID ?? session.currentClip?.id
+        guard let clip = candidates.first(where: { $0.id == preferred }) ?? candidates.first,
+              let retained = timeline.outputInterval(clip.timelineInterval) else { return }
+        let lower = gap.map { max(retained.start, $0.interval.start) } ?? retained.start
+        let upper = gap.map { min(retained.end, $0.interval.end) } ?? retained.end
+        let length = CMTime(seconds: 2, preferredTimescale: 60_000)
+        let latestStart = (try? MediaTime(validating: CMTimeSubtract(upper.cmTime, length))) ?? lower
+        let start = gap != nil ? lower : min(max(lower, session.time), max(lower, latestStart))
+        let end = min(upper, (try? MediaTime(validating: CMTimeAdd(start.cmTime, length))) ?? upper)
+        guard let interval = try? MediaInterval(start: start, end: end) else { return }
+        addingCaption = ManualCaptionDraft(clipID: clip.id, interval: interval)
+        session.seek(to: start)
     }
 
     private func retryMissing(windowIndices: [Int]? = nil) {

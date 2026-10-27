@@ -1,9 +1,19 @@
 import CoreMedia
 import Foundation
 
+/// Display-only timed text. Native words retain their own strict persisted model;
+/// a manually authored phrase needs no fabricated native window or word anchors.
+struct CaptionUnit: Sendable {
+    let id: UUID
+    let clipID: UUID
+    let text: String
+    var projectInterval: MediaInterval
+    let timingProvenance: String
+}
+
 struct CaptionPresentation: Sendable {
     let cueID: UUID
-    let words: [CaptionWord]
+    let words: [CaptionUnit]
     let activeWordIDs: Set<UUID>
     var text: String {
         words.map(\.text).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -43,13 +53,15 @@ struct CaptionSnapshot: Sendable {
     private(set) var style: CaptionStyle
     private var clipStyles: [UUID: CaptionStyle]
     private let clipOverrides: [UUID: CaptionStyleOverrides]
-    let wordsByID: [UUID: CaptionWord]
+    let manualCaptionIDs: Set<UUID>
+    let manualConflicts: [ManualCaptionConflict]
+    let wordsByID: [UUID: CaptionUnit]
     let cues: [CaptionCue]
     let timeline: OutputTimeline
     let gaps: [CaptionGap]
     let transcriptItems: [CaptionTranscriptItem]
     let transcriptItemsByClip: [UUID: [CaptionTranscriptItem]]
-    private let originalWordsByID: [UUID: CaptionWord]
+    private let originalWordsByID: [UUID: CaptionUnit]
     private let ordered: [CaptionCue]
     private let prefixEnd: [MediaTime]
 
@@ -61,9 +73,36 @@ struct CaptionSnapshot: Sendable {
         clipOverrides = Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).map { ($0.id, $0.captions) })
         let timeline = OutputTimeline(document)
         self.timeline = timeline
-        let originalWords = document.recognition?.words ?? []
+        let manuals = document.manualCaptions ?? []
+        manualCaptionIDs = Set(manuals.map(\.id))
+        let nativeWords = document.recognition?.words ?? []
+        let retainedManuals = manuals.compactMap { value -> ManualCaption? in
+            guard let interval = timeline.retained(value.interval) else { return nil }
+            var copy = value; copy.interval = interval; return copy
+        }
+        let manualIndex = ManualCaptionIndex(retainedManuals)
+        var conflicts: [ManualCaptionConflict] = []
+        if !manualIndex.captions.isEmpty {
+            let nativeIndex = Dictionary(uniqueKeysWithValues: nativeWords.map { ($0.id, $0) })
+            for cue in document.recognition?.cues ?? [] {
+                guard let retained = timeline.retained(cue.interval) else { continue }
+                let overlaps = manualIndex.overlapping(retained)
+                guard !overlaps.isEmpty else { continue }
+                let text = cue.wordIDs.compactMap { nativeIndex[$0]?.text }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { conflicts.append(ManualCaptionConflict(cue: cue, text: text, manuals: overlaps)) }
+            }
+        }
+        manualConflicts = conflicts
+        let suppressed = Set(conflicts.map(\.id))
+        let originalWords = nativeWords.map {
+            CaptionUnit(id: $0.id, clipID: $0.clipID, text: $0.text,
+                projectInterval: $0.projectInterval, timingProvenance: $0.timingProvenance)
+        } + manuals.map {
+            CaptionUnit(id: $0.id, clipID: $0.clipID, text: $0.text,
+                projectInterval: $0.interval, timingProvenance: "manual-phrase")
+        }
         originalWordsByID = Dictionary(uniqueKeysWithValues: originalWords.map { ($0.id, $0) })
-        let mappedWords = originalWords.compactMap { word -> CaptionWord? in
+        let mappedWords = originalWords.compactMap { word -> CaptionUnit? in
             guard let interval = timeline.outputInterval(word.projectInterval) else { return nil }
             var copy = word
             copy.projectInterval = interval
@@ -71,13 +110,31 @@ struct CaptionSnapshot: Sendable {
         }
         let mappedIndex = Dictionary(uniqueKeysWithValues: mappedWords.map { ($0.id, $0) })
         wordsByID = mappedIndex
-        cues = (document.recognition?.cues ?? []).compactMap { cue in
+        // A manual phrase replaces the whole overlapping recognized cue. Keep
+        // native anchors intact and expose every replacement in the editor/export
+        // review, including overlaps introduced by a later gap retry.
+        let nativeCues = (document.recognition?.cues ?? []).filter { !suppressed.contains($0.id) }
+        let manualCues = manuals.map { CaptionCue(id: $0.id, wordIDs: [$0.id], interval: $0.interval) }
+        let additions = manualCues.sorted {
+            $0.interval.start == $1.interval.start ? $0.id.uuidString < $1.id.uuidString : $0.interval.start < $1.interval.start
+        }
+        var originalCues: [CaptionCue] = []
+        originalCues.reserveCapacity(nativeCues.count + additions.count)
+        var addition = 0
+        for cue in nativeCues {
+            while addition < additions.count, additions[addition].interval.start < cue.interval.start {
+                originalCues.append(additions[addition]); addition += 1
+            }
+            originalCues.append(cue)
+        }
+        originalCues.append(contentsOf: additions.dropFirst(addition))
+        cues = originalCues.compactMap { cue in
             guard let interval = timeline.outputInterval(cue.interval) else { return nil }
             let ids = cue.wordIDs.filter { mappedIndex[$0] != nil }
             guard !ids.isEmpty else { return nil }
             return CaptionCue(id: cue.id, wordIDs: ids, interval: interval)
         }
-        let originalStarts = Dictionary(uniqueKeysWithValues: (document.recognition?.cues ?? []).map { ($0.id, $0.interval.start) })
+        let originalStarts = Dictionary(uniqueKeysWithValues: originalCues.map { ($0.id, $0.interval.start) })
         var missing: [CaptionGap] = []
         if let progress = document.recognition?.progress, progress.isIncomplete,
            let plan = try? SpeechCheckpoint.plan(clips: document.clips, assets: document.assets) {

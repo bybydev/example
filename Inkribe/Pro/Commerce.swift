@@ -4,7 +4,8 @@ import Foundation
 enum Commerce {
     static let monthlyID = "com.hoangbkit.inkribe.pro.monthly"
     static let lifetimeID = "com.hoangbkit.inkribe.pro.lifetime"
-    static let weeklySeconds = 300
+    static let weeklyMinutes = 30
+    static let weeklySeconds = weeklyMinutes * 60
     static let configuration = PurchaseConfiguration(productIDs: [monthlyID, lifetimeID],
         preferredProductID: monthlyID, features: features)
     static let simulatedProducts: [StoreProduct] = [
@@ -15,7 +16,7 @@ enum Commerce {
     ]
     static let features: [PurchaseFeature] = [
         .init(id: "captioning", systemImage: "waveform", title: "Unlimited Captioning",
-              message: "Transcribe your videos without weekly limits.", freeValue: "5 min/week", proValue: "Unlimited"),
+              message: "Transcribe your videos without weekly limits.", freeValue: "\(weeklyMinutes) min/week", proValue: "Unlimited"),
         .init(id: "styles", systemImage: "textformat", title: "All Styles & Animations",
               message: "Unlock every caption font, template and animation.", freeValue: "Basic", proValue: "All"),
         .init(id: "fullHD", systemImage: "film", title: "Full HD Exports",
