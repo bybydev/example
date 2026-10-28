@@ -32,10 +32,30 @@ struct InkribeApp: App {
     }
 }
 
-/// App-owned access and ordering; palette definitions remain in AppFoundation.
+/// App-owned ordering/access plus Graphite; existing palettes come from AppFoundation.
 private enum InkribeThemes {
+    static let graphite = AppTheme(
+        id: "graphite",
+        title: "Graphite",
+        symbolName: "moon.fill",
+        access: .free,
+        appearance: ThemeAppearance(
+            background: ThemeColor(hex: 0x141414),
+            gradientStart: ThemeColor(hex: 0x20262D),
+            gradientEnd: ThemeColor(hex: 0x16384A),
+            accent: ThemeColor(hex: 0x279ED2),
+            primaryForeground: ThemeColor(hex: 0xF2F2F2),
+            secondaryForeground: .white.withAlpha(0.72),
+            surface: .white.withAlpha(0.065),
+            elevatedSurface: .white.withAlpha(0.10),
+            border: .white.withAlpha(0.13),
+            shadow: .black.withAlpha(0.42),
+            preferredColorScheme: .dark
+        )
+    )
+
     static let catalog = ThemeCatalog(
-        themes: [FoundationThemes.paper.withAccess(.free)]
+        themes: [FoundationThemes.paper.withAccess(.free), graphite]
             + FoundationThemes.all.filter { $0.id != FoundationThemes.paper.id }
                 .map { $0.withAccess(.pro) },
         fallbackThemeID: FoundationThemes.paper.id

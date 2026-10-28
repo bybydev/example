@@ -1,5 +1,48 @@
 # Inkribe iOS — current design contract
 
+## Preview handoff (2026-10-28, stacked on #50)
+
+Opening Captions/Customize or another preview-bearing presentation keeps the covered
+editor visually stable: retain its video still and caption time/snapshot while
+the live player belongs to the visible host. On return, adopt the outgoing host's
+latest still until the returning video layer has its first displayable frame.
+There is one live owner and one AVPlayer; no second player or project reload.
+Caption overlays on stills use the held presentation, not another sheet's advancing
+playhead. Audio-only previews keep live caption timing without waiting for video.
+Initial/no-frame, deliberate black footage and real preview failures retain their
+existing states. Preserve preview geometry, #50's row actions, push/pop, controls,
+highlight-without-auto-scroll, keyboard, editing/history/saving and exports.
+Source integration is not device acceptance. See handoffs/PREVIEW_HANDOFF.md.
+
+## Contextual caption editor (2026-10-28)
+
+Bottom actions are Clips, Captions, Styles, Media and Customize. Export remains
+toolbar-only. Timing is no longer a top-level action. First tap selects a timeline
+caption; second tap opens Edit caption without another seek. In Captions, the
+row text selects/highlights and seeks to that caption, including a selected row.
+Only the selected row's top-left Edit caption button pushes editing in the existing
+navigation stack, in the former Editing caption label's position. Back/swipe-back/
+Done returns to the same Captions list and scroll context. The list has no inline
+text editing, Split / Words or deletion control; those edits belong to Edit caption.
+
+Captions shows a bounded video preview at the top, followed by play/pause, time
+readout and Undo/Redo. The list scrolls independently below; there is no scrubber,
+timeline or follow toggle in this sheet. The current playback caption always has
+an accent highlight/marker, even when a different caption is selected for editing.
+Playback never selects another row or automatically scrolls the list. The same
+player/renderer serves this preview; the covered main host retains a still while
+its live layer is disconnected.
+
+Edit caption contains one full-caption text field, native word correction and
+split/merge where available, expandable caption/word timing and manual deletion.
+There is no player, scrubber or transport in this editor. From Captions, Done pops
+to the list. From the timeline, Done (or sheet dismissal) returns to the main
+timeline, paused 0.25 seconds before the surviving edited caption, clamped to zero,
+with that caption selected. No automatic playback.
+Precision timing retains its existing original-project-clock semantics. A removed
+or no-longer-visible target shows an unavailable state rather than another caption.
+Other consolidation is deferred. This section supersedes older Timing-sheet wording.
+
 2026-10-24. Expanded Pass 1 (#41) adds the discussed project experience to the
 AppShot-inspired editor and AppShot/AppReel home hierarchy
 to Inkribe's actual caption workflow and AppFoundation themes. These are integrated
@@ -105,17 +148,18 @@ intervals explicitly without inventing word boundaries or modifying native ancho
 Positive-duration/precision and clip/trim bounds are enforced before publication.
 
 An edge hidden by project trim has no timeline handle; its original timing remains
-editable in the Timing sheet. Body movement preserves already-hidden portions.
+editable in Edit caption. Body movement preserves already-hidden portions.
 Existing native overlap behavior remains; timeline gestures cannot overlap another
 manual caption or silently replace additional recognized captions. Such proposals
 show a red block/readout and require the existing Add Caption replacement review.
 VoiceOver provides 0.1-second move/start/end actions through the same edit path.
 Native execution/performance are unverified.
 
-Bottom actions are Captions, Styles, Timing, Media, Customize and Export. Each opens
+Bottom actions are Clips, Captions, Styles, Media and Customize. Each opens
 a sheet. Captions retains transcript correction, manual caption creation, overlap
-review, generation, gaps/retry and explicit playback-follow. Timing retains word/
-phrase correction, split/merge and original-project-clock timing fields. Media
+review, generation, gaps/retry and current-playback highlighting without auto-scroll.
+Its top preview has play/pause and Undo/Redo but no scrubber/timeline. Contextual Edit caption
+retains word/phrase correction, split/merge and original-project-clock timing fields. Media
 retains trim/framing/audio and project/clip scope. Customize retains the existing
 actual-preview inspector and reset controls. Styles retains the large-only animated
 sample browser with explicit Apply and existing Pro rules. Export keeps the durable

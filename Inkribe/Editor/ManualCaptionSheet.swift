@@ -13,6 +13,7 @@ struct ManualCaptionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     let session: EditorSession
+    @Binding var previewIsActive: Bool
     @State private var clipID: UUID
     @State private var text = ""
     @State private var start: String
@@ -37,8 +38,9 @@ struct ManualCaptionSheet: View {
             exactStart: exactStart, exactEnd: exactEnd)
     }
 
-    init(session: EditorSession, draft: ManualCaptionDraft) {
+    init(session: EditorSession, draft: ManualCaptionDraft, previewIsActive: Binding<Bool>) {
         self.session = session
+        _previewIsActive = previewIsActive
         _clipID = State(initialValue: draft.clipID)
         _start = State(initialValue: EditorTime.field(draft.interval.start))
         _end = State(initialValue: EditorTime.field(draft.interval.end))
@@ -160,14 +162,7 @@ struct ManualCaptionSheet: View {
     }
 
     private func preview(_ document: ProjectDocument) -> some View {
-        ZStack {
-            Color.black
-            PlayerSurface(player: session.player)
-            if let snapshot = session.snapshot {
-                StyledCaptionOverlay(snapshot: snapshot, time: session.time,
-                    mediaSize: PreviewComposition.previewSize(for: document.canvas)) { renderError = $0 }
-            }
-        }
+        EditorPlayerPreview(session: session, isActive: previewIsActive, onError: { renderError = $0 })
         .frame(maxWidth: .infinity).frame(height: 180)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityLabel("Video preview, " + (session.presentation?.text ?? "no caption at playhead"))

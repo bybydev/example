@@ -23,6 +23,8 @@ struct ProjectEditorView: View {
     @State private var isRelinking = false
     @State private var showDeleteConfirmation = false
     @State private var activeToolSheet: EditorTool?
+    @State private var captionEditorCueID: UUID?
+    @State private var editingCaptionFromTranscript = false
     @State private var preparationAttempt = UUID()
     @State private var openingTask: Task<Void, Never>?
     @State private var isOpening = true
@@ -92,7 +94,7 @@ struct ProjectEditorView: View {
             .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
             .sheet(item: Binding(get: { activeToolSheet == nil ? addingCaption : nil },
                 set: { if activeToolSheet == nil { addingCaption = $0 } }), onDismiss: finishToolEditing) { draft in
-                    ManualCaptionSheet(session: session, draft: draft)
+                    ManualCaptionSheet(session: session, draft: draft, previewIsActive: manualPreviewBinding)
             }
             .sheet(isPresented: $showClips, onDismiss: finishToolEditing) {
                 ProjectClipsSheet(session: session, initialClipID: clipsInitialSelection) { id in
@@ -153,12 +155,14 @@ struct ProjectEditorView: View {
             if let document = session.document {
                 VStack(spacing: 8) {
                     preview(document, height: previewHeight(document, in: geometry.size))
+                        .padding(.horizontal, 12)
                     EditorPlaybackControls(session: session, showsTimeline: false,
                         onInteraction: { focused = nil },
                         onExpand: { session.workspace.expandedPreview = true })
+                        .padding(.horizontal, 12)
                     timelineWorkspace(document)
                 }
-                .padding(.horizontal, 12).padding(.top, 8)
+                .padding(.top, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             } else if let error = session.loadError {
                 VStack(spacing: 12) {
@@ -179,6 +183,7 @@ struct ProjectEditorView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 12) {
                 timelineHeader(document)
+                    .padding(.horizontal, 12)
                 ProjectTimelineView(session: session,
                     isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving && !session.isChangingClips,
                     onInteraction: finishToolInteraction,
@@ -186,12 +191,15 @@ struct ProjectEditorView: View {
                     onClip: { session.seekToClip($0) })
                     .frame(height: CGFloat(TimelineGeometry.trackHeight))
                 editorErrors
+                    .padding(.horizontal, 12)
                 if document.recognition?.isIncomplete == true {
                     Button("Review unfinished captions", systemImage: "exclamationmark.bubble") { switchTool(.captions) }
                         .font(.footnote).frame(minHeight: 44)
+                        .padding(.horizontal, 12)
                 } else if !document.hasCaptionUnits {
                     Button("Add or generate captions", systemImage: "captions.bubble") { switchTool(.captions) }
                         .font(.footnote).frame(minHeight: 44)
+                        .padding(.horizontal, 12)
                 }
             }.padding(.vertical, 8)
         }
@@ -232,8 +240,7 @@ struct ProjectEditorView: View {
 
     private func timelineCaptionTapped(_ id: UUID) {
         if session.workspace.timelineCueID == id, session.selectedCueID == id {
-            session.workspace.setAnchor("timeline-caption-editor", for: .timing)
-            switchTool(.timing)
+            openCaptionEditor(id)
         } else {
             session.selectCue(id)
         }
@@ -289,7 +296,7 @@ struct ProjectEditorView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .sheet(item: $addingCaption, onDismiss: finishToolEditing) { draft in
-                ManualCaptionSheet(session: session, draft: draft)
+                ManualCaptionSheet(session: session, draft: draft, previewIsActive: manualPreviewBinding)
             }
             .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
             .alert("Project", isPresented: Binding(get: { addingCaption == nil && session.proUpsell == nil && model.alertMessage != nil },
@@ -300,16 +307,65 @@ struct ProjectEditorView: View {
 
     private func toolNavigation(_ tool: EditorTool) -> some View {
         NavigationStack {
-            toolContent(tool)
-                .navigationTitle(tool.title).navigationBarTitleDisplayMode(.inline).themedSurface()
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { activeToolSheet = nil } }
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
-                    }
+            toolPage(tool)
+                .navigationDestination(isPresented: $editingCaptionFromTranscript) {
+                    toolPage(.captionEditor)
                 }
         }
+        .onChange(of: editingCaptionFromTranscript) { wasEditing, isEditing in
+            guard wasEditing, !isEditing, activeToolSheet == .captions else { return }
+            // Native Back/swipe and Done pop to the same transcript, without
+            // closing its sheet, seeking or replacing its scroll context.
+            finishToolInteraction()
+            captionEditorCueID = nil
+            Task { await session.flush() }
+        }
+    }
+
+    private func toolPage(_ tool: EditorTool) -> some View {
+        toolPageContent(tool)
+            .navigationTitle(tool.title).navigationBarTitleDisplayMode(.inline).themedSurface()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        if tool == .captionEditor { closeCaptionEditor() }
+                        else { focused = nil; activeToolSheet = nil }
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func toolPageContent(_ tool: EditorTool) -> some View {
+        if tool == .captions {
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    if let document = session.document {
+                        captionsPlaybackHeader(document, in: geometry.size)
+                    }
+                    toolContent(tool)
+                }
+                .disabled(preparingTranscription)
+            }
+        } else {
+            toolContent(tool)
+        }
+    }
+
+    private func captionsPlaybackHeader(_ document: ProjectDocument, in size: CGSize) -> some View {
+        let width = max(0, size.width - 32)
+        let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
+        let height = max(0, min(width / aspect, min(260, size.height * 0.32)))
+        return VStack(spacing: 8) {
+            preview(document, height: height, inCaptions: true)
+            EditorPlaybackControls(session: session, showsOverview: false, showsTimeline: false,
+                onInteraction: { focused = nil })
+        }
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
     }
 
     private func toolContent(_ tool: EditorTool) -> some View {
@@ -321,9 +377,6 @@ struct ProjectEditorView: View {
                         if tool == .captions, document.recognition?.isIncomplete == true {
                             PartialCaptionStatus(document: document, preparing: preparingTranscription,
                                 retry: { retryMissing() }, reset: resetRetryProgress)
-                        }
-                        if tool == .captions || tool == .timing {
-                            EditorPlaybackControls(session: session, onInteraction: { focused = nil })
                         }
                         activeWorkspace(document, tool: tool)
                     }
@@ -337,12 +390,8 @@ struct ProjectEditorView: View {
             .scrollPosition(id: scrollBinding(for: tool))
             .id(tool)
             .onChange(of: focused) { _, field in
+                guard tool != .captions || !editingCaptionFromTranscript else { return }
                 if let field { scroll.scrollTo(field, anchor: .center) }
-            }
-            .onChange(of: session.presentation?.cueID) { _, id in
-                guard tool == .captions, session.workspace.followsPlayback, session.isPlaying,
-                      focused == nil, let id else { return }
-                scroll.scrollTo(id, anchor: .center)
             }
         }
     }
@@ -387,8 +436,6 @@ struct ProjectEditorView: View {
             transcriptHeader(document)
             ManualCaptionConflictReview(session: session)
             if document.hasCaptionUnits {
-                Toggle("Follow captions during playback", isOn: $session.workspace.followsPlayback)
-                    .font(.subheadline)
                 if let snapshot = session.snapshot {
                     if snapshot.transcriptItems.isEmpty {
                         Text("No captions are inside the retained range. Adjust trim in Media to restore them.")
@@ -404,22 +451,67 @@ struct ProjectEditorView: View {
         case .style:
             // Styles owns its existing animated browser rather than this sheet.
             EmptyView()
-        case .timing:
-            if let cue = session.selectedCue {
-                CaptionTranscriptRow(session: session, cue: cue,
-                    active: session.presentation?.cueID == cue.id,
-                    openWords: { focused = nil }, focused: $focused)
-                    .id("timeline-caption-editor")
-                correctionPanel
-                Button("Return to caption correction", systemImage: "captions.bubble") { switchTool(.captions) }
-            } else {
-                ContentUnavailableView("Select a caption", systemImage: "timer",
-                    description: Text("Choose a caption in Captions to correct words, split, merge or adjust timing."))
-                Button("Choose a caption") { switchTool(.captions) }
-            }
+        case .captionEditor:
+            captionEditorContent
         case .media:
             MediaPanel(session: session, focused: $focused)
         }
+    }
+
+    @ViewBuilder
+    private var captionEditorContent: some View {
+        if let cue = session.selectedCue, cue.id == captionEditorCueID {
+            captionTextEditor(cue)
+                .id("caption-editor")
+            correctionPanel
+            Text(editingCaptionFromTranscript ? "Tap Back or Done to return to Captions." :
+                "Tap Done to return to the timeline and play back your changes.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            ContentUnavailableView("Caption unavailable", systemImage: "captions.bubble",
+                description: Text(editingCaptionFromTranscript ?
+                    "This caption is no longer visible. Tap Back or Done to return to Captions." :
+                    "This caption is no longer visible. Tap Done to return to the timeline."))
+        }
+    }
+
+    private func captionTextEditor(_ cue: CaptionCue) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack { captionEditingLabel; Spacer(minLength: 4); captionTimestamp(cue) }
+                VStack(alignment: .leading, spacing: 4) { captionEditingLabel; captionTimestamp(cue) }
+            }
+            .font(.caption)
+            TextField("Hidden caption", text: Binding(get: {
+                let text = session.snapshot?.text(for: cue) ?? ""
+                return session.workspace.captionDraft?.value(for: cue.id, canonical: text) ?? text
+            }, set: { value in
+                guard session.editCueText(cueID: cue.id, value: value) else { return }
+                session.workspace.captionDraft = EditorTextDraft(id: cue.id, text: value,
+                    canonical: session.snapshot?.text(for: cue) ?? "")
+            }), axis: .vertical)
+            .font(.body)
+            .focused($focused, equals: .caption(cue.id))
+            .id(EditorField.caption(cue.id))
+            .accessibilityLabel("Caption text")
+            if cue.wordIDs.contains(where: { session.snapshot?.wordsByID[$0]?.timingProvenance == "whisper-segment" }) {
+                Label("Phrase timing", systemImage: "text.alignleft")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var captionEditingLabel: some View {
+        Label(session.selectedManualCaption == nil ? "Editing caption" : "Manual caption", systemImage: "pencil")
+            .foregroundStyle(theme.accentColor)
+    }
+
+    private func captionTimestamp(_ cue: CaptionCue) -> some View {
+        Text(EditorTime.display(cue.interval.start) + "–" + EditorTime.display(cue.interval.end))
+            .monospacedDigit().foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -451,6 +543,29 @@ struct ProjectEditorView: View {
         finishToolInteraction()
         session.workspace.select(tool)
         activeToolSheet = tool
+    }
+
+    private func openCaptionEditor(_ id: UUID) {
+        guard session.snapshot?.cues.contains(where: { $0.id == id }) == true else { return }
+        finishToolInteraction()
+        // A second timeline tap and a selected row's Edit caption action open
+        // without seeking again. Row selection itself remains a separate action.
+        if session.selectedCueID != id { session.selectCue(id) }
+        captionEditorCueID = id
+        session.workspace.setAnchor("caption-editor", for: .captionEditor)
+        if activeToolSheet == .captions {
+            // Push in Captions' existing stack; the list keeps its scroll context.
+            editingCaptionFromTranscript = true
+        } else {
+            session.workspace.select(.captionEditor)
+            activeToolSheet = .captionEditor
+        }
+    }
+
+    private func closeCaptionEditor() {
+        focused = nil
+        if editingCaptionFromTranscript { editingCaptionFromTranscript = false }
+        else { activeToolSheet = nil }
     }
 
     private func openStyleBrowser() {
@@ -560,34 +675,30 @@ struct ProjectEditorView: View {
         return max(0, min(width / aspect, min(available, min(360, size.height * 0.48))))
     }
 
-    private func preview(_ document: ProjectDocument, height: CGFloat, fullscreen: Bool = false) -> some View {
-        ZStack {
-            Color.black
-            // Export/Queue can push another editor for this same app-owned
-            // session. Remove the covered layer before a modal takes the player.
-            if !showStyleSheet && !showExport && !showQueue && addingCaption == nil &&
-                (!session.workspace.expandedPreview || fullscreen) { PlayerSurface(player: session.player) }
-            if document.assets.allSatisfy({ $0.kind == .audio }) {
-                Image(systemName: "waveform").font(.system(size: 40)).foregroundStyle(.white.opacity(0.45))
-            }
-            if let snapshot = session.snapshot {
-                StyledCaptionOverlay(snapshot: snapshot, time: session.time,
-                    mediaSize: PreviewComposition.previewSize(for: document.canvas)) { captionRenderError = $0 }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(session.presentation?.text ?? "No caption at playhead")
-            }
-            if session.isPreparingPreview { ProgressView().tint(.white).accessibilityLabel("Preparing preview") }
-        }
+    private func preview(_ document: ProjectDocument, height: CGFloat, fullscreen: Bool = false,
+                         inCaptions: Bool = false) -> some View {
+        EditorPlayerPreview(session: session,
+            isActive: previewOwnsPlayer(fullscreen: fullscreen, inCaptions: inCaptions),
+            onError: { captionRenderError = $0 })
         .frame(maxWidth: .infinity)
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func previewOwnsPlayer(fullscreen: Bool, inCaptions: Bool) -> Bool {
+        guard !isLeaving, !showStyleSheet, !showExport, !showQueue, addingCaption == nil else { return false }
+        if inCaptions {
+            return activeToolSheet == .captions && !editingCaptionFromTranscript
+        }
+        if fullscreen { return session.workspace.expandedPreview }
+        return activeToolSheet != .captions && !session.workspace.expandedPreview
     }
 
     private var editorToolBar: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 4) {
                 actionButton("Clips", symbol: "film.stack", selected: showClips, action: openClips)
-                ForEach(EditorTool.allCases) { tool in
+                ForEach(EditorTool.primaryTools) { tool in
                     actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleBrowser)) {
                         switchTool(tool)
                     }
@@ -667,7 +778,7 @@ struct ProjectEditorView: View {
         case .cue(let cue):
             CaptionTranscriptRow(session: session, cue: cue,
                 active: session.presentation?.cueID == cue.id,
-                openWords: { switchTool(.timing) }, focused: $focused)
+                openEditor: { openCaptionEditor(cue.id) })
         case .gap(let gap):
             CaptionGapRow(gap: gap,
                 busy: model.transcription.isActive(projectID) || preparingTranscription || model.transcription.isAuthorizing,
@@ -704,72 +815,8 @@ struct ProjectEditorView: View {
     private var correctionPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let cue = session.selectedCue, let snapshot = session.snapshot {
-                Text(session.selectedManualCaption == nil ? "Words & phrases" : "Manual caption").font(.headline)
-                Text(snapshot.text(for: cue).isEmpty ? "Hidden caption" : snapshot.text(for: cue))
-                    .font(.body).textSelection(.enabled)
-                Text(EditorTime.display(cue.interval.start) + "–" + EditorTime.display(cue.interval.end))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Text(session.selectedManualCaption == nil ? "Select a word to correct it. Clear its text to hide it; timing stays unchanged." : "This phrase uses timing you chose. Clear its text to hide it; no word timings are generated.")
-                    .font(.caption).foregroundStyle(.secondary)
-                ScrollViewReader { words in
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 6) {
-                            ForEach(cue.wordIDs, id: \.self) { id in
-                                if let word = snapshot.wordsByID[id] {
-                                    Button {
-                                        focused = nil
-                                        session.selectWord(id)
-                                    } label: {
-                                        Text(wordLabel(word))
-                                            .lineLimit(1)
-                                            .frame(maxWidth: 160)
-                                            .padding(.horizontal, 12)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                            .background(session.selectedWordID == id ? theme.accentColor.opacity(0.25) : theme.surfaceColor,
-                                                in: RoundedRectangle(cornerRadius: 10))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .id(id)
-                                    .accessibilityLabel("Select word: " + wordLabel(word))
-                                    .accessibilityValue(EditorTime.display(word.projectInterval.start))
-                                    .accessibilityAddTraits(session.selectedWordID == id ? .isSelected : [])
-                                }
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                    .onChange(of: session.selectedWordID) { _, id in
-                        if let id { words.scrollTo(id, anchor: .center) }
-                    }
-                }
-                if let id = session.selectedWordID, cue.wordIDs.contains(id) {
-                    if session.selectedWord?.timingProvenance == "whisper-segment" {
-                        Text("This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    TextField("Hidden word", text: Binding(
-                        get: {
-                            let canonical = session.snapshot?.wordsByID[id]?.text ?? ""
-                            return session.workspace.wordDraft?.value(for: id, canonical: canonical)
-                                ?? canonical.trimmingCharacters(in: .whitespacesAndNewlines)
-                        },
-                        set: { value in
-                            guard session.editText(wordID: id, value: value) else { return }
-                            session.workspace.wordDraft = EditorTextDraft(id: id, text: value,
-                                canonical: session.snapshot?.wordsByID[id]?.text ?? "")
-                        }), axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($focused, equals: .word(id))
-                        .id(EditorField.word(id))
-                        .accessibilityLabel("Selected word or corrected phrase")
-                }
                 if session.selectedManualCaption == nil {
-                    ViewThatFits(in: .horizontal) {
-                        HStack { splitButton; mergeButton }
-                        VStack(alignment: .leading) { splitButton; mergeButton }
-                    }
-                } else if let manual = session.selectedManualCaption {
-                    Button("Delete manual caption", role: .destructive) { focused = nil; session.deleteManualCaption(manual.id) }
+                    nativeWordCorrection(cue, snapshot: snapshot)
                 }
                 DisclosureGroup("Caption timing") {
                     TimingFields(interval: session.timingCue?.interval ?? cue.interval, identity: cue.id,
@@ -783,6 +830,79 @@ struct ProjectEditorView: View {
                             apply: session.retimeWord, workspace: $session.workspace, focused: $focused)
                     }
                 }
+                if let manual = session.selectedManualCaption {
+                    Button("Delete manual caption", role: .destructive) {
+                        focused = nil
+                        session.deleteManualCaption(manual.id)
+                        if session.document?.manualCaptions?.contains(where: { $0.id == manual.id }) != true {
+                            closeCaptionEditor()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func nativeWordCorrection(_ cue: CaptionCue, snapshot: CaptionSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Words & phrases").font(.headline)
+            Text("Select a word to correct it. Clear its text to hide it; timing stays unchanged.")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollViewReader { words in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(cue.wordIDs, id: \.self) { id in
+                            if let word = snapshot.wordsByID[id] {
+                                Button {
+                                    focused = nil
+                                    session.selectWord(id)
+                                } label: {
+                                    Text(wordLabel(word))
+                                        .lineLimit(1)
+                                        .frame(maxWidth: 160)
+                                        .padding(.horizontal, 12)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                        .background(session.selectedWordID == id ? theme.accentColor.opacity(0.25) : theme.surfaceColor,
+                                            in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .buttonStyle(.plain)
+                                .id(id)
+                                .accessibilityLabel("Select word: " + wordLabel(word))
+                                .accessibilityValue(EditorTime.display(word.projectInterval.start))
+                                .accessibilityAddTraits(session.selectedWordID == id ? .isSelected : [])
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .onChange(of: session.selectedWordID) { _, id in
+                    if let id { words.scrollTo(id, anchor: .center) }
+                }
+            }
+            if let id = session.selectedWordID, cue.wordIDs.contains(id) {
+                if session.selectedWord?.timingProvenance == "whisper-segment" {
+                    Text("This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                TextField("Hidden word", text: Binding(
+                    get: {
+                        let canonical = session.snapshot?.wordsByID[id]?.text ?? ""
+                        return session.workspace.wordDraft?.value(for: id, canonical: canonical)
+                            ?? canonical.trimmingCharacters(in: .whitespacesAndNewlines)
+                    },
+                    set: { value in
+                        guard session.editText(wordID: id, value: value) else { return }
+                        session.workspace.wordDraft = EditorTextDraft(id: id, text: value,
+                            canonical: session.snapshot?.wordsByID[id]?.text ?? "")
+                    }), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focused, equals: .word(id))
+                    .id(EditorField.word(id))
+                    .accessibilityLabel("Selected word or corrected phrase")
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack { splitButton; mergeButton }
+                VStack(alignment: .leading) { splitButton; mergeButton }
             }
         }
     }
@@ -798,7 +918,10 @@ struct ProjectEditorView: View {
     }
 
     private var splitButton: some View {
-        Button("Split before word", systemImage: "scissors") { focused = nil; session.split() }
+        Button("Split before word", systemImage: "scissors") {
+            focused = nil; session.split()
+            captionEditorCueID = session.selectedCueID
+        }
             .buttonStyle(.bordered)
             .disabled(session.selectedWordID == nil || session.selectedWordID == session.selectedCue?.wordIDs.first)
     }
@@ -879,11 +1002,20 @@ struct ProjectEditorView: View {
     private func finishToolEditing() {
         focused = nil
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        if activeToolSheet == nil, let id = captionEditorCueID {
+            captionEditorCueID = nil
+            editingCaptionFromTranscript = false
+            session.prepareCaptionPlayback(id)
+        }
         Task { await session.flush() }
     }
 
     private var styleSheet: some View {
-        CaptionStyleInspector(session: session)
+        CaptionStyleInspector(session: session, previewIsActive: $showStyleSheet)
+    }
+
+    private var manualPreviewBinding: Binding<Bool> {
+        Binding(get: { addingCaption != nil }, set: { if !$0 { addingCaption = nil } })
     }
 
     private var projectInfoSheet: some View {

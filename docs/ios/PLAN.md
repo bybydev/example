@@ -1,5 +1,41 @@
 # Inkribe iOS — current plan
 
+## Current: Graphite in PR #50
+
+2026-10-28. Confirmed plan: add Free, always-dark Graphite immediately after Paper,
+accent #279ED2. The confirmed visual revision uses Midnight's translucent panels,
+subtle shadows and layered background with charcoal/blue lighting. Paper stays default;
+premium themes and stored selections stay intact. Source-integrated; no runtime
+validation. See [handoff](handoffs/GRAPHITE_THEME.md). Keep #50 open. The preview
+fix below is already squash merged from #51 into #50 as 35b29af, user-validated.
+
+## Current: preview handoff fix stacked on #50
+
+2026-10-28. `fix/ios-preview-handoff` starts at #50 head `5c9f9eb` and targets
+`feat/ios-contextual-caption-editor`. Retain a current still before disconnecting
+live video, retain its caption presentation, and restore live video after readiness.
+Source-integrated; compilation/device acceptance unverified. Preserve the full #50
+workflow and one player. No automatic next feature or merge. See
+[scope](phases/PREVIEW_HANDOFF.md) and [handoff](handoffs/PREVIEW_HANDOFF.md).
+
+## Current: contextual caption editor
+
+2026-10-28. Replace only the top-level Timing tool, from develop `ba5b422`, in a
+new open PR targeting develop. Source integration covers contextual entry from
+timeline/transcript, caption/word correction and timing without playback controls,
+and native push/pop back to the Captions list. Timeline entry retains sheet dismissal
+to the main timeline with selection and paused pre-roll.
+Captions now includes top video preview/play/pause/Undo/Redo without a scrubber or
+timeline, and always highlights the current playback cue without auto-scrolling.
+Row taps still select/highlight/seek. The selected row's top-left Edit caption
+pushes the editor; remove list inline editing and Split / Words. Future edits
+require a concrete plan confirmed by the user before implementation.
+Styles/Customize, Media, reset scope and displayed-clock consolidation are deferred.
+See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
+[handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). No automatic next feature or merge.
+
+## Prior project-sheet passes (merged)
+
 2026-10-28. The three approved project-sheet passes are source-integrated in PR #49
 on `feat/ios-editor-sheets` → develop. Leave open without auto-merge.
 

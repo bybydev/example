@@ -1,5 +1,80 @@
 # Inkribe Working Rules
 
+## Current edge-to-edge timeline authorization
+
+2026-10-28. The user confirmed removing the editor timeline's inherited 12-point
+side gutters in PR #50. Move horizontal padding to preview, playback controls,
+timeline header, errors and caption prompts so the ruler/tracks span the editor
+width. Preserve centered-playhead start/end scroll space, scrub/pinch/timing
+gestures, thumbnail/caption geometry and preview dimensions. Layout only; retain
+all caption, Graphite and preview-handoff work. Source-only checks; no builds,
+typechecks/tests/fixtures, CI, generation or UI/device execution. Keep #50 open
+without auto-merge; future edits still require a confirmed concrete plan.
+
+## Current Graphite theme authorization
+
+2026-10-28. The user confirmed adding Graphite in existing PR #50, targeting
+develop. Graphite is Free, always dark, immediately after Paper, with accent
+#279ED2. The user subsequently confirmed revising the flat design to Midnight's
+translucent surface/elevated/border tokens, subtle shadows and layered background
+with restrained blue lighting. Keep the charcoal base and blue accent; remove
+the special flat-background adapter and reuse AppThemeBackground for all themes.
+Paper remains the default/fallback; existing premium themes retain their palettes
+and Pro access. Keep theme persistence, picker and access in AppFoundation 1.6.4;
+the Graphite palette is iOS app-owned. Update the
+Free comparison to Paper and Graphite. No shared-package, Mac, icon, schema,
+editor/playback or purchase-product changes. Source-only checks; no builds,
+typechecks/tests/fixtures, CI, generation or UI/device execution. Keep #50 open
+without auto-merge. Other edits still require a concrete plan and confirmation.
+PR #51's preview fix was user-validated and squash merged into #50 as 35b29af.
+Earlier instructions to leave #51 open and Paper as the sole Free theme are
+superseded. See docs/ios/handoffs/GRAPHITE_THEME.md.
+
+## Current preview handoff authorization
+
+2026-10-28. The user confirms the proposed fix for the covered editor turning black
+when sheets open, in a new stacked PR. Branch fix/ios-preview-handoff starts at
+PR #50 head 5c9f9eb and targets feat/ios-contextual-caption-editor, not develop.
+Preserve a current frame before transferring the one shared player's live layer;
+keep covered previews mounted with a still and matching caption clock/snapshot,
+then reveal returning live video only when its layer is ready. Preserve all #50
+row selection/seek/top-left Edit caption, native push/pop, Captions preview/controls,
+highlight-without-auto-scroll, styles, timing/history/saving and independent exports.
+No extra player, asset reload/decode pipeline, schema, renderer implementation,
+speech, queue/commerce/model/Mac or CI changes. Source-only checks; no builds,
+typechecks/tests/fixtures, generation/models, native processing/exports, CI or
+UI/device execution. Leave both PRs open without auto-merge. Read PREVIEW_HANDOFF
+under docs/ios/phases and handoffs. This request confirms only the discussed fix;
+other edit plans still require the user's confirmation before implementation.
+
+## Current contextual caption editor authorization
+
+2026-10-28. The user authorizes only replacing the top-level Timing tool with a
+contextual Edit caption editor in one new PR from latest develop, targeting develop.
+Second tap on a selected timeline caption or the selected transcript row's top-left
+Edit caption button opens the same editing content. Keep caption/word correction, split/
+merge, exact timing, manual deletion, existing history and automatic saving. The
+contextual editor has no player, scrubber or transport. The latest correction
+requires a native push from Captions; Back/swipe-back/Done returns to the same list
+and scroll context, without another sheet. Timeline entry remains a sheet whose
+Done/dismissal returns paused just before the edited caption with selection retained.
+The latest user correction also gives Captions a video preview above its list,
+play/pause and Undo/Redo, with no scrubber/timeline. Always highlight the current
+playback cue without selecting it or auto-scrolling. Remove the optional follow
+toggle; retain manual list scrolling and contextual push/pop. Reuse the sole player
+and existing renderer, handing off its visible layer across sheets/navigation.
+The latest confirmed row plan preserves tap-to-select/highlight/seek. The list has
+no inline text editing or Split / Words button. Only the selected row's existing
+top-left Edit caption button pushes editing; text/words/split/merge/timing/manual
+deletion stay in that editor. Before future edit work, explain the concrete plan
+and wait for the user's confirmation. This request confirms only this row change.
+Keep all other consolidation proposals deferred until the user's next signal.
+No schema, native timing/IDs, renderer, speech, queue/export, commerce, model, Mac or
+CI changes. Source-only checks; no builds/typechecks/tests/fixtures, generation,
+native processing/exports, CI runs or UI/device execution. Leave the new PR open
+with auto-merge disabled. Read phases/CONTEXTUAL_CAPTION_EDITOR.md and its handoff.
+Earlier implementation authorizations below are historical where superseded.
+
 ## Current direct editor and sheets authorization
 
 2026-10-28. The user requests **pass 3** in existing PR #49,

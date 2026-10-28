@@ -2,10 +2,11 @@ import AppFoundation
 import SwiftUI
 
 /// Focused controls include their own real, scrollable preview and transport.
-/// The presenting editor removes its player layer while this sheet owns it.
+/// The presenting editor retains a still while this sheet owns live video.
 struct CaptionStyleInspector: View {
     @Environment(\.dismiss) private var dismiss
     let session: EditorSession
+    @Binding var previewIsActive: Bool
     @State private var section = CaptionStyleSection.typography
     @State private var renderError: String?
 
@@ -62,19 +63,7 @@ struct CaptionStyleInspector: View {
 
     private func preview(_ document: ProjectDocument) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                Color.black
-                PlayerSurface(player: session.player)
-                if document.assets.allSatisfy({ $0.kind == .audio }) {
-                    Image(systemName: "waveform").font(.title).foregroundStyle(.white.opacity(0.45))
-                }
-                if let snapshot = session.snapshot {
-                    StyledCaptionOverlay(snapshot: snapshot, time: session.time,
-                        mediaSize: PreviewComposition.previewSize(for: document.canvas)) { renderError = $0 }
-                        .accessibilityLabel(session.presentation?.text ?? "No caption at playhead")
-                }
-                if session.isPreparingPreview { ProgressView().tint(.white) }
-            }
+            EditorPlayerPreview(session: session, isActive: previewIsActive, onError: { renderError = $0 })
             .aspectRatio(CGFloat(document.canvas.width) / CGFloat(document.canvas.height), contentMode: .fit)
             .frame(maxHeight: 340)
             .clipShape(RoundedRectangle(cornerRadius: 12))

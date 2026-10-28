@@ -1,5 +1,64 @@
 # Inkribe iOS — current architecture
 
+## Preview handoff (2026-10-28, stacked on #50)
+
+EditorSession.previewFrames owns one AVPlayerItemVideoOutput attached before the
+existing preview item is installed. Rendering remains enabled. Existing playback
+ticks, pause/seek completion and handoffs sample decoded output; no second player,
+asset generator, inference path or export resource is introduced. The app retains
+one latest pixel buffer and converts only at readiness/handoff to a still bounded
+to 768px. A shared latest still bridges UIKit mount/dismantle ordering; hosts retain
+their own previous good stills. Item replacement/stop clear output buffers.
+
+PlayerSurface now remains mounted when inactive. Its UIKit video layer and still
+image share aspect-fit geometry. A weak live-owner coordinator freezes/releases
+the outgoing host before attaching the incoming host. AVPlayerLayer readiness is
+observed with per-transition tokens; obsolete callbacks and publications are rejected.
+Presentation bindings mark closing Customize/manual/fullscreen hosts inactive so
+late item updates cannot let a dismissing host reclaim the shared live layer.
+The still covers the layer until readiness and the matching live caption state are
+published. Audio-only items bypass video readiness. Failed capture keeps an earlier
+good presentation; no-frame/source failures are not reported as successful video.
+
+EditorPlayerPreview shares the existing StyledCaptionOverlay. Held snapshots retain
+the caption clock/style/data that belong to their still, while active previews read
+the live session. Main/Captions/fullscreen, Customize and manual authoring use this
+adapter. #50's visibility decisions now choose live ownership, not view removal.
+No renderer, media graph, canonical schema, speech/queue/export/commerce or Mac change.
+Native scheduling, color/orientation, memory and actual visual acceptance are unverified.
+See [source handoff](handoffs/PREVIEW_HANDOFF.md).
+
+## Contextual caption editor (2026-10-28)
+
+EditorTool.primaryTools excludes the contextual captionEditor route. Timeline
+second-tap presents it directly; Captions pushes the same toolPage using a native
+navigationDestination in its existing NavigationStack. Back/swipe-back/Done pops
+to that same transcript and flushes edits without seeking or closing the sheet.
+CaptionTranscriptRow has no text field, focus binding or editing mutation: its
+caption-text button selects/seeks and its selected header's Edit caption pushes.
+The dedicated captionTextEditor owns the text field/draft binding in the pushed
+editor, with no Split / Words or inline deletion control in the list. The covered
+list ignores editor focus scrolling. Timeline entry's Done
+still closes its sheet. Successful manual deletion follows the entry's return path.
+One captured cue ID prevents concurrent removal/reselection from exposing another
+caption's controls. Split explicitly follows the existing new-cue selection.
+The contextual page has no player, scrubber, transport or duplicate row timing.
+Its single caption field, native word controls, split/merge, timing and manual
+deletion reuse the existing session edits and writer. Manual phrases have no
+invented word controls. On tool-sheet dismissal, prepareCaptionPlayback restores a surviving
+cue's selection and seeks 0.25 seconds before its retained-clock start, clamped
+to zero, without autoplay, a document revision or a history entry. Missing targets
+do not seek a fallback caption. See [handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md).
+
+Captions' root page places a bounded video preview and transport/history above the
+independently scrollable list. EditorPlaybackControls has both overview/timeline
+disabled here. The shared preview uses the same session player and styled overlay;
+previewOwnsPlayer transfers the live layer while covered hosts retain stills,
+including Captions push/manual authoring and return. No extra player/engine.
+Current-cue evaluation drives a stronger row highlight/accent marker independently
+of edit selection. The follow flag/toggle and playback-driven scrollTo observer
+are removed. Manual scrolling and keyboard-focus accommodation remain.
+
 ## Final project sheets and reorder — pass 3 (2026-10-28)
 
 ProjectClipsSheet owns a local stable-ID order and native List edit-mode handles.

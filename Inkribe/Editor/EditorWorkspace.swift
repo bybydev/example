@@ -2,14 +2,16 @@ import Foundation
 
 /// Presentation context belongs to the app-owned session, never the saved project.
 /// Switching tools neither seeks playback nor creates an edit/undo entry.
-enum EditorTool: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case captions, style, timing, media
+enum EditorTool: String, Identifiable, Hashable, Sendable {
+    case captions, style, captionEditor, media
+    // The selected-caption editor is contextual, never a bottom-bar action.
+    static let primaryTools: [Self] = [.captions, .style, .media]
     var id: Self { self }
     var title: String {
-        switch self { case .captions: "Captions"; case .style: "Styles"; case .timing: "Timing"; case .media: "Media" }
+        switch self { case .captions: "Captions"; case .style: "Styles"; case .captionEditor: "Edit caption"; case .media: "Media" }
     }
     var symbol: String {
-        switch self { case .captions: "captions.bubble"; case .style: "sparkles"; case .timing: "timer"; case .media: "crop.rotate" }
+        switch self { case .captions: "captions.bubble"; case .style: "sparkles"; case .captionEditor: "pencil"; case .media: "crop.rotate" }
     }
 }
 
@@ -23,12 +25,10 @@ struct EditorWorkspace: Sendable {
     var timelineScale = 48.0
     var timelineCueID: UUID?
     var timelineClipID: UUID?
-    var followsPlayback = false
     var expandedPreview = false
     var presetCategory: CaptionPresetCategory?
     var captionDraft: EditorTextDraft?
     var wordDraft: EditorTextDraft?
-    var expandedCaptionTiming: UUID?
     var timingDrafts: [UUID: EditorTimingDraft] = [:]
     private(set) var fieldResetGeneration = UUID()
     var trimDraft: EditorTimingDraft?

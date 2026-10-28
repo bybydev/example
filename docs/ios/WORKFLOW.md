@@ -1,11 +1,22 @@
 # Inkribe iOS — current working agreement
 
-2026-10-28. The latest user request authorizes pass 3 in existing PR #49,
-`feat/ios-editor-sheets` → develop, extending `014ad963`. All three approved passes
-have source integration. Keep the PR open with auto-merge disabled.
+2026-10-28. The user confirmed the concrete Graphite plan in existing PR #50:
+Free dark theme after Paper, #279ED2 accent. The confirmed visual revision adds
+Midnight's translucent panels, subtle shadows and layered charcoal/blue lighting;
+Paper remains default and other themes remain Pro. See
+[handoff](handoffs/GRAPHITE_THEME.md). Source-only checks and the requirement to
+confirm future edit plans remain. Keep #50 open without auto-merge. PR #51 is
+already squash merged into #50 at the user's request; its open-PR rule below is
+historical.
 
-Read root AGENTS.md, [scope](phases/EDITOR_SHEETS.md),
-[marked handoff](handoffs/EDITOR_SHEETS.md), README, PLAN, FEATURES, ARCHITECTURE,
+2026-10-28. The latest user request confirms the preview handoff fix in a new stacked
+PR from #50 head `5c9f9eb`, branch fix/ios-preview-handoff, targeting
+feat/ios-contextual-caption-editor. Keep both PRs open without auto-merge.
+Other edits require a concrete plan and the user's confirmation first. All parent
+caption, project and output contracts remain protected.
+
+Read root AGENTS.md, [scope](phases/PREVIEW_HANDOFF.md),
+[marked handoff](handoffs/PREVIEW_HANDOFF.md), README, PLAN, FEATURES, ARCHITECTURE,
 DESIGN and HANDOFF. Current sheet/navigation contracts supersede older overview
 and clip-strip descriptions. Historical handoffs remain evidence, not new scope.
 

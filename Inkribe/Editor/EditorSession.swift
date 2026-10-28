@@ -11,6 +11,7 @@ final class EditorSession {
     var proUpsell: ProFeature?
     let projectID: UUID
     let player = AVPlayer()
+    let previewFrames = PreviewFrameBuffer()
     var workspace = EditorWorkspace()
     private(set) var previewGeneration = UUID()
     private(set) var document: ProjectDocument?
@@ -349,6 +350,18 @@ final class EditorSession {
             .flatMap { snapshot?.wordsByID[$0]?.clipID }
         selectedWordID = snapshot?.cues.first { $0.id == id }?.wordIDs.first
         if let cue = selectedCue { reveal(cue.interval) }
+    }
+
+    /// Returning from the contextual editor only adjusts presentation state.
+    /// Cue intervals in the snapshot already use the retained playback clock.
+    func prepareCaptionPlayback(_ id: UUID) {
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        guard let cue = snapshot?.cues.first(where: { $0.id == id }) else { return }
+        selectedCueID = id
+        workspace.timelineCueID = id
+        workspace.timelineClipID = cue.wordIDs.first.flatMap { snapshot?.wordsByID[$0]?.clipID }
+        let start = CMTimeMaximum(.zero, CMTimeSubtract(cue.interval.start.cmTime, CMTime(value: 1, timescale: 4)))
+        if let target = try? MediaTime(validating: start) { seek(to: target) }
     }
 
     func selectWord(_ id: UUID) {
@@ -854,6 +867,7 @@ final class EditorSession {
             if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
             let playbackID = UUID()
             playbackGeneration = playbackID
+            previewFrames.attach(to: item)
             player.replaceCurrentItem(with: item)
             previewGeneration = UUID()
             preparedMedia = key
@@ -880,6 +894,7 @@ final class EditorSession {
             // Never attach a cancelled composition or present a spurious error.
         } catch {
             guard !Task.isCancelled, loadGeneration == generation else { return }
+            previewFrames.reset()
             player.replaceCurrentItem(with: nil)
             previewGeneration = UUID()
             preparedMedia = nil
@@ -893,6 +908,7 @@ final class EditorSession {
             Task { @MainActor [weak self] in
                 guard let self, self.periodicObserver != nil, !self.isSeeking, !self.isPreparingPreview,
                       let time = try? MediaTime(validating: self.player.currentTime()) else { return }
+                self.previewFrames.sample(at: time.cmTime)
                 self.time = min(time, self.duration)
             }
         }
@@ -909,6 +925,7 @@ final class EditorSession {
                 guard let self, self.seekGeneration == generation else { return }
                 self.isSeeking = false
                 if finished, let actual = try? MediaTime(validating: self.player.currentTime()) {
+                    self.previewFrames.sample(at: actual.cmTime)
                     self.time = min(actual, self.duration)
                 }
             }
@@ -926,7 +943,10 @@ final class EditorSession {
         isPlaying = true
         player.play()
     }
-    func pause() { player.pause(); isPlaying = false }
+    func pause() {
+        previewFrames.sample(at: player.currentTime())
+        player.pause(); isPlaying = false
+    }
 
     /// Invalidate editor-owned work immediately. Never touches the processing
     /// coordinator, transcription engine, export jobs, saves or project storage.
@@ -949,6 +969,7 @@ final class EditorSession {
         statusObserver = nil
         playbackGeneration = UUID()
         preparedMedia = nil
+        previewFrames.reset()
         player.replaceCurrentItem(with: nil)
         previewGeneration = UUID()
     }

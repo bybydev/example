@@ -40,7 +40,7 @@ struct ProUpsell: View {
         case .fullHD:
             message = "Export captioned videos in 1080p with Pro. You can keep exporting in 720p and saving SRT subtitles for free."
         case .themes:
-            message = "Unlock every premium app theme. Your default theme stays free."
+            message = "Unlock every premium app theme. Paper and Graphite stay free."
         }
         return .init(navigationTitle: feature.title, title: feature.title, message: message,
             symbolName: "crown.fill", rows: Commerce.comparison)
@@ -58,7 +58,6 @@ private struct ThemedSurface: ViewModifier {
             .foregroundStyle(theme.primaryForegroundColor)
             .tint(theme.accentColor)
             // Keep the native bar/Back gesture over the continuous themed page.
-            // A flat theme.backgroundColor caused the black strip after scrolling.
             .toolbarBackground(.hidden, for: .navigationBar)
     }
 }

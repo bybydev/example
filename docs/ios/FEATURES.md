@@ -1,5 +1,39 @@
 # Inkribe iOS — current feature ledger
 
+## Timeline width (2026-10-28, PR #50)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.TIMELINE_WIDTH | Ruler/tracks span editor width; preview/controls/labels/prompts retain side padding; centered-playhead scroll space preserved | Source-integrated; device layout unverified |
+
+## Graphite theme (2026-10-28, PR #50)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| V1.PRO / APP.GRAPHITE | Free dark Graphite directly after Paper; #279ED2 accent, Midnight-like translucent panels and layered charcoal/blue background; Paper default and existing Pro themes preserved | Source-integrated; compilation/device appearance unverified |
+
+See [source handoff](handoffs/GRAPHITE_THEME.md). Preview handoff #51 below is
+squash merged into #50 as 35b29af after the user reported it working.
+
+## Preview handoff (2026-10-28, stacked on #50)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.PREVIEW_HANDOFF | Covered preview retains video/caption frame; one live owner; readiness-gated return; bounded decoded-frame cache and stale callback rejection | Source-integrated; compilation/device acceptance unverified |
+
+See [scope](phases/PREVIEW_HANDOFF.md) and [handoff](handoffs/PREVIEW_HANDOFF.md).
+
+## Contextual caption editor (2026-10-28)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.CONTEXTUAL_CAPTION | No top-level Timing; shared Edit caption from timeline/transcript; text/words/split/merge/exact timing; no playback controls; selected-caption return to main timeline | Source-integrated; compilation/device acceptance unverified |
+| EDITOR.CAPTIONS_PREVIEW | Top video preview/play/pause/Undo/Redo, no scrubber/timeline; always highlight current playback row without auto-scroll; retain contextual push/pop | Source-integrated; compilation/device acceptance unverified |
+| EDITOR.CAPTION_ROW_ACTION | Row tap selects/highlights/seeks; selected row's top-left Edit caption pushes editing; no inline text field or Split / Words | Source-integrated; compilation/device acceptance unverified |
+
+See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
+[handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). Other consolidation is deferred.
+
 ## Final project sheets — passes 1–3 (2026-10-28, PR #49)
 
 | ID | Requirement | Source status |
