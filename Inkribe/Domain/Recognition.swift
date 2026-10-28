@@ -63,23 +63,36 @@ struct RecognitionProgress: Codable, Equatable, Sendable {
     let runtimeRevision: String
     let totalWindows: Int
     let resolved: [Resolved]
-    var isIncomplete: Bool { resolved.count < totalWindows }
+    /// Completed pre-coverage clips can be retained without inventing raw windows.
+    var retainedClipIDs: [UUID]? = nil
+    var retainedWindowCount: Int? = nil
+    var unresolvedCount: Int { max(0, totalWindows - resolved.count - (retainedWindowCount ?? 0)) }
+    var isIncomplete: Bool { unresolvedCount > 0 }
 
     func validate(rawWindows: [RecognitionWindow], words: [CaptionWord],
                   clips: [ProjectClip], assets: [SourceAsset]) throws {
         let plan = try SpeechCheckpoint.plan(clips: clips, assets: assets)
+        let retained = Set(retainedClipIDs ?? [])
+        let retainedWindows = plan.filter { retained.contains($0.clip.id) }
+        let retainedIndices = Set(retainedWindows.map(\.index))
+        let retainedRaw = Set(rawWindows.filter { retained.contains($0.clipID) }.map(\.id))
+        guard retained.count == (retainedClipIDs?.count ?? 0), retained.isSubset(of: Set(clips.map(\.id))),
+              (retainedWindowCount ?? 0) == retainedWindows.count,
+              retainedWindowCount == nil || retainedWindowCount! >= 0 else {
+            throw ProjectStoreError.invalidDocument("Invalid retained clip coverage")
+        }
         let rawIDs = resolved.flatMap(\.rawWindowIDs)
         let nativeIDs = resolved.flatMap(\.nativeWordIDs)
         guard version == 1, policy == SpeechCheckpoint.currentPolicy,
               runtimeRevision.count == 40, runtimeRevision.allSatisfy(\.isHexDigit),
               totalWindows == plan.count, resolved.count <= totalWindows,
               Set(resolved.map(\.index)).count == resolved.count,
-              resolved.allSatisfy({ plan.indices.contains($0.index) && (1...2).contains($0.attempts) &&
+              resolved.allSatisfy({ plan.indices.contains($0.index) && !retainedIndices.contains($0.index) && (1...2).contains($0.attempts) &&
                   $0.copiedSamples >= 0 && $0.peak.isFinite && $0.peak >= 0 &&
                   (1...WordMapper.currentMappingVersion).contains($0.mappingVersion ?? 1) }),
               Set(rawIDs).count == rawIDs.count, Set(nativeIDs).count == nativeIDs.count,
-              Set(rawIDs) == Set(rawWindows.map(\.id)),
-              Set(words.map(\.id)).isSubset(of: Set(nativeIDs)) else {
+              Set(rawIDs) == Set(rawWindows.map(\.id)).subtracting(retainedRaw),
+              Set(words.filter { !retained.contains($0.clipID) }.map(\.id)).isSubset(of: Set(nativeIDs)) else {
             throw ProjectStoreError.invalidDocument("Invalid transcription coverage")
         }
     }
@@ -187,7 +200,8 @@ struct Recognition: Codable, Equatable, Sendable, Identifiable {
                               rawWindowIDs: $0.rawWindowIDs.map { windowIDs[$0]! },
                               nativeWordIDs: $0.nativeWordIDs.map { wordIDs[$0]! },
                               copiedSamples: $0.copiedSamples, peak: $0.peak, mappingVersion: $0.mappingVersion)
-                    })
+                    }, retainedClipIDs: value.retainedClipIDs?.map { assetClips[$0]! },
+                    retainedWindowCount: value.retainedWindowCount)
             })
     }
 }

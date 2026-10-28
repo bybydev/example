@@ -259,7 +259,7 @@ final class TimelineTrackCanvas: UIView {
         for clip in snapshot.visibleClips(range).prefix(32) where clip.end > range.lowerBound {
             let key = "clip-" + clip.id.uuidString
             let element = accessibleItem(key); retainedKeys.insert(key)
-            element.accessibilityLabel = "Clip, " + clip.title
+            element.accessibilityLabel = clip.title
             element.accessibilityValue = TimelineGeometry.label(clip.start) + " to " + TimelineGeometry.label(clip.end)
             element.accessibilityTraits = selectedClipID == clip.id ? [.button, .selected] : [.button]
             element.accessibilityFrameInContainerSpace = rect(start: clip.start, end: clip.end,

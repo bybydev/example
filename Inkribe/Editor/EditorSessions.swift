@@ -6,11 +6,12 @@ import Observation
 @MainActor
 @Observable
 final class EditorSessions {
+    private let transcription: TranscriptionController
     private let access: ProAccess
     private var sessions: [UUID: EditorSession] = [:]
     private var owners: [UUID: Set<UUID>] = [:]
 
-    init(access: ProAccess) { self.access = access }
+    init(access: ProAccess, transcription: TranscriptionController) { self.access = access; self.transcription = transcription }
 
     func session(for id: UUID) -> EditorSession {
         // Keep the last clean editor for cancelled/repeated transitions; prune
@@ -21,7 +22,7 @@ final class EditorSessions {
             owners.removeValue(forKey: key)
         }
         if let session = sessions[id] { return session }
-        let session = EditorSession(projectID: id, access: access)
+        let session = EditorSession(projectID: id, access: access, transcription: transcription)
         sessions[id] = session
         return session
     }

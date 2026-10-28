@@ -22,6 +22,7 @@ struct SpeechCheckpoint: Codable, Sendable {
     let language: String?
     let assets: [SourceAsset]
     let clips: [ProjectClip]
+    let retainedClipIDs: [UUID]?
     var entries: [Entry]
 
     struct Window: Equatable, Sendable {
@@ -78,7 +79,9 @@ struct SpeechCheckpoint: Codable, Sendable {
         self.jobID = jobID; projectID = project.id; revision = project.contentRevision
         self.modelID = modelID; self.modelSHA256 = modelSHA256; self.language = language
         runtimeRevision = WhisperRuntimeRelease.revision
-        assets = project.assets; clips = project.clips; entries = []
+        assets = project.assets; clips = project.clips
+        retainedClipIDs = project.recognition?.progress?.retainedClipIDs
+        entries = []
     }
 
     func matches(_ other: Self) -> Bool {
@@ -89,7 +92,8 @@ struct SpeechCheckpoint: Codable, Sendable {
         version == other.version && policy == other.policy && jobID == other.jobID &&
             projectID == other.projectID &&
             runtimeRevision == other.runtimeRevision &&
-            language == other.language && assets == other.assets && clips == other.clips
+            language == other.language && assets == other.assets && clips == other.clips &&
+            retainedClipIDs == other.retainedClipIDs
     }
 
     /// Canonical coverage can rebuild resume state after sidecar loss/discard or
@@ -137,14 +141,17 @@ struct SpeechCheckpoint: Codable, Sendable {
     func publication(merging existing: Recognition?) throws -> Recognition? {
         let accepted = entries.filter { $0.failure == nil }
         let raw = accepted.flatMap(\.windows)
-        let native = accepted.flatMap(\.words)
+        let retained = Set(retainedClipIDs ?? [])
+        let carriedWords = existing?.words.filter { retained.contains($0.clipID) } ?? []
+        let carriedRaw = existing?.rawWindows.filter { retained.contains($0.clipID) } ?? []
+        let native = accepted.flatMap(\.words) + carriedWords
         if native.isEmpty && existing == nil { return nil }
         let existingIDs = Set(existing?.words.map(\.id) ?? [])
         let nativeIndex = Dictionary(uniqueKeysWithValues: native.map { ($0.id, $0) })
         guard existingIDs.isSubset(of: Set(nativeIndex.keys)) else { throw SpeechRecoveryError.corrupt }
         if let existing {
             guard existing.id == jobID, existing.requestedLanguageCode == language else { throw SpeechError.alreadyTranscribed }
-            let rawIndex = Dictionary(uniqueKeysWithValues: raw.map { ($0.id, $0) })
+            let rawIndex = Dictionary(uniqueKeysWithValues: (raw + carriedRaw).map { ($0.id, $0) })
             guard existing.rawWindows.allSatisfy({ rawIndex[$0.id] == $0 }) else { throw SpeechRecoveryError.corrupt }
         }
         // Compare native text/anchors for deduplication, even when the visible
@@ -161,13 +168,15 @@ struct SpeechCheckpoint: Codable, Sendable {
             if oldByText[WordMapper.duplicateKey(word)]?.contains(where: { WordMapper.duplicates(word, $0) }) == true { continue }
             WordMapper.append([word], to: &additions)
         }
+        let publicationPlan = try Self.plan(clips: clips, assets: assets)
         let progress = RecognitionProgress(version: 1, policy: policy, runtimeRevision: runtimeRevision,
-            totalWindows: try Self.plan(clips: clips, assets: assets).count,
+            totalWindows: publicationPlan.count,
             resolved: accepted.map {
                 .init(index: $0.index, attempts: $0.attempts, recoveryReason: $0.recoveryReason?.rawValue,
                       rawWindowIDs: $0.windows.map(\.id), nativeWordIDs: $0.words.map(\.id),
                       copiedSamples: $0.copiedSamples, peak: $0.peak, mappingVersion: $0.mappingVersion)
-            })
+            }, retainedClipIDs: retainedClipIDs,
+            retainedWindowCount: retainedClipIDs.map { _ in publicationPlan.filter { retained.contains($0.clip.id) }.count })
         let currentRawIDs = Set(existing?.rawWindows.map(\.id) ?? [])
         return Recognition(id: jobID, modelID: modelID, modelSHA256: modelSHA256,
             requestedLanguageCode: language, completedAt: existing?.completedAt ?? Date(),
@@ -226,9 +235,11 @@ struct SpeechCheckpoint: Codable, Sendable {
         let assetIndex = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
         for clip in clips { try clip.validate(assets: assetIndex) }
         let plan = try Self.plan(clips: clips, assets: assets)
+        let retained = Set(retainedClipIDs ?? [])
+        guard retained.count == (retainedClipIDs?.count ?? 0), retained.isSubset(of: Set(clips.map(\.id))) else { throw SpeechRecoveryError.corrupt }
         guard entries.count <= plan.count else { throw SpeechRecoveryError.corrupt }
         for entry in entries {
-            guard plan.indices.contains(entry.index), (1...2).contains(entry.attempts),
+            guard plan.indices.contains(entry.index), !retained.contains(plan[entry.index].clip.id), (1...2).contains(entry.attempts),
                   (entry.attempts == 1 ? entry.recoveryReason == nil : entry.recoveryReason != nil),
                   entry.copiedSamples >= 0, entry.peak.isFinite, entry.peak >= 0,
                   (1...WordMapper.currentMappingVersion).contains(entry.mappingVersion ?? 1) else {
@@ -299,6 +310,12 @@ struct SpeechCheckpoint: Codable, Sendable {
             .validate(clips: clips, assets: assets)
     }
 
+    func retainedWindowCount(in plan: [Window]) -> Int {
+        let retained = Set(retainedClipIDs ?? [])
+        return plan.filter { retained.contains($0.clip.id) }.count
+    }
+    func retains(_ clipID: UUID) -> Bool { retainedClipIDs?.contains(clipID) == true }
+
     var wordCount: Int { entries.reduce(0) { $0 + $1.words.count } }
     /// Accepted raw intervals and mapping versions are reusable with any active
     /// model. Only runtime/mapping compatibility controls whether work can resume.
@@ -307,8 +324,8 @@ struct SpeechCheckpoint: Codable, Sendable {
 
     /// A fully empty run must infer again on retry; its empty responses are not
     /// permanent evidence that the source contains no speech. Digital silence is reusable.
-    mutating func prepareForResume() {
-        if wordCount == 0 { entries.removeAll { $0.failure == nil && $0.peak > 0 } }
+    mutating func prepareForResume(preservingSavedWords: Bool = false) {
+        if wordCount == 0 && !preservingSavedWords { entries.removeAll { $0.failure == nil && $0.peak > 0 } }
     }
 }
 

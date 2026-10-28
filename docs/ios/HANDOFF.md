@@ -1,62 +1,24 @@
 # Inkribe iOS — current handoff
 
-2026-10-27 — Issue #47, timeline editor **passes 1–3 source-integrated** in
-PR #48, `feat/ios-timeline-editor` → develop. Pass 3 extends head `95628a7`.
-The fixed editor includes real multi-clip frame/caption tracks, ruler, center
-playhead, scrubbing/playback, anchored zoom, selection and caption move/resize.
-Drag a selected block or its edge handles; hold any block to select/move it.
-A temporary block/readout and frame audition precede one validated undoable commit
-on release. Cancel/interruption does not publish the proposed timing. Existing
-native intervals stay immutable; moved words translate and resized words scale.
-Sheets, preview geometry, cancellable opening, cache/queue/Pro contracts remain.
-See [scope](phases/TIMELINE_EDITOR.md) and [source handoff](handoffs/TIMELINE_EDITOR.md).
-Keep PR #48 open without auto-merge. Source review only; compilation and native
-acceptance are unverified. Existing no-build/test/CI/UI/device restrictions remain.
+2026-10-28. PR #49 on `feat/ios-editor-sheets` → develop contains all three approved
+project-sheet source passes. Pass 3 extends `014ad963`; keep the PR open without
+auto-merge. The full [marked handoff](handoffs/EDITOR_SHEETS.md) owns source evidence,
+implementation details, format limits and the runtime acceptance boundary.
 
-
-2026-10-26 update: current work is **Add missing caption**, branch
-`feat/ios-manual-captions` → develop, based on f0eb80c (merged #43).
-See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).
-Manual phrases are separate project data; schema 10 reads 1–9. Native recognition,
-working styles, Mac behavior and existing wrappers are preserved. Source-only
-review; compilation/device/output acceptance pending. Keep the new PR open with
-no auto-merge. Earlier current-phase entries below describe completed history.
-
-
-2026-10-26 update: current work is the approved animated Styles sheet in
-`feat/ios-animated-style-sheet` → develop, based on 81b8207 (merged #42).
-See [source checklist and pending acceptance](handoffs/ANIMATED_STYLES.md).
-Keep the PR open. Source-only checks; all existing execution restrictions remain.
-Earlier phase descriptions below are completed history.
-
-2026-10-24. Expanded Pass 1 (#41, parent #40) is source-integrated in
-feat/ios-pass1-project-experience → develop, based on 4a9780f. Leave the new PR open
-without auto-merge. #39 is already merged in that base; its old open-PR holds are historical.
-
-See [the complete marked handoff](handoffs/PROJECT_EXPERIENCE.md) for source ownership,
-six implemented areas, compatibility limits, eight authored/unrun specifications and
-the pending build/device/output acceptance checklist.
-
-- One creation makes one project with one/multiple ordered clips. Failed selection
-  items require retry/removal; no separate-project option or silent subset publication.
-- Project details and the scrolling editor share one app-owned session/writer. Clip
-  entry points and caption groups use stable identities and the existing output clock.
-- Schema 9 adds sparse clip overrides and reads 1–8. Reset restores live inheritance,
-  preserving text/timing/trim. Duplicate remaps clip IDs. Caption-only changes do not
-  invalidate media composition. Preview/MP4 resolve the same effective clip settings.
-- Both export entry points use the existing durable worker/gate. Export now follows
-  progress in-place. Project exports show retained results, actual-file preview and
-  native delivery; immutable requests include their saved defaults and clip overrides.
-- Existing atomic saves retain failed changes in memory across navigation, with one
-  friendly failure/retry. Unwritten changes are not guaranteed across process death.
-- No Mac source/config, purchases, model policy, native recognition or allowance rules
-  are changed. No legacy conversion job, editor sidecar or advanced sequencing is added.
+- Direct editor entry with cancellable preparation and one app-owned session/writer.
+- Project info for metadata, originals/relink and project-only thumbnail cleanup.
+- Large Clips sheet for ordered selection, Photos/Files/URL append, rename, confirmed
+  removal and native drag reorder with Cancel/Save and one durable Undo entry.
+- Numbered timeline labels; native/manual captions, source anchors, settings, coverage,
+  preview/seek/media/audio/SRT positions follow stable clip identities.
+- Existing toolbar-only Export sheet owns creation, progress and retained files.
+  Background artwork pins files without blocking dismissal. Frozen outputs stay intact.
+- Schema 11 reads 1–10. No Mac/shared-package/renderer/engine/commerce/model-policy change.
 
 Source/call-site/diff/whitespace/publication review only. No builds/typechecks/tests/
-fixtures, CI/generation/models/native inference/exports/UI/device/accessibility/deployment
-ran. Compilation, strict concurrency, real media/output parity, provider/delivery,
-save-failure, entitlement and supported-phone behavior remain unverified.
+fixtures, CI/generation/models, native media/exports, UI/device/accessibility execution
+or deployment. Compilation and actual touch/layout/performance/output acceptance are
+unverified. [Production readiness](PRODUCTION_READINESS.md) retains release gates.
 
-[Production readiness](PRODUCTION_READINESS.md) still owns release gates. Parent
-passes 2–5 remain separate; no next pass or merge is authorized automatically.
-Historical source evidence remains in CONSOLIDATION, earlier phase handoffs and archive.
+Earlier source evidence remains in the phase handoffs and archive. No automatic
+next feature, merge or release is authorized.

@@ -30,11 +30,11 @@ struct ProcessingQueueSheet: View {
             ProcessingQueueView()
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }.disabled(model.exports.isDelivering)
+                        Button("Done") { dismiss() }.disabled(model.exports.hasUserDelivery)
                     }
                 }
         }
-        .interactiveDismissDisabled(model.exports.isDelivering)
+        .interactiveDismissDisabled(model.exports.hasUserDelivery)
     }
 }
 

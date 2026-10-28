@@ -8,7 +8,8 @@ enum MediaFit: String, Codable, CaseIterable, Sendable {
 }
 
 /// Project-wide, non-destructive presentation. Trim uses the original project
-/// clock; persisted clips, recognition and manual caption timing never move.
+/// clock. Trim changes do not move captions; structural clip edits explicitly
+/// reproject project-clock values while preserving native source anchors.
 struct MediaEdits: Codable, Equatable, Sendable {
     var trim: MediaInterval? = nil
     var fit: MediaFit = .fit

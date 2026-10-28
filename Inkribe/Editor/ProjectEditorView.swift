@@ -14,12 +14,10 @@ struct ProjectEditorView: View {
     let projectID: UUID
     private let sessions: EditorSessions
     private let renameOnOpen: Bool
-    private let initialClipID: UUID?
-    private let initialTool: EditorTool?
-    @State private var didApplyInitialRoute = false
     @State private var session: EditorSession
     @State private var presentationID = UUID()
-    @State private var renamingClip: ProjectClip?
+    @State private var showClips = false
+    @State private var clipsInitialSelection: UUID?
     @State private var addingCaption: ManualCaptionDraft?
     @State private var relinkAsset: UUID?
     @State private var isRelinking = false
@@ -40,12 +38,10 @@ struct ProjectEditorView: View {
     @State private var focusTitleOnPresentation = false
     @FocusState private var focused: EditorField?
 
-    init(session: EditorSession, sessions: EditorSessions, renameOnOpen: Bool = false,
-         initialClipID: UUID? = nil, initialTool: EditorTool? = nil) {
+    init(session: EditorSession, sessions: EditorSessions, renameOnOpen: Bool = false) {
         self.projectID = session.projectID
         self.sessions = sessions
         self.renameOnOpen = renameOnOpen
-        self.initialClipID = initialClipID; self.initialTool = initialTool
         _session = State(initialValue: session)
     }
 
@@ -54,6 +50,9 @@ struct ProjectEditorView: View {
     var body: some View {
         editorPresentation
         .onAppear { isLeaving = false; sessions.attach(session, owner: presentationID) }
+        .onChange(of: session.clipEditGeneration) { _, _ in
+            Task { await model.refreshAfterClipEdit(projectID) }
+        }
         .onChange(of: session.isLoading) { _, _ in finishOpeningIfReady() }
         .onChange(of: session.isPreparingPreview) { _, _ in finishOpeningIfReady() }
         .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await session.refreshSaved() } }
@@ -84,14 +83,25 @@ struct ProjectEditorView: View {
 
     private var editorDocumentPresentation: some View {
         editorStylePresentation
-            .sheet(isPresented: $showExport) { ExportView(session: session) }
+            .sheet(isPresented: $showExport, onDismiss: finishToolEditing) {
+                ExportView(session: session)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
             .sheet(isPresented: $showQueue, onDismiss: { Task { await session.refreshSaved() } }) { ProcessingQueueSheet() }
             .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
             .sheet(item: Binding(get: { activeToolSheet == nil ? addingCaption : nil },
                 set: { if activeToolSheet == nil { addingCaption = $0 } }), onDismiss: finishToolEditing) { draft in
                     ManualCaptionSheet(session: session, draft: draft)
             }
-            .sheet(item: $renamingClip) { clip in ClipRenameView(session: session, clipID: clip.id) }
+            .sheet(isPresented: $showClips, onDismiss: finishToolEditing) {
+                ProjectClipsSheet(session: session, initialClipID: clipsInitialSelection) { id in
+                    session.seekToClip(id)
+                    showClips = false
+                }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
     }
 
     private var editorStylePresentation: some View {
@@ -133,7 +143,7 @@ struct ProjectEditorView: View {
     private var editorWorkspace: some View {
         editorCanvas
             .safeAreaInset(edge: .bottom, spacing: 0) { editorToolBar }
-            .disabled(isOpening || preparingTranscription)
+            .disabled(isOpening || preparingTranscription || session.isChangingClips)
             .accessibilityHidden(isOpening)
             .modifier(EditorPreparationPresentation(isPreparing: isOpening, cancel: cancelOpening))
     }
@@ -170,7 +180,7 @@ struct ProjectEditorView: View {
             VStack(alignment: .leading, spacing: 12) {
                 timelineHeader(document)
                 ProjectTimelineView(session: session,
-                    isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving,
+                    isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving && !session.isChangingClips,
                     onInteraction: finishToolInteraction,
                     onCaption: timelineCaptionTapped,
                     onClip: { session.seekToClip($0) })
@@ -193,17 +203,31 @@ struct ProjectEditorView: View {
         HStack(spacing: 12) {
             Text("Timeline").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            if let clip = document.clips.first(where: { $0.id == session.workspace.timelineClipID }) ?? session.currentClip {
-                Menu {
-                    Button("Go to clip start", systemImage: "backward.end") { session.seekToClip(clip.id) }
-                    Button("Rename clip", systemImage: "pencil") { finishToolInteraction(); renamingClip = clip }
-                } label: {
-                    Label(document.editorClipTitle(clip), systemImage: "film")
-                        .font(.caption).lineLimit(1).truncationMode(.middle).frame(minHeight: 44)
+            let clip = selectedTimelineClip(in: document)
+            let index = clip.flatMap { selected in document.orderedClips.firstIndex { $0.id == selected.id } }
+            Button { openClips() } label: {
+                HStack(spacing: 6) {
+                    Text(index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "Clips")
+                        .font(.caption.weight(.medium)).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
                 }
-                .accessibilityLabel("Actions for clip, " + document.editorClipTitle(clip))
+                .frame(minHeight: 44).contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Manage clips")
+            .accessibilityValue(index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "")
+            .accessibilityHint("Opens the clip list at the selected clip")
         }
+    }
+
+    private func selectedTimelineClip(in document: ProjectDocument) -> ProjectClip? {
+        document.clips.first { $0.id == session.workspace.timelineClipID } ?? session.currentClip
+    }
+
+    private func openClips() {
+        finishToolInteraction()
+        clipsInitialSelection = session.document.flatMap { selectedTimelineClip(in: $0)?.id }
+        showClips = true
     }
 
     private func timelineCaptionTapped(_ id: UUID) {
@@ -236,14 +260,6 @@ struct ProjectEditorView: View {
         // Keep the opening overlay until the current generation has settled.
         guard isOpening, !isLeaving, !session.isLoading, !session.isPreparingPreview else { return }
         isOpening = false
-        if !didApplyInitialRoute, session.document != nil {
-            didApplyInitialRoute = true
-            if let initialClipID { session.seekToClip(initialClipID) }
-            if let initialTool {
-                session.selectSettingsScope(.project)
-                switchTool(initialTool)
-            }
-        }
         if renameOnOpen, !didRequestInitialRename, session.document != nil {
             didRequestInitialRename = true
             beginRenaming()
@@ -263,8 +279,8 @@ struct ProjectEditorView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        showProjectInfo || showExport || showQueue || showStyleSheet || showStyleBrowser ||
-            activeToolSheet != nil || renamingClip != nil || addingCaption != nil ||
+        showProjectInfo || showClips || showExport || showQueue || showStyleSheet || showStyleBrowser ||
+            activeToolSheet != nil || addingCaption != nil ||
             session.proUpsell != nil || session.workspace.expandedPreview
     }
 
@@ -452,11 +468,7 @@ struct ProjectEditorView: View {
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button("Export") {
-                focused = nil
-                session.pause()
-                session.endTyping()
-                session.endStyleEditing()
-                session.endMediaEditing()
+                finishToolInteraction()
                 showExport = true
             }
             .font(.subheadline.weight(.semibold))
@@ -476,11 +488,6 @@ struct ProjectEditorView: View {
             Label(saveStatus, systemImage: hasStatusError ? "exclamationmark.triangle" : "checkmark.circle")
             Divider()
             Button("Rename", systemImage: "pencil") { beginRenaming() }
-            if let document = session.document, document.clips.count == 1, let clip = document.clips.first {
-                Button("Rename clip", systemImage: "film") {
-                    focused = nil; session.pause(); renamingClip = clip
-                }
-            }
             Divider()
             Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
                 .disabled(!session.canUndo)
@@ -500,9 +507,8 @@ struct ProjectEditorView: View {
             Button("Media tools", systemImage: "crop.rotate") {
                 switchTool(.media)
             }
-            Button("Project details", systemImage: "info.circle") {
-                focused = nil
-                session.pause()
+            Button("Project info", systemImage: "info.circle") {
+                finishToolInteraction()
                 showProjectInfo = true
             }
             Button("Duplicate project", systemImage: "plus.square.on.square") {
@@ -514,7 +520,11 @@ struct ProjectEditorView: View {
             }
             Button("Move to Trash", systemImage: "trash", role: .destructive) { showDeleteConfirmation = true }
                 .disabled(model.transcription.isActive(projectID))
-        } label: { Image(systemName: hasEditorError ? "exclamationmark.circle" : "ellipsis.circle") }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
         .accessibilityLabel("Editor actions, " + saveStatus)
         .disabled(isOpening || !session.isReadyToEdit || preparingTranscription || showStyleBrowser)
     }
@@ -576,6 +586,7 @@ struct ProjectEditorView: View {
     private var editorToolBar: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 4) {
+                actionButton("Clips", symbol: "film.stack", selected: showClips, action: openClips)
                 ForEach(EditorTool.allCases) { tool in
                     actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleBrowser)) {
                         switchTool(tool)
@@ -583,9 +594,6 @@ struct ProjectEditorView: View {
                 }
                 actionButton("Customize", symbol: "slider.horizontal.3", selected: showStyleSheet) {
                     finishToolInteraction(); showStyleSheet = true
-                }
-                actionButton("Export", symbol: "square.and.arrow.up", selected: showExport) {
-                    finishToolInteraction(); showExport = true
                 }
             }.padding(.horizontal, 12).padding(.vertical, 8)
         }
@@ -622,9 +630,6 @@ struct ProjectEditorView: View {
         !hasPresentedSheet && !isOpening
     }
 
-    private var hasEditorError: Bool {
-        hasStatusError || session.previewError != nil || captionRenderError != nil
-    }
     private var hasStatusError: Bool {
         session.saveError != nil || session.loadError != nil || session.commandError != nil
     }
@@ -829,7 +834,7 @@ struct ProjectEditorView: View {
                 Text("Captions").font(.headline)
                 Text("\(session.snapshot?.cues.count ?? 0)").font(.caption).foregroundStyle(.secondary)
             }
-            if let count = document.recognition?.progress.map({ $0.totalWindows - $0.resolved.count }), count > 0 {
+            if let count = document.recognition?.progress.map({ $0.unresolvedCount }), count > 0 {
                 Text(count == 1 ? "1 gap" : "\(count) gaps")
                     .font(.caption2).foregroundStyle(.orange)
             }
@@ -888,12 +893,13 @@ struct ProjectEditorView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         if hasStatusError { status }
                         projectInfo(document)
+                        ProjectStorageSection(session: session)
                     }
                     .padding(16)
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Project details")
+            .navigationTitle("Project info")
             .navigationBarTitleDisplayMode(.inline)
             .themedSurface()
             .task {
@@ -930,7 +936,7 @@ struct ProjectEditorView: View {
                 }
             }
         }
-        .alert("Project details", isPresented: Binding(
+        .alert("Project info", isPresented: Binding(
             get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
             Button("OK", role: .cancel) { model.alertMessage = nil }
         } message: { Text(model.alertMessage ?? "") }
@@ -943,12 +949,17 @@ struct ProjectEditorView: View {
             TextField("Project title", text: Binding(get: { session.document?.title ?? "" }, set: { session.setTitle($0) }))
                 .textFieldStyle(.roundedBorder).focused($focused, equals: .title)
                 .accessibilityLabel("Project title, saved automatically")
-            Text("\(document.clips.count) clips · \(document.canvas.width) × \(document.canvas.height)")
-                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Clips", value: "\(document.clips.count)")
+            LabeledContent("Duration", value: EditorTime.display(document.outputDuration))
+            LabeledContent("Canvas", value: "\(document.canvas.width) × \(document.canvas.height)")
+            LabeledContent("Created", value: document.createdAt.formatted(date: .abbreviated, time: .shortened))
+            LabeledContent("Modified", value: document.updatedAt.formatted(date: .abbreviated, time: .shortened))
             Text("Original media").font(.headline).padding(.top, 8)
             ForEach(document.assets) { asset in
                 VStack(alignment: .leading, spacing: 5) {
                     Label(asset.displayName, systemImage: asset.kind == .video ? "film" : "waveform")
+                    Text(ByteCountFormatter.string(fromByteCount: asset.byteCount, countStyle: .file))
+                        .font(.caption).foregroundStyle(.secondary)
                     if asset.kind == .video {
                         Text("\(asset.metadata.displayedWidth) × \(asset.metadata.displayedHeight) · \(EditorTime.display(asset.metadata.duration))")
                             .font(.caption).foregroundStyle(.secondary)

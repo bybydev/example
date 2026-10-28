@@ -1,5 +1,26 @@
 # Inkribe Working Rules
 
+## Current direct editor and sheets authorization
+
+2026-10-28. The user requests **pass 3** in existing PR #49,
+feat/ios-editor-sheets → develop, extending pass-2 head 014ad963. Complete native
+clip drag reorder and source consolidation while preserving passes 1–2. Reorder
+is local in the large Clips sheet until Save, with Cancel, stable IDs, expected
+state, one durable undoable commit and no-op rejection. Project trim remains a
+window at its current clock positions; reordered footage inside it can change.
+Keep native source intervals/raw IDs, manual/native captions, clip names/settings,
+accepted coverage/retry/allowance, preview/media/audio/SRT order, selection and
+original files aligned. Do not automatically transcribe or affect frozen exports.
+Retain direct editor/opening cancellation, Project info/storage, numbered timeline,
+plain ellipsis and toolbar-only Export sheet/history. Remove unused clip-strip UI;
+background export artwork must retain deletion leases without blocking dismissal.
+Schema stays 11 (reads 1–10); no shared-package/Mac/native renderer/engine/commerce/
+model-policy/CI changes. Active project transcription still excludes final graph
+transactions. Read docs/ios/phases/EDITOR_SHEETS.md and handoffs/EDITOR_SHEETS.md.
+Source-only: no builds/typechecks/tests/fixtures, CI, generation/models, native
+processing/exports, UI/device/accessibility execution or deployment. Keep PR #49
+open without auto-merge; implementation completion is not runtime acceptance.
+
 ## Current timeline editor authorization
 
 2026-10-27. The user requests **pass 3** of issue #47 in existing PR #48,

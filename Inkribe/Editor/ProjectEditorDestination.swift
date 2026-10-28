@@ -9,7 +9,7 @@ struct ProjectEditorDestination: View {
     @State private var session: EditorSession?
     var body: some View {
         Group {
-            if let session { ProjectDetailView(session: session, sessions: model.editors, renameOnOpen: renameOnOpen) }
+            if let session { ProjectEditorView(session: session, sessions: model.editors, renameOnOpen: renameOnOpen) }
             else { ProgressView("Opening project…").frame(maxWidth: .infinity, maxHeight: .infinity).themedSurface() }
         }
         .task {

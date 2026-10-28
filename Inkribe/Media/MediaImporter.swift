@@ -16,10 +16,17 @@ struct ImportInput: Sendable, Identifiable {
     }
 }
 
+/// Originals copied and inspected in unpublished staging; no project is created.
+struct PreparedClipImport: Sendable {
+    let staging: URL
+    let assets: [SourceAsset]
+    let clips: [ProjectClip]
+}
+
 struct ImportItemError: LocalizedError {
     let name: String
     let detail: String
-    var errorDescription: String? { "Couldn’t import \(name). \(detail) Retry, or remove this file before creating the project." }
+    var errorDescription: String? { "Couldn’t import \(name). \(detail) Retry, or remove this selection." }
 }
 
 /// Non-UI ingress for Files, iCloud/document providers, Photos transferable
@@ -45,11 +52,18 @@ actor MediaImporter {
                                        title: title, projectID: projectID)
     }
 
-    /// No streaming site scraping or DRM bypass: this is direct HTTPS media only.
-    /// Caller must obtain explicit media rights confirmation before this is called.
     func importDirectURL(_ remoteURL: URL, rightsConfirmed: Bool,
                          preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
                          title: String? = nil, projectID: UUID) async throws -> ProjectDocument {
+        if let existing = try? await repository.open(projectID) { return existing }
+        let prepared = try await prepareDirectURL(remoteURL, rightsConfirmed: rightsConfirmed)
+        return try await commitPreparedProject(prepared, preset: preset, customCanvas: customCanvas,
+            title: title, projectID: projectID)
+    }
+
+    /// Direct HTTPS media only, with bounded download/cancellation and the same
+    /// inspected staging used by Files and Photos. The caller chooses new/append.
+    func prepareDirectURL(_ remoteURL: URL, rightsConfirmed: Bool) async throws -> PreparedClipImport {
         guard rightsConfirmed else { throw ProjectStoreError.rightsNotConfirmed }
         guard remoteURL.scheme?.lowercased() == "https",
               remoteURL.host != nil, remoteURL.user == nil,
@@ -114,10 +128,7 @@ actor MediaImporter {
                 try output.close()
                 let name = remoteURL.lastPathComponent.isEmpty
                     ? "Imported Media" : remoteURL.lastPathComponent
-                return try await createProject(
-                    [ImportInput(localURL: temporary, origin: .directURL, displayName: name)],
-                    preset: preset, customCanvas: customCanvas, title: title?.isEmpty == false ? title : name, projectID: projectID
-                )
+                return try await prepareClips([ImportInput(localURL: temporary, origin: .directURL, displayName: name)])
             } onCancel: {
                 session.invalidateAndCancel()
             }
@@ -129,12 +140,16 @@ actor MediaImporter {
 
     private func createProject(
         _ inputs: [ImportInput], preset: CanvasPreset,
-        customCanvas: ProjectCanvas?, title: String?,
-        projectID: UUID? = nil
+        customCanvas: ProjectCanvas?, title: String?, projectID: UUID? = nil
     ) async throws -> ProjectDocument {
-        if let projectID, let existing = try? await repository.open(projectID) {
-            return existing
-        }
+        if let projectID, let existing = try? await repository.open(projectID) { return existing }
+        let prepared = try await prepareClips(inputs)
+        return try await commitPreparedProject(prepared, preset: preset, customCanvas: customCanvas,
+            title: title, projectID: projectID)
+    }
+
+    func prepareClips(_ inputs: [ImportInput]) async throws -> PreparedClipImport {
+        guard !inputs.isEmpty else { throw ClipGraphError.invalidImport }
         let staging = try await repository.makeStagingDirectory()
         do {
             var assets: [SourceAsset] = []
@@ -169,12 +184,24 @@ actor MediaImporter {
                 end = mapping.timelineInterval.end
             }
             try Task.checkCancellation()
-            let firstVideo = assets.first(where: { $0.kind == .video })?.metadata
+            return PreparedClipImport(staging: staging, assets: assets, clips: clips)
+        } catch {
+            try? await repository.discardStaging(staging)
+            throw error
+        }
+    }
+
+    private func commitPreparedProject(_ prepared: PreparedClipImport, preset: CanvasPreset,
+                                       customCanvas: ProjectCanvas?, title: String?, projectID: UUID?) async throws -> ProjectDocument {
+        do {
+            try Task.checkCancellation()
+            let firstVideo = prepared.assets.first(where: { $0.kind == .video })?.metadata
             let natural = ProjectCanvas(width: max(64, firstVideo?.displayedWidth ?? 1080),
                                     height: max(64, firstVideo?.displayedHeight ?? 1080))
             let dimensions = preset.canvas ?? (preset == .custom ? customCanvas : nil) ?? natural
             try dimensions.validate()
-            let rawTitle = title ?? inputs.first?.displayName ?? "Untitled Project"
+            let requestedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let rawTitle = requestedTitle.isEmpty ? (prepared.assets.first?.displayName ?? "Untitled Project") : requestedTitle
             let safeTitle = String(rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).prefix(256))
             let now = Date()
             let document = ProjectDocument(
@@ -183,11 +210,11 @@ actor MediaImporter {
                 title: safeTitle.isEmpty ? "Untitled Project" : safeTitle,
                 createdAt: now, updatedAt: now,
                 preset: preset, canvas: dimensions,
-                assets: assets, clips: clips
+                assets: prepared.assets, clips: prepared.clips
             )
-            return try await repository.commitNew(document, stagedAt: staging)
+            return try await repository.commitNew(document, stagedAt: prepared.staging)
         } catch {
-            try? await repository.discardStaging(staging)
+            try? await repository.discardStaging(prepared.staging)
             throw error
         }
     }

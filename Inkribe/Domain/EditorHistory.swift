@@ -8,11 +8,23 @@ struct EditorHistoryEntry: Sendable {
     var selectionAfter: EditorSelection
 }
 enum EditorHistoryChange: Sendable {
+    case clips(before: ClipGraphState, after: ClipGraphState)
     case caption(CaptionEditPatch)
     case manual(ManualCaptionPatch)
     case settings(before: ProjectSettingsState, after: ProjectSettingsState)
 
+    var actionName: String {
+        switch self {
+        case .clips(let before, let after):
+            if before.clips.count < after.clips.count { return "add clips" }
+            if before.clips.count > after.clips.count { return "remove clip" }
+            return "reorder clips"
+        default: return "edit"
+        }
+    }
+
     var changesMedia: Bool {
+        if case .clips = self { return true }
         if case .settings(let before, let after) = self { return after.changesMedia(from: before) }
         return false
     }
@@ -22,6 +34,9 @@ enum EditorHistoryChange: Sendable {
     func applying(to document: ProjectDocument, forward: Bool) throws -> ProjectDocument {
         var project = document
         switch self {
+        case .clips(let before, let after):
+            guard ClipGraphState(project) == (forward ? before : after) else { throw ClipGraphError.stale }
+            project = (forward ? after : before).applying(to: project)
         case .caption(let patch):
             guard let result = project.recognition else { throw CaptionEditError.missingCaption }
             let state = try patch.applying(to: CaptionEditState(result), forward: forward)
@@ -39,6 +54,7 @@ enum EditorHistoryChange: Sendable {
 
     var estimatedBytes: Int {
         switch self {
+        case .clips(let before, let after): before.estimatedBytes + after.estimatedBytes
         case .caption(let patch): patch.estimatedBytes
         case .manual(let patch): patch.estimatedBytes
         case .settings(let before, let after):

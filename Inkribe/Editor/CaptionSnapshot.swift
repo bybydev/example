@@ -139,7 +139,7 @@ struct CaptionSnapshot: Sendable {
         if let progress = document.recognition?.progress, progress.isIncomplete,
            let plan = try? SpeechCheckpoint.plan(clips: document.clips, assets: document.assets) {
             let resolved = Set(progress.resolved.map(\.index))
-            for window in plan where !resolved.contains(window.index) {
+            for window in plan where !resolved.contains(window.index) && progress.retainedClipIDs?.contains(window.clip.id) != true {
                 let offset = CMTimeSubtract(window.core.start.cmTime, window.clip.sourceInterval.start.cmTime)
                 let start = CMTimeAdd(window.clip.timelineInterval.start.cmTime, offset)
                 if let interval = try? MediaInterval(start: MediaTime(validating: start),

@@ -4,7 +4,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 10
+    static let current = 11
 }
 
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
@@ -203,6 +203,9 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
             for pair in zip(visible, visible.dropFirst()) where ManualCaption.overlaps(pair.0.interval, pair.1.interval) {
                 throw ManualCaptionError.overlap
             }
+        }
+        guard schemaVersion >= 11 || (recognition?.progress?.retainedClipIDs == nil && recognition?.progress?.retainedWindowCount == nil) else {
+            throw ProjectStoreError.invalidDocument("Retained clip coverage requires schema v11")
         }
         try recognition?.validate(clips: clips, assets: assets)
         guard schemaVersion >= 6 || recognition?.progress == nil else {

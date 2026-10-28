@@ -66,9 +66,11 @@ struct CaptionAllowanceLedger: Codable, Equatable {
     }
 
     static func seconds(for document: ProjectDocument) throws -> Int {
-        let audio = Set(document.assets.filter { $0.metadata.audioTrackCount > 0 }.map(\.id))
-        let duration = document.clips.filter { audio.contains($0.sourceAssetID) }
-            .reduce(0.0) { $0 + CMTimeGetSeconds($1.sourceInterval.duration) }
+        let plan = try SpeechCheckpoint.plan(clips: document.clips, assets: document.assets)
+        let resolved = Set(document.recognition?.progress?.resolved.map(\.index) ?? [])
+        let retained = Set(document.recognition?.progress?.retainedClipIDs ?? [])
+        let duration = plan.filter { !resolved.contains($0.index) && !retained.contains($0.clip.id) }
+            .reduce(0.0) { $0 + CMTimeGetSeconds($1.core.duration) }
         guard duration.isFinite, duration > 0 else { throw SpeechError.noAudio }
         guard duration <= Double(Commerce.weeklySeconds) else { throw ProError.requiresPro(.captioning) }
         return max(1, Int(ceil(duration)))

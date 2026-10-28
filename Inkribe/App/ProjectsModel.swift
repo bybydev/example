@@ -211,8 +211,9 @@ final class ProjectsModel {
     init() {
         let access = ProAccess()
         self.access = access
-        processing = ProcessingCoordinator(access: access)
-        editors = EditorSessions(access: access)
+        let coordinator = ProcessingCoordinator(access: access)
+        processing = coordinator
+        editors = EditorSessions(access: access, transcription: coordinator.transcription)
         // These ingress copies have no durable authority: committed projects
         // own their originals in the repository. Safe once, before new picks.
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
@@ -547,8 +548,15 @@ final class ProjectsModel {
         await refreshLibrary()
     }
 
+    func refreshAfterClipEdit(_ id: UUID) async {
+        cacheGeneration += 1
+        await refreshLibrary()
+        await regenerateThumbnail(id)
+        await refreshStorage()
+    }
+
     func regenerateThumbnail(_ id: UUID) async {
-        if await makeThumbnail(id) { await refreshLibrary() }
+        if await makeThumbnail(id) { cacheGeneration += 1; await refreshLibrary() }
     }
 
     func rename(_ summary: ProjectSummary, to title: String) async throws {
@@ -618,6 +626,11 @@ final class ProjectsModel {
         }
         do { try await repository.permanentlyDeleteProject(id); await refresh() }
         catch { alertMessage = error.localizedDescription; await refreshTrash() }
+    }
+
+    func clearProjectThumbnail(_ id: UUID) async throws {
+        try await repository.purgeThumbnail(projectID: id)
+        cacheGeneration += 1
     }
 
     func purgeCache() async {

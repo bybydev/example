@@ -2,11 +2,12 @@ import AppFoundation
 import JobQueue
 import SwiftUI
 
-/// Both entry points publish to the existing durable export inventory.
+/// Project-scoped activity and retained files inside the existing Export form.
 struct ProjectExportsSection: View {
     @Environment(ProjectsModel.self) private var model
     let session: EditorSession
-    let onExport: () -> Void
+    var excludingActivityID: UUID? = nil
+    let onReuseProfile: (ExportProfile) -> Void
     private var completed: [ExportArtifact] {
         model.exports.artifacts.values.filter { artifact in
             artifact.projectID == session.projectID && artifact.outputURL != nil &&
@@ -17,40 +18,49 @@ struct ProjectExportsSection: View {
         }
     }
     private var activity: [ProcessingEntry] {
-        model.processing.entries.filter { $0.id.kind == .export && $0.projectID == session.projectID && $0.record.status != .completed }
+        model.processing.entries.filter { $0.id.kind == .export && $0.projectID == session.projectID &&
+            $0.record.status != .completed && $0.id.jobID != excludingActivityID }
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Exports").font(.title3.weight(.semibold)); Spacer()
-                Button("Export", systemImage: "square.and.arrow.up", action: onExport).frame(minHeight: 44)
-            }
-            if completed.isEmpty && activity.isEmpty {
-                Text("Your exported videos and subtitles will appear here.").font(.subheadline).foregroundStyle(.secondary)
-                Button("Create an export", action: onExport).buttonStyle(.bordered)
-            }
-            ForEach(activity) { entry in
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(entry.statusTitle, systemImage: "film").font(.subheadline)
-                    if let fraction = entry.fraction { ProgressView(value: fraction) }
-                    NavigationLink { ProcessingJobDetail(key: entry.id) } label: { Label("View in Queue", systemImage: "list.bullet.rectangle") }
-                    if entry.record.status.isRetryable {
-                        Button("Retry export") {
-                            Task { do { try await model.processing.perform(.retry, entry.id) } catch { model.alertMessage = error.localizedDescription } }
+        Group {
+            if !activity.isEmpty {
+                Section("Export activity") {
+                    ForEach(activity) { entry in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(entry.statusTitle, systemImage: "film").font(.subheadline)
+                            if let fraction = entry.fraction { ProgressView(value: fraction) }
+                            NavigationLink { ProcessingJobDetail(key: entry.id) } label: {
+                                Label("View in Queue", systemImage: "list.bullet.rectangle")
+                            }
+                            if entry.record.status.isRetryable {
+                                Button("Retry export") {
+                                    Task {
+                                        do { try await model.processing.perform(.retry, entry.id) }
+                                        catch { model.alertMessage = error.localizedDescription }
+                                    }
+                                }
+                            }
                         }
                     }
-                }.studioCard()
+                }
             }
-            ForEach(completed) { artifact in
-                ProjectExportRow(artifact: artifact, currentRevision: session.document?.contentRevision,
-                    hasPendingEdits: session.hasPendingChanges, exportAgain: onExport)
-            }
-            if let error = model.exports.inventoryError ?? model.exports.persistenceError {
-                Text(error).font(.footnote).foregroundStyle(.orange)
-                Button("Refresh exports") { Task { await model.exports.retryStorage(); await model.exports.refreshArtifacts() } }
+            Section("Exported files") {
+                if completed.isEmpty {
+                    Text("Your exported videos and subtitles will appear here.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(completed) { artifact in
+                    ProjectExportRow(artifact: artifact, currentRevision: session.document?.contentRevision,
+                        hasPendingEdits: session.hasPendingChanges, reuseProfile: onReuseProfile)
+                }
+                if let error = model.exports.inventoryError {
+                    Text(error).font(.footnote).foregroundStyle(.orange)
+                    Button("Refresh exports") { Task { await model.exports.refreshArtifacts() } }
+                }
             }
         }
+        .buttonStyle(.borderless)
     }
 }
 
@@ -59,7 +69,7 @@ private struct ProjectExportRow: View {
     let artifact: ExportArtifact
     let currentRevision: UInt64?
     let hasPendingEdits: Bool
-    let exportAgain: () -> Void
+    let reuseProfile: (ExportProfile) -> Void
     @State private var deleting = false
     @State private var error: String?
     @State private var thumbnail: Data?
@@ -82,14 +92,16 @@ private struct ProjectExportRow: View {
             }
             if older {
                 Text("Created before your latest changes").font(.caption).foregroundStyle(.secondary)
-                Button("Export again", action: exportAgain)
+            }
+            if let profile = artifact.profile {
+                Button("Use these export settings", systemImage: "slider.horizontal.3") { reuseProfile(profile) }
             }
             ExportResultView(jobID: artifact.id)
             Button("Delete local export", systemImage: "trash", role: .destructive) { deleting = true }
                 .disabled(model.exports.isDelivering(artifact.id) || model.exports.persistenceError != nil)
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
-        .studioCard()
+        .padding(.vertical, 8)
         .confirmationDialog("Delete this local export?", isPresented: $deleting) {
             Button("Delete export", role: .destructive) {
                 Task { do { try await model.exports.discard(artifact.id); await model.refreshStorage() } catch { self.error = error.localizedDescription } }
@@ -98,7 +110,7 @@ private struct ProjectExportRow: View {
         .task(id: artifact.outputURL) {
             guard artifact.profile?.format == .mp4 else { return }
             do {
-                let lease = try model.exports.beginDelivery(artifact.id)
+                let lease = try model.exports.beginDelivery(artifact.id, purpose: .artwork)
                 defer { model.exports.endDelivery(lease.token) }
                 let review = await ImportMediaReviewer().review(ImportInput(localURL: lease.url, origin: .files))
                 guard !Task.isCancelled else { return }

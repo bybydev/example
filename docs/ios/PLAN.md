@@ -1,71 +1,40 @@
 # Inkribe iOS — current plan
 
-2026-10-27 — Issue #47, timeline editor **passes 1–3 source-integrated** in
-PR #48, `feat/ios-timeline-editor` → develop. Pass 3 extends head `95628a7`.
-The fixed editor includes real multi-clip frame/caption tracks, ruler, center
-playhead, scrubbing/playback, anchored zoom, selection and caption move/resize.
-Drag a selected block or its edge handles; hold any block to select/move it.
-A temporary block/readout and frame audition precede one validated undoable commit
-on release. Cancel/interruption does not publish the proposed timing. Existing
-native intervals stay immutable; moved words translate and resized words scale.
-Sheets, preview geometry, cancellable opening, cache/queue/Pro contracts remain.
-See [scope](phases/TIMELINE_EDITOR.md) and [source handoff](handoffs/TIMELINE_EDITOR.md).
-Keep PR #48 open without auto-merge. Source review only; compilation and native
-acceptance are unverified. Existing no-build/test/CI/UI/device restrictions remain.
+2026-10-28. The three approved project-sheet passes are source-integrated in PR #49
+on `feat/ios-editor-sheets` → develop. Leave open without auto-merge.
 
+| Pass | Result | Source status |
+|---|---|---|
+| 1 | Direct editor; separate Project info/Clips; toolbar-only existing Export sheet/history; numbered labels/plain ellipsis | Integrated |
+| 2 | Reviewed Photos/Files/URL append, confirmed removal, durable expected-state history and caption/coverage/preview integration | Integrated |
+| 3 | Native local reorder with Cancel/Save, exact caption projection, ordering/trim/history integration and source consolidation | Integrated |
 
-2026-10-26 update: current work is **Add missing caption**, branch
-`feat/ios-manual-captions` → develop, based on f0eb80c (merged #43).
-See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).
-Manual phrases are separate project data; schema 10 reads 1–9. Native recognition,
-working styles, Mac behavior and existing wrappers are preserved. Source-only
-review; compilation/device/output acceptance pending. Keep the new PR open with
-no auto-merge. Earlier current-phase entries below describe completed history.
-
-
-2026-10-26 update: current work is the approved animated Styles sheet in
-`feat/ios-animated-style-sheet` → develop, based on 81b8207 (merged #42).
-See [source checklist and pending acceptance](handoffs/ANIMATED_STYLES.md).
-Keep the PR open. Source-only checks; all existing execution restrictions remain.
-Earlier phase descriptions below are completed history.
-
-2026-10-24. Expanded Pass 1 of #40 is tracked by #41. The user authorized all source
-implementation in one new PR from develop 4a9780f, left open targeting develop.
-
-| Work | Source status |
-|---|---|
-| One-project creation | Photos/Files/direct URL; review/remove/order; failed-item handling; atomic single project |
-| Project details/editor | Shared session; combined preview; clip strip/transcript groups; explicit entry points |
-| Defaults/overrides | Sparse caption/framing/audio patches; section/all inheritance reset; bounded undo; preview/export wiring |
-| Project exports | Existing durable inventory; in-place/queued generation; real-file preview and native delivery |
-| Saving/consolidation | Existing atomic writer/error retention across routes; docs and eight unrun regression specifications |
-
-All rows are source-integrated, **not compiled or accepted on device**. Exact files,
-limits and pending user scenarios are in [the marked handoff](handoffs/PROJECT_EXPERIENCE.md).
+See [scope](phases/EDITOR_SHEETS.md) and [marked handoff](handoffs/EDITOR_SHEETS.md).
+Compilation and device/output acceptance remain unverified.
 
 ## Product contracts
 
-New Project always creates one project with one/multiple ordered files. No separate
-projects option. Project defaults update inheriting fields; explicit clip overrides
-remain. Reset removes overrides without touching text, timing, original media or trim.
-Output aspect, resolution and existing 30fps stay project/output-wide.
+One creation makes one project containing one/multiple clips. Existing projects
+can append clips; copies are inspected in unpublished staging, then one transaction
+publishes all selected media or none. Removal keeps one clip minimum and retains
+original files for history. Structural Undo is in memory like other editor history;
+files are not automatically purged when history ages out.
 
-Both export entry points capture the saved document and use the same durable queue,
-worker and resource gate. Export now follows progress in-place; it does not bypass
-accepted work, user pause or foreground requirements. Completed files share one
-project export collection and remain immutable after later edits.
+Clip names/settings/native/manual captions follow stable clip IDs. Source intervals,
+raw recognition and native word IDs stay genuine; structural edits move project-clock
+positions and accepted coverage indices. Active project transcription excludes final
+structural transactions. Copying and frozen export jobs remain independent.
 
-Keep the approved Free/Pro rules and pricing. Existing saved premium work survives
-expiry; no new watermark, trial, backend quota or product is introduced. Canonical
-schema 9 reads 1–8; no migration job or editor-sidecar workflow is added.
+Reorder edits a local order and Save commits one durable change. Cancel/no-op does
+not publish. Global trim keeps its start/end clock positions through reorder. Add
+expands an explicit end trim; removal collapses boundaries and resets only if no
+visible range remains. These behaviors are disclosed in the corresponding sheet.
 
-## Remaining parent passes
+Schema 11 reads 1–10. Free remains 30 minutes/week; accepted coverage is reused and
+new speech reservations measure unresolved audio cores. Model choice stays solely
+in Settings and all transcription uses the shared active engine/model. Existing
+premium work and immutable export files retain their established access rules.
 
-#40 Pass 2: deeper transcription/queue reliability. Pass 3: manual missing captions
-and correction/style quality. Pass 4: output/audio/timing parity and delivery acceptance.
-Pass 5: first-use, accessibility, commerce and supported-iPhone performance acceptance.
-Do not automatically start another pass. Metadata remains excluded.
-
-No post-creation sequencing, new per-clip trim, transitions, multitrack, accounts,
-cloud inference/sync, dubbing/translation, share extension, iPad or Mac expansion.
-Existing model packaging policy remains unchanged. See [readiness](PRODUCTION_READINESS.md).
+No automatic next feature, merge or release. No transitions, music/multitrack,
+per-clip trim, accounts/backend/cloud sync, translation/dubbing, share extension,
+iPad or Mac expansion. Source-only execution restrictions remain in force.

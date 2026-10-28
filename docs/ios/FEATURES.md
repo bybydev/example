@@ -1,5 +1,46 @@
 # Inkribe iOS — current feature ledger
 
+## Final project sheets — passes 1–3 (2026-10-28, PR #49)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| PROJECT.DIRECT_EDITOR | One direct editor route, cancellable preparation | Integrated |
+| PROJECT.INFO_STORAGE | Plain ellipsis, metadata/originals/relink, scoped storage | Integrated |
+| PROJECT.CLIPS_SHEET | Numbered timeline, select/rename/add/remove/reorder in Clips | Integrated |
+| PROJECT.CLIP_REORDER | Native local drag order, Cancel/Save, one expected-state durable history entry | Integrated |
+| PROJECT.CLIP_ORDERING | Genuine source anchors, native/manual captions, settings and coverage follow stable clips | Integrated |
+| PROJECT.EXPORT_SHEET | Existing toolbar-only Export sheet owns configuration/activity/files/delivery | Integrated |
+| PROJECT.CONSOLIDATION | Shared structural projection, current docs and nonblocking optional artwork | Integrated |
+
+All three passes have source integration; compilation/device/output acceptance remains
+unverified. [Scope](phases/EDITOR_SHEETS.md) and [handoff](handoffs/EDITOR_SHEETS.md)
+supersede earlier intermediate overview/clip-strip and deferred-pass descriptions below.
+
+## Clip management — pass 2 (2026-10-28, PR #49)
+
+| ID | Requirement | Status |
+|---|---|---|
+| PROJECT.ADD_CLIPS | Reviewed Photos/Files/URL append, cancellation/failures, one publication | Source-integrated |
+| PROJECT.REMOVE_CLIPS | Confirmed removal, last-clip guard, retained clock/settings/captions | Source-integrated |
+| PROJECT.CLIP_HISTORY | Expected-state durable structural Undo/Redo and original retention | Source-integrated |
+| PROJECT.CLIP_COVERAGE | Accepted coverage reuse/reindex, unresolved audio admission, schema 11 | Source-integrated |
+
+Pass 1 remains intact. Drag reorder remains pass 3. See
+[handoff](handoffs/EDITOR_SHEETS.md); compilation/device/output acceptance unverified.
+
+## Direct editor and sheets — pass 1 (2026-10-28)
+
+| ID | Requirement | Status |
+|---|---|---|
+| PROJECT.DIRECT_EDITOR | Home/Recent/import/Queue enter the editor directly | Source-integrated |
+| PROJECT.INFO_STORAGE | Basic info, originals/relink, scoped storage and thumbnail cleanup | Source-integrated |
+| PROJECT.CLIPS_SHEET | Two entry points, numbered timeline labels, select and existing rename | Source-integrated |
+| PROJECT.EXPORT_SHEET | Existing sheet owns configuration, activity and retained MP4/SRT files; toolbar-only entry | Source-integrated |
+
+See [scope](phases/EDITOR_SHEETS.md) and [handoff](handoffs/EDITOR_SHEETS.md).
+No clip addition/removal/reorder in this pass. Earlier overview navigation is
+superseded; compilation/device/output acceptance remains unverified.
+
 ## Timeline editor passes 1–3 — issue #47 (2026-10-27)
 
 | ID | Requirement | Status |

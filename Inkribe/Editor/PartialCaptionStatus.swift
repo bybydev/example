@@ -12,7 +12,7 @@ struct PartialCaptionStatus: View {
 
     var body: some View {
         let speech = model.transcription
-        let record = speech.record(for: document.id)
+        let record = speech.record(for: document.id).flatMap { $0.id == document.recognition?.id ? $0 : nil }
         VStack(alignment: .leading, spacing: 8) {
             if let record, !record.status.isTerminal {
                 let progress = speech.queue?.liveProgress[record.id]

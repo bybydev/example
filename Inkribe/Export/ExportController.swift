@@ -76,6 +76,7 @@ struct ExportArtifact: Identifiable, Sendable {
 @MainActor
 @Observable
 final class ExportController {
+    enum DeliveryPurpose: Sendable { case user, artwork }
     nonisolated static let retainedRecordLimit = 100
     private let access: ProAccess
     private let lifecycle: ProcessingLifecycle
@@ -91,6 +92,7 @@ final class ExportController {
     private(set) var artifacts: [UUID: ExportArtifact] = [:]
     private(set) var inventoryError: String?
     private(set) var deliveryTokens: [UUID: UUID] = [:]
+    private var artworkDeliveryTokens: Set<UUID> = []
     private(set) var mutatingIDs: Set<UUID> = []
     private var inventoryGeneration = 0
 
@@ -101,6 +103,8 @@ final class ExportController {
 
     var persistenceError: String? { startupError ?? queue?.persistenceIssue?.errorDescription }
     var isDelivering: Bool { !deliveryTokens.isEmpty }
+    /// Optional artwork keeps file-deletion protection without holding a sheet open.
+    var hasUserDelivery: Bool { deliveryTokens.keys.contains { !artworkDeliveryTokens.contains($0) } }
     var orphanedArtifacts: [ExportArtifact] {
         artifacts.values.filter { queue?.records[$0.id] == nil }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
@@ -256,7 +260,7 @@ final class ExportController {
     }
 
     /// A lease pins this exact immutable URL through native completion/cancel.
-    func beginDelivery(_ id: UUID) throws -> (token: UUID, url: URL) {
+    func beginDelivery(_ id: UUID, purpose: DeliveryPurpose = .user) throws -> (token: UUID, url: URL) {
         guard !mutatingIDs.contains(id),
               (queue?.records[id] == nil || queue?.records[id]?.status == .completed),
               let url = artifacts[id]?.outputURL else { throw ExportError.invalidOutput }
@@ -265,7 +269,11 @@ final class ExportController {
               (values.fileSize ?? 0) > 0 else { throw ExportError.invalidOutput }
         let token = UUID()
         deliveryTokens[token] = id
+        if case .artwork = purpose { artworkDeliveryTokens.insert(token) }
         return (token, url)
     }
-    func endDelivery(_ token: UUID) { deliveryTokens.removeValue(forKey: token) }
+    func endDelivery(_ token: UUID) {
+        deliveryTokens.removeValue(forKey: token)
+        artworkDeliveryTokens.remove(token)
+    }
 }

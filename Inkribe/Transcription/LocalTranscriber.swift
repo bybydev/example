@@ -58,7 +58,7 @@ actor LocalTranscriber {
         let fresh = SpeechCheckpoint(jobID: id, project: current, modelID: model.id,
                                      modelSHA256: model.sha256, language: language)
         var checkpoint = try await repository.loadSpeechCheckpoint(matching: fresh)
-        checkpoint.prepareForResume()
+        checkpoint.prepareForResume(preservingSavedWords: checkpoint.retainedClipIDs?.isEmpty == false && current.recognition?.words.isEmpty == false)
         let plan = try SpeechCheckpoint.plan(clips: project.clips, assets: project.assets)
         guard !plan.isEmpty else { throw SpeechError.noAudio }
         if let windowIndices {
@@ -70,7 +70,7 @@ actor LocalTranscriber {
         // starts fresh only after the new checkpoint is durably written.
         checkpoint = try await repository.saveSpeechCheckpoint(checkpoint)
         checkpoint = try await publish(checkpoint, chargeAllowance: chargeAllowance)
-        if checkpoint.wordCount > 0, checkpoint.entries.filter({ $0.failure == nil }).count == plan.count { return }
+        if checkpoint.wordCount > 0, checkpoint.entries.filter({ $0.failure == nil }).count + checkpoint.retainedWindowCount(in: plan) == plan.count { return }
         var entries = Dictionary(uniqueKeysWithValues: checkpoint.entries.map { ($0.index, $0) })
         let total = plan.reduce(0.0) { $0 + CMTimeGetSeconds($1.core.duration) }
         var completed = 0.0
@@ -80,6 +80,11 @@ actor LocalTranscriber {
             let duration = CMTimeGetSeconds(window.core.duration)
             let share = duration / total
             await tracker.begin(window: window.index, base: base, share: share)
+            if checkpoint.retains(window.clip.id) {
+                completed += duration
+                await tracker.stage("Keeping saved captions…", fraction: completed / total * 0.95)
+                continue
+            }
             if let saved = entries[window.index], saved.failure == nil {
                 completed += duration
                 await tracker.stage("Reusing saved transcription…", fraction: completed / total * 0.95)
@@ -130,7 +135,7 @@ actor LocalTranscriber {
             await tracker.stage(entry.failure == nil ? "Audio window saved" : "Window needs retry; continuing…",
                                 fraction: completed / total * 0.95)
         }
-        let resolved = checkpoint.entries.filter { $0.failure == nil }.count
+        let resolved = checkpoint.entries.filter { $0.failure == nil }.count + checkpoint.retainedWindowCount(in: plan)
         guard resolved == plan.count else {
             let failures = Dictionary(grouping: checkpoint.entries.compactMap { $0.failure?.description }, by: { $0 })
             let reasons = failures.keys.sorted().map { "\($0): \(failures[$0]?.count ?? 0) ranges" }.joined(separator: "; ")
@@ -138,6 +143,9 @@ actor LocalTranscriber {
             throw SpeechRecoveryError.incomplete(resolved: resolved, total: plan.count,
                 detail: captions + (reasons.isEmpty ? "" : " " + reasons + "."))
         }
+        // A carried legacy transcript already supplies genuine saved words;
+        // newly appended silent cores must not erase that completed publication.
+        if checkpoint.retainedClipIDs?.isEmpty == false, current.recognition?.words.isEmpty == false { return }
         guard checkpoint.entries.contains(where: { $0.copiedSamples > 0 }) else { throw SpeechError.emptyAudio }
         guard checkpoint.entries.contains(where: { $0.peak > 0 }) else { throw SpeechError.silentAudio }
         guard checkpoint.wordCount > 0 else { throw SpeechError.noRecognizedWords }

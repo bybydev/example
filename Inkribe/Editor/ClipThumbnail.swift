@@ -4,62 +4,6 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Compact navigation only when the project actually contains multiple clips.
-struct ClipStrip: View {
-    let session: EditorSession
-    let onRename: (ProjectClip) -> Void
-    var body: some View {
-        if let document = session.document, document.clips.count > 1 {
-            let current = session.currentClip
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Clips").font(.subheadline.weight(.medium))
-                    Spacer()
-                    if let current, let index = document.orderedClips.firstIndex(where: { $0.id == current.id }) {
-                        Text("\(index + 1) of \(document.clips.count)").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(document.orderedClips.enumerated()), id: \.element.id) { index, clip in
-                            clipCard(clip, index: index, current: current, document: document)
-                        }
-                    }
-                }.scrollIndicators(.hidden)
-            }
-        }
-    }
-
-    private func clipCard(_ clip: ProjectClip, index: Int, current: ProjectClip?, document: ProjectDocument) -> some View {
-        HStack(spacing: 0) {
-            Button { session.seekToClip(clip.id) } label: {
-                HStack(spacing: 10) {
-                    ClipThumbnail(projectID: document.id, clip: clip,
-                        source: document.assets.first { $0.id == clip.sourceAssetID })
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(document.editorClipTitle(clip)).font(.caption.weight(.medium))
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(EditorTime.display(clip.timelineInterval.durationTime))
-                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(OutputTimeline(document).outputInterval(clip.timelineInterval) == nil)
-            .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
-            .accessibilityAddTraits(current?.id == clip.id ? .isSelected : [])
-            Menu {
-                Button("Rename clip", systemImage: "pencil") { onRename(clip) }
-            } label: {
-                Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
-            }.accessibilityLabel("Actions for clip \(index + 1), \(document.clipName(clip))")
-        }
-        .padding(8).frame(width: 240)
-        .background(current?.id == clip.id ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06),
-            in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
 extension ProjectDocument {
     /// Hide machine-generated import labels in editor chrome only. User labels
     /// and canonical source filenames remain untouched in storage and details.

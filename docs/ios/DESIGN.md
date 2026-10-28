@@ -14,7 +14,7 @@ loading, failure, missing-original and save-failure states use actual data.
 Hero/toolbar enter the same guarded importer. One or multiple files always create
 one project. Review thumbnails/durations/order, remove or retry failed selections,
 then create atomically. No separate/combined selector or silent subset publication.
-Successful creation routes to project details only after importer dismissal. Surrounding settings/storage/
+Successful creation routes directly to the editor after importer dismissal. Surrounding settings/storage/
 models/queue/export views share AF surfaces, borders, accent and semantic text.
 
 Native Back/edge swipe and continuous themed chrome remain installed. A completed
@@ -22,17 +22,43 @@ pop does not discard failed saves or block on persistence. A genuine save failur
 does not create an attention card. Rename opens the existing project title field.
 There is no user-facing draft/recovery/discard/reload workflow. No sticky home/activity component or UIKit gesture override.
 
-## Project details
+## Project sheets (2026-10-28)
 
-One scrolling overview: combined preview/Edit → ordered Clips → Project defaults →
-Exports newest first. Clip rows seek the shared editor at that clip. Rename, duplicate
-and Trash remain plain actions. Save-failure and missing-media messages use actual state.
+The library, Recent Project, creation completion and Queue open the existing editor
+directly. There is no intermediate project overview. A plain ellipsis toolbar menu
+with a 44-point target opens Project info: title, duration, clip count, canvas,
+created/modified dates, original media details/relink and scoped storage accounting.
+Confirmed cleanup removes only that project's rebuildable library thumbnail.
 
-Exports includes active/failed work with Queue access and retained completed MP4/SRT
-files with format/size/date, optional artwork, actual-file playback, Photos/Files/Share
-and explicit local deletion. Old outputs remain immutable; changed revisions can show
-Created before your latest changes and Export again. Export now follows progress in-place;
-Queue export opens job detail. Both publish to the same collection.
+Clips is one large sheet, opened from bottom Clips or Clip N of M above the timeline.
+Reveal/highlight the selected row; show thumbnails, full names within bounded rows,
+duration/output position and missing originals. Tap retained clips to select/seek and
+return. Swipe/context/accessible rename uses the existing cancellable rename sheet;
+excluded-by-trim clips remain visible and renameable. Timeline labels stay Clip N.
+Add clips opens local Photos/Files/direct-URL review. New media appends to the existing
+canvas/defaults; Clips stays open and reveals the added row. Preparation is cancellable,
+failed picks require retry/removal, and Add publishes all reviewed selections or none.
+It does not start transcription. An explicit end trim expands (disclosed before Add).
+
+Remove is a confirmed swipe/context/accessible action, disabled for the last clip or
+while project transcription is active. Retained captions/settings move with their clips
+when the gap closes. If removal clears the visible trim, the confirmation explains that
+remaining clips become visible. Originals stay in project storage for Undo; completed
+exports stay unchanged. Reorder enters native drag mode in this same sheet. Clip rows show names/durations
+with drag handles and accessible Move earlier/later actions; selection/rename/removal
+stay inactive while arranging. Cancel keeps the video unchanged. Save applies one
+undoable order and returns to normal Clips with the selected identity retained.
+Project trim stays at its current start/end times; disclose that reordered footage
+inside the window can change.
+
+Only toolbar Export opens the existing large Export sheet. It contains configuration,
+Export now/Queue export, current/other export activity and newest-first completed MP4/SRT
+files. Retain revision freshness, optional artwork, actual-file preview, Photos/Files/
+Share, settings reuse and confirmed local deletion. Settings reuse returns to the same
+sheet's configuration and rechecks the existing Pro policy. Independent completed files
+remain accessible through the app-wide Queue as well. Optional artwork does not
+block sheet dismissal; actual user preview/save/share retains its delivery protection.
+No bottom Export action.
 
 ## Timeline editor — issue #47 (2026-10-27)
 
@@ -51,8 +77,8 @@ follows that clock across clip boundaries; dragging pauses playback and seeks,
 with a final exact seek on release. Pinch zoom preserves time beneath the fingers.
 Leading/trailing padding allows the project start/end to meet the center playhead.
 
-Tap a clip to select/seek it. The current/selected clip's header menu retains
-rename and Go to clip start. Tap a caption to select/reveal it; tap it again to
+Tap a clip to select/seek it. The current/selected clip's numbered header opens
+the Clips sheet; rename belongs to that sheet. Tap a caption to select/reveal it; tap it again to
 open text and word/phrase timing in a large sheet, preserving the playhead on the
 second tap. Selection remains separate from playback-follow. Project trim and
 source offsets map frame samples correctly without rewriting clip/caption times.

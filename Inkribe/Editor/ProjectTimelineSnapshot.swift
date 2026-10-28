@@ -42,11 +42,11 @@ struct ProjectTimelineSnapshot: Sendable {
         duration = EditorTime.seconds(document.outputDuration)
         let timeline = OutputTimeline(document)
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
-        clips = document.orderedClips.compactMap { clip in
+        clips = document.orderedClips.enumerated().compactMap { index, clip in
             guard let asset = assets[clip.sourceAssetID],
                   let kept = timeline.retained(clip.timelineInterval),
                   let output = timeline.outputInterval(clip.timelineInterval) else { return nil }
-            return Clip(id: clip.id, assetID: asset.id, title: document.editorClipTitle(clip),
+            return Clip(id: clip.id, assetID: asset.id, title: "Clip \(index + 1)",
                 fingerprint: asset.sha256, kind: asset.kind,
                 start: EditorTime.seconds(output.start), end: EditorTime.seconds(output.end),
                 sourceStart: CMTimeGetSeconds(CMTimeAdd(clip.sourceInterval.start.cmTime,

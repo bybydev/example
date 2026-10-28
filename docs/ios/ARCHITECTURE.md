@@ -1,5 +1,72 @@
 # Inkribe iOS — current architecture
 
+## Final project sheets and reorder — pass 3 (2026-10-28)
+
+ProjectClipsSheet owns a local stable-ID order and native List edit-mode handles.
+Cancel never mutates the session. Save supplies an expected ClipGraphState and a
+complete identity permutation to EditorSession → transcription admission → repository.
+One valid changed order advances one revision and records one bounded structural
+history entry. Invalid/stale/no-op orders never publish a structural edit.
+
+ClipGraphEdit shares manual/native projection for append/remove/reorder. Reorder
+rebuilds contiguous project intervals, translates each clip’s editable caption values
+by an exact rational offset, sorts projected cues/words/manuals chronologically and
+reindexes accepted coverage by clip/core. Native source intervals/IDs/raw windows,
+clip names/settings and original files stay intact. Global trim keeps its absolute
+clock window. Existing preview/media/audio/MP4/SRT read the same document graph.
+Selection/playhead, timeline frames/labels and library artwork use existing adoption.
+
+Structural history checks both expected graph and current transcription admission;
+labels distinguish add/remove/reorder. Background export artwork leases remain
+per-file deletion guards, while only user delivery blocks Export/Queue dismissal.
+Unused ClipStrip UI is removed; thumbnail/name helpers are in ClipThumbnail.swift.
+Schema stays 11; Mac, shared packages, renderer, speech engine and commerce stay intact.
+See [handoff](handoffs/EDITOR_SHEETS.md). Earlier pass sections describe retained history.
+
+## Clip management — pass 2 (2026-10-28)
+
+PreparedClipImport owns inspected unpublished originals. MediaImporter supports both
+new-project publication and returning staging to AddClipsSheet; Home selection state
+is independent. ProjectRepository validates the exact expected base, adopts UUID-owned
+files, then publishes one graph revision. Failure before publication leaves the old
+graph intact. Inactive resume sidecars and derived artwork are invalidated afterward.
+Removed files are kept for history; asset references are limited to retained clips.
+
+ClipGraphEdit removes one clip, translates retained project intervals and maps trim
+boundaries without modifying source intervals or native/raw IDs. EditorSession flushes
+prior edits, holds only final transcription admission, adopts saved state and records
+one bounded expected-state structural history entry. Ordinary caption/settings writes
+keep their existing immutable-source gates. Active project speech blocks graph changes;
+exports retain their independent pinned versions. Later inference disables incompatible
+structural Undo instead of replacing accepted results.
+
+Schema 11 adds optional retained-complete clip coverage. Native accepted window indices
+are remapped by clip/core; legacy-complete clips carry accepted raw/captions without
+synthesized checkpoint entries. A new structural operation ID prevents stale queue or
+charged-allowance reuse. Reservations measure unresolved cores; existing accepted data
+is not inferred again. Gap display, duplication, checkpoint seeding/publication and
+library artwork support the new graph. Read [handoff](handoffs/EDITOR_SHEETS.md).
+
+## Direct editor and project sheets — pass 1 (2026-10-28)
+
+ProjectEditorDestination acquires the shared EditorSession and directly hosts
+ProjectEditorView. There is no ProjectDetailView or second preview owner. Existing
+editor opening cancellation, attach/detach, writer/history, error retention and
+rename-on-open apply to every project route. Presentation state remains unsaved.
+ProjectClipsSheet owns clip-list navigation and nested ClipRenameView; both entry
+points capture the selected clip, without opening a new editor. All sheets suspend
+timeline gesture/frame work and do not enter the player-sizing calculation.
+
+ProjectStorageSection uses targeted repository package/thumbnail accounting and
+ProjectsModel's cache-generation invalidation after confirmed thumbnail-only cleanup.
+It never deletes durable data, originals, transcription progress or frozen exports.
+ExportView embeds ProjectExportsSection as native Form sections, with one current
+progress panel and a shared retained-file inventory. Existing ExportResultView,
+delivery leases, frozen jobs, cancellation and deletion contracts remain intact.
+Only toolbar Export presents that sheet. Timeline labels change only display text;
+no media/caption mapping, schema, renderer, speech/commerce or Mac change is made.
+See [handoff](handoffs/EDITOR_SHEETS.md). Earlier overview ownership is historical.
+
 ## Timeline editor pass 3 (2026-10-27)
 
 TimelineCaptionTiming captures one cue/manual value, linked editable words, its

@@ -74,6 +74,90 @@ actor ProjectRepository {
         try writeEdit(proposed, expectedRevision: expectedRevision)
     }
 
+    /// New originals are moved into owned UUID paths before one atomic document
+    /// publication. Failure leaves the old graph intact; a crash can leave only
+    /// unreferenced originals, never a partially appended document.
+    func appendClips(_ imported: PreparedClipImport, basedOn base: ProjectDocument) throws -> ProjectDocument {
+        let current = try requireClipEditBase(base)
+        let parent = try directory("Pending").resolvingSymlinksInPath().standardizedFileURL
+        guard imported.staging.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == parent,
+              let stagingID = UUID(uuidString: imported.staging.lastPathComponent), activeStaging.contains(stagingID) else {
+            throw ClipGraphError.invalidImport
+        }
+        let next = try ClipGraphEdit.appending(imported, to: current)
+        let project = try projectDirectory(current.id)
+        var moved: [(source: URL, destination: URL)] = []
+        do {
+            for asset in imported.assets {
+                try Task.checkCancellation()
+                let source = try OwnedPath.secureURL(for: asset.relativeOriginalPath, base: "Originals", in: imported.staging)
+                let destination = try OwnedPath.secureURL(for: asset.relativeOriginalPath, base: "Originals", in: project)
+                let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                guard values.isRegularFile == true, values.isSymbolicLink != true,
+                      Int64(values.fileSize ?? -1) == asset.byteCount,
+                      !files.fileExists(atPath: destination.path) else { throw ClipGraphError.invalidImport }
+                try files.moveItem(at: source, to: destination)
+                moved.append((source, destination))
+            }
+            try Task.checkCancellation()
+            let saved = try saveClipEdit(next, replacing: current)
+            // Publication is the point of no return. Do not throw/cancel after it.
+            try? discardStaging(imported.staging)
+            return saved
+        } catch {
+            for move in moved.reversed() { try? files.moveItem(at: move.destination, to: move.source) }
+            throw error
+        }
+    }
+
+    func removeClip(_ clipID: UUID, basedOn base: ProjectDocument) throws -> ProjectDocument {
+        let current = try requireClipEditBase(base)
+        return try saveClipEdit(ClipGraphEdit.removing(clipID, from: current), replacing: current)
+    }
+
+    func reorderClips(_ ids: [UUID], replacing graph: ClipGraphState,
+                      basedOn base: ProjectDocument) throws -> ProjectDocument {
+        let current = try requireClipEditBase(base)
+        guard ClipGraphState(current) == graph else { throw ClipGraphError.stale }
+        let next = try ClipGraphEdit.reordering(ids, in: current)
+        if next == current { return current }
+        return try saveClipEdit(next, replacing: current)
+    }
+
+    func restoreClipGraph(_ state: ClipGraphState, replacing expected: ClipGraphState,
+                          basedOn base: ProjectDocument) throws -> ProjectDocument {
+        let current = try requireClipEditBase(base)
+        guard ClipGraphState(current) == expected else { throw ClipGraphError.stale }
+        return try saveClipEdit(state.applying(to: current), replacing: current)
+    }
+
+    private func requireClipEditBase(_ base: ProjectDocument) throws -> ProjectDocument {
+        try Task.checkCancellation()
+        let current = try open(base.id)
+        guard current.contentRevision == base.contentRevision,
+              try encoder.encode(current) == encoder.encode(base) else { throw ClipGraphError.stale }
+        return current
+    }
+
+    /// This narrow path is separate from ordinary caption/settings writes.
+    /// Only importer/removal/expected-state structural undo reaches it.
+    private func saveClipEdit(_ proposed: ProjectDocument, replacing current: ProjectDocument) throws -> ProjectDocument {
+        guard current.contentRevision < UInt64.max else { throw ProjectEditConflict.revisionOverflow }
+        var next = proposed
+        next.schemaVersion = ProjectSchema.current
+        next.contentRevision = current.contentRevision + 1
+        next.updatedAt = max(Date(), current.updatedAt)
+        try next.validate()
+        // Settle any old successful operation while its identity is still current.
+        try settlePublishedSpeechAllowance()
+        try packageStore().save(next, replacing: current)
+        // The previous sidecar belongs to a different graph/operation. Accepted
+        // raw intervals and coverage were already retained in the new document.
+        if let checkpoint = try? speechCheckpointURL(current.id) { try? files.removeItem(at: checkpoint) }
+        if let thumbnail = try? thumbnailURL(id: current.id) { try? files.removeItem(at: thumbnail) }
+        return next
+    }
+
     /// Only the explicit empty-result recovery operation may clear recognition.
     private func writeEdit(_ proposed: ProjectDocument, expectedRevision: UInt64,
                            clearingEmptyRecognitionID: UUID? = nil,
@@ -281,18 +365,24 @@ actor ProjectRepository {
     func speechRecovery(projectID: UUID) throws -> SpeechRecoverySummary? {
         let project = try open(projectID)
         guard project.recognition?.isIncomplete != false else { return nil }
-        guard let value = try readSpeechCheckpoint(projectID) else {
+        let checkpoint = try readSpeechCheckpoint(projectID)
+        let matching = checkpoint.flatMap { candidate -> SpeechCheckpoint? in
+            guard candidate.assets == project.assets, candidate.clips == project.clips,
+                  project.recognition == nil || project.recognition?.id == candidate.jobID else { return nil }
+            return candidate
+        }
+        guard let value = matching else {
             guard let recognition = project.recognition, let progress = recognition.progress else { return nil }
             let plan = try SpeechCheckpoint.plan(clips: project.clips, assets: project.assets)
             let resolved = Set(progress.resolved.map(\.index))
-            let unresolved = plan.filter { !resolved.contains($0.index) }.map { window in
+            let unresolved = plan.filter { !resolved.contains($0.index) && progress.retainedClipIDs?.contains($0.clip.id) != true }.map { window in
                 SpeechRecoverySummary.Unresolved(id: window.index,
                     clipNumber: (project.clips.firstIndex { $0.id == window.clip.id } ?? 0) + 1,
                     source: window.core, reason: "Needs transcription")
             }
             return SpeechRecoverySummary(jobID: recognition.id, reusableRevision: true,
                 compatibleRuntime: SpeechCheckpoint.usesCurrentRuntime(revision: progress.runtimeRevision),
-                resolved: resolved.count, total: plan.count,
+                resolved: resolved.count + (progress.retainedWindowCount ?? 0), total: plan.count,
                 words: recognition.words.count,
                 language: recognition.requestedLanguageCode, unresolved: unresolved)
         }
@@ -300,7 +390,7 @@ actor ProjectRepository {
         let entries = Dictionary(uniqueKeysWithValues: value.entries.map { ($0.index, $0) })
         let unresolved = plan.compactMap { window -> SpeechRecoverySummary.Unresolved? in
             let entry = entries[window.index]
-            guard entry == nil || entry?.failure != nil else { return nil }
+            guard !value.retains(window.clip.id), entry == nil || entry?.failure != nil else { return nil }
             return .init(id: window.index,
                 clipNumber: (value.clips.firstIndex(where: { $0.id == window.clip.id }) ?? 0) + 1,
                 source: window.core, reason: entry?.failure?.description ?? "Not processed yet")
@@ -1079,9 +1169,10 @@ actor ProjectRepository {
 
     /// Publish a derived preview only while its original project/source still
     /// exists. A late image task cannot resurrect cache for a trashed project.
-    func publishThumbnail(_ data: Data, projectID: UUID, assetID: UUID, sourceHash: String) throws -> URL {
+    func publishThumbnail(_ data: Data, projectID: UUID, assetID: UUID, sourceHash: String, expectedRevision: UInt64) throws -> URL {
         let project = try open(projectID)
-        guard project.assets.contains(where: { $0.id == assetID && $0.sha256 == sourceHash }) else {
+        guard project.contentRevision == expectedRevision,
+              project.assets.contains(where: { $0.id == assetID && $0.sha256 == sourceHash }) else {
             throw ProjectStoreError.invalidDocument("The preview source changed")
         }
         _ = try sourceURL(projectID: projectID, assetID: assetID)
@@ -1094,6 +1185,30 @@ actor ProjectRepository {
         let cache = try directory("Cache")
         let items = try files.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)
         for item in items { try files.removeItem(at: item) }
+    }
+
+    struct ProjectStorageDetails: Sendable {
+        let bytes: ProjectPackageStorage
+        let thumbnailBytes: Int64
+    }
+
+    func projectStorageDetails(_ id: UUID) throws -> ProjectStorageDetails {
+        _ = try open(id)
+        let breakdown = try packageStore().storage(of: id)
+        let thumbnail = try thumbnailURL(id: id)
+        let bytes: Int64
+        if files.fileExists(atPath: thumbnail.path) {
+            let values = try thumbnail.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            bytes = values.isRegularFile == true && values.isSymbolicLink != true ? Int64(values.fileSize ?? 0) : 0
+        } else { bytes = 0 }
+        return ProjectStorageDetails(bytes: breakdown, thumbnailBytes: bytes)
+    }
+
+    func purgeThumbnail(projectID: UUID, expectedRevision: UInt64? = nil) throws {
+        let project = try open(projectID)
+        if let expectedRevision, project.contentRevision != expectedRevision { return }
+        let thumbnail = try thumbnailURL(id: projectID)
+        if files.fileExists(atPath: thumbnail.path) { try files.removeItem(at: thumbnail) }
     }
 
     struct ProjectStorageUsage: Identifiable, Sendable {

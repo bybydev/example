@@ -160,6 +160,22 @@ final class TranscriptionController {
         return !record.status.isTerminal
     }
 
+    /// Admission covers the final repository transaction, not copying/downloading
+    /// media. Exports and work in other projects remain independent.
+    func withClipMutation<T: Sendable>(projectID: UUID,
+        operation: @MainActor () async throws -> T) async throws -> T {
+        let generation = lifecycle.workGeneration
+        try lifecycle.requireAdmission(generation)
+        start()
+        await waitForAuthorization()
+        try lifecycle.requireAdmission(generation)
+        guard queueStarted, persistenceError == nil, lifecycle.error == nil,
+              !isActive(projectID) else { throw ClipGraphError.busy }
+        isAuthorizing = true
+        defer { needsAllowanceRefresh = true; endAuthorization() }
+        return try await operation()
+    }
+
     func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil,
                  windowIndices: [Int]? = nil) async throws {
         let generation = lifecycle.workGeneration
@@ -265,12 +281,18 @@ final class TranscriptionController {
         let partial = project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil }
         guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
         guard models.available else { throw SpeechError.missingModel }
+        let recovery = try await repository.speechRecovery(projectID: project.id)
+        let keepsCheckpoint = recovery?.jobID == record.id && recovery?.reusableRevision == true
+        // A structural edit can remove the old result entirely. That operation's
+        // terminal/charged ID must not authorize different new media inputs.
+        let id = project.recognition == nil && !keepsCheckpoint &&
+            previous.payload.expectedRevision != project.contentRevision ? UUID() : record.id
         let free = !access.hasPro
         if free {
             allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
-            try await repository.reserveSpeechAllowance(jobID: record.id, projectID: project.id, revision: project.contentRevision)
+            try await repository.reserveSpeechAllowance(jobID: id, projectID: project.id, revision: project.contentRevision)
         } else {
-            try await repository.releaseSpeechAllowance(record.id)
+            try await repository.releaseSpeechAllowance(id)
         }
         try Task.checkCancellation()
         guard lifecycle.error == nil, persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
@@ -279,11 +301,13 @@ final class TranscriptionController {
         // Every retry uses the shared active model. Language and operation identity
         // retain the saved caption mapping; the old payload model ID is ignored.
         try lifecycle.requireAdmission(generation)
-        try queue.replace(id: record.id, with: SpeechJob(id: record.id, payload: .init(
-            projectID: project.id, expectedRevision: project.contentRevision,
-            languageCode: partial != nil ? partial!.requestedLanguageCode :
-                previous.payload.languageCode,
-            requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
+        let job = SpeechJob(id: id, payload: .init(projectID: project.id,
+            expectedRevision: project.contentRevision,
+            languageCode: partial != nil ? partial!.requestedLanguageCode : previous.payload.languageCode,
+            requiresAllowance: free, windowIndices: id == record.id ? windowIndices : nil,
+            projectTitle: project.title))
+        if id == record.id { try queue.replace(id: id, with: job) }
+        else { try queue.enqueue(job) }
     }
 }
 
