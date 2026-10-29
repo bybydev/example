@@ -8,7 +8,7 @@ enum EditorTool: String, Identifiable, Hashable, Sendable {
     static let primaryTools: [Self] = [.captions, .style, .media]
     var id: Self { self }
     var title: String {
-        switch self { case .captions: "Captions"; case .style: "Styles"; case .captionEditor: "Edit caption"; case .media: "Media" }
+        switch self { case .captions: "Captions"; case .style: "Style"; case .captionEditor: "Edit caption"; case .media: "Media" }
     }
     var symbol: String {
         switch self { case .captions: "captions.bubble"; case .style: "sparkles"; case .captionEditor: "pencil"; case .media: "crop.rotate" }
@@ -69,3 +69,4 @@ struct EditorTimingDraft: Sendable {
     var start: String
     var end: String
 }
+

@@ -1,5 +1,39 @@
 # Inkribe iOS — current plan
 
+## Current: native fullscreen playback stacked on PR #52
+
+2026-10-29. Implement the approved native-player replacement in a new stacked PR,
+feat/ios-native-fullscreen-player -> feat/ios-style-sheet-grid, based on 3f9b8107.
+Scope EDITOR.NATIVE_FULLSCREEN / EXPORT.NATIVE_PREVIEW: live editor composition and
+caption overlay, immutable export MP4 playback, native UI and safe ownership/return.
+See [scope](phases/NATIVE_FULLSCREEN.md) and [handoff](handoffs/NATIVE_FULLSCREEN.md).
+Source-only; keep both PRs open and do not modify the parent.
+
+## Current: Style form and shared template sample in PR #52
+
+2026-10-29. Update existing feat/ios-style-sheet-grid -> develop with the latest
+approved form. Use the grid's same sample scenery/text/timing for live customized
+preview, play/pause only, section rows, menu/inline/pushed pickers and the existing
+template-grid navigation. One project caption style; no scope/inheritance UI.
+Caption placement is project-wide in Style under Layout, with a preset menu and
+inline precise X/Y reflected in the sample and saved through Cancel/Done.
+Cancel/Done atomicity and one Undo entry remain. Old frozen export requests keep
+their captured values; new requests use project-wide styling. Existing media scopes,
+clip names, speech/outputs/schema/Mac remain. Source-integrated; no runtime acceptance.
+See [scope](phases/STYLE_SHEET.md) and [handoff](handoffs/STYLE_SHEET.md). Keep #52 open.
+
+## Current: unified Style sheet and templates grid
+
+2026-10-29. Implement the user-approved revised mockup in one new PR from develop
+b28beebb, feat/ios-style-sheet-grid -> develop, left open without auto-merge.
+The large Style sheet owns the real preview, selected-template row and inline
+controls. Its row pushes a lazy template grid; selection returns to the sheet.
+Caption changes stay local until Done durably commits one undoable edit. Cancel,
+swipe dismissal and failed saves preserve the live project's settings. Keep the
+existing ten templates and existing inheritance/access/renderer/export contracts.
+See [scope](phases/STYLE_SHEET.md) and [source handoff](handoffs/STYLE_SHEET.md).
+Source-integrated; compilation/runtime acceptance remains unverified.
+
 ## Current: Graphite in PR #50
 
 2026-10-28. Confirmed plan: add Free, always-dark Graphite immediately after Paper,
@@ -74,3 +108,4 @@ premium work and immutable export files retain their established access rules.
 No automatic next feature, merge or release. No transitions, music/multitrack,
 per-clip trim, accounts/backend/cloud sync, translation/dubbing, share extension,
 iPad or Mac expansion. Source-only execution restrictions remain in force.
+

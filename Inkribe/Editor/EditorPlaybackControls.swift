@@ -5,8 +5,11 @@ struct EditorPlaybackControls: View {
     let session: EditorSession
     var showsOverview = true
     var showsTimeline = true
+    var showsHistory = true
+    var clipLabel: String?
     var onInteraction: () -> Void = {}
     var onExpand: (() -> Void)?
+    var onClips: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,12 +24,19 @@ struct EditorPlaybackControls: View {
                     Spacer(minLength: 0)
                     readout.fixedSize(horizontal: true, vertical: true)
                     Spacer(minLength: 0)
-                    historyButtons
+                    if showsHistory { historyButtons }
+                    clipsButton
                     expandButton
                 }
                 VStack(spacing: 4) {
                     readout.fixedSize(horizontal: false, vertical: true)
-                    HStack { playButton; Spacer(minLength: 0); historyButtons; expandButton }
+                    HStack {
+                        playButton
+                        Spacer(minLength: 0)
+                        if showsHistory { historyButtons }
+                        clipsButton
+                        expandButton
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -53,6 +63,23 @@ struct EditorPlaybackControls: View {
                 .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(!session.canRedo)
         }
     }
+    @ViewBuilder private var clipsButton: some View {
+        if let clipLabel, let onClips {
+            Button {
+                endEditing(); onClips()
+            } label: {
+                HStack(spacing: 6) {
+                    Text(clipLabel).font(.caption.weight(.medium)).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                }
+                .fixedSize(horizontal: true, vertical: true)
+                .frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel("Manage clips")
+            .accessibilityValue(clipLabel)
+            .accessibilityHint("Opens the clip list at the selected clip")
+        }
+    }
     @ViewBuilder private var expandButton: some View {
         if let onExpand {
             Button("Fullscreen preview", systemImage: "arrow.up.left.and.arrow.down.right") { endEditing(); onExpand() }
@@ -73,4 +100,5 @@ struct EditorPlaybackControls: View {
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
     }
 }
+
 

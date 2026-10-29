@@ -1,5 +1,39 @@
 # Inkribe iOS — current feature ledger
 
+## Native fullscreen playback (2026-10-29, stacked on #52)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.NATIVE_FULLSCREEN | Native fullscreen for both expand entries; current player/live captions, paused same-position return | Source-integrated; runtime unverified |
+| EXPORT.NATIVE_PREVIEW | Native fullscreen for all completed-MP4 preview routes; preserve delivery protection | Source-integrated; runtime unverified |
+
+See [scope](phases/NATIVE_FULLSCREEN.md) and [handoff](handoffs/NATIVE_FULLSCREEN.md).
+
+## Style form revision (2026-10-29, PR #52)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| V1.STYLE_FORM | Native form sections, left labels/right summaries, menu/inline/pushed pickers | Source-integrated; runtime unverified |
+| EDITOR.STYLE_SAMPLE | Same sample scenery/text/timing as grid; live rendered draft; play/pause only | Source-integrated; runtime unverified |
+| EDITOR.PROJECT_CAPTION_STYLE | One appearance across clips, no caption scope/inheritance UI; new exports agree | Source-integrated; runtime unverified |
+| EDITOR.CAPTION_PLACEMENT | Global placement in Style: preset menu, inline X/Y, live sample, Cancel/Done | Source-integrated; runtime unverified |
+| EDITOR.ACTIONS | Five equal bottom actions including Export; compact spacing; main Undo/Redo in toolbar | Source-integrated; runtime unverified |
+
+See [scope](phases/STYLE_SHEET.md) and [handoff](handoffs/STYLE_SHEET.md).
+This supersedes the earlier PR #52 real-video Style preview and clip-caption scope.
+
+## Unified Style sheet (2026-10-29)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| V1.STYLE | One large sheet: real preview, selected template, inline customization | Source-integrated; runtime unverified |
+| V1.PRESETS | Native push to lazy grid of existing catalog; selection pops to Style | Source-integrated; runtime unverified |
+| EDITOR.STYLE_TRANSACTION | Cancel/dismiss discard; Done saves before adoption, one history entry; retry remains local | Source-integrated; runtime unverified |
+| EDITOR.STYLE_SCOPE | Project inheritance, sparse clip overrides, named resets and current Pro checks | Source-integrated; runtime unverified |
+
+See [scope](phases/STYLE_SHEET.md) and [source handoff](handoffs/STYLE_SHEET.md).
+This supersedes the separate Styles carousel / Customize descriptions below.
+
 ## Timeline width (2026-10-28, PR #50)
 
 | ID | Requirement | Source status |
@@ -178,3 +212,4 @@ implied. Search/sort/filter, direct URLs and combined imports remain existing
 supported behavior; transcript search and incoming share extension are not required.
 No invented word timing, implicit regrouping or inference on style choices.
 Previous source records are preserved in [the archive](archive/before-consolidation/FEATURES.md).
+

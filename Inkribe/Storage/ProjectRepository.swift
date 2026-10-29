@@ -1050,7 +1050,9 @@ actor ProjectRepository {
                 }
             }
             try Task.checkCancellation()
-            let manifest = ExportManifest(version: 1, jobID: id, document: saved, profile: profile, createdAt: Date())
+            // New exports match the project-wide editor. Existing frozen manifests
+            // retain their original values and are still rendered as recorded.
+            let manifest = ExportManifest(version: 1, jobID: id, document: saved.usingProjectCaptionStyle(), profile: profile, createdAt: Date())
             let metadata = try encoder.encode(manifest)
             guard metadata.count <= 256 * 1024 * 1024 else { throw ProjectStoreError.oversizedProjectMetadata }
             try metadata.write(to: folder.appendingPathComponent("request.json"), options: .atomic)
@@ -1268,5 +1270,6 @@ actor ProjectRepository {
     }
 
 }
+
 
 

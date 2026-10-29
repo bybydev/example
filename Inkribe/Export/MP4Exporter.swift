@@ -92,7 +92,8 @@ enum MP4Exporter {
         if videoOutput != nil || audioOutput != nil {
             guard reader.startReading() else { throw reader.error ?? ExportError.decoding }
         }
-        let snapshot = CaptionSnapshot(document)
+        // Honor old immutable requests; newly frozen requests contain project style only.
+        let snapshot = CaptionSnapshot(document, usesClipStyles: true)
         let renderer = CaptionRenderer()
         let context = CIContext(options: [.cacheIntermediates: false])
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw ExportError.encoding }
@@ -252,3 +253,4 @@ enum MP4Exporter {
         }
     }
 }
+

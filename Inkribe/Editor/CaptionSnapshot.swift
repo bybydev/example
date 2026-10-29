@@ -65,12 +65,14 @@ struct CaptionSnapshot: Sendable {
     private let ordered: [CaptionCue]
     private let prefixEnd: [MediaTime]
 
-    init(_ document: ProjectDocument) {
+    init(_ document: ProjectDocument, usesClipStyles: Bool = false) {
         revision = ProjectRevision(projectID: document.id, contentRevision: document.contentRevision)
         canvas = document.canvas
         style = document.effectiveCaptionStyle
-        clipStyles = Dictionary(uniqueKeysWithValues: document.clips.map { ($0.id, document.captionStyle(for: $0.id)) })
-        clipOverrides = Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).map { ($0.id, $0.captions) })
+        clipStyles = Dictionary(uniqueKeysWithValues: document.clips.map {
+            ($0.id, usesClipStyles ? document.captionStyle(for: $0.id) : document.effectiveCaptionStyle)
+        })
+        clipOverrides = usesClipStyles ? Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).map { ($0.id, $0.captions) }) : [:]
         let timeline = OutputTimeline(document)
         self.timeline = timeline
         let manuals = document.manualCaptions ?? []
@@ -262,4 +264,5 @@ enum EditorTime {
         return try MediaInterval(start: parse(start, original: original?.start), end: parse(end, original: original?.end))
     }
 }
+
 

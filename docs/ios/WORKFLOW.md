@@ -1,5 +1,34 @@
 # Inkribe iOS — current working agreement
 
+2026-10-29. The user explicitly authorizes the discussed native fullscreen changes
+in a new stacked PR from #52 head 3f9b8107, targeting feat/ios-style-sheet-grid.
+Apply phases/NATIVE_FULLSCREEN.md and handoffs/NATIVE_FULLSCREEN.md. Preserve the
+parent branch and leave both PRs open without auto-merge. No builds/tests/typechecks,
+CI, generation, native playback/export or UI/device execution. Discussion of another
+problem/preference is not authorization; wait for an explicit implementation command.
+
+2026-10-29. The user authorizes implementing the latest native Style-form mockup
+in existing PR #52. The confirmed plan replaces project footage/transport with
+the template's live-rendered sample, groups appearance into native form rows,
+uses pushed pickers/details without previews, and removes clip caption scopes.
+Caption placement stays in Style under Layout with preset/inline coordinate
+controls and live sample feedback; media scopes remain separate. Done saves
+project-wide appearance and placement atomically; Cancel discards both.
+Existing frozen exports retain recorded behavior; new exports match the project's
+single style. See phases/STYLE_SHEET.md and handoffs/STYLE_SHEET.md. Source-only
+restrictions and open/no-auto-merge requirements remain. Earlier #52 UI below is
+superseded where it conflicts with this latest approved design.
+
+2026-10-29. The latest request approves implementing the revised unified Style
+sheet in a new PR from develop b28beebb, targeting develop. The concrete UI is
+already approved: actual preview, selected-template row pushing a lazy grid,
+inline customization, top-left Cancel and top-right Done. Its local caption-only
+transaction supersedes immediate style autosaving while the sheet is open. Done
+saves before adopting; Cancel and dismissal never publish the draft. Preserve the
+existing caption/project/preview/Pro/export contracts. See phases/STYLE_SHEET.md
+and handoffs/STYLE_SHEET.md. All source-only restrictions and open/no-auto-merge
+requirements remain. Prior phase statuses below are historical for this scope.
+
 2026-10-28. The user confirmed the concrete Graphite plan in existing PR #50:
 Free dark theme after Paper, #279ED2 accent. The confirmed visual revision adds
 Midnight's translucent panels, subtle shadows and layered charcoal/blue lighting;
@@ -38,3 +67,4 @@ This checkout is a partial review snapshot with synthetic local git history.
 Publish only changed blobs/deletions onto the full verified remote PR head tree;
 never push this snapshot’s root tree/history. Verify expected-base blob hashes,
 unchanged remote files, branch-head lease and final PR base/head/open/no-auto-merge.
+

@@ -1,5 +1,91 @@
 # Inkribe Working Rules
 
+## Current native fullscreen player authorization
+
+2026-10-29. The user explicitly requests the discussed replacement in a new stacked
+PR. Branch feat/ios-native-fullscreen-player starts at PR #52 head 3f9b8107 and
+targets feat/ios-style-sheet-grid, not develop. Keep both PRs open without auto-merge
+and do not update the parent branch. Scope: EDITOR.NATIVE_FULLSCREEN and
+EXPORT.NATIVE_PREVIEW. Present AVPlayerViewController itself for both editor expand
+entry points and every ExportResultView video preview in Export/Queue/retained files.
+Reuse the editor's AVPlayer/composition with live captions in contentOverlayView;
+no temp output, extra editor player or export/inference work. Completed-file previews
+use their own immutable MP4, without a second caption overlay. Retain delivery leases
+through native dismissal/failure/teardown, frame ownership/held-frame return, actual
+clock/play-state synchronization and pause on dismissal/inactivity. Native controls
+replace the custom navigation/Done/transport/timeline/history screen. Inline previews,
+Style/sample/form, caption/media edits, timing/history/persistence, queue/jobs/frozen
+outputs, schema/packages/native renderer/Mac/models/allowance/commerce/icons stay.
+PiP and external playback are disabled during these in-app previews because live
+captions and delivery ownership are tied to the presentation; restore player policy
+on close. No new background playback entitlement or media pipeline.
+
+This explicit request authorizes this implementation only. Discussion of another
+problem or preference is not permission to edit; wait for an implementation command.
+Source-only: no builds/typechecks/tests/fixtures, CI/generation/models, native media
+execution/exports, UI/device execution or deployment. Read phases/NATIVE_FULLSCREEN.md
+and handoffs/NATIVE_FULLSCREEN.md under docs/ios. Runtime acceptance is unverified.
+
+## Current Style form authorization (PR #52)
+
+2026-10-29. The user approves the latest native-form mockup and requests updating
+current PR #52, feat/ios-style-sheet-grid -> develop. This supersedes its first
+actual-project preview, category tabs and caption scope controls. Use the same
+sample background, text and timing as the template tiles, with live rendering of
+all draft appearance changes and only an overlaid play/pause button. Native form
+sections show labels left and selected/compound values right; small menus, inline
+Size, and pushed Font/Animation/Spacing/Outline/Background/Shadow/Text-layout forms.
+The template row still pushes the lazy grid. Cancel discards and Done atomically
+saves one undoable project-wide caption style. No per-clip caption appearance,
+inheritance indicators or caption reset-to-project controls remain.
+The user's follow-up keeps the live sample preview only on the root Style form;
+pushed pickers/detail forms contain settings only. Grid tiles remain static.
+The shared sample uses three meaningful sentences as sequential timed cues.
+The latest editor-controls follow-up moves Export into the bottom action bar as
+an ordinary fifth button (Clips/Captions/Style/Media/Export), tightens spacing to fit
+standard iPhone widths, and moves main-editor Undo/Redo to the top toolbar. Remove
+their main playback-row/menu duplicates. Existing sheet/fullscreen history remains.
+This supersedes historical toolbar-only Export requirements for the main editor.
+The next follow-up removes the visible Timeline heading/header and places its
+Clip X of Y button in the main playback row, before fullscreen where Undo/Redo
+used to be. Preserve selected-clip numbering and the same Clips-sheet action.
+The next follow-up removes the main navigation title and save-status subtitle;
+keep Back, Undo/Redo and the ellipsis, with project naming/status in existing menus.
+
+The latest follow-up keeps caption placement in Style: project-wide Top/Center/Bottom
+and inline precise X/Y under Layout, previewed using the live sample and saved only
+with Done. Media has no caption placement controls; keep per-clip framing/audio.
+Live captions and newly frozen exports use one project style. Read compatibility
+for existing clip-caption fields and already-frozen requests is retained without
+changing document/request versions; a successful appearance/placement edit clears
+obsolete caption overrides while keeping clip names/media. No new catalog,
+saved-template library, shared package, native renderer, schema, Mac, speech/model,
+allowance, queue, purchase, icon or CI work. Source-only restrictions remain: no
+builds/typechecks/tests/fixtures, CI/generation/downloads/native processing/exports,
+UI/device execution or deployment. Keep #52 open without auto-merge. Current scope
+and handoff are docs/ios/phases/STYLE_SHEET.md and handoffs/STYLE_SHEET.md.
+
+## Current unified Style sheet authorization
+
+2026-10-29. The user approved the revised Style mockup and requests one new PR
+from latest develop b28beebb, targeting develop. One bottom Style action opens a
+large sheet with the actual preview/transport, selected template row and inline
+Text/Colors/Backdrop/Layout/Position/Motion customization. Tapping the template
+row natively pushes a lazy templates grid. Selecting a template changes the local
+sheet state and returns to Style; native Back alone does not select anything.
+Cancel or swipe dismissal discards uncommitted caption settings. Top-right Done
+publishes one durable, undoable edit only after saving succeeds. A failed Done
+keeps the local choices and permits retry or Cancel without adopting them.
+
+This supersedes the older carousel/explicit-Apply/separate-Customize requirements
+for V1.STYLE/PRESETS. Keep the existing ten-template catalog, renderer, project
+inheritance/sparse clip overrides, Pro policy, preview handoff/single player,
+recognition/timing, frozen exports, model/queue/commerce, schema and Mac behavior.
+No saved-template library or catalog expansion is authorized. Source-only: no
+builds/typechecks/tests/fixtures, CI/generation/models, native processing/exports,
+UI/device execution or deployment. Leave the PR open without auto-merge. See
+phases/STYLE_SHEET.md and handoffs/STYLE_SHEET.md under docs/ios.
+
 ## Current edge-to-edge timeline authorization
 
 2026-10-28. The user confirmed removing the editor timeline's inherited 12-point
@@ -303,4 +389,5 @@ The user requires the iOS app source folder to be Inkribe/, matching its target,
 The user requires iPhone-only support: TARGETED_DEVICE_FAMILY is 1 for both iOS configurations, inherited by the bundled-model spec. Do not re-enable iPad support.
 
 Both app targets must use the same existing InkribeMac/AppIcon.icon resource, following Spokio. iOS selects AppIcon and references that file directly; do not duplicate or redesign the artwork.
+
 

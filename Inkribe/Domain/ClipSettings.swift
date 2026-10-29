@@ -52,6 +52,20 @@ extension ProjectDocument {
         if !value.isEmpty { settings.append(value) }
         clipSettings = settings.isEmpty ? nil : settings.sorted { $0.id.uuidString < $1.id.uuidString }
     }
+    /// New project-wide caption edits and new export requests discard obsolete
+    /// caption overrides while retaining clip names and every media override.
+    func usingProjectCaptionStyle() -> Self {
+        guard let stored = clipSettings else { return self }
+        var next = self
+        let cleared = stored.compactMap { value -> ClipSettings? in
+            var settings = value
+            settings.captions = .init()
+            return settings.isEmpty ? nil : settings
+        }
+        next.clipSettings = cleared.isEmpty ? nil : cleared
+        return next
+    }
+    /// Decode-only rendering compatibility for previously frozen export requests.
     func captionStyle(for clipID: UUID) -> CaptionStyle {
         settings(for: clipID).captions.resolved(over: effectiveCaptionStyle)
     }
@@ -89,3 +103,4 @@ struct ProjectSettingsState: Equatable, Sendable {
         return mediaEdits != other.mediaEdits || canvas != other.canvas || preset != other.preset || current != previous
     }
 }
+

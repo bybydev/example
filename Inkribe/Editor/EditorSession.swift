@@ -20,6 +20,7 @@ final class EditorSession {
     private(set) var originalAvailable: [UUID: Bool] = [:]
     private(set) var clipEditGeneration = 0
     private(set) var isChangingClips = false
+    private(set) var isSavingCaptionStyle = false
     private(set) var isLoading = false
     private(set) var isSaving = false
     private(set) var isPreparingPreview = false
@@ -60,6 +61,7 @@ final class EditorSession {
     @ObservationIgnored private var periodicObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObserver: NSKeyValueObservation?
+    @ObservationIgnored private var playbackStateObserver: NSKeyValueObservation?
     @ObservationIgnored private var preparedMedia: MediaKey?
     @ObservationIgnored private var mediaRefresh: Task<Void, Never>?
 
@@ -74,8 +76,8 @@ final class EditorSession {
     init(projectID: UUID, access: ProAccess, transcription: TranscriptionController) {
         self.projectID = projectID; self.access = access; self.transcription = transcription
     }
-    var isReadyToEdit: Bool { document != nil && !isChangingClips }
-    var canChangeClips: Bool { document != nil && !isChangingClips && !transcription.isActive(projectID) && !transcription.isAuthorizing }
+    var isReadyToEdit: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle }
+    var canChangeClips: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle && !transcription.isActive(projectID) && !transcription.isAuthorizing }
     var timelineSourceURLs: [UUID: URL] { mediaURLs }
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: CaptionPresentation? { snapshot?.evaluate(at: time) }
@@ -100,10 +102,7 @@ final class EditorSession {
         if case .clip(let id) = workspace.settingsScope { return id }
         return nil
     }
-    var editingCaptionStyle: CaptionStyle {
-        guard let document else { return .standard }
-        return editingClipID.map { document.captionStyle(for: $0) } ?? document.effectiveCaptionStyle
-    }
+    var editingCaptionStyle: CaptionStyle { document?.effectiveCaptionStyle ?? .standard }
     var editingMediaEdits: MediaEdits {
         guard let document else { return .standard }
         return editingClipID.map { document.mediaEdits(for: $0) } ?? document.effectiveMediaEdits
@@ -145,14 +144,14 @@ final class EditorSession {
 
     /// Call after an external result/relink; never throw away unsaved changes.
     func refreshSaved() async {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         await flush()
         guard !Task.isCancelled, isPresented, !hasPendingChanges else { return }
         await readSaved()
     }
 
     private func readSaved() async {
-        guard isPresented, !isChangingClips else { return }
+        guard isPresented, !isChangingClips, !isSavingCaptionStyle else { return }
         let generation = UUID()
         loadGeneration = generation
         let sequence = editSequence
@@ -219,7 +218,7 @@ final class EditorSession {
     }
 
     func setTitle(_ value: String) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard var next = document, next.title != value else { return }
         next.title = value
         stylingControl = nil; mediaControl = nil
@@ -231,7 +230,7 @@ final class EditorSession {
     /// without changing media identity, recognition checkpoints or the preview graph.
     @discardableResult
     func renameClip(_ id: UUID, to value: String?) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         guard var project = document, project.clips.contains(where: { $0.id == id }) else {
             commandError = "This clip is no longer available."
             return false
@@ -385,7 +384,7 @@ final class EditorSession {
 
     func setMediaPresentation(_ edits: MediaEdits, canvas: ProjectCanvas? = nil,
                               preset: CanvasPreset? = nil, coalescing control: MediaControl? = nil) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard var project = document else { return }
         let before = ProjectSettingsState(project)
         if let id = editingClipID {
@@ -429,7 +428,7 @@ final class EditorSession {
     /// Reset removes presence fields; it never copies defaults into the clip.
     /// Returning to already saved project defaults is permitted after Pro expires.
     func resetClipSettings(captions section: CaptionStyleReset? = nil, media: Bool = false, framing: Bool = false, volume: Bool = false, all: Bool = false) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard var project = document, let id = editingClipID else { return }
         let before = ProjectSettingsState(project)
         var settings = project.settings(for: id)
@@ -469,9 +468,39 @@ final class EditorSession {
         }
     }
 
-    func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil,
-                         applyingPreset: Bool = false, preservingPlacement: Bool = true) {
-        guard !isChangingClips else { return }
+    /// Save before adopting the draft: a failed Done leaves the live document and
+    /// history untouched, so Cancel still discards every local style adjustment.
+    func saveCaptionStyleDraft(_ draft: CaptionStyleDraft) async throws {
+        guard !isChangingClips, !isSavingCaptionStyle, !isLoading, !isPreparingPreview else { throw ClipGraphError.busy }
+        isSavingCaptionStyle = true
+        defer { isSavingCaptionStyle = false }
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        // Supersede an in-flight refresh before it can replace the document.
+        loadGeneration = UUID()
+        isLoading = false
+        await flush()
+        guard !hasPendingChanges, let base = document, let savedBase else { throw CaptionEditError.unsavedChanges }
+        try Task.checkCancellation()
+        let proposed = try draft.applying(to: base, access: access)
+        let before = ProjectSettingsState(base)
+        guard ProjectSettingsState(proposed) != before else { return }
+        let saved = try await repository.commitEditorEdit(proposed, basedOn: savedBase)
+        // No cancellable work after publication. All other session mutations are
+        // excluded until the saved result and its one history entry are adopted.
+        let selection = Selection(cue: selectedCueID, word: selectedWordID)
+        document = saved
+        self.savedBase = saved
+        committedRevision = saved.contentRevision
+        editSequence += 1; savedSequence = editSequence
+        hasPendingChanges = false; saveError = nil; commandError = nil
+        editHistory.past.append(History(change: .settings(before: before, after: ProjectSettingsState(saved)),
+            selectionBefore: selection, selectionAfter: selection))
+        finishHistoryEdit(); rebuildSnapshot(); repairSelection()
+    }
+
+    /// Project-wide appearance/placement; media scope never selects caption scope.
+    func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil) {
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         var style = value
         if style.formatVersion == 1 && (style.hasExtendedValues || [.condensed, .rounded].contains(style.font) ||
             [.emphasis, .underline, .rise].contains(style.effect)) { style.formatVersion = 2 }
@@ -479,19 +508,15 @@ final class EditorSession {
         let previous = editingCaptionStyle
         guard access.canChangeStyle(from: previous, to: style) else { proUpsell = .styles; return }
         let before = ProjectSettingsState(project)
-        if let id = editingClipID {
-            var settings = project.settings(for: id)
-            if applyingPreset { settings.captions.applyPreset(style, preservingPlacement: preservingPlacement) }
-            else { settings.captions.recordChanges(from: previous, to: style) }
-            project.setSettings(settings)
-        } else { project.captionStyle = style }
+        project = project.usingProjectCaptionStyle()
+        project.captionStyle = style
         commitSettings(project, before: before, coalescing: control != nil && control == stylingControl)
         stylingControl = control; mediaControl = nil
     }
 
     @discardableResult
     func editText(wordID: UUID, value: String) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         if let caption = document?.manualCaptions?.first(where: { $0.id == wordID }) {
             return editManualText(caption, value: value)
         }
@@ -503,7 +528,7 @@ final class EditorSession {
 
     @discardableResult
     func editCueText(cueID: UUID, value: String) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         if let caption = document?.manualCaptions?.first(where: { $0.id == cueID }) {
             return editManualText(caption, value: value)
         }
@@ -514,7 +539,7 @@ final class EditorSession {
     }
 
     func beginTimelineTiming(cueID: UUID, operation: TimelineTimingOperation) -> TimelineCaptionTiming? {
-        guard !isChangingClips else { return nil }
+        guard !isChangingClips, !isSavingCaptionStyle else { return nil }
         guard let project = document else { return nil }
         do {
             let edit = try TimelineCaptionTiming(cueID: cueID, operation: operation, project: project)
@@ -531,7 +556,7 @@ final class EditorSession {
     }
     @discardableResult
     func commitTimelineTiming(_ edit: TimelineCaptionTiming, interval: MediaInterval) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         guard let project = document else { return false }
         do {
             guard edit.matches(project), selectedCueID == edit.cueID,
@@ -551,7 +576,7 @@ final class EditorSession {
     }
 
     func retimeCue(_ interval: MediaInterval) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedCueID else { return }
         perform { state, project in
@@ -560,7 +585,7 @@ final class EditorSession {
         }
     }
     func retimeWord(_ interval: MediaInterval) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedWordID else { return }
         perform { state, project in
@@ -569,12 +594,12 @@ final class EditorSession {
         }
     }
     func split() {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard let cue = selectedCueID, let word = selectedWordID else { return }
         perform { state, _ in try CaptionEdits.split(cueID: cue, before: word, in: &state) }
     }
     func mergeNext() {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard let id = selectedCueID else { return }
         guard canMergeNext else { commandError = CaptionEditError.mergeBoundary.localizedDescription; return }
         perform { state, _ in try CaptionEdits.mergeNext(cueID: id, in: &state); return nil }
@@ -582,7 +607,7 @@ final class EditorSession {
 
     @discardableResult
     func addManualCaption(text: String, clipID: UUID, interval: MediaInterval) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { commandError = ManualCaptionError.emptyText.localizedDescription; return false }
         guard (document?.manualCaptions?.count ?? 0) < 10_000 else {
@@ -593,7 +618,7 @@ final class EditorSession {
     }
 
     func deleteManualCaption(_ id: UUID) {
-        guard !isChangingClips else { return }
+        guard !isChangingClips, !isSavingCaptionStyle else { return }
         guard let caption = document?.manualCaptions?.first(where: { $0.id == id }) else { return }
         _ = performManual(ManualCaptionPatch(id: id, before: caption, after: nil))
     }
@@ -609,7 +634,7 @@ final class EditorSession {
 
     @discardableResult
     private func performManual(_ patch: ManualCaptionPatch, coalescingText: Bool = false) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         guard let project = document else { return false }
         guard patch.before != patch.after else { commandError = nil; return true }
         do {
@@ -637,7 +662,7 @@ final class EditorSession {
     @discardableResult
     private func perform(coalescing wordID: UUID? = nil,
                          _ edit: (inout CaptionEditState, ProjectDocument) throws -> UUID?) -> Bool {
-        guard !isChangingClips else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle else { return false }
         guard var project = document, let result = project.recognition else { return false }
         pause()
         stylingControl = nil
@@ -716,7 +741,7 @@ final class EditorSession {
         updateHistoryFlags()
     }
     private func historyAdmitted(_ entry: History?) -> Bool {
-        guard !isChangingClips, let entry else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, let entry else { return false }
         if case .clips = entry.change { return canChangeClips }
         return true
     }
@@ -733,7 +758,7 @@ final class EditorSession {
         hasRedo = available(editHistory.future.last, forward: true)
     }
     private func rebuildSnapshot() {
-        snapshot = document.map(CaptionSnapshot.init)
+        snapshot = document.map { CaptionSnapshot($0) }
         if let document, let snapshot { timelineSnapshot = ProjectTimelineSnapshot(document: document, captions: snapshot) }
         else { timelineSnapshot = nil }
         updateHistoryFlags()
@@ -780,7 +805,7 @@ final class EditorSession {
     }
     /// Later style/export adapters freeze this value only after the latest changes are saved.
     func savedDocument() async throws -> ProjectDocument {
-        guard !isChangingClips else { throw ClipGraphError.busy }
+        guard !isChangingClips, !isSavingCaptionStyle else { throw ClipGraphError.busy }
         await flush()
         guard !hasPendingChanges else { throw CaptionEditError.unsavedChanges }
         guard let document else { throw ProjectStoreError.missingProject(projectID) }
@@ -903,6 +928,15 @@ final class EditorSession {
     }
 
     private func observeTimeIfNeeded() {
+        if playbackStateObserver == nil {
+            playbackStateObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.playbackStateObserver != nil else { return }
+                    // AVKit's native controls operate on the player directly.
+                    self.isPlaying = self.player.timeControlStatus != .paused
+                }
+            }
+        }
         guard periodicObserver == nil else { return }
         periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 20), queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -948,6 +982,13 @@ final class EditorSession {
         player.pause(); isPlaying = false
     }
 
+    /// Preserve native seeks and the matching caption clock before a live handoff.
+    func holdPreviewFrame() {
+        guard player.currentItem != nil, let actual = try? MediaTime(validating: player.currentTime()) else { return }
+        time = min(actual, duration)
+        _ = previewFrames.capture(at: actual.cmTime, snapshot: snapshot, presentationTime: time)
+    }
+
     /// Invalidate editor-owned work immediately. Never touches the processing
     /// coordinator, transcription engine, export jobs, saves or project storage.
     func cancelPreparation() {
@@ -967,6 +1008,7 @@ final class EditorSession {
         if let periodicObserver { player.removeTimeObserver(periodicObserver); self.periodicObserver = nil }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
         statusObserver = nil
+        playbackStateObserver = nil
         playbackGeneration = UUID()
         preparedMedia = nil
         previewFrames.reset()
@@ -974,4 +1016,5 @@ final class EditorSession {
         previewGeneration = UUID()
     }
 }
+
 

@@ -1,5 +1,30 @@
 # Inkribe iOS — start here
 
+2026-10-29. Current work is [native fullscreen playback](phases/NATIVE_FULLSCREEN.md),
+stacked on PR #52 at 3f9b8107 and targeting feat/ios-style-sheet-grid. Editor expands
+use the existing live composition/captions; Export/Queue previews use the selected
+completed MP4. AVKit owns fullscreen controls/dismissal; inline previews remain.
+See [source handoff](handoffs/NATIVE_FULLSCREEN.md). Source-only; runtime unverified.
+Keep parent/stacked PRs open without auto-merge.
+
+2026-10-29. Latest approved revision in PR #52 is the [Style form](phases/STYLE_SHEET.md):
+shared template sample background/text, live appearance preview with play/pause only,
+native section/row controls and pushed pickers. Caption appearance is project-wide;
+placement stays in Style with live sample feedback; Media retains its actual
+preview/scrubber for framing/audio. The template grid and
+Cancel/Done transaction remain. This supersedes PR #52's first real-video Style
+preview, category tabs and caption scope menu below. See [handoff](handoffs/STYLE_SHEET.md).
+Source-only; compilation and runtime acceptance remain unverified. Keep #52 open.
+
+2026-10-29. Current user-approved work is the [unified Style sheet](phases/STYLE_SHEET.md),
+from develop b28beebb in feat/ios-style-sheet-grid, targeting develop. Style contains
+real preview, selected template and inline controls; its template row pushes the
+lazy grid. Cancel discards local settings; Done durably saves one undoable edit.
+This replaces the former carousel and separate Customize entry. Existing catalog,
+single player/held-frame handoff, clip inheritance and Pro access remain.
+See the [source handoff](handoffs/STYLE_SHEET.md). Source-only; compilation/device
+acceptance is unverified. Keep the new PR open without auto-merge.
+
 2026-10-28. PR #50 also removes the timeline's outer side gutters: ruler/tracks
 span the editor width; preview, controls, labels and prompts keep 12-point insets.
 Centered-playhead scroll space is preserved. Source-only; device layout unverified.
@@ -64,3 +89,4 @@ Source-only: no builds/typechecks/tests/fixtures, CI, generation/models, native
 processing/exports, UI/device/accessibility execution or deployment. Source
 completion is not production validation. [Readiness](PRODUCTION_READINESS.md)
 retains the unverified runtime/release gates.
+

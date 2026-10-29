@@ -194,3 +194,4 @@ struct MediaPanel: View {
         catch { return nil }
     }
 }
+

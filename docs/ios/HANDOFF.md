@@ -1,5 +1,32 @@
 # Inkribe iOS — current handoff
 
+2026-10-29. Current source delivery is [native fullscreen playback](handoffs/NATIVE_FULLSCREEN.md),
+stacked on PR #52 at 3f9b8107, targeting feat/ios-style-sheet-grid. Both editor expand
+entries and all completed-file preview routes use AVKit directly, with live caption
+overlay for the editor and burned-in captions for exported MP4s. Preserve frame
+ownership, paused return, delivery leases and all parent behavior. Source-only;
+compilation/device acceptance unverified. Keep both PRs open without auto-merge.
+
+2026-10-29. Latest source delivery in PR #52 is the [Style form revision](handoffs/STYLE_SHEET.md):
+shared template sample with live draft rendering, play/pause only, native section
+rows and preview-free pushed pickers. Caption styling and placement are project-wide
+in Style, with placement menu/inline X/Y reflected in the root sample. Media retains
+real preview/scrubbing and its own framing/audio scope.
+Cancel/Done atomicity and the lazy templates grid remain. Existing frozen requests
+retain recorded clip styling; new requests capture the single project style.
+Source review only; no compilation or native/UI/device execution. Keep #52 open
+without auto-merge. Earlier descriptions of the first #52 design below are superseded.
+
+2026-10-29. Current delivery is the [unified Style sheet](handoffs/STYLE_SHEET.md)
+in feat/ios-style-sheet-grid -> develop, based on b28beebb. The user approved
+real preview and inline customization, selected-template row pushing a lazy grid,
+Cancel discarding local settings and Done durably saving one history entry.
+The old carousel and separate Customize action are removed. Catalog, schema,
+shared packages, Mac, native renderer, speech/model/commerce/exports stay intact.
+Source/call-site/diff review only; no compilation or runtime acceptance. Keep the
+new PR open without auto-merge. Earlier feature handoffs are historical where
+superseded by this approved flow.
+
 2026-10-28. Current source work in #50 is [Graphite](handoffs/GRAPHITE_THEME.md):
 Free dark theme immediately after Paper, #279ED2 accent, translucent panels and
 layered charcoal/blue lighting following the confirmed Midnight-like revision.
@@ -49,3 +76,4 @@ unverified. [Production readiness](PRODUCTION_READINESS.md) retains release gate
 
 Earlier source evidence remains in the phase handoffs and archive. No automatic
 next feature, merge or release is authorized.
+

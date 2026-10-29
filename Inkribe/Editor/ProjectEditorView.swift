@@ -30,7 +30,6 @@ struct ProjectEditorView: View {
     @State private var isOpening = true
     @State private var isLeaving = false
     @State private var showStyleSheet = false
-    @State private var showStyleBrowser = false
     @State private var captionRenderError: String?
     @State private var showExport = false
     @State private var showQueue = false
@@ -79,8 +78,13 @@ struct ProjectEditorView: View {
         editorDocumentPresentation
             .task(id: preparationAttempt) { await prepareEditor() }
             .sheet(item: $activeToolSheet, onDismiss: finishToolEditing) { tool in toolSheet(tool) }
-            .fullScreenCover(isPresented: $session.workspace.expandedPreview,
-                onDismiss: { session.pause() }) { fullscreenPlayer }
+            .background {
+                NativeVideoPlayer(isPresented: $session.workspace.expandedPreview, player: session.player,
+                    session: session, snapshot: session.snapshot, time: session.time,
+                    mediaGeneration: session.previewGeneration,
+                    onError: { session.commandError = $0 })
+                    .frame(width: 0, height: 0)
+            }
     }
 
     private var editorDocumentPresentation: some View {
@@ -108,10 +112,12 @@ struct ProjectEditorView: View {
 
     private var editorStylePresentation: some View {
         editorDialogs
-            .sheet(isPresented: $showStyleSheet, onDismiss: finishToolEditing) { styleSheet }
-            .sheet(isPresented: $showStyleBrowser, onDismiss: finishToolEditing) { CaptionStylesSheet(session: session) }
-            .sheet(item: Binding(get: { showStyleSheet || showStyleBrowser || activeToolSheet != nil ? nil : session.proUpsell },
-                set: { if !showStyleSheet && !showStyleBrowser && activeToolSheet == nil { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
+            .sheet(isPresented: $showStyleSheet, onDismiss: {
+                finishToolEditing()
+                Task { await session.refreshSaved() }
+            }) { styleSheet }
+            .sheet(item: Binding(get: { showStyleSheet || activeToolSheet != nil ? nil : session.proUpsell },
+                set: { if !showStyleSheet && activeToolSheet == nil { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
     }
 
     private var editorDialogs: some View {
@@ -136,7 +142,7 @@ struct ProjectEditorView: View {
     private var editorNavigation: some View {
         editorWorkspace
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .navigationTitle(session.document?.title ?? "Project")
+        .navigationTitle("")
         .themedSurface()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { editorToolbar }
@@ -156,9 +162,10 @@ struct ProjectEditorView: View {
                 VStack(spacing: 8) {
                     preview(document, height: previewHeight(document, in: geometry.size))
                         .padding(.horizontal, 12)
-                    EditorPlaybackControls(session: session, showsTimeline: false,
+                    EditorPlaybackControls(session: session, showsTimeline: false, showsHistory: false,
+                        clipLabel: clipPlaybackLabel(document),
                         onInteraction: { focused = nil },
-                        onExpand: { session.workspace.expandedPreview = true })
+                        onExpand: openFullscreenPreview, onClips: openClips)
                         .padding(.horizontal, 12)
                     timelineWorkspace(document)
                 }
@@ -182,8 +189,6 @@ struct ProjectEditorView: View {
     private func timelineWorkspace(_ document: ProjectDocument) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 12) {
-                timelineHeader(document)
-                    .padding(.horizontal, 12)
                 ProjectTimelineView(session: session,
                     isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving && !session.isChangingClips,
                     onInteraction: finishToolInteraction,
@@ -207,25 +212,10 @@ struct ProjectEditorView: View {
         .accessibilityLabel("Project timeline")
     }
 
-    private func timelineHeader(_ document: ProjectDocument) -> some View {
-        HStack(spacing: 12) {
-            Text("Timeline").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            let clip = selectedTimelineClip(in: document)
-            let index = clip.flatMap { selected in document.orderedClips.firstIndex { $0.id == selected.id } }
-            Button { openClips() } label: {
-                HStack(spacing: 6) {
-                    Text(index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "Clips")
-                        .font(.caption.weight(.medium)).lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                }
-                .frame(minHeight: 44).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Manage clips")
-            .accessibilityValue(index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "")
-            .accessibilityHint("Opens the clip list at the selected clip")
-        }
+    private func clipPlaybackLabel(_ document: ProjectDocument) -> String {
+        let clip = selectedTimelineClip(in: document)
+        let index = clip.flatMap { selected in document.orderedClips.firstIndex { $0.id == selected.id } }
+        return index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "Clips"
     }
 
     private func selectedTimelineClip(in document: ProjectDocument) -> ProjectClip? {
@@ -286,7 +276,7 @@ struct ProjectEditorView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        showProjectInfo || showClips || showExport || showQueue || showStyleSheet || showStyleBrowser ||
+        showProjectInfo || showClips || showExport || showQueue || showStyleSheet ||
             activeToolSheet != nil || addingCaption != nil ||
             session.proUpsell != nil || session.workspace.expandedPreview
     }
@@ -341,11 +331,12 @@ struct ProjectEditorView: View {
 
     @ViewBuilder
     private func toolPageContent(_ tool: EditorTool) -> some View {
-        if tool == .captions {
+        if tool == .captions || tool == .media {
             GeometryReader { geometry in
                 VStack(spacing: 0) {
                     if let document = session.document {
-                        captionsPlaybackHeader(document, in: geometry.size)
+                        if tool == .captions { captionsPlaybackHeader(document, in: geometry.size) }
+                        else { mediaPlaybackHeader(document, in: geometry.size) }
                     }
                     toolContent(tool)
                 }
@@ -363,6 +354,18 @@ struct ProjectEditorView: View {
         return VStack(spacing: 8) {
             preview(document, height: height, inCaptions: true)
             EditorPlaybackControls(session: session, showsOverview: false, showsTimeline: false,
+                onInteraction: { focused = nil })
+        }
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+    }
+
+    private func mediaPlaybackHeader(_ document: ProjectDocument, in size: CGSize) -> some View {
+        let width = max(0, size.width - 32)
+        let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
+        let height = max(0, min(width / aspect, min(260, size.height * 0.32)))
+        return VStack(spacing: 8) {
+            preview(document, height: height, inMedia: true)
+            EditorPlaybackControls(session: session, showsOverview: false,
                 onInteraction: { focused = nil })
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
@@ -393,24 +396,6 @@ struct ProjectEditorView: View {
                 guard tool != .captions || !editingCaptionFromTranscript else { return }
                 if let field { scroll.scrollTo(field, anchor: .center) }
             }
-        }
-    }
-
-    private var fullscreenPlayer: some View {
-        NavigationStack {
-            GeometryReader { geometry in
-                if let document = session.document {
-                    VStack(spacing: 12) {
-                        preview(document, height: max(0, geometry.size.height - 100), fullscreen: true)
-                        EditorPlaybackControls(session: session, onInteraction: { focused = nil })
-                    }.padding(12)
-                }
-            }
-            .themedSurface()
-            .navigationTitle("Preview").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { session.workspace.expandedPreview = false }
-            } }
         }
     }
 
@@ -449,7 +434,7 @@ struct ProjectEditorView: View {
                 if document.recognition == nil { transcription(document) }
             } else { transcription(document) }
         case .style:
-            // Styles owns its existing animated browser rather than this sheet.
+            // Style owns its transactional sheet rather than this tool page.
             EmptyView()
         case .captionEditor:
             captionEditorContent
@@ -539,7 +524,7 @@ struct ProjectEditorView: View {
     }
 
     private func switchTool(_ tool: EditorTool) {
-        if tool == .style { openStyleBrowser(); return }
+        if tool == .style { openStyleSheet(); return }
         finishToolInteraction()
         session.workspace.select(tool)
         activeToolSheet = tool
@@ -568,27 +553,28 @@ struct ProjectEditorView: View {
         else { activeToolSheet = nil }
     }
 
-    private func openStyleBrowser() {
+    private func openStyleSheet() {
         finishToolInteraction()
-        showStyleBrowser = true
+        showStyleSheet = true
+    }
+
+    private func openFullscreenPreview() {
+        guard !isOpening, session.isReadyToEdit, !session.isPreparingPreview,
+              session.player.currentItem != nil else { return }
+        focused = nil
+        session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
+        session.workspace.expandedPreview = true
     }
 
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            VStack(spacing: 2) {
-                Text(session.document?.title ?? "Project").font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(saveStatus).font(.caption2).foregroundStyle(.secondary)
-            }
-        }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Button("Export") {
-                finishToolInteraction()
-                showExport = true
-            }
-            .font(.subheadline.weight(.semibold))
-            .buttonStyle(.plain).frame(minHeight: 44).tint(theme.accentColor)
-            .disabled(isOpening || !session.isReadyToEdit || preparingTranscription || showStyleBrowser)
+            Button(session.undoLabel, systemImage: "arrow.uturn.backward") { finishToolInteraction(); session.undo() }
+                .labelStyle(.iconOnly)
+                .disabled(isOpening || !session.isReadyToEdit || preparingTranscription || !session.canUndo)
+            Button(session.redoLabel, systemImage: "arrow.uturn.forward") { finishToolInteraction(); session.redo() }
+                .labelStyle(.iconOnly)
+                .disabled(isOpening || !session.isReadyToEdit || preparingTranscription || !session.canRedo)
             editorActions
         }
         ToolbarItemGroup(placement: .keyboard) {
@@ -604,21 +590,8 @@ struct ProjectEditorView: View {
             Divider()
             Button("Rename", systemImage: "pencil") { beginRenaming() }
             Divider()
-            Button(session.undoLabel, systemImage: "arrow.uturn.backward") { focused = nil; session.undo() }
-                .disabled(!session.canUndo)
-            Button(session.redoLabel, systemImage: "arrow.uturn.forward") { focused = nil; session.redo() }
-                .disabled(!session.canRedo)
-            Divider()
-            Button(session.workspace.expandedPreview ? "Reduce preview" : "Expand preview", systemImage: "arrow.up.left.and.arrow.down.right") {
-                focused = nil
-                session.workspace.expandedPreview.toggle()
-            }
+            Button("Expand preview", systemImage: "arrow.up.left.and.arrow.down.right", action: openFullscreenPreview)
             Button("Queue", systemImage: "list.bullet.rectangle") { openQueue() }
-            Button("Style settings & resets", systemImage: "slider.horizontal.3") {
-                focused = nil
-                session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
-                showStyleSheet = true
-            }
             Button("Media tools", systemImage: "crop.rotate") {
                 switchTool(.media)
             }
@@ -641,7 +614,7 @@ struct ProjectEditorView: View {
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .accessibilityLabel("Editor actions, " + saveStatus)
-        .disabled(isOpening || !session.isReadyToEdit || preparingTranscription || showStyleBrowser)
+        .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
     }
 
     private func openQueue() {
@@ -667,46 +640,49 @@ struct ProjectEditorView: View {
     private func previewHeight(_ document: ProjectDocument, in size: CGSize) -> CGFloat {
         let width = max(0, size.width - 24)
         let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
-        // Reserve actual track/header space before sizing portrait footage.
+        // Reserve actual track space before sizing portrait footage.
         // Sheet/keyboard/focus state never enters this geometry calculation.
         let controls: CGFloat = dynamicTypeSize.isAccessibilitySize ? 88 : 44
-        let reserved = CGFloat(TimelineGeometry.trackHeight) + 44 + 12 + 16 + controls + 24
+        let reserved = CGFloat(TimelineGeometry.trackHeight) + 16 + controls + 24
         let available = max(0, size.height - reserved)
         return max(0, min(width / aspect, min(available, min(360, size.height * 0.48))))
     }
 
-    private func preview(_ document: ProjectDocument, height: CGFloat, fullscreen: Bool = false,
-                         inCaptions: Bool = false) -> some View {
+    private func preview(_ document: ProjectDocument, height: CGFloat,
+                         inCaptions: Bool = false, inMedia: Bool = false) -> some View {
         EditorPlayerPreview(session: session,
-            isActive: previewOwnsPlayer(fullscreen: fullscreen, inCaptions: inCaptions),
+            isActive: previewOwnsPlayer(inCaptions: inCaptions, inMedia: inMedia),
             onError: { captionRenderError = $0 })
         .frame(maxWidth: .infinity)
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func previewOwnsPlayer(fullscreen: Bool, inCaptions: Bool) -> Bool {
-        guard !isLeaving, !showStyleSheet, !showExport, !showQueue, addingCaption == nil else { return false }
+    private func previewOwnsPlayer(inCaptions: Bool, inMedia: Bool) -> Bool {
+        guard !isLeaving, !showStyleSheet, !showExport, !showQueue, addingCaption == nil,
+              !session.workspace.expandedPreview else { return false }
         if inCaptions {
             return activeToolSheet == .captions && !editingCaptionFromTranscript
         }
-        if fullscreen { return session.workspace.expandedPreview }
-        return activeToolSheet != .captions && !session.workspace.expandedPreview
+        if inMedia { return activeToolSheet == .media }
+        return activeToolSheet != .captions && activeToolSheet != .media
     }
 
     private var editorToolBar: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 actionButton("Clips", symbol: "film.stack", selected: showClips, action: openClips)
                 ForEach(EditorTool.primaryTools) { tool in
-                    actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleBrowser)) {
+                    actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleSheet)) {
                         switchTool(tool)
                     }
                 }
-                actionButton("Customize", symbol: "slider.horizontal.3", selected: showStyleSheet) {
-                    finishToolInteraction(); showStyleSheet = true
+                actionButton("Export", symbol: "square.and.arrow.up", selected: showExport) {
+                    finishToolInteraction()
+                    showExport = true
                 }
-            }.padding(.horizontal, 12).padding(.vertical, 8)
+                .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
+            }.padding(.horizontal, 8).padding(.vertical, 8)
         }
         .scrollIndicators(.hidden)
         .background(theme.backgroundColor)
@@ -723,8 +699,8 @@ struct ProjectEditorView: View {
                 Text(title).font(.caption.weight(.medium)).lineLimit(1)
             }
             .fixedSize(horizontal: true, vertical: true)
-            .frame(minWidth: 68, minHeight: 54)
-            .padding(.horizontal, 6)
+            .frame(minWidth: 60, minHeight: 54)
+            .padding(.horizontal, 4)
             .foregroundStyle(selected ? theme.accentColor : theme.secondaryForegroundColor)
             .contentShape(Rectangle())
         }
@@ -1162,4 +1138,5 @@ struct TimingFields: View {
         error = nil
     }
 }
+
 

@@ -1,195 +1,189 @@
+import Foundation
 import SwiftUI
-import AppFoundation
 import UIKit
 
-enum CaptionStyleSection: String, CaseIterable, Hashable, Identifiable {
-    case typography = "Text", colors = "Colors", outline = "Backdrop", layout = "Layout", position = "Position", motion = "Motion"
-    var id: Self { self }
+enum CaptionStyleDestination: Hashable {
+    case templates, font, spacing, outline, background, shadow, layout, animation
+    var title: String {
+        switch self {
+        case .templates: "Templates"
+        case .font: "Font"
+        case .spacing: "Spacing"
+        case .outline: "Outline"
+        case .background: "Background"
+        case .shadow: "Shadow"
+        case .layout: "Text layout"
+        case .animation: "Animation"
+        }
+    }
 }
 
-struct CaptionStylePanel: View {
+/// All form controls share one admission boundary and edit only the local draft.
+@MainActor
+struct CaptionStyleFormControls {
     let session: EditorSession
-    let section: CaptionStyleSection
-    private var style: CaptionStyle { session.editingCaptionStyle }
-    private var baseline: CaptionStyle { CaptionPreset.definition(for: style.preset)?.style ?? .standard }
-    private var resetName: String { CaptionPreset.definition(for: style.preset)?.name ?? "Basic" }
+    let draft: CaptionStyleDraft
+    var style: CaptionStyle { draft.style }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(section.rawValue).font(.headline)
-            controls
-            if let id = session.editingClipID, let document = session.document {
-                Label(document.settings(for: id).captions.isCustomized(resetKind) ? "Customized" : "Using project defaults",
-                      systemImage: document.settings(for: id).captions.isCustomized(resetKind) ? "slider.horizontal.3" : "link")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Reset section to project defaults", systemImage: "arrow.counterclockwise") {
-                    session.resetClipSettings(captions: resetKind)
-                }
-            } else {
-                Button("Reset \(section.rawValue.lowercased()) to \(resetName)", systemImage: "arrow.counterclockwise") { resetSection() }
-            }
-        }
-        .studioCard()
-        .onDisappear { session.endStyleEditing() }
+    @discardableResult func set(_ value: CaptionStyle) -> Bool {
+        let accepted = draft.setStyle(value, access: session.access)
+        if !accepted, draft.error == nil { session.pause(); session.proUpsell = .styles }
+        return accepted
     }
-
-    @ViewBuilder
-    private var controls: some View {
-        switch section {
-        case .typography:
-            Picker("Font", selection: value(\.font)) {
-                ForEach(CaptionFont.allCases, id: \.self) { font in
-                    Text(font.name + (!session.access.hasPro && font != .modern ? " · Pro" : "")).tag(font)
-                }
-            }
-            .disabled(session.access.isChecking)
-            Picker("Weight", selection: value(\.weight)) {
-                ForEach(CaptionFontWeight.allCases, id: \.self) { weight in
-                    Text(weight.name + (!session.access.hasPro && weight != .original ? " · Pro" : "")).tag(weight)
-                }
-            }
-            .disabled(session.access.isChecking)
-            slider("Letter spacing · Pro", value: value(\.tracking, control: .tracking), range: -0.02...0.1,
-                display: "\(Int((style.tracking * 100).rounded()))%")
-            slider("Size", value: value(\.fontSize, control: .size), range: 0.025...0.12,
-                display: "\(Int((style.fontSize * 100).rounded()))%")
-        case .colors:
-            ColorPicker("Text color", selection: color(\.textColor, control: .textColor), supportsOpacity: true)
-            if [.highlight, .karaoke, .emphasis, .underline].contains(style.effect) {
-                ColorPicker("Highlight color", selection: color(\.accentColor, control: .accentColor), supportsOpacity: true)
-            }
-        case .outline: backdropControls
-        case .layout: layoutControls
-        case .position:
-            ViewThatFits(in: .horizontal) {
-                HStack { placementButtons }
-                VStack(alignment: .leading) { placementButtons }
-            }
-            slider("Horizontal", value: value(\.positionX, control: .horizontalPosition), range: 0...1,
-                display: "\(Int((style.positionX * 100).rounded()))%")
-            slider("Vertical", value: value(\.positionY, control: .verticalPosition), range: 0...1,
-                display: "\(Int((style.positionY * 100).rounded()))%")
-        case .motion:
-            Picker("Animation", selection: value(\.effect, modern: true)) {
-                ForEach(CaptionEffect.allCases, id: \.self) { effect in
-                    Text(effect.name + (!session.access.hasPro && effect != .none ? " · Pro" : "")).tag(effect)
-                }
-            }
-            .disabled(session.access.isChecking)
-            Text("Play or scrub to inspect motion. Phrase-timed captions animate as whole phrases.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var backdropControls: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            slider("Outline", value: value(\.outlineWidth, control: .outlineWidth), range: 0...0.12,
-                display: style.outlineWidth == 0 ? "Off" : "\(Int((style.outlineWidth * 100).rounded()))%")
-            if style.outlineWidth > 0 {
-                ColorPicker("Outline color", selection: color(\.outlineColor, control: .outlineColor), supportsOpacity: true)
-            }
-            Toggle("Background", isOn: value(\.backgroundEnabled))
-            if style.backgroundEnabled {
-                ColorPicker("Background color", selection: color(\.backgroundColor, control: .backgroundColor), supportsOpacity: true)
-            }
-            Picker("Background shape · Pro", selection: value(\.backgroundMode)) {
-                ForEach(CaptionBackgroundMode.allCases, id: \.self) { Text($0.name).tag($0) }
-            }
-            slider("Box padding · Pro", value: value(\.backgroundPadding, control: .backgroundPadding), range: 0...0.6,
-                display: "\(Int((style.backgroundPadding * 100).rounded()))%")
-            slider("Corner radius · Pro", value: value(\.backgroundRadius, control: .backgroundRadius), range: 0...1,
-                display: "\(Int((style.backgroundRadius * 100).rounded()))%")
-            Toggle("Text shadow · Pro", isOn: value(\.shadowEnabled))
-            if style.shadowEnabled {
-                ColorPicker("Shadow color", selection: color(\.shadowColor, control: .shadowColor), supportsOpacity: true)
-                slider("Shadow softness", value: value(\.shadowBlur, control: .shadowBlur), range: 0...1,
-                    display: "\(Int((style.shadowBlur * 100).rounded()))%")
-                slider("Shadow horizontal", value: value(\.shadowOffsetX, control: .shadowX), range: -1...1,
-                    display: "\(Int((style.shadowOffsetX * 100).rounded()))%")
-                slider("Shadow vertical", value: value(\.shadowOffsetY, control: .shadowY), range: -1...1,
-                    display: "\(Int((style.shadowOffsetY * 100).rounded()))%")
-            }
-        }
-    }
-
-    private var layoutControls: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            if !session.access.hasPro { Label("Pro layout controls", systemImage: "lock").font(.caption).foregroundStyle(.secondary) }
-            Picker("Alignment", selection: value(\.alignment)) {
-                ForEach(CaptionAlignment.allCases, id: \.self) { Text($0.name).tag($0) }
-            }
-            Picker("Maximum lines", selection: value(\.maximumLines)) {
-                ForEach(1...8, id: \.self) { Text("\($0)").tag($0) }
-            }
-            slider("Text width", value: value(\.lineWidth, control: .lineWidth), range: 0.4...1,
-                display: "\(Int((style.lineWidth * 100).rounded()))%")
-            slider("Line spacing", value: value(\.lineSpacing, control: .lineSpacing), range: 0...0.8,
-                display: "\(Int((style.lineSpacing * 100).rounded()))%")
-            Toggle("Fit long captions · Pro", isOn: Binding(get: { style.minimumScale < 1 }, set: {
-                var next = style; next.minimumScale = $0 ? 0.65 : 1; session.setCaptionStyle(next)
-            }))
-            if style.minimumScale < 1 {
-                slider("Minimum size", value: value(\.minimumScale, control: .minimumScale), range: 0.5...1,
-                    display: "\(Int((style.minimumScale * 100).rounded()))% of chosen size")
-            }
-            Text("Wrapping changes the look without splitting your captions. Long captions stop shrinking at the minimum size.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var resetKind: CaptionStyleReset {
-        switch section {
-        case .typography: .typography
-        case .colors: .colors
-        case .outline: .backdrop
-        case .layout: .layout
-        case .position: .placement
-        case .motion: .motion
-        }
-    }
-    private func resetSection() { session.setCaptionStyle(style.resetting(resetKind, to: baseline)) }
-
-    private var placementButtons: some View {
-        Group {
-            Button("Top") { place(0.18) }
-            Button("Center") { place(0.5) }
-            Button("Bottom") { place(0.82) }
-        }
-        .buttonStyle(.bordered)
-    }
-    private func place(_ y: Double) {
-        var next = style
-        next.positionX = 0.5; next.positionY = y
-        session.setCaptionStyle(next)
-    }
-    private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack { Text(title); Spacer(); Text(display).monospacedDigit().foregroundStyle(.secondary) }
-            Slider(value: value, in: range, onEditingChanged: { _ in session.endStyleEditing() })
-                .accessibilityLabel(title)
-                .accessibilityValue(display)
-        }
-    }
-    private func value<T>(_ key: WritableKeyPath<CaptionStyle, T>, control: CaptionStyleControl? = nil, modern: Bool = false) -> Binding<T> {
+    func value<T>(_ key: WritableKeyPath<CaptionStyle, T>) -> Binding<T> {
         Binding(get: { style[keyPath: key] }, set: { newValue in
             var next = style
             next[keyPath: key] = newValue
-            if modern { next.formatVersion = 2 }
-            session.setCaptionStyle(next, coalescing: control)
+            set(next)
         })
     }
-    private func color(_ key: WritableKeyPath<CaptionStyle, CaptionColor>, control: CaptionStyleControl) -> Binding<Color> {
+    func color(_ key: WritableKeyPath<CaptionStyle, CaptionColor>) -> Binding<Color> {
         Binding(get: {
-            let color = style[keyPath: key]
-            return Color(.sRGB, red: color.red, green: color.green, blue: color.blue, opacity: color.alpha)
-        }, set: { newColor in
-            var red: CGFloat = 0; var green: CGFloat = 0; var blue: CGFloat = 0; var alpha: CGFloat = 0
-            guard UIColor(newColor).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return }
+            let c = style[keyPath: key]
+            return Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
+        }, set: { color in
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
             var next = style
-            next[keyPath: key] = CaptionColor(red: min(1, max(0, Double(red))),
-                green: min(1, max(0, Double(green))), blue: min(1, max(0, Double(blue))),
-                alpha: min(1, max(0, Double(alpha))))
-            session.setCaptionStyle(next, coalescing: control)
+            next[keyPath: key] = CaptionColor(red: min(1, max(0, Double(r))), green: min(1, max(0, Double(g))),
+                blue: min(1, max(0, Double(b))), alpha: min(1, max(0, Double(a))))
+            set(next)
         })
+    }
+}
+
+enum CaptionStyleFormValue {
+    static func percent(_ value: Double) -> String { "\(Int((value * 100).rounded()))%" }
+    static func weight(_ value: CaptionFontWeight) -> String { value == .original ? "Default" : value.name }
+    static func color(_ c: CaptionColor) -> String {
+        let palette: [(String, CaptionColor)] = [("White", .white), ("Black", .black), ("Mint", .mint), ("Pink", .pink), ("Yellow", .yellow)]
+        let name = palette.first { _, value in
+            abs(c.red - value.red) < 0.03 && abs(c.green - value.green) < 0.03 && abs(c.blue - value.blue) < 0.03
+        }?.0 ?? String(format: "#%02X%02X%02X", Int((c.red * 255).rounded()), Int((c.green * 255).rounded()), Int((c.blue * 255).rounded()))
+        return c.alpha < 0.995 ? name + " · " + percent(c.alpha) : name
+    }
+    static func spacing(_ style: CaptionStyle) -> String {
+        if abs(style.tracking) < 0.0001 && abs(style.lineSpacing - 0.1) < 0.0001 { return "Default" }
+        return "Letters \(percent(style.tracking)) · Lines \(percent(style.lineSpacing))"
+    }
+    static func layout(_ style: CaptionStyle) -> String {
+        style.alignment.name + " · \(style.maximumLines) " + (style.maximumLines == 1 ? "line" : "lines")
+    }
+    static func placement(_ style: CaptionStyle) -> String {
+        guard abs(style.positionX - 0.5) < 0.001 else { return "Custom" }
+        if abs(style.positionY - 0.18) < 0.001 { return "Top" }
+        if abs(style.positionY - 0.5) < 0.001 { return "Center" }
+        if abs(style.positionY - 0.82) < 0.001 { return "Bottom" }
+        return "Custom"
+    }
+}
+
+/// Native form sections below Template. Secondary settings are compound rows;
+/// small menus and the inline Size control avoid unnecessary navigation.
+struct CaptionStylePanel: View {
+    let session: EditorSession
+    let draft: CaptionStyleDraft
+    private var controls: CaptionStyleFormControls { .init(session: session, draft: draft) }
+    private var style: CaptionStyle { draft.style }
+
+    var body: some View {
+        Group { textSection; colorSection; appearanceSection; layoutSection; motionSection }
+            .disabled(session.access.isChecking)
+    }
+    private var textSection: some View {
+        Section("Text") {
+            NavigationLink(value: CaptionStyleDestination.font) { LabeledContent("Font", value: style.font.name) }
+            Picker("Weight", selection: controls.value(\.weight)) {
+                ForEach(CaptionFontWeight.allCases, id: \.self) { weight in
+                    Text(CaptionStyleFormValue.weight(weight)).tag(weight)
+                }
+            }.pickerStyle(.menu)
+            DisclosureGroup {
+                Slider(value: controls.value(\.fontSize), in: 0.025...0.12)
+                    .accessibilityLabel("Text size").accessibilityValue(CaptionStyleFormValue.percent(style.fontSize))
+            } label: { LabeledContent("Size", value: CaptionStyleFormValue.percent(style.fontSize)) }
+            NavigationLink(value: CaptionStyleDestination.spacing) {
+                LabeledContent("Spacing", value: CaptionStyleFormValue.spacing(style))
+            }
+        }
+    }
+    private var colorSection: some View {
+        Section("Colors") {
+            CaptionStyleColorRow(title: "Text", value: style.textColor, selection: controls.color(\.textColor))
+            if [.highlight, .karaoke, .emphasis, .underline].contains(style.effect) {
+                CaptionStyleColorRow(title: "Highlight", value: style.accentColor, selection: controls.color(\.accentColor))
+            }
+        }
+    }
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            NavigationLink(value: CaptionStyleDestination.outline) {
+                LabeledContent("Outline", value: style.outlineWidth == 0 ? "Off" :
+                    CaptionStyleFormValue.color(style.outlineColor) + " · " + CaptionStyleFormValue.percent(style.outlineWidth))
+            }
+            NavigationLink(value: CaptionStyleDestination.background) {
+                LabeledContent("Background", value: style.backgroundEnabled ?
+                    CaptionStyleFormValue.color(style.backgroundColor) + " · " + style.backgroundMode.name : "Off")
+            }
+            NavigationLink(value: CaptionStyleDestination.shadow) {
+                LabeledContent("Shadow", value: style.shadowEnabled ?
+                    CaptionStyleFormValue.color(style.shadowColor) + " · " + CaptionStyleFormValue.percent(style.shadowBlur) : "Off")
+            }
+        }
+    }
+    private var layoutSection: some View {
+        Section("Layout") {
+            NavigationLink(value: CaptionStyleDestination.layout) {
+                LabeledContent("Text layout", value: CaptionStyleFormValue.layout(style))
+            }
+            Menu {
+                Button("Top") { placeCaptions(y: 0.18) }
+                Button("Center") { placeCaptions(y: 0.5) }
+                Button("Bottom") { placeCaptions(y: 0.82) }
+            } label: {
+                LabeledContent("Caption placement", value: CaptionStyleFormValue.placement(style))
+            }
+            DisclosureGroup {
+                placementSlider("Horizontal", key: \.positionX)
+                placementSlider("Vertical", key: \.positionY)
+            } label: {
+                LabeledContent("Fine position", value:
+                    "X \(CaptionStyleFormValue.percent(style.positionX)) · Y \(CaptionStyleFormValue.percent(style.positionY))")
+            }
+        }
+    }
+    private func placeCaptions(y: Double) {
+        var next = style
+        next.positionX = 0.5; next.positionY = y
+        controls.set(next)
+    }
+    private func placementSlider(_ title: String, key: WritableKeyPath<CaptionStyle, Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LabeledContent(title, value: CaptionStyleFormValue.percent(style[keyPath: key]))
+            Slider(value: controls.value(key), in: 0...1)
+                .accessibilityLabel("Caption " + title.lowercased())
+                .accessibilityValue(CaptionStyleFormValue.percent(style[keyPath: key]))
+        }
+    }
+    private var motionSection: some View {
+        Section("Motion") {
+            NavigationLink(value: CaptionStyleDestination.animation) { LabeledContent("Animation", value: style.effect.name) }
+        }
+    }
+}
+
+struct CaptionStyleColorRow: View {
+    let title: String
+    let value: CaptionColor
+    let selection: Binding<Color>
+    var body: some View {
+        ColorPicker(selection: selection, supportsOpacity: true) {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                Text(CaptionStyleFormValue.color(value)).foregroundStyle(.secondary).font(.subheadline)
+            }
+        }
+        .accessibilityValue(CaptionStyleFormValue.color(value))
     }
 }

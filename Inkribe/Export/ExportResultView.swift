@@ -15,6 +15,8 @@ struct ExportResultView: View {
     let jobID: UUID
     @State private var delivery: ExportDeliveryPresentation?
     @State private var deliveryToken: UUID?
+    @State private var previewToken: UUID?
+    @State private var previewPlayer: AVPlayer?
     @State private var savingPhotos = false
     @State private var error: String?
     @State private var message: String?
@@ -44,10 +46,15 @@ struct ExportResultView: View {
             if let message { Text(message).foregroundStyle(.secondary) }
         }
         .buttonStyle(.borderless)
-        .sheet(item: $delivery, onDismiss: endDelivery) { destination in
-            if destination.kind == .preview {
-                ExportVideoPreview(url: destination.url)
-            } else if destination.kind == .files {
+        .background {
+            NativeVideoPlayer(isPresented: Binding(get: { delivery?.kind == .preview },
+                set: { if !$0 { delivery = nil } }), player: previewPlayer,
+                onError: { error = $0 }, onDismiss: endVideoPreview)
+                .frame(width: 0, height: 0)
+        }
+        .sheet(item: Binding(get: { delivery?.kind == .preview ? nil : delivery },
+            set: { if delivery?.kind != .preview { delivery = $0 } }), onDismiss: endDelivery) { destination in
+            if destination.kind == .files {
                 ExportFilesPicker(url: destination.url) { saved in
                     message = saved ? "Saved to Files." : "Save to Files cancelled."
                     endDelivery()
@@ -67,16 +74,27 @@ struct ExportResultView: View {
     }
 
     private func present(_ kind: ExportDeliveryPresentation.Kind) {
+        guard delivery == nil, !savingPhotos else { return }
         error = nil; message = nil
         do {
             let lease = try exports.beginDelivery(jobID)
-            deliveryToken = lease.token
+            if kind == .preview {
+                previewToken = lease.token
+                previewPlayer = AVPlayer(url: lease.url)
+            } else { deliveryToken = lease.token }
             delivery = ExportDeliveryPresentation(kind: kind, url: lease.url)
         } catch { self.error = error.localizedDescription }
     }
     private func endDelivery() {
         if let token = deliveryToken { exports.endDelivery(token) }
         deliveryToken = nil
+    }
+    private func endVideoPreview() {
+        previewPlayer?.pause()
+        previewPlayer?.replaceCurrentItem(with: nil)
+        previewPlayer = nil
+        if let token = previewToken { exports.endDelivery(token) }
+        previewToken = nil
     }
     private func saveToPhotos() {
         error = nil; message = nil
@@ -99,39 +117,5 @@ struct ExportResultView: View {
                 } catch { self.error = error.localizedDescription }
             }
         } catch { self.error = error.localizedDescription }
-    }
-}
-
-
-/// Owns playback of the immutable completed file; the presenter holds its lease.
-private struct ExportVideoPreview: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var player: AVPlayer
-    @State private var playbackError: String?
-    @State private var observer: NSKeyValueObservation?
-    @State private var generation = UUID()
-    init(url: URL) { _player = State(initialValue: AVPlayer(url: url)) }
-    var body: some View {
-        NavigationStack {
-            VideoPlayer(player: player).background(.black)
-                .overlay(alignment: .bottom) {
-                    if let playbackError {
-                        Text(playbackError).font(.footnote).padding().background(.regularMaterial)
-                    }
-                }
-                .navigationTitle("Exported video")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { player.pause(); dismiss() } } }
-        }
-        .onAppear {
-            let token = generation
-            observer = player.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
-                let failure = item.status == .failed ? item.error?.localizedDescription ?? "This exported file could not be played." : nil
-                Task { @MainActor in if token == generation { playbackError = failure } }
-            }
-        }
-        .onDisappear { generation = UUID(); observer = nil; player.pause(); player.replaceCurrentItem(with: nil) }
-        .onChange(of: scenePhase) { _, value in if value != .active { player.pause() } }
     }
 }

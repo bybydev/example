@@ -8,14 +8,14 @@ struct SettingsScopePicker: View {
             VStack(alignment: .leading, spacing: 8) {
                 EditorSettingsScopeMenu(session: session)
                 if let id = session.editingClipID {
-                    let customized = document.settings(for: id).hasOverrides
+                    let customized = !document.settings(for: id).media.isEmpty
                     Label(customized ? "Customized" : "Using project defaults", systemImage: customized ? "slider.horizontal.3" : "link")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Reset all settings to project defaults", systemImage: "arrow.counterclockwise") {
-                        session.resetClipSettings(all: true)
+                    Button("Reset media settings to project defaults", systemImage: "arrow.counterclockwise") {
+                        session.resetClipSettings(media: true)
                     }.disabled(!customized)
                 } else {
-                    Text("Clips inherit these values unless a setting is customized.").font(.caption).foregroundStyle(.secondary)
+                    Text("Clips inherit framing and audio unless customized.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .onChange(of: document.clips.map(\.id)) { _, ids in
@@ -68,3 +68,4 @@ struct EditorSettingsScopeMenu: View {
         }
     }
 }
+
