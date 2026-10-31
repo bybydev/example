@@ -53,7 +53,7 @@ struct EditorPlaybackControls: View {
             endEditing(); session.togglePlayback()
         }
         .labelStyle(.iconOnly).font(.title3).frame(width: 44, height: 44)
-        .disabled(session.isPreparingPreview || session.previewError != nil)
+        .disabled(session.isEditingClipTrim || session.isPreparingPreview || session.previewError != nil)
     }
     private var historyButtons: some View {
         HStack(spacing: 0) {
@@ -75,6 +75,7 @@ struct EditorPlaybackControls: View {
                 .fixedSize(horizontal: true, vertical: true)
                 .frame(minHeight: 44).contentShape(Rectangle())
             }
+            .disabled(session.isEditingClipTrim)
             .accessibilityLabel("Manage clips")
             .accessibilityValue(clipLabel)
             .accessibilityHint("Opens the clip list at the selected clip")
@@ -83,7 +84,7 @@ struct EditorPlaybackControls: View {
     @ViewBuilder private var expandButton: some View {
         if let onExpand {
             Button("Fullscreen preview", systemImage: "arrow.up.left.and.arrow.down.right") { endEditing(); onExpand() }
-                .labelStyle(.iconOnly).frame(width: 44, height: 44)
+                .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(session.isEditingClipTrim)
         }
     }
 

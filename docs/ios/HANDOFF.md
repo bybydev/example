@@ -1,5 +1,20 @@
 # Inkribe iOS — current handoff
 
+2026-10-31. [Timeline clip trimming](handoffs/CLIP_TRIMMING.md) is stacked on
+#55 head 381b0d2b, targeting feat/ios-media-form. Source delivery covers selected
+clip handles/main-preview boundary audition, restoration/source limits, one saved
+Undo edit, shared piecewise output/caption/seek mapping and legacy trim preservation.
+Media trim controls are removed. Schema 13 reads 1–12; frozen outputs stay captured.
+Compilation/native/UI acceptance is unverified. Keep parent and child PRs open.
+
+2026-10-31. [Media Form pass 2](handoffs/MEDIA_FORM.md) completes both source
+passes in PR #55, extending bb0d1b11. Review covers scopes/resets, cancellation,
+stale/save/history/reopen, shared preview/output and preserved frozen exports.
+Scoped fixes harden sheet-owned save lifetime, preview-independent saving and
+recovery, clip settings rewrite/sort and final speech reconciliation. The approved
+Form and other editor design remain unchanged. Compilation/native/UI acceptance
+is unverified. Keep open without auto-merge; no next feature or merge.
+
 2026-10-31. [Music pass 3](handoffs/MUSIC_LAYER.md) completes the planned three-pass
 source delivery in PR #54. Integration review covers import/replacement/removal,
 owned/staged files, stale/cancel/save/history, reopen/duplicate/Trash, duration/mute
@@ -100,4 +115,3 @@ unverified. [Production readiness](PRODUCTION_READINESS.md) retains release gate
 
 Earlier source evidence remains in the phase handoffs and archive. No automatic
 next feature, merge or release is authorized.
-

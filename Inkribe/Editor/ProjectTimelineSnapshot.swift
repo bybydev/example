@@ -52,23 +52,25 @@ struct ProjectTimelineSnapshot: Sendable {
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
         clips = document.orderedClips.enumerated().compactMap { index, clip in
             guard let asset = assets[clip.sourceAssetID],
-                  let kept = timeline.retained(clip.timelineInterval),
-                  let output = timeline.outputInterval(clip.timelineInterval) else { return nil }
+                  let anchor = try? timeline.outputTime(clampingOriginal: clip.timelineInterval.start) else { return nil }
+            let kept = timeline.retained(clip.timelineInterval)
+            let output = timeline.outputInterval(clip.timelineInterval)
             return Clip(id: clip.id, assetID: asset.id, title: "Clip \(index + 1)",
                 fingerprint: asset.sha256, kind: asset.kind,
-                start: EditorTime.seconds(output.start), end: EditorTime.seconds(output.end),
-                sourceStart: CMTimeGetSeconds(CMTimeAdd(clip.sourceInterval.start.cmTime,
-                    CMTimeSubtract(kept.start.cmTime, clip.timelineInterval.start.cmTime))),
+                start: EditorTime.seconds(output?.start ?? anchor), end: EditorTime.seconds(output?.end ?? anchor),
+                sourceStart: kept.map { CMTimeGetSeconds(CMTimeAdd(clip.sourceInterval.start.cmTime,
+                    CMTimeSubtract($0.start.cmTime, clip.timelineInterval.start.cmTime))) } ?? EditorTime.seconds(clip.sourceInterval.start),
                 isMuted: document.isOriginalAudioMuted || document.mediaEdits(for: clip.id).volume == 0)
         }
         let nativeIntervals = Dictionary(uniqueKeysWithValues: (document.recognition?.cues ?? []).map { ($0.id, $0.interval) })
         let manualIntervals = Dictionary(uniqueKeysWithValues: (document.manualCaptions ?? []).map { ($0.id, $0.interval) })
         captions = snapshot.chronologicalCues.compactMap { cue in
             guard let clipID = cue.wordIDs.first.flatMap({ snapshot.wordsByID[$0]?.clipID }) else { return nil }
+            guard let clip = document.clips.first(where: { $0.id == clipID }), let retained = timeline.retained(clip.timelineInterval) else { return nil }
             return Caption(id: cue.id, clipID: clipID, start: EditorTime.seconds(cue.interval.start),
                 end: EditorTime.seconds(cue.interval.end), text: snapshot.text(for: cue),
-                canResizeStart: (manualIntervals[cue.id] ?? nativeIntervals[cue.id]).map { $0.start >= timeline.start } ?? false,
-                canResizeEnd: (manualIntervals[cue.id] ?? nativeIntervals[cue.id]).map { $0.end <= timeline.end } ?? false)
+                canResizeStart: (manualIntervals[cue.id] ?? nativeIntervals[cue.id]).map { $0.start >= retained.start } ?? false,
+                canResizeEnd: (manualIntervals[cue.id] ?? nativeIntervals[cue.id]).map { $0.end <= retained.end } ?? false)
         }
         gaps = snapshot.gaps.map { Gap(start: EditorTime.seconds($0.interval.start), end: EditorTime.seconds($0.interval.end)) }
             .sorted { $0.start < $1.start }

@@ -1,6 +1,13 @@
 import CoreMedia
 import UIKit
 
+struct TimelineClipTrimDrawing {
+    let clipID: UUID
+    let start: Double
+    let end: Double
+    let range: ClipSourceTrim
+}
+
 struct TimelineTimingPreview {
     let caption: ProjectTimelineSnapshot.Caption
     let interval: MediaInterval
@@ -33,6 +40,8 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
     var onSeek: ((Double) -> Void)?
     var onZoom: ((Double) -> Void)?
     var onTimingAction: ((UUID, TimelineTimingOperation, Double) -> Bool)?
+    var clipTrimPreview: TimelineClipTrimDrawing?
+    var onClipTrimAction: ((UUID, ClipTrimEdge, Double) -> Bool)?
     var timingPreview: TimelineTimingPreview?
     var timingMessage: String?
     private var tapRecognizer: UITapGestureRecognizer?
@@ -210,6 +219,7 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
         for clip in snapshot.visibleClips(range) where clip.end > range.lowerBound {
             draw(clip, snapshot: snapshot, range: range, context: context)
         }
+        drawClipTrim(context, snapshot: snapshot)
         for gap in snapshot.visibleGaps(range) where gap.end > range.lowerBound {
             let frame = self.rect(start: gap.start, end: gap.end, y: TimelineGeometry.captionTop, height: TimelineGeometry.captionHeight)
             context.saveGState()
@@ -229,7 +239,12 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
         } else if let selected = visibleCaptions.first(where: { $0.id == selectedCaptionID && $0.end > range.lowerBound }) {
             drawCaption(selected)
         }
-        if let preview = timingPreview {
+        if let preview = clipTrimPreview {
+            let length = max(0, EditorTime.seconds(preview.range.end) - EditorTime.seconds(preview.range.start))
+            let text = "Source " + EditorTime.display(preview.range.start) + " – " + EditorTime.display(preview.range.end) + " · " + TimelineGeometry.label(length, fractional: true)
+            drawText(text, in: CGRect(x: 12, y: TimelineGeometry.messageTop, width: max(0, bounds.width - 24), height: 15),
+                font: .monospacedDigitSystemFont(ofSize: 11, weight: .medium), color: .secondaryLabel)
+        } else if let preview = timingPreview {
             let text = preview.valid ? EditorTime.display(preview.interval.start) +
                 " – " + EditorTime.display(preview.interval.end) : "Overlaps another caption"
             drawText(text, in: CGRect(x: 12, y: TimelineGeometry.messageTop, width: max(0, bounds.width - 24), height: 15),
@@ -248,6 +263,47 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
                 font: .systemFont(ofSize: 13), color: .secondaryLabel)
         }
     }
+    private func trimFrame(start: Double, end: Double) -> CGRect {
+        let a = x(start), b = x(end)
+        let width = max(CGFloat(44), b - a)
+        var left = (a + b - width) / 2
+        if b - a < 44 {
+            if start <= 0 { left = x(0) }
+            else if let duration = snapshot?.duration, end >= duration { left = x(duration) - width }
+        }
+        return CGRect(x: left, y: TimelineGeometry.videoTop, width: width, height: TimelineGeometry.videoHeight)
+    }
+    private func drawClipTrim(_ context: CGContext, snapshot: ProjectTimelineSnapshot) {
+        guard let clip = snapshot.clips.first(where: { $0.id == selectedClipID }) else { return }
+        let preview = clipTrimPreview
+        let frame = trimFrame(start: preview?.start ?? clip.start, end: preview?.end ?? clip.end)
+        if clip.end == clip.start {
+            UIColor.tertiarySystemFill.setFill(); context.fill(frame)
+            drawText(clip.title, in: frame.insetBy(dx: 10, dy: 8), font: .systemFont(ofSize: 11), color: .secondaryLabel)
+        }
+        if let preview {
+            UIColor.black.withAlphaComponent(0.55).setFill()
+            if preview.start > clip.start { context.fill(rect(start: clip.start, end: min(clip.end, preview.start), y: TimelineGeometry.videoTop, height: TimelineGeometry.videoHeight)) }
+            if preview.end < clip.end { context.fill(rect(start: max(clip.start, preview.end), end: clip.end, y: TimelineGeometry.videoTop, height: TimelineGeometry.videoHeight)) }
+        }
+        accent.setStroke(); let outline = UIBezierPath(rect: frame.insetBy(dx: 1, dy: 1)); outline.lineWidth = 2; outline.stroke()
+        for x in [frame.minX, frame.maxX - 8] {
+            let handle = CGRect(x: x, y: frame.minY, width: 8, height: frame.height)
+            accent.setFill(); UIBezierPath(roundedRect: handle, cornerRadius: 3).fill()
+            UIColor.white.withAlphaComponent(0.9).setFill()
+            context.fill(CGRect(x: x + 3, y: handle.midY - 9, width: 2, height: 18))
+        }
+    }
+    func clipTrimHit(at point: CGPoint) -> (UUID, ClipTrimEdge)? {
+        guard let clip = snapshot?.clips.first(where: { $0.id == selectedClipID }),
+              point.y >= TimelineGeometry.videoTop, point.y <= TimelineGeometry.videoTop + TimelineGeometry.videoHeight else { return nil }
+        let frame = trimFrame(start: clip.start, end: clip.end)
+        let left = abs(point.x - frame.minX), right = abs(point.x - frame.maxX)
+        if left <= 22, frame.minX >= 0, frame.minX <= bounds.width, left <= right { return (clip.id, .start) }
+        if right <= 22, frame.maxX >= 0, frame.maxX <= bounds.width { return (clip.id, .end) }
+        return nil
+    }
+
     private func drawCaption(_ cue: ProjectTimelineSnapshot.Caption) {
         let frame = rect(start: cue.start, end: cue.end, y: TimelineGeometry.captionTop, height: TimelineGeometry.captionHeight)
         let selected = selectedCaptionID == cue.id
@@ -420,7 +476,10 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
         elements.append(playhead)
         var retainedKeys: Set<String> = ["playhead"]
         let range = visibleRange()
-        for clip in snapshot.visibleClips(range).prefix(32) where clip.end > range.lowerBound {
+        var accessibleClips = Array(snapshot.visibleClips(range).prefix(32).filter { $0.end > range.lowerBound })
+        if let hidden = snapshot.clips.first(where: { $0.id == selectedClipID && $0.end == $0.start }),
+           !accessibleClips.contains(where: { $0.id == hidden.id }) { accessibleClips.append(hidden) }
+        for clip in accessibleClips {
             let key = "clip-" + clip.id.uuidString
             let element = accessibleItem(key); retainedKeys.insert(key)
             element.accessibilityLabel = clip.title
@@ -429,6 +488,12 @@ final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
             element.accessibilityFrameInContainerSpace = rect(start: clip.start, end: clip.end,
                 y: TimelineGeometry.videoTop, height: TimelineGeometry.videoHeight).intersection(bounds)
             element.activate = { [weak self] in self?.onClip?(clip.id); return true }
+            element.accessibilityHint = "Select, then drag the clip's edge handles to trim or restore footage"
+            element.accessibilityCustomActions = [("Trim start later", ClipTrimEdge.start, 0.1),
+                ("Restore clip start", .start, -0.1), ("Trim end earlier", .end, -0.1), ("Restore clip end", .end, 0.1)].map { name, edge, delta in
+                    UIAccessibilityCustomAction(name: name) { [weak self] _ in self?.onClipTrimAction?(clip.id, edge, delta) ?? false }
+                }
+            if clip.end == clip.start { element.accessibilityFrameInContainerSpace = trimFrame(start: clip.start, end: clip.end).intersection(bounds) }
             elements.append(element)
         }
         if let music = snapshot.music, let interval = snapshot.musicPlayback {

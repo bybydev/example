@@ -22,6 +22,10 @@ final class EditorSession {
     private(set) var isChangingClips = false
     private(set) var isSavingCaptionStyle = false
     private(set) var isSavingMusic = false
+    private(set) var isSavingMedia = false
+    private(set) var isSavingClipTrim = false
+    private(set) var clipTrimPreview: TimelineClipTrimPreview?
+    var isEditingClipTrim: Bool { clipTrimPreview != nil || isSavingClipTrim }
     private(set) var isLoading = false
     private(set) var isSaving = false
     private(set) var isPreparingPreview = false
@@ -72,6 +76,7 @@ final class EditorSession {
         let urls: [UUID: URL]
         let edits: MediaEdits
         let clipMedia: [UUID: ClipMediaOverrides]
+        let clipTrims: [UUID: ClipSourceTrim]
         let music: ProjectMusic?
         let originalAudioMuted: Bool
     }
@@ -79,8 +84,8 @@ final class EditorSession {
     init(projectID: UUID, access: ProAccess, transcription: TranscriptionController) {
         self.projectID = projectID; self.access = access; self.transcription = transcription
     }
-    var isReadyToEdit: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle && !isSavingMusic }
-    var canChangeClips: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle && !isSavingMusic && !transcription.isActive(projectID) && !transcription.isAuthorizing }
+    var isReadyToEdit: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle && !isSavingMusic && !isSavingMedia && !isEditingClipTrim }
+    var canChangeClips: Bool { document != nil && !isChangingClips && !isSavingCaptionStyle && !isSavingMusic && !isSavingMedia && !isEditingClipTrim && !transcription.isActive(projectID) && !transcription.isAuthorizing }
     var timelineSourceURLs: [UUID: URL] { mediaURLs }
     var duration: MediaTime { document?.outputDuration ?? .zero }
     var presentation: CaptionPresentation? { snapshot?.evaluate(at: time) }
@@ -96,10 +101,11 @@ final class EditorSession {
     var selectedManualCaption: ManualCaption? { document?.manualCaptions?.first { $0.id == selectedCueID } }
     var currentClip: ProjectClip? {
         guard let document else { return nil }
-        let original = try? OutputTimeline(document).originalTime(forOutput: min(time, duration))
-        guard let original else { return nil }
-        return document.orderedClips.first { $0.timelineInterval.contains(original) } ??
-            (time == duration ? document.orderedClips.last : nil)
+        let timeline = OutputTimeline(document)
+        guard let original = try? timeline.originalTime(forOutput: min(time, duration)) else { return nil }
+        let visible = document.orderedClips.filter { timeline.outputInterval($0.timelineInterval) != nil }
+        if time == duration { return visible.last }
+        return visible.first { $0.timelineInterval.contains(original) }
     }
     var editingClipID: UUID? {
         if case .clip(let id) = workspace.settingsScope { return id }
@@ -110,14 +116,21 @@ final class EditorSession {
         guard let document else { return .standard }
         return editingClipID.map { document.mediaEdits(for: $0) } ?? document.effectiveMediaEdits
     }
-    func seekToClip(_ id: UUID) {
-        guard let document, let clip = document.clips.first(where: { $0.id == id }),
-              let interval = OutputTimeline(document).outputInterval(clip.timelineInterval) else { return }
+    /// Timeline selection reveals trim handles without moving the playhead.
+    func selectTimelineClip(_ id: UUID) {
+        guard !isEditingClipTrim, let document, document.clips.contains(where: { $0.id == id }) else { return }
         pause(); endTyping(); endStyleEditing(); endMediaEditing()
         workspace.timelineClipID = id
         workspace.timelineCueID = nil
         if editingClipID != nil { workspace.settingsScope = .clip(id) }
-        seek(to: interval.start)
+    }
+    func seekToClip(_ id: UUID) {
+        guard !isEditingClipTrim, let document, let clip = document.clips.first(where: { $0.id == id }) else { return }
+        let timeline = OutputTimeline(document)
+        let point = timeline.outputInterval(clip.timelineInterval)?.start ??
+            (try? timeline.outputTime(clampingOriginal: clip.timelineInterval.start)) ?? .zero
+        selectTimelineClip(id)
+        seek(to: point)
     }
     func selectSettingsScope(_ scope: EditorSettingsScope) {
         pause(); endTyping(); endStyleEditing(); endMediaEditing()
@@ -147,14 +160,21 @@ final class EditorSession {
 
     /// Call after an external result/relink; never throw away unsaved changes.
     func refreshSaved() async {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         await flush()
         guard !Task.isCancelled, isPresented, !hasPendingChanges else { return }
         await readSaved()
     }
 
+    /// Media adoption already schedules its graph refresh. Reconcile excluded
+    /// speech notifications afterward so an unchanged graph reuses that result.
+    func refreshAfterMediaEditing() async {
+        await mediaRefresh?.value
+        await refreshSaved()
+    }
+
     private func readSaved() async {
-        guard isPresented, !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard isPresented, !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         let generation = UUID()
         loadGeneration = generation
         let sequence = editSequence
@@ -221,7 +241,7 @@ final class EditorSession {
     }
 
     func setTitle(_ value: String) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard var next = document, next.title != value else { return }
         next.title = value
         stylingControl = nil; mediaControl = nil
@@ -233,7 +253,7 @@ final class EditorSession {
     /// without changing media identity, recognition checkpoints or the preview graph.
     @discardableResult
     func renameClip(_ id: UUID, to value: String?) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         guard var project = document, project.clips.contains(where: { $0.id == id }) else {
             commandError = "This clip is no longer available."
             return false
@@ -440,7 +460,7 @@ final class EditorSession {
 
     func setMediaPresentation(_ edits: MediaEdits, canvas: ProjectCanvas? = nil,
                               preset: CanvasPreset? = nil, coalescing control: MediaControl? = nil) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard var project = document else { return }
         let before = ProjectSettingsState(project)
         if let id = editingClipID {
@@ -484,7 +504,7 @@ final class EditorSession {
     /// Reset removes presence fields; it never copies defaults into the clip.
     /// Returning to already saved project defaults is permitted after Pro expires.
     func resetClipSettings(captions section: CaptionStyleReset? = nil, media: Bool = false, framing: Bool = false, volume: Bool = false, all: Bool = false) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard var project = document, let id = editingClipID else { return }
         let before = ProjectSettingsState(project)
         var settings = project.settings(for: id)
@@ -537,7 +557,7 @@ final class EditorSession {
     /// Save before adopting the draft: a failed Done leaves the live document and
     /// history untouched, so Cancel still discards every local style adjustment.
     func saveCaptionStyleDraft(_ draft: CaptionStyleDraft) async throws {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isLoading, !isPreparingPreview else { throw ClipGraphError.busy }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim, !isLoading, !isPreparingPreview else { throw ClipGraphError.busy }
         isSavingCaptionStyle = true
         defer { isSavingCaptionStyle = false }
         pause(); endTyping(); endStyleEditing(); endMediaEditing()
@@ -564,9 +584,127 @@ final class EditorSession {
         finishHistoryEdit(); rebuildSnapshot(); repairSelection()
     }
 
+    /// Commit all Media scopes together. Save failure leaves the draft local;
+    /// publication adopts one durable settings history entry and one preview refresh.
+    func saveMediaDraft(_ draft: MediaDraft) async throws {
+        try Task.checkCancellation()
+        guard !draft.isClosed else { throw CancellationError() }
+        guard isReadyToEdit else { throw ClipGraphError.busy }
+        isSavingMedia = true
+        var restorePreview = isLoading || isPreparingPreview
+        defer {
+            isSavingMedia = false
+            // If saving failed or was a no-op, restart any interrupted work
+            // against the unchanged document instead of leaving a busy preview.
+            if restorePreview, isPresented { refreshMediaPreview() }
+        }
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        mediaRefresh?.cancel(); mediaRefresh = nil
+        loadGeneration = UUID()
+        isLoading = false; isPreparingPreview = false
+        await flush()
+        guard !hasPendingChanges, let base = document, let savedBase else { throw CaptionEditError.unsavedChanges }
+        try Task.checkCancellation()
+        let proposed = try draft.applying(to: base)
+        let before = ProjectSettingsState(base)
+        guard ProjectSettingsState(proposed) != before else { return }
+        let originalTime = try OutputTimeline(base).originalTime(forOutput: min(time, base.outputDuration))
+        let nextTime = try OutputTimeline(proposed).outputTime(clampingOriginal: originalTime)
+        try Task.checkCancellation()
+        let saved = try await repository.commitEditorEdit(proposed, basedOn: savedBase)
+        // Do not cancel between durable publication and local adoption.
+        let selection = Selection(cue: selectedCueID, word: selectedWordID)
+        document = saved; self.savedBase = saved; committedRevision = saved.contentRevision
+        editSequence += 1; savedSequence = editSequence
+        hasPendingChanges = false; saveError = nil; commandError = nil
+        time = nextTime
+        editHistory.past.append(History(change: .settings(before: before, after: ProjectSettingsState(saved)),
+            selectionBefore: selection, selectionAfter: selection))
+        finishHistoryEdit(); rebuildSnapshot(); repairSelection()
+        restorePreview = false
+        refreshMediaPreview()
+    }
+
+    func beginClipTrim(_ id: UUID, edge: ClipTrimEdge) -> TimelineClipTrim? {
+        guard isReadyToEdit, let document,
+              let plan = try? TimelineClipTrim(clipID: id, edge: edge, document: document),
+              mediaURLs[plan.clip.sourceAssetID] != nil else { return nil }
+        pause(); endTyping(); endStyleEditing(); endMediaEditing()
+        workspace.timelineClipID = id
+        commandError = nil
+        let preview = TimelineClipTrimPreview(plan: plan, document: document, urls: mediaURLs) { [weak self] error in
+            self?.commandError = error
+        }
+        clipTrimPreview = preview
+        preview.update(plan.original)
+        return plan
+    }
+    func clipTrimIsCurrent(_ plan: TimelineClipTrim) -> Bool {
+        clipTrimPreview?.plan.id == plan.id && (document.map { plan.matches($0) } ?? false)
+    }
+    func previewClipTrim(_ plan: TimelineClipTrim, range: ClipSourceTrim) {
+        guard clipTrimIsCurrent(plan), !isSavingClipTrim else { return }
+        clipTrimPreview?.update(range)
+    }
+    func cancelClipTrim(_ plan: TimelineClipTrim) {
+        guard clipTrimPreview?.plan.id == plan.id, !isSavingClipTrim else { return }
+        clipTrimPreview?.close(); clipTrimPreview = nil
+        Task { await refreshSaved() }
+    }
+    func commitClipTrim(_ plan: TimelineClipTrim, range: ClipSourceTrim) {
+        guard clipTrimIsCurrent(plan), !isSavingClipTrim else { return }
+        isSavingClipTrim = true
+        Task {
+            var didSave = false
+            defer {
+                isSavingClipTrim = false
+                if didSave {
+                    // Keep the boundary frame until the real trimmed graph has
+                    // replaced the old player item, preventing an old-frame flash.
+                    Task {
+                        await mediaRefresh?.value
+                        if clipTrimPreview?.plan.id == plan.id { clipTrimPreview?.close(); clipTrimPreview = nil }
+                        await refreshSaved()
+                    }
+                } else {
+                    if clipTrimPreview?.plan.id == plan.id { clipTrimPreview?.close(); clipTrimPreview = nil }
+                    Task { await refreshAfterMediaEditing() }
+                }
+            }
+            do {
+                await flush()
+                guard clipTrimPreview?.plan.id == plan.id else { throw CancellationError() }
+                guard !hasPendingChanges, let base = document, let savedBase else { throw CaptionEditError.unsavedChanges }
+                let proposed = try plan.applying(range, to: base)
+                let before = ClipTrimState(base), after = ClipTrimState(proposed)
+                guard before != after else { return }
+                let point = try plan.projectPoint(range)
+                var nextTime = try OutputTimeline(proposed).outputTime(clampingOriginal: point)
+                if plan.edge == .end, let interval = range.interval {
+                    let step = CMTimeMinimum(CMTime(value: 1, timescale: 60_000), CMTimeMultiplyByFloat64(interval.duration, multiplier: 0.5))
+                    nextTime = try MediaTime(validating: CMTimeMaximum(.zero, CMTimeSubtract(nextTime.cmTime, step)))
+                }
+                try Task.checkCancellation()
+                let saved = try await repository.commitEditorEdit(proposed, basedOn: savedBase)
+                let selection = Selection(cue: selectedCueID, word: selectedWordID)
+                document = saved; self.savedBase = saved; committedRevision = saved.contentRevision
+                editSequence += 1; savedSequence = editSequence
+                hasPendingChanges = false; saveError = nil; commandError = nil
+                time = nextTime
+                editHistory.past.append(History(change: .clipTrim(before: before, after: ClipTrimState(saved)),
+                    selectionBefore: selection, selectionAfter: selection))
+                finishHistoryEdit(); rebuildSnapshot(); repairSelection()
+                didSave = true
+                refreshMediaPreview()
+            } catch is CancellationError {
+                // Teardown before admission does not publish the gesture.
+            } catch { commandError = error.localizedDescription }
+        }
+    }
+
     /// Project-wide appearance/placement; media scope never selects caption scope.
     func setCaptionStyle(_ value: CaptionStyle, coalescing control: CaptionStyleControl? = nil) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         var style = value
         if style.formatVersion == 1 && (style.hasExtendedValues || [.condensed, .rounded].contains(style.font) ||
             [.emphasis, .underline, .rise].contains(style.effect)) { style.formatVersion = 2 }
@@ -582,7 +720,7 @@ final class EditorSession {
 
     @discardableResult
     func editText(wordID: UUID, value: String) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         if let caption = document?.manualCaptions?.first(where: { $0.id == wordID }) {
             return editManualText(caption, value: value)
         }
@@ -594,7 +732,7 @@ final class EditorSession {
 
     @discardableResult
     func editCueText(cueID: UUID, value: String) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         if let caption = document?.manualCaptions?.first(where: { $0.id == cueID }) {
             return editManualText(caption, value: value)
         }
@@ -605,7 +743,7 @@ final class EditorSession {
     }
 
     func beginTimelineTiming(cueID: UUID, operation: TimelineTimingOperation) -> TimelineCaptionTiming? {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return nil }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return nil }
         guard let project = document else { return nil }
         do {
             let edit = try TimelineCaptionTiming(cueID: cueID, operation: operation, project: project)
@@ -622,7 +760,7 @@ final class EditorSession {
     }
     @discardableResult
     func commitTimelineTiming(_ edit: TimelineCaptionTiming, interval: MediaInterval) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         guard let project = document else { return false }
         do {
             guard edit.matches(project), selectedCueID == edit.cueID,
@@ -642,7 +780,7 @@ final class EditorSession {
     }
 
     func retimeCue(_ interval: MediaInterval) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedCueID else { return }
         perform { state, project in
@@ -651,7 +789,7 @@ final class EditorSession {
         }
     }
     func retimeWord(_ interval: MediaInterval) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         if let manual = selectedManualCaption { retimeManual(manual, to: interval); return }
         guard let id = selectedWordID else { return }
         perform { state, project in
@@ -660,12 +798,12 @@ final class EditorSession {
         }
     }
     func split() {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard let cue = selectedCueID, let word = selectedWordID else { return }
         perform { state, _ in try CaptionEdits.split(cueID: cue, before: word, in: &state) }
     }
     func mergeNext() {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard let id = selectedCueID else { return }
         guard canMergeNext else { commandError = CaptionEditError.mergeBoundary.localizedDescription; return }
         perform { state, _ in try CaptionEdits.mergeNext(cueID: id, in: &state); return nil }
@@ -673,7 +811,7 @@ final class EditorSession {
 
     @discardableResult
     func addManualCaption(text: String, clipID: UUID, interval: MediaInterval) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { commandError = ManualCaptionError.emptyText.localizedDescription; return false }
         guard (document?.manualCaptions?.count ?? 0) < 10_000 else {
@@ -684,7 +822,7 @@ final class EditorSession {
     }
 
     func deleteManualCaption(_ id: UUID) {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return }
         guard let caption = document?.manualCaptions?.first(where: { $0.id == id }) else { return }
         _ = performManual(ManualCaptionPatch(id: id, before: caption, after: nil))
     }
@@ -700,7 +838,7 @@ final class EditorSession {
 
     @discardableResult
     private func performManual(_ patch: ManualCaptionPatch, coalescingText: Bool = false) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         guard let project = document else { return false }
         guard patch.before != patch.after else { commandError = nil; return true }
         do {
@@ -728,7 +866,7 @@ final class EditorSession {
     @discardableResult
     private func perform(coalescing wordID: UUID? = nil,
                          _ edit: (inout CaptionEditState, ProjectDocument) throws -> UUID?) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { return false }
         guard var project = document, let result = project.recognition else { return false }
         pause()
         stylingControl = nil
@@ -807,7 +945,7 @@ final class EditorSession {
         updateHistoryFlags()
     }
     private func historyAdmitted(_ entry: History?) -> Bool {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, let entry else { return false }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim, let entry else { return false }
         if case .clips = entry.change { return canChangeClips }
         return true
     }
@@ -871,7 +1009,7 @@ final class EditorSession {
     }
     /// Later style/export adapters freeze this value only after the latest changes are saved.
     func savedDocument() async throws -> ProjectDocument {
-        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic else { throw ClipGraphError.busy }
+        guard !isChangingClips, !isSavingCaptionStyle, !isSavingMusic, !isSavingMedia, !isEditingClipTrim else { throw ClipGraphError.busy }
         await flush()
         guard !hasPendingChanges else { throw CaptionEditError.unsavedChanges }
         guard let document else { throw ProjectStoreError.missingProject(projectID) }
@@ -944,6 +1082,7 @@ final class EditorSession {
     private func preparePreview(document: ProjectDocument, urls: [UUID: URL], generation: UUID) async {
         let key = MediaKey(clips: document.clips, canvas: document.canvas, urls: urls,
             edits: document.effectiveMediaEdits, clipMedia: Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) }),
+            clipTrims: Dictionary(uniqueKeysWithValues: (document.clipSettings ?? []).compactMap { value in value.sourceTrim.map { (value.id, $0) } }),
             music: document.music, originalAudioMuted: document.isOriginalAudioMuted)
         guard key != preparedMedia else {
             if loadGeneration == generation { isPreparingPreview = false }
@@ -1062,6 +1201,7 @@ final class EditorSession {
     /// Invalidate editor-owned work immediately. Never touches the processing
     /// coordinator, transcription engine, export jobs, saves or project storage.
     func cancelPreparation() {
+        clipTrimPreview?.close(); clipTrimPreview = nil
         mediaRefresh?.cancel(); mediaRefresh = nil
         loadGeneration = UUID()
         isPreparingPreview = false
@@ -1086,5 +1226,3 @@ final class EditorSession {
         previewGeneration = UUID()
     }
 }
-
-

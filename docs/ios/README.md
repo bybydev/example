@@ -1,5 +1,22 @@
 # Inkribe iOS — start here
 
+2026-10-31. Current work is [timeline clip trimming](phases/CLIP_TRIMMING.md),
+stacked on PR #55 at 381b0d2b and targeting feat/ios-media-form. Timeline edge
+handles are the only trimming UI; the existing main preview auditions boundaries.
+One saved Undo edit closes excluded time without moving native clip/caption data.
+Media has no trim controls. Schema 13 reads 1–12, including old project trim windows;
+frozen exports remain independent. See [source handoff](handoffs/CLIP_TRIMMING.md).
+Source-only; compilation/native/UI acceptance unverified. Leave both PRs open.
+
+2026-10-31. [Media Form pass 2](phases/MEDIA_FORM.md) completes the two source
+passes in PR #55, extending bb0d1b11. Scope/reset/save/history/reopen and shared
+preview/export review preserves the approved Form. Scoped fixes cancel a closed
+sheet's unpublished save, remove preview-preparation waiting from Done, recover
+interrupted preview work, rewrite clip settings with one sort and reconcile speech
+progress on dismissal. See [review matrix](handoffs/MEDIA_FORM.md). Compilation/
+native/UI acceptance is unverified; keep open without auto-merge. Earlier Media
+preview/default wording is historical where superseded by this scope.
+
 2026-10-31. [Music integration pass 3](phases/MUSIC_LAYER.md) completes the three
 source passes in PR #54, extending 73a2323c. Review covers file/history/lifecycle,
 duration/mute behavior and frozen outputs; scoped fixes harden actual-sheet draft
@@ -113,4 +130,3 @@ Source-only: no builds/typechecks/tests/fixtures, CI, generation/models, native
 processing/exports, UI/device/accessibility execution or deployment. Source
 completion is not production validation. [Readiness](PRODUCTION_READINESS.md)
 retains the unverified runtime/release gates.
-

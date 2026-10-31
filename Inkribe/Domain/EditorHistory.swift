@@ -13,9 +13,11 @@ enum EditorHistoryChange: Sendable {
     case manual(ManualCaptionPatch)
     case settings(before: ProjectSettingsState, after: ProjectSettingsState)
     case music(before: ProjectMusic?, after: ProjectMusic?)
+    case clipTrim(before: ClipTrimState, after: ClipTrimState)
 
     var actionName: String {
         switch self {
+        case .clipTrim: return "trim clip"
         case .clips(let before, let after):
             if before.clips.count < after.clips.count { return "add clips" }
             if before.clips.count > after.clips.count { return "remove clip" }
@@ -29,6 +31,7 @@ enum EditorHistoryChange: Sendable {
     }
 
     var changesMedia: Bool {
+        if case .clipTrim = self { return true }
         if case .clips = self { return true }
         if case .music = self { return true }
         if case .settings(let before, let after) = self { return after.changesMedia(from: before) }
@@ -40,6 +43,9 @@ enum EditorHistoryChange: Sendable {
     func applying(to document: ProjectDocument, forward: Bool) throws -> ProjectDocument {
         var project = document
         switch self {
+        case .clipTrim(let before, let after):
+            guard ClipTrimState(project) == (forward ? before : after) else { throw ClipTrimError.changed }
+            project = (forward ? after : before).applying(to: project)
         case .clips(let before, let after):
             guard ClipGraphState(project) == (forward ? before : after) else { throw ClipGraphError.stale }
             project = (forward ? after : before).applying(to: project)
@@ -63,6 +69,7 @@ enum EditorHistoryChange: Sendable {
 
     var estimatedBytes: Int {
         switch self {
+        case .clipTrim(let before, let after): (before.clips.count + after.clips.count) * 512 + (before.trims.count + after.trims.count) * 128
         case .clips(let before, let after): before.estimatedBytes + after.estimatedBytes
         case .caption(let patch): patch.estimatedBytes
         case .manual(let patch): patch.estimatedBytes

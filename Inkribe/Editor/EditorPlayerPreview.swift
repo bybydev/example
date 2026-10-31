@@ -32,6 +32,10 @@ struct EditorPlayerPreview: View {
             if EditorPreparationPresentation.showsLoadingIndicators && session.isPreparingPreview {
                 ProgressView().tint(.white).accessibilityLabel("Preparing preview")
             }
+            if let preview = session.clipTrimPreview, preview.frame.time != nil {
+                CaptionStillPreview(frame: preview.frame, snapshot: preview.snapshot,
+                    audioOnly: preview.audioOnly, showsLoadingIndicator: false)
+            }
         }
     }
 }

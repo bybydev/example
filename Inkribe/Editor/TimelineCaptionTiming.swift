@@ -23,6 +23,7 @@ struct TimelineCaptionTiming: Sendable {
     let original: MediaInterval
     let outputStart: MediaTime
     let outputEnd: MediaTime
+    private let outputMap: OutputTimeline
     let retainedClip: MediaInterval
     let nativeCue: CaptionCue?
     let words: [CaptionWord]
@@ -42,13 +43,13 @@ struct TimelineCaptionTiming: Sendable {
               let clip = project.clips.first(where: { $0.id == clipID }) else { throw CaptionEditError.missingCaption }
         original = interval; self.clip = clip
         let timeline = OutputTimeline(project)
-        outputStart = timeline.start; outputEnd = timeline.end
+        outputStart = timeline.start; outputEnd = timeline.end; outputMap = timeline
         guard let retained = timeline.retained(clip.timelineInterval), timeline.outputInterval(interval) != nil else {
             throw CaptionEditError.invalidTiming
         }
         retainedClip = retained
-        if operation == .start, interval.start < timeline.start { throw TimelineTimingError.clippedEdge }
-        if operation == .end, interval.end > timeline.end { throw TimelineTimingError.clippedEdge }
+        if operation == .start, interval.start < retained.start { throw TimelineTimingError.clippedEdge }
+        if operation == .end, interval.end > retained.end { throw TimelineTimingError.clippedEdge }
         let duration = CMTimeGetSeconds(interval.duration)
         let shortestWord = words.map { CMTimeGetSeconds($0.projectInterval.duration) }.min() ?? duration
         // Leave at least two rational ticks per scaled word. Final native/project
@@ -70,7 +71,7 @@ struct TimelineCaptionTiming: Sendable {
     func matches(_ project: ProjectDocument) -> Bool {
         let timeline = OutputTimeline(project)
         guard project.clips.first(where: { $0.id == clip.id }) == clip,
-              timeline.start == outputStart, timeline.end == outputEnd else { return false }
+              timeline == outputMap else { return false }
         if let manual { return project.manualCaptions?.first { $0.id == cueID } == manual }
         guard let nativeCue, project.recognition?.cues.first(where: { $0.id == cueID }) == nativeCue else { return false }
         let ids = Set(nativeCue.wordIDs)
@@ -105,10 +106,7 @@ struct TimelineCaptionTiming: Sendable {
         }
     }
     func outputInterval(_ interval: MediaInterval) -> MediaInterval? {
-        let start = max(outputStart, interval.start), end = min(outputEnd, interval.end)
-        guard start < end else { return nil }
-        return try? MediaInterval(start: MediaTime(validating: CMTimeSubtract(start.cmTime, outputStart.cmTime)),
-            end: MediaTime(validating: CMTimeSubtract(end.cmTime, outputStart.cmTime)))
+        outputMap.outputInterval(interval)
     }
     func allows(_ interval: MediaInterval) -> Bool {
         !blockers.contains { ManualCaption.overlaps($0, interval) }

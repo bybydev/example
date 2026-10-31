@@ -52,36 +52,91 @@ enum MediaEditError: LocalizedError {
     var errorDescription: String? { "Use a positive trim range inside the original project, a supported crop, and volume from 0 to 100%." }
 }
 
-/// One rational source-project/output map for media, captions, SRT and seeking.
-struct OutputTimeline: Sendable {
+/// One piecewise rational map for preview, captions, SRT, frames and seeking.
+/// Remove trimmed clip portions, closing their gaps while retaining any genuine
+/// pre-existing timeline gaps and the old project's output window.
+struct OutputTimeline: Sendable, Equatable {
+    struct Segment: Sendable, Equatable {
+        let original: MediaInterval
+        let output: MediaInterval
+    }
     let start: MediaTime
     let end: MediaTime
-    var duration: MediaTime { (try? MediaTime(validating: CMTimeSubtract(end.cmTime, start.cmTime))) ?? .zero }
+    let segments: [Segment]
+    let duration: MediaTime
 
     init(_ document: ProjectDocument) {
         start = document.mediaEdits?.trim?.start ?? .zero
         end = document.mediaEdits?.trim?.end ?? document.sourceDuration
+        let settings = Dictionary((document.clipSettings ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var removed: [MediaInterval] = []
+        for clip in document.orderedClips {
+            guard let trim = settings[clip.id]?.sourceTrim else { continue }
+            let a = CMTimeAdd(clip.timelineInterval.start.cmTime, CMTimeSubtract(trim.start.cmTime, clip.sourceInterval.start.cmTime))
+            let b = CMTimeAdd(clip.timelineInterval.start.cmTime, CMTimeSubtract(trim.end.cmTime, clip.sourceInterval.start.cmTime))
+            if let range = try? MediaInterval(start: clip.timelineInterval.start, end: MediaTime(validating: a)) { removed.append(range) }
+            if let range = try? MediaInterval(start: MediaTime(validating: b), end: clip.timelineInterval.end) { removed.append(range) }
+        }
+        var cursor = start, output = MediaTime.zero
+        var result: [Segment] = []
+        var invalid = false
+        func append(_ a: MediaTime, _ b: MediaTime) {
+            guard let original = try? MediaInterval(start: a, end: b),
+                  let next = try? MediaTime(validating: CMTimeAdd(output.cmTime, original.duration)),
+                  let mapped = try? MediaInterval(start: output, end: next) else { invalid = true; return }
+            result.append(Segment(original: original, output: mapped)); output = next
+        }
+        for range in removed.sorted(by: { $0.start < $1.start }) where range.end > start && range.start < end {
+            let a = max(start, range.start), b = min(end, range.end)
+            if cursor < a { append(cursor, a) }
+            cursor = max(cursor, b)
+        }
+        if cursor < end { append(cursor, end) }
+        segments = invalid ? [] : result; duration = invalid ? .zero : output
     }
 
+    private func firstEnding(after value: MediaTime, output: Bool = false) -> Int {
+        var low = 0, high = segments.count
+        while low < high {
+            let mid = (low + high) / 2
+            let end = output ? segments[mid].output.end : segments[mid].original.end
+            if end <= value { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+    /// Clip/caption intervals are contiguous within one retained clip. A larger
+    /// interval returns the bounding retained source range; output mapping removes
+    /// any excluded portions between those bounds.
     func retained(_ interval: MediaInterval) -> MediaInterval? {
-        let a = max(start, interval.start)
-        let b = min(end, interval.end)
-        guard a < b else { return nil }
-        return try? MediaInterval(start: a, end: b)
+        let first = firstEnding(after: interval.start)
+        guard first < segments.count, segments[first].original.start < interval.end else { return nil }
+        var low = first, high = segments.count
+        while low < high {
+            let mid = (low + high) / 2
+            if segments[mid].original.start < interval.end { low = mid + 1 } else { high = mid }
+        }
+        return try? MediaInterval(start: max(interval.start, segments[first].original.start),
+            end: min(interval.end, segments[low - 1].original.end))
     }
-
     func outputInterval(_ original: MediaInterval) -> MediaInterval? {
         guard let kept = retained(original) else { return nil }
-        return try? MediaInterval(start: MediaTime(validating: CMTimeSubtract(kept.start.cmTime, start.cmTime)),
-                                 end: MediaTime(validating: CMTimeSubtract(kept.end.cmTime, start.cmTime)))
+        return try? MediaInterval(start: outputTime(clampingOriginal: kept.start), end: outputTime(clampingOriginal: kept.end))
     }
-
-    func originalTime(forOutput time: MediaTime) throws -> MediaTime {
-        guard time <= duration else { throw MediaEditError.invalidSettings }
-        return try MediaTime(validating: CMTimeAdd(start.cmTime, time.cmTime))
+    func originalTime(forOutput time: MediaTime, precedingBoundary: Bool = false) throws -> MediaTime {
+        guard time <= duration, !segments.isEmpty else { throw MediaEditError.invalidSettings }
+        var i = firstEnding(after: time, output: true)
+        if precedingBoundary, i > 0, segments[i - 1].output.end == time { return segments[i - 1].original.end }
+        if i == segments.count { i -= 1 }
+        let segment = segments[i]
+        return try MediaTime(validating: CMTimeAdd(segment.original.start.cmTime,
+            CMTimeSubtract(min(time, segment.output.end).cmTime, segment.output.start.cmTime)))
     }
     func outputTime(clampingOriginal time: MediaTime) throws -> MediaTime {
-        try MediaTime(validating: CMTimeSubtract(min(end, max(start, time)).cmTime, start.cmTime))
+        let i = firstEnding(after: time)
+        guard i < segments.count else { return duration }
+        let segment = segments[i]
+        return try MediaTime(validating: CMTimeAdd(segment.output.start.cmTime,
+            CMTimeSubtract(max(time, segment.original.start).cmTime, segment.original.start.cmTime)))
     }
 }
 

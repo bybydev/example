@@ -26,6 +26,13 @@ struct ProjectTimelineView: UIViewRepresentable {
         view.onTimingBegin = { [weak session] in session?.beginTimelineTiming(cueID: $0, operation: $1) }
         view.onTimingCurrent = { [weak session] in session?.timelineTimingIsCurrent($0) ?? false }
         view.onTimingCommit = { [weak session] in session?.commitTimelineTiming($0, interval: $1) ?? false }
+        view.onClipTrimBegin = { [weak session] in session?.beginClipTrim($0, edge: $1) }
+        view.onClipTrimCurrent = { [weak session] in session?.clipTrimIsCurrent($0) ?? false }
+        view.onClipTrimPreview = { [weak session] in session?.previewClipTrim($0, range: $1) }
+        view.onClipTrimEnd = { [weak session] plan, range in
+            if let range { session?.commitClipTrim(plan, range: range) }
+            else { session?.cancelClipTrim(plan) }
+        }
         view.update(snapshot: session.timelineSnapshot, urls: session.timelineSourceURLs,
             seconds: EditorTime.seconds(session.time), playing: session.isPlaying, scale: session.workspace.timelineScale,
             selectedCaption: session.workspace.timelineCueID, selectedClip: session.workspace.timelineClipID,
@@ -70,6 +77,13 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     var onTimingBegin: ((UUID, TimelineTimingOperation) -> TimelineCaptionTiming?)?
     var onTimingCurrent: ((TimelineCaptionTiming) -> Bool)?
     var onTimingCommit: ((TimelineCaptionTiming, MediaInterval) -> Bool)?
+    var onClipTrimBegin: ((UUID, ClipTrimEdge) -> TimelineClipTrim?)?
+    var onClipTrimCurrent: ((TimelineClipTrim) -> Bool)?
+    var onClipTrimPreview: ((TimelineClipTrim, ClipSourceTrim) -> Void)?
+    var onClipTrimEnd: ((TimelineClipTrim, ClipSourceTrim?) -> Void)?
+    private var clipPan: UIPanGestureRecognizer?
+    private var pendingClipHit: (UUID, ClipTrimEdge)?
+    private var clipGesture: ActiveClipTrim?
     private var timingPan: UIPanGestureRecognizer?
     private var timingHold: UILongPressGestureRecognizer?
     private var pinchRecognizer: UIPinchGestureRecognizer?
@@ -137,6 +151,12 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         addGestureRecognizer(pan); timingPan = pan
         scroll.panGestureRecognizer.require(toFail: pan)
         canvas.requireTapFailure(of: pan)
+        let clip = UIPanGestureRecognizer(target: self, action: #selector(clipPanned(_:)))
+        clip.maximumNumberOfTouches = 1; clip.delegate = self
+        addGestureRecognizer(clip); clipPan = clip
+        scroll.panGestureRecognizer.require(toFail: clip)
+        canvas.requireTapFailure(of: clip)
+        canvas.onClipTrimAction = { [weak self] in self?.accessibleClipTrim(id: $0, edge: $1, delta: $2) ?? false }
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(timingHeld(_:)))
         hold.minimumPressDuration = 0.3; hold.allowableMovement = 12; hold.delegate = self
         addGestureRecognizer(hold); timingHold = hold
@@ -144,7 +164,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         canvas.onTimingAction = { [weak self] in self?.accessibleTiming(cueID: $0, operation: $1, delta: $2) ?? false }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    private var userIsScrolling: Bool { scroll.isDragging || scroll.isDecelerating || pinching || timingGesture != nil }
+    private var userIsScrolling: Bool { scroll.isDragging || scroll.isDecelerating || pinching || timingGesture != nil || clipGesture != nil }
 
     func update(snapshot: ProjectTimelineSnapshot?, urls: [UUID: URL], seconds: Double, playing: Bool, scale: Double,
                 selectedCaption: UUID?, selectedClip: UUID?, accent: UIColor, enabled: Bool) {
@@ -153,6 +173,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         let selectionChanged = canvas.selectedCaptionID != selectedCaption || canvas.selectedClipID != selectedClip
         self.snapshot = snapshot; self.seconds = seconds; self.enabled = enabled
         if !enabled || (playing && !wasPlaying) {
+            finishClipTrim(commit: false)
             finishTiming(commit: false)
             stopUserScrolling()
         }
@@ -160,6 +181,11 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
            (onTimingCurrent?(edit.plan) != true || selectedCaption != edit.plan.cueID) {
             finishTiming(commit: false)
             canvas.timingMessage = "Caption changed; try again"
+        }
+        if let edit = clipGesture, changed || selectionChanged,
+           (onClipTrimCurrent?(edit.plan) != true || selectedClip != edit.plan.clip.id) {
+            finishClipTrim(commit: false)
+            canvas.timingMessage = "Clip changed; try again"
         }
         wasPlaying = playing
         isUserInteractionEnabled = enabled
@@ -172,7 +198,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
             cancelPendingSeek()
             if scroll.isDecelerating { stopUserScrolling() }
         }
-        if !pinching && timingGesture == nil { self.scale = clampedScale(scale) }
+        if !pinching && timingGesture == nil && clipGesture == nil { self.scale = clampedScale(scale) }
         updateGeometry()
         if !userIsScrolling { setOffset(seconds * self.scale) }
         refreshViewport()
@@ -180,7 +206,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     override func layoutSubviews() {
         super.layoutSubviews()
         let resized = previousSize != bounds.size
-        if resized { finishTiming(commit: false); stopUserScrolling() }
+        if resized { finishClipTrim(commit: false); finishTiming(commit: false); stopUserScrolling() }
         updatingOffset = true
         scroll.frame = bounds
         playhead.frame = CGRect(x: bounds.midX - 1, y: 0, width: 2,
@@ -198,7 +224,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     override func didMoveToWindow() {
         super.didMoveToWindow()
         thumbnailWindow = nil
-        if window == nil { finishTiming(commit: false); cancelPendingSeek() }
+        if window == nil { finishClipTrim(commit: false); finishTiming(commit: false); cancelPendingSeek() }
         refreshViewport()
     }
     private func clampedScale(_ value: Double) -> Double {
@@ -318,7 +344,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         seekTask?.cancel(); seekTask = nil; pendingSeek = nil; seekToken = UUID()
     }
     @objc private func pinched(_ pinch: UIPinchGestureRecognizer) {
-        guard snapshot != nil, timingGesture == nil else { return }
+        guard snapshot != nil, timingGesture == nil, clipGesture == nil else { return }
         let location = Double(pinch.location(in: self).x)
         switch pinch.state {
         case .began:
@@ -356,7 +382,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
             (otherGestureRecognizer is UIPinchGestureRecognizer && gestureRecognizer === scroll.panGestureRecognizer)
     }
     private func zoom(by factor: Double) {
-        guard enabled, timingGesture == nil else { return }
+        guard enabled, timingGesture == nil, clipGesture == nil else { return }
         stopUserScrolling()
         onInteraction?()
         let time = centerTime
@@ -369,16 +395,21 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     // UIView already owns this Objective-C selector. Override it in the class
     // body rather than redeclaring a delegate witness in a Swift extension.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === clipPan, let pan = clipPan {
+            let delta = pan.translation(in: self)
+            return enabled && clipGesture == nil && timingGesture == nil && !pinching && pendingClipHit != nil && abs(delta.x) > abs(delta.y)
+        }
         if gestureRecognizer === timingPan, let pan = timingPan {
             let delta = pan.translation(in: self)
-            return enabled && timingGesture == nil && !pinching && pendingTimingHit != nil && abs(delta.x) > abs(delta.y)
+            return enabled && clipGesture == nil && timingGesture == nil && !pinching && pendingTimingHit != nil && abs(delta.x) > abs(delta.y)
         }
-        if gestureRecognizer === timingHold { return enabled && timingGesture == nil && !pinching && pendingHoldCue != nil }
-        return timingGesture == nil && super.gestureRecognizerShouldBegin(gestureRecognizer)
+        if gestureRecognizer === timingHold { return enabled && clipGesture == nil && timingGesture == nil && !pinching && pendingHoldCue != nil }
+        return clipGesture == nil && timingGesture == nil && super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 
     func stop() {
         enabled = false
+        finishClipTrim(commit: false)
         finishTiming(commit: false)
         cancelPendingSeek()
         scroll.delegate = nil
@@ -389,9 +420,20 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         onInteraction = nil; onCaption = nil; onClip = nil; onSeek = nil; onScale = nil
         canvas.onCaption = nil; canvas.onClip = nil; canvas.onSeek = nil; canvas.onZoom = nil; canvas.onTimingAction = nil
         onTimingBegin = nil; onTimingCurrent = nil; onTimingCommit = nil
+        onClipTrimBegin = nil; onClipTrimCurrent = nil; onClipTrimPreview = nil; onClipTrimEnd = nil
+        canvas.onClipTrimAction = nil
     }
 }
 
+
+private struct ActiveClipTrim {
+    let plan: TimelineClipTrim
+    let initialX: Double
+    let initialOffset: Double
+    var touchX: Double
+    var extraDelta = 0.0
+    var proposed: ClipSourceTrim
+}
 
 private struct ActiveTimelineTiming {
     let plan: TimelineCaptionTiming
@@ -410,6 +452,11 @@ extension TimelineViewport {
             if view is UIControl { return false }
             touchedView = view.superview
         }
+        if clipGesture != nil { finishClipTrim(commit: false); return false }
+        if gestureRecognizer === clipPan {
+            pendingClipHit = enabled && !pinching && timingGesture == nil ? canvas.clipTrimHit(at: touch.location(in: canvas)) : nil
+            return pendingClipHit != nil
+        }
         if timingGesture != nil {
             // A second finger must not turn a held caption into a centroid jump.
             finishTiming(commit: false, restorePlayhead: true)
@@ -423,8 +470,78 @@ extension TimelineViewport {
             pendingHoldCue = enabled && !pinching ? canvas.captionHit(at: touch.location(in: canvas)) : nil
             return pendingHoldCue != nil
         }
-        return timingGesture == nil
+        return timingGesture == nil && clipGesture == nil
     }
+    @objc private func clipPanned(_ pan: UIPanGestureRecognizer) {
+        switch pan.state {
+        case .began:
+            guard let (id, edge) = pendingClipHit, clipGesture == nil, timingGesture == nil else { return }
+            stopUserScrolling(); onInteraction?()
+            guard let plan = onClipTrimBegin?(id, edge) else { return }
+            let point = pan.location(in: self)
+            clipGesture = ActiveClipTrim(plan: plan, initialX: Double(point.x - pan.translation(in: self).x),
+                initialOffset: Double(scroll.contentOffset.x), touchX: Double(point.x), proposed: plan.original)
+            scroll.isScrollEnabled = false; pinchRecognizer?.isEnabled = false
+            canvas.timingMessage = nil
+            let target = TimelineTimingDisplayTarget(viewport: self)
+            let link = CADisplayLink(target: target, selector: #selector(TimelineTimingDisplayTarget.tick(_:)))
+            timingLink = link; timingTick = 0; link.add(to: .main, forMode: .common)
+            updateClipTrim(touchX: Double(point.x))
+        case .changed: updateClipTrim(touchX: Double(pan.location(in: self).x))
+        case .ended:
+            updateClipTrim(touchX: Double(pan.location(in: self).x)); finishClipTrim(commit: true)
+        case .cancelled, .failed: finishClipTrim(commit: false)
+        default: break
+        }
+    }
+    private func updateClipTrim(touchX: Double) {
+        guard var edit = clipGesture else { return }
+        edit.touchX = touchX
+        let delta = (touchX - edit.initialX + Double(scroll.contentOffset.x) - edit.initialOffset) / scale + edit.extraDelta
+        guard let range = try? edit.plan.proposal(delta: delta) else { return }
+        edit.proposed = range; clipGesture = edit
+        let left = EditorTime.seconds(range.start) - EditorTime.seconds(edit.plan.original.start)
+        let right = EditorTime.seconds(range.end) - EditorTime.seconds(edit.plan.original.end)
+        canvas.clipTrimPreview = TimelineClipTrimDrawing(clipID: edit.plan.clip.id,
+            start: edit.plan.outputStart + left, end: edit.plan.outputEnd + right, range: range)
+        onClipTrimPreview?(edit.plan, range)
+        canvas.setNeedsDisplay()
+    }
+    private func clipDisplayTick(_ link: CADisplayLink) {
+        guard var edit = clipGesture, enabled, window != nil else { return }
+        let elapsed = timingTick == 0 ? 0 : min(1.0 / 15, link.timestamp - timingTick)
+        timingTick = link.timestamp
+        let margin = 40.0, width = Double(bounds.width)
+        let edge = edit.touchX < margin ? max(-1, (edit.touchX - margin) / margin) :
+            edit.touchX > width - margin ? min(1, (edit.touchX - width + margin) / margin) : 0
+        guard edge != 0, elapsed > 0 else { return }
+        let delta = (edit.touchX - edit.initialX + Double(scroll.contentOffset.x) - edit.initialOffset) / scale + edit.extraDelta
+        guard let farther = try? edit.plan.proposal(delta: delta + edge * max(1 / scale, 1 / edit.plan.frameRate)), farther != edit.proposed else { return }
+        let before = Double(scroll.contentOffset.x), desired = edge * 160 * elapsed
+        setOffset(before + desired)
+        edit.extraDelta += (desired - (Double(scroll.contentOffset.x) - before)) / scale
+        clipGesture = edit
+        refreshViewport(); updateClipTrim(touchX: edit.touchX)
+    }
+    private func finishClipTrim(commit: Bool) {
+        guard let edit = clipGesture else { return }
+        clipGesture = nil; pendingClipHit = nil; canvas.clipTrimPreview = nil
+        timingLink?.invalidate(); timingLink = nil; timingTick = 0
+        scroll.isScrollEnabled = true; pinchRecognizer?.isEnabled = true
+        cancelPendingSeek()
+        onClipTrimEnd?(edit.plan, commit && enabled ? edit.proposed : nil)
+        accessibilityDirty = true; refreshViewport()
+    }
+    private func accessibleClipTrim(id: UUID, edge: ClipTrimEdge, delta: Double) -> Bool {
+        guard enabled, timingGesture == nil, clipGesture == nil else { return false }
+        stopUserScrolling(); onInteraction?()
+        guard let plan = onClipTrimBegin?(id, edge) else { return false }
+        guard let range = try? plan.proposal(delta: delta), range != plan.original else {
+            onClipTrimEnd?(plan, nil); return false
+        }
+        onClipTrimEnd?(plan, range); return true
+    }
+
     @objc private func timingPanned(_ pan: UIPanGestureRecognizer) {
         guard pan.state == .began || timingOwner === pan else { return }
         switch pan.state {
@@ -456,7 +573,7 @@ extension TimelineViewport {
         }
     }
     private func beginTiming(cueID: UUID, operation: TimelineTimingOperation, owner: UIGestureRecognizer, initialX: Double, currentX: Double) {
-        guard enabled, timingGesture == nil,
+        guard enabled, timingGesture == nil, clipGesture == nil,
               let caption = snapshot?.captions.first(where: { $0.id == cueID }) else { return }
         stopUserScrolling(); onInteraction?()
         guard let plan = onTimingBegin?(cueID, operation) else { return }
@@ -487,6 +604,7 @@ extension TimelineViewport {
         return operation == .end ? max(start, end - min(0.001, (end - start) / 2)) : start + min(0.001, (end - start) / 2)
     }
     fileprivate func timingDisplayTick(_ link: CADisplayLink) {
+        if clipGesture != nil { clipDisplayTick(link); return }
         guard let edit = timingGesture, enabled, window != nil else { return }
         let elapsed = timingTick == 0 ? 0 : min(1.0 / 15, link.timestamp - timingTick)
         timingTick = link.timestamp
@@ -522,7 +640,7 @@ extension TimelineViewport {
         accessibilityDirty = true; refreshViewport()
     }
     private func accessibleTiming(cueID: UUID, operation: TimelineTimingOperation, delta: Double) -> Bool {
-        guard enabled, timingGesture == nil else { return false }
+        guard enabled, timingGesture == nil, clipGesture == nil else { return false }
         stopUserScrolling(); onInteraction?()
         guard let edit = onTimingBegin?(cueID, operation), let interval = try? edit.proposal(delta: delta),
               onTimingCommit?(edit, interval) == true else { return false }

@@ -35,7 +35,10 @@ struct ClipSettings: Codable, Equatable, Sendable, Identifiable {
     var displayName: String? = nil
     var captions: CaptionStyleOverrides = .init()
     var media: ClipMediaOverrides = .init()
-    var hasOverrides: Bool { !captions.isEmpty || !media.isEmpty }
+    /// Source-clock trim; nil retains the original clip. Equal endpoints are
+    /// allowed only to preserve clips fully excluded by a legacy project trim.
+    var sourceTrim: ClipSourceTrim? = nil
+    var hasOverrides: Bool { !captions.isEmpty || !media.isEmpty || sourceTrim != nil }
     var isEmpty: Bool { displayName == nil && !hasOverrides }
 }
 
@@ -103,7 +106,9 @@ struct ProjectSettingsState: Equatable, Sendable {
     func changesMedia(from other: Self) -> Bool {
         let current = Dictionary(uniqueKeysWithValues: (clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) })
         let previous = Dictionary(uniqueKeysWithValues: (other.clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) })
-        return mediaEdits != other.mediaEdits || canvas != other.canvas || preset != other.preset ||
+        let trims = Dictionary(uniqueKeysWithValues: (clipSettings ?? []).compactMap { value in value.sourceTrim.map { (value.id, $0) } })
+        let oldTrims = Dictionary(uniqueKeysWithValues: (other.clipSettings ?? []).compactMap { value in value.sourceTrim.map { (value.id, $0) } })
+        return trims != oldTrims || mediaEdits != other.mediaEdits || canvas != other.canvas || preset != other.preset ||
             current != previous || originalAudioMuted != other.originalAudioMuted
     }
 }

@@ -13,11 +13,13 @@ final class CaptionPreviewFrame {
     @ObservationIgnored private var generator: AVAssetImageGenerator?
     private var generation = UUID()
 
-    func capture(item: AVPlayerItem?, at time: MediaTime, audioOnly: Bool) async {
+    @discardableResult
+    func capture(item: AVPlayerItem?, at time: MediaTime, audioOnly: Bool, preservingImage: Bool = false) async -> Bool {
         cancel()
-        image = nil; self.time = nil; error = nil
-        guard !audioOnly else { self.time = time; return }
-        guard let item else { error = "Footage preview is unavailable. Retry preview above."; return }
+        if !preservingImage { image = nil; self.time = nil }
+        error = nil
+        guard !audioOnly else { self.time = time; return true }
+        guard let item else { error = "Footage preview is unavailable. Retry preview above."; return false }
         let token = generation
         let generator = AVAssetImageGenerator(asset: item.asset)
         generator.appliesPreferredTrackTransform = true
@@ -31,12 +33,14 @@ final class CaptionPreviewFrame {
         defer { if token == generation { isLoading = false; self.generator = nil } }
         do {
             let result = try await generator.image(at: time.cmTime)
-            guard token == generation, !Task.isCancelled else { return }
+            guard token == generation, !Task.isCancelled else { return false }
             image = result.image
             self.time = try MediaTime(validating: result.actualTime)
+            return true
         } catch {
-            guard token == generation, !Task.isCancelled else { return }
-            self.error = "The comparison frame could not be loaded. " + error.localizedDescription
+            guard token == generation, !Task.isCancelled else { return false }
+            self.error = "The video frame could not be loaded. " + error.localizedDescription
+            return false
         }
     }
     func clear() {
@@ -65,6 +69,7 @@ struct CaptionStillPreview: View {
     let frame: CaptionPreviewFrame
     let snapshot: CaptionSnapshot?
     let audioOnly: Bool
+    var showsLoadingIndicator = true
     @State private var renderError: String?
 
     var body: some View {
@@ -80,7 +85,7 @@ struct CaptionStillPreview: View {
                     StyledCaptionOverlay(snapshot: snapshot, time: time,
                         mediaSize: PreviewComposition.previewSize(for: snapshot.canvas)) { renderError = $0 }
                 }
-                if frame.isLoading { ProgressView().tint(.white) }
+                if showsLoadingIndicator && frame.isLoading { ProgressView().tint(.white) }
             }
             .aspectRatio(aspect, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 12))

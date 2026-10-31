@@ -1,5 +1,31 @@
 # Inkribe iOS — current feature ledger
 
+## Timeline clip trimming (2026-10-31, stacked on #55)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.CLIP_TRIM_HANDLES | Selected timeline clip start/end drag, bounds, restore and accessibility actions | Source-integrated |
+| EDITOR.CLIP_TRIM_PREVIEW | Bounded serial boundary-frame audition in existing main preview; no new player | Source-integrated |
+| EDITOR.CLIP_TRIM_OUTPUT | Shared piecewise map closes excluded time across video, audio, captions, SRT and seeks | Source-integrated |
+| EDITOR.CLIP_TRIM_TRANSACTION | Save once on release, expected-state check, atomic adoption, bounded Undo/Redo | Source-integrated |
+| EDITOR.CLIP_TRIM_COMPATIBILITY | Preserve old project windows/hidden clips; schema 13 reads 1–12; frozen exports stay captured | Source-integrated |
+
+See [scope](phases/CLIP_TRIMMING.md) and [handoff](handoffs/CLIP_TRIMMING.md).
+Media trim fields/reset are removed. Compilation/native/UI acceptance is unverified.
+
+## Media Form — passes 1–2 (2026-10-31)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| EDITOR.MEDIA_FORM | Native themed Form without preview/transport | Source-integrated |
+| EDITOR.MEDIA_SCOPE | Top Project/Clip menu changes every following section | Source-integrated |
+| EDITOR.MEDIA_TRANSACTION | Cancel/swipe discards; Done saves one settings Undo entry | Source-integrated |
+| EDITOR.CLIP_MEDIA_VALUES | Independent clip framing/volume; standard resets; legacy effective values preserved | Source-integrated |
+| EDITOR.MEDIA_INTEGRATION | Closed-sheet cancellation, preview-independent saving/recovery, one rewrite/sort and speech reconciliation; source lifecycle/history/output review | Source-reviewed and scoped fixes integrated |
+
+See [scope](phases/MEDIA_FORM.md) and [handoff](handoffs/MEDIA_FORM.md).
+Both source passes are complete; compilation/native/UI acceptance is unverified.
+
 ## Music layer — passes 1–3 (2026-10-31)
 
 | ID | Requirement | Source status |
@@ -227,4 +253,3 @@ implied. Search/sort/filter, direct URLs and combined imports remain existing
 supported behavior; transcript search and incoming share extension are not required.
 No invented word timing, implicit regrouping or inference on style choices.
 Previous source records are preserved in [the archive](archive/before-consolidation/FEATURES.md).
-

@@ -1,5 +1,25 @@
 # Inkribe iOS — current plan
 
+## Current: timeline-only clip trimming stacked on #55
+
+2026-10-31. Implement the approved [clip trimming](phases/CLIP_TRIMMING.md), from
+#55 head 381b0d2b, in feat/ios-timeline-clip-trimming -> feat/ios-media-form. Scope:
+selected-clip edge handles, main boundary preview, source bounds/restoration,
+piecewise output mapping, one atomic undoable save and removal of Media trim UI.
+Preserve legacy trim windows, captions/native clocks and frozen exports. Schema 13
+adds optional clip source ranges. See [handoff](handoffs/CLIP_TRIMMING.md).
+Source-only; leave parent and stacked PR open without auto-merge.
+
+## Current: Media Form — both source passes complete
+
+2026-10-31. The user's next-pass signal authorizes pass 2 in PR #55 from bb0d1b11.
+Review and scoped fixes complete the two planned [Media Form](phases/MEDIA_FORM.md)
+source passes. The [handoff matrix](handoffs/MEDIA_FORM.md) records scope/reset,
+local cancellation, stale/write/history/reopen and preview/frozen-export evidence.
+Preserve the approved Form and other editor behavior. Compilation/native/UI
+acceptance remains unverified under source-only restrictions. Keep the PR open
+without auto-merge; no automatic next feature or merge.
+
 ## Current: music layer — all three source passes complete
 
 2026-10-31. The user's final next-pass signal authorizes pass 3 in PR #54 from
@@ -137,4 +157,3 @@ premium work and immutable export files retain their established access rules.
 No automatic next feature, merge or release. No transitions, music/multitrack,
 per-clip trim, accounts/backend/cloud sync, translation/dubbing, share extension,
 iPad or Mac expansion. Source-only execution restrictions remain in force.
-

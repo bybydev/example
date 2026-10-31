@@ -4,7 +4,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 12
+    static let current = 13
 }
 
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
@@ -177,6 +177,12 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
                 throw ProjectStoreError.invalidDocument("Invalid clip settings")
             }
             for settings in clipSettings {
+                if let trim = settings.sourceTrim {
+                    guard schemaVersion >= 13, let clip = clips.first(where: { $0.id == settings.id }) else {
+                        throw ProjectStoreError.invalidDocument("Clip trims require schema v13")
+                    }
+                    try trim.validate(in: clip.sourceInterval)
+                }
                 if let name = settings.displayName {
                     guard !name.isEmpty, name.count <= 256,
                           name == name.trimmingCharacters(in: .whitespacesAndNewlines) else {

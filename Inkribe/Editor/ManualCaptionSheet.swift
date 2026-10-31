@@ -180,7 +180,7 @@ struct ManualCaptionSheet: View {
         let output = try MediaInterval(start: parse(start, preserving: exactStart), end: parse(end, preserving: exactEnd))
         let timeline = OutputTimeline(document)
         let original = try MediaInterval(start: timeline.originalTime(forOutput: output.start),
-                                         end: timeline.originalTime(forOutput: output.end))
+                                         end: timeline.originalTime(forOutput: output.end, precedingBoundary: true))
         guard original.start >= clip.timelineInterval.start, original.end <= clip.timelineInterval.end else {
             throw ManualCaptionError.invalidCaption
         }

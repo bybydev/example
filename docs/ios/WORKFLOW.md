@@ -1,5 +1,20 @@
 # Inkribe iOS — current working agreement
 
+2026-10-31. The user authorizes timeline-only per-clip trimming in a stacked PR
+on #55 at 381b0d2b. Apply phases/CLIP_TRIMMING.md and handoffs/CLIP_TRIMMING.md.
+Target feat/ios-media-form, keep both PRs open without auto-merge and do not alter
+the parent. The request authorizes the agreed handles/main preview/ripple timing,
+Media trim removal and necessary schema/persistence/output integration. Source-only
+restrictions remain: no builds/typechecks/tests/fixtures, CI, generation/models,
+native processing/exports or UI/device execution. No unrelated design or features.
+
+2026-10-31. The user's next-pass signal authorizes Media Form pass 2 in existing
+PR #55, extending bb0d1b11. Apply phases/MEDIA_FORM.md and handoffs/MEDIA_FORM.md.
+Complete the source review and scoped fixes only; keep the approved Form/design.
+Both source passes are delivered without runtime validation. No builds/typechecks/
+tests/fixtures, CI, generation, native media/exports or UI/device execution.
+Keep open without auto-merge; no automatic next feature or merge.
+
 2026-10-31. The user authorizes music pass 3 in existing PR #54, extending 73a2323c.
 Complete the source integration review and scoped defects without changing the
 approved design. All three source passes are delivered; no runtime validation is
@@ -86,4 +101,3 @@ This checkout is a partial review snapshot with synthetic local git history.
 Publish only changed blobs/deletions onto the full verified remote PR head tree;
 never push this snapshot’s root tree/history. Verify expected-base blob hashes,
 unchanged remote files, branch-head lease and final PR base/head/open/no-auto-merge.
-

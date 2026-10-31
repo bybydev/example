@@ -1,5 +1,51 @@
 # Inkribe Working Rules
 
+## Current timeline clip trimming authorization
+
+2026-10-31. The user explicitly requests implementing the discussed timeline-only
+clip trimming in a stacked PR on #55, starting at 381b0d2b and targeting
+feat/ios-media-form. Branch feat/ios-timeline-clip-trimming. Select a timeline clip,
+drag its edge handles, audition the boundary in the existing main preview and
+save one undoable edit on release. Restore native footage by dragging outward;
+close trimmed output gaps and keep all captions aligned. Remove Media trim UI.
+Preserve saved legacy project trims and frozen outputs. Schema 13 adds optional
+source-clock clip trims; original clips/native word/source clocks stay unchanged.
+Use one derived piecewise output map across preview/MP4/SRT/seeking. No new player,
+engine, inference, allowance, shared-package/Mac/model/commerce/CI or unrelated
+design work. Read phases/CLIP_TRIMMING.md and handoffs/CLIP_TRIMMING.md under docs/ios.
+Existing source-only restrictions remain: no builds/typechecks/tests/fixtures,
+CI/generation/downloads, native processing/exports or UI/device execution. Keep
+parent and stacked PR open without auto-merge; never modify the parent branch.
+
+## Current Media Form authorization — pass 2
+
+2026-10-31. The user's next-pass signal authorizes the final source integration
+review in PR #55, feat/ios-media-form -> develop, extending bb0d1b11. Review scope,
+resets, cancel/dismissal, stale/save/history/reopen and shared preview/export use.
+Fix scoped defects only: sheet-owned save cancellation/late completion; save without
+waiting on preview preparation, with interrupted-preview recovery; one settings
+rewrite/sort; and dismissal reconciliation of speech progress. Preserve the approved
+Form, scopes and every other editor design. Both source passes may be complete;
+compilation/native/UI acceptance remains unverified. Read MEDIA_FORM phase/handoff.
+Existing source-only restrictions remain, including no builds/typechecks/tests,
+fixtures, CI, generation/downloads/native processing/exports, UI/device execution
+or deployment. Leave #55 open without auto-merge; no next feature or merge.
+
+## Current Media Form authorization — pass 1
+
+2026-10-31. The user starts pass 1 of two in a new feat/ios-media-form PR targeting
+develop. Scope: a large native Form like Style with no preview/transport; the first
+row selects Project or a numbered clip and changes all sections below it. Project:
+aspect ratio, whole-project trim and original-audio master mute. Clip: framing,
+zoom/position, volume and standard resets. Remove inheritance/default/reset-to-project
+UI; preserve existing effective clip values. All scopes share one local Cancel/Done
+transaction, one durable settings Undo entry and existing preview/MP4 integration.
+No other editor design changes, schema/wrapper/shared-package/Mac/model/commerce/CI
+work. Read phases/MEDIA_FORM.md and handoffs/MEDIA_FORM.md under docs/ios.
+Pass 2 awaits a separate user signal. Source-only restrictions remain: no builds,
+typechecks/tests/fixtures, CI/generation/downloads, native media processing/exports,
+UI/device execution or deployment. Leave the PR open without auto-merge.
+
 ## Current music layer authorization — pass 3
 
 2026-10-31. The user says "next pass" after pass 2 and authorizes the final music
@@ -447,5 +493,3 @@ The user requires the iOS app source folder to be Inkribe/, matching its target,
 The user requires iPhone-only support: TARGETED_DEVICE_FAMILY is 1 for both iOS configurations, inherited by the bundled-model spec. Do not re-enable iPad support.
 
 Both app targets must use the same existing InkribeMac/AppIcon.icon resource, following Spokio. iOS selects AppIcon and references that file directly; do not duplicate or redesign the artwork.
-
-

@@ -193,7 +193,7 @@ struct ProjectClipsSheet: View {
     private func clipRow(_ clip: ProjectClip, index: Int, document: ProjectDocument) -> some View {
         let output = OutputTimeline(document).outputInterval(clip.timelineInterval)
         return Group {
-            if output != nil && !isReordering {
+            if !isReordering {
                 Button { onSelect(clip.id) } label: { clipLabel(clip, index: index, document: document, output: output) }
                     .buttonStyle(.plain)
             } else {
@@ -202,8 +202,8 @@ struct ProjectClipsSheet: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
-        .accessibilityValue(!isReordering && output == nil ? "Outside trim" : EditorTime.display(clip.timelineInterval.durationTime))
-        .accessibilityHint(isReordering ? "Use reorder actions to move this clip" : output == nil ? "Outside the current video trim" : "Jumps to this clip in the editor")
+        .accessibilityValue(!isReordering && output == nil ? "Trimmed out" : EditorTime.display(clip.timelineInterval.durationTime))
+        .accessibilityHint(isReordering ? "Use reorder actions to move this clip" : output == nil ? "Select to restore footage using the timeline trim handles" : "Jumps to this clip in the editor")
         .accessibilityAddTraits(clip.id == highlightedClipID ? .isSelected : [])
         .listRowBackground(clip.id == highlightedClipID ? theme.accentColor.opacity(0.1) : theme.surfaceColor)
         .listRowSeparatorTint(theme.borderColor)
@@ -254,7 +254,7 @@ struct ProjectClipsSheet: View {
                     .lineLimit(2).truncationMode(.middle)
                 Text(isReordering ? EditorTime.display(clip.timelineInterval.durationTime) :
                     EditorTime.display(clip.timelineInterval.durationTime) + " · " +
-                    (output.map { "In video " + EditorTime.display($0.start) } ?? "Outside trim"))
+                    (output.map { "In video " + EditorTime.display($0.start) } ?? "Trimmed out"))
                     .font(.caption).foregroundStyle(.secondary)
                 if session.originalAvailable[clip.sourceAssetID] == false {
                     Label("Original unavailable", systemImage: "exclamationmark.triangle")

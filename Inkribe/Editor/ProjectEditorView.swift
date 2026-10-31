@@ -85,7 +85,7 @@ struct ProjectEditorView: View {
     private var editorPresentation: some View {
         editorDocumentPresentation
             .task(id: preparationAttempt) { await prepareEditor() }
-            .sheet(item: $activeToolSheet, onDismiss: finishToolEditing) { tool in toolSheet(tool) }
+            .sheet(item: $activeToolSheet, onDismiss: finishActiveToolEditing) { tool in toolSheet(tool) }
             .background {
                 NativeVideoPlayer(isPresented: $session.workspace.expandedPreview, player: session.player,
                     session: session, snapshot: session.snapshot, time: session.time,
@@ -227,7 +227,7 @@ struct ProjectEditorView: View {
                     isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving && !session.isChangingClips,
                     onInteraction: finishToolInteraction,
                     onCaption: timelineCaptionTapped,
-                    onClip: { session.seekToClip($0) },
+                    onClip: { session.selectTimelineClip($0) },
                     onMusic: openMusic, onCaptions: { switchTool(.captions) })
                     .frame(height: CGFloat(TimelineGeometry.trackHeight))
                 editorErrors
@@ -323,18 +323,23 @@ struct ProjectEditorView: View {
             session.proUpsell != nil || session.workspace.expandedPreview
     }
 
+    @ViewBuilder
     private func toolSheet(_ tool: EditorTool) -> some View {
-        toolNavigation(tool)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .sheet(item: $addingCaption, onDismiss: finishToolEditing) { draft in
-                ManualCaptionSheet(session: session, draft: draft, previewIsActive: manualPreviewBinding)
-            }
-            .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
-            .alert("Project", isPresented: Binding(get: { addingCaption == nil && session.proUpsell == nil && model.alertMessage != nil },
-                set: { if !$0 { model.alertMessage = nil } })) {
-                    Button("OK", role: .cancel) { model.alertMessage = nil }
-                } message: { Text(model.alertMessage ?? "") }
+        if tool == .media {
+            MediaSheet(session: session)
+        } else {
+            toolNavigation(tool)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .sheet(item: $addingCaption, onDismiss: finishToolEditing) { draft in
+                    ManualCaptionSheet(session: session, draft: draft, previewIsActive: manualPreviewBinding)
+                }
+                .sheet(item: Binding(get: { session.proUpsell }, set: { session.proUpsell = $0 })) { ProUpsell(feature: $0) }
+                .alert("Project", isPresented: Binding(get: { addingCaption == nil && session.proUpsell == nil && model.alertMessage != nil },
+                    set: { if !$0 { model.alertMessage = nil } })) {
+                        Button("OK", role: .cancel) { model.alertMessage = nil }
+                    } message: { Text(model.alertMessage ?? "") }
+        }
     }
 
     private func toolNavigation(_ tool: EditorTool) -> some View {
@@ -373,12 +378,11 @@ struct ProjectEditorView: View {
 
     @ViewBuilder
     private func toolPageContent(_ tool: EditorTool) -> some View {
-        if tool == .captions || tool == .media {
+        if tool == .captions {
             GeometryReader { geometry in
                 VStack(spacing: 0) {
                     if let document = session.document {
-                        if tool == .captions { captionsPlaybackHeader(document, in: geometry.size) }
-                        else { mediaPlaybackHeader(document, in: geometry.size) }
+                        captionsPlaybackHeader(document, in: geometry.size)
                     }
                     toolContent(tool)
                 }
@@ -396,18 +400,6 @@ struct ProjectEditorView: View {
         return VStack(spacing: 8) {
             preview(document, height: height, inCaptions: true)
             EditorPlaybackControls(session: session, showsOverview: false, showsTimeline: false,
-                onInteraction: { focused = nil })
-        }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
-    }
-
-    private func mediaPlaybackHeader(_ document: ProjectDocument, in size: CGSize) -> some View {
-        let width = max(0, size.width - 32)
-        let aspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
-        let height = max(0, min(width / aspect, min(260, size.height * 0.32)))
-        return VStack(spacing: 8) {
-            preview(document, height: height, inMedia: true)
-            EditorPlaybackControls(session: session, showsOverview: false,
                 onInteraction: { focused = nil })
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
@@ -481,7 +473,8 @@ struct ProjectEditorView: View {
         case .captionEditor:
             captionEditorContent
         case .media:
-            MediaPanel(session: session, focused: $focused)
+            // Media owns its controls-only transactional Form.
+            EmptyView()
         }
     }
 
@@ -691,22 +684,21 @@ struct ProjectEditorView: View {
     }
 
     private func preview(_ document: ProjectDocument, height: CGFloat,
-                         inCaptions: Bool = false, inMedia: Bool = false) -> some View {
+                         inCaptions: Bool = false) -> some View {
         EditorPlayerPreview(session: session,
-            isActive: previewOwnsPlayer(inCaptions: inCaptions, inMedia: inMedia),
+            isActive: previewOwnsPlayer(inCaptions: inCaptions),
             onError: { captionRenderError = $0 })
         .frame(maxWidth: .infinity)
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func previewOwnsPlayer(inCaptions: Bool, inMedia: Bool) -> Bool {
+    private func previewOwnsPlayer(inCaptions: Bool) -> Bool {
         guard !isLeaving, !showStyleSheet, musicSheet == nil, !choosingMusic, !showExport, !showQueue, addingCaption == nil,
               !session.workspace.expandedPreview else { return false }
         if inCaptions {
             return activeToolSheet == .captions && !editingCaptionFromTranscript
         }
-        if inMedia { return activeToolSheet == .media }
         return activeToolSheet != .captions && activeToolSheet != .media
     }
 
@@ -1017,6 +1009,14 @@ struct ProjectEditorView: View {
         }
     }
 
+    private func finishActiveToolEditing() {
+        let refreshMedia = session.workspace.tool == .media
+        finishToolEditing()
+        // Reconcile speech publication whose notification may have arrived while
+        // the Media transaction excluded session reloads, as Style already does.
+        if refreshMedia { Task { await session.refreshAfterMediaEditing() } }
+    }
+
     private func finishToolEditing() {
         focused = nil
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
@@ -1180,5 +1180,3 @@ struct TimingFields: View {
         error = nil
     }
 }
-
-
