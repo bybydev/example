@@ -29,7 +29,9 @@ struct EditorPlayerPreview: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(snapshot.evaluate(at: time)?.text ?? "No caption at playhead")
             }
-            if session.isPreparingPreview { ProgressView().tint(.white).accessibilityLabel("Preparing preview") }
+            if EditorPreparationPresentation.showsLoadingIndicators && session.isPreparingPreview {
+                ProgressView().tint(.white).accessibilityLabel("Preparing preview")
+            }
         }
     }
 }

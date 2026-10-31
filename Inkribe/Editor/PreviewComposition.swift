@@ -113,7 +113,8 @@ enum PreviewComposition {
                 if let interval = try await insert(track: track, clip: clip, into: audio[index]) {
                     inserted = true
                     populatedAudio.insert(audio[index].trackID)
-                    volumeSegments[audio[index].trackID, default: []].append((interval, edits.volume))
+                    volumeSegments[audio[index].trackID, default: []].append((interval,
+                        document.isOriginalAudioMuted ? 0 : edits.volume))
                 }
             }
             if let videoInterval, let layer {
@@ -133,8 +134,15 @@ enum PreviewComposition {
             instructions.append(instruction(start: cursor, end: duration, layer: nil))
         }
         let includedAudio = audio.filter { populatedAudio.contains($0.trackID) }
+        var musicParameters: AVMutableAudioMixInputParameters?
+        if let music = document.music,
+           try music.playbackInterval(outputDuration: duration) != nil {
+            guard let url = urls[music.asset.id] else { throw ProjectStoreError.missingOriginal(music.asset.displayName) }
+            musicParameters = try await MusicComposition.append(music, url: url,
+                to: composition, outputDuration: duration)
+        }
         let finalMix: AVAudioMix?
-        if includedAudio.isEmpty { finalMix = nil }
+        if includedAudio.isEmpty && musicParameters == nil { finalMix = nil }
         else {
             let mix = AVMutableAudioMix()
             mix.inputParameters = includedAudio.map { lane in
@@ -144,6 +152,7 @@ enum PreviewComposition {
                 }
                 return parameters
             }
+            if let musicParameters { mix.inputParameters.append(musicParameters) }
             finalMix = mix.copy() as? AVAudioMix
         }
         if let video, !insertedVideo { composition.removeTrack(video) }
@@ -178,7 +187,7 @@ enum PreviewComposition {
         }
         guard let asset = composition.copy() as? AVComposition else { throw ExportError.invalidRequest }
         return MediaGraph(asset: asset, videoComposition: finalVideo, videoIntervals: videoIntervals,
-                             duration: duration.cmTime, hasAudio: !includedAudio.isEmpty, audioMix: finalMix)
+                             duration: duration.cmTime, hasAudio: !includedAudio.isEmpty || musicParameters != nil, audioMix: finalMix)
     }
 
     static func originalAudioMix(trackIDs: [CMPersistentTrackID], volume: Double) -> AVAudioMix {

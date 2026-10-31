@@ -12,6 +12,7 @@ enum EditorHistoryChange: Sendable {
     case caption(CaptionEditPatch)
     case manual(ManualCaptionPatch)
     case settings(before: ProjectSettingsState, after: ProjectSettingsState)
+    case music(before: ProjectMusic?, after: ProjectMusic?)
 
     var actionName: String {
         switch self {
@@ -19,12 +20,17 @@ enum EditorHistoryChange: Sendable {
             if before.clips.count < after.clips.count { return "add clips" }
             if before.clips.count > after.clips.count { return "remove clip" }
             return "reorder clips"
+        case .music(let before, let after):
+            if before == nil { return "add music" }
+            if after == nil { return "remove music" }
+            return before?.asset == after?.asset ? "edit music" : "replace music"
         default: return "edit"
         }
     }
 
     var changesMedia: Bool {
         if case .clips = self { return true }
+        if case .music = self { return true }
         if case .settings(let before, let after) = self { return after.changesMedia(from: before) }
         return false
     }
@@ -46,6 +52,9 @@ enum EditorHistoryChange: Sendable {
         case .settings(let before, let after):
             guard ProjectSettingsState(project) == (forward ? before : after) else { throw MediaEditError.invalidSettings }
             project = (forward ? after : before).applying(to: project)
+        case .music(let before, let after):
+            guard project.music == (forward ? before : after) else { throw MusicEditError.stale }
+            project.music = forward ? after : before
         }
         project.schemaVersion = ProjectSchema.current
         try project.validate()
@@ -57,6 +66,7 @@ enum EditorHistoryChange: Sendable {
         case .clips(let before, let after): before.estimatedBytes + after.estimatedBytes
         case .caption(let patch): patch.estimatedBytes
         case .manual(let patch): patch.estimatedBytes
+        case .music: 4_096
         case .settings(let before, let after):
             1_024 + ((before.clipSettings?.count ?? 0) + (after.clipSettings?.count ?? 0)) * 2_048
         }

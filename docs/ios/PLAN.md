@@ -1,5 +1,34 @@
 # Inkribe iOS — current plan
 
+## Current: music layer — all three source passes complete
+
+2026-10-31. The user's final next-pass signal authorizes pass 3 in PR #54 from
+73a2323c. Source review and scoped fixes complete the planned music work. The
+[handoff matrix](handoffs/MUSIC_LAYER.md) records replacement/removal, lifecycle,
+stale/save/history, reopen/duplication, duration/mute and frozen-output coverage.
+No editor redesign or next feature. Compilation/native audio/device acceptance
+remains unverified under source-only restrictions; keep the PR open without merge.
+
+## Current: music layer — pass 2 of three
+
+2026-10-31. User-authorized pass 2 in PR #54 adds the settled timeline rows/leading
+controls, waveform and controls-only Music sheet. Import/replacement is staged
+until Done and one saved history entry; Cancel/swipe discards unpublished files.
+Passes 1–2 are source-integrated; pass 3 remains unstarted pending the user's signal.
+See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md). Source-only;
+no builds/typechecks/tests/native/UI execution and no unrelated editor changes.
+
+## Current: music layer — pass 1 of three
+
+2026-10-31. Implement MUSIC.FOUNDATION in feat/ios-music-layer -> develop from
+723f333. See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md).
+Pass 1 owns one soundtrack's persistence/import/timing/mix/loop/fades/history and
+preview/export agreement, plus independent original-audio master mute. Schema 12
+reads 1–11. No UI/layout changes in this pass. Pass 2 owns the agreed leading row
+buttons, Video/Music/Captions order, waveform and controls-only sheet; pass 3 owns
+integration review. Await a separate signal for each next pass. This supersedes
+only the historical single-file music exclusion below. No other editor expansion.
+
 ## Current: native fullscreen playback stacked on PR #52
 
 2026-10-29. Implement the approved native-player replacement in a new stacked PR,

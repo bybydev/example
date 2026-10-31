@@ -74,6 +74,46 @@ actor ProjectRepository {
         try writeEdit(proposed, expectedRevision: expectedRevision)
     }
 
+    /// Install one inspected soundtrack without changing the speech graph. The
+    /// file move precedes atomic publication; failure restores unpublished staging.
+    func installMusic(_ imported: PreparedMusicImport, basedOn base: ProjectDocument,
+                      settings: ProjectMusic) throws -> ProjectDocument {
+        try Task.checkCancellation()
+        let current = try open(base.id)
+        var sameBase = false
+        if current.contentRevision == base.contentRevision {
+            sameBase = try encoder.encode(current) == encoder.encode(base)
+        }
+        guard sameBase || current.isSpeechPublication(since: base) else { throw MusicEditError.stale }
+        let parent = try directory("Pending").resolvingSymlinksInPath().standardizedFileURL
+        guard imported.staging.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == parent,
+              let stagingID = UUID(uuidString: imported.staging.lastPathComponent), activeStaging.contains(stagingID),
+              !current.ownedMediaAssets.contains(where: { $0.id == imported.asset.id }) else { throw MusicEditError.invalidImport }
+        var next = current
+        next.schemaVersion = ProjectSchema.current
+        guard settings.asset == imported.asset else { throw MusicEditError.invalidImport }
+        next.music = settings
+        try next.validate()
+        let source = try OwnedPath.secureURL(for: imported.asset.relativeOriginalPath, base: "Originals", in: imported.staging)
+        let destination = try packageStore().file(imported.asset.relativeOriginalPath, in: projectDirectory(current.id))
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              Int64(values.fileSize ?? -1) == imported.asset.byteCount,
+              !files.fileExists(atPath: destination.path) else { throw MusicEditError.invalidImport }
+        try files.moveItem(at: source, to: destination)
+        do {
+            try Task.checkCancellation()
+            let saved = try writeEdit(next, expectedRevision: current.contentRevision)
+            // No cancellation or fallible work after publication. Older songs
+            // remain project-owned for Undo and are not automatically purged.
+            try? discardStaging(imported.staging)
+            return saved
+        } catch {
+            try? files.moveItem(at: destination, to: source)
+            throw error
+        }
+    }
+
     /// New originals are moved into owned UUID paths before one atomic document
     /// publication. Failure leaves the old graph intact; a crash can leave only
     /// unreferenced originals, never a partially appended document.
@@ -598,7 +638,7 @@ actor ProjectRepository {
     func integrityIssues(projectID: UUID) throws -> [LibraryIssue] {
         let project = try open(projectID)
         var issues: [LibraryIssue] = []
-        for asset in project.assets {
+        for asset in project.ownedMediaAssets {
             do {
                 let url = try sourceURL(projectID: projectID, assetID: asset.id)
                 let input = try FileHandle(forReadingFrom: url)
@@ -627,7 +667,7 @@ actor ProjectRepository {
 
     func sourceURL(projectID: UUID, assetID: UUID) throws -> URL {
         let project = try open(projectID)
-        guard let asset = project.assets.first(where: { $0.id == assetID }) else {
+        guard let asset = project.ownedMediaAssets.first(where: { $0.id == assetID }) else {
             throw ProjectStoreError.invalidDocument("Asset is not in this project")
         }
         try OwnedPath.validate(asset.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
@@ -822,7 +862,8 @@ actor ProjectRepository {
         do {
             var newAssets: [SourceAsset] = []
             var mapping: [UUID: UUID] = [:]
-            for asset in original.assets {
+            var copiedMusic: ProjectMusic?
+            for asset in original.ownedMediaAssets {
                 let newID = UUID()
                 mapping[asset.id] = newID
                 let ext = URL(fileURLWithPath: asset.relativeOriginalPath).pathExtension
@@ -831,9 +872,13 @@ actor ProjectRepository {
                 let origin = try sourceURL(projectID: id, assetID: asset.id)
                 let destination = try OwnedPath.secureURL(for: path, base: "Originals", in: staging)
                 try files.copyItem(at: origin, to: destination)
-                newAssets.append(SourceAsset(id: newID, relativeOriginalPath: path,
+                let copiedAsset = SourceAsset(id: newID, relativeOriginalPath: path,
                     kind: asset.kind, origin: asset.origin, displayName: asset.displayName,
-                    byteCount: asset.byteCount, sha256: asset.sha256, metadata: asset.metadata))
+                    byteCount: asset.byteCount, sha256: asset.sha256, metadata: asset.metadata)
+                if var music = original.music, music.asset.id == asset.id {
+                    music.asset = copiedAsset
+                    copiedMusic = music
+                } else { newAssets.append(copiedAsset) }
             }
             var clipMapping: [UUID: UUID] = [:]
             let newClips = try original.clips.map { clip -> ProjectClip in
@@ -858,7 +903,7 @@ actor ProjectRepository {
                 }, manualCaptions: try original.manualCaptions?.map { caption in
                     guard let clipID = clipMapping[caption.clipID] else { throw ManualCaptionError.invalidCaption }
                     return ManualCaption(id: UUID(), clipID: clipID, text: caption.text, interval: caption.interval)
-                })
+                }, music: copiedMusic, originalAudioMuted: original.originalAudioMuted)
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)
@@ -945,7 +990,7 @@ actor ProjectRepository {
         projectID: UUID, assetID: UUID, from externalURL: URL
     ) throws {
         let document = try open(projectID)
-        guard let source = document.assets.first(where: { $0.id == assetID }) else {
+        guard let source = document.ownedMediaAssets.first(where: { $0.id == assetID }) else {
             throw ProjectStoreError.invalidDocument("Unknown media identity")
         }
         try OwnedPath.validate(source.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
@@ -1036,8 +1081,9 @@ actor ProjectRepository {
             try files.createDirectory(at: folder.appendingPathComponent("Result", isDirectory: true), withIntermediateDirectories: true)
             if profile.format == .mp4 {
                 let timeline = OutputTimeline(saved)
-                let used = Set(saved.clips.filter { timeline.retained($0.timelineInterval) != nil }.map(\.sourceAssetID))
-                for asset in saved.assets where used.contains(asset.id) {
+                var used = Set(saved.clips.filter { timeline.retained($0.timelineInterval) != nil }.map(\.sourceAssetID))
+                if let music = saved.music { used.insert(music.asset.id) }
+                for asset in saved.ownedMediaAssets where used.contains(asset.id) {
                     try Task.checkCancellation()
                     let source = try sourceURL(projectID: saved.id, assetID: asset.id)
                     let attributes = try files.attributesOfItem(atPath: source.path)
@@ -1094,7 +1140,7 @@ actor ProjectRepository {
         guard manifest.version == 1, manifest.jobID == id else { throw ExportError.invalidRequest }
         try manifest.document.validate()
         var urls: [UUID: URL] = [:]
-        for asset in manifest.document.assets where manifest.profile.format == .mp4 {
+        for asset in manifest.document.ownedMediaAssets where manifest.profile.format == .mp4 {
             let ext = URL(fileURLWithPath: asset.relativeOriginalPath).pathExtension
             urls[asset.id] = try store.file("Media/" + asset.id.uuidString + "." + ext, in: folder)
         }
@@ -1258,7 +1304,7 @@ actor ProjectRepository {
     }
 
     private func originalsExist(of project: ProjectDocument, in folder: URL) throws -> Bool {
-        for asset in project.assets {
+        for asset in project.ownedMediaAssets {
             try OwnedPath.validate(asset.relativeOriginalPath, base: ProjectPackageLayout.originalsName)
             let url = try packageStore().file(asset.relativeOriginalPath, in: folder)
             guard files.fileExists(atPath: url.path) else { return false }

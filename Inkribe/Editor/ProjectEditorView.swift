@@ -5,6 +5,12 @@ import UniformTypeIdentifiers
 
 enum EditorField: Hashable { case title, caption(UUID), word(UUID), timing(UUID, Bool), trimStart, trimEnd }
 
+private struct MusicSheetRoute: Identifiable {
+    let id = UUID()
+    let draft: MusicDraft
+    let input: ImportInput?
+}
+
 struct ProjectEditorView: View {
     @Environment(ProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -30,6 +36,8 @@ struct ProjectEditorView: View {
     @State private var isOpening = true
     @State private var isLeaving = false
     @State private var showStyleSheet = false
+    @State private var musicSheet: MusicSheetRoute?
+    @State private var choosingMusic = false
     @State private var captionRenderError: String?
     @State private var showExport = false
     @State private var showQueue = false
@@ -111,13 +119,39 @@ struct ProjectEditorView: View {
     }
 
     private var editorStylePresentation: some View {
-        editorDialogs
+        editorMusicPresentation
             .sheet(isPresented: $showStyleSheet, onDismiss: {
                 finishToolEditing()
                 Task { await session.refreshSaved() }
             }) { styleSheet }
             .sheet(item: Binding(get: { showStyleSheet || activeToolSheet != nil ? nil : session.proUpsell },
                 set: { if !showStyleSheet && activeToolSheet == nil { session.proUpsell = $0 } })) { ProUpsell(feature: $0) }
+    }
+
+    private var editorMusicPresentation: some View {
+        editorDialogs
+            .sheet(item: musicSheetBinding, onDismiss: {
+                finishToolEditing()
+                Task { await model.refreshLibrary() }
+            }) { route in MusicSheet(draft: route.draft, initialInput: route.input) }
+            .fileImporter(isPresented: $choosingMusic, allowedContentTypes: [.audio]) { result in
+                switch result {
+                case .success(let url):
+                    musicSheet = MusicSheetRoute(draft: MusicDraft(session: session),
+                        input: ImportInput(localURL: url, origin: .files))
+                case .failure(let error):
+                    if (error as NSError).code != NSUserCancelledError { session.commandError = error.localizedDescription }
+                }
+            }
+    }
+
+    /// Only dismissing/replacing Music releases its draft. A child Files picker
+    /// may cover the sheet without ending its editing or staging lifetime.
+    private var musicSheetBinding: Binding<MusicSheetRoute?> {
+        Binding(get: { musicSheet }, set: { next in
+            if musicSheet?.id != next?.id { musicSheet?.draft.close() }
+            musicSheet = next
+        })
     }
 
     private var editorDialogs: some View {
@@ -179,8 +213,8 @@ struct ProjectEditorView: View {
                     Button("Back", action: cancelOpening).frame(minHeight: 44)
                 }.padding(16)
             } else {
-                // Real editor geometry is filled when the document arrives. The
-                // delayed preparation overlay supplies the indicator and Cancel.
+                // Real editor geometry is filled when the document arrives.
+                // Loading indicators are temporarily hidden; native Back remains available.
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -193,7 +227,8 @@ struct ProjectEditorView: View {
                     isActive: scenePhase == .active && !hasPresentedSheet && !isOpening && !isLeaving && !session.isChangingClips,
                     onInteraction: finishToolInteraction,
                     onCaption: timelineCaptionTapped,
-                    onClip: { session.seekToClip($0) })
+                    onClip: { session.seekToClip($0) },
+                    onMusic: openMusic, onCaptions: { switchTool(.captions) })
                     .frame(height: CGFloat(TimelineGeometry.trackHeight))
                 editorErrors
                     .padding(.horizontal, 12)
@@ -226,6 +261,13 @@ struct ProjectEditorView: View {
         finishToolInteraction()
         clipsInitialSelection = session.document.flatMap { selectedTimelineClip(in: $0)?.id }
         showClips = true
+    }
+
+    private func openMusic() {
+        guard session.isReadyToEdit else { return }
+        finishToolInteraction()
+        if session.document?.music == nil { choosingMusic = true }
+        else { musicSheet = MusicSheetRoute(draft: MusicDraft(session: session), input: nil) }
     }
 
     private func timelineCaptionTapped(_ id: UUID) {
@@ -276,7 +318,7 @@ struct ProjectEditorView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        showProjectInfo || showClips || showExport || showQueue || showStyleSheet ||
+        showProjectInfo || showClips || showExport || showQueue || showStyleSheet || musicSheet != nil || choosingMusic ||
             activeToolSheet != nil || addingCaption != nil ||
             session.proUpsell != nil || session.workspace.expandedPreview
     }
@@ -659,7 +701,7 @@ struct ProjectEditorView: View {
     }
 
     private func previewOwnsPlayer(inCaptions: Bool, inMedia: Bool) -> Bool {
-        guard !isLeaving, !showStyleSheet, !showExport, !showQueue, addingCaption == nil,
+        guard !isLeaving, !showStyleSheet, musicSheet == nil, !choosingMusic, !showExport, !showQueue, addingCaption == nil,
               !session.workspace.expandedPreview else { return false }
         if inCaptions {
             return activeToolSheet == .captions && !editingCaptionFromTranscript

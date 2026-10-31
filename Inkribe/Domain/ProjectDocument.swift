@@ -4,7 +4,7 @@ import Foundation
 
 /// P1 disk format. Deliberately separate from the Mac Transcript schema.
 enum ProjectSchema {
-    static let current = 11
+    static let current = 12
 }
 
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
@@ -128,6 +128,9 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
     var mediaEdits: MediaEdits? = nil
     var clipSettings: [ClipSettings]? = nil
     var manualCaptions: [ManualCaption]? = nil
+    var music: ProjectMusic? = nil
+    /// Independent master mute; never overwrites inherited/per-clip volumes.
+    var originalAudioMuted: Bool? = nil
 
     var hasCaptionUnits: Bool { recognition?.words.isEmpty == false || manualCaptions?.isEmpty == false }
 
@@ -159,6 +162,14 @@ struct ProjectDocument: Codable, Equatable, Sendable, Identifiable {
             throw ProjectStoreError.invalidDocument("Media edits require schema v5")
         }
         try mediaEdits?.validate(sourceDuration: sourceDuration)
+        guard schemaVersion >= 12 || (music == nil && originalAudioMuted == nil) else {
+            throw ProjectStoreError.invalidDocument("Music and original-audio mute require schema v12")
+        }
+        try music?.validate(outputDuration: outputDuration)
+        guard Set(ownedMediaAssets.map(\.id)).count == ownedMediaAssets.count,
+              Set(ownedMediaAssets.map(\.relativeOriginalPath)).count == ownedMediaAssets.count else {
+            throw ProjectStoreError.invalidDocument("Duplicate owned media identity or path")
+        }
         if let clipSettings {
             guard schemaVersion >= 9, clipSettings.count <= clips.count,
                   Set(clipSettings.map(\.id)).count == clipSettings.count,

@@ -1,5 +1,63 @@
 # Inkribe Working Rules
 
+## Current music layer authorization — pass 3
+
+2026-10-31. The user says "next pass" after pass 2 and authorizes the final music
+integration review in existing PR #54, feat/ios-music-layer -> develop, extending
+73a2323c. Review one-file ingress/replacement/removal, stale/cancel/failed-save
+paths, reopen/duplicate/Trash/history, duration changes, mute states and shared
+preview/frozen-export consistency. Fix scoped integration defects only; preserve
+the approved layout, controls-only Music sheet and all other editor design.
+Source fixes cover actual-sheet-owned draft cleanup across child Files pickers,
+late save/cancellation lifetime, rational repeat budget/boundaries, clamped native
+fade ranges, stable fade-slider bounds, effective-zero-volume feedback and copied
+music readability/composability/protection preflight. No other feature expansion,
+new player, schema/wrapper/dependency/engine/model/commerce/Mac/CI work.
+Read MUSIC_LAYER phase/handoff. Source-only restrictions still prohibit builds,
+typechecks/tests/fixtures, native processing/exports, CI, generation/downloads,
+UI/device execution or deployment. Keep #54 open without auto-merge. All three
+passes may be source-complete; actual compilation/device/audio acceptance remains
+unverified. Do not start another feature or merge/release automatically.
+
+## Current music layer authorization — pass 2
+
+2026-10-31. The user says "next pass" after pass 1 and authorizes pass 2 in existing
+PR #54, feat/ios-music-layer -> develop, extending b345f71c. Implement only the agreed
+MUSIC.TIMELINE / MUSIC.SHEET: Video -> Music -> Captions, leading unboxed original
+mute, compact square music/caption buttons before time zero, empty Add music lane,
+real bounded waveform/loop indicator and controls-only Music sheet. Keep the main
+preview/transport/actions/theme/navigation and caption gestures otherwise intact;
+the added row alone changes reserved timeline height. No new preview/transport in
+Music. Files/replace selections and all controls stay local until Done publishes
+one saved Undo operation; Cancel/swipe discards staging. This explicitly authorizes
+the narrow pass-1 transaction adaptation needed for that sheet. Keep schema 12,
+shared preview/MP4 graph, speech/allowance and frozen outputs. No unrelated design
+changes. Pass 3 still awaits a separate signal. Existing source-only execution
+restrictions apply; leave #54 open without auto-merge. Read MUSIC_LAYER scope/handoff.
+
+## Current music layer authorization — pass 1
+
+2026-10-31. The user approves one new PR from develop 723f333 targeting develop,
+branch feat/ios-music-layer, and explicitly starts pass 1 of three. Implement
+MUSIC.FOUNDATION: one project-level audio file, coordinated Files ingress/owned
+storage, replacement/removal, source-section trim, output-clock offset, loop-to-fit,
+volume/mute, endpoint fades, atomic saved controls, bounded Undo/Redo and one shared
+preview/MP4 composition. Add an independent original-audio master mute that keeps
+per-clip volumes. Music never extends duration, enters transcription or consumes
+speech allowance. Preserve frozen exports, duplicate/Trash/relink and old documents.
+Schema 12 reads 1–11; package/export/job wrapper versions remain unchanged.
+
+The settled next-pass UI is Video -> Music -> Captions, leading unboxed original
+mute and compact square music/caption controls, an empty Add music lane, waveform,
+and a controls-only Music sheet with Done; no preview or transport in that sheet.
+Pass 1 adds no UI, entry buttons, row reordering or other design changes. Pass 2
+requires the user's next signal. Any unrelated change requires asking first.
+Read docs/ios/phases/MUSIC_LAYER.md and handoffs/MUSIC_LAYER.md. Existing source-only
+restrictions apply: no builds/typechecks/tests/fixtures, CI/generation/models, native
+media processing/exports, UI/device execution or deployment. Leave the PR open with
+no auto-merge. This explicit scope supersedes historical exclusions of music only
+for this single-file soundtrack; no other editor expansion is authorized.
+
 ## Current native fullscreen player authorization
 
 2026-10-29. The user explicitly requests the discussed replacement in a new stacked

@@ -10,7 +10,13 @@ struct ProjectEditorDestination: View {
     var body: some View {
         Group {
             if let session { ProjectEditorView(session: session, sessions: model.editors, renameOnOpen: renameOnOpen) }
-            else { ProgressView("Opening project…").frame(maxWidth: .infinity, maxHeight: .infinity).themedSurface() }
+            else {
+                Group {
+                    if EditorPreparationPresentation.showsLoadingIndicators { ProgressView("Opening project…") }
+                    else { Color.clear }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).themedSurface()
+            }
         }
         .task {
             if session == nil { session = model.editors.session(for: projectID) }

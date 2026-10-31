@@ -1,5 +1,29 @@
 # Inkribe iOS — current handoff
 
+2026-10-31. [Music pass 3](handoffs/MUSIC_LAYER.md) completes the planned three-pass
+source delivery in PR #54. Integration review covers import/replacement/removal,
+owned/staged files, stale/cancel/save/history, reopen/duplicate/Trash, duration/mute
+and preview/frozen-export consistency. Scoped fixes harden sheet ownership and
+late completion, rational loops/fades, slider bounds, muted feedback and audio
+suitability preflight. The approved design is unchanged. See the source review
+matrix and unresolved runtime boundary. Keep the PR open without auto-merge.
+
+2026-10-31. [Music layer pass 2](handoffs/MUSIC_LAYER.md) is source-integrated in
+PR #54: Video/Music/Captions order, leading native controls before time zero,
+Add music, real bounded waveform/loop indicator, mute feedback and the controls-only
+Music sheet. Local/staged Files/replace/control changes commit once on Done;
+Cancel/swipe cancels ingress and discards staging. No other editor redesign.
+Pass 3 remains unstarted. Source review only; compilation/native/UI acceptance
+unverified. Keep the PR open without auto-merge.
+
+2026-10-31. Current source delivery: [music foundation, pass 1](handoffs/MUSIC_LAYER.md),
+in feat/ios-music-layer -> develop from 723f333. Adds one separate owned soundtrack,
+source selection/output offset, looping, volume/mute/fades, saved controls/history,
+master original mute and shared preview/frozen-MP4 integration. Schema 12 reads
+1–11; wrapper versions and speech inputs remain unchanged. No timeline or sheet UI
+is delivered in pass 1. Those are pass 2 and await the user's signal. Source review
+only; compilation/native output/device behavior remain unverified. Leave PR open.
+
 2026-10-29. Current source delivery is [native fullscreen playback](handoffs/NATIVE_FULLSCREEN.md),
 stacked on PR #52 at 3f9b8107, targeting feat/ios-style-sheet-grid. Both editor expand
 entries and all completed-file preview routes use AVKit directly, with live caption

@@ -10,7 +10,7 @@ extension ProjectDocument: ProjectPackageDocument {
     }
 
     var packageSources: [ProjectPackageSource] {
-        assets.map { ProjectPackageSource(relativePath: $0.relativeOriginalPath, byteCount: $0.byteCount) }
+        ownedMediaAssets.map { ProjectPackageSource(relativePath: $0.relativeOriginalPath, byteCount: $0.byteCount) }
     }
 
     func validatePackageDocument() throws { try validate() }

@@ -1,5 +1,29 @@
 # Inkribe iOS — start here
 
+2026-10-31. [Music integration pass 3](phases/MUSIC_LAYER.md) completes the three
+source passes in PR #54, extending 73a2323c. Review covers file/history/lifecycle,
+duration/mute behavior and frozen outputs; scoped fixes harden actual-sheet draft
+ownership, late completion/cleanup, rational repeat/fade boundaries, stable fade
+controls, zero-volume feedback and import suitability checks. The approved layout
+is unchanged. See [review matrix](handoffs/MUSIC_LAYER.md). Source-only: no builds,
+tests/typechecks/native/UI runs; runtime acceptance remains unverified. Leave open.
+
+2026-10-31. [Music pass 2](phases/MUSIC_LAYER.md) is now source-integrated in PR #54,
+extending b345f71c. Timeline order is Video/Music/Captions, with leading original
+mute and square music/caption controls before time zero, Add music, a real waveform
+and loop indication. Music has a controls-only large sheet; Files/replace/settings
+publish together on Done, while Cancel/swipe discards staging. Existing editor
+chrome and preview ownership remain. See [handoff](handoffs/MUSIC_LAYER.md). Pass 3
+awaits the user's signal; source-only, no runtime acceptance or auto-merge.
+
+2026-10-31. Current work is [music layer pass 1](phases/MUSIC_LAYER.md), in one
+new feat/ios-music-layer PR from develop 723f333, targeting develop. One soundtrack
+has owned storage, independent output timing/mix/fades/loop, saved edits/history and
+shared preview/MP4 rendering. Schema 12 reads 1–11; speech remains clip-only. Pass 1
+has no editor UI/layout changes; leading controls and the preview-free Music sheet
+are pass 2 and await the user's next signal. See [handoff](handoffs/MUSIC_LAYER.md).
+Source-only; compilation/runtime unverified; keep the PR open without auto-merge.
+
 2026-10-29. Current work is [native fullscreen playback](phases/NATIVE_FULLSCREEN.md),
 stacked on PR #52 at 3f9b8107 and targeting feat/ios-style-sheet-grid. Editor expands
 use the existing live composition/captions; Export/Queue previews use the selected

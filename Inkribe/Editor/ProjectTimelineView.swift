@@ -9,11 +9,18 @@ struct ProjectTimelineView: UIViewRepresentable {
     var onInteraction: () -> Void
     var onCaption: (UUID) -> Void
     var onClip: (UUID) -> Void
+    var onMusic: () -> Void
+    var onCaptions: () -> Void
 
     func makeUIView(context: Context) -> TimelineViewport { TimelineViewport(frame: .zero) }
     func updateUIView(_ view: TimelineViewport, context: Context) {
         view.onInteraction = onInteraction
         view.onCaption = onCaption; view.onClip = onClip
+        view.onMusic = onMusic; view.onCaptions = onCaptions
+        view.onOriginalMute = { [weak session] in
+            guard let session else { return }
+            session.setOriginalAudioMuted(session.document?.isOriginalAudioMuted != true)
+        }
         view.onSeek = { [weak session] in session?.scrub(seconds: $0) }
         view.onScale = { [weak session] in session?.workspace.timelineScale = $0 }
         view.onTimingBegin = { [weak session] in session?.beginTimelineTiming(cueID: $0, operation: $1) }
@@ -35,6 +42,7 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     private let canvas = TimelineTrackCanvas(frame: .zero)
     private let playhead = UIView()
     private let thumbnails = TimelineThumbnailLoader()
+    private let musicWaveform = TimelineMusicWaveform()
     private var snapshot: ProjectTimelineSnapshot?
     private var scale = 48.0
     private var seconds = 0.0
@@ -54,6 +62,9 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
     var onInteraction: (() -> Void)?
     var onCaption: ((UUID) -> Void)?
     var onClip: ((UUID) -> Void)?
+    var onMusic: (() -> Void)?
+    var onCaptions: (() -> Void)?
+    var onOriginalMute: (() -> Void)?
     var onSeek: ((Double) -> Void)?
     var onScale: ((Double) -> Void)?
     var onTimingBegin: ((UUID, TimelineTimingOperation) -> TimelineCaptionTiming?)?
@@ -87,6 +98,8 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         playhead.isAccessibilityElement = false
         addSubview(playhead)
         canvas.thumbnails = thumbnails
+        canvas.musicWaveform = musicWaveform
+        musicWaveform.onChange = { [weak canvas] in canvas?.setNeedsDisplay() }
         thumbnails.onChange = { [weak canvas] in canvas?.setNeedsDisplay() }
         canvas.onCaption = { [weak self] id in
             guard let self, self.enabled else { return }
@@ -97,6 +110,18 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
             guard let self, self.enabled else { return }
             self.canvas.timingMessage = nil
             self.stopUserScrolling(); self.onInteraction?(); self.onClip?(id)
+        }
+        canvas.onMusic = { [weak self] in
+            guard let self, self.enabled else { return }
+            self.stopUserScrolling(); self.onInteraction?(); self.onMusic?()
+        }
+        canvas.onCaptions = { [weak self] in
+            guard let self, self.enabled else { return }
+            self.stopUserScrolling(); self.onInteraction?(); self.onCaptions?()
+        }
+        canvas.onOriginalMute = { [weak self] in
+            guard let self, self.enabled else { return }
+            self.stopUserScrolling(); self.onInteraction?(); self.onOriginalMute?()
         }
         canvas.onSeek = { [weak self] time in
             guard let self, self.enabled else { return }
@@ -158,7 +183,8 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         if resized { finishTiming(commit: false); stopUserScrolling() }
         updatingOffset = true
         scroll.frame = bounds
-        playhead.frame = CGRect(x: bounds.midX - 1, y: 0, width: 2, height: min(bounds.height, 152))
+        playhead.frame = CGRect(x: bounds.midX - 1, y: 0, width: 2,
+            height: min(bounds.height, CGFloat(TimelineGeometry.captionTop + TimelineGeometry.captionHeight + 8)))
         if resized {
             previousSize = bounds.size
             scale = clampedScale(scale)
@@ -198,12 +224,24 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         guard bounds.width > 0, bounds.height > 0 else { return }
         canvas.frame = CGRect(origin: CGPoint(x: scroll.contentOffset.x, y: 0), size: bounds.size)
         canvas.contentOffsetX = Double(scroll.contentOffset.x)
+        canvas.updateLayerControls()
         canvas.setNeedsDisplay()
         if accessibilityDirty || abs(canvas.contentOffsetX - accessibilityOffset) >= 48 {
             canvas.updateAccessibility()
             accessibilityOffset = canvas.contentOffsetX; accessibilityDirty = false
         }
         updateThumbnails()
+        updateMusicWaveform()
+    }
+
+    private func updateMusicWaveform() {
+        let request: MusicWaveformRequest? = snapshot?.music.flatMap { music in
+            canvas.sourceURLs[music.asset.id].map { url in
+                MusicWaveformRequest(assetID: music.asset.id, fingerprint: music.asset.sha256, url: url,
+                    duration: EditorTime.seconds(music.asset.metadata.duration))
+            }
+        }
+        musicWaveform.update(request, enabled: enabled && window != nil)
     }
     private func updateThumbnails() {
         guard let snapshot else { thumbnails.update([], enabled: false); return }
@@ -345,6 +383,9 @@ final class TimelineViewport: UIView, UIScrollViewDelegate, UIGestureRecognizerD
         cancelPendingSeek()
         scroll.delegate = nil
         thumbnails.stop()
+        musicWaveform.stop()
+        onMusic = nil; onCaptions = nil; onOriginalMute = nil
+        canvas.onMusic = nil; canvas.onCaptions = nil; canvas.onOriginalMute = nil
         onInteraction = nil; onCaption = nil; onClip = nil; onSeek = nil; onScale = nil
         canvas.onCaption = nil; canvas.onClip = nil; canvas.onSeek = nil; canvas.onZoom = nil; canvas.onTimingAction = nil
         onTimingBegin = nil; onTimingCurrent = nil; onTimingCommit = nil
@@ -364,6 +405,11 @@ private struct ActiveTimelineTiming {
 
 extension TimelineViewport {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var touchedView = touch.view
+        while let view = touchedView, view !== self {
+            if view is UIControl { return false }
+            touchedView = view.superview
+        }
         if timingGesture != nil {
             // A second finger must not turn a held caption into a centroid jump.
             finishTiming(commit: false, restorePlayhead: true)

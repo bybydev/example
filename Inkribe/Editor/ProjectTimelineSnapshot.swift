@@ -12,6 +12,7 @@ struct ProjectTimelineSnapshot: Sendable {
         let start: Double
         let end: Double
         let sourceStart: Double
+        let isMuted: Bool
     }
     struct Caption: Identifiable, Sendable {
         let id: UUID
@@ -32,6 +33,9 @@ struct ProjectTimelineSnapshot: Sendable {
     let clips: [Clip]
     let captions: [Caption]
     let gaps: [Gap]
+    let music: ProjectMusic?
+    let originalAudioMuted: Bool
+    let musicPlayback: MediaInterval?
     private let captionEnds: [Double]
     private let clipEnds: [Double]
     private let gapEnds: [Double]
@@ -40,6 +44,10 @@ struct ProjectTimelineSnapshot: Sendable {
         id = snapshot.id
         projectID = document.id
         duration = EditorTime.seconds(document.outputDuration)
+        music = document.music
+        if let music = document.music { musicPlayback = try? music.playbackInterval(outputDuration: document.outputDuration) }
+        else { musicPlayback = nil }
+        originalAudioMuted = document.isOriginalAudioMuted
         let timeline = OutputTimeline(document)
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
         clips = document.orderedClips.enumerated().compactMap { index, clip in
@@ -50,7 +58,8 @@ struct ProjectTimelineSnapshot: Sendable {
                 fingerprint: asset.sha256, kind: asset.kind,
                 start: EditorTime.seconds(output.start), end: EditorTime.seconds(output.end),
                 sourceStart: CMTimeGetSeconds(CMTimeAdd(clip.sourceInterval.start.cmTime,
-                    CMTimeSubtract(kept.start.cmTime, clip.timelineInterval.start.cmTime))))
+                    CMTimeSubtract(kept.start.cmTime, clip.timelineInterval.start.cmTime))),
+                isMuted: document.isOriginalAudioMuted || document.mediaEdits(for: clip.id).volume == 0)
         }
         let nativeIntervals = Dictionary(uniqueKeysWithValues: (document.recognition?.cues ?? []).map { ($0.id, $0.interval) })
         let manualIntervals = Dictionary(uniqueKeysWithValues: (document.manualCaptions ?? []).map { ($0.id, $0.interval) })
@@ -128,9 +137,12 @@ enum TimelineGeometry {
     static let tileWidth = 64.0
     static let videoTop = 28.0
     static let videoHeight = 60.0
-    static let captionTop = 100.0
+    static let musicTop = 96.0
+    static let musicHeight = 44.0
+    static let captionTop = 148.0
     static let captionHeight = 42.0
-    static let trackHeight = 160.0
+    static let messageTop = 193.0
+    static let trackHeight = 208.0
 
     static func tiles(clip: ProjectTimelineSnapshot.Clip, range: ClosedRange<Double>,
                       scale: Double, projectID: UUID, urls: [UUID: URL]) -> [TimelineFrameTile] {

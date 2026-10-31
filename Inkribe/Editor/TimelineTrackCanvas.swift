@@ -1,3 +1,4 @@
+import CoreMedia
 import UIKit
 
 struct TimelineTimingPreview {
@@ -9,7 +10,7 @@ struct TimelineTimingPreview {
 /// One viewport-sized drawing surface. It never allocates a project-wide bitmap
 /// or a view/player for every thumbnail or caption.
 @MainActor
-final class TimelineTrackCanvas: UIView {
+final class TimelineTrackCanvas: UIView, UIGestureRecognizerDelegate {
     var snapshot: ProjectTimelineSnapshot?
     var sourceURLs: [UUID: URL] = [:]
     var pointsPerSecond = 48.0
@@ -18,6 +19,15 @@ final class TimelineTrackCanvas: UIView {
     var selectedClipID: UUID?
     var accent = UIColor.systemOrange
     var thumbnails: TimelineThumbnailLoader?
+    var musicWaveform: TimelineMusicWaveform?
+    var onMusic: (() -> Void)?
+    var onCaptions: (() -> Void)?
+    var onOriginalMute: (() -> Void)?
+    private let originalControl = UIButton(type: .system)
+    private let musicControl = UIButton(type: .system)
+    private let captionsControl = UIButton(type: .system)
+    private let addMusicControl = UIButton(type: .system)
+    private var controlsMuted: Bool?
     var onCaption: ((UUID) -> Void)?
     var onClip: ((UUID) -> Void)?
     var onSeek: ((Double) -> Void)?
@@ -41,11 +51,142 @@ final class TimelineTrackCanvas: UIView {
         isOpaque = true
         contentMode = .redraw
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.delegate = self
         addGestureRecognizer(tap)
         tapRecognizer = tap
         isAccessibilityElement = false
+        configureLayerControls()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func configureLayerControls() {
+        for (button, symbol, label) in [(musicControl, "music.note", "Music controls"),
+                                        (captionsControl, "captions.bubble", "Open captions")] {
+            var config = UIButton.Configuration.plain()
+            config.image = UIImage(systemName: symbol)
+            config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 19)
+            config.baseForegroundColor = .secondaryLabel
+            config.background.backgroundColor = .tertiarySystemFill
+            config.background.cornerRadius = 8
+            button.configuration = config
+            button.accessibilityLabel = label
+        }
+        var original = UIButton.Configuration.plain()
+        original.imagePlacement = .top; original.imagePadding = 3
+        original.titleAlignment = .center
+        original.contentInsets = .zero
+        original.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var value = attributes; value.font = UIFont.preferredFont(forTextStyle: .caption2); return value
+        }
+        originalControl.configuration = original
+        originalControl.titleLabel?.numberOfLines = 2
+        originalControl.titleLabel?.textAlignment = .center
+        var add = UIButton.Configuration.plain()
+        add.image = UIImage(systemName: "plus")
+        add.title = "Add music"; add.imagePadding = 5
+        add.baseForegroundColor = .secondaryLabel
+        add.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+            var value = attributes; value.font = UIFont.preferredFont(forTextStyle: .subheadline); return value
+        }
+        add.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 14)
+        add.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 8)
+        addMusicControl.configuration = add
+        addMusicControl.contentHorizontalAlignment = .leading
+        addMusicControl.accessibilityLabel = "Add music"
+        originalControl.addAction(UIAction { [weak self] _ in self?.onOriginalMute?() }, for: .touchUpInside)
+        musicControl.addAction(UIAction { [weak self] _ in self?.onMusic?() }, for: .touchUpInside)
+        captionsControl.addAction(UIAction { [weak self] _ in self?.onCaptions?() }, for: .touchUpInside)
+        addMusicControl.addAction(UIAction { [weak self] _ in self?.onMusic?() }, for: .touchUpInside)
+        for button in [originalControl, musicControl, captionsControl, addMusicControl] { addSubview(button) }
+    }
+
+    /// Controls occupy the existing negative-time start padding. They scroll
+    /// away with time zero rather than shrinking every lane into a fixed sidebar.
+    func updateLayerControls() {
+        guard let snapshot else {
+            for button in [originalControl, musicControl, captionsControl, addMusicControl] { button.isHidden = true }
+            return
+        }
+        let start = x(0)
+        originalControl.frame = CGRect(x: start - 76, y: TimelineGeometry.videoTop, width: 68, height: TimelineGeometry.videoHeight)
+        musicControl.frame = CGRect(x: start - 52, y: TimelineGeometry.musicTop, width: 44, height: 44)
+        captionsControl.frame = CGRect(x: start - 52, y: TimelineGeometry.captionTop - 1, width: 44, height: 44)
+        for button in [originalControl, musicControl, captionsControl] {
+            button.isHidden = !button.frame.intersects(bounds)
+        }
+        if controlsMuted != snapshot.originalAudioMuted {
+            controlsMuted = snapshot.originalAudioMuted
+            var config = originalControl.configuration
+            config?.image = UIImage(systemName: snapshot.originalAudioMuted ? "speaker.slash" : "speaker.wave.2")
+            config?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
+            config?.title = snapshot.originalAudioMuted ? "Unmute clip\naudio" : "Mute clip\naudio"
+            config?.titleLineBreakMode = .byWordWrapping
+            originalControl.configuration = config
+        }
+        var original = originalControl.configuration
+        original?.baseForegroundColor = snapshot.originalAudioMuted ? accent : .secondaryLabel
+        originalControl.configuration = original
+        originalControl.titleLabel?.numberOfLines = 2
+        originalControl.accessibilityLabel = snapshot.originalAudioMuted ? "Unmute all original clip audio" : "Mute all original clip audio"
+        originalControl.accessibilityValue = snapshot.originalAudioMuted ? "Muted" : "On"
+        musicControl.accessibilityLabel = snapshot.music == nil ? "Add music" : "Music controls"
+        let left = max(0, start), right = min(bounds.width, x(snapshot.duration))
+        addMusicControl.frame = CGRect(x: left, y: TimelineGeometry.musicTop, width: max(0, right - left), height: 44)
+        addMusicControl.isHidden = snapshot.music != nil || right - left < 44
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var view = touch.view
+        while let candidate = view, candidate !== self {
+            if candidate is UIControl { return false }
+            view = candidate.superview
+        }
+        return true
+    }
+
+    private func drawMusic(_ context: CGContext, snapshot: ProjectTimelineSnapshot) {
+        let lane = rect(start: 0, end: snapshot.duration, y: TimelineGeometry.musicTop, height: TimelineGeometry.musicHeight)
+        UIColor.tertiarySystemFill.setFill(); context.fill(lane)
+        guard let music = snapshot.music, let playback = snapshot.musicPlayback else { return }
+        let frame = rect(start: EditorTime.seconds(playback.start), end: EditorTime.seconds(playback.end),
+            y: TimelineGeometry.musicTop, height: TimelineGeometry.musicHeight)
+        context.saveGState()
+        UIBezierPath(roundedRect: frame, cornerRadius: 5).addClip()
+        accent.withAlphaComponent(music.isEffectivelyMuted ? 0.08 : 0.18).setFill(); context.fill(frame)
+        let left = max(0, frame.minX), right = min(bounds.width, frame.maxX)
+        let title = music.asset.displayName + (music.isEffectivelyMuted ? " · Muted" : "")
+        let textLeft = left + (music.loopToFit ? 25 : 8)
+        if music.loopToFit, right - left >= 28 {
+            UIImage(systemName: "repeat")?.withTintColor(.secondaryLabel, renderingMode: .alwaysOriginal)
+                .draw(in: CGRect(x: left + 7, y: frame.minY + 5, width: 13, height: 13))
+        }
+        drawText(title, in: CGRect(x: textLeft, y: frame.minY + 3, width: right - textLeft - 6, height: 18),
+            font: .systemFont(ofSize: 11, weight: .medium), color: .label)
+        if let waveform = musicWaveform, !waveform.peaks.isEmpty {
+            let peaks = waveform.peaks
+            let section = CMTimeGetSeconds(music.sourceInterval.duration)
+            let sourceStart = EditorTime.seconds(music.sourceInterval.start)
+            let duration = EditorTime.seconds(music.asset.metadata.duration)
+            accent.withAlphaComponent(music.isEffectivelyMuted ? 0.3 : 0.8).setFill()
+            var position = left + 4
+            while position < right - 3 {
+                let elapsed = max(0, time(at: position) - EditorTime.seconds(playback.start))
+                let offset = music.loopToFit ? elapsed.truncatingRemainder(dividingBy: section) : elapsed
+                let fraction = max(0, min(1, (sourceStart + offset) / duration))
+                let index = min(peaks.count - 1, Int(fraction * Double(peaks.count)))
+                let height = max(1, CGFloat(peaks[index]) * 15)
+                context.fill(CGRect(x: position, y: frame.minY + 32 - height / 2, width: 2, height: height))
+                position += 3
+            }
+        } else {
+            let message = sourceURLs[music.asset.id] == nil ? "Audio file unavailable" :
+                musicWaveform?.unavailable == true ? "Waveform unavailable" : "Loading waveform…"
+            drawText(message, in: CGRect(x: left + 8, y: frame.minY + 23, width: right - left - 16, height: 17),
+                font: .systemFont(ofSize: 11), color: .secondaryLabel)
+        }
+        context.restoreGState()
+    }
+
     func x(_ seconds: Double) -> CGFloat { bounds.width / 2 + CGFloat(seconds * pointsPerSecond - contentOffsetX) }
     func time(at x: CGFloat) -> Double {
         min(snapshot?.duration ?? 0, max(0, (Double(x - bounds.width / 2) + contentOffsetX) / pointsPerSecond))
@@ -65,6 +206,7 @@ final class TimelineTrackCanvas: UIView {
         UIColor.secondarySystemBackground.setFill(); context.fill(bounds)
         drawRuler(context, duration: snapshot.duration)
         let range = visibleRange()
+        drawMusic(context, snapshot: snapshot)
         for clip in snapshot.visibleClips(range) where clip.end > range.lowerBound {
             draw(clip, snapshot: snapshot, range: range, context: context)
         }
@@ -90,15 +232,20 @@ final class TimelineTrackCanvas: UIView {
         if let preview = timingPreview {
             let text = preview.valid ? EditorTime.display(preview.interval.start) +
                 " – " + EditorTime.display(preview.interval.end) : "Overlaps another caption"
-            drawText(text, in: CGRect(x: 12, y: 145, width: max(0, bounds.width - 24), height: 15),
+            drawText(text, in: CGRect(x: 12, y: TimelineGeometry.messageTop, width: max(0, bounds.width - 24), height: 15),
                 font: .monospacedDigitSystemFont(ofSize: 11, weight: .medium), color: preview.valid ? .secondaryLabel : .systemRed)
         } else if let timingMessage {
-            drawText(timingMessage, in: CGRect(x: 12, y: 145, width: max(0, bounds.width - 24), height: 15),
+            drawText(timingMessage, in: CGRect(x: 12, y: TimelineGeometry.messageTop, width: max(0, bounds.width - 24), height: 15),
                 font: .systemFont(ofSize: 11), color: .systemRed)
         }
         if snapshot.captions.isEmpty && snapshot.gaps.isEmpty {
-            drawText("No captions yet", in: CGRect(x: 12, y: TimelineGeometry.captionTop + 12,
-                width: max(0, bounds.width - 24), height: 22), font: .systemFont(ofSize: 13), color: .secondaryLabel)
+            let inset: CGFloat = 12
+            let left: CGFloat = max(CGFloat.zero, x(0)) + inset
+            let right: CGFloat = min(bounds.width, x(snapshot.duration))
+            let width: CGFloat = max(CGFloat.zero, right - left - inset)
+            drawText("No captions yet", in: CGRect(x: left, y: CGFloat(TimelineGeometry.captionTop) + inset,
+                width: width, height: 22),
+                font: .systemFont(ofSize: 13), color: .secondaryLabel)
         }
     }
     private func drawCaption(_ cue: ProjectTimelineSnapshot.Caption) {
@@ -141,12 +288,22 @@ final class TimelineTrackCanvas: UIView {
             }
         }
         if frame.width >= 44 {
+            let titleFont = UIFont.systemFont(ofSize: 10, weight: .medium)
+            let titleWidth = (clip.title as NSString).size(withAttributes: [.font: titleFont]).width.rounded(.up)
             let titleFrame = CGRect(x: max(0, frame.minX) + 4, y: frame.minY + 3,
-                width: min(frame.maxX, bounds.width) - max(0, frame.minX) - 8, height: 17)
+                width: min(titleWidth, min(frame.maxX, bounds.width) - max(0, frame.minX) - 8), height: 17)
             if titleFrame.width > 4 {
-                UIColor.black.withAlphaComponent(0.55).setFill(); context.fill(titleFrame.insetBy(dx: -2, dy: -1))
-                drawText(clip.title, in: titleFrame, font: .systemFont(ofSize: 10, weight: .medium), color: .white)
+                UIColor.black.withAlphaComponent(0.55).setFill()
+                UIBezierPath(roundedRect: titleFrame.insetBy(dx: -2, dy: -1), cornerRadius: 3).fill()
+                drawText(clip.title, in: titleFrame, font: titleFont, color: .white)
             }
+        }
+        if clip.isMuted, frame.width >= 28 {
+            let badge = CGRect(x: max(0, frame.minX) + 5, y: frame.maxY - 20, width: 18, height: 16)
+            UIColor.black.withAlphaComponent(0.6).setFill()
+            UIBezierPath(roundedRect: badge, cornerRadius: 3).fill()
+            UIImage(systemName: "speaker.slash.fill")?.withTintColor(.white, renderingMode: .alwaysOriginal)
+                .draw(in: badge.insetBy(dx: 3, dy: 3))
         }
         context.restoreGState()
         let selected = selectedClipID == clip.id
@@ -217,6 +374,9 @@ final class TimelineTrackCanvas: UIView {
         let time = self.time(at: point.x)
         let rawTime = (Double(point.x - bounds.width / 2) + contentOffsetX) / pointsPerSecond
         guard rawTime >= 0, rawTime <= snapshot.duration else { onSeek?(time); return }
+        if point.y >= TimelineGeometry.musicTop && point.y <= TimelineGeometry.musicTop + TimelineGeometry.musicHeight {
+            onMusic?(); return
+        }
         if point.y >= TimelineGeometry.captionTop && point.y <= TimelineGeometry.captionTop + TimelineGeometry.captionHeight + 8 {
             if let id = captionHit(at: point) { onCaption?(id); return }
         } else if point.y >= TimelineGeometry.videoTop && point.y <= TimelineGeometry.videoTop + TimelineGeometry.videoHeight {
@@ -233,7 +393,11 @@ final class TimelineTrackCanvas: UIView {
 
     func updateAccessibility() {
         guard let snapshot else { accessibilityElements = []; return }
-        var elements: [UIAccessibilityElement] = []
+        var elements: [Any] = []
+        if !originalControl.isHidden { elements.append(originalControl) }
+        if !musicControl.isHidden { elements.append(musicControl) }
+        if !addMusicControl.isHidden { elements.append(addMusicControl) }
+        if !captionsControl.isHidden { elements.append(captionsControl) }
         let playhead = accessibleItem("playhead")
         let seconds = min(snapshot.duration, max(0, contentOffsetX / pointsPerSecond))
         playhead.accessibilityLabel = "Project playhead"
@@ -260,12 +424,27 @@ final class TimelineTrackCanvas: UIView {
             let key = "clip-" + clip.id.uuidString
             let element = accessibleItem(key); retainedKeys.insert(key)
             element.accessibilityLabel = clip.title
-            element.accessibilityValue = TimelineGeometry.label(clip.start) + " to " + TimelineGeometry.label(clip.end)
+            element.accessibilityValue = TimelineGeometry.label(clip.start) + " to " + TimelineGeometry.label(clip.end) + (clip.isMuted ? ", original audio muted" : "")
             element.accessibilityTraits = selectedClipID == clip.id ? [.button, .selected] : [.button]
             element.accessibilityFrameInContainerSpace = rect(start: clip.start, end: clip.end,
                 y: TimelineGeometry.videoTop, height: TimelineGeometry.videoHeight).intersection(bounds)
             element.activate = { [weak self] in self?.onClip?(clip.id); return true }
             elements.append(element)
+        }
+        if let music = snapshot.music, let interval = snapshot.musicPlayback {
+            let frame = rect(start: EditorTime.seconds(interval.start), end: EditorTime.seconds(interval.end),
+                y: TimelineGeometry.musicTop, height: TimelineGeometry.musicHeight).intersection(bounds)
+            if !frame.isNull, !frame.isEmpty {
+                let element = accessibleItem("music"); retainedKeys.insert("music")
+                element.accessibilityLabel = "Music, " + music.asset.displayName
+                element.accessibilityValue = (music.isEffectivelyMuted ? "Muted" : "Volume \(Int((music.volume * 100).rounded())) percent") +
+                    (music.loopToFit ? ", loop to fit video" : ", plays once")
+                element.accessibilityTraits = [.button]
+                element.accessibilityHint = "Opens music controls"
+                element.accessibilityFrameInContainerSpace = frame
+                element.activate = { [weak self] in self?.onMusic?(); return true }
+                elements.append(element)
+            }
         }
         for cue in snapshot.visibleCaptions(range).prefix(64) where cue.end > range.lowerBound {
             let key = "caption-" + cue.id.uuidString

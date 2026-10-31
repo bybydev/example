@@ -46,6 +46,7 @@ extension ProjectDocument {
               canvas == base.canvas, preset == base.preset, assets == base.assets,
               clips == base.clips, captionStyle == base.captionStyle, mediaEdits == base.mediaEdits,
               clipSettings == base.clipSettings, manualCaptions == base.manualCaptions,
+              music == base.music, originalAudioMuted == base.originalAudioMuted,
               let current = recognition, current.progress != nil else { return false }
         guard let old = base.recognition else { return true }
         guard old.isIncomplete, current.id == old.id,

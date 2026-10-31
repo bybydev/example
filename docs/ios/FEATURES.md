@@ -1,5 +1,20 @@
 # Inkribe iOS — current feature ledger
 
+## Music layer — passes 1–3 (2026-10-31)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| MUSIC.FOUNDATION | One owned audio file, source selection/output offset, loop/mix/fades, durable edits/history | Source-integrated; runtime unverified |
+| MUSIC.OUTPUT | Shared preview/MP4 composition; frozen media pins; duration remains clip-defined | Source-integrated; runtime unverified |
+| MUSIC.OWNERSHIP | Reopen/duplicate/Trash/storage/integrity/relink; schema 12 reads 1–11 | Source-integrated; runtime unverified |
+| MUSIC.ORIGINAL_MUTE | Independent original-clip master mute preserves per-clip levels and music | Source-integrated with pass-2 leading control; runtime unverified |
+| MUSIC.TIMELINE | Video/Music/Captions, leading buttons, empty Add music, real bounded waveform/loop | Source-integrated in pass 2; runtime unverified |
+| MUSIC.SHEET | Controls only; staged Files/replace/settings save once on Done, Cancel/swipe discards; no preview/transport | Source-integrated in pass 2; runtime unverified |
+| MUSIC.INTEGRATION | Sheet lifetime/late completion, rational loop/fade bounds, stable sliders, effective mute, import suitability; source ownership/duration/output review | Source-reviewed and fixes integrated in pass 3; runtime unverified |
+
+See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md). No other
+editor design changes are authorized. Source-only restrictions remain.
+
 ## Native fullscreen playback (2026-10-29, stacked on #52)
 
 | ID | Requirement | Source status |

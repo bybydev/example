@@ -4,6 +4,9 @@ import SwiftUI
 /// The overlay belongs to this editor, never to the application's window.
 /// Its Cancel button is outside the disabled/hidden editor subtree.
 struct EditorPreparationPresentation: ViewModifier {
+    // Temporarily hide editor-loading UI. Restore it here without changing preparation.
+    static let showsLoadingIndicators = false
+
     @Environment(\.appFoundationTheme) private var theme
     let isPreparing: Bool
     let cancel: () -> Void
@@ -32,7 +35,7 @@ struct EditorPreparationPresentation: ViewModifier {
             }
             .task(id: isPreparing) {
                 showsIndicator = false
-                guard isPreparing else { return }
+                guard Self.showsLoadingIndicators, isPreparing else { return }
                 do { try await Task.sleep(for: .milliseconds(180)) }
                 catch { return }
                 guard !Task.isCancelled else { return }

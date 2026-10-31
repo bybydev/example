@@ -23,6 +23,12 @@ struct PreparedClipImport: Sendable {
     let clips: [ProjectClip]
 }
 
+/// Reuses coordinated, bounded copy/inspection without publishing a speech clip.
+struct PreparedMusicImport: Sendable {
+    let staging: URL
+    let asset: SourceAsset
+}
+
 struct ImportItemError: LocalizedError {
     let name: String
     let detail: String
@@ -187,6 +193,27 @@ actor MediaImporter {
             return PreparedClipImport(staging: staging, assets: assets, clips: clips)
         } catch {
             try? await repository.discardStaging(staging)
+            throw error
+        }
+    }
+
+    func prepareMusic(_ input: ImportInput) async throws -> PreparedMusicImport {
+        let prepared = try await prepareClips([input])
+        do {
+            try Task.checkCancellation()
+            guard let asset = prepared.assets.first, prepared.assets.count == 1,
+                  asset.kind == .audio, asset.metadata.videoTrackCount == 0,
+                  asset.metadata.audioTrackCount > 0 else { throw MusicEditError.invalidImport }
+            // Track metadata alone does not establish that the soundtrack can
+            // feed both the preview composition and the exported PCM mix.
+            let url = try OwnedPath.secureURL(for: asset.relativeOriginalPath, base: "Originals", in: prepared.staging)
+            let copied = AVURLAsset(url: url)
+            let (readable, composable, protected) = try await copied.load(.isReadable, .isComposable, .hasProtectedContent)
+            try Task.checkCancellation()
+            guard readable, composable, !protected else { throw MusicEditError.invalidImport }
+            return PreparedMusicImport(staging: prepared.staging, asset: asset)
+        } catch {
+            try? await repository.discardStaging(prepared.staging)
             throw error
         }
     }

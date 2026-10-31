@@ -87,20 +87,24 @@ struct ProjectSettingsState: Equatable, Sendable {
     let clipSettings: [ClipSettings]?
     let canvas: ProjectCanvas
     let preset: CanvasPreset
+    let originalAudioMuted: Bool?
     init(_ document: ProjectDocument) {
         captionStyle = document.captionStyle; mediaEdits = document.mediaEdits
         clipSettings = document.clipSettings; canvas = document.canvas; preset = document.preset
+        originalAudioMuted = document.originalAudioMuted
     }
     func applying(to document: ProjectDocument) -> ProjectDocument {
         var value = document
         value.captionStyle = captionStyle; value.mediaEdits = mediaEdits
         value.clipSettings = clipSettings; value.canvas = canvas; value.preset = preset
+        value.originalAudioMuted = originalAudioMuted
         return value
     }
     func changesMedia(from other: Self) -> Bool {
         let current = Dictionary(uniqueKeysWithValues: (clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) })
         let previous = Dictionary(uniqueKeysWithValues: (other.clipSettings ?? []).filter { !$0.media.isEmpty }.map { ($0.id, $0.media) })
-        return mediaEdits != other.mediaEdits || canvas != other.canvas || preset != other.preset || current != previous
+        return mediaEdits != other.mediaEdits || canvas != other.canvas || preset != other.preset ||
+            current != previous || originalAudioMuted != other.originalAudioMuted
     }
 }
 

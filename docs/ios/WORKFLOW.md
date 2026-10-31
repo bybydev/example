@@ -1,5 +1,24 @@
 # Inkribe iOS — current working agreement
 
+2026-10-31. The user authorizes music pass 3 in existing PR #54, extending 73a2323c.
+Complete the source integration review and scoped defects without changing the
+approved design. All three source passes are delivered; no runtime validation is
+implied. Existing no-build/no-test/no-typecheck/no-CI/no-native/UI execution rules
+remain. Leave the PR open without auto-merge; no automatic next feature/release.
+
+2026-10-31. The user's "next pass" authorizes pass 2 in existing PR #54, extending
+b345f71c. Implement only MUSIC.TIMELINE / MUSIC.SHEET and their required local-draft
+publication adapter. Keep the settled CapCut-inspired order/leading button styles,
+existing editor design and preview-free Music sheet. Pass 3 awaits the next signal.
+Existing source-only restrictions and open/no-auto-merge requirement remain.
+
+2026-10-31. The user explicitly starts pass 1 of the agreed three-pass music PR,
+feat/ios-music-layer -> develop, from 723f333. Apply phases/MUSIC_LAYER.md and its
+handoff. Pass 1 is source/data/media integration only; all editor layout and visible
+controls stay as on develop. Next passes await the user's signal, and unrelated
+design changes require approval. Keep the PR open without auto-merge. Existing
+source-only/no-build/no-test/no-CI/no-native-execution restrictions remain.
+
 2026-10-29. The user explicitly authorizes the discussed native fullscreen changes
 in a new stacked PR from #52 head 3f9b8107, targeting feat/ios-style-sheet-grid.
 Apply phases/NATIVE_FULLSCREEN.md and handoffs/NATIVE_FULLSCREEN.md. Preserve the
