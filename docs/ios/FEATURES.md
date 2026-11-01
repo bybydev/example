@@ -1,5 +1,56 @@
 # Inkribe iOS — current feature ledger
 
+## Queue experience — final pass 4 (2026-11-01)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| JOB.ACTIONS / JOB.CONCURRENCY | Single queued Transcribe/Create Export and JobQueue 1/3 limits/current/legacy jobs | Source-integrated and reviewed |
+| JOB.QUEUE_UI / JOB.PROJECT_ROUTE / JOB.RETAINED_EXPORTS | Settled queue design, exact project/export routes, retained-file fallback and delivery | Source-integrated and reviewed |
+| JOB.BACKGROUND / JOB.BACKGROUND_RECOVERY / JOB.BACKGROUND_RESOURCES | Explicit system leases, kind/resource isolation, pause/recovery and GPU fallback | Source-integrated and reviewed |
+| JOB.INTEGRATION | Stable scene owner, real-background recovery, settled/cancellable focus, stale-project fallback and source ownership cleanup | Source-reviewed; scoped fixes integrated |
+
+All four source passes are complete. See [handoff](handoffs/QUEUE_EXPERIENCE.md).
+Source-only; compilation/native/UI/signing acceptance remains unverified.
+
+## Queue experience — pass 3 (2026-11-01)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| JOB.BACKGROUND | Explicit work/Resume requests; actual handler grants; independent speech/export leases and system progress | Source-integrated |
+| JOB.BACKGROUND_RECOVERY | Expiration cancels/pauses affected kind; captured native teardown before completion; foreground recovery without resubmission | Source-integrated |
+| JOB.BACKGROUND_RESOURCES | CPU speech/SRT-only export; GPU-supported MP4; foreground-only export fallback; source metadata/entitlement | Source-integrated |
+| JOB.ACTIONS / JOB.CONCURRENCY / JOB.QUEUE_UI / JOB.PROJECT_ROUTE | Passes 1–2 | Preserved |
+| JOB.INTEGRATION | Final scoped source review | Await pass 4 |
+
+See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+No generation/build/native/UI execution; runtime acceptance remains unverified.
+
+## Queue experience — pass 2 (2026-11-01)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| JOB.QUEUE_UI | Spokio-style plain list, outlined status pills/counts, compact status/progress/chevron rows, toolbar filters/sort, swipe/context actions | Source-integrated |
+| JOB.PROJECT_ROUTE | Rows open project Captions or exact Export activity/file; owner-dismissed handoff and same-editor reuse | Source-integrated |
+| JOB.RETAINED_EXPORTS | Dedicated retained requests/files, live details/recovery/delivery and unavailable-project fallback | Source-integrated |
+| JOB.ACTIONS / JOB.CONCURRENCY | Single queued actions and JobQueue 1/3 limits from pass 1 | Preserved |
+| JOB.BACKGROUND / JOB.INTEGRATION | Continued processing / final source integration review | Await passes 3 / 4 |
+
+See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+Source-only; compilation/native/UI acceptance remains unverified.
+
+## Queue experience — pass 1 (2026-11-01)
+
+| ID | Requirement | Source status |
+|---|---|---|
+| JOB.ACTIONS | One Transcribe/Create Export path, always queued; project activity persists across sheet reopening | Source-integrated |
+| JOB.CONCURRENCY | JobQueue capacity: transcription 1, exports 3; current/legacy types; no global iOS permit | Source-integrated |
+| JOB.QUEUE_UI / JOB.PROJECT_ROUTE | Spokio iOS reference and project Captions/specific-export navigation | Deferred to pass 2 |
+| JOB.BACKGROUND | User-initiated continued processing, progress/expiration and GPU-aware export fallback | Deferred to pass 3 |
+| JOB.INTEGRATION | Final source review of retry/cancellation/recovery/navigation | Deferred to pass 4 |
+
+See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+Source integration only; compilation/runtime acceptance remains unverified.
+
 ## Timeline clip trimming (2026-10-31, stacked on #55)
 
 | ID | Requirement | Source status |

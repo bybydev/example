@@ -4,6 +4,7 @@ import SwiftUI
 /// Resolve by compound ID on every render/action, never retain a record snapshot.
 struct ProcessingJobDetail: View {
     @Environment(ProjectsModel.self) private var model
+    @Environment(\.queueProjectNavigation) private var openProject
     let key: ProcessingJobKey
     @State private var error: String?
     @State private var pendingAction: ProcessingAction?
@@ -36,8 +37,9 @@ struct ProcessingJobDetail: View {
                         LabeledContent("Finished") { Text(finished, format: .dateTime) }
                     }
                     if let failure = entry.record.error { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
-                    if !entry.record.status.isTerminal && processing.lifecycle.userPaused {
-                        Text("Paused by you. Resume in Queue when you are ready.").foregroundStyle(.secondary)
+                    if !entry.record.status.isTerminal,
+                       let pause = processing.lifecycle.pauseDescription(for: key.kind) {
+                        Text(pause).foregroundStyle(.secondary)
                     }
                 } else {
                     Text(artifact == nil ? "This queue record has been removed." : "This retained request/file has no queue record.")
@@ -49,6 +51,14 @@ struct ProcessingJobDetail: View {
             projectSection
             if key.kind == .export { exportSection }
             actionSection
+            if entry?.record.status.isTerminal == false {
+                Section {
+                    Text(processing.continuedProcessing.explanation(for: key.kind))
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("Closing Inkribe from the app switcher stops processing. Reopen the app to continue saved work.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
             if let error { Section("Action could not finish") { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
         }
         .buttonStyle(.borderless)
@@ -96,9 +106,10 @@ struct ProcessingJobDetail: View {
     private var projectSection: some View {
         Section("Project") {
             if let project {
-                NavigationLink {
-                    ProjectEditorDestination(projectID: project.id)
-                } label: { Label("Open \(project.title)", systemImage: "folder") }
+                Text(project.title).font(.headline)
+                Button(key.kind == .transcription ? "Open Captions" : "Open Export", systemImage: key.kind.icon) {
+                    if let route = model.queueProjectRoute(for: key) { openProject(route) }
+                }.disabled(model.exports.hasUserDelivery)
                 if !project.available {
                     Text("Some original media is missing or changed. Open the project to relink it; saved captions remain available.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -176,7 +187,7 @@ struct ProcessingJobDetail: View {
     private var confirmationMessage: String {
         switch pendingAction {
         case .cancel: "Saved captions and completed files are kept. Incomplete work can be retried."
-        case .removeRecord: "Your project captions and recovery checkpoints are kept. Export files remain available under Retained files in Queue."
+        case .removeRecord: "Your project captions and recovery checkpoints are kept. Export files remain available in Retained Exports from Queue options."
         case .discardExport: "Deletes only this export's frozen inputs, result and queue record. Save or share the file first if you need a copy. Your project and original media are kept."
         default: ""
         }

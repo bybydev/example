@@ -13,7 +13,7 @@ struct SpeechJob: Job {
 
     func execute(progress: JobProgressReporter) async throws {
         guard let executor = SpeechEnvironment.shared.executor else { throw SpeechError.missingModel }
-        await progress.report(message: "Waiting for processing capacity…")
+        await progress.report(message: "Preparing transcription…")
         try await ProcessingRuntime.shared.run(kind: .transcription) {
             try await executor.execute(id: id, payload: payload, progress: progress)
         }
@@ -46,6 +46,8 @@ final class TranscriptionController {
     private var registered = false
     private var queueStarted = false
     private let lifecycle: ProcessingLifecycle
+    var onQueueEvent: ((JobQueueEvent) -> Void)?
+    var onUserRequestedWork: (() -> Void)?
     let models = SpeechModels()
     var modelAvailable: Bool { !lifecycle.isSwitchingModel && models.available }
     var protectedModelIDs: Set<String> { Set(SpeechEngine.shared.loadedModelID.map { [$0] } ?? []) }
@@ -106,9 +108,10 @@ final class TranscriptionController {
                     await self?.publishedWindow()
                 }))
                 let value = JobQueue(fileURL: root.appendingPathComponent("speech-jobs.json"),
-                    policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
+                    policy: JobQueuePolicy(maxConcurrentExecutions: SpeechJob.maxConcurrentExecutions), registry: registry,
                     maxRecords: 100, autoCleanupEnabled: true)
                 value.eventHandler = { [weak self] event in
+                    self?.onQueueEvent?(event)
                     switch event {
                     case .jobCompleted, .jobFailed, .jobCancelled:
                         self?.resultGeneration += 1
@@ -225,6 +228,7 @@ final class TranscriptionController {
         try queue.enqueue(SpeechJob(id: id, payload: .init(projectID: projectID,
             expectedRevision: project.contentRevision, languageCode: partial != nil ? partial!.requestedLanguageCode : code,
             requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
+        onUserRequestedWork?()
     }
 
     func cancel(_ id: UUID) throws { try queue?.cancel(id: id) }
@@ -276,6 +280,7 @@ final class TranscriptionController {
             // Job completion may have failed to persist after document publication.
             try lifecycle.requireAdmission(generation)
             try queue.retry(id: record.id)
+            onUserRequestedWork?()
             return
         }
         let partial = project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil }
@@ -308,6 +313,7 @@ final class TranscriptionController {
             projectTitle: project.title))
         if id == record.id { try queue.replace(id: id, with: job) }
         else { try queue.enqueue(job) }
+        onUserRequestedWork?()
     }
 }
 

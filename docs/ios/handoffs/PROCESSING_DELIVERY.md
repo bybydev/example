@@ -1,5 +1,10 @@
 # Issue #38 — production pass 2 handoff
 
+> 2026-11-01: [Queue experience](../phases/QUEUE_EXPERIENCE.md) supersedes
+> this historical single-heavy-operation policy and dual export actions.
+> Current pass 1 uses JobQueue capacity 1 transcription / 3 exports.
+> Background continuation remains deferred to pass 3.
+
 > Historical pass-2 record: pass 3 is now source-integrated in the same PR #39.
 > HOME_NATIVE_FLOW phase/handoff and root AGENTS define current scope. Earlier
 > pending-pass/authorization statements here describe the pass-2 delivery point.

@@ -13,8 +13,33 @@ final class ProcessingLifecycle {
     private var pendingPause: Bool?
     private(set) var isSwitchingModel = false
     private(set) var workGeneration = UUID()
-    var canRun: Bool { foreground && !userPaused && error == nil }
-    var canTranscribe: Bool { canRun && !isSwitchingModel }
+    private(set) var backgroundKinds: Set<ProcessingKind> = []
+    private(set) var systemPausedKinds: Set<ProcessingKind> = []
+    var needsResume: Bool { userPaused || !systemPausedKinds.isEmpty }
+    var canTranscribe: Bool { canProcess(.transcription) && !isSwitchingModel }
+    var canExport: Bool { canProcess(.export) }
+
+    private func canProcess(_ kind: ProcessingKind) -> Bool {
+        (foreground || backgroundKinds.contains(kind)) && !userPaused && error == nil &&
+            !systemPausedKinds.contains(kind)
+    }
+    func setBackground(_ granted: Bool, for kind: ProcessingKind) {
+        if granted { backgroundKinds.insert(kind) } else { backgroundKinds.remove(kind) }
+    }
+    func interrupt(_ kind: ProcessingKind) { systemPausedKinds.insert(kind) }
+    func resumeInterrupted(_ kind: ProcessingKind) { systemPausedKinds.remove(kind) }
+    func resumeInterrupted() { systemPausedKinds.removeAll() }
+
+    func pauseDescription(for kind: ProcessingKind) -> String? {
+        if userPaused { return "Paused by you. Resume in Queue when you’re ready." }
+        if systemPausedKinds.contains(kind) {
+            return "Paused by iOS. Resume in Queue to continue."
+        }
+        if !foreground && !backgroundKinds.contains(kind) {
+            return "Processing paused outside Inkribe. Return to the app to continue."
+        }
+        return nil
+    }
 
     func beginModelSwitch() throws {
         guard !isSwitchingModel else { throw SpeechError.busy }

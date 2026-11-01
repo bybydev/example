@@ -1,33 +1,40 @@
 import AppFoundation
 import SwiftUI
 
-/// Captures the editor's saved document, then follows the exact queued job ID.
+/// One create action captures the saved document and enqueues a durable export.
+/// Project activity resolves saved job IDs again when this sheet is reopened.
 struct ExportView: View {
     @Environment(\.appFoundationTheme) private var theme
     @Environment(ProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let session: EditorSession?
+    var focusedJobID: UUID? = nil
     @State private var profile = ExportProfile()
     @State private var launching = false
     @State private var launchTask: Task<Void, Never>?
     @State private var error: String?
     @State private var message: String?
+    @State private var acceptanceToast: ConfirmationToast?
     @State private var upsell: ProFeature?
-    @State private var path: [ProcessingJobKey] = []
-    @State private var immediateJobID: UUID?
+    @State private var acceptedJobID: UUID?
+    @State private var exportDetails: ProcessingJobKey?
+    @State private var didFocusExport = false
+    @State private var hasLoadedExports = false
     private var exports: ExportController { model.exports }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             ScrollViewReader { scroll in
                 Form {
                     Group {
                         configuration
-                        if let immediateJobID, immediateExportNeedsProgress {
-                            Section("Current export") { ImmediateExportStatus(jobID: immediateJobID) }
-                        }
                         if let session {
-                            ProjectExportsSection(session: session, excludingActivityID: immediateJobID) { previous in
+                            ProjectExportsSection(session: session, focusedJobID: selectedExportID,
+                                showsUnavailableExport: hasLoadedExports && !exports.isRefreshingArtifacts &&
+                                    selectedExportID != nil && exportFocusAnchor == nil,
+                                requestError: error,
+                                onDetails: { exportDetails = .init(kind: .export, jobID: $0) }) { previous in
+                                didFocusExport = true
                                 profile = previous
                                 if previous.format == .mp4 && previous.resolution == .fullHD && !model.access.hasPro {
                                     profile.resolution = .hd
@@ -36,51 +43,43 @@ struct ExportView: View {
                                 scroll.scrollTo("export-configuration", anchor: .top)
                             }
                         }
-                        Section {
-                            NavigationLink { ProcessingQueueView() } label: {
-                                Label("Open Queue", systemImage: "list.bullet.rectangle")
-                            }
-                            Text("Keep Inkribe open while processing. Completed files stay in Queue until you explicitly delete them.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if let storageError = exports.persistenceError {
-                            Section {
-                                Text(storageError).foregroundStyle(.red)
-                                Button("Retry export storage") { Task { await exports.retryStorage() } }
-                            }
-                        }
-                        if let issue = model.processing.lifecycle.error {
-                            Section {
-                                Text(issue).foregroundStyle(.red)
-                                Button("Retry processing control storage") { model.processing.retryControlStorage() }
-                            }
-                        }
-                        if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
-                        if let message { Section { Text(message).foregroundStyle(.secondary) } }
                     }
                     .listRowBackground(theme.surfaceColor)
                     .listRowSeparatorTint(theme.borderColor)
                 }
+                .task(id: exportFocusTarget) {
+                    guard let id = exportFocusTarget, !didFocusExport else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled, !didFocusExport, exportFocusTarget == id else { return }
+                    scroll.scrollTo(id, anchor: .top)
+                    didFocusExport = true
+                }
             }
             .navigationTitle("Export")
+            .onChange(of: profile) { _, _ in didFocusExport = true }
             .themedSurface()
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: ProcessingJobKey.self) { ProcessingJobDetail(key: $0) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }.disabled(launching || exports.hasUserDelivery)
                 }
             }
-            .task { await exports.start(); await exports.refreshArtifacts() }
+            .task {
+                await exports.start()
+                await exports.refreshArtifacts()
+                hasLoadedExports = true
+            }
             .refreshable { await exports.refreshArtifacts() }
             .alert("Export", isPresented: Binding(
-                get: { upsell == nil && !exports.hasUserDelivery && model.alertMessage != nil },
+                get: { upsell == nil && exportDetails == nil && !exports.hasUserDelivery && model.alertMessage != nil },
                 set: { if !$0 { model.alertMessage = nil } })) {
                 Button("OK", role: .cancel) { model.alertMessage = nil }
             } message: { Text(model.alertMessage ?? "") }
             .sheet(item: $upsell) { ProUpsell(feature: $0) }
+            .queueJobDetails($exportDetails)
         }
         .interactiveDismissDisabled(launching || exports.hasUserDelivery)
+        .confirmationToast($acceptanceToast)
     }
 
     @ViewBuilder private var configuration: some View {
@@ -118,22 +117,22 @@ struct ExportView: View {
                     Text("UTF-8 subtitles with your edited text and project timing. Fonts and animations are part of video exports.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Button { launch(immediate: true) } label: {
-                    Label("Export now", systemImage: "play.circle")
-                }.buttonStyle(.borderedProminent)
-                .disabled(launching || exports.isPreparing || exports.persistenceError != nil || model.processing.lifecycle.error != nil || session.document == nil || model.access.isChecking || (profile.format == .srt && !hasCaptions))
-                Button { launch(immediate: false) } label: {
+                Button(action: launch) {
                     if launching || exports.isPreparing { ProgressView("Preparing export…") }
-                    else { Label("Queue export", systemImage: "square.and.arrow.up") }
+                    else { Label("Create Export", systemImage: "square.and.arrow.up") }
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(launching || exports.isPreparing || exports.persistenceError != nil
                     || model.processing.lifecycle.error != nil || session.document == nil
                     || model.access.isChecking || (profile.format == .srt && !hasCaptions))
+                if let message {
+                    Text(message).font(.footnote).foregroundStyle(.secondary)
+                }
                 if profile.format == .srt && !hasCaptions {
                     Text("Add or transcribe at least one visible caption to export SRT.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Text("Each export keeps its own saved version and file. Export now follows progress here; queued exports continue while you edit. Completed videos and subtitles appear below.")
+                Text("Each export keeps its own saved version and file. Progress and completed videos or subtitles appear below while you continue editing.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if launching {
                     Button("Cancel preparation", role: .cancel) { launchTask?.cancel() }
@@ -143,33 +142,47 @@ struct ExportView: View {
         }
     }
 
-    private var immediateExportNeedsProgress: Bool {
-        guard let immediateJobID,
-              let entry = model.processing.entry(.init(kind: .export, jobID: immediateJobID)) else { return false }
-        return entry.record.status != .completed
-    }
-
     private var hasCaptions: Bool {
         guard let snapshot = session?.snapshot else { return false }
         return snapshot.cues.contains { !snapshot.text(for: $0).isEmpty }
     }
-    private func launch(immediate: Bool) {
+    private var selectedExportID: UUID? { acceptedJobID ?? focusedJobID }
+
+    /// Every queue record and retained artifact has one row, regardless of
+    /// status or file availability. Never substitute a different export.
+    private var exportFocusAnchor: UUID? {
+        guard let id = selectedExportID, let session else { return nil }
+        if let entry = model.processing.entry(.init(kind: .export, jobID: id)),
+           entry.projectID == session.projectID { return id }
+        if let artifact = exports.artifacts[id], artifact.projectID == session.projectID { return id }
+        return nil
+    }
+    private var exportFocusTarget: UUID? {
+        guard hasLoadedExports, !exports.isRefreshingArtifacts else { return nil }
+        return exportFocusAnchor
+    }
+    private func launch() {
         guard let session, !launching else { return }
-        launching = true; error = nil; message = nil
+        didFocusExport = true
+        launching = true; error = nil; message = nil; acceptanceToast = nil
         session.pause(); session.endTyping(); session.endStyleEditing()
         let selected = profile
         launchTask = Task {
-            defer { launching = false; launchTask = nil }
             do {
                 let document = try await session.savedDocument()
                 try Task.checkCancellation()
                 let id = try await exports.enqueue(document: document, profile: selected)
-                if immediate { immediateJobID = id; message = "Your export stays available in this project and Queue." }
-                else { path.append(.init(kind: .export, jobID: id)) }
-                await model.refreshStorage()
+                acceptedJobID = id
+                acceptanceToast = ConfirmationToast(text: "Export added")
+                // Each accepted request gets one focus using the same durable
+                // activity/file anchors as a queue deep link.
+                didFocusExport = false
             } catch is CancellationError { message = "Export preparation cancelled." }
             catch ProError.requiresPro(let feature) { upsell = feature }
             catch { self.error = error.localizedDescription }
+            launching = false
+            launchTask = nil
+            await model.refreshStorage()
         }
     }
 }

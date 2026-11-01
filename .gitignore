@@ -9,4 +9,5 @@ xcuserdata/
 artifacts/
 *.xcarchive/
 __pycache__/
+Inkribe/Resources/Info.plist
 

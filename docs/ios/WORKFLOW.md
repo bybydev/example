@@ -1,5 +1,42 @@
 # Inkribe iOS — current working agreement
 
+2026-11-01. The user's next-pass signal authorizes final queue integration in
+PR #57 from 2923c08b. Apply QUEUE_EXPERIENCE phase/handoff: source-review all four
+passes, fix supported scoped defects and leave design/behavior outside this PR
+unchanged. Source fixes cover stable scene observation/real-background recovery,
+export inventory/focus handoff and stale project routes; ownership comments/helpers
+are consolidated. All four source passes are complete without runtime acceptance.
+Existing no-build/no-test/no-typecheck/no-CI/no-generation/no-native/UI execution
+restrictions remain; keep open without auto-merge. No automatic new scope or release.
+
+2026-11-01. The user's next-pass signal authorizes queue experience pass 3 in
+PR #57 from 7d4b06fd. Implement JOB.BACKGROUND and necessary source configuration,
+resource eligibility, interruption and truthful status copy. See the phase/handoff
+QUEUE_EXPERIENCE under docs/ios. Use user-initiated continued-processing requests,
+per-kind grants and GPU-supported video background work/foreground fallback; retain
+JobQueue 1/3 capacity and all pass-1/2 behavior. Launch/foreground recovery must not
+submit new continued tasks. This permits iOS background-mode/GPU-entitlement source
+edits only, not project/plist generation, signing, deployment, native/UI execution,
+CI or builds/typechecks/tests/fixtures. No automatic next pass; leave open.
+
+2026-11-01. The user's next-pass signal authorizes queue experience pass 2 in
+PR #57 from faa33e8c, retaining pass 1. Implement the settled Spokio-reference queue
+presentation and project-tool routes only, including necessary presentation-owner
+handoffs and exact export focusing/retained-request visibility. See
+phases/QUEUE_EXPERIENCE.md and handoffs/QUEUE_EXPERIENCE.md. All other editor design,
+processing policy, persistence/contracts and shared/Mac behavior remain. Background
+continuation is still pass 3; final review is pass 4. Source-only restrictions
+remain; keep open without auto-merge and await each next signal.
+
+2026-11-01. The user authorizes only pass 1 of the four-pass queue experience
+in one new feat/ios-queue-experience PR targeting develop from b51e1b95. See
+phases/QUEUE_EXPERIENCE.md and handoffs/QUEUE_EXPERIENCE.md. Implement one queued
+Transcribe/Create Export path and JobQueue 1-transcription/3-export capacity, removing
+iOS global serialization while retaining cancellation/teardown. Preserve current
+editor design and foreground-only lifecycle. Each next pass requires a separate
+signal; keep the PR open without auto-merge. Existing source-only restrictions
+remain. Earlier two-export-action/single-heavy-operation requirements are superseded.
+
 2026-10-31. The user authorizes timeline-only per-clip trimming in a stacked PR
 on #55 at 381b0d2b. Apply phases/CLIP_TRIMMING.md and handoffs/CLIP_TRIMMING.md.
 Target feat/ios-media-form, keep both PRs open without auto-merge and do not alter

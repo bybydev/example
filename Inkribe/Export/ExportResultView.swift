@@ -9,10 +9,52 @@ private struct ExportDeliveryPresentation: Identifiable {
     let url: URL
 }
 
-/// Every button and native callback captures this job's lease, never selection.
+/// Detailed inspection keeps explicit delivery buttons; project rows supply
+/// compact menus to the same delivery owner below.
 struct ExportResultView: View {
     @Environment(ProjectsModel.self) private var model
     let jobID: UUID
+
+    var body: some View {
+        ExportDeliveryView(jobID: jobID) { actions in
+            VStack(alignment: .leading, spacing: 12) {
+                if let artifact = model.exports.artifacts[jobID], let url = artifact.outputURL {
+                    Label("Ready to save or share", systemImage: "checkmark.circle")
+                    Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                    if artifact.profile?.format == .mp4 {
+                        Button("Preview video", systemImage: "play.rectangle", action: actions.preview)
+                            .disabled(actions.isBusy)
+                        Button("Save to Photos", systemImage: "photo.on.rectangle", action: actions.saveToPhotos)
+                            .disabled(actions.isBusy)
+                    }
+                    Button("Save to Files", systemImage: "folder", action: actions.saveToFiles)
+                        .disabled(actions.isBusy)
+                    Button("Share…", systemImage: "square.and.arrow.up", action: actions.share)
+                        .disabled(actions.isBusy)
+                } else {
+                    Text("The completed file is unavailable. Your project and saved captions are preserved; create a new export from the project.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+struct ExportDeliveryActions {
+    let isBusy: Bool
+    let preview: () -> Void
+    let saveToPhotos: () -> Void
+    let saveToFiles: () -> Void
+    let share: () -> Void
+}
+
+/// Every control and native callback captures this job's lease, never selection.
+/// The content changes presentation only; delivery and feedback retain one owner.
+struct ExportDeliveryView<Content: View>: View {
+    @Environment(ProjectsModel.self) private var model
+    let jobID: UUID
+    private let content: (ExportDeliveryActions) -> Content
     @State private var delivery: ExportDeliveryPresentation?
     @State private var deliveryToken: UUID?
     @State private var previewToken: UUID?
@@ -22,25 +64,16 @@ struct ExportResultView: View {
     @State private var message: String?
     private var exports: ExportController { model.exports }
 
+    init(jobID: UUID, @ViewBuilder content: @escaping (ExportDeliveryActions) -> Content) {
+        self.jobID = jobID
+        self.content = content
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let artifact = exports.artifacts[jobID], let url = artifact.outputURL {
-                Label("Ready to save or share", systemImage: "checkmark.circle")
-                Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
-                if artifact.profile?.format == .mp4 {
-                    Button("Preview video", systemImage: "play.rectangle") { present(.preview) }
-                        .disabled(savingPhotos || delivery != nil)
-                    Button("Save to Photos", systemImage: "photo.on.rectangle", action: saveToPhotos)
-                        .disabled(savingPhotos || delivery != nil)
-                }
-                Button("Save to Files", systemImage: "folder") { present(.files) }
-                    .disabled(savingPhotos || delivery != nil)
-                Button("Share…", systemImage: "square.and.arrow.up") { present(.share) }
-                    .disabled(savingPhotos || delivery != nil)
-            } else {
-                Text("The completed file is unavailable. Your project and saved captions are preserved; create a new export from the project.")
-                    .foregroundStyle(.secondary)
-            }
+            content(ExportDeliveryActions(isBusy: savingPhotos || delivery != nil,
+                preview: { present(.preview) }, saveToPhotos: saveToPhotos,
+                saveToFiles: { present(.files) }, share: { present(.share) }))
             if savingPhotos { ProgressView("Saving to Photos…") }
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if let message { Text(message).foregroundStyle(.secondary) }

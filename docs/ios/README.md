@@ -1,5 +1,38 @@
 # Inkribe iOS — start here
 
+2026-11-01. [Queue experience pass 4](phases/QUEUE_EXPERIENCE.md) completes all
+four source passes in PR #57, extending 2923c08b. Final source review covers queue
+admission/actions, same-project/other-project routes, retained files/delivery,
+background grants/resource changes and recovery. Scoped fixes stabilize scene
+observation, prevent temporary inactivity from clearing iOS pauses, settle export
+focus/inventory and recheck project availability at handoff. See
+[source matrix](handoffs/QUEUE_EXPERIENCE.md). Source-only; runtime acceptance is
+unverified. Keep the PR open without auto-merge; no automatic next feature/release.
+
+2026-11-01. [Queue experience pass 3](phases/QUEUE_EXPERIENCE.md) extends PR #57
+from 7d4b06fd with user-initiated continued background processing, per-kind execution
+grants, system progress/expiration and GPU-aware export fallback. Transcription and
+SRT-only exports use CPU resources; video-containing exports need supported GPU
+access or pause outside the foreground. iOS metadata/capability are source-configured;
+no project/plist generation ran. See [handoff](handoffs/QUEUE_EXPERIENCE.md). Passes
+1–2 remain; final pass 4 awaits a signal. Source-only; runtime unverified; keep open.
+
+2026-11-01. [Queue experience pass 2](phases/QUEUE_EXPERIENCE.md) extends PR #57
+from faa33e8c with Spokio-style plain rows/scopes/toolbar/actions and project-tool
+navigation. Rows open Captions or the matching export; retained exports and full
+job details remain available separately. Owner onDismiss callbacks hand off from
+Home/Editor/Captions/Export/Storage/Settings. See [handoff](handoffs/QUEUE_EXPERIENCE.md).
+Pass-1 actions/capacity stay intact; background continuation awaits pass 3.
+Source-only; compilation/runtime acceptance unverified; keep open without auto-merge.
+
+2026-11-01. Current work is [queue experience, pass 1](phases/QUEUE_EXPERIENCE.md),
+from develop b51e1b95 in feat/ios-queue-experience -> develop. One Create Export
+uses the durable queue and project-local activity; Transcribe already follows the
+same queued path. JobQueue capacity is one transcription and three exports, without
+the iOS single-operation gate. See [source handoff](handoffs/QUEUE_EXPERIENCE.md).
+Queue redesign/deep links, background continuation and final review remain later
+passes awaiting the user's signal. Source-only; keep open without auto-merge.
+
 2026-10-31. Current work is [timeline clip trimming](phases/CLIP_TRIMMING.md),
 stacked on PR #55 at 381b0d2b and targeting feat/ios-media-form. Timeline edge
 handles are the only trimming UI; the existing main preview auditions boundaries.

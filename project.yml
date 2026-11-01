@@ -133,10 +133,18 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "26.0"
+    info:
+      path: Inkribe/Resources/Info.plist
+      properties:
+        BGTaskSchedulerPermittedIdentifiers:
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).queue.*"
+        UIBackgroundModes:
+          - processing
     sources:
       - path: Inkribe
         excludes:
           - Resources/PrivacyInfo.xcprivacy
+          - Resources/Info.plist
       - path: Inkribe/Resources/PrivacyInfo.xcprivacy
         buildPhase: resources
       - path: InkribeMac/AppIcon.icon

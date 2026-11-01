@@ -1,5 +1,83 @@
 # Inkribe Working Rules
 
+## Current queue experience authorization — pass 4
+
+2026-11-01. The user's next-pass signal authorizes final JOB.INTEGRATION in PR #57,
+feat/ios-queue-experience -> develop, extending 2923c08b. Review all prior queue
+actions/capacity, navigation/presentation owners, background permission/resource
+changes, pause/cancel/retry, retention/delivery and reopening paths; fix scoped
+integration defects only. Source fixes keep lifecycle observation on the stable
+navigation owner, distinguish true background return from temporary inactivity,
+wait for settled export inventory before one-time focus, respect subsequent user
+actions, and revalidate projects after sheet dismissal with Job-details fallback.
+Remove obsolete global-cancellation helper/correct stale engine ownership comment.
+Preserve queue/editor design, 1/3 JobQueue limits, explicit-only continued-task
+submission, GPU fallback, stores/schema/allowance/frozen output/native ownership,
+shared packages/Mac/models/commerce/CI behavior. Apply QUEUE_EXPERIENCE phase/handoff.
+All four source passes may be complete; compilation/native/UI acceptance remains
+unverified. No builds/typechecks/tests/fixtures, CI, project/plist generation,
+models, native processing/exports, UI/device execution, signing or deployment.
+Keep PR open without auto-merge; no new feature or merge is authorized.
+
+## Current queue experience authorization — pass 3
+
+2026-11-01. The user's next-pass signal authorizes JOB.BACKGROUND in PR #57,
+feat/ios-queue-experience -> develop, extending 7d4b06fd. Apply QUEUE_EXPERIENCE
+phase/handoff under docs/ios. Adapt the inspected Spokio iOS continued-processing
+pattern: explicit enqueue/retry/recovery/Resume requests, system progress, expiration
+and durable foreground recovery. JobQueue still owns execution (speech 1, exports 3).
+Track speech/export execution grants independently so GPU restrictions/expiration or
+model switching cannot unnecessarily stop the other kind. CPU transcription and
+SRT-only exports use default resources; export work containing MP4 requires supported
+background GPU access. Unsupported/denied GPU access keeps export work foreground-
+only, without a new renderer or custom scheduler. Enable iOS processing metadata and
+GPU entitlement in source configuration; do not generate a project or plist.
+Preserve user pause, cancellation/awaited native teardown, accepted caption progress,
+allowance, frozen inputs/results, delivery and all pass-2 design/navigation. Force
+quit cannot guarantee completion; interrupted MP4s restart from frozen input as before.
+No auto-submission on launch/foreground return, model/schema/package/Mac/commerce/CI
+changes or unrelated editor work. Source-only: no builds/typechecks/tests/fixtures,
+CI, generation/models, native processing/exports, UI/device execution or deployment.
+Keep #57 open without auto-merge; pass 4 awaits a separate signal.
+
+## Current queue experience authorization — pass 2
+
+2026-11-01. The user's next-pass signal authorizes pass 2 in existing PR #57,
+feat/ios-queue-experience -> develop, extending faa33e8c. Implement only JOB.QUEUE_UI
+and JOB.PROJECT_ROUTE in phases/QUEUE_EXPERIENCE.md and its handoff under docs/ios.
+Use the inspected Spokio iOS plain list, outlined icon/count scopes, compact status/
+progress/chevron rows, toolbar sorting/type filter and swipe/context actions. Move
+retained exports/storage explanation to their own destination; show only relevant
+notices. Row tap opens project Captions or its exact export activity/file, with
+Job details available from context menu and as unavailable-project fallback.
+Presentation owners must dismiss their own sheets before forwarding navigation;
+reuse the current editor for its own project. Preserve file delivery protection,
+pass-1 actions/concurrency, job identities/storage, engine/allowance/frozen outputs
+and all unrelated editor design. Background work remains pass 3 and final review
+pass 4; both await separate signals. No shared-package/schema/Mac/model/commerce/
+CI work. Existing source-only execution restrictions remain. Keep #57 open without
+auto-merge; no automatic next pass or merge.
+
+## Current queue experience authorization — pass 1
+
+2026-11-01. The user starts pass 1 of four in one new PR from develop b51e1b95,
+branch feat/ios-queue-experience, targeting develop. Apply
+phases/QUEUE_EXPERIENCE.md and handoffs/QUEUE_EXPERIENCE.md under docs/ios.
+One Transcribe action and one Create Export action always use the existing durable
+JobQueue stores; remove Export now versus Queue export and keep project-local
+progress available after reopening. JobQueue alone owns execution capacity:
+transcription 1, exports 3, including current and legacy job types. Remove the iOS
+call to the shared single-operation gate; keep native cancellation/teardown tracking,
+shared speech engine, allowance, frozen inputs/results and delivery protection.
+No scheduler, package/schema/model/commerce/Mac/CI changes or unrelated editor design.
+The agreed Queue UI/deep links are pass 2, continued background processing is pass 3,
+and final integration review is pass 4; each awaits a separate signal. Pass 1 stays
+foreground-only and must not promise background completion. This supersedes the
+historical one-heavy-operation/two-export-action requirements only for this scope.
+Source-only: no builds/typechecks/tests/fixtures, CI, project generation/models,
+native processing/exports, UI/device execution or deployment. Leave the PR open
+without auto-merge; no automatic next pass or merge.
+
 ## Current timeline clip trimming authorization
 
 2026-10-31. The user explicitly requests implementing the discussed timeline-only

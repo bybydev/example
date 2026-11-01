@@ -5,14 +5,14 @@ import Observation
 
 struct ExportJob: Job {
     typealias Payload = InkribeCore.ExportRequest
-    static let maxConcurrentExecutions = 1
+    static let maxConcurrentExecutions = 3
     let id: UUID
     let payload: Payload
     var title: String? { payload.profile.format == .mp4 ? "Captioned video export" : "Edited subtitle export" }
     var priority: JobPriority { .userInitiated }
 
     func execute(progress: JobProgressReporter) async throws {
-        await progress.report(message: "Waiting for processing capacity…")
+        await progress.report(message: "Preparing export…")
         try await ProcessingRuntime.shared.run(kind: .export) {
             try await render(progress: progress)
         }
@@ -68,6 +68,7 @@ struct ExportArtifact: Identifiable, Sendable {
     let bytes: Int64
     let issue: String?
     let createdAt: Date?
+    let updatedAt: Date?
     let duration: MediaTime?
     let outputBytes: Int64?
 }
@@ -80,6 +81,8 @@ final class ExportController {
     nonisolated static let retainedRecordLimit = 100
     private let access: ProAccess
     private let lifecycle: ProcessingLifecycle
+    var onQueueEvent: ((JobQueueEvent) -> Void)?
+    var onUserRequestedWork: (() -> Void)?
     private let registry = JobRegistry()
     private let repository = ProjectRepository.shared
     private var startup: Task<Void, Never>?
@@ -91,6 +94,7 @@ final class ExportController {
     private(set) var isPreparing = false
     private(set) var artifacts: [UUID: ExportArtifact] = [:]
     private(set) var inventoryError: String?
+    private(set) var isRefreshingArtifacts = false
     private(set) var deliveryTokens: [UUID: UUID] = [:]
     private var artworkDeliveryTokens: Set<UUID> = []
     private(set) var mutatingIDs: Set<UUID> = []
@@ -133,9 +137,10 @@ final class ExportController {
                     .appendingPathComponent("InkribeIOSProcessing", isDirectory: true)
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 let value = JobQueue(fileURL: root.appendingPathComponent("export-jobs.json"),
-                    policy: JobQueuePolicy(maxConcurrentExecutions: 1), registry: registry,
+                    policy: JobQueuePolicy(maxConcurrentExecutions: ExportJob.maxConcurrentExecutions), registry: registry,
                     maxRecords: Self.retainedRecordLimit, autoCleanupEnabled: false)
                 value.eventHandler = { [weak self] event in
+                    self?.onQueueEvent?(event)
                     switch event {
                     case .jobCompleted, .jobFailed, .jobCancelled:
                         Task { await self?.refreshArtifacts() }
@@ -146,7 +151,7 @@ final class ExportController {
             }
             try queue?.start()
             queueStarted = true
-            if !lifecycle.canRun { try queue?.pause() }
+            if !lifecycle.canExport { try queue?.pause() }
             ready = true
             startupError = nil
             // Never delete orphaned requests/results on startup. They may be the
@@ -170,7 +175,7 @@ final class ExportController {
     func applyLifecycle() {
         guard ready, let queue else { return }
         do {
-            if lifecycle.canRun { try queue.resume() } else { try queue.pause() }
+            if lifecycle.canExport { try queue.resume() } else { try queue.pause() }
         } catch { startupError = error.localizedDescription }
     }
 
@@ -191,6 +196,7 @@ final class ExportController {
             try Task.checkCancellation()
             guard lifecycle.error == nil, persistenceError == nil else { throw ExportError.invalidRequest }
             try queue.enqueue(ExportJob(id: id, payload: .init(projectID: document.id, profile: profile)))
+            onUserRequestedWork?()
         } catch {
             // A failed cleanup stays discoverable in retained requests on refresh.
             try? await repository.discardExport(id)
@@ -209,6 +215,7 @@ final class ExportController {
               !mutatingIDs.contains(id), !isDelivering(id) else { throw ExportError.busy }
         // Accepted frozen input is reused, including after an entitlement change.
         try queue.retry(id: id)
+        onUserRequestedWork?()
     }
 
     func recover(_ id: UUID) async throws {
@@ -221,6 +228,7 @@ final class ExportController {
         guard persistenceError == nil, queue.records[id] == nil else { throw ExportError.busy }
         try queue.enqueue(ExportJob(id: id, payload: .init(
             projectID: request.manifest.document.id, profile: request.manifest.profile)))
+        onUserRequestedWork?()
         await refreshArtifacts()
     }
 
@@ -248,6 +256,8 @@ final class ExportController {
     func refreshArtifacts() async {
         inventoryGeneration += 1
         let generation = inventoryGeneration
+        isRefreshingArtifacts = true
+        defer { if generation == inventoryGeneration { isRefreshingArtifacts = false } }
         do {
             let values = try await repository.exportArtifacts()
             guard generation == inventoryGeneration else { return }

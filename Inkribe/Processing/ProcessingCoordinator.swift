@@ -2,14 +2,14 @@ import Foundation
 import JobQueue
 import Observation
 
-enum ProcessingKind: String, CaseIterable, Identifiable, Hashable {
+enum ProcessingKind: String, CaseIterable, Identifiable, Hashable, Sendable {
     case transcription, export
     var id: Self { self }
     var title: String { self == .transcription ? "Transcription" : "Export" }
     var icon: String { self == .transcription ? "waveform" : "square.and.arrow.up" }
 }
 
-struct ProcessingJobKey: Hashable, Identifiable {
+struct ProcessingJobKey: Hashable, Identifiable, Sendable {
     let kind: ProcessingKind
     let jobID: UUID
     var id: Self { self }
@@ -25,11 +25,8 @@ struct ProcessingEntry: Identifiable {
         case .export: (try? record.decode(ExportJob.self))?.payload.projectID
         }
     }
-    var waitingForCapacity: Bool {
-        record.status == .processing && progress?.message == "Waiting for processing capacity…"
-    }
-    var pending: Bool { record.status == .pending || waitingForCapacity }
-    var processing: Bool { record.status.isExecuting && !waitingForCapacity }
+    var pending: Bool { record.status == .pending }
+    var processing: Bool { record.status.isExecuting }
     var statusTitle: String {
         switch record.status {
         case .pending: "Pending"
@@ -43,7 +40,7 @@ struct ProcessingEntry: Identifiable {
         }
     }
     var fraction: Double? {
-        guard record.status == .processing, !waitingForCapacity,
+        guard record.status == .processing,
               let value = progress?.fractionCompleted, value.isFinite else { return nil }
         return min(1, max(0, value))
     }
@@ -62,13 +59,14 @@ enum ProcessingError: LocalizedError {
 }
 
 /// One composition/lifecycle/action owner, preserving both existing queue files.
-/// Each queue admits one job; the shared core gate admits one native operation.
+/// JobQueue admits one transcription and up to three independent exports.
 @MainActor
 @Observable
 final class ProcessingCoordinator {
     let lifecycle: ProcessingLifecycle
     let transcription: TranscriptionController
     let exports: ExportController
+    let continuedProcessing = ContinuedProcessing()
     private(set) var acting: Set<ProcessingJobKey> = []
 
     init(access: ProAccess) {
@@ -77,6 +75,11 @@ final class ProcessingCoordinator {
         ProcessingRuntime.shared.configure(lifecycle)
         transcription = TranscriptionController(access: access, lifecycle: lifecycle)
         exports = ExportController(access: access, lifecycle: lifecycle)
+        continuedProcessing.configure(self)
+        transcription.onQueueEvent = { [weak self] in self?.continuedProcessing.handle($0, kind: .transcription) }
+        exports.onQueueEvent = { [weak self] in self?.continuedProcessing.handle($0, kind: .export) }
+        transcription.onUserRequestedWork = { [weak self] in self?.userRequestedWork(.transcription) }
+        exports.onUserRequestedWork = { [weak self] in self?.userRequestedWork(.export) }
     }
 
     var entries: [ProcessingEntry] {
@@ -105,13 +108,26 @@ final class ProcessingCoordinator {
         transcription.start()
         await exports.start()
     }
-    func setForeground(_ value: Bool) {
+    func setForeground(_ value: Bool, recoveringFromBackground: Bool = false) {
+        // A temporary inactive/active cycle (system UI, alerts) must not undo
+        // cancellation/expiration. Resume automatically only on a real return.
+        if value && recoveringFromBackground {
+            lifecycle.resumeInterrupted()
+            continuedProcessing.didReturnToForeground()
+        }
         lifecycle.foreground = value
         applyLifecycle()
     }
     func setPaused(_ value: Bool) throws {
         do { try lifecycle.setUserPaused(value) }
-        catch { applyLifecycle(); throw error }
+        catch { continuedProcessing.stopAll(); applyLifecycle(); throw error }
+        if value {
+            continuedProcessing.stopAll()
+        } else {
+            lifecycle.resumeInterrupted()
+            // Explicit Resume is user intent; ordinary foreground recovery is not.
+            for kind in ProcessingKind.allCases { continuedProcessing.beginOrExtend(kind) }
+        }
         applyLifecycle()
     }
     func retryControlStorage() {
@@ -119,17 +135,35 @@ final class ProcessingCoordinator {
         applyLifecycle()
     }
     private func applyLifecycle() {
-        if !lifecycle.canRun { ProcessingRuntime.shared.cancelForInterruption() }
+        if !lifecycle.canTranscribe { ProcessingRuntime.shared.cancelTranscription() }
+        if !lifecycle.canExport { ProcessingRuntime.shared.cancelExports() }
         transcription.applyLifecycle()
         exports.applyLifecycle()
     }
 
-    /// A model switch cancels transcription only. Exports keep running or
-    /// waiting at the shared gate; accepted captions and edits are retained.
+    private func userRequestedWork(_ kind: ProcessingKind) {
+        lifecycle.resumeInterrupted(kind)
+        continuedProcessing.beginOrExtend(kind)
+        applyLifecycle()
+    }
+
+    func setBackgroundAccess(_ granted: Bool, for kind: ProcessingKind) {
+        lifecycle.setBackground(granted, for: kind)
+        applyLifecycle()
+    }
+
+    func interruptFromSystem(_ kind: ProcessingKind) {
+        lifecycle.interrupt(kind)
+        applyLifecycle()
+    }
+
+    /// A model switch cancels transcription only. Exports keep running
+    /// independently; accepted captions and edits are retained.
     func switchSpeechModel(to id: String) async throws {
         guard id != SpeechEngine.shared.activeModelID else { return }
         guard !transcription.models.isRemoving else { throw SpeechError.busy }
         try lifecycle.beginModelSwitch()
+        continuedProcessing.stop(.transcription)
         ProcessingRuntime.shared.cancelTranscription()
         transcription.applyLifecycle()
         defer { lifecycle.endModelSwitch(); transcription.applyLifecycle() }

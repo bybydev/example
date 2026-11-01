@@ -1,11 +1,19 @@
 import AppFoundation
 import JobQueue
 import SwiftUI
-import UIKit
 
 private enum QueueScope: String, CaseIterable, Identifiable {
     case all = "All", pending = "Pending", processing = "Processing", done = "Done", failed = "Failed"
     var id: Self { self }
+    var icon: String {
+        switch self {
+        case .all: "rectangle.stack.fill"
+        case .pending: "clock"
+        case .processing: "waveform"
+        case .done: "checkmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        }
+    }
     func includes(_ entry: ProcessingEntry) -> Bool {
         switch self {
         case .all: true
@@ -18,7 +26,7 @@ private enum QueueScope: String, CaseIterable, Identifiable {
 }
 
 private enum QueueSort: String, CaseIterable, Identifiable {
-    case newest = "Newest first", oldest = "Oldest first", project = "Project name"
+    case createdAt = "Date Created", project = "Project Name"
     var id: Self { self }
 }
 
@@ -29,296 +37,328 @@ struct ProcessingQueueSheet: View {
         NavigationStack {
             ProcessingQueueView()
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }.disabled(model.exports.hasUserDelivery)
                     }
                 }
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(model.exports.hasUserDelivery)
     }
 }
 
-/// Custom native queue, inspired by Spokio's scopes, rows and live detail IDs.
-/// All activity content scrolls. Display sorting never changes execution order.
+/// Display filters never change execution order. Rows hand off to project tools;
+/// full job inspection and housekeeping remain available from their context menu.
 struct ProcessingQueueView: View {
     @Environment(ProjectsModel.self) private var model
     @Environment(\.appFoundationTheme) private var theme
+    @Environment(\.queueProjectNavigation) private var openProject
     @State private var scope = QueueScope.all
     @State private var kind: ProcessingKind?
     @State private var search = ""
-    @State private var sort = QueueSort.newest
+    @State private var sort = QueueSort.createdAt
+    @State private var ascending = false
+    @State private var details: ProcessingJobKey?
+    @State private var showingRetained = false
+    @State private var retainedProjectRoute: QueueProjectRoute?
+    @State private var isOpeningProject = false
     @State private var error: String?
-    @State private var bulkAction: ProcessingAction?
-    @State private var bulkKeys: [ProcessingJobKey] = []
-    @State private var confirmingBulk = false
-    @State private var runningBulk = false
+    @State private var pendingAction: ProcessingAction?
+    @State private var actionKeys: [ProcessingJobKey] = []
+    @State private var confirming = false
+    @State private var runningAction = false
     private var processing: ProcessingCoordinator { model.processing }
 
     private var matching: [ProcessingEntry] {
-        processing.entries.filter { entry in
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return processing.entries.filter { entry in
             (kind == nil || kind == entry.id.kind) &&
-                (search.isEmpty || title(entry).localizedStandardContains(search) ||
-                 entry.id.kind.title.localizedStandardContains(search) ||
-                 entry.record.error?.localizedStandardContains(search) == true)
+                (query.isEmpty || title(entry).localizedStandardContains(query) ||
+                 detail(entry).localizedStandardContains(query) ||
+                 entry.id.kind.title.localizedStandardContains(query) ||
+                 entry.record.error?.localizedStandardContains(query) == true)
         }
     }
     private var visible: [ProcessingEntry] {
         matching.filter { scope.includes($0) }.sorted { a, b in
             switch sort {
-            case .newest: if a.record.createdAt != b.record.createdAt { return a.record.createdAt > b.record.createdAt }
-            case .oldest: if a.record.createdAt != b.record.createdAt { return a.record.createdAt < b.record.createdAt }
+            case .createdAt:
+                if a.record.createdAt != b.record.createdAt {
+                    return ascending ? a.record.createdAt < b.record.createdAt : a.record.createdAt > b.record.createdAt
+                }
             case .project:
                 let order = title(a).localizedStandardCompare(title(b))
-                if order != .orderedSame { return order == .orderedAscending }
+                if order != .orderedSame { return ascending ? order == .orderedAscending : order == .orderedDescending }
             }
             return a.record.id.uuidString < b.record.id.uuidString
         }
     }
 
     var body: some View {
+        queueList
+            .navigationTitle("Queue")
+            .navigationSubtitle("\(processing.entries.count) jobs · \(processing.processingCount) processing · \(processing.pendingCount) pending")
+            .navigationBarTitleDisplayMode(.large)
+            .themedSurface()
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search jobs")
+            .toolbar { queueToolbar }
+            .queueJobDetails($details)
+            .sheet(isPresented: $showingRetained, onDismiss: finishRetainedNavigation) { retainedSheet }
+            .onAppear { isOpeningProject = false }
+            .task { await processing.start(); await model.exports.refreshArtifacts() }
+            .refreshable { await model.exports.refreshArtifacts(); await model.refreshStorage() }
+            .confirmationDialog(confirmationTitle, isPresented: $confirming, titleVisibility: .visible) {
+                Button(confirmationTitle, role: .destructive) {
+                    if let pendingAction { run(pendingAction, keys: actionKeys) }
+                }
+            } message: {
+                Text(pendingAction == .cancel ?
+                    "Saved captions and completed files are kept." :
+                    "Only finished records are removed. Captions and export files are kept. Find retained exports in the Queue options menu.")
+            }
+    }
+
+    private var retainedSheet: some View {
+        NavigationStack {
+            RetainedExportsView()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingRetained = false }.disabled(model.exports.hasUserDelivery)
+                    }
+                }
+        }
+        .environment(\.queueProjectNavigation, QueueProjectNavigation { route in
+            guard retainedProjectRoute == nil, !model.exports.hasUserDelivery else { return }
+            retainedProjectRoute = route
+            showingRetained = false
+        })
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(model.exports.hasUserDelivery)
+    }
+
+    private var queueList: some View {
         List {
-            controls
-            storageProblems
-            if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
+            notices
+            Section {
+                scopeStrip
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 14, trailing: 0))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
             Section {
                 if visible.isEmpty {
-                    ContentUnavailableView {
-                        Label(processing.entries.isEmpty ? "Your queue is empty" : "No matching jobs",
-                              systemImage: "list.bullet.rectangle")
-                    } description: {
-                        Text(processing.entries.isEmpty ? "Transcribe a project or export a video or subtitles. Work stays in the queue when you leave this screen." : "Try another status, type or search.")
-                    }
+                    ContentUnavailableView(processing.entries.isEmpty ? "Queue Empty" : "No Matches",
+                        systemImage: "tray", description: Text(processing.entries.isEmpty ?
+                            "Transcribe a project or create an export to get started." : "Try changing the search, status or job type."))
+                        .frame(maxWidth: .infinity, minHeight: 220)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 } else {
-                    ForEach(visible) { entry in
-                        NavigationLink(value: entry.id) {
-                            ProcessingQueueRow(entry: entry, title: title(entry),
-                                thumbnailURL: project(entry)?.thumbnailURL,
-                                cacheGeneration: model.cacheGeneration)
-                        }
-                        .listRowBackground(theme.surfaceColor)
-                    }
+                    ForEach(visible) { entry in jobRow(entry) }
                 }
-            } header: {
-                Text("\(visible.count) jobs")
-            } footer: {
-                Text("One heavy operation runs at a time. Transcription and export share capacity fairly. Display sorting does not reorder work.")
-            }
-            retainedFiles
-            Section {
-                Text("Keep Inkribe open to process jobs. Leaving the foreground pauses work; returning resumes it unless you paused the queue yourself. Saved captions and completed files remain available.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Queue")
-        .navigationBarTitleDisplayMode(.inline)
-        .themedSurface()
-        .searchable(text: $search, prompt: "Search projects or errors")
-        .navigationDestination(for: ProcessingJobKey.self) { ProcessingJobDetail(key: $0) }
-        .toolbar { actionsMenu }
-        .task { await processing.start(); await model.exports.refreshArtifacts() }
-        .refreshable { await model.exports.refreshArtifacts(); await model.refreshStorage() }
-        .confirmationDialog("Update these jobs?", isPresented: $confirmingBulk) {
-            Button(bulkAction == .cancel ? "Cancel jobs" : "Remove finished records", role: .destructive) {
-                if let bulkAction { runBulk(bulkAction, keys: bulkKeys) }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .listSectionSpacing(8)
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var scopeStrip: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(QueueScope.allCases) { value in
+                    Button { scope = value } label: {
+                        LibraryScopePill(title: value.rawValue, systemImage: value.icon,
+                            count: matching.filter { value.includes($0) }.count, isSelected: scope == value)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(scope == value ? .isSelected : [])
+                }
+            }.padding(.trailing, 16)
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityLabel("Job status")
+    }
+
+    private func jobRow(_ entry: ProcessingEntry) -> some View {
+        Button { open(entry.id) } label: {
+            ProcessingQueueRow(entry: entry, title: title(entry), detail: detail(entry),
+                paused: processing.queue(for: entry.id.kind)?.isPaused == true)
+        }
+        .buttonStyle(.plain)
+        .disabled(isOpeningProject || model.exports.hasUserDelivery)
+        .accessibilityHint(model.queueProjectID(for: entry.id) == nil ? "Opens job details" :
+            entry.id.kind == .transcription ? "Opens project captions" : "Opens this export in its project")
+        .accessibilityAction(named: "Job Details") { details = entry.id }
+        .contextMenu { rowActions(entry.id) }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            if processing.can(.retry, entry.id) {
+                Button("Retry", systemImage: "arrow.clockwise") { run(.retry, keys: [entry.id]) }.tint(.blue)
             }
-        } message: {
-            Text(bulkAction == .cancel ? "Cancel \(bulkKeys.count) selected jobs. Saved captions and completed files are kept." : "Remove \(bulkKeys.count) finished records. Project captions, recovery checkpoints and retained export files are kept. Export files stay in Retained files below.")
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if processing.can(.cancel, entry.id) {
+                Button("Cancel", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel, keys: [entry.id]) }
+            } else if processing.can(.removeRecord, entry.id) {
+                Button("Remove Record", systemImage: "trash", role: .destructive) { confirm(.removeRecord, keys: [entry.id]) }
+            }
+        }
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(theme.borderColor)
+    }
+
+    @ViewBuilder private func rowActions(_ key: ProcessingJobKey) -> some View {
+        Button("Job Details", systemImage: "info.circle") { details = key }
+        if model.queueProjectID(for: key) != nil {
+            Button(key.kind == .transcription ? "Open Captions" : "Open Export",
+                systemImage: key.kind.icon) { open(key) }
+        }
+        Divider()
+        if processing.can(.retry, key) { Button("Retry", systemImage: "arrow.clockwise") { run(.retry, keys: [key]) } }
+        if processing.can(.cancel, key) {
+            Button("Cancel Job", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel, keys: [key]) }
+        }
+        if processing.can(.removeRecord, key) {
+            Button("Remove Record", systemImage: "trash", role: .destructive) { confirm(.removeRecord, keys: [key]) }
         }
     }
 
-    private var controls: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                Label(notice, systemImage: processing.lifecycle.userPaused ? "pause.circle" : "list.bullet.rectangle")
-                    .font(.headline)
-                if processing.lifecycle.userPaused || processing.activeCount > 0 {
-                    Button(processing.lifecycle.userPaused ? "Resume queue" : "Pause queue",
-                           systemImage: processing.lifecycle.userPaused ? "play.fill" : "pause.fill") {
-                        do { try processing.setPaused(!processing.lifecycle.userPaused) }
-                        catch { self.error = error.localizedDescription }
-                    }
-                    .disabled(processing.lifecycle.error != nil)
-                }
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(QueueScope.allCases) { value in
-                            Button { scope = value } label: {
-                                Text("\(value.rawValue) \(matching.filter { value.includes($0) }.count)")
-                                    .font(.subheadline.weight(scope == value ? .semibold : .regular))
-                                    .padding(.horizontal, 12).frame(minHeight: 44)
-                                    .background(scope == value ? theme.accentColor.opacity(0.18) : theme.surfaceColor, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(scope == value ? .isSelected : [])
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-                Picker("Job type", selection: $kind) {
-                    Text("All types").tag(ProcessingKind?.none)
-                    ForEach(ProcessingKind.allCases) { Text($0.title).tag(Optional($0)) }
-                }
-                Picker("Display order", selection: $sort) {
+    private var queueToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Menu {
+                Picker("Sort By", selection: $sort) {
                     ForEach(QueueSort.allCases) { Text($0.rawValue).tag($0) }
                 }
-                if runningBulk { ProgressView("Updating jobs…") }
-            }
-            .buttonStyle(.borderless)
+                Picker("Order", selection: $ascending) {
+                    Text("Ascending").tag(true)
+                    Text("Descending").tag(false)
+                }
+            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+            Menu {
+                Picker("Job Type", selection: $kind) {
+                    Text("All Types").tag(ProcessingKind?.none)
+                    Text("Captions").tag(Optional(ProcessingKind.transcription))
+                    Text("Exports").tag(Optional(ProcessingKind.export))
+                }
+                Divider()
+                Button("Retained Exports", systemImage: "archivebox") { showingRetained = true }
+                if processing.lifecycle.needsResume || processing.activeCount > 0 {
+                    Button(processing.lifecycle.needsResume ? "Resume Queue" : "Pause Queue",
+                        systemImage: processing.lifecycle.needsResume ? "play.fill" : "pause.fill") {
+                        do { try processing.setPaused(!processing.lifecycle.needsResume) }
+                        catch { self.error = error.localizedDescription }
+                    }.disabled(processing.lifecycle.error != nil)
+                }
+                Divider()
+                Button("Retry Filtered Jobs", systemImage: "arrow.clockwise") { run(.retry, keys: visible.map(\.id)) }
+                    .disabled(runningAction || !visible.contains { processing.can(.retry, $0.id) })
+                Button("Cancel Filtered Jobs", systemImage: "xmark.circle", role: .destructive) {
+                    confirm(.cancel, keys: visible.map(\.id))
+                }.disabled(runningAction || !visible.contains { processing.can(.cancel, $0.id) })
+                Button("Remove Finished Filtered Records", systemImage: "trash", role: .destructive) {
+                    confirm(.removeRecord, keys: visible.map(\.id))
+                }.disabled(runningAction || !visible.contains { processing.can(.removeRecord, $0.id) })
+            } label: { Label("Queue Options", systemImage: "ellipsis") }
         }
     }
 
-    private var notice: String {
-        if processing.lifecycle.error != nil { return "Processing storage needs attention" }
-        if processing.lifecycle.userPaused { return "Paused by you" }
-        if !processing.lifecycle.foreground { return "Paused outside the foreground" }
-        return "\(processing.processingCount) processing · \(processing.pendingCount) pending"
-    }
-
-    @ViewBuilder private var storageProblems: some View {
+    @ViewBuilder private var notices: some View {
+        if processing.lifecycle.userPaused {
+            notice("Queue paused", message: "Resume from Queue options when you’re ready.", icon: "pause.circle.fill", tint: .orange)
+        }
+        ForEach(ProcessingKind.allCases) { kind in
+            if let background = processing.continuedProcessing.notices[kind] {
+                notice(kind == .transcription ? "Caption processing" : "Export processing",
+                    message: background.message, icon: "arrow.up.forward.app", tint: .orange)
+            }
+        }
         if let issue = processing.lifecycle.error {
-            Section("Processing control storage") {
-                Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                Button("Retry control storage") { processing.retryControlStorage() }
+            notice("Processing unavailable", message: issue, icon: "exclamationmark.triangle.fill", tint: .red) {
+                processing.retryControlStorage()
             }
         }
         if let issue = model.transcription.persistenceError {
-            Section("Transcription storage") {
-                Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                Button("Retry transcription storage") { model.transcription.retryStorage() }
-                Text("The original queue file is retained. No empty replacement or reset is performed.").font(.footnote)
+            notice("Transcription storage needs attention", message: issue, icon: "exclamationmark.triangle.fill", tint: .red) {
+                model.transcription.retryStorage()
             }
         }
         if let issue = model.exports.persistenceError {
-            Section("Export storage") {
-                Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                Button("Retry export storage") { Task { await model.exports.retryStorage() } }
-                Text("Retained requests and files are preserved while queue recovery is unavailable.").font(.footnote)
+            notice("Export storage needs attention", message: issue, icon: "exclamationmark.triangle.fill", tint: .red) {
+                Task { await model.exports.retryStorage() }
             }
         }
         if let issue = model.exports.inventoryError {
-            Section("Export file inventory") {
-                Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                Button("Refresh retained files") { Task { await model.exports.refreshArtifacts() } }
+            notice("Export files need attention", message: issue, icon: "exclamationmark.triangle.fill", tint: .orange) {
+                Task { await model.exports.refreshArtifacts() }
             }
         }
-    }
-
-    @ViewBuilder private var retainedFiles: some View {
-        if !model.exports.orphanedArtifacts.isEmpty {
-            Section {
-                ForEach(model.exports.orphanedArtifacts) { artifact in
-                    NavigationLink(value: ProcessingJobKey(kind: .export, jobID: artifact.id)) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(artifact.title).font(.headline)
-                            Text(artifact.issue ?? (artifact.outputURL == nil ? "Saved request · not in queue" : "Completed file · not in queue"))
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text(ByteCountFormatter.string(fromByteCount: artifact.bytes, countStyle: .file))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 6)
-                    }
-                }
-            } header: { Text("Retained files and requests") }
-            footer: { Text("Requests and results survive record removal and interrupted queue publication. Inspect, recover or explicitly delete each one. No unsaved result expires automatically.") }
-        }
-        Section {
-            Text("\(model.exports.artifacts.count) retained export requests/results · \(ByteCountFormatter.string(fromByteCount: model.exports.artifacts.values.reduce(0) { $0 + $1.bytes }, countStyle: .file))")
-                .font(.footnote).foregroundStyle(.secondary)
-            Text("Unreadable folders may have incomplete size information. Storage shows the aggregate export usage.")
-                .font(.footnote).foregroundStyle(.secondary)
-            Text("Local retention holds up to 100 exports, including files without queue records. Save what you need, then delete older local exports to make room. Removing a queue record alone keeps its file.")
-                .font(.footnote).foregroundStyle(.secondary)
+        if let error { notice("Action could not finish", message: error, icon: "exclamationmark.circle", tint: .red) }
+        if runningAction {
+            ProgressView("Updating jobs…").listRowBackground(Color.clear).listRowSeparator(.hidden)
         }
     }
 
-    private var actionsMenu: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button("Retry eligible filtered jobs", systemImage: "arrow.clockwise") {
-                    runBulk(.retry, keys: visible.map(\.id))
-                }
-                .disabled(runningBulk || !visible.contains { processing.can(.retry, $0.id) })
-                Button("Cancel filtered jobs", systemImage: "xmark.circle", role: .destructive) {
-                    confirmBulk(.cancel)
-                }
-                .disabled(runningBulk || !visible.contains { processing.can(.cancel, $0.id) })
-                Button("Remove finished filtered records", systemImage: "trash", role: .destructive) {
-                    confirmBulk(.removeRecord)
-                }
-                .disabled(runningBulk || !visible.contains { processing.can(.removeRecord, $0.id) })
-            } label: { Label("Queue actions", systemImage: "ellipsis.circle") }
+    private func notice(_ title: String, message: String, icon: String, tint: Color,
+                        retry: (() -> Void)? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon).font(.subheadline.weight(.semibold)).foregroundStyle(tint)
+            Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            if let retry { Button("Retry", action: retry).font(.subheadline.weight(.semibold)) }
         }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+        .listRowBackground(Color.clear).listRowSeparator(.hidden)
     }
-    private func confirmBulk(_ action: ProcessingAction) {
-        bulkAction = action
-        bulkKeys = visible.filter { processing.can(action, $0.id) }.map(\.id)
-        confirmingBulk = true
+
+    private var confirmationTitle: String {
+        let count = actionKeys.count
+        return pendingAction == .cancel ? "Cancel \(count) \(count == 1 ? "job" : "jobs")?" :
+            "Remove \(count) \(count == 1 ? "record" : "records")?"
     }
-    private func runBulk(_ action: ProcessingAction, keys: [ProcessingJobKey]) {
-        runningBulk = true; error = nil
+    private func confirm(_ action: ProcessingAction, keys: [ProcessingJobKey]) {
+        actionKeys = keys.filter { processing.can(action, $0) }
+        guard !actionKeys.isEmpty else { return }
+        pendingAction = action
+        confirming = true
+    }
+    private func run(_ action: ProcessingAction, keys: [ProcessingJobKey]) {
+        guard !runningAction else { return }
+        runningAction = true; error = nil
         Task {
             let failures = await processing.performBulk(action, keys: keys)
             error = failures.isEmpty ? nil : failures.joined(separator: "\n\n")
-            runningBulk = false
+            runningAction = false
             await model.refreshStorage()
         }
     }
-    private func project(_ entry: ProcessingEntry) -> ProjectSummary? {
-        model.allProjects.first { $0.id == entry.projectID }
+    private func open(_ key: ProcessingJobKey) {
+        guard !isOpeningProject, !model.exports.hasUserDelivery else { return }
+        if let route = model.queueProjectRoute(for: key) {
+            isOpeningProject = true
+            openProject(route)
+        }
+        else { details = key }
+    }
+    private func finishRetainedNavigation() {
+        guard let route = retainedProjectRoute else { return }
+        retainedProjectRoute = nil
+        openProject(route)
     }
     private func title(_ entry: ProcessingEntry) -> String {
-        if entry.id.kind == .export, let artifact = model.exports.artifacts[entry.record.id] { return artifact.title }
-        return project(entry)?.title ?? entry.record.title ?? "Unavailable project"
+        let project = model.allProjects.first { $0.id == entry.projectID }
+        let artifactTitle = entry.id.kind == .export ? model.exports.artifacts[entry.id.jobID]?.title : nil
+        return project?.title ?? artifactTitle ?? entry.record.title ?? "Unavailable project"
     }
-}
-
-private struct ProcessingQueueRow: View {
-    let entry: ProcessingEntry
-    let title: String
-    let thumbnailURL: URL?
-    let cacheGeneration: Int
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            QueueThumbnail(url: thumbnailURL, generation: cacheGeneration, icon: entry.id.kind.icon)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline).lineLimit(2)
-                Label(entry.id.kind.title, systemImage: entry.id.kind.icon).font(.caption).foregroundStyle(.secondary)
-                Text(entry.statusTitle).font(.subheadline)
-                if let value = entry.fraction {
-                    ProgressView(value: value).accessibilityLabel("Job progress")
-                }
-                if let error = entry.record.error {
-                    Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                }
-                Text(entry.record.createdAt, style: .relative).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct QueueThumbnail: View {
-    let url: URL?
-    let generation: Int
-    let icon: String
-    @State private var thumbnail: UIImage?
-    var body: some View {
-        RoundedRectangle(cornerRadius: 10).fill(.quaternary)
-            .frame(width: 48, height: 48)
-            .overlay {
-                if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFill()
-                        .frame(width: 48, height: 48).clipped()
-                } else { Image(systemName: icon).foregroundStyle(.secondary) }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .accessibilityHidden(true)
-            .task(id: "\(url?.path ?? "")-\(generation)") {
-                thumbnail = nil
-                let data = await ProjectThumbnailData.shared.load(url)
-                guard !Task.isCancelled else { return }
-                thumbnail = data.flatMap { UIImage(data: $0) }
-            }
+    private func detail(_ entry: ProcessingEntry) -> String {
+        guard entry.id.kind == .export else { return "Captions" }
+        let profile = model.exports.artifacts[entry.id.jobID]?.profile ?? (try? entry.record.decode(ExportJob.self))?.payload.profile
+        guard let profile else { return "Export" }
+        return profile.format == .mp4 ? "Captioned video · \(profile.resolution.title)" : "SRT subtitles"
     }
 }

@@ -6,7 +6,7 @@ import JobQueue
 // New work uses SpeechJob/ExportJob; payload bytes and storage paths stay stable.
 struct IOSSpeechJob: Job {
     typealias Payload = SpeechJob.Payload
-    static let maxConcurrentExecutions = 1
+    static let maxConcurrentExecutions = SpeechJob.maxConcurrentExecutions
     let id: UUID
     let payload: Payload
     func execute(progress: JobProgressReporter) async throws {
@@ -16,7 +16,7 @@ struct IOSSpeechJob: Job {
 
 struct IOSExportJob: Job {
     typealias Payload = ExportJob.Payload
-    static let maxConcurrentExecutions = 1
+    static let maxConcurrentExecutions = ExportJob.maxConcurrentExecutions
     let id: UUID
     let payload: Payload
     func execute(progress: JobProgressReporter) async throws {

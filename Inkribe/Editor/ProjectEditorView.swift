@@ -17,6 +17,7 @@ struct ProjectEditorView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.appFoundationTheme) private var theme
+    @Environment(\.queueProjectNavigation) private var openQueueProject
     let projectID: UUID
     private let sessions: EditorSessions
     private let renameOnOpen: Bool
@@ -45,20 +46,29 @@ struct ProjectEditorView: View {
     @State private var showProjectInfo = false
     @State private var didRequestInitialRename = false
     @State private var focusTitleOnPresentation = false
+    @State private var pendingQueueRoute: QueueProjectRoute?
+    @State private var queueOwnerIsDismissing = false
+    @State private var focusedExportID: UUID?
     @FocusState private var focused: EditorField?
 
-    init(session: EditorSession, sessions: EditorSessions, renameOnOpen: Bool = false) {
+    init(session: EditorSession, sessions: EditorSessions, renameOnOpen: Bool = false,
+         queueRoute: QueueProjectRoute? = nil) {
         self.projectID = session.projectID
         self.sessions = sessions
         self.renameOnOpen = renameOnOpen
         _session = State(initialValue: session)
+        _pendingQueueRoute = State(initialValue: queueRoute)
     }
 
     // Keep layout, toolbar and presentation as separate opaque expressions.
     // A single modifier chain exceeded Swift's type-checking budget in CI.
     var body: some View {
         editorPresentation
-        .onAppear { isLeaving = false; sessions.attach(session, owner: presentationID) }
+        .onAppear {
+            isLeaving = false
+            sessions.attach(session, owner: presentationID)
+            finishQueueNavigation()
+        }
         .onChange(of: session.clipEditGeneration) { _, _ in
             Task { await model.refreshAfterClipEdit(projectID) }
         }
@@ -80,6 +90,7 @@ struct ProjectEditorView: View {
             sessions.detach(session, owner: presentationID)
             Task { await session.flush(); await model.refreshLibrary() }
         }
+        .environment(\.queueProjectNavigation, QueueProjectNavigation(open: handleQueueProject))
     }
 
     private var editorPresentation: some View {
@@ -97,12 +108,17 @@ struct ProjectEditorView: View {
 
     private var editorDocumentPresentation: some View {
         editorStylePresentation
-            .sheet(isPresented: $showExport, onDismiss: finishToolEditing) {
-                ExportView(session: session)
+            .sheet(isPresented: $showExport, onDismiss: {
+                finishToolEditing()
+                queueOwnerDidDismiss()
+            }) {
+                ExportView(session: session, focusedJobID: focusedExportID)
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
-            .sheet(isPresented: $showQueue, onDismiss: { Task { await session.refreshSaved() } }) { ProcessingQueueSheet() }
+            .sheet(isPresented: $showQueue, onDismiss: {
+                Task { await session.refreshSaved(); queueOwnerDidDismiss() }
+            }) { ProcessingQueueSheet() }
             .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
             .sheet(item: Binding(get: { activeToolSheet == nil ? addingCaption : nil },
                 set: { if activeToolSheet == nil { addingCaption = $0 } }), onDismiss: finishToolEditing) { draft in
@@ -302,6 +318,40 @@ struct ProjectEditorView: View {
         if renameOnOpen, !didRequestInitialRename, session.document != nil {
             didRequestInitialRename = true
             beginRenaming()
+        }
+        finishQueueNavigation()
+    }
+
+    private func handleQueueProject(_ route: QueueProjectRoute) {
+        guard pendingQueueRoute == nil, !isLeaving, !model.exports.hasUserDelivery else { return }
+        pendingQueueRoute = route
+        session.pause()
+        focused = nil
+        // Close the owning presentation, including Queue pushed/presented inside
+        // Export or Captions. Its actual onDismiss performs the next navigation.
+        if showQueue { queueOwnerIsDismissing = true; showQueue = false }
+        else if showExport { queueOwnerIsDismissing = true; showExport = false }
+        else if activeToolSheet != nil { queueOwnerIsDismissing = true; activeToolSheet = nil }
+        else { finishQueueNavigation() }
+    }
+
+    private func queueOwnerDidDismiss() {
+        queueOwnerIsDismissing = false
+        finishQueueNavigation()
+    }
+
+    private func finishQueueNavigation() {
+        guard let route = pendingQueueRoute, !isOpening, !isLeaving,
+              !queueOwnerIsDismissing, !hasPresentedSheet, session.document != nil else { return }
+        pendingQueueRoute = nil
+        if route.projectID != projectID || !model.allProjects.contains(where: { $0.id == projectID }) {
+            openQueueProject(route)
+        } else if route.job.kind == .transcription {
+            switchTool(.captions)
+        } else {
+            finishToolInteraction()
+            focusedExportID = route.job.jobID
+            showExport = true
         }
     }
 
@@ -713,6 +763,7 @@ struct ProjectEditorView: View {
                 }
                 actionButton("Export", symbol: "square.and.arrow.up", selected: showExport) {
                     finishToolInteraction()
+                    focusedExportID = nil
                     showExport = true
                 }
                 .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
@@ -1015,6 +1066,7 @@ struct ProjectEditorView: View {
         // Reconcile speech publication whose notification may have arrived while
         // the Media transaction excluded session reloads, as Style already does.
         if refreshMedia { Task { await session.refreshAfterMediaEditing() } }
+        queueOwnerDidDismiss()
     }
 
     private func finishToolEditing() {

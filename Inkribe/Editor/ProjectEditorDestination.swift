@@ -6,10 +6,14 @@ struct ProjectEditorDestination: View {
     @Environment(ProjectsModel.self) private var model
     let projectID: UUID
     var renameOnOpen = false
+    var queueRoute: QueueProjectRoute? = nil
     @State private var session: EditorSession?
     var body: some View {
         Group {
-            if let session { ProjectEditorView(session: session, sessions: model.editors, renameOnOpen: renameOnOpen) }
+            if let session {
+                ProjectEditorView(session: session, sessions: model.editors,
+                    renameOnOpen: renameOnOpen, queueRoute: queueRoute)
+            }
             else {
                 Group {
                     if EditorPreparationPresentation.showsLoadingIndicators { ProgressView("Opening project…") }

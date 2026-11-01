@@ -7,8 +7,10 @@ struct SettingsView: View {
     @Environment(ProjectsModel.self) private var model
     @Environment(ThemeManager.self) private var themes
     @Environment(\.appFoundationTheme) private var theme
+    @Environment(\.queueProjectNavigation) private var openQueueProject
     let onShowPro: () -> Void
     @State private var sheet: SettingsSheet?
+    @State private var pendingQueueRoute: QueueProjectRoute?
 
     var body: some View {
         List {
@@ -97,13 +99,26 @@ struct SettingsView: View {
         .themedSurface()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $sheet) { destination in
+        .sheet(item: $sheet, onDismiss: finishQueueNavigation) { destination in
             switch destination {
             case .themes: ProUpsell(feature: .themes)
             case .models: SpeechModelsView()
             case .storage: StorageView()
             }
         }
+        .environment(\.queueProjectNavigation, QueueProjectNavigation { route in
+            guard pendingQueueRoute == nil, !model.exports.hasUserDelivery else { return }
+            if sheet != nil {
+                pendingQueueRoute = route
+                sheet = nil
+            } else { openQueueProject(route) }
+        })
+    }
+
+    private func finishQueueNavigation() {
+        guard let route = pendingQueueRoute else { return }
+        pendingQueueRoute = nil
+        openQueueProject(route)
     }
 
     private var appVersion: String {

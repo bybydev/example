@@ -23,6 +23,9 @@ struct ProjectsView: View {
     @State private var searchPresented = false
     @State private var folderToDelete: LibraryFolder?
     @State private var projectToDelete: ProjectRepository.TrashedProject?
+    @State private var pendingQueueRoute: QueueProjectRoute?
+    @State private var queueFallbackDetails: ProcessingJobKey?
+    @State private var didEnterBackground = false
     private var searching: Bool { searchPresented || !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
@@ -37,6 +40,21 @@ struct ProjectsView: View {
                 case .folder(let folder): LibraryFolderEditor(folder: folder, onSaved: { searchPresented = false })
                 }
             }
+            .queueJobDetails($queueFallbackDetails)
+            .task {
+                updateProcessingScene(scenePhase)
+                await model.processing.start()
+                await model.refresh()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                updateProcessingScene(phase)
+                if phase == .active {
+                    Task { await model.refresh(); await model.transcription.refreshAllowance() }
+                } else {
+                    Task { await model.editors.flushAll() }
+                }
+            }
+            .environment(\.queueProjectNavigation, QueueProjectNavigation(open: openQueueProject))
     }
 
     private var libraryLifecycle: some View {
@@ -45,19 +63,6 @@ struct ProjectsView: View {
             .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await model.refreshLibrary() } }
             .onChange(of: path) { _, value in
                 if value.isEmpty { Task { await model.refreshLibrary() } }
-            }
-            .task {
-                model.processing.setForeground(scenePhase == .active)
-                await model.processing.start()
-                await model.refresh()
-            }
-            .onChange(of: scenePhase) { _, value in
-                model.processing.setForeground(value == .active)
-                if value == .active {
-                    Task { await model.refresh(); await model.transcription.refreshAllowance() }
-                } else {
-                    Task { await model.editors.flushAll() }
-                }
             }
             .refreshable { await model.refresh(); await model.exports.refreshArtifacts() }
     }
@@ -125,6 +130,8 @@ struct ProjectsView: View {
                 case .renameProject(let id): ProjectEditorDestination(projectID: id, renameOnOpen: true)
                 case .settings: SettingsView(onShowPro: presentProStatus)
                 case .queue: ProcessingQueueView()
+                case .queueProject(let route):
+                    ProjectEditorDestination(projectID: route.projectID, queueRoute: route)
                 }
             }
     }
@@ -399,7 +406,8 @@ struct ProjectsView: View {
         let failures = entries.filter { $0.record.status == .failed || $0.record.status == .unrecoverable }.count
         let storageProblem = model.transcription.persistenceError != nil || model.exports.persistenceError != nil
             || model.exports.inventoryError != nil || processing.lifecycle.error != nil
-        let paused = processing.lifecycle.userPaused || (!processing.lifecycle.foreground && processing.activeCount > 0)
+        let paused = processing.lifecycle.needsResume || (!processing.lifecycle.foreground &&
+            processing.lifecycle.backgroundKinds.isEmpty && processing.activeCount > 0)
         let needsAttention = storageProblem || failures > 0
         let title = needsAttention ? "Queue needs attention" : paused ? "Queue paused" : "Processing Queue"
         let detail = "\(processingCount) processing · \(pendingCount) waiting · \(completed) files ready"
@@ -767,6 +775,11 @@ struct ProjectsView: View {
         sheet = .newProject
     }
     private func finishPresentation() {
+        if let route = pendingQueueRoute {
+            pendingQueueRoute = nil
+            showQueueProject(route)
+            return
+        }
         if importPresented {
             model.clearSelection()
             importPresented = false
@@ -793,6 +806,32 @@ struct ProjectsView: View {
             }
         }
     }
+
+    private func openQueueProject(_ route: QueueProjectRoute) {
+        guard !model.exports.hasUserDelivery, pendingQueueRoute == nil else { return }
+        if sheet != nil {
+            pendingQueueRoute = route
+            sheet = nil
+        } else {
+            showQueueProject(route)
+        }
+    }
+
+    private func showQueueProject(_ route: QueueProjectRoute) {
+        // A project can move to Trash while its enclosing sheet dismisses.
+        guard model.allProjects.contains(where: { $0.id == route.projectID }) else {
+            queueFallbackDetails = route.job
+            return
+        }
+        path.append(.queueProject(route))
+    }
+
+    private func updateProcessingScene(_ phase: ScenePhase) {
+        if phase == .background { didEnterBackground = true }
+        let returning = phase == .active && didEnterBackground
+        if phase == .active { didEnterBackground = false }
+        model.processing.setForeground(phase == .active, recoveringFromBackground: returning)
+    }
 }
 
 private enum LibrarySheet: Identifiable {
@@ -809,7 +848,9 @@ private enum LibrarySheet: Identifiable {
         }
     }
 }
-private enum ProjectsRoute: Hashable { case project(UUID), renameProject(UUID), settings, queue }
+private enum ProjectsRoute: Hashable {
+    case project(UUID), renameProject(UUID), settings, queue, queueProject(QueueProjectRoute)
+}
 
 private extension View {
     func libraryChromeRow() -> some View {

@@ -1,5 +1,50 @@
 # Inkribe iOS — current plan
 
+## Current: queue experience — all four source passes complete
+
+2026-11-01. Final JOB.INTEGRATION in PR #57 extends 2923c08b. Source review covers
+single queued actions, 1/3 capacity/current/legacy jobs, project/sheet routes,
+retained files/delivery and continued-task submission, GPU eligibility, interruption
+and recovery. Scoped fixes stabilize scene ownership and real-background recovery,
+one-time export focus/inventory, and post-dismissal project availability. See
+[scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+Preserve the settled design/contracts. All four source passes are complete;
+compilation/native/UI acceptance remains unverified. Keep open without auto-merge;
+no automatic next scope, merge or release.
+
+## Current: queue experience — pass 3 of four
+
+2026-11-01. User-authorized JOB.BACKGROUND in PR #57 from 7d4b06fd. Add iOS 26
+continued-processing requests only for explicit work/resume, system progress and
+expiration/cleanup over existing JobQueue. Keep speech/export grants independent;
+GPU-enabled video exports require runtime support, with foreground-only export
+fallback when unavailable. Preserve 1/3 capacity, durable inputs/progress/files,
+user pause and all queue/editor design. See [scope](phases/QUEUE_EXPERIENCE.md) and
+[handoff](handoffs/QUEUE_EXPERIENCE.md). Metadata/entitlement source only; no generation
+or execution. Pass 4 awaits the user's signal; leave open without auto-merge.
+
+## Current: queue experience — pass 2 of four
+
+2026-11-01. User-authorized JOB.QUEUE_UI / JOB.PROJECT_ROUTE in PR #57 from faa33e8c:
+Spokio iOS plain queue/scopes/toolbar/compact status/progress/actions; row navigation
+to project Captions or the exact export; separate retained-file management and full
+job details. Native dismissal callbacks close the owning presentations before root
+navigation or reuse of the current editor. Preserve pass-1 queue behavior and all
+unrelated editor design. See [scope](phases/QUEUE_EXPERIENCE.md) and
+[source handoff](handoffs/QUEUE_EXPERIENCE.md). Passes 3–4 await separate signals.
+Source-only; leave open without auto-merge.
+
+## Current: queue experience — pass 1 of four
+
+2026-11-01. Implement [queue actions and capacity](phases/QUEUE_EXPERIENCE.md)
+in feat/ios-queue-experience -> develop from b51e1b95. One queued Transcribe/Create
+Export flow, project-local export progress after reopening, JobQueue capacity 1/3
+and no shared iOS serialization. Preserve lifecycle cancellation, speech engine,
+allowance, immutable outputs and current editor design. See
+[source handoff](handoffs/QUEUE_EXPERIENCE.md). Passes 2 (queue UI/deep links),
+3 (background processing) and 4 (integration review) await separate signals.
+Source-only; no automatic next pass, merge or release.
+
 ## Current: timeline-only clip trimming stacked on #55
 
 2026-10-31. Implement the approved [clip trimming](phases/CLIP_TRIMMING.md), from

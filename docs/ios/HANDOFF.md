@@ -1,5 +1,44 @@
 # Inkribe iOS — current handoff
 
+2026-11-01. [Queue experience final pass 4](handoffs/QUEUE_EXPERIENCE.md) extends
+PR #57 from 2923c08b and completes all four source passes. The final matrix reviews
+single actions/JobQueue limits, project and retained-file routes, cancellation/retry,
+delivery, system grants/resources and interruption/reopening. Scoped fixes move
+lifecycle observation to the stable navigation owner, preserve iOS pauses across
+temporary inactivity, wait for current export inventory before focus, honor user
+actions over pending focus, and recheck projects after dismissal. Current design,
+formats/allowance/engine/frozen outputs and Mac/shared packages remain. Compilation/
+native/UI/signing acceptance is unverified. Keep open without auto-merge; no new scope.
+
+2026-11-01. [Queue experience pass 3](handoffs/QUEUE_EXPERIENCE.md) extends PR #57
+from 7d4b06fd. Source delivery adds explicit continued-processing requests, per-kind
+speech/export grants, system progress, expiration/captured native teardown and
+foreground recovery. GPU-supported video exports can continue; unsupported or denied
+background access pauses export work outside the app without blocking CPU speech.
+Metadata/capability remain source-only; generated Info.plist is excluded/ignored.
+No automatic background resubmission on relaunch/foreground return. Accepted captions
+and frozen outputs remain durable; force quit stops work and MP4 retry restarts its
+partial rendering. Passes 1–2 remain; pass 4 awaits a signal. Compilation/runtime
+unverified under source-only restrictions; keep open without auto-merge.
+
+2026-11-01. [Queue experience pass 2](handoffs/QUEUE_EXPERIENCE.md) extends PR #57
+from faa33e8c. Source delivery covers Spokio-style queue/list/scopes/toolbar/rows,
+confirmed swipe/context actions, dedicated retained exports, row project-tool
+routes and exact export focusing. Queue, detail and retained-sheet owners dismiss
+before forwarding; Editor reuses itself for its own project. Root and Settings
+handle their Storage sheets. Missing/trashed projects keep independent output
+access in Job details. Pass-1 behavior is retained. Source review only; compilation/
+native/UI acceptance unverified. Passes 3–4 await signals; keep open without auto-merge.
+
+2026-11-01. [Queue experience pass 1](handoffs/QUEUE_EXPERIENCE.md) is source-
+integrated in feat/ios-queue-experience -> develop from b51e1b95. Create Export
+always enqueues and stays in the project Export sheet; all saved export activity
+is shown again on reopening. Transcribe retains its existing queued entry. JobQueue
+owns concurrency (speech 1, exports 3, legacy/current types); iOS no longer uses
+the shared permit. Cancellation/teardown, model switching, frozen outputs and
+delivery protection remain. Source-only; runtime unverified. Passes 2–4 await the
+user's next signals. Leave open without auto-merge.
+
 2026-10-31. [Timeline clip trimming](handoffs/CLIP_TRIMMING.md) is stacked on
 #55 head 381b0d2b, targeting feat/ios-media-form. Source delivery covers selected
 clip handles/main-preview boundary audition, restoration/source limits, one saved

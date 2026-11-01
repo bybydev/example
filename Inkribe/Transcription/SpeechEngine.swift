@@ -4,7 +4,7 @@ import Observation
 import WhisperRuntime
 
 /// One app-wide active model and one retained native context. Jobs never select
-/// an engine or keep a model alive. ProcessingRuntime serializes native work.
+/// an engine or keep a model alive. JobQueue serializes transcription work.
 @MainActor
 @Observable
 final class SpeechEngine {
