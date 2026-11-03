@@ -14,8 +14,7 @@ struct ProjectStorageSection: View {
     @State private var generation = UUID()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Project storage").font(.headline)
+        Section {
             if let usage {
                 usageRow("Project files", usage.bytes.total)
                 usageRow("Original media", usage.bytes.sources)
@@ -31,10 +30,11 @@ struct ProjectStorageSection: View {
                 Text(error).font(.footnote).foregroundStyle(.orange)
                 Button("Retry storage") { Task { await refresh() } }.disabled(loading || clearing)
             }
+        } header: {
+            Text("Storage")
+        } footer: {
             Text("Clearing the thumbnail keeps your original media, captions and edits. A thumbnail is recreated when needed. Manage exported files in Export.")
-                .font(.footnote).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: session.document?.contentRevision) { await refresh() }
         .confirmationDialog("Clear this project’s library thumbnail?", isPresented: $confirmCleanup) {
             Button("Clear thumbnail", role: .destructive) {
@@ -52,7 +52,6 @@ struct ProjectStorageSection: View {
 
     private func usageRow(_ title: String, _ bytes: Int64) -> some View {
         LabeledContent(title, value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
-            .font(.subheadline)
     }
 
     private func refresh() async {

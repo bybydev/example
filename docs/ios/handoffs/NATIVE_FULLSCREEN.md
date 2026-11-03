@@ -1,5 +1,32 @@
 # Native fullscreen playback — source handoff
 
+## Fullscreen caption clock follow-up
+
+2026-11-01. The user reports captions freezing at fullscreen entry and requests
+the fix in a new generic fix/ios-improvements PR from develop 5910c9c, targeting
+develop. Keep this PR open for later explicitly requested small changes.
+
+- [x] NativeVideoPlayer.Presenter owns an editor-only 30 Hz AVPlayer periodic
+  time observer. Caption redraws no longer require the covered SwiftUI editor to
+  call updateUIViewController. Native playback and time jumps drive the callback.
+- [x] Each redraw reads the current session snapshot and actual player time,
+  clamped to output duration, rather than a previously forwarded SwiftUI clock.
+  Readiness still selects the matched held frame/snapshot/time until video is ready;
+  the existing video-bounds observer preserves rotation/zoom alignment.
+- [x] Observer replacement, final dismissal/failure and representable teardown
+  remove the token from the exact player that registered it. Generation and weak
+  controller checks reject queued callbacks after replacement/close/reopen; skip
+  updates when the native controller no longer owns the player.
+- [x] Completed-file previews do not install the observer. The shared editor player,
+  native controls, pause/current-time return, delivery leases, inline previews,
+  renderer, export pipeline and project data remain unchanged.
+
+Validation: source lifecycle/call-site review and diff/whitespace checks only.
+No builds/typechecks/tests, CI or native/UI/device execution. Compilation and
+device playback/paused seeking/close/reopen acceptance remain unverified.
+
+## Original native-player implementation
+
 2026-10-29. feat/ios-native-fullscreen-player -> feat/ios-style-sheet-grid.
 Based on PR #52 head 3f9b81076fd3ec0e20638865b3cdbd57247f3d2f; parent unchanged.
 Keep both PRs open without auto-merge.

@@ -7,6 +7,7 @@ import Observation
 @MainActor
 @Observable
 final class EditorSession {
+    static let previewPlaybackSpeeds: [Float] = [0.5, 1, 1.25, 1.5, 2]
     let access: ProAccess
     var proUpsell: ProFeature?
     let projectID: UUID
@@ -30,6 +31,7 @@ final class EditorSession {
     private(set) var isSaving = false
     private(set) var isPreparingPreview = false
     private(set) var isPlaying = false
+    private(set) var previewPlaybackSpeed: Float = 1
     private(set) var time = MediaTime.zero
     private(set) var selectedCueID: UUID?
     private(set) var selectedWordID: UUID?
@@ -67,6 +69,8 @@ final class EditorSession {
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObserver: NSKeyValueObservation?
     @ObservationIgnored private var playbackStateObserver: NSKeyValueObservation?
+    @ObservationIgnored private var playbackRateObserver: NSKeyValueObservation?
+    @ObservationIgnored private var defaultPlaybackRateObserver: NSKeyValueObservation?
     @ObservationIgnored private var preparedMedia: MediaKey?
     @ObservationIgnored private var mediaRefresh: Task<Void, Never>?
 
@@ -1137,6 +1141,28 @@ final class EditorSession {
     }
 
     private func observeTimeIfNeeded() {
+        if defaultPlaybackRateObserver == nil {
+            defaultPlaybackRateObserver = player.observe(\.defaultRate, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.defaultPlaybackRateObserver != nil else { return }
+                    let rate = self.player.defaultRate
+                    guard rate.isFinite, rate > 0 else { return }
+                    self.previewPlaybackSpeed = rate
+                }
+            }
+        }
+        if playbackRateObserver == nil {
+            playbackRateObserver = player.observe(\.rate, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.playbackRateObserver != nil else { return }
+                    let rate = self.player.rate
+                    guard rate.isFinite, rate > 0 else { return }
+                    // Also retain speed chosen through AVKit's native controls.
+                    self.previewPlaybackSpeed = rate
+                    self.player.defaultRate = rate
+                }
+            }
+        }
         if playbackStateObserver == nil {
             playbackStateObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
@@ -1178,11 +1204,42 @@ final class EditorSession {
         pause()
         if let value = try? EditorTime.stamp(seconds) { seek(to: value) }
     }
+
+    /// Preview and export compositions use a 30 fps output clock. Seek inside
+    /// the last frame rather than to duration, which has no displayable frame.
+    private var previewEndTime: MediaTime {
+        let frames = CMTimeConvertScale(duration.cmTime, timescale: 30, method: .roundAwayFromZero)
+        guard frames.isNumeric, frames.value > 0 else { return .zero }
+        return (try? MediaTime(validating: CMTime(value: frames.value - 1, timescale: 30))) ?? .zero
+    }
+
+    func jumpToStart() {
+        guard !isEditingClipTrim, !isPreparingPreview, previewError == nil, player.currentItem != nil else { return }
+        pause()
+        seek(to: .zero)
+    }
+
+    func jumpToEnd() {
+        guard !isEditingClipTrim, !isPreparingPreview, previewError == nil, player.currentItem != nil else { return }
+        pause()
+        seek(to: previewEndTime)
+    }
+
+    func setPreviewPlaybackSpeed(_ speed: Float) {
+        guard Self.previewPlaybackSpeeds.contains(speed), !isEditingClipTrim, !isPreparingPreview,
+              previewError == nil, player.currentItem != nil else { return }
+        previewPlaybackSpeed = speed
+        // play() uses defaultRate on resume; changing speed while paused must
+        // not start playback. This state never enters saved/export documents.
+        player.defaultRate = speed
+        if player.timeControlStatus != .paused { player.rate = speed }
+    }
+
     func togglePlayback() {
         if isPlaying { pause(); return }
         guard player.currentItem != nil, previewError == nil, !isPreparingPreview else { return }
         endTyping()
-        if time >= duration { seek(to: .zero) }
+        if time >= previewEndTime { seek(to: .zero) }
         isPlaying = true
         player.play()
     }
@@ -1219,6 +1276,8 @@ final class EditorSession {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
         statusObserver = nil
         playbackStateObserver = nil
+        playbackRateObserver = nil
+        defaultPlaybackRateObserver = nil
         playbackGeneration = UUID()
         preparedMedia = nil
         previewFrames.reset()

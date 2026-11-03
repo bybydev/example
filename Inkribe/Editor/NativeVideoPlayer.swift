@@ -39,6 +39,8 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         private var native: AVPlayerViewController?
         private var captions: NativeCaptionOverlay?
         private var observations: [NSKeyValueObservation] = []
+        private var captionClock: (player: AVPlayer, token: Any)?
+        private var captionClockGeneration = UUID()
         private var inactiveObserver: NSObjectProtocol?
         private var externalPlayback: Bool?
         private var latestSnapshot: CaptionSnapshot?
@@ -179,10 +181,42 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
                         self.session?.pause()
                     }
                 }
+            startCaptionClock(controller)
+        }
+
+        private func startCaptionClock(_ controller: AVPlayerViewController) {
+            stopCaptionClock()
+            guard session != nil, let player else { return }
+            let generation = captionClockGeneration
+            // The covered SwiftUI editor may stop updating its representable.
+            // Native playback and seeks must drive the overlay independently.
+            let token = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self, weak controller] _ in
+                Task { @MainActor [weak self, weak controller] in
+                    guard let self, let controller, !self.stopping, !self.closing,
+                          self.captionClockGeneration == generation,
+                          self.native === controller, controller.player === self.player else { return }
+                    self.updateCaptions()
+                }
+            }
+            captionClock = (player, token)
+        }
+
+        private func stopCaptionClock() {
+            captionClockGeneration = UUID()
+            guard let clock = captionClock else { return }
+            captionClock = nil
+            clock.player.removeTimeObserver(clock.token)
         }
 
         private func updateCaptions() {
-            captions?.update(snapshot: latestSnapshot, time: latestTime, held: session?.previewFrames.heldFrame)
+            guard let captions else { return }
+            if let session {
+                let actual = (try? MediaTime(validating: session.player.currentTime())) ?? session.time
+                captions.update(snapshot: session.snapshot, time: min(actual, session.duration),
+                    held: session.previewFrames.heldFrame)
+            } else {
+                captions.update(snapshot: latestSnapshot, time: latestTime, held: nil)
+            }
         }
 
         func relinquishVideo() {
@@ -219,6 +253,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
 
         private func finish(_ controller: AVPlayerViewController) {
             guard native === controller else { return }
+            stopCaptionClock()
             player?.pause(); session?.pause()
             relinquishVideo()
             if let externalPlayback { player?.allowsExternalPlayback = externalPlayback }
@@ -242,6 +277,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         func tearDown() {
             let wasRequested = requested
             stopping = true; requested = false
+            stopCaptionClock()
             guard let native else {
                 if wasRequested {
                     let callback = close

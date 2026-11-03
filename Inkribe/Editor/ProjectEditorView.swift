@@ -41,11 +41,11 @@ struct ProjectEditorView: View {
     @State private var choosingMusic = false
     @State private var captionRenderError: String?
     @State private var showExport = false
-    @State private var showQueue = false
     @State private var preparingTranscription = false
     @State private var showProjectInfo = false
     @State private var didRequestInitialRename = false
-    @State private var focusTitleOnPresentation = false
+    @State private var showingRename = false
+    @State private var renamedTitle = ""
     @State private var pendingQueueRoute: QueueProjectRoute?
     @State private var queueOwnerIsDismissing = false
     @State private var focusedExportID: UUID?
@@ -116,9 +116,6 @@ struct ProjectEditorView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
-            .sheet(isPresented: $showQueue, onDismiss: {
-                Task { await session.refreshSaved(); queueOwnerDidDismiss() }
-            }) { ProcessingQueueSheet() }
             .sheet(isPresented: $showProjectInfo) { projectInfoSheet }
             .sheet(item: Binding(get: { activeToolSheet == nil ? addingCaption : nil },
                 set: { if activeToolSheet == nil { addingCaption = $0 } }), onDismiss: finishToolEditing) { draft in
@@ -170,8 +167,22 @@ struct ProjectEditorView: View {
         })
     }
 
-    private var editorDialogs: some View {
+    private var editorRenamePresentation: some View {
         editorNavigation
+        .alert("Rename project", isPresented: $showingRename) {
+            TextField("Project title", text: $renamedTitle)
+            Button("Save") {
+                session.setTitle(renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines))
+                Task { await session.flush() }
+            }
+            .disabled(renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                renamedTitle.count > 256 || !session.isReadyToEdit)
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("Enter a name up to 256 characters.") }
+    }
+
+    private var editorDialogs: some View {
+        editorRenamePresentation
         .confirmationDialog("Move this project to Trash?", isPresented: $showDeleteConfirmation) {
             Button("Move to Trash", role: .destructive) {
                 Task {
@@ -213,9 +224,9 @@ struct ProjectEditorView: View {
                     preview(document, height: previewHeight(document, in: geometry.size))
                         .padding(.horizontal, 12)
                     EditorPlaybackControls(session: session, showsTimeline: false, showsHistory: false,
-                        clipLabel: clipPlaybackLabel(document),
+                        showsEditorTransport: true,
                         onInteraction: { focused = nil },
-                        onExpand: openFullscreenPreview, onClips: openClips)
+                        onExpand: openFullscreenPreview)
                         .padding(.horizontal, 12)
                     timelineWorkspace(document)
                 }
@@ -261,12 +272,6 @@ struct ProjectEditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .accessibilityLabel("Project timeline")
-    }
-
-    private func clipPlaybackLabel(_ document: ProjectDocument) -> String {
-        let clip = selectedTimelineClip(in: document)
-        let index = clip.flatMap { selected in document.orderedClips.firstIndex { $0.id == selected.id } }
-        return index.map { "Clip \($0 + 1) of \(document.clips.count)" } ?? "Clips"
     }
 
     private func selectedTimelineClip(in document: ProjectDocument) -> ProjectClip? {
@@ -327,10 +332,9 @@ struct ProjectEditorView: View {
         pendingQueueRoute = route
         session.pause()
         focused = nil
-        // Close the owning presentation, including Queue pushed/presented inside
-        // Export or Captions. Its actual onDismiss performs the next navigation.
-        if showQueue { queueOwnerIsDismissing = true; showQueue = false }
-        else if showExport { queueOwnerIsDismissing = true; showExport = false }
+        // Close the owning Export or Captions presentation before following a
+        // job-detail route. Its actual onDismiss performs the next navigation.
+        if showExport { queueOwnerIsDismissing = true; showExport = false }
         else if activeToolSheet != nil { queueOwnerIsDismissing = true; activeToolSheet = nil }
         else { finishQueueNavigation() }
     }
@@ -368,7 +372,7 @@ struct ProjectEditorView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        showProjectInfo || showClips || showExport || showQueue || showStyleSheet || musicSheet != nil || choosingMusic ||
+        showProjectInfo || showingRename || showClips || showExport || showStyleSheet || musicSheet != nil || choosingMusic ||
             activeToolSheet != nil || addingCaption != nil ||
             session.proUpsell != nil || session.workspace.expandedPreview
     }
@@ -671,19 +675,7 @@ struct ProjectEditorView: View {
 
     private var editorActions: some View {
         Menu {
-            Label(saveStatus, systemImage: hasStatusError ? "exclamationmark.triangle" : "checkmark.circle")
-            Divider()
             Button("Rename", systemImage: "pencil") { beginRenaming() }
-            Divider()
-            Button("Expand preview", systemImage: "arrow.up.left.and.arrow.down.right", action: openFullscreenPreview)
-            Button("Queue", systemImage: "list.bullet.rectangle") { openQueue() }
-            Button("Media tools", systemImage: "crop.rotate") {
-                switchTool(.media)
-            }
-            Button("Project info", systemImage: "info.circle") {
-                finishToolInteraction()
-                showProjectInfo = true
-            }
             Button("Duplicate project", systemImage: "plus.square.on.square") {
                 Task {
                     await session.flush()
@@ -691,6 +683,11 @@ struct ProjectEditorView: View {
                     await model.duplicate(projectID)
                 }
             }
+            Button("Project info", systemImage: "info.circle") {
+                finishToolInteraction()
+                showProjectInfo = true
+            }
+            Divider()
             Button("Move to Trash", systemImage: "trash", role: .destructive) { showDeleteConfirmation = true }
                 .disabled(model.transcription.isActive(projectID))
         } label: {
@@ -698,28 +695,17 @@ struct ProjectEditorView: View {
                 .font(.body.weight(.semibold))
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
-        .accessibilityLabel("Editor actions, " + saveStatus)
+        .accessibilityLabel("Project actions")
         .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
     }
 
-    private func openQueue() {
-        guard !preparingTranscription else { return }
-        focused = nil
-        session.pause(); session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
-        preparingTranscription = true
-        Task {
-            defer { preparingTranscription = false }
-            do { _ = try await session.savedDocument(); showQueue = true }
-            catch { model.alertMessage = error.localizedDescription }
-        }
-    }
-
     private func beginRenaming() {
+        guard let document = session.document else { return }
         focused = nil
         session.pause()
         session.endTyping(); session.endStyleEditing(); session.endMediaEditing()
-        focusTitleOnPresentation = true
-        showProjectInfo = true
+        renamedTitle = document.title
+        showingRename = true
     }
 
     private func previewHeight(_ document: ProjectDocument, in size: CGSize) -> CGFloat {
@@ -744,7 +730,7 @@ struct ProjectEditorView: View {
     }
 
     private func previewOwnsPlayer(inCaptions: Bool) -> Bool {
-        guard !isLeaving, !showStyleSheet, musicSheet == nil, !choosingMusic, !showExport, !showQueue, addingCaption == nil,
+        guard !isLeaving, !showStyleSheet, musicSheet == nil, !choosingMusic, !showExport, addingCaption == nil,
               !session.workspace.expandedPreview else { return false }
         if inCaptions {
             return activeToolSheet == .captions && !editingCaptionFromTranscript
@@ -753,23 +739,22 @@ struct ProjectEditorView: View {
     }
 
     private var editorToolBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 2) {
-                actionButton("Clips", symbol: "film.stack", selected: showClips, action: openClips)
-                ForEach(EditorTool.primaryTools) { tool in
-                    actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleSheet)) {
-                        switchTool(tool)
-                    }
+        HStack(spacing: 0) {
+            actionButton("Clips", symbol: "film.stack", selected: showClips, action: openClips)
+            ForEach(EditorTool.primaryTools) { tool in
+                actionButton(tool.title, symbol: tool.symbol, selected: activeToolSheet == tool || (tool == .style && showStyleSheet)) {
+                    switchTool(tool)
                 }
-                actionButton("Export", symbol: "square.and.arrow.up", selected: showExport) {
-                    finishToolInteraction()
-                    focusedExportID = nil
-                    showExport = true
-                }
-                .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
-            }.padding(.horizontal, 8).padding(.vertical, 8)
+            }
+            actionButton("Export", symbol: "square.and.arrow.up", selected: showExport) {
+                finishToolInteraction()
+                focusedExportID = nil
+                showExport = true
+            }
+            .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
         }
-        .scrollIndicators(.hidden)
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
         .background(theme.backgroundColor)
         .overlay(alignment: .top) { Divider() }
         .disabled(!session.isReadyToEdit)
@@ -783,9 +768,8 @@ struct ProjectEditorView: View {
                 Image(systemName: symbol).font(.title3)
                 Text(title).font(.caption.weight(.medium)).lineLimit(1)
             }
-            .fixedSize(horizontal: true, vertical: true)
-            .frame(minWidth: 60, minHeight: 54)
             .padding(.horizontal, 4)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 54)
             .foregroundStyle(selected ? theme.accentColor : theme.secondaryForegroundColor)
             .contentShape(Rectangle())
         }
@@ -804,11 +788,6 @@ struct ProjectEditorView: View {
 
     private var hasStatusError: Bool {
         session.saveError != nil || session.loadError != nil || session.commandError != nil
-    }
-    private var saveStatus: String {
-        if session.document == nil { return session.isLoading ? "Opening…" : "Couldn’t open project" }
-        if session.saveError != nil { return "Couldn’t save changes" }
-        return session.hasPendingChanges || session.isSaving ? "Saving…" : "Saved"
     }
 
     private var status: some View {
@@ -1090,38 +1069,28 @@ struct ProjectEditorView: View {
 
     private var projectInfoSheet: some View {
         NavigationStack {
-            ScrollView {
+            Form {
                 if let document = session.document {
-                    VStack(alignment: .leading, spacing: 20) {
-                        if hasStatusError { status }
-                        projectInfo(document)
-                        ProjectStorageSection(session: session)
+                    if hasStatusError {
+                        Section("Status") { status }
+                            .listRowBackground(theme.surfaceColor)
                     }
-                    .padding(16)
+                    projectInfo(document)
+                    ProjectStorageSection(session: session)
+                        .listRowBackground(theme.surfaceColor)
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollContentBackground(.hidden)
+            .listRowSeparatorTint(theme.borderColor)
             .navigationTitle("Project info")
             .navigationBarTitleDisplayMode(.inline)
             .themedSurface()
-            .task {
-                if focusTitleOnPresentation {
-                    focusTitleOnPresentation = false
-                    focused = .title
-                }
-            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        focused = nil
-                        session.endTyping()
                         showProjectInfo = false
                         Task { await session.flush() }
                     }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focused = nil; session.endTyping(); Task { await session.flush() } }
                 }
             }
             .fileImporter(isPresented: $isRelinking, allowedContentTypes: [.movie, .audio]) { result in
@@ -1142,21 +1111,22 @@ struct ProjectEditorView: View {
             get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
             Button("OK", role: .cancel) { model.alertMessage = nil }
         } message: { Text(model.alertMessage ?? "") }
-        .onDisappear { focused = nil; session.endTyping(); Task { await session.flush() } }
+        .onDisappear { Task { await session.flush() } }
     }
 
-    private func projectInfo(_ document: ProjectDocument) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Project title").font(.caption).foregroundStyle(.secondary)
-            TextField("Project title", text: Binding(get: { session.document?.title ?? "" }, set: { session.setTitle($0) }))
-                .textFieldStyle(.roundedBorder).focused($focused, equals: .title)
-                .accessibilityLabel("Project title, saved automatically")
+    @ViewBuilder private func projectInfo(_ document: ProjectDocument) -> some View {
+        Section("Project") {
+            LabeledContent("Title") {
+                Text(document.title).multilineTextAlignment(.trailing).textSelection(.enabled)
+            }
             LabeledContent("Clips", value: "\(document.clips.count)")
             LabeledContent("Duration", value: EditorTime.display(document.outputDuration))
             LabeledContent("Canvas", value: "\(document.canvas.width) × \(document.canvas.height)")
             LabeledContent("Created", value: document.createdAt.formatted(date: .abbreviated, time: .shortened))
             LabeledContent("Modified", value: document.updatedAt.formatted(date: .abbreviated, time: .shortened))
-            Text("Original media").font(.headline).padding(.top, 8)
+        }
+        .listRowBackground(theme.surfaceColor)
+        Section("Original media") {
             ForEach(document.assets) { asset in
                 VStack(alignment: .leading, spacing: 5) {
                     Label(asset.displayName, systemImage: asset.kind == .video ? "film" : "waveform")
@@ -1172,10 +1142,12 @@ struct ProjectEditorView: View {
                         Text("Original not found. Select the exact original file to restore it.")
                             .font(.caption).foregroundStyle(.orange)
                         Button("Find original…", systemImage: "folder") { relinkAsset = asset.id; isRelinking = true }
+                            .buttonStyle(.borderless)
                     }
                 }
             }
         }
+        .listRowBackground(theme.surfaceColor)
     }
 }
 

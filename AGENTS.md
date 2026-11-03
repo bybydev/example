@@ -1,5 +1,69 @@
 # Inkribe Working Rules
 
+## Current iOS improvements PR
+
+2026-11-02. The user approves the ellipsis-menu assessment and requests updating
+this same PR. Keep Rename, Duplicate project and Project info in that order, then
+a separator and confirmed destructive Move to Trash. Remove the informational
+save-status row and redundant Expand preview, Queue and Media tools entries.
+Preserve save errors/retry in editor/Project info, playback fullscreen, the bottom
+Media action and Home Queue. Remove only the now-unused editor Queue sheet/state/
+opener and menu-status helper; keep incoming queue project routes and Export/
+Captions dismissal handoffs intact. All earlier #58 fixes and source-only rules
+remain; no unrelated feature, processing/queue policy, CI, test or merge work.
+
+2026-11-01. The user requests a native, theme-aware Project info Form, grouped
+as Project, Original media and Storage, with Status only for existing errors.
+Use read-only title/metadata rows, theme surface backgrounds/separators and the
+existing themed sheet background. Storage accounting and its confirmed thumbnail
+cleanup use native section rows and an explanatory footer. Preserve missing-media
+relink, save/status recovery and all protected files. The sheet must not rename
+titles: remove its title field/focus/keyboard toolbar and route the separate
+editor Rename action and rename-on-open fallback to a native Save/Cancel alert
+using the existing session title setter/writer. Keep the dedicated Clips action,
+all earlier #58 fixes and unrelated UI/data/processing behavior. Source-only rules
+remain. See docs/ios/handoffs/PROJECT_INFO_FORM.md.
+
+2026-11-01. The user now explicitly authorizes the main editor transport layout:
+Start/Play-Pause/End, flexible space, current/total time, flexible space, preview
+speed and Fullscreen. Remove the redundant Clip X of N button/helper, preserving
+the dedicated Clips action and its selected-clip routing. Use icon-only transport
+with full 44-point targets, a compact speed menu and the existing narrow/large-text
+two-row fallback. Boundary jumps pause at zero/the final 30 fps preview frame;
+Play at that final frame restarts. The user's sizing follow-up enlarges speed
+text to title3/medium and reduces the fullscreen glyph to body for visual balance;
+Start/Play/End retain title3 and every control retains its 44-point target.
+Corrected speed choices 0.5/1/1.25/1.5/2 use only the shared
+editor AVPlayer, persist across pause/resume and native fullscreen in memory,
+and never change saved media timing, history or exports. Observe native default/
+positive rate changes and remove both observers on session stop. Other sheet transports keep
+their existing controls; preserve all earlier #58 fixes. Source-only restrictions
+remain. See docs/ios/handoffs/EDITOR_TRANSPORT.md for source evidence.
+
+2026-11-01. In this same PR #58 the user also explicitly authorizes replacing
+the editor's horizontal scrolling actions with five equal-width columns across
+the available bottom bar. Keep Clips/Captions/Style/Media/Export in that order,
+the current icon/label/color/height/insets and existing sheet actions/disabled
+states. Each label expands equally and its entire column is tappable. Remove the
+horizontal ScrollView and fixed intrinsic button widths; this is layout-only.
+Preserve the fullscreen fix and all other editor behavior. Source/diff/whitespace
+review only under the existing no-build/no-test/no-native/UI execution rules.
+
+2026-11-01. The user requests a new generic fix/ios-improvements branch from
+latest develop 5910c9c, targeting develop, for this fullscreen caption fix and
+later explicitly requested small changes. Keep work in this PR until told
+otherwise; leave it open without auto-merge. Discussion alone does not authorize
+other edits. EDITOR.NATIVE_FULLSCREEN now owns an AVPlayer periodic caption clock
+inside the native presenter rather than depending on the covered SwiftUI editor's
+representable updates. Read the current session snapshot and actual player time,
+preserve readiness/held-frame pairing and native controls, and remove/invalidate
+the clock on replacement, dismissal and teardown. Completed MP4 previews keep
+burned-in captions and receive no caption observer. No extra player, temporary
+export, renderer/schema/queue/Mac/commerce/CI changes. Existing source-only
+restrictions remain: no builds/typechecks/tests/fixtures, CI, generation/models,
+native processing/exports, UI/device execution or deployment. See the follow-up
+in docs/ios/handoffs/NATIVE_FULLSCREEN.md; runtime acceptance remains unverified.
+
 ## Current queue experience authorization — pass 4
 
 2026-11-01. The user's next-pass signal authorizes final JOB.INTEGRATION in PR #57,

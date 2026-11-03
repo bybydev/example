@@ -6,10 +6,9 @@ struct EditorPlaybackControls: View {
     var showsOverview = true
     var showsTimeline = true
     var showsHistory = true
-    var clipLabel: String?
+    var showsEditorTransport = false
     var onInteraction: () -> Void = {}
     var onExpand: (() -> Void)?
-    var onClips: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,28 +18,55 @@ struct EditorPlaybackControls: View {
                     showsOverview: showsOverview, seek: { endEditing(); session.scrub(seconds: $0) })
             }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    playButton
-                    Spacer(minLength: 0)
+                HStack(spacing: showsEditorTransport ? 0 : 12) {
+                    transportButtons
+                    Spacer(minLength: showsEditorTransport ? 8 : 0)
                     readout.fixedSize(horizontal: true, vertical: true)
-                    Spacer(minLength: 0)
-                    if showsHistory { historyButtons }
-                    clipsButton
-                    expandButton
+                    Spacer(minLength: showsEditorTransport ? 8 : 0)
+                    trailingButtons
                 }
                 VStack(spacing: 4) {
                     readout.fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        playButton
-                        Spacer(minLength: 0)
-                        if showsHistory { historyButtons }
-                        clipsButton
-                        expandButton
+                    HStack(spacing: showsEditorTransport ? 0 : nil) {
+                        transportButtons
+                        Spacer(minLength: showsEditorTransport ? 8 : 0)
+                        trailingButtons
                     }
                 }
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var transportButtons: some View {
+        HStack(spacing: 0) {
+            if showsEditorTransport {
+                transportButton("Jump to start", symbol: "backward.end.fill") {
+                    endEditing(); session.jumpToStart()
+                }
+                .disabled(playbackUnavailable)
+            }
+            playButton
+            if showsEditorTransport {
+                transportButton("Jump to end", symbol: "forward.end.fill") {
+                    endEditing(); session.jumpToEnd()
+                }
+                .disabled(playbackUnavailable)
+            }
+        }
+    }
+
+    private var trailingButtons: some View {
+        HStack(spacing: 0) {
+            if showsHistory { historyButtons }
+            if showsEditorTransport { speedMenu }
+            expandButton
+        }
+    }
+
+    private var playbackUnavailable: Bool {
+        session.isEditingClipTrim || session.isPreparingPreview ||
+            session.previewError != nil || session.player.currentItem == nil
     }
 
     private var readout: some View {
@@ -49,11 +75,18 @@ struct EditorPlaybackControls: View {
             .accessibilityLabel("\(playbackTime(session.time)) of \(playbackTime(session.duration))")
     }
     private var playButton: some View {
-        Button(session.isPlaying ? "Pause" : "Play", systemImage: session.isPlaying ? "pause.fill" : "play.fill") {
+        transportButton(session.isPlaying ? "Pause" : "Play", symbol: session.isPlaying ? "pause.fill" : "play.fill") {
             endEditing(); session.togglePlayback()
         }
-        .labelStyle(.iconOnly).font(.title3).frame(width: 44, height: 44)
-        .disabled(session.isEditingClipTrim || session.isPreparingPreview || session.previewError != nil)
+        .disabled(playbackUnavailable)
+    }
+
+    private func transportButton(_ title: String, symbol: String, font: Font = .title3, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(font)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel(title)
     }
     private var historyButtons: some View {
         HStack(spacing: 0) {
@@ -63,28 +96,32 @@ struct EditorPlaybackControls: View {
                 .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(!session.canRedo)
         }
     }
-    @ViewBuilder private var clipsButton: some View {
-        if let clipLabel, let onClips {
-            Button {
-                endEditing(); onClips()
-            } label: {
-                HStack(spacing: 6) {
-                    Text(clipLabel).font(.caption.weight(.medium)).lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+    private var speedMenu: some View {
+        Menu {
+            Picker("Preview speed", selection: Binding(
+                get: { session.previewPlaybackSpeed },
+                set: { endEditing(); session.setPreviewPlaybackSpeed($0) })) {
+                ForEach(EditorSession.previewPlaybackSpeeds, id: \.self) { speed in
+                    Text(speedLabel(speed)).tag(speed)
                 }
-                .fixedSize(horizontal: true, vertical: true)
-                .frame(minHeight: 44).contentShape(Rectangle())
             }
-            .disabled(session.isEditingClipTrim)
-            .accessibilityLabel("Manage clips")
-            .accessibilityValue(clipLabel)
-            .accessibilityHint("Opens the clip list at the selected clip")
+        } label: {
+            Text(speedLabel(session.previewPlaybackSpeed))
+                .font(.title3.weight(.medium)).monospacedDigit()
+                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
+        .disabled(playbackUnavailable)
+        .accessibilityLabel("Preview speed")
+        .accessibilityValue(speedLabel(session.previewPlaybackSpeed))
+    }
+
+    private func speedLabel(_ speed: Float) -> String {
+        speed.formatted(.number.precision(.fractionLength(0...2))) + "×"
     }
     @ViewBuilder private var expandButton: some View {
         if let onExpand {
-            Button("Fullscreen preview", systemImage: "arrow.up.left.and.arrow.down.right") { endEditing(); onExpand() }
-                .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(session.isEditingClipTrim)
+            transportButton("Fullscreen preview", symbol: "arrow.up.left.and.arrow.down.right", font: .body) { endEditing(); onExpand() }
+                .disabled(session.isEditingClipTrim)
         }
     }
 
