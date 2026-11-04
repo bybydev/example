@@ -4,6 +4,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import JobQueue
+import Synchronization
 
 /// One job task owns every reader, writer, CIContext and caption renderer here.
 /// No pixel arrays or PCM are accumulated across the movie. AVFoundation applies
@@ -202,13 +203,17 @@ enum MP4Exporter {
         if reader.status == .failed { throw reader.error ?? ExportError.decoding }
         writer.endSession(atSourceTime: graph.duration)
         await progress.report(fractionCompleted: 0.96, message: "Finalizing MP4…")
-        // Cancellation also interrupts finalization; it does not publish a part file.
-        await withTaskCancellationHandler {
-            await writer.finishWriting()
-        } onCancel: {
-            // cancelWriting is blocking. Task.cancel may be called by the main
-            // actor's queue controls, so close the writer on a utility thread.
-            DispatchQueue.global(qos: .userInitiated).async { writer.cancelWriting() }
+        // Only the completion flag crosses into AVFoundation's callback.
+        // Cancellation unwinds this task through the existing defer, which
+        // finishes cancelWriting before the caller removes the partial file.
+        try Task.checkCancellation()
+        let completion = MP4WritingCompletion()
+        writer.finishWriting {
+            completion.markCompleted()
+        }
+        while !completion.isCompleted {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(10))
         }
         try Task.checkCancellation()
         guard writer.status == .completed else { throw writer.error ?? ExportError.encoding }
@@ -254,3 +259,15 @@ enum MP4Exporter {
     }
 }
 
+/// Shared only between AVFoundation's completion callback and the export task.
+private final class MP4WritingCompletion: Sendable {
+    private let completed = Mutex(false)
+
+    func markCompleted() {
+        completed.withLock { $0 = true }
+    }
+
+    var isCompleted: Bool {
+        completed.withLock { $0 }
+    }
+}
