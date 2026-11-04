@@ -69,7 +69,7 @@ struct AddClipsSheet: View {
                 }
             }
             .photosPicker(isPresented: $pickingPhotos, selection: $photos, maxSelectionCount: 0,
-                selectionBehavior: .ordered, matching: .videos)
+                selectionBehavior: .ordered, matching: .videos, preferredItemEncoding: .current)
             .onDisappear {
                 guard !pickingFiles, !pickingPhotos else { return }
                 task?.cancel(); generation = UUID(); cleanupPhotos()
@@ -183,7 +183,7 @@ struct AddClipsSheet: View {
             for entry in items {
                 guard !Task.isCancelled, generation == token else { break }
                 do {
-                    guard let file = try await entry.item.loadTransferable(type: PickedMovie.self) else { throw ProjectStoreError.unsupportedMedia }
+                    let file = try await PickedMovie.load(from: entry.item)
                     guard !Task.isCancelled, generation == token else {
                         try? FileManager.default.removeItem(at: file.localURL)
                         break

@@ -20,7 +20,7 @@ private enum QueueScope: String, CaseIterable, Identifiable {
         case .pending: entry.pending
         case .processing: entry.processing
         case .done: entry.record.status == .completed
-        case .failed: entry.record.status.isTerminal && entry.record.status != .completed
+        case .failed: entry.failed
         }
     }
 }

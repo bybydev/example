@@ -6,8 +6,8 @@ Models/
 *.xcuserstate
 xcuserdata/
 *.xcodeproj/
+!Inkribe.xcodeproj/
 artifacts/
 *.xcarchive/
 __pycache__/
-Inkribe/Resources/Info.plist
 

@@ -13,12 +13,13 @@ final class ProAccess {
     var hasPro: Bool {
         _ = clockGeneration
         #if DEBUG
-        // AF's simulator grants monthly access without a real subscription expiry.
+        // AF's simulator grants subscription access without a real subscription expiry.
         if purchases.isUsingSimulatedPurchases { return purchases.hasPro }
         #endif
         guard case .active(let snapshot) = purchases.entitlementState else { return false }
         if snapshot.activeProductIDs.contains(Commerce.lifetimeID) { return true }
-        return snapshot.activeProductIDs.contains(Commerce.monthlyID)
+        return (snapshot.activeProductIDs.contains(Commerce.monthlyID)
+                || snapshot.activeProductIDs.contains(Commerce.yearlyID))
             && (snapshot.latestExpirationDate.map { $0 > Date() } ?? false)
     }
 

@@ -3,14 +3,17 @@ import Foundation
 
 enum Commerce {
     static let monthlyID = "com.hoangbkit.inkribe.pro.monthly"
+    static let yearlyID = "com.hoangbkit.inkribe.pro.yearly"
     static let lifetimeID = "com.hoangbkit.inkribe.pro.lifetime"
     static let weeklyMinutes = 30
     static let weeklySeconds = weeklyMinutes * 60
-    static let configuration = PurchaseConfiguration(productIDs: [monthlyID, lifetimeID],
+    static let configuration = PurchaseConfiguration(productIDs: [monthlyID, yearlyID, lifetimeID],
         preferredProductID: monthlyID, features: features)
     static let simulatedProducts: [StoreProduct] = [
         .init(id: monthlyID, displayName: "Monthly", description: "Inkribe Pro billed monthly.",
-              displayPrice: "$6.99", price: 6.99, subscriptionPeriod: .init(value: 1, unit: .month)),
+              displayPrice: "$2.99", price: 2.99, subscriptionPeriod: .init(value: 1, unit: .month)),
+        .init(id: yearlyID, displayName: "Yearly", description: "Inkribe Pro billed yearly.",
+              displayPrice: "$9.99", price: 9.99, subscriptionPeriod: .init(value: 1, unit: .year)),
         .init(id: lifetimeID, displayName: "Lifetime", description: "One purchase for lifetime Inkribe Pro access.",
               displayPrice: "$24.99", price: 24.99)
     ]

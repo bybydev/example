@@ -16,8 +16,6 @@ struct ImportView: View {
     @State private var title = ""
     @State private var customWidth = "1080"
     @State private var customHeight = "1920"
-    @State private var mediaURL = ""
-    @State private var confirmRights = false
     @State private var handedOff = false
     var onImported: ([UUID]) -> Void = { _ in }
     private var busy: Bool { model.isImporting || model.isPreparingPhotos }
@@ -37,7 +35,7 @@ struct ImportView: View {
                     guard !picked.isEmpty else { return }
                     photosSelection = []; model.beginPhotoPreparation(picked)
                 }
-                .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.movie, .audio], allowsMultipleSelection: true) { result in
+                .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in
                     guard let fileSelectionID, fileSelectionID == model.importSelectionID else { return }
                     switch result {
                     case .success(let urls): model.addFiles(urls, selectionID: fileSelectionID)
@@ -55,19 +53,30 @@ struct ImportView: View {
 
     private var importForm: some View {
         Form {
-            Group { sources; selectedMedia; preparationFailures; projectSettings; directURL; creation }
+            Group { introduction; sources; photoPreparation; selectedMedia; preparationFailures; projectSettings; creation }
                 .listRowBackground(theme.surfaceColor).listRowSeparatorTint(theme.borderColor)
         }
     }
-    private var sources: some View {
+    private var introduction: some View {
         Section {
-            Label("Start with your media", systemImage: "captions.bubble").font(.headline)
+            Label("Start with your videos", systemImage: "captions.bubble").font(.headline)
             Text("Choose one video or combine several clips in one project.").font(.subheadline).foregroundStyle(.secondary)
-            PhotosPicker(selection: $photosSelection, maxSelectionCount: 0, selectionBehavior: .ordered, matching: .videos) {
+        }
+    }
+    private var sources: some View {
+        // Keep the picker section's rows fixed while Photos hands off its selection.
+        // Preparation belongs in a separate section, as before the creation refactor.
+        Section {
+            PhotosPicker(selection: $photosSelection, maxSelectionCount: 0, selectionBehavior: .ordered, matching: .videos,
+                preferredItemEncoding: .current) {
                 Label("Photos", systemImage: "photo.on.rectangle")
-            }.disabled(busy)
-            Button("Files", systemImage: "folder") { fileSelectionID = model.importSelectionID; isPickingFiles = true }.disabled(busy)
-            if model.isPreparingPhotos {
+            }
+            Button("Files", systemImage: "folder") { fileSelectionID = model.importSelectionID; isPickingFiles = true }
+        }.disabled(busy)
+    }
+    @ViewBuilder private var photoPreparation: some View {
+        if model.isPreparingPhotos {
+            Section {
                 ProgressView("Preparing videos from Photos…")
                 Button("Cancel preparation", role: .cancel) { model.cancelPhotoPreparation() }
             }
@@ -85,7 +94,7 @@ struct ImportView: View {
         let review = model.sourceReviews[source.id]
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                MediaThumbnail(data: review?.thumbnail, audio: review?.kind == .audio)
+                MediaThumbnail(data: review?.thumbnail)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(index + 1). \(source.displayName)").font(.subheadline).lineLimit(2)
                     if let metadata = review?.metadata { Text(EditorTime.display(metadata.duration)).font(.caption).foregroundStyle(.secondary) }
@@ -140,20 +149,6 @@ struct ImportView: View {
                 }
             }
         }.disabled(busy)
-    }
-    @ViewBuilder private var directURL: some View {
-        if model.selectedSources.isEmpty && model.photoFailures.isEmpty {
-            Section {
-                DisclosureGroup("Import a direct media URL") {
-                    TextField("https://example.com/video.mp4", text: $mediaURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                    Toggle("I have the rights to import this media", isOn: $confirmRights)
-                    Button("Create Project from URL") {
-                        do { model.beginURLImport(text: mediaURL, rightsConfirmed: confirmRights, preset: preset, canvas: try dimensions(), title: title) }
-                        catch { model.alertMessage = error.localizedDescription }
-                    }.disabled(busy || !confirmRights || mediaURL.isEmpty || title.count > 256)
-                }
-            } footer: { Text("Direct downloadable media only. Transcription starts when you ask for it in the project.") }
-        }
     }
     @ViewBuilder private var creation: some View {
         if model.isImporting {

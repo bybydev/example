@@ -14,12 +14,15 @@ struct ImportSourceReview: Sendable {
 
 /// Disposable ingress previews. Publication revalidates the copied original.
 actor ImportMediaReviewer {
-    func review(_ source: ImportInput) async -> ImportSourceReview {
+    func review(_ source: ImportInput, requireVideo: Bool = false) async -> ImportSourceReview {
         let granted = source.localURL.startAccessingSecurityScopedResource()
         defer { if granted { source.localURL.stopAccessingSecurityScopedResource() } }
         do {
             try Task.checkCancellation()
             let (kind, metadata) = try await MediaInspector.inspect(url: source.localURL)
+            if requireVideo && kind != .video {
+                throw ProjectStoreError.invalidDocument("Choose a video file. Audio-only files can be added in Music.")
+            }
             var image: Data?
             if kind == .video { image = try? await thumbnail(url: source.localURL, duration: metadata.duration) }
             return ImportSourceReview(metadata: metadata, kind: kind, thumbnail: image, error: nil)

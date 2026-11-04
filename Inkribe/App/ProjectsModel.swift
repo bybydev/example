@@ -8,9 +8,23 @@ import UniformTypeIdentifiers
 
 /// PhotosPicker's URL transfers are not durable. Copy while its
 /// FileRepresentation callback owns the security scope; never load movie Data.
-struct PickedMovie: Transferable {
+struct PickedMovie: Transferable, Sendable {
     let localURL: URL
     let displayName: String
+
+    /// Keep the provider's cancellation handle, and bound how long this request can wait.
+    @MainActor
+    static func load(from item: PhotosPickerItem) async throws -> PickedMovie {
+        let transfer = PhotoMovieTransfer()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                transfer.start(item, continuation: continuation)
+            }
+        } onCancel: {
+            Task { @MainActor in transfer.cancel() }
+        }
+    }
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .movie) { received in
@@ -35,6 +49,76 @@ struct PickedMovie: Transferable {
             let displayName = name.isEmpty || UUID(uuidString: stem) != nil ? "Imported Video" : name
             return PickedMovie(localURL: copy, displayName: displayName)
         }
+    }
+}
+
+/// Owns one provider request. Main-actor serialization makes completion, cancellation
+/// and expiry mutually exclusive, even if Photos calls back after we stop waiting.
+@MainActor
+private final class PhotoMovieTransfer {
+    private var continuation: CheckedContinuation<PickedMovie, Error>?
+    private var progress: Progress?
+    private var deadline: Task<Void, Never>?
+    private var result: Result<PickedMovie, Error>?
+    private var deliveredURL: URL?
+
+    func start(_ item: PhotosPickerItem, continuation: CheckedContinuation<PickedMovie, Error>) {
+        if let result {
+            continuation.resume(with: result)
+            return
+        }
+        self.continuation = continuation
+        progress = item.loadTransferable(type: PickedMovie.self) { result in
+            Task { @MainActor in
+                switch result {
+                case .success(let movie?):
+                    self.finish(.success(movie))
+                case .success(nil):
+                    self.finish(.failure(ProjectStoreError.unsupportedMedia))
+                case .failure(let error):
+                    self.finish(.failure(error))
+                }
+            }
+        }
+        // A provider that never completes must not hold the creation screen forever.
+        // This task resumes our waiter directly; it does not await provider shutdown.
+        deadline = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(120))
+                self?.finish(.failure(PhotoMovieTransferError.timedOut), cancelProvider: true)
+            } catch { }
+        }
+    }
+
+    func cancel() {
+        finish(.failure(CancellationError()), cancelProvider: true)
+    }
+
+    private func finish(_ result: Result<PickedMovie, Error>, cancelProvider: Bool = false) {
+        guard self.result == nil else {
+            if case .success(let movie) = result, movie.localURL != deliveredURL {
+                try? FileManager.default.removeItem(at: movie.localURL)
+            }
+            return
+        }
+        self.result = result
+        if case .success(let movie) = result { deliveredURL = movie.localURL }
+        let continuation = self.continuation
+        self.continuation = nil
+        deadline?.cancel()
+        deadline = nil
+        let progress = self.progress
+        self.progress = nil
+        if cancelProvider { progress?.cancel() }
+        continuation?.resume(with: result)
+    }
+}
+
+private enum PhotoMovieTransferError: LocalizedError {
+    case timedOut
+
+    var errorDescription: String? {
+        "Photos did not finish loading this video within two minutes. Retry, or save it to Files and import it there."
     }
 }
 
@@ -178,7 +262,7 @@ final class ProjectsModel {
     }
     var scope: LibraryScope = .all
     var cacheGeneration = 0
-    var isLoading = false
+    private(set) var hasLoadedLibrary = false
     var isImporting = false
     private(set) var isPreparingPhotos = false
     var alertMessage: String?
@@ -193,7 +277,9 @@ final class ProjectsModel {
     private var selectionOrder: [UUID] = []
     var canCreateProject: Bool {
         !selectedSources.isEmpty && !isImporting && !isPreparingPhotos && photoFailures.isEmpty &&
-            reviewingSources.isEmpty && selectedSources.allSatisfy { sourceReviews[$0.id]?.metadata != nil }
+            reviewingSources.isEmpty && selectedSources.allSatisfy {
+                sourceReviews[$0.id]?.kind == .video && sourceReviews[$0.id]?.metadata != nil
+            }
     }
     var storage: ProjectRepository.StorageUsage?
     var trashed: [ProjectRepository.TrashedProject] = []
@@ -202,7 +288,6 @@ final class ProjectsModel {
     private var selectionSession = UUID()
     var importSelectionID: UUID { selectionSession }
     private var importTask: Task<Void, Never>?
-    private var importedInSession: [UUID] = []
     private var photoTask: Task<Void, Never>?
     private var libraryGeneration = 0
     private var storageGeneration = 0
@@ -241,14 +326,13 @@ final class ProjectsModel {
     func refreshLibrary() async {
         libraryGeneration += 1
         let generation = libraryGeneration
-        isLoading = true
-        defer { if generation == libraryGeneration { isLoading = false } }
         do {
             let snapshot = try await repository.list()
             guard generation == libraryGeneration else { return }
             allProjects = snapshot.projects
             libraryIssues = snapshot.issues
             libraryError = nil
+            hasLoadedLibrary = true
         } catch {
             if generation == libraryGeneration { libraryError = error.localizedDescription }
         }
@@ -340,7 +424,6 @@ final class ProjectsModel {
         guard !isImporting, !isPreparingPhotos else { return }
         importCompletion = nil
         importMessage = nil
-        importedInSession = []
         creationID = UUID()
         clearSelection()
     }
@@ -384,7 +467,7 @@ final class ProjectsModel {
         reviewTask = Task {
             for source in sources {
                 guard session == selectionSession, !Task.isCancelled else { return }
-                let review = await reviewer.review(source)
+                let review = await reviewer.review(source, requireVideo: true)
                 guard session == selectionSession, !Task.isCancelled else { return }
                 if selectedSources.contains(where: { $0.id == source.id }) { sourceReviews[source.id] = review }
                 reviewingSources.remove(source.id)
@@ -421,9 +504,7 @@ final class ProjectsModel {
                 do {
                     try Task.checkCancellation()
                     guard session == selectionSession else { return }
-                    guard let file = try await failure.item.loadTransferable(type: PickedMovie.self) else {
-                        throw ProjectStoreError.unsupportedMedia
-                    }
+                    let file = try await PickedMovie.load(from: failure.item)
                     guard session == selectionSession, !Task.isCancelled else {
                         try? FileManager.default.removeItem(at: file.localURL)
                         return
@@ -460,6 +541,9 @@ final class ProjectsModel {
         photoTask?.cancel(); photoTask = nil
         selectionSession = UUID()
         isPreparingPhotos = false
+        for index in photoFailures.indices {
+            photoFailures[index].message = "Preparation cancelled. Retry or remove this video."
+        }
         reviewSources()
     }
 
@@ -482,7 +566,6 @@ final class ProjectsModel {
             do {
                 let document = try await importer.importFiles(sources, projectID: projectID,
                     preset: preset, customCanvas: canvas, title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title)
-                importedInSession = [document.id]
                 let stopped = Task.isCancelled
                 clearSelection()
                 await refreshLibrary()
@@ -499,48 +582,23 @@ final class ProjectsModel {
         }
     }
 
-    func beginURLImport(text: String, rightsConfirmed: Bool,
-                        preset: CanvasPreset, canvas: ProjectCanvas? = nil, title: String) {
-        guard !isImporting, !isPreparingPhotos else { return }
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme?.lowercased() == "https", url.host?.isEmpty == false,
-              url.user == nil, url.password == nil else {
-            alertMessage = "Enter a valid HTTPS media URL."
-            return
-        }
-        isImporting = true
-        importMessage = nil
-        importCompletion = nil
-        importTask = Task {
-            defer { isImporting = false; importTask = nil }
-            do {
-                let document = try await importer.importDirectURL(
-                    url, rightsConfirmed: rightsConfirmed, preset: preset, customCanvas: canvas, title: title, projectID: creationID
-                )
-                importMessage = "Imported " + document.title
-                clearSelection()
-                await refreshLibrary()
-                if Task.isCancelled { importMessage = "Import stopped. The saved project is available." }
-                if !importedInSession.contains(document.id) { importedInSession.append(document.id) }
-                importCompletion = ImportCompletion(projectIDs: importedInSession, hasFailures: Task.isCancelled)
-                Task { await generateMissingThumbnails(for: [document]); await refreshStorage() }
-            } catch is CancellationError {
-                importMessage = "Download cancelled."
-            } catch {
-                alertMessage = error.localizedDescription
-            }
-        }
-    }
-
     func cancelImport() {
         importTask?.cancel()
     }
 
-    private func makeThumbnail(_ id: UUID) async -> Bool {
-        guard thumbnailJobs.insert(id).inserted else { return false }
+    private enum ThumbnailUpdate: Equatable {
+        case generated, noFrame, unchanged
+    }
+
+    private func makeThumbnail(_ id: UUID) async -> ThumbnailUpdate {
+        guard thumbnailJobs.insert(id).inserted else { return .unchanged }
         defer { thumbnailJobs.remove(id) }
-        do { _ = try await thumbnails.regenerate(projectID: id); return true }
-        catch { return false } // Derived images never turn a committed import into a failure.
+        do {
+            let url = try await thumbnails.regenerate(projectID: id)
+            return url == nil ? .noFrame : .generated
+        } catch {
+            return .unchanged // Derived images never turn a committed import into a failure.
+        }
     }
 
     func generateMissingThumbnails(for documents: [ProjectDocument]) async {
@@ -555,8 +613,17 @@ final class ProjectsModel {
         await refreshStorage()
     }
 
+    func regenerateMissingThumbnail(_ id: UUID) async {
+        // Publishing a missing image changes its URL in the library snapshot.
+        // Keep other rows' thumbnail tasks running with their existing identities.
+        guard await makeThumbnail(id) == .generated else { return }
+        await refreshLibrary()
+    }
+
     func regenerateThumbnail(_ id: UUID) async {
-        if await makeThumbnail(id) { cacheGeneration += 1; await refreshLibrary() }
+        guard await makeThumbnail(id) != .unchanged else { return }
+        cacheGeneration += 1
+        await refreshLibrary()
     }
 
     func rename(_ summary: ProjectSummary, to title: String) async throws {

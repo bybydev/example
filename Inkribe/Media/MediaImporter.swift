@@ -58,17 +58,8 @@ actor MediaImporter {
                                        title: title, projectID: projectID)
     }
 
-    func importDirectURL(_ remoteURL: URL, rightsConfirmed: Bool,
-                         preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
-                         title: String? = nil, projectID: UUID) async throws -> ProjectDocument {
-        if let existing = try? await repository.open(projectID) { return existing }
-        let prepared = try await prepareDirectURL(remoteURL, rightsConfirmed: rightsConfirmed)
-        return try await commitPreparedProject(prepared, preset: preset, customCanvas: customCanvas,
-            title: title, projectID: projectID)
-    }
-
     /// Direct HTTPS media only, with bounded download/cancellation and the same
-    /// inspected staging used by Files and Photos. The caller chooses new/append.
+    /// inspected staging used by Files and Photos for editor clip append.
     func prepareDirectURL(_ remoteURL: URL, rightsConfirmed: Bool) async throws -> PreparedClipImport {
         guard rightsConfirmed else { throw ProjectStoreError.rightsNotConfirmed }
         guard remoteURL.scheme?.lowercased() == "https",
@@ -149,12 +140,13 @@ actor MediaImporter {
         customCanvas: ProjectCanvas?, title: String?, projectID: UUID? = nil
     ) async throws -> ProjectDocument {
         if let projectID, let existing = try? await repository.open(projectID) { return existing }
-        let prepared = try await prepareClips(inputs)
+        let prepared = try await prepareClips(inputs, requireVideo: true)
         return try await commitPreparedProject(prepared, preset: preset, customCanvas: customCanvas,
             title: title, projectID: projectID)
     }
 
-    func prepareClips(_ inputs: [ImportInput]) async throws -> PreparedClipImport {
+    // New Project requires video; editor clip append and Music keep their own policies.
+    func prepareClips(_ inputs: [ImportInput], requireVideo: Bool = false) async throws -> PreparedClipImport {
         guard !inputs.isEmpty else { throw ClipGraphError.invalidImport }
         let staging = try await repository.makeStagingDirectory()
         do {
@@ -170,6 +162,9 @@ actor MediaImporter {
                     adopted = try copySource(input, into: staging)
                     let inspected = try await MediaInspector.inspect(url: adopted.url)
                     kind = inspected.0; metadata = inspected.1
+                    if requireVideo && kind != .video {
+                        throw ProjectStoreError.invalidDocument("Choose a video file. Audio-only files can be added in Music.")
+                    }
                 } catch is CancellationError { throw CancellationError() }
                 catch { throw ImportItemError(name: input.displayName, detail: error.localizedDescription) }
                 let asset = SourceAsset(

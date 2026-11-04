@@ -9,7 +9,7 @@ struct ProjectsView: View {
     @Environment(\.appFoundationTheme) private var theme
     @State private var sheet: LibrarySheet?
     @State private var proStartedWithoutEntitlement = false
-    @State private var attemptedThumbnails: Set<UUID> = []
+    @State private var attemptedThumbnailTasks: [UUID: String] = [:]
     @State private var path: [ProjectsRoute] = []
     @State private var importedProjectIDs: [UUID] = []
     @State private var importPresented = false
@@ -59,7 +59,6 @@ struct ProjectsView: View {
 
     private var libraryLifecycle: some View {
         libraryDialogs
-            .onChange(of: model.cacheGeneration) { _, _ in attemptedThumbnails.removeAll() }
             .onChange(of: model.transcription.resultGeneration) { _, _ in Task { await model.refreshLibrary() } }
             .onChange(of: path) { _, value in
                 if value.isEmpty { Task { await model.refreshLibrary() } }
@@ -227,7 +226,7 @@ struct ProjectsView: View {
             Group {
                 if let project = recentProject {
                     recentProjectSection(project)
-                } else if model.isLoading {
+                } else if !model.hasLoadedLibrary && model.libraryError == nil {
                     ProgressView("Loading projects…")
                         .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
                         .padding(20)
@@ -283,7 +282,7 @@ struct ProjectsView: View {
         .disabled(model.mutatingProjectIDs.contains(project.id))
         .accessibilityHint("Opens the most recently updated project")
         .accessibilityIdentifier("home.recentProject")
-        .task(id: "\(project.id)-\(model.cacheGeneration)") {
+        .task(id: thumbnailTaskID(for: project)) {
             await prepareThumbnail(for: project)
         }
     }
@@ -403,7 +402,7 @@ struct ProjectsView: View {
         let processingCount = entries.filter(\.processing).count
         let pendingCount = entries.filter(\.pending).count
         let completed = model.exports.artifacts.values.filter { $0.outputURL != nil }.count
-        let failures = entries.filter { $0.record.status == .failed || $0.record.status == .unrecoverable }.count
+        let failures = entries.filter(\.failed).count
         let storageProblem = model.transcription.persistenceError != nil || model.exports.persistenceError != nil
             || model.exports.inventoryError != nil || processing.lifecycle.error != nil
         let paused = processing.lifecycle.needsResume || (!processing.lifecycle.foreground &&
@@ -411,7 +410,7 @@ struct ProjectsView: View {
         let needsAttention = storageProblem || failures > 0
         let title = needsAttention ? "Queue needs attention" : paused ? "Queue paused" : "Processing Queue"
         let detail = "\(processingCount) processing · \(pendingCount) waiting · \(completed) files ready"
-            + (failures > 0 ? " · \(failures) need retry" : "")
+            + (failures > 0 ? " · \(failures) need attention" : "")
 
         return Button { path.append(.queue) } label: {
             HStack(alignment: .top, spacing: 12) {
@@ -472,7 +471,7 @@ struct ProjectsView: View {
     @ViewBuilder private var emptyLibrary: some View {
         if model.scope == .trash && model.isLoadingTrash {
             ProgressView("Loading Trash…").frame(maxWidth: .infinity, minHeight: 120)
-        } else if model.isLoading && model.allProjects.isEmpty && model.scope != .trash {
+        } else if !model.hasLoadedLibrary && model.libraryError == nil && model.scope != .trash {
             ProgressView("Loading projects…").frame(maxWidth: .infinity, minHeight: 120)
         } else if model.scope == .trash && model.trashError != nil {
             Text("Trash could not be refreshed. Retry below; no projects have been removed.")
@@ -534,16 +533,22 @@ struct ProjectsView: View {
             .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparatorTint(theme.borderColor)
-            .task(id: "\(project.id)-\(model.cacheGeneration)") {
+            .task(id: thumbnailTaskID(for: project)) {
                 await prepareThumbnail(for: project)
             }
         }
     }
 
+    private func thumbnailTaskID(for project: ProjectSummary) -> String {
+        "\(project.id)-\(project.contentRevision)-\(model.cacheGeneration)"
+    }
+
     private func prepareThumbnail(for project: ProjectSummary) async {
-        guard project.thumbnailURL == nil, project.mediaKind == .video, project.available,
-              attemptedThumbnails.insert(project.id).inserted else { return }
-        await model.regenerateThumbnail(project.id)
+        let taskID = thumbnailTaskID(for: project)
+        guard !Task.isCancelled, project.thumbnailURL == nil, project.mediaKind == .video, project.available,
+              attemptedThumbnailTasks[project.id] != taskID else { return }
+        attemptedThumbnailTasks[project.id] = taskID
+        await model.regenerateMissingThumbnail(project.id)
     }
 
     private var trashList: some View {

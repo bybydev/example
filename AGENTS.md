@@ -1,5 +1,55 @@
 # Inkribe Working Rules
 
+## Current Photos import repair
+
+2026-11-04. The user authorizes repairing Photos imports stuck at Preparing videos
+in PR #59. Request current movie encoding in New Project and Add clips. Both use
+one cancellable transfer bridge with a two-minute per-item deadline, one completion
+and cleanup of late successful files. Preserve the app-owned file copy, ordered
+selection/retry/session guards, video-only creation, working Files path and Music.
+Source/API/diff review only; no builds/typechecks/tests, CI or device execution.
+The device-specific trigger remains unconfirmed; native regression acceptance is
+pending. Keep the PR open targeting develop without auto-merge.
+
+## Current New Project import scope
+
+2026-11-04. In PR #59, the user authorizes video-only New Project creation from
+Photos and Files. Remove its direct URL UI/state and creation-only URL helpers.
+Require inspected video media both in selection review and before publication;
+keep ordered combined imports, cancellation and recovery behavior. Preserve the
+editor Music audio importer, existing project compatibility and separate editor
+Add clips flow. This supersedes historical audio/URL New Project support only.
+No unrelated New Project UI polish, builds/typechecks/tests, CI or device runs.
+Keep this PR open targeting develop without auto-merge.
+
+## Current Screenshot Studio implementation
+
+2026-11-04. The user authorizes the five approved static App Store scenes plus
+AppFoundation's real paywall screenshot, referencing BYOKchat, in PR #59
+`fix/ios-polish` -> develop. Add a Debug-only Settings developer destination and
+catalog for the 6.9/6.5-inch iPhone PNG presets. Feature scenes must use fixed data
+and pure SwiftUI drawing, with no app/session/media/queue/store dependencies.
+Omit campaign app icon/name/footer. Default to the approved light cyan palette;
+allow screenshot appearance/background configuration. The paywall alone uses a
+lazy, separate nonpersistent screenshotPreview purchase manager and Commerce's
+three products, selecting yearly. Update committed iOS source membership without
+running project generation. Preserve all earlier changes. Source/diff review only;
+no native builds/typechecks/tests, CI runs, models or device/export execution.
+Keep the PR open without auto-merge. See docs/ios/SCREENSHOT_STUDIO.md.
+
+## Current Xcode Cloud setup
+
+2026-11-04. The user authorizes the discussed Xcode Cloud setup in PR #59,
+`fix/ios-polish` -> develop, following Spokio and ReadAloud. Commit the generated
+project/shared schemes/lockfile and required iOS Info.plist, add executable
+post-clone/archive-verification hooks, and document the manual Apple setup.
+Read `IOS_MODELS` directly: unset/empty defaults to download, and only bundled
+includes Small multilingual and enables the existing bundled-only behavior.
+No xcconfig is needed. XcodeGen remains authoritative; Cloud adjusts only iOS
+model resources/flags after package resolution. Preserve earlier Home fixes.
+Use source/syntax review; native builds/tests/model downloads and Cloud/device
+acceptance remain unverified. Keep the PR open without auto-merge.
+
 ## Current iOS improvements PR
 
 2026-11-02. The user approves the ellipsis-menu assessment and requests updating

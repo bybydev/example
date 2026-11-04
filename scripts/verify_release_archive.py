@@ -18,6 +18,16 @@ def plist(path):
         return plistlib.load(source)
 
 
+def verify_ios_models(app, ios_models):
+    model_paths = list(app.rglob('*.bin')) + list(app.rglob('*.gguf')) + list(app.rglob('*.onnx'))
+    if ios_models == 'bundled':
+        small = next(asset for asset in assets() if asset['id'] == SMALL_ID)
+        verify(app / 'ggml-small.bin', small)
+        require(model_paths == [app / 'ggml-small.bin'], 'Unexpected additional iOS weights')
+    else:
+        require(not model_paths and not (app / 'Models').exists(), 'Download-enabled iOS contains unwanted weights')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
@@ -66,13 +76,7 @@ def main():
         flags = app_settings.get('OTHER_SWIFT_FLAGS', '')
         require(('INKRIBE_IOS_BUNDLED_MODELS_ONLY' in flags) == (options.ios_models == 'bundled'),
                 'Effective iOS model build policy disagrees with selection')
-        model_paths = list(app.rglob('*.bin')) + list(app.rglob('*.gguf')) + list(app.rglob('*.onnx'))
-        if options.ios_models == 'bundled':
-            small = next(asset for asset in assets() if asset['id'] == SMALL_ID)
-            verify(app / 'ggml-small.bin', small)
-            require(model_paths == [app / 'ggml-small.bin'], 'Unexpected additional iOS weights')
-        else:
-            require(not model_paths and not (app / 'Models').exists(), 'Download-enabled iOS contains unwanted weights')
+        verify_ios_models(app, options.ios_models)
     else:
         require({'arm64', 'x86_64'}.issubset(architectures), 'Missing universal macOS slices')
         for asset in assets():

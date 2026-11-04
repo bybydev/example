@@ -38,14 +38,18 @@ struct SettingsView: View {
             .listRowBackground(theme.surfaceColor)
             .listRowSeparatorTint(theme.borderColor)
 
-            Section("Projects & Processing") {
+            Section("Engine") {
                 Button {
                     sheet = .models
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label("Active speech model", systemImage: "cpu")
-                        Text(model.transcription.models.activeName)
-                            .font(.caption).foregroundStyle(.secondary)
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Active speech model")
+                            Text(model.transcription.models.activeName)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "cpu")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -68,12 +72,6 @@ struct SettingsView: View {
                 Link(destination: Commerce.termsURL) {
                     Label("Terms of Use", systemImage: "doc.text")
                 }
-            }
-            .listRowBackground(theme.surfaceColor)
-            .listRowSeparatorTint(theme.borderColor)
-
-            Section("About") {
-                LabeledContent("Transcription", value: "On-device")
                 LabeledContent("Version", value: appVersion)
             }
             .listRowBackground(theme.surfaceColor)
@@ -145,6 +143,21 @@ struct SettingsView: View {
                 ) { _ in
                     ProCelebration()
                 }
+            ],
+            additionalSections: [
+                FoundationDeveloperSection(
+                    id: "screenshots",
+                    title: "App Store",
+                    items: [
+                        .destination(FoundationDeveloperDestination(
+                            id: "screenshot-studio",
+                            title: "Screenshot Studio",
+                            systemImage: "camera.viewfinder"
+                        ) {
+                            InkribeScreenshotStudioView()
+                        })
+                    ]
+                )
             ]
         )
     }

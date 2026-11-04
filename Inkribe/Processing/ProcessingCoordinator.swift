@@ -27,6 +27,7 @@ struct ProcessingEntry: Identifiable {
     }
     var pending: Bool { record.status == .pending }
     var processing: Bool { record.status.isExecuting }
+    var failed: Bool { record.status == .failed || record.status == .unrecoverable }
     var statusTitle: String {
         switch record.status {
         case .pending: "Pending"
