@@ -183,7 +183,7 @@ struct ProjectEditorView: View {
 
     private var editorDialogs: some View {
         editorRenamePresentation
-        .confirmationDialog("Move this project to Trash?", isPresented: $showDeleteConfirmation) {
+        .alert("Move this project to Trash?", isPresented: $showDeleteConfirmation) {
             Button("Move to Trash", role: .destructive) {
                 Task {
                     await session.flush()
@@ -192,6 +192,7 @@ struct ProjectEditorView: View {
                     if model.alertMessage == nil { dismiss() }
                 }
             }
+            Button("Cancel", role: .cancel) { }
         } message: { Text("Original files are preserved in Trash until you empty it.") }
         .alert("Project", isPresented: Binding(
             get: { canPresentProjectError && model.alertMessage != nil },
@@ -787,7 +788,7 @@ struct ProjectEditorView: View {
     }
 
     private var canPresentProjectError: Bool {
-        !hasPresentedSheet && !isOpening
+        !hasPresentedSheet && !isOpening && !showDeleteConfirmation
     }
 
     private var hasStatusError: Bool {

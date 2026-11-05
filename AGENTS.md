@@ -1,5 +1,20 @@
 # Inkribe Working Rules
 
+## Current iOS confirmation alerts — stacked on #62
+
+2026-11-05. The user requests a new stacked PR targeting #62's
+fix/ios-improvements branch at c26807a048becf9d0e5b9a8e69302dacd01a7fad.
+Use fix/ios-confirmation-alerts. Replace every iOS confirmationDialog with a
+native centered alert, preserving titles/messages, roles, guarded operations and
+presentation owners. The full inventory is 17 sites in 11 iOS files, including
+Speech Models under the ignored source folder. Keep explicit Cancel actions,
+captured import/model IDs and pending error presentation safe. Preserve Mac,
+existing sheets/menus, processing/storage policy and all earlier #62 work.
+Source/diff/whitespace/publication review only; no builds/typechecks/tests,
+fixtures, CI, generation, model downloads, native/UI/device execution or
+deployment. Leave parent and child PRs open without auto-merge. See
+docs/ios/handoffs/CONFIRMATION_ALERTS.md. Further work requires the user's request.
+
 ## Current issue #63 — stacked caption word effects fix
 
 2026-11-05. The user requests the proposed v1.0 fix in a stacked PR on #62,

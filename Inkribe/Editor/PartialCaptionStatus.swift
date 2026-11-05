@@ -55,8 +55,9 @@ struct PartialCaptionStatus: View {
             }
             if preparing { ProgressView("Preparing retry…").font(.caption) }
         }
-        .confirmationDialog("Reset saved retry progress?", isPresented: $confirmReset) {
+        .alert("Reset saved retry progress?", isPresented: $confirmReset) {
             Button("Reset retry progress", action: reset)
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text("Your available captions and edits stay saved. Retry will rebuild progress from them and transcribe only missing ranges. This does not change model or runtime compatibility.")
         }
