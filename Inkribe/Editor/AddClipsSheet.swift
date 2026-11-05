@@ -565,25 +565,17 @@ private final class ClipPhotoFileRequest {
             }
             // The registered representation can still be rejected or skipped
             // without data; try the raw item acquisition once before treating
-            // the provider as failed.
-            self.startItemLoad(provider, type: type, suggestedName: suggestedName, onCopying: onCopying)
-        }
-    }
-
-    private func startItemLoad(_ provider: NSItemProvider, type: String, suggestedName: String?,
-                               onCopying: @escaping @MainActor () -> Void) {
-        guard result == nil else { return }
-        let itemProgress = provider.loadItem(forTypeIdentifier: type, options: nil) { item, error in
-            if item != nil, error == nil {
-                Task { @MainActor in if self.result == nil { onCopying() } }
+            // the provider as failed. loadItem has no cancellable handle, so
+            // completion and expiry are guarded by the single-shot finish and
+            // the late-success cleanup instead.
+            provider.loadItem(forTypeIdentifier: type, options: nil) { item, itemError in
+                if item != nil, itemError == nil {
+                    Task { @MainActor in if self.result == nil { onCopying() } }
+                }
+                // Copy synchronously before returning; the acquired item expires too.
+                let result = Self.copyItem(item, error: itemError, suggestedName: suggestedName, type: type)
+                Task { @MainActor in self.finish(result) }
             }
-            // Copy synchronously before returning; acquired item values expire too.
-            let result = Self.copyItem(item, error: error, suggestedName: suggestedName, type: type)
-            Task { @MainActor in self.finish(result) }
-        }
-        Task { @MainActor in
-            guard self.result == nil else { itemProgress.cancel(); return }
-            self.progress = itemProgress
         }
     }
 
