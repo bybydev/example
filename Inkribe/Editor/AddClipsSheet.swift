@@ -3,7 +3,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Local picker/review state, independent from Home's New Project importer.
+/// Pushed inside Clips. Local selection never changes the project before Add.
 /// Preparing files never creates a project or touches the saved document.
 struct AddClipsSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -23,8 +23,6 @@ struct AddClipsSheet: View {
     @State private var adding = false
     @State private var task: Task<Void, Never>?
     @State private var generation = UUID()
-    @State private var urlText = ""
-    @State private var rightsConfirmed = false
     @State private var error: String?
     @State private var notice: String?
     private let importer = MediaImporter(repository: .shared)
@@ -32,48 +30,47 @@ struct AddClipsSheet: View {
     private var busy: Bool { preparingPhotos || adding }
     private var ready: Bool {
         !sources.isEmpty && photoFailures.isEmpty && reviewing.isEmpty &&
-            sources.allSatisfy { reviews[$0.id]?.metadata != nil } && session.canChangeClips
+            sources.allSatisfy { reviews[$0.id]?.metadata != nil && reviews[$0.id]?.kind == .video } && session.canChangeClips
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Group { sourcePicker; selectedMedia; failures; directURL; status }
-                    .listRowBackground(theme.surfaceColor).listRowSeparatorTint(theme.borderColor)
+        Form {
+            Group { sourcePicker; selectedMedia; failures; status }
+                .listRowBackground(theme.surfaceColor).listRowSeparatorTint(theme.borderColor)
+        }
+        .navigationTitle("Add clips").navigationBarTitleDisplayMode(.inline).themedSurface()
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { task?.cancel(); dismiss() }.disabled(session.isChangingClips)
             }
-            .navigationTitle("Add clips").navigationBarTitleDisplayMode(.inline).themedSurface()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { task?.cancel(); dismiss() }.disabled(session.isChangingClips)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if !sources.isEmpty { Button("Add") { addSelected() }.disabled(busy || !ready) }
-                }
+            ToolbarItem(placement: .confirmationAction) {
+                if !sources.isEmpty { Button(sources.count == 1 ? "Add clip" : "Add \(sources.count) clips") { addSelected() }.disabled(busy || !ready) }
             }
-            .interactiveDismissDisabled(session.isChangingClips)
-            .onChange(of: photos) { _, items in
-                guard !items.isEmpty else { return }
-                photos = []
-                preparePhotos(items.map { PhotoPreparationFailure(id: UUID(), item: $0,
-                    name: "Selected video", message: "") })
+        }
+        .interactiveDismissDisabled(session.isChangingClips)
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            photos = []
+            preparePhotos(items.map { PhotoPreparationFailure(id: UUID(), item: $0,
+                name: "Selected video", message: "") })
+        }
+        .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                let additions = urls.map { ImportInput(localURL: $0, origin: .files) }
+                sources += additions; sourceOrder += additions.map(\.id)
+                reviewSources()
+            case .failure(let failure):
+                let value = failure as NSError
+                if value.domain != NSCocoaErrorDomain || value.code != NSUserCancelledError { error = failure.localizedDescription }
             }
-            .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.movie, .audio], allowsMultipleSelection: true) { result in
-                switch result {
-                case .success(let urls):
-                    let additions = urls.map { ImportInput(localURL: $0, origin: .files) }
-                    sources += additions; sourceOrder += additions.map(\.id)
-                    reviewSources()
-                case .failure(let failure):
-                    let value = failure as NSError
-                    if value.domain != NSCocoaErrorDomain || value.code != NSUserCancelledError { error = failure.localizedDescription }
-                }
-            }
-            .photosPicker(isPresented: $pickingPhotos, selection: $photos, maxSelectionCount: 0,
-                selectionBehavior: .ordered, matching: .videos, preferredItemEncoding: .current)
-            .onDisappear {
-                guard !pickingFiles, !pickingPhotos else { return }
-                task?.cancel(); generation = UUID(); cleanupPhotos()
-            }
+        }
+        .photosPicker(isPresented: $pickingPhotos, selection: $photos, maxSelectionCount: 0,
+            selectionBehavior: .ordered, matching: .videos, preferredItemEncoding: .current)
+        .onDisappear {
+            guard !pickingFiles, !pickingPhotos else { return }
+            task?.cancel(); generation = UUID(); cleanupPhotos()
         }
     }
 
@@ -90,19 +87,22 @@ struct AddClipsSheet: View {
 
     @ViewBuilder private var selectedMedia: some View {
         if !sources.isEmpty {
-            Section("Selected clips · \(sources.count)") {
-                ForEach(sources) { source in
+            Section {
+                ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 12) {
-                            MediaThumbnail(data: reviews[source.id]?.thumbnail, audio: reviews[source.id]?.kind == .audio)
+                            if let metadata = reviews[source.id]?.metadata {
+                                AddClipThumbnail(source: source, duration: metadata.duration)
+                            } else { MediaThumbnail(data: nil) }
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(source.displayName).lineLimit(2).truncationMode(.middle)
+                                Text("\(index + 1). \(source.displayName)").lineLimit(2).truncationMode(.middle)
                                 if let metadata = reviews[source.id]?.metadata {
                                     Text(EditorTime.display(metadata.duration)).font(.caption).foregroundStyle(.secondary)
                                 } else if reviewing.contains(source.id) { ProgressView("Checking media…") }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                             Button("Remove selection", systemImage: "xmark") { remove(source) }
-                                .labelStyle(.iconOnly).frame(width: 44, height: 44).disabled(busy)
+                                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                                .frame(width: 44, height: 44).disabled(busy)
                         }
                         if let issue = reviews[source.id]?.error {
                             Text(issue).font(.footnote).foregroundStyle(.orange)
@@ -110,7 +110,8 @@ struct AddClipsSheet: View {
                         }
                     }
                 }
-            }
+            } header: { Text("Selected clips · \(sources.count)") }
+            footer: { Text("Clips will be added in this order. You can reorder them in Clips after adding.") }
         }
     }
 
@@ -134,20 +135,6 @@ struct AddClipsSheet: View {
         }
     }
 
-    @ViewBuilder private var directURL: some View {
-        if sources.isEmpty && photoFailures.isEmpty {
-            Section {
-                DisclosureGroup("Import a direct media URL") {
-                    TextField("https://example.com/video.mp4", text: $urlText)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                    Toggle("I have the rights to import this media", isOn: $rightsConfirmed)
-                    Button("Add clip from URL") { addURL() }
-                        .disabled(busy || !rightsConfirmed || urlText.isEmpty || !session.canChangeClips)
-                }.disabled(busy)
-            } footer: { Text("Direct downloadable HTTPS media only.") }
-        }
-    }
-
     @ViewBuilder private var status: some View {
         if busy {
             Section {
@@ -162,11 +149,11 @@ struct AddClipsSheet: View {
     private func reviewSources() {
         task?.cancel()
         let token = UUID(); generation = token
-        let selected = sources
+        let selected = sources.filter { reviews[$0.id]?.metadata == nil }
         reviewing = Set(selected.map(\.id)); error = nil
         task = Task {
             for source in selected {
-                let review = await reviewer.review(source)
+                let review = await reviewer.review(source, requireVideo: true, includeThumbnail: false)
                 guard !Task.isCancelled, generation == token else { return }
                 reviews[source.id] = review; reviewing.remove(source.id)
             }
@@ -224,13 +211,7 @@ struct AddClipsSheet: View {
     private func addSelected() {
         guard ready, !busy else { return }
         let selected = sources
-        beginAdding { try await importer.prepareClips(selected) }
-    }
-    private func addURL() {
-        guard let url = URL(string: urlText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme?.lowercased() == "https", url.host?.isEmpty == false,
-              url.user == nil, url.password == nil else { error = "Enter a valid HTTPS media URL."; return }
-        beginAdding { try await importer.prepareDirectURL(url, rightsConfirmed: rightsConfirmed) }
+        beginAdding { try await importer.prepareClips(selected, requireVideo: true) }
     }
     private func beginAdding(_ prepare: @escaping @MainActor () async throws -> PreparedClipImport) {
         guard !busy, session.canChangeClips else { return }
@@ -251,5 +232,22 @@ struct AddClipsSheet: View {
     private func cleanupPhotos() {
         for url in ownedPhotos { try? FileManager.default.removeItem(at: url) }
         ownedPhotos.removeAll()
+    }
+}
+
+/// Optional artwork has its own view task and never gates Add. Removing a row or
+/// leaving the screen cancels its request; a timeout keeps a plain video icon.
+private struct AddClipThumbnail: View {
+    let source: ImportInput
+    let duration: MediaTime
+    @State private var data: Data?
+
+    var body: some View {
+        MediaThumbnail(data: data)
+            .task(id: source.id) {
+                let image = await ImportMediaReviewer.preview(source, duration: duration)
+                guard !Task.isCancelled else { return }
+                data = image
+            }
     }
 }

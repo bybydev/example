@@ -1,5 +1,21 @@
 # Inkribe Working Rules
 
+## Current Add clips flow — new PR targeting develop
+
+2026-11-05. The user requests improving Add clips in a new PR from latest develop.
+Verified baseline: d74676d4e6a5a3042a91c075122f1d7866c7ebb6 (merged #62).
+Use feat/ios-add-clips-flow targeting develop. Push Add clips within the Clips
+navigation stack; align selection with video-only Photos/Files; validate metadata
+independently of optional bounded thumbnails; make append order/count explicit;
+select/seek the first saved clip and offer a dismissal-safe route to Captions.
+Use Generate missing captions for unmatched/new coverage, retaining retry behavior.
+This supersedes historical Add clips audio/URL UI preservation for this scope.
+Preserve Photos current encoding/transfer bridge, staging/atomic append, existing
+captions/history, New Project, Music, export, schema and Mac behavior. Source/diff/
+publication review only; no builds/typechecks/tests/fixtures, CI, generation,
+models, native/UI/device execution or deployment. See
+docs/ios/handoffs/ADD_CLIPS_FLOW.md. Leave the new PR open without auto-merge.
+
 ## Current MP4 frame timing repair — stacked on #62
 
 2026-11-05 follow-up. After the user reproduced a frame-coverage failure at
