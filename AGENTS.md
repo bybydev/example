@@ -2,6 +2,16 @@
 
 ## Current MP4 frame timing repair — stacked on #62
 
+2026-11-05 follow-up. After the user reproduced a frame-coverage failure at
+260.100 s, update the existing PR #67. Consecutive composed presentation
+timestamps now determine interior frame selection; remove the strict
+duration-coverage guard. Keep EOF validation separate, using the terminal sample
+duration/fixed composition cadence and at most a sub-output-frame tail allowance.
+Preserve native errors, timestamp ordering, missing-image checks, intentional
+black gaps and all existing output/cancellation contracts. This supersedes the
+duration-coverage policy described below. Source-only review; no tests/builds,
+CI or native/device execution. Leave #67 stacked on #62 and open without merge.
+
 2026-11-05. The user requests the discussed multi-clip export repair in a stacked
 PR from #62 head bb4fd6f9e312746d42ed52b3e156c94a6520d67d, targeting
 fix/ios-improvements. Use fix/ios-export-timing. Validate composed frame display

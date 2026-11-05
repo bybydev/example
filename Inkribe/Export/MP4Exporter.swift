@@ -122,8 +122,8 @@ enum MP4Exporter {
         var lastVideoPTS = CMTime.invalid
         var videoIntervalIndex = 0
         var lastAudioPTS = CMTime.invalid
-        // These are composed samples, not source-track frames. An absent sample
-        // duration can use the composition cadence, never an unlimited hold.
+        // Only EOF validation needs a duration fallback. Between samples the
+        // next presentation timestamp defines when the current frame is replaced.
         let composedFrameDuration: CMTime
         if let composition = graph.videoComposition,
            composition.sourceTrackIDForFrameTiming == kCMPersistentTrackID_Invalid {
@@ -188,15 +188,19 @@ enum MP4Exporter {
                             throw mediaFailure("A video frame is missing", at: pts, reader: reader,
                                 sample: currentVideo, next: pendingVideo, interval: activeInterval)
                         }
-                        // Clip intervals identify intentional black gaps only.
-                        // AVFoundation has already applied cuts/trim/transforms;
-                        // a composed frame can start before a non-frame-aligned
-                        // cut and still cover this output time. Do not compare its
-                        // PTS with the source clip start or a fixed 67 ms age limit.
-                        guard frameCovers(pts, sample: sample, next: pendingVideo,
-                                          fallbackDuration: composedFrameDuration) else {
-                            throw mediaFailure("Video frame timing does not cover the export time",
-                                at: pts, reader: reader, sample: sample, next: pendingVideo, interval: activeInterval)
+                        // The loop above selects currentPTS <= pts < nextPTS.
+                        // Hold that decoded frame until the next presentation,
+                        // even if its duration metadata ends sooner. Clip cuts
+                        // and transforms have already been applied by AVFoundation;
+                        // graph intervals here only mask intentional black gaps.
+                        // EOF has no next PTS, so validate the remaining video tail
+                        // separately rather than holding a truncated stream forever.
+                        if videoEOF, pendingVideo == nil,
+                           let finalInterval = graph.videoIntervals.last,
+                           !videoReachedEnd(sample, requiredEnd: finalInterval.end.cmTime,
+                                            fallbackDuration: composedFrameDuration) {
+                            throw mediaFailure("The video reader ended before the final video interval",
+                                at: pts, reader: reader, sample: sample, interval: finalInterval)
                         }
                         image = CIImage(cvPixelBuffer: pixels).cropped(to: bounds)
                     }
@@ -269,28 +273,30 @@ enum MP4Exporter {
         try await validate(url: request.partialURL, document: document, canvas: canvas, expectAudio: graph.hasAudio)
     }
 
-    private static func frameCovers(_ time: CMTime, sample: CMSampleBuffer,
-                                    next: CMSampleBuffer?, fallbackDuration: CMTime) -> Bool {
+    private static func videoReachedEnd(_ sample: CMSampleBuffer, requiredEnd: CMTime,
+                                        fallbackDuration: CMTime) -> Bool {
         let start = CMSampleBufferGetPresentationTimeStamp(sample)
-        let sampleDuration = CMSampleBufferGetDuration(sample)
+        let declared = CMSampleBufferGetDuration(sample)
+        let hasDeclaredDuration = declared.isNumeric && CMTimeCompare(declared, .zero) > 0
+        let hasFallback = fallbackDuration.isNumeric && CMTimeCompare(fallbackDuration, .zero) > 0
+        guard start.isNumeric, requiredEnd.isNumeric, hasDeclaredDuration || hasFallback else { return false }
+        // A composed frame occupies at least one composition tick. Preserve a
+        // longer declared terminal hold (e.g. a static screen-recording tail).
         let duration: CMTime
-        if sampleDuration.isNumeric {
-            guard CMTimeCompare(sampleDuration, .zero) >= 0 else { return false }
-            duration = CMTimeCompare(sampleDuration, .zero) > 0 ? sampleDuration : fallbackDuration
+        if hasDeclaredDuration, hasFallback {
+            duration = CMTimeMaximum(declared, fallbackDuration)
         } else {
-            guard !sampleDuration.isValid else { return false }
-            duration = fallbackDuration
+            duration = hasDeclaredDuration ? declared : fallbackDuration
         }
-        guard start.isNumeric, duration.isNumeric, CMTimeCompare(duration, .zero) > 0 else { return false }
-        var end = CMTimeAdd(start, duration)
+        let end = CMTimeAdd(start, duration)
         guard end.isNumeric else { return false }
-        if let next {
-            // A later composed sample takes over even if durations overlap.
-            let nextPTS = CMSampleBufferGetPresentationTimeStamp(next)
-            guard nextPTS.isNumeric, CMTimeCompare(nextPTS, start) > 0 else { return false }
-            if CMTimeCompare(nextPTS, end) < 0 { end = nextPTS }
-        }
-        return CMTimeCompare(start, time) <= 0 && CMTimeCompare(time, end) < 0
+        if CMTimeCompare(end, requiredEnd) >= 0 { return true }
+        // The writer's final frame is clipped to graph.duration. Permit only a
+        // sub-output-frame tail discrepancy, not an arbitrary missing segment.
+        // This allowance is EOF-only; normal frame selection never uses age or
+        // duration thresholds.
+        let shortfall = CMTimeSubtract(requiredEnd, end)
+        return shortfall.isNumeric && CMTimeCompare(shortfall, CMTime(value: 1, timescale: 30)) < 0
     }
 
     private static func mediaFailure(_ reason: String, at time: CMTime = .invalid,
