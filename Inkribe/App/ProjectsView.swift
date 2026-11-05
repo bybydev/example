@@ -80,10 +80,11 @@ struct ProjectsView: View {
                 .disabled(renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renamedTitle.count > 256)
                 Button("Cancel", role: .cancel) { }
             } message: { _ in Text("Enter a name up to 256 characters.") }
-            .confirmationDialog("Move project to Trash?", isPresented: $showingTrash, presenting: trashTarget) { project in
+            .alert("Move project to Trash?", isPresented: $showingTrash, presenting: trashTarget) { project in
                 Button("Move to Trash", role: .destructive) { Task { await model.trash(project.id) } }
+                Button("Cancel", role: .cancel) { }
             } message: { project in Text("\(project.title) can be restored from the Trash pill or Storage.") }
-            .confirmationDialog("Delete folder?", isPresented: Binding(
+            .alert("Delete folder?", isPresented: Binding(
                 get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } }
             ), presenting: folderToDelete) { folder in
                 Button("Delete Folder", role: .destructive) {
@@ -94,7 +95,7 @@ struct ProjectsView: View {
             } message: { folder in
                 Text("Delete “\(folder.name)”? Its projects stay in All. Projects in Trash are kept too.")
             }
-            .confirmationDialog("Delete project forever?", isPresented: Binding(
+            .alert("Delete project forever?", isPresented: Binding(
                 get: { projectToDelete != nil }, set: { if !$0 { projectToDelete = nil } }
             ), presenting: projectToDelete) { project in
                 Button("Delete Forever", role: .destructive) {

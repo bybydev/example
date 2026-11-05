@@ -1,5 +1,76 @@
 # Inkribe Working Rules
 
+## Current MP4 frame timing repair — stacked on #62
+
+2026-11-05 follow-up. After the user reproduced a frame-coverage failure at
+260.100 s, update the existing PR #67. Consecutive composed presentation
+timestamps now determine interior frame selection; remove the strict
+duration-coverage guard. Keep EOF validation separate, using the terminal sample
+duration/fixed composition cadence and at most a sub-output-frame tail allowance.
+Preserve native errors, timestamp ordering, missing-image checks, intentional
+black gaps and all existing output/cancellation contracts. This supersedes the
+duration-coverage policy described below. Source-only review; no tests/builds,
+CI or native/device execution. Leave #67 stacked on #62 and open without merge.
+
+2026-11-05. The user requests the discussed multi-clip export repair in a stacked
+PR from #62 head bb4fd6f9e312746d42ed52b3e156c94a6520d67d, targeting
+fix/ios-improvements. Use fix/ios-export-timing. Validate composed frame display
+intervals instead of a fixed 67 ms age/source-clip-start check; keep genuine
+missing-frame, reader and timestamp failures. Make the shared 30 fps composition
+timing explicit and retain bounded sample ownership, black gaps, captions/audio,
+cancellation, frozen requests and atomic publication. Add failure-stage/time and
+native-error diagnostics. Do not normalize/rewrite originals or change import/UI,
+Mac, schema, formats or queue policy. The affected recording has not been supplied;
+its exact failing branch remains unconfirmed. Source/diff/publication review only;
+no builds/typechecks/tests/fixtures, CI, generation, downloads, native exports or
+device/UI execution. See docs/ios/handoffs/MP4_FRAME_TIMING.md. Leave both PRs open
+without auto-merge; do not modify the parent branch.
+
+## Current iOS confirmation alerts — stacked on #62
+
+2026-11-05. The user requests a new stacked PR targeting #62's
+fix/ios-improvements branch at c26807a048becf9d0e5b9a8e69302dacd01a7fad.
+Use fix/ios-confirmation-alerts. Replace every iOS confirmationDialog with a
+native centered alert, preserving titles/messages, roles, guarded operations and
+presentation owners. The full inventory is 17 sites in 11 iOS files, including
+Speech Models under the ignored source folder. Keep explicit Cancel actions,
+captured import/model IDs and pending error presentation safe. Preserve Mac,
+existing sheets/menus, processing/storage policy and all earlier #62 work.
+Source/diff/whitespace/publication review only; no builds/typechecks/tests,
+fixtures, CI, generation, model downloads, native/UI/device execution or
+deployment. Leave parent and child PRs open without auto-merge. See
+docs/ios/handoffs/CONFIRMATION_ALERTS.md. Further work requires the user's request.
+
+## Current issue #63 — stacked caption word effects fix
+
+2026-11-05. The user requests the proposed v1.0 fix in a stacked PR on #62,
+starting at 8119966e71db23222a635c6e32316cd682c6635e. Branch
+fix/ios-caption-highlighting targets fix/ios-improvements; do not modify the
+parent branch. Scope: word-only eligibility for Highlight/Active color/Underline/
+Karaoke, word-preserving text correction with stable typing/undo scope, truthful
+phrase indicators and the authored Karaoke sample. Preserve raw/native timing,
+trimmed-out text and IDs, manual captions, saved projects, existing frozen export
+behavior and Mac callers. A default-off shared motion opt-in and shared text
+mapping helper are scoped support, with optional frozen-export motion metadata.
+Deeper WordMapper/native timing recovery remains deferred; never invent word
+timestamps. See docs/ios/handoffs/CAPTION_WORD_EFFECTS.md. Source-only review and
+regression-source authoring; no builds/typechecks/tests/fixtures, CI, generation,
+model downloads, native processing/exports, UI/device execution or deployment.
+Leave both PRs open without auto-merge; await further user-requested changes.
+
+## Current iOS improvements — trimmed caption text correction
+
+2026-11-05. The user requests fixing the reviewed P1 trimmed-caption text bug in
+one new PR from latest develop d870b04, targeting develop. Use the generic branch
+fix/ios-improvements for this fix and later explicitly requested changes. Keep
+caption text edits scoped to the same retained word IDs displayed by the field;
+preserve trimmed-out text, native IDs/timing, raw recognition, manual captions,
+undo/redo, autosave, preview/export mapping and existing UI. Other review findings
+are outside this request. See docs/ios/handoffs/CAPTION_TRIM_TEXT.md. Source-only
+review; no builds/typechecks/tests/fixtures, CI, project generation, downloads,
+native processing/exports, UI/device execution or deployment. Leave the PR open
+without auto-merge and await the user's next requested change.
+
 ## Current Photos import repair
 
 2026-11-04. The user authorizes repairing Photos imports stuck at Preparing videos

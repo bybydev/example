@@ -37,7 +37,7 @@ struct ProjectClipsSheet: View {
                 }
                 .presentationDetents([.large]).presentationDragIndicator(.visible)
             }
-            .confirmationDialog("Remove clip?", isPresented: Binding(
+            .alert("Remove clip?", isPresented: Binding(
                 get: { removingClip != nil }, set: { if !$0 { removingClip = nil } }), presenting: removingClip) { clip in
                 Button("Remove clip", role: .destructive) { remove(clip) }
                 Button("Cancel", role: .cancel) { removingClip = nil }

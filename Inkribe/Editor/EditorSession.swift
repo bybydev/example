@@ -56,6 +56,7 @@ final class EditorSession {
     private var playbackGeneration = UUID()
     private var isSeeking = false
     private var typingWordID: UUID?
+    private var cueTextBase: (id: UUID, wordIDs: [UUID], units: [CaptionTextUnit])?
     private var stylingControl: CaptionStyleControl?
     private var mediaControl: MediaControl?
     private var mediaURLs: [UUID: URL] = [:]
@@ -209,7 +210,9 @@ final class EditorSession {
                 savedSequence = editSequence
                 hasPendingChanges = false
                 saveError = nil
-                if !appendOnly { editHistory.reset(); workspace.clearFieldDrafts(); updateHistoryFlags() }
+                if !appendOnly {
+                    editHistory.reset(); workspace.clearFieldDrafts(); endTyping(); updateHistoryFlags()
+                }
                 rebuildSnapshot()
                 repairSelection()
                 // A newly available transcript should be visible on the paused
@@ -405,7 +408,7 @@ final class EditorSession {
     }
 
     func beginTyping() { pause() }
-    func endTyping() { typingWordID = nil }
+    func endTyping() { typingWordID = nil; cueTextBase = nil }
     func endStyleEditing() { stylingControl = nil }
     func endMediaEditing() { mediaControl = nil }
 
@@ -740,8 +743,25 @@ final class EditorSession {
         if let caption = document?.manualCaptions?.first(where: { $0.id == cueID }) {
             return editManualText(caption, value: value)
         }
+        // The text field reads the retained snapshot, not the full original cue.
+        // Use the same word scope so editing cannot rewrite trimmed-out text.
+        guard let cue = snapshot?.cues.first(where: { $0.id == cueID }) else {
+            commandError = CaptionEditError.missingCaption.localizedDescription
+            return false
+        }
+        // Map every keystroke against one starting word layout. An intermediate
+        // clear or partial replacement must not destroy the remaining slots.
+        if typingWordID != cueID || cueTextBase?.id != cueID || cueTextBase?.wordIDs != cue.wordIDs {
+            let units = cue.wordIDs.compactMap { id in
+                snapshot?.wordsByID[id].map { CaptionTextUnit(id: id, text: $0.text) }
+            }
+            guard units.count == cue.wordIDs.count else { return false }
+            cueTextBase = (cueID, cue.wordIDs, units)
+        }
+        guard let originalText = cueTextBase?.units else { return false }
         return perform(coalescing: cueID) { state, _ in
-            try CaptionEdits.cueText(value, cueID: cueID, in: &state)
+            try CaptionEdits.cueText(value, cueID: cueID, wordIDs: cue.wordIDs,
+                originalText: originalText, in: &state)
             return nil
         }
     }

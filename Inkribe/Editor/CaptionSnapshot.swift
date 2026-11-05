@@ -49,6 +49,7 @@ enum CaptionTranscriptItem: Sendable, Identifiable {
 struct CaptionSnapshot: Sendable {
     private(set) var id = UUID()
     let revision: ProjectRevision
+    let requireWordTiming: Bool
     let canvas: ProjectCanvas
     private(set) var style: CaptionStyle
     private var clipStyles: [UUID: CaptionStyle]
@@ -65,7 +66,8 @@ struct CaptionSnapshot: Sendable {
     private let ordered: [CaptionCue]
     private let prefixEnd: [MediaTime]
 
-    init(_ document: ProjectDocument, usesClipStyles: Bool = false) {
+    init(_ document: ProjectDocument, usesClipStyles: Bool = false, requireWordTiming: Bool = true) {
+        self.requireWordTiming = requireWordTiming
         revision = ProjectRevision(projectID: document.id, contentRevision: document.contentRevision)
         canvas = document.canvas
         style = document.effectiveCaptionStyle

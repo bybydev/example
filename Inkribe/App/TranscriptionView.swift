@@ -112,8 +112,9 @@ struct TranscriptionView: View {
                 recoveryError = error.localizedDescription
             }
         }
-        .confirmationDialog("Start transcription over?", isPresented: $confirmingDiscard) {
+        .alert("Start transcription over?", isPresented: $confirmingDiscard) {
             Button("Start over", role: .destructive) { discardProgress() }
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text("The next attempt will process the full clip again. Your project and original media are kept.")
         }

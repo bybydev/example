@@ -183,7 +183,7 @@ struct ProjectEditorView: View {
 
     private var editorDialogs: some View {
         editorRenamePresentation
-        .confirmationDialog("Move this project to Trash?", isPresented: $showDeleteConfirmation) {
+        .alert("Move this project to Trash?", isPresented: $showDeleteConfirmation) {
             Button("Move to Trash", role: .destructive) {
                 Task {
                     await session.flush()
@@ -192,6 +192,7 @@ struct ProjectEditorView: View {
                     if model.alertMessage == nil { dismiss() }
                 }
             }
+            Button("Cancel", role: .cancel) { }
         } message: { Text("Original files are preserved in Trash until you empty it.") }
         .alert("Project", isPresented: Binding(
             get: { canPresentProjectError && model.alertMessage != nil },
@@ -568,7 +569,11 @@ struct ProjectEditorView: View {
             .focused($focused, equals: .caption(cue.id))
             .id(EditorField.caption(cue.id))
             .accessibilityLabel("Caption text")
-            if cue.wordIDs.contains(where: { session.snapshot?.wordsByID[$0]?.timingProvenance == "whisper-segment" }) {
+            if cue.wordIDs.contains(where: { id in
+                guard let word = session.snapshot?.wordsByID[id],
+                      !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+                return !CaptionMotion.isWordTimed(word)
+            }) {
                 Label("Phrase timing", systemImage: "text.alignleft")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -783,7 +788,7 @@ struct ProjectEditorView: View {
     }
 
     private var canPresentProjectError: Bool {
-        !hasPresentedSheet && !isOpening
+        !hasPresentedSheet && !isOpening && !showDeleteConfirmation
     }
 
     private var hasStatusError: Bool {
@@ -920,8 +925,10 @@ struct ProjectEditorView: View {
                 }
             }
             if let id = session.selectedWordID, cue.wordIDs.contains(id) {
-                if session.selectedWord?.timingProvenance == "whisper-segment" {
-                    Text("This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval.")
+                if let word = session.selectedWord, !CaptionMotion.isWordTimed(word) {
+                    Text(word.timingProvenance == "whisper-segment" ?
+                        "This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval." :
+                        "This text shares one timing interval. Word-by-word effects stay off for this phrase; correcting the text keeps its timing.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 TextField("Hidden word", text: Binding(

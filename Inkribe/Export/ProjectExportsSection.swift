@@ -145,13 +145,14 @@ private struct ProjectExportFileRow: View {
             }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
-        .confirmationDialog("Delete this local export?", isPresented: $deleting) {
+        .alert("Delete this local export?", isPresented: $deleting) {
             Button("Delete export", role: .destructive) {
                 Task {
                     do { try await model.exports.discard(artifact.id); await model.refreshStorage() }
                     catch { self.error = error.localizedDescription }
                 }
             }
+            Button("Cancel", role: .cancel) { }
         } message: { Text("Your project, original clips and copies already saved elsewhere are kept.") }
         .task(id: artifact.outputURL) {
             guard artifact.profile?.format == .mp4 else { return }
@@ -262,11 +263,12 @@ private struct ProjectExportJobRow: View {
             if model.processing.acting.contains(key) { ProgressView("Updating export…").font(.caption) }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
-        .confirmationDialog(confirming == .cancel ? "Cancel this export?" : "Delete this local export?",
+        .alert(confirming == .cancel ? "Cancel this export?" : "Delete this local export?",
             isPresented: $showingConfirmation) {
             Button(confirming == .cancel ? "Cancel export" : "Delete export", role: .destructive) {
                 if let confirming { perform(confirming) }
             }
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text(confirming == .cancel ? "Saved captions and completed files are kept." :
                 "Your project, original clips and copies already saved elsewhere are kept.")

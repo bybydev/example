@@ -179,6 +179,9 @@ enum PreviewComposition {
             let videoComposition = AVMutableVideoComposition()
             videoComposition.renderSize = size
             videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+            // Preview and export consume composed 30 fps timing, including VFR
+            // sources. Do not derive output cadence from a source track.
+            videoComposition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
             videoComposition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
             videoComposition.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
             videoComposition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
