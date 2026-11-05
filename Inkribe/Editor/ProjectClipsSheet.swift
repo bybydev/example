@@ -7,6 +7,7 @@ struct ProjectClipsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appFoundationTheme) private var theme
     let session: EditorSession
+    let clipImport: AddClipsModel
     let onSelect: (UUID) -> Void
     let onOpenCaptions: () -> Void
     @State private var renamingClip: ProjectClip?
@@ -26,9 +27,10 @@ struct ProjectClipsSheet: View {
         return !savingOrder && session.canChangeClips && orderIDs != originalIDs
     }
 
-    init(session: EditorSession, initialClipID: UUID?, onOpenCaptions: @escaping () -> Void,
+    init(session: EditorSession, clipImport: AddClipsModel, initialClipID: UUID?, onOpenCaptions: @escaping () -> Void,
          onSelect: @escaping (UUID) -> Void) {
         self.session = session; self.onSelect = onSelect; self.onOpenCaptions = onOpenCaptions
+        self.clipImport = clipImport
         _highlightedClipID = State(initialValue: initialClipID)
     }
 
@@ -44,7 +46,7 @@ struct ProjectClipsSheet: View {
             }
             .interactiveDismissDisabled(savingOrder || session.isChangingClips)
             .onChange(of: addingClips) { _, adding in
-                if !adding { revealRequest = UUID() }
+                if !adding { clipImport.endSelection(); revealRequest = UUID() }
             }
             .onChange(of: session.document?.contentRevision) { _, _ in
                 guard !savingOrder, let orderBase, let document = session.document,
@@ -62,10 +64,12 @@ struct ProjectClipsSheet: View {
                 .themedSurface()
                 .toolbar { clipToolbar }
                 .navigationDestination(isPresented: $addingClips) {
-                    AddClipsSheet(session: session) { ids in
+                    AddClipsSheet(session: session, model: clipImport, selectionID: clipImport.selectionID,
+                                  onCancel: { closeAddClips() }) { ids in
                         error = nil; highlightedClipID = ids.first
                         addedClipIDs.formUnion(ids)
                         if let first = ids.first { session.seekToClip(first) }
+                        closeAddClips()
                     }
                 }
         }
@@ -114,7 +118,7 @@ struct ProjectClipsSheet: View {
     private var controls: some View {
         Section {
             if !isReordering {
-                Button("Add clips", systemImage: "plus") { addingClips = true }
+                Button("Add clips", systemImage: "plus") { clipImport.beginSelection(); addingClips = true }
                     .disabled(!session.canChangeClips)
             } else {
                 Text("Drag the handles to change playback order. Captions and settings move with their clips.")
@@ -168,6 +172,11 @@ struct ProjectClipsSheet: View {
             }
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
         }
+    }
+
+    private func closeAddClips() {
+        clipImport.endSelection()
+        addingClips = false
     }
 
     private func displayedClips(in document: ProjectDocument) -> [ProjectClip] {

@@ -2,6 +2,15 @@
 
 ## Current Add clips flow — new PR targeting develop
 
+2026-11-05 follow-up in #68. The user confirms the temporary-view lifetime issue.
+Move Add clips import selection/tasks into an editor-owned observable model;
+remove import cancellation/cleanup from the pushed view's onDisappear. Use
+explicit Add navigation closure and Clips sheet dismissal to close the selection,
+separate task generations, immediate Photos cancellation state reset, guarded
+completion cleanup and stale picker/result rejection. Keep the shared Photos
+transfer bridge/current encoding and previous flow changes. Source-only rules
+remain; device reproduction/acceptance is unverified.
+
 2026-11-05. The user requests improving Add clips in a new PR from latest develop.
 Verified baseline: d74676d4e6a5a3042a91c075122f1d7866c7ebb6 (merged #62).
 Use feat/ios-add-clips-flow targeting develop. Push Add clips within the Clips
