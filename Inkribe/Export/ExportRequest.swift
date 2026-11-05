@@ -34,6 +34,8 @@ struct ExportManifest: Codable, Sendable {
     let document: ProjectDocument
     let profile: ExportProfile
     let createdAt: Date?
+    /// Absent in existing frozen requests: retain their original motion policy.
+    let wordEffectVersion: Int?
 }
 
 struct FrozenExport: Sendable {
