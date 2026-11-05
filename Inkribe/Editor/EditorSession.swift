@@ -740,8 +740,14 @@ final class EditorSession {
         if let caption = document?.manualCaptions?.first(where: { $0.id == cueID }) {
             return editManualText(caption, value: value)
         }
+        // The text field reads the retained snapshot, not the full original cue.
+        // Use the same word scope so editing cannot rewrite trimmed-out text.
+        guard let cue = snapshot?.cues.first(where: { $0.id == cueID }) else {
+            commandError = CaptionEditError.missingCaption.localizedDescription
+            return false
+        }
         return perform(coalescing: cueID) { state, _ in
-            try CaptionEdits.cueText(value, cueID: cueID, in: &state)
+            try CaptionEdits.cueText(value, cueID: cueID, wordIDs: cue.wordIDs, in: &state)
             return nil
         }
     }

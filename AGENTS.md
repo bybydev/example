@@ -1,5 +1,18 @@
 # Inkribe Working Rules
 
+## Current iOS improvements — trimmed caption text correction
+
+2026-11-05. The user requests fixing the reviewed P1 trimmed-caption text bug in
+one new PR from latest develop d870b04, targeting develop. Use the generic branch
+fix/ios-improvements for this fix and later explicitly requested changes. Keep
+caption text edits scoped to the same retained word IDs displayed by the field;
+preserve trimmed-out text, native IDs/timing, raw recognition, manual captions,
+undo/redo, autosave, preview/export mapping and existing UI. Other review findings
+are outside this request. See docs/ios/handoffs/CAPTION_TRIM_TEXT.md. Source-only
+review; no builds/typechecks/tests/fixtures, CI, project generation, downloads,
+native processing/exports, UI/device execution or deployment. Leave the PR open
+without auto-merge and await the user's next requested change.
+
 ## Current Photos import repair
 
 2026-11-04. The user authorizes repairing Photos imports stuck at Preparing videos

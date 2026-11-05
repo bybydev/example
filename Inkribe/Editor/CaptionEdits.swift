@@ -33,12 +33,18 @@ enum CaptionEditError: LocalizedError {
 enum CaptionEdits {
     /// Changed characters stay on existing timed units. Inserted/replaced phrases
     /// never manufacture new word IDs or evenly divided timestamp boundaries.
-    static func cueText(_ value: String, cueID: UUID, in state: inout CaptionEditState) throws {
+    /// Edit only the retained units shown by the field; words hidden by trim keep
+    /// their text and cannot receive any of the replacement characters.
+    static func cueText(_ value: String, cueID: UUID, wordIDs: [UUID], in state: inout CaptionEditState) throws {
         guard value.count <= 4_096 else { throw CaptionEditError.invalidText }
         guard let cue = state.cues.first(where: { $0.id == cueID }) else { throw CaptionEditError.missingCaption }
+        let editableIDs = Set(wordIDs)
+        guard !wordIDs.isEmpty, cue.wordIDs.filter({ editableIDs.contains($0) }) == wordIDs else {
+            throw CaptionEditError.missingCaption
+        }
         let wordIndex = Dictionary(uniqueKeysWithValues: state.words.enumerated().map { ($0.element.id, $0.offset) })
         var old: [Character] = [], owners: [UUID] = []
-        for id in cue.wordIDs {
+        for id in wordIDs {
             guard let index = wordIndex[id] else { throw CaptionEditError.missingCaption }
             let characters = Array(state.words[index].text)
             old.append(contentsOf: characters); owners.append(contentsOf: repeatElement(id, count: characters.count))
@@ -52,7 +58,7 @@ enum CaptionEdits {
         var suffix = 0
         while suffix < min(old.count - prefix, next.count - prefix),
               old[old.count - suffix - 1] == next[next.count - suffix - 1] { suffix += 1 }
-        guard let fallback = cue.wordIDs.first else { throw CaptionEditError.missingCaption }
+        guard let fallback = wordIDs.first else { throw CaptionEditError.missingCaption }
         let insertionOwner = owners.isEmpty ? fallback : owners[min(prefix, owners.count - 1)]
         let newOwners = Array(owners.prefix(prefix)) +
             Array(repeating: insertionOwner, count: next.count - prefix - suffix) + Array(owners.suffix(suffix))
@@ -60,7 +66,7 @@ enum CaptionEdits {
         for (character, owner) in leading { textByID[owner, default: ""].append(character) }
         for (character, owner) in zip(next, newOwners) { textByID[owner, default: ""].append(character) }
         for (character, owner) in trailing.reversed() { textByID[owner, default: ""].append(character) }
-        for id in cue.wordIDs {
+        for id in wordIDs {
             guard let index = wordIndex[id] else { throw CaptionEditError.missingCaption }
             state.words[index].text = textByID[id] ?? ""
         }
