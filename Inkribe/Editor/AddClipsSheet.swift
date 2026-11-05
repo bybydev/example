@@ -19,7 +19,7 @@ struct AddClipsSheet: View {
 
     var body: some View {
         Form {
-            Group { sourcePicker; selectedMedia; failures; status }
+            Group { sourcePicker; selectedMedia; status }
                 .listRowBackground(theme.surfaceColor).listRowSeparatorTint(theme.borderColor)
         }
         .navigationTitle("Add clips").navigationBarTitleDisplayMode(.inline).themedSurface()
@@ -29,11 +29,17 @@ struct AddClipsSheet: View {
                 Button("Cancel", action: onCancel).disabled(session.isChangingClips)
             }
             ToolbarItem(placement: .confirmationAction) {
-                if !model.sources.isEmpty { Button(model.sources.count == 1 ? "Add clip" : "Add \(model.sources.count) clips") { model.addSelected(to: session, selectionID: selectionID, onAdded: onAdded) }.disabled(model.busy || !ready) }
+                if !model.sourceOrder.isEmpty {
+                    Button(model.sourceOrder.count == 1 ? "Add clip" : "Add \(model.sourceOrder.count) clips") {
+                        model.addSelected(to: session, selectionID: selectionID, onAdded: onAdded)
+                    }.disabled(model.busy || !ready)
+                }
             }
         }
         .interactiveDismissDisabled(session.isChangingClips)
-        .sheet(item: $model.photoPicker) { request in
+        // PHPicker is built for full-screen presentation on iPhone; presenting it
+        // inside a nested page sheet proved unreliable on device.
+        .fullScreenCover(item: $model.photoPicker) { request in
             ClipPhotosPicker { providers in
                 model.receivePhotos(providers, request: request)
             }
@@ -54,60 +60,104 @@ struct AddClipsSheet: View {
         }
     }
 
+    /// One merged, ordered list for Photos and Files. Every selection gets a row
+    /// immediately, like Files; Photos rows carry their own loading/copying
+    /// stage, then the shared media review state.
     @ViewBuilder private var selectedMedia: some View {
-        if !model.sources.isEmpty {
+        if !model.sourceOrder.isEmpty {
             Section {
-                ForEach(Array(model.sources.enumerated()), id: \.element.id) { index, source in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            if let metadata = model.reviews[source.id]?.metadata {
-                                AddClipThumbnail(source: source, duration: metadata.duration)
-                            } else { MediaThumbnail(data: nil) }
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("\(index + 1). \(source.displayName)").lineLimit(2).truncationMode(.middle)
-                                if let metadata = model.reviews[source.id]?.metadata {
-                                    Text(EditorTime.display(metadata.duration)).font(.caption).foregroundStyle(.secondary)
-                                } else if model.reviewing.contains(source.id) { ProgressView("Checking media…") }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Remove selection", systemImage: "xmark") { model.remove(source) }
-                                .labelStyle(.iconOnly).buttonStyle(.borderless)
-                                .frame(width: 44, height: 44).disabled(model.busy)
-                        }
-                        if let issue = model.reviews[source.id]?.error {
-                            Text(issue).font(.footnote).foregroundStyle(.orange)
-                            Button("Retry media check", action: model.reviewSources).disabled(model.busy)
-                        }
-                    }
+                ForEach(Array(model.sourceOrder.enumerated()), id: \.element) { index, id in
+                    selectionRow(index: index, id: id)
                 }
-            } header: { Text("Selected clips · \(model.sources.count)") }
-            footer: { Text("Clips will be added in this order. You can reorder them in Clips after adding.") }
+            } header: { Text("Selected clips · \(model.sourceOrder.count)") }
+            footer: {
+                Text(model.photoFailures.isEmpty
+                    ? "Clips will be added in this order. You can reorder them in Clips after adding."
+                    : "Retry or remove these selections before adding clips. Clips are added in this order.")
+            }
         }
     }
 
-    @ViewBuilder private var failures: some View {
-        if !model.photoFailures.isEmpty && !model.preparingPhotos {
-            Section("Videos not prepared") {
-                ForEach(model.photoFailures) { failure in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(failure.name)
-                        Text(failure.message).font(.footnote).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Retry") { model.preparePhotos([failure], selectionID: selectionID) }
-                            Button("Remove", role: .destructive) {
-                                model.removeFailure(failure.id)
-                            }
-                        }.buttonStyle(.borderless).disabled(model.busy)
-                    }
-                }
-                Text("Retry or remove these selections before adding clips.").font(.footnote)
+    @ViewBuilder private func selectionRow(index: Int, id: UUID) -> some View {
+        if let source = model.sources.first(where: { $0.id == id }) {
+            preparedRow(source, number: index + 1)
+        } else if let entry = model.photoEntries[id], case .failed(let message) = entry.stage {
+            failedPhotoRow(entry, number: index + 1, message: message)
+        } else if let entry = model.photoEntries[id] {
+            pendingPhotoRow(entry, number: index + 1)
+        }
+    }
+
+    private func preparedRow(_ source: ImportInput, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                if let metadata = model.reviews[source.id]?.metadata {
+                    AddClipThumbnail(source: source, duration: metadata.duration)
+                } else { MediaThumbnail(data: nil) }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(number). \(source.displayName)").lineLimit(2).truncationMode(.middle)
+                    if let metadata = model.reviews[source.id]?.metadata {
+                        Text(EditorTime.display(metadata.duration)).font(.caption).foregroundStyle(.secondary)
+                    } else if model.reviewing.contains(source.id) { ProgressView("Checking media…") }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Button("Remove selection", systemImage: "xmark") { model.remove(source) }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    .frame(width: 44, height: 44).disabled(model.busy)
             }
+            if let issue = model.reviews[source.id]?.error {
+                Text(issue).font(.footnote).foregroundStyle(.orange)
+                Button("Retry media check", action: model.reviewSources).disabled(model.busy)
+            }
+        }
+    }
+
+    private func pendingPhotoRow(_ entry: ClipPhotoSelection, number: Int) -> some View {
+        HStack(spacing: 12) {
+            MediaThumbnail(data: nil)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("\(number). \(entry.name)").lineLimit(2).truncationMode(.middle)
+                HStack(spacing: 6) {
+                    ProgressView()
+                    Text(photoStageTitle(entry.stage)).font(.caption).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Button("Remove selection", systemImage: "xmark") { model.removeFailure(entry.id) }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                .frame(width: 44, height: 44).disabled(model.busy)
+        }
+    }
+
+    private func failedPhotoRow(_ entry: ClipPhotoSelection, number: Int, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                MediaThumbnail(data: nil)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(number). \(entry.name)").lineLimit(2).truncationMode(.middle)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Button("Remove selection", systemImage: "xmark") { model.removeFailure(entry.id) }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    .frame(width: 44, height: 44).disabled(model.busy)
+            }
+            Text(message).font(.footnote).foregroundStyle(.orange)
+            HStack {
+                Button("Retry") { model.preparePhotos([entry], selectionID: selectionID) }
+                Button("Remove", role: .destructive) { model.removeFailure(entry.id) }
+            }.buttonStyle(.borderless).disabled(model.busy)
+        }
+    }
+
+    private func photoStageTitle(_ stage: ClipPhotoSelection.Stage) -> String {
+        switch stage {
+        case .loading: "Loading from Photos…"
+        case .copying: "Copying video…"
+        case .failed: ""
         }
     }
 
     @ViewBuilder private var status: some View {
         if model.busy {
             Section {
-                ProgressView(model.adding ? "Copying, checking and adding clips…" : model.photoPreparationMessage)
+                ProgressView(model.adding ? "Copying, checking and adding clips…" : "Loading videos from Photos…")
                 Button("Cancel preparation", role: .cancel) { model.cancelPreparation() }.disabled(session.isChangingClips)
             }
         }
@@ -139,10 +189,13 @@ private struct AddClipThumbnail: View {
 @MainActor @Observable
 final class AddClipsModel {
     var photoPicker: ClipPhotosPickerRequest?
-    private(set) var photoPreparationMessage = "Loading videos from Photos…"
     private(set) var selectionID = UUID()
     private(set) var sources: [ImportInput] = []
-    private(set) var photoFailures: [ClipPhotoSelection] = []
+    /// Registration order of every Photos and Files selection; drives row order.
+    private(set) var sourceOrder: [UUID] = []
+    /// All Photos selections between receivePhotos and their resolved loading,
+    /// copying or failure stage. Success removes the entry.
+    private(set) var photoEntries: [UUID: ClipPhotoSelection] = [:]
     private(set) var reviews: [UUID: ImportSourceReview] = [:]
     private(set) var reviewing: Set<UUID> = []
     private(set) var preparingPhotos = false
@@ -150,7 +203,6 @@ final class AddClipsModel {
     private(set) var error: String?
     private(set) var notice: String?
     @ObservationIgnored private var active = false
-    @ObservationIgnored private var sourceOrder: [UUID] = []
     @ObservationIgnored private var ownedPhotos: Set<URL> = []
     @ObservationIgnored private var photoTask: Task<Void, Never>?
     @ObservationIgnored private var reviewTask: Task<Void, Never>?
@@ -159,7 +211,22 @@ final class AddClipsModel {
     @ObservationIgnored private var reviewGeneration = UUID()
     @ObservationIgnored private let importer = MediaImporter(repository: .shared)
     @ObservationIgnored private let reviewer = ImportMediaReviewer()
+    /// Concurrent provider loads are windowed so many multi-GB originals cannot
+    /// surge library reads and storage writes at the same time.
+    private let loadWindow = 3
     var busy: Bool { preparingPhotos || adding }
+
+    /// Failed selections keep their provider for Retry, in selection order.
+    var photoFailures: [ClipPhotoSelection] {
+        let positions = Dictionary(uniqueKeysWithValues: sourceOrder.enumerated().map { ($0.element, $0.offset) })
+        return photoEntries.values
+            .filter { entry in
+                if case .failed = entry.stage { return true }
+                return false
+            }
+            .sorted { positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max] }
+    }
+
     var isReady: Bool {
         active && !busy && !sources.isEmpty && photoFailures.isEmpty && reviewing.isEmpty &&
             sources.allSatisfy { reviews[$0.id]?.metadata != nil && reviews[$0.id]?.kind == .video }
@@ -177,8 +244,9 @@ final class AddClipsModel {
         reviewTask?.cancel(); reviewTask = nil
         addTask?.cancel(); addTask = nil
         preparingPhotos = false; adding = false
-        photoPicker = nil; sources = []; photoFailures = []; reviews = [:]; reviewing = []
-        sourceOrder = []; error = nil; notice = nil
+        photoPicker = nil; sources = []; sourceOrder = []; photoEntries = [:]
+        reviews = [:]; reviewing = []
+        error = nil; notice = nil
         for url in ownedPhotos { try? FileManager.default.removeItem(at: url) }
         ownedPhotos.removeAll()
     }
@@ -234,43 +302,69 @@ final class AddClipsModel {
         reviewGeneration = UUID(); reviewTask?.cancel(); reviewTask = nil; reviewing = []
         let token = UUID(); photoGeneration = token
         preparingPhotos = true; error = nil; notice = nil
-        // Register every item first so cancellation leaves unfinished selections retryable.
+        // Register every selection first so rows appear immediately, like Files,
+        // and cancellation leaves unfinished selections retryable.
         for item in items {
+            var entry = photoEntries[item.id] ?? item
+            entry.stage = .loading
+            photoEntries[item.id] = entry
             if !sourceOrder.contains(item.id) { sourceOrder.append(item.id) }
-            if !photoFailures.contains(where: { $0.id == item.id }) { photoFailures.append(item) }
         }
         photoTask = Task {
             defer {
                 if photoGeneration == token {
                     preparingPhotos = false; photoTask = nil
+                    // A finished batch cannot leave a loading/copying row behind;
+                    // finalize any leftover deterministically as retryable.
+                    let leftoverIDs = photoEntries.filter { !$0.value.isFailed }.map(\.key)
+                    for id in leftoverIDs {
+                        photoEntries[id]?.stage = .failed("Loading did not finish. Retry or remove this video.")
+                    }
                     reviewSources()
                 }
             }
-            for (index, entry) in items.enumerated() {
+            var index = 0
+            while index < items.count {
                 guard !Task.isCancelled, active, photoGeneration == token else { return }
-                photoPreparationMessage = "Loading video \(index + 1) of \(items.count) from Photos…"
-                do {
-                    let file = try await ClipPhotoFileRequest.load(entry.provider) {
-                        guard self.active, self.photoGeneration == token else { return }
-                        self.photoPreparationMessage = "Copying video \(index + 1) of \(items.count)…"
-                    }
-                    guard !Task.isCancelled, active, photoGeneration == token else {
-                        try? FileManager.default.removeItem(at: file.localURL)
-                        return
-                    }
-                    ownedPhotos.insert(file.localURL)
-                    sources.append(ImportInput(id: entry.id, localURL: file.localURL, origin: .photos, displayName: file.displayName))
-                    photoFailures.removeAll { $0.id == entry.id }
-                    let positions = Dictionary(uniqueKeysWithValues: sourceOrder.enumerated().map { ($0.element, $0.offset) })
-                    sources.sort { positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max] }
-                } catch {
-                    guard active, photoGeneration == token else { return }
-                    if let index = photoFailures.firstIndex(where: { $0.id == entry.id }) {
-                        photoFailures[index].message = error.localizedDescription
+                let chunk = Array(items[index..<min(index + loadWindow, items.count)])
+                await withTaskGroup(of: Void.self) { group in
+                    for item in chunk {
+                        // Strict Sendability bounds: only this Sendable box crosses
+                        // into the child task; the provider itself stays there.
+                        let load = PhotoLoad(provider: item.provider, id: item.id, name: item.name)
+                        group.addTask { await self.materialize(load, token: token) }
                     }
                 }
+                index += chunk.count
             }
         }
+    }
+
+    private func materialize(_ load: PhotoLoad, token: UUID) async {
+        guard active, !Task.isCancelled, photoGeneration == token else { return }
+        do {
+            let file = try await ClipPhotoFileRequest.load(load.provider) { [self] in
+                guard self.active, self.photoGeneration == token else { return }
+                self.advancePhotoStage(load.id, .copying)
+            }
+            guard !Task.isCancelled, active, photoGeneration == token else {
+                try? FileManager.default.removeItem(at: file.localURL)
+                return
+            }
+            ownedPhotos.insert(file.localURL)
+            sources.append(ImportInput(id: load.id, localURL: file.localURL, origin: .photos, displayName: file.displayName))
+            photoEntries[load.id] = nil
+            let positions = Dictionary(uniqueKeysWithValues: sourceOrder.enumerated().map { ($0.element, $0.offset) })
+            sources.sort { positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max] }
+        } catch {
+            guard active, photoGeneration == token else { return }
+            advancePhotoStage(load.id, .failed(error.localizedDescription))
+        }
+    }
+
+    private func advancePhotoStage(_ id: UUID, _ stage: ClipPhotoSelection.Stage?) {
+        guard var entry = photoEntries[id] else { return }
+        if let stage { entry.stage = stage; photoEntries[id] = entry } else { photoEntries[id] = nil }
     }
 
     func cancelPreparation() {
@@ -280,8 +374,8 @@ final class AddClipsModel {
         photoGeneration = UUID()
         photoTask?.cancel(); photoTask = nil
         preparingPhotos = false
-        for index in photoFailures.indices {
-            photoFailures[index].message = "Preparation cancelled. Retry or remove this video."
+        for id in Array(photoEntries.keys) {
+            advancePhotoStage(id, .failed("Preparation cancelled. Retry or remove this video."))
         }
         notice = "Preparation cancelled. Your prepared selections are kept."
         reviewSources()
@@ -289,7 +383,8 @@ final class AddClipsModel {
 
     func removeFailure(_ id: UUID) {
         guard active, !busy else { return }
-        photoFailures.removeAll { $0.id == id }; sourceOrder.removeAll { $0 == id }
+        photoEntries[id] = nil
+        sourceOrder.removeAll { $0 == id }
     }
 
     func remove(_ source: ImportInput) {
@@ -333,7 +428,28 @@ struct ClipPhotoSelection: Identifiable {
     let id = UUID()
     let provider: NSItemProvider
     let name: String
-    var message = "Not prepared yet"
+    var stage = Stage.loading
+
+    enum Stage {
+        case loading
+        case copying
+        case failed(String)
+    }
+
+    var isFailed: Bool {
+        if case .failed = stage { return true }
+        return false
+    }
+}
+
+/// A selection's cross-task payload. NSItemProvider is not Sendable, but Inkribe
+/// serializes every access: probing and loading happen only inside this one
+/// selection's own file request, and the box exists purely to move the
+/// reference into that request's MainActor start.
+private struct PhotoLoad: @unchecked Sendable {
+    let provider: NSItemProvider
+    let id: UUID
+    let name: String
 }
 
 /// Get the native file providers directly, without a PhotosPickerItem/Transferable
@@ -349,7 +465,10 @@ private struct ClipPhotosPicker: UIViewControllerRepresentable {
         configuration.filter = .videos
         configuration.selectionLimit = 0
         configuration.selection = .ordered
-        configuration.preferredAssetRepresentationMode = .current
+        // .current can stall waiting for the absolute original (downloads,
+        // exotic encodings). .automatic lets the system substitute a complete,
+        // compatible representation when the current one cannot be delivered.
+        configuration.preferredAssetRepresentationMode = .automatic
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker
@@ -400,26 +519,71 @@ private final class ClipPhotoFileRequest {
         if let result { continuation.resume(with: result); return }
         self.continuation = continuation
         self.provider = provider
-        guard provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) else {
-            finish(.failure(ProjectStoreError.unsupportedMedia)); return
-        }
-        let type = provider.registeredTypeIdentifiers.first {
-            UTType($0)?.conforms(to: .movie) == true
-        } ?? UTType.movie.identifier
         let name = provider.suggestedName
-        progress = provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-            if url != nil, error == nil {
-                Task { @MainActor in if self.result == nil { onCopying() } }
+        // Picker-backed providers register their item types lazily. An immediate
+        // probe can observe no types at all and fail a perfectly good video, so
+        // re-check shortly before deciding the provider has no video.
+        if let type = Self.movieType(provider) {
+            beginLoad(provider, type: type, suggestedName: name, onCopying: onCopying)
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard self.result == nil else { return }
+                let resolved = Self.movieType(provider)
+                    ?? (provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? UTType.movie.identifier : nil)
+                if let type = resolved {
+                    self.beginLoad(provider, type: type, suggestedName: name, onCopying: onCopying)
+                } else {
+                    self.finish(.failure(ProjectStoreError.unsupportedMedia))
+                }
             }
-            // Do not hop to an actor/task before this synchronous owned copy.
-            let result = Self.copyFile(url, error: error, suggestedName: name, type: type)
-            Task { @MainActor in self.finish(result) }
         }
         deadline = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(120))
                 self?.finish(.failure(ClipPhotoFileError.timedOut), cancelProvider: true)
             } catch { }
+        }
+    }
+
+    @MainActor private static func movieType(_ provider: NSItemProvider) -> String? {
+        provider.registeredTypeIdentifiers.first {
+            UTType($0)?.conforms(to: .movie) == true
+        }
+    }
+
+    private func beginLoad(_ provider: NSItemProvider, type: String, suggestedName: String?,
+                           onCopying: @escaping @MainActor () -> Void) {
+        guard result == nil else { return }
+        progress = provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+            if url != nil, error == nil {
+                Task { @MainActor in if self.result == nil { onCopying() } }
+                // Do not hop to an actor/task before this synchronous owned copy.
+                let result = Self.copyFile(url, error: error, suggestedName: suggestedName, type: type)
+                Task { @MainActor in self.finish(result) }
+                return
+            }
+            // The registered representation can still be rejected or skipped
+            // without data; try the raw item acquisition once before treating
+            // the provider as failed.
+            self.startItemLoad(provider, type: type, suggestedName: suggestedName, onCopying: onCopying)
+        }
+    }
+
+    private func startItemLoad(_ provider: NSItemProvider, type: String, suggestedName: String?,
+                               onCopying: @escaping @MainActor () -> Void) {
+        guard result == nil else { return }
+        let itemProgress = provider.loadItem(forTypeIdentifier: type, options: nil) { item, error in
+            if item != nil, error == nil {
+                Task { @MainActor in if self.result == nil { onCopying() } }
+            }
+            // Copy synchronously before returning; acquired item values expire too.
+            let result = Self.copyItem(item, error: error, suggestedName: suggestedName, type: type)
+            Task { @MainActor in self.finish(result) }
+        }
+        Task { @MainActor in
+            guard self.result == nil else { itemProgress.cancel(); return }
+            self.progress = itemProgress
         }
     }
 
@@ -443,7 +607,7 @@ private final class ClipPhotoFileRequest {
     nonisolated private static func copyFile(_ url: URL?, error: Error?, suggestedName: String?,
                                              type: String) -> Result<PickedMovie, Error> {
         if let error { return .failure(ClipPhotoFileError.loading(error.localizedDescription)) }
-        guard let url else { return .failure(ClipPhotoFileError.missingFile) }
+        guard let url, url.isFileURL else { return .failure(ClipPhotoFileError.missingFile) }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("InkribePhotoTransfers", isDirectory: true)
         let ext = url.pathExtension.isEmpty ? (UTType(type)?.preferredFilenameExtension ?? "mov") : url.pathExtension
         let copy = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
@@ -462,6 +626,15 @@ private final class ClipPhotoFileRequest {
             try? FileManager.default.removeItem(at: copy)
             return .failure(ClipPhotoFileError.copying(error.localizedDescription))
         }
+    }
+
+    /// Last-resort acquisition when the file representation itself is rejected.
+    /// The acquired item is only usable synchronously inside this callback.
+    nonisolated private static func copyItem(_ item: Any?, error: Error?, suggestedName: String?,
+                                             type: String) -> Result<PickedMovie, Error> {
+        if let error { return .failure(ClipPhotoFileError.loading(error.localizedDescription)) }
+        guard let url = item as? URL, url.isFileURL else { return .failure(ClipPhotoFileError.missingFile) }
+        return copyFile(url, error: nil, suggestedName: suggestedName, type: type)
     }
 }
 

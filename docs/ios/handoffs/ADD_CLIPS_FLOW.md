@@ -12,10 +12,22 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
 - Add clips obtains Photos files directly through PHPickerViewController and
   NSItemProvider.loadFileRepresentation, bypassing its earlier
   PhotosPickerItem.loadTransferable path. It retains the selected providers in
-  the editor model, preserves current representations and ordered selection, and
-  copies each temporary file synchronously before the provider callback returns.
-  Only the owned, nonempty file URL enters metadata review and staged append.
-  New Project's existing picker/transfer implementation is unchanged.
+  the editor model, preserves ordered selection, and copies each temporary file
+  synchronously before the provider callback returns. Only the owned, nonempty
+  file URL enters metadata review and staged append. New Project's existing
+  picker/transfer implementation is unchanged.
+- 2026-11-05 instability follow-up (still in #68): after device reports of
+  Photos selection hanging at a single global spinner, loading is now parallel
+  within a bounded window of three concurrent providers, every Photos selection
+  registers a row immediately (Files/Photos share one ordered list), and each
+  row reports its own loading, copying, checking or failed stage. Failed rows
+  keep one Retry/Remove pair inline. The picker runs full screen because a
+  nested page-sheet presentation behaved unreliably. Representation mode is
+  .automatic so the system can substitute a complete compatible file instead of
+  stalling on the absolute original. A provider whose types are not registered
+  yet is re-checked after 250 ms, and a rejected file representation gets one
+  loadItem-based acquisition attempt before failing. Per-provider 120 s
+  deadlines, cancellation, retry and late-success cleanup are unchanged.
 - The editor owns AddClipsModel across the Clips screen, pushed Add screen and
   native pickers. Import preparation never stops on view disappearance. Explicit
   Cancel/pop or Clips dismissal closes its selection; Cancel preparation clears
@@ -35,11 +47,11 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
 
 | Path | Review result |
 |---|---|
-| Photos picker and transfer | Native PHPicker with videos/current/ordered configuration. Selected NSItemProviders survive dismissal; direct file representation copy finishes inside the callback. No PHAsset lookup, library-read permission or whole-video Data loading. |
-| Preparation ownership | Editor-owned observable model, separate photo/review/add tasks, no Add-screen onDisappear cleanup. Picker request and selection IDs reject late delegate results. |
+| Photos picker and transfer | Native PHPicker, videos filter, ordered selection and .automatic representation, presented full screen. Selected NSItemProviders survive dismissal; direct file representation copy finishes inside the callback, with one delayed type re-check and one loadItem fallback after a rejection. No PHAsset lookup, library-read permission or whole-video Data loading. |
+| Preparation ownership | Editor-owned observable model, separate photo/review/add tasks with a three-wide bounded concurrent load window, no Add-screen onDisappear cleanup. Picker request and selection IDs reject late delegate results. |
 | Completion and cancellation | Photo completion uses generation-guarded defer cleanup; explicit cancellation resets busy state synchronously and registers unfinished items for retry. Old completion cannot clear a newer task's state. |
 | Selection lifetime | Cancel/success/navigation pop and Clips sheet onDismiss end the selection. Captured IDs reject stale picker delegate results, Files results and append navigation callbacks. Late successful photo copies are removed. |
-| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once. Late success is cleaned; failures retain their provider for Retry. Progress distinguishes each video's loading and copying stages. |
+| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once per provider. Late success is cleaned; failures retain their provider for Retry. Row-level stages report loading, copying, checking and the native failure text. |
 | Files and metadata | Video-only filter plus inspected-kind checks at review and copied-original preparation. Already validated selections are not rechecked on every removal/addition. |
 | Thumbnail completion | MainActor-owned generator/continuation, balanced security scope, completion/cancel/deadline resume once; late callbacks ignored. No thumbnail dependency in Add readiness. |
 | Save/cancel/failure | Existing staging and revision-checked atomic append retained. Preparation remains cancellable; save failure stays on the selection screen. |
@@ -56,6 +68,10 @@ missing thumbnail, append/save failure, repeated additions, list reveal/playhead
 Open Captions presentation and missing-range transcription preserving edits.
 Include picker coverage/return while transferring, immediate Cancel preparation
 followed by Retry, and closing/reopening Add clips while a provider completes late.
+For the instability follow-up also cover several Photos videos at once with
+per-row loading/copying rows, mixed local and iCloud-offloaded originals,
+per-row failures appearing while other rows still load, and Retry of one row
+inside a settled batch.
 
 The source defect was cancellation on Add-screen disappearance invalidating the
 operation before the old task reached its busy-state reset. This path existed on
@@ -70,7 +86,10 @@ an alternate native import implementation, not proof of a diagnosed Apple defect
   copy before callback return; the provider's temporary URL is not durable.
 - [Apple engineer guidance on video loading](https://developer.apple.com/forums/thread/652496):
   use loadFileRepresentation and current representation to avoid unnecessary
-  compatibility transcoding where possible.
+  compatibility transcoding where possible. After device stalls were reported
+  with .current, Add clips keeps loadFileRepresentation but selects
+  .automatic so the system may substitute a compatible representation instead
+  of blocking on the absolute original.
 - [Ordered selection](https://developer.apple.com/documentation/photosui/phpickerconfiguration-swift.struct/selection-swift.enum/ordered):
   selected results arrive in user selection order when confirmed.
 
