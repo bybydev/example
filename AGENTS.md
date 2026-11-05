@@ -2,6 +2,18 @@
 
 ## Current Add clips flow — new PR targeting develop
 
+2026-11-05 import-path follow-up in #68. The user explicitly requests making
+Photos video import work, beyond spinner/lifetime cleanup. Replace Add clips'
+PhotosPickerItem/Transferable acquisition with native PHPickerViewController
+and retained NSItemProvider file requests. Preserve ordered video selection and
+current representation; copy the temporary URL synchronously inside the provider
+callback before returning, then hand off an app-owned file. Keep cancellation,
+late-result cleanup, retry, bounded waits and staged append. Report per-video
+loading/copying stages and native failure descriptions. New Project's existing
+Photos path is unchanged. This supersedes using the shared transfer bridge for
+Add clips only. API/source review only; no build/test/native/device execution.
+Do not claim the user's footage was verified without device evidence.
+
 2026-11-05 follow-up in #68. The user confirms the temporary-view lifetime issue.
 Move Add clips import selection/tasks into an editor-owned observable model;
 remove import cancellation/cleanup from the pushed view's onDisappear. Use

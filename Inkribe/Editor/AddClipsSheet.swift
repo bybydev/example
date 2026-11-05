@@ -3,6 +3,7 @@ import Observation
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 /// Pushed inside Clips. Local selection never changes the project before Add.
 /// Preparing files never creates a project or touches the saved document.
@@ -32,11 +33,10 @@ struct AddClipsSheet: View {
             }
         }
         .interactiveDismissDisabled(session.isChangingClips)
-        .onChange(of: model.photos) { _, items in
-            guard model.selectionID == selectionID, !items.isEmpty else { return }
-            model.photos = []
-            model.preparePhotos(items.map { PhotoPreparationFailure(id: UUID(), item: $0,
-                name: "Selected video", message: "") }, selectionID: selectionID)
+        .sheet(item: $model.photoPicker) { request in
+            ClipPhotosPicker { providers in
+                model.receivePhotos(providers, request: request)
+            }
         }
         .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in
             model.receiveFiles(result, selectionID: selectionID)
@@ -45,24 +45,13 @@ struct AddClipsSheet: View {
 
     private var sourcePicker: some View {
         Section {
-            PhotosPicker(selection: photosBinding, maxSelectionCount: 0, selectionBehavior: .ordered,
-                matching: .videos, preferredItemEncoding: .current) {
-                Label("Photos", systemImage: "photo.on.rectangle")
-            }.disabled(model.busy)
+            Button("Photos", systemImage: "photo.on.rectangle") { model.openPhotos() }.disabled(model.busy)
             Button("Files", systemImage: "folder") { pickingFiles = true }.disabled(model.busy)
         } footer: {
             Text(session.document?.mediaEdits?.trim == nil
                 ? "Clips are added to the end of this project. Transcribe them when you’re ready."
                 : "Clips are added to the end. Your start trim stays; the end trim expands to include the new clips.")
         }
-    }
-
-    /// A picker returning after this selection closed cannot fill a newer draft.
-    private var photosBinding: Binding<[PhotosPickerItem]> {
-        Binding(get: { model.selectionID == selectionID ? model.photos : [] }, set: { items in
-            guard model.selectionID == selectionID else { return }
-            model.photos = items
-        })
     }
 
     @ViewBuilder private var selectedMedia: some View {
@@ -118,7 +107,7 @@ struct AddClipsSheet: View {
     @ViewBuilder private var status: some View {
         if model.busy {
             Section {
-                ProgressView(model.adding ? "Copying, checking and adding clips…" : "Preparing videos from Photos…")
+                ProgressView(model.adding ? "Copying, checking and adding clips…" : model.photoPreparationMessage)
                 Button("Cancel preparation", role: .cancel) { model.cancelPreparation() }.disabled(session.isChangingClips)
             }
         }
@@ -149,10 +138,11 @@ private struct AddClipThumbnail: View {
 /// Only explicit navigation/dismissal ends a selection; view disappearance does not.
 @MainActor @Observable
 final class AddClipsModel {
-    var photos: [PhotosPickerItem] = []
+    var photoPicker: ClipPhotosPickerRequest?
+    private(set) var photoPreparationMessage = "Loading videos from Photos…"
     private(set) var selectionID = UUID()
     private(set) var sources: [ImportInput] = []
-    private(set) var photoFailures: [PhotoPreparationFailure] = []
+    private(set) var photoFailures: [ClipPhotoSelection] = []
     private(set) var reviews: [UUID: ImportSourceReview] = [:]
     private(set) var reviewing: Set<UUID> = []
     private(set) var preparingPhotos = false
@@ -187,10 +177,26 @@ final class AddClipsModel {
         reviewTask?.cancel(); reviewTask = nil
         addTask?.cancel(); addTask = nil
         preparingPhotos = false; adding = false
-        photos = []; sources = []; photoFailures = []; reviews = [:]; reviewing = []
+        photoPicker = nil; sources = []; photoFailures = []; reviews = [:]; reviewing = []
         sourceOrder = []; error = nil; notice = nil
         for url in ownedPhotos { try? FileManager.default.removeItem(at: url) }
         ownedPhotos.removeAll()
+    }
+
+    func openPhotos() {
+        guard active, !busy, photoPicker == nil else { return }
+        photoPicker = ClipPhotosPickerRequest(selectionID: selectionID)
+    }
+
+    func receivePhotos(_ providers: [NSItemProvider], request: ClipPhotosPickerRequest) {
+        guard active, selectionID == request.selectionID, photoPicker?.id == request.id else { return }
+        // Retain providers in the model before dismissing the native picker.
+        let selections = providers.enumerated().map { index, provider in
+            ClipPhotoSelection(provider: provider,
+                name: provider.suggestedName ?? "Selected video \(index + 1)")
+        }
+        photoPicker = nil
+        preparePhotos(selections, selectionID: request.selectionID)
     }
 
     func receiveFiles(_ result: Result<[URL], Error>, selectionID: UUID) {
@@ -223,7 +229,7 @@ final class AddClipsModel {
         }
     }
 
-    func preparePhotos(_ items: [PhotoPreparationFailure], selectionID: UUID) {
+    func preparePhotos(_ items: [ClipPhotoSelection], selectionID: UUID) {
         guard active, self.selectionID == selectionID, !busy, !items.isEmpty else { return }
         reviewGeneration = UUID(); reviewTask?.cancel(); reviewTask = nil; reviewing = []
         let token = UUID(); photoGeneration = token
@@ -240,10 +246,14 @@ final class AddClipsModel {
                     reviewSources()
                 }
             }
-            for entry in items {
+            for (index, entry) in items.enumerated() {
                 guard !Task.isCancelled, active, photoGeneration == token else { return }
+                photoPreparationMessage = "Loading video \(index + 1) of \(items.count) from Photos…"
                 do {
-                    let file = try await PickedMovie.load(from: entry.item)
+                    let file = try await ClipPhotoFileRequest.load(entry.provider) {
+                        guard self.active, self.photoGeneration == token else { return }
+                        self.photoPreparationMessage = "Copying video \(index + 1) of \(items.count)…"
+                    }
                     guard !Task.isCancelled, active, photoGeneration == token else {
                         try? FileManager.default.removeItem(at: file.localURL)
                         return
@@ -310,6 +320,160 @@ final class AddClipsModel {
                 if active, self.selectionID == selectionID { self.error = error.localizedDescription }
             }
             if let staged { try? await ProjectRepository.shared.discardStaging(staged.staging) }
+        }
+    }
+}
+
+struct ClipPhotosPickerRequest: Identifiable {
+    let id = UUID()
+    let selectionID: UUID
+}
+
+struct ClipPhotoSelection: Identifiable {
+    let id = UUID()
+    let provider: NSItemProvider
+    let name: String
+    var message = "Not prepared yet"
+}
+
+/// Get the native file providers directly, without a PhotosPickerItem/Transferable
+/// conversion. No full photo-library permission or PHAsset lookup is needed.
+@MainActor
+private struct ClipPhotosPicker: UIViewControllerRepresentable {
+    let onSelection: ([NSItemProvider]) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onSelection: onSelection) }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .videos
+        configuration.selectionLimit = 0
+        configuration.selection = .ordered
+        configuration.preferredAssetRepresentationMode = .current
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: PHPickerViewController, context: Context) { }
+
+    @MainActor
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onSelection: ([NSItemProvider]) -> Void
+        private var completed = false
+
+        init(onSelection: @escaping ([NSItemProvider]) -> Void) { self.onSelection = onSelection }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard !completed else { return }
+            completed = true
+            onSelection(results.map(\.itemProvider))
+        }
+    }
+}
+
+/// Retains the provider and its cancellation handle independently of the picker.
+/// Copy inside the provider callback: its temporary URL expires when it returns.
+@MainActor
+private final class ClipPhotoFileRequest {
+    private var provider: NSItemProvider?
+    private var continuation: CheckedContinuation<PickedMovie, Error>?
+    private var progress: Progress?
+    private var deadline: Task<Void, Never>?
+    private var result: Result<PickedMovie, Error>?
+    private var deliveredURL: URL?
+
+    static func load(_ provider: NSItemProvider, onCopying: @escaping @MainActor () -> Void) async throws -> PickedMovie {
+        let request = ClipPhotoFileRequest()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                request.start(provider, onCopying: onCopying, continuation: continuation)
+            }
+        } onCancel: {
+            Task { @MainActor in request.finish(.failure(CancellationError()), cancelProvider: true) }
+        }
+    }
+
+    private func start(_ provider: NSItemProvider, onCopying: @escaping @MainActor () -> Void,
+                       continuation: CheckedContinuation<PickedMovie, Error>) {
+        if let result { continuation.resume(with: result); return }
+        self.continuation = continuation
+        self.provider = provider
+        guard provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) else {
+            finish(.failure(ProjectStoreError.unsupportedMedia)); return
+        }
+        let type = provider.registeredTypeIdentifiers.first {
+            UTType($0)?.conforms(to: .movie) == true
+        } ?? UTType.movie.identifier
+        let name = provider.suggestedName
+        progress = provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+            if url != nil, error == nil {
+                Task { @MainActor in if self.result == nil { onCopying() } }
+            }
+            // Do not hop to an actor/task before this synchronous owned copy.
+            let result = Self.copyFile(url, error: error, suggestedName: name, type: type)
+            Task { @MainActor in self.finish(result) }
+        }
+        deadline = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(120))
+                self?.finish(.failure(ClipPhotoFileError.timedOut), cancelProvider: true)
+            } catch { }
+        }
+    }
+
+    private func finish(_ result: Result<PickedMovie, Error>, cancelProvider: Bool = false) {
+        guard self.result == nil else {
+            if case .success(let file) = result, file.localURL != deliveredURL {
+                try? FileManager.default.removeItem(at: file.localURL)
+            }
+            return
+        }
+        self.result = result
+        if case .success(let file) = result { deliveredURL = file.localURL }
+        let continuation = self.continuation; self.continuation = nil
+        deadline?.cancel(); deadline = nil
+        let progress = self.progress; self.progress = nil
+        provider = nil
+        if cancelProvider { progress?.cancel() }
+        continuation?.resume(with: result)
+    }
+
+    nonisolated private static func copyFile(_ url: URL?, error: Error?, suggestedName: String?,
+                                             type: String) -> Result<PickedMovie, Error> {
+        if let error { return .failure(ClipPhotoFileError.loading(error.localizedDescription)) }
+        guard let url else { return .failure(ClipPhotoFileError.missingFile) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("InkribePhotoTransfers", isDirectory: true)
+        let ext = url.pathExtension.isEmpty ? (UTType(type)?.preferredFilenameExtension ?? "mov") : url.pathExtension
+        let copy = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: url, to: copy)
+            let values = try copy.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            guard values.isRegularFile == true, (values.fileSize ?? 0) > 0 else {
+                throw ClipPhotoFileError.missingFile
+            }
+            let name: String
+            if let suggestedName, !suggestedName.isEmpty { name = suggestedName }
+            else { name = url.lastPathComponent }
+            return .success(PickedMovie(localURL: copy, displayName: name.isEmpty ? "Imported Video" : name))
+        } catch {
+            try? FileManager.default.removeItem(at: copy)
+            return .failure(ClipPhotoFileError.copying(error.localizedDescription))
+        }
+    }
+}
+
+private enum ClipPhotoFileError: LocalizedError {
+    case loading(String), copying(String), missingFile, timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .loading(let detail): "Couldn’t load this video from Photos. \(detail)"
+        case .copying(let detail): "Couldn’t copy this video into Inkribe. \(detail)"
+        case .missingFile: "Photos did not provide a readable video file."
+        case .timedOut: "Photos did not finish providing this video within two minutes. Retry when the video is available on your iPhone."
         }
     }
 }
