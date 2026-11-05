@@ -1,5 +1,21 @@
 # Inkribe Working Rules
 
+## Current MP4 frame timing repair — stacked on #62
+
+2026-11-05. The user requests the discussed multi-clip export repair in a stacked
+PR from #62 head bb4fd6f9e312746d42ed52b3e156c94a6520d67d, targeting
+fix/ios-improvements. Use fix/ios-export-timing. Validate composed frame display
+intervals instead of a fixed 67 ms age/source-clip-start check; keep genuine
+missing-frame, reader and timestamp failures. Make the shared 30 fps composition
+timing explicit and retain bounded sample ownership, black gaps, captions/audio,
+cancellation, frozen requests and atomic publication. Add failure-stage/time and
+native-error diagnostics. Do not normalize/rewrite originals or change import/UI,
+Mac, schema, formats or queue policy. The affected recording has not been supplied;
+its exact failing branch remains unconfirmed. Source/diff/publication review only;
+no builds/typechecks/tests/fixtures, CI, generation, downloads, native exports or
+device/UI execution. See docs/ios/handoffs/MP4_FRAME_TIMING.md. Leave both PRs open
+without auto-merge; do not modify the parent branch.
+
 ## Current iOS confirmation alerts — stacked on #62
 
 2026-11-05. The user requests a new stacked PR targeting #62's

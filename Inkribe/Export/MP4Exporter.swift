@@ -4,12 +4,15 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import JobQueue
+import OSLog
 import Synchronization
 
 /// One job task owns every reader, writer, CIContext and caption renderer here.
 /// No pixel arrays or PCM are accumulated across the movie. AVFoundation applies
 /// the shared media graph; the P4 overlay receives the exact output-frame PTS.
 enum MP4Exporter {
+    private static let logger = Logger(subsystem: "com.hoangbkit.inkribe", category: "MP4Exporter")
+
     static func write(_ request: FrozenExport, progress: JobProgressReporter) async throws {
         let document = request.manifest.document
         let canvas = try request.manifest.profile.resolution.canvas(for: document.canvas)
@@ -35,7 +38,9 @@ enum MP4Exporter {
                 videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
             output.videoComposition = composition
             output.alwaysCopiesSampleData = false
-            guard reader.canAdd(output) else { throw ExportError.decoding }
+            guard reader.canAdd(output) else {
+                throw mediaFailure("The video reader could not be configured", reader: reader)
+            }
             reader.add(output)
             videoOutput = output
         }
@@ -48,7 +53,9 @@ enum MP4Exporter {
                 AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false])
             output.alwaysCopiesSampleData = false
             output.audioMix = graph.audioMix
-            guard reader.canAdd(output) else { throw ExportError.decoding }
+            guard reader.canAdd(output) else {
+                throw mediaFailure("The audio reader could not be configured", reader: reader)
+            }
             reader.add(output)
             audioOutput = output
         }
@@ -91,7 +98,9 @@ enum MP4Exporter {
         writer.startSession(atSourceTime: .zero)
         // An audio-only graph still generates real black video/caption frames.
         if videoOutput != nil || audioOutput != nil {
-            guard reader.startReading() else { throw reader.error ?? ExportError.decoding }
+            guard reader.startReading() else {
+                throw mediaFailure("The media reader could not start", reader: reader)
+            }
         }
         // Honor old immutable requests; newly frozen requests contain project style only.
         let snapshot = CaptionSnapshot(document, usesClipStyles: true,
@@ -113,6 +122,36 @@ enum MP4Exporter {
         var lastVideoPTS = CMTime.invalid
         var videoIntervalIndex = 0
         var lastAudioPTS = CMTime.invalid
+        // These are composed samples, not source-track frames. An absent sample
+        // duration can use the composition cadence, never an unlimited hold.
+        let composedFrameDuration: CMTime
+        if let composition = graph.videoComposition,
+           composition.sourceTrackIDForFrameTiming == kCMPersistentTrackID_Invalid {
+            composedFrameDuration = composition.frameDuration
+        } else {
+            // A source-timed composition cannot infer a missing VFR duration
+            // from its nominal cadence. Do not guess if that mode is ever used.
+            composedFrameDuration = .invalid
+        }
+
+        func readVideo(at time: CMTime) throws -> CMSampleBuffer? {
+            try Task.checkCancellation()
+            let sample = videoOutput?.copyNextSampleBuffer()
+            if reader.status == .failed {
+                throw mediaFailure("The video reader failed", at: time, reader: reader, sample: sample)
+            }
+            guard let sample else { videoEOF = true; return nil }
+            let samplePTS = CMSampleBufferGetPresentationTimeStamp(sample)
+            // Validate on read, including the lookahead sample: an invalid future
+            // timestamp must not silently leave the previous frame selected.
+            guard samplePTS.isNumeric,
+                  !lastVideoPTS.isValid || CMTimeCompare(samplePTS, lastVideoPTS) > 0 else {
+                throw mediaFailure("Video frame timestamps are invalid or out of order",
+                    at: time, reader: reader, sample: sample)
+            }
+            lastVideoPTS = samplePTS
+            return sample
+        }
         let clock = ContinuousClock()
         var lastAdvance = clock.now
         var lastProgress = -1
@@ -122,27 +161,21 @@ enum MP4Exporter {
         while !videoFinished || !audioFinished {
             try Task.checkCancellation()
             if writer.status == .failed { throw writer.error ?? ExportError.encoding }
-            if reader.status == .failed { throw reader.error ?? ExportError.decoding }
+            if reader.status == .failed {
+                throw mediaFailure("The media reader failed", at: CMTime(value: frame, timescale: 30), reader: reader)
+            }
             var advanced = false
             if !videoFinished, videoInput.isReadyForMoreMediaData,
                let outputPixels = try pixelBuffer(from: adaptor.pixelBufferPool) {
                 let pts = CMTime(value: frame, timescale: 30)
                 try autoreleasepool {
                     if !videoEOF, pendingVideo == nil {
-                        pendingVideo = videoOutput?.copyNextSampleBuffer()
-                        if pendingVideo == nil { videoEOF = true }
+                        pendingVideo = try readVideo(at: pts)
                     }
                     while let sample = pendingVideo,
                           CMTimeCompare(CMSampleBufferGetPresentationTimeStamp(sample), pts) <= 0 {
-                        let samplePTS = CMSampleBufferGetPresentationTimeStamp(sample)
-                        guard samplePTS.isNumeric,
-                              !lastVideoPTS.isValid || CMTimeCompare(samplePTS, lastVideoPTS) > 0 else {
-                            throw ExportError.decoding
-                        }
-                        lastVideoPTS = samplePTS
                         currentVideo = sample
-                        pendingVideo = videoOutput?.copyNextSampleBuffer()
-                        if pendingVideo == nil { videoEOF = true }
+                        pendingVideo = try readVideo(at: pts)
                     }
                     let time = try MediaTime(validating: pts)
                     while videoIntervalIndex < graph.videoIntervals.count,
@@ -150,12 +183,20 @@ enum MP4Exporter {
                     let activeInterval = videoIntervalIndex < graph.videoIntervals.count
                         && graph.videoIntervals[videoIntervalIndex].contains(time) ? graph.videoIntervals[videoIntervalIndex] : nil
                     var image = black
-                    if let interval = activeInterval {
-                        guard let sample = currentVideo,
-                              let pixels = CMSampleBufferGetImageBuffer(sample),
-                              CMTimeCompare(CMSampleBufferGetPresentationTimeStamp(sample), interval.start.cmTime) >= 0,
-                              CMTimeGetSeconds(CMTimeSubtract(pts, CMSampleBufferGetPresentationTimeStamp(sample))) <= 0.067 else {
-                            throw reader.error ?? ExportError.decoding
+                    if activeInterval != nil {
+                        guard let sample = currentVideo, let pixels = CMSampleBufferGetImageBuffer(sample) else {
+                            throw mediaFailure("A video frame is missing", at: pts, reader: reader,
+                                sample: currentVideo, next: pendingVideo, interval: activeInterval)
+                        }
+                        // Clip intervals identify intentional black gaps only.
+                        // AVFoundation has already applied cuts/trim/transforms;
+                        // a composed frame can start before a non-frame-aligned
+                        // cut and still cover this output time. Do not compare its
+                        // PTS with the source clip start or a fixed 67 ms age limit.
+                        guard frameCovers(pts, sample: sample, next: pendingVideo,
+                                          fallbackDuration: composedFrameDuration) else {
+                            throw mediaFailure("Video frame timing does not cover the export time",
+                                at: pts, reader: reader, sample: sample, next: pendingVideo, interval: activeInterval)
                         }
                         image = CIImage(cvPixelBuffer: pixels).cropped(to: bounds)
                     }
@@ -176,12 +217,16 @@ enum MP4Exporter {
                         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                         guard pts.isNumeric, CMTimeCompare(pts, .zero) >= 0,
                               !lastAudioPTS.isValid || CMTimeCompare(pts, lastAudioPTS) > 0 else {
-                            throw ExportError.decoding
+                            throw mediaFailure("Audio sample timestamps are invalid or out of order",
+                                at: pts, reader: reader, sample: sample)
                         }
                         lastAudioPTS = pts
                         guard audioInput.append(sample) else { throw writer.error ?? ExportError.encoding }
                     } else {
-                        if reader.status == .failed { throw reader.error ?? ExportError.decoding }
+                        if reader.status == .failed {
+                            throw mediaFailure("The audio reader failed",
+                                at: CMTime(value: frame, timescale: 30), reader: reader)
+                        }
                         audioInput.markAsFinished()
                         audioFinished = true
                     }
@@ -201,7 +246,9 @@ enum MP4Exporter {
             await Task.yield()
         }
         try Task.checkCancellation()
-        if reader.status == .failed { throw reader.error ?? ExportError.decoding }
+        if reader.status == .failed {
+            throw mediaFailure("The media reader failed", at: graph.duration, reader: reader)
+        }
         writer.endSession(atSourceTime: graph.duration)
         await progress.report(fractionCompleted: 0.96, message: "Finalizing MP4…")
         // Only the completion flag crosses into AVFoundation's callback.
@@ -220,6 +267,56 @@ enum MP4Exporter {
         guard writer.status == .completed else { throw writer.error ?? ExportError.encoding }
         finished = true
         try await validate(url: request.partialURL, document: document, canvas: canvas, expectAudio: graph.hasAudio)
+    }
+
+    private static func frameCovers(_ time: CMTime, sample: CMSampleBuffer,
+                                    next: CMSampleBuffer?, fallbackDuration: CMTime) -> Bool {
+        let start = CMSampleBufferGetPresentationTimeStamp(sample)
+        let sampleDuration = CMSampleBufferGetDuration(sample)
+        let duration: CMTime
+        if sampleDuration.isNumeric {
+            guard CMTimeCompare(sampleDuration, .zero) >= 0 else { return false }
+            duration = CMTimeCompare(sampleDuration, .zero) > 0 ? sampleDuration : fallbackDuration
+        } else {
+            guard !sampleDuration.isValid else { return false }
+            duration = fallbackDuration
+        }
+        guard start.isNumeric, duration.isNumeric, CMTimeCompare(duration, .zero) > 0 else { return false }
+        var end = CMTimeAdd(start, duration)
+        guard end.isNumeric else { return false }
+        if let next {
+            // A later composed sample takes over even if durations overlap.
+            let nextPTS = CMSampleBufferGetPresentationTimeStamp(next)
+            guard nextPTS.isNumeric, CMTimeCompare(nextPTS, start) > 0 else { return false }
+            if CMTimeCompare(nextPTS, end) < 0 { end = nextPTS }
+        }
+        return CMTimeCompare(start, time) <= 0 && CMTimeCompare(time, end) < 0
+    }
+
+    private static func mediaFailure(_ reason: String, at time: CMTime = .invalid,
+                                     reader: AVAssetReader, sample: CMSampleBuffer? = nil,
+                                     next: CMSampleBuffer? = nil, interval: MediaInterval? = nil) -> NSError {
+        func describe(_ time: CMTime) -> String {
+            time.isNumeric ? "\(time.value)/\(time.timescale)" : "invalid"
+        }
+        let pts = sample.map { describe(CMSampleBufferGetPresentationTimeStamp($0)) } ?? "none"
+        let duration = sample.map { describe(CMSampleBufferGetDuration($0)) } ?? "none"
+        let nextPTS = next.map { describe(CMSampleBufferGetPresentationTimeStamp($0)) } ?? "none"
+        let active = interval.map { "\(describe($0.start.cmTime))..<\(describe($0.end.cmTime))" } ?? "none"
+        let underlying = reader.error as NSError?
+        let native = underlying.map { "\($0.domain) (\($0.code))" } ?? "none"
+        let details = "\(reason); output=\(describe(time)); sample=\(pts); duration=\(duration); next=\(nextPTS); interval=\(active); reader=\(reader.status.rawValue); native=\(native)"
+        // Timing/status only: no media paths, project titles or caption text.
+        logger.error("\(details, privacy: .public)")
+        let location = time.isNumeric ? " at \(String(format: "%.3f", CMTimeGetSeconds(time))) s" : ""
+        var info: [String: Any] = [NSLocalizedDescriptionKey: "\(reason)\(location)."]
+        if let underlying {
+            info[NSUnderlyingErrorKey] = underlying
+            // Job history persists localizedDescription, so retain the native
+            // domain/code there as well as the complete underlying NSError.
+            info[NSLocalizedDescriptionKey] = "\(reason)\(location). \(native). \(underlying.localizedDescription)"
+        }
+        return NSError(domain: "Inkribe.MP4Export.MediaRead", code: 1, userInfo: info)
     }
 
     private static func pixelBuffer(from pool: CVPixelBufferPool?) throws -> CVPixelBuffer? {
