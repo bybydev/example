@@ -94,7 +94,8 @@ enum MP4Exporter {
             guard reader.startReading() else { throw reader.error ?? ExportError.decoding }
         }
         // Honor old immutable requests; newly frozen requests contain project style only.
-        let snapshot = CaptionSnapshot(document, usesClipStyles: true)
+        let snapshot = CaptionSnapshot(document, usesClipStyles: true,
+            requireWordTiming: request.manifest.wordEffectVersion == 1)
         let renderer = CaptionRenderer()
         let context = CIContext(options: [.cacheIntermediates: false])
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw ExportError.encoding }

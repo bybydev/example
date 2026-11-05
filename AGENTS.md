@@ -1,5 +1,22 @@
 # Inkribe Working Rules
 
+## Current issue #63 — stacked caption word effects fix
+
+2026-11-05. The user requests the proposed v1.0 fix in a stacked PR on #62,
+starting at 8119966e71db23222a635c6e32316cd682c6635e. Branch
+fix/ios-caption-highlighting targets fix/ios-improvements; do not modify the
+parent branch. Scope: word-only eligibility for Highlight/Active color/Underline/
+Karaoke, word-preserving text correction with stable typing/undo scope, truthful
+phrase indicators and the authored Karaoke sample. Preserve raw/native timing,
+trimmed-out text and IDs, manual captions, saved projects, existing frozen export
+behavior and Mac callers. A default-off shared motion opt-in and shared text
+mapping helper are scoped support, with optional frozen-export motion metadata.
+Deeper WordMapper/native timing recovery remains deferred; never invent word
+timestamps. See docs/ios/handoffs/CAPTION_WORD_EFFECTS.md. Source-only review and
+regression-source authoring; no builds/typechecks/tests/fixtures, CI, generation,
+model downloads, native processing/exports, UI/device execution or deployment.
+Leave both PRs open without auto-merge; await further user-requested changes.
+
 ## Current iOS improvements — trimmed caption text correction
 
 2026-11-05. The user requests fixing the reviewed P1 trimmed-caption text bug in

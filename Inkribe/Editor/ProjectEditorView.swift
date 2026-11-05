@@ -568,7 +568,11 @@ struct ProjectEditorView: View {
             .focused($focused, equals: .caption(cue.id))
             .id(EditorField.caption(cue.id))
             .accessibilityLabel("Caption text")
-            if cue.wordIDs.contains(where: { session.snapshot?.wordsByID[$0]?.timingProvenance == "whisper-segment" }) {
+            if cue.wordIDs.contains(where: { id in
+                guard let word = session.snapshot?.wordsByID[id],
+                      !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+                return !CaptionMotion.isWordTimed(word)
+            }) {
                 Label("Phrase timing", systemImage: "text.alignleft")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -920,8 +924,10 @@ struct ProjectEditorView: View {
                 }
             }
             if let id = session.selectedWordID, cue.wordIDs.contains(id) {
-                if session.selectedWord?.timingProvenance == "whisper-segment" {
-                    Text("This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval.")
+                if let word = session.selectedWord, !CaptionMotion.isWordTimed(word) {
+                    Text(word.timingProvenance == "whisper-segment" ?
+                        "This phrase uses Whisper's segment timing. Individual word timing was unavailable; correcting the phrase keeps its original interval." :
+                        "This text shares one timing interval. Word-by-word effects stay off for this phrase; correcting the text keeps its timing.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 TextField("Hidden word", text: Binding(

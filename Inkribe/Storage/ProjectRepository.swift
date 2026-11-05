@@ -1098,7 +1098,8 @@ actor ProjectRepository {
             try Task.checkCancellation()
             // New exports match the project-wide editor. Existing frozen manifests
             // retain their original values and are still rendered as recorded.
-            let manifest = ExportManifest(version: 1, jobID: id, document: saved.usingProjectCaptionStyle(), profile: profile, createdAt: Date())
+            let manifest = ExportManifest(version: 1, jobID: id, document: saved.usingProjectCaptionStyle(),
+                profile: profile, createdAt: Date(), wordEffectVersion: 1)
             let metadata = try encoder.encode(manifest)
             guard metadata.count <= 256 * 1024 * 1024 else { throw ProjectStoreError.oversizedProjectMetadata }
             try metadata.write(to: folder.appendingPathComponent("request.json"), options: .atomic)
@@ -1137,7 +1138,8 @@ actor ProjectRepository {
             guard data.count <= limit else { throw ProjectStoreError.oversizedProjectMetadata }
         }
         let manifest = try decoder.decode(ExportManifest.self, from: data)
-        guard manifest.version == 1, manifest.jobID == id else { throw ExportError.invalidRequest }
+        guard manifest.version == 1, manifest.jobID == id,
+              manifest.wordEffectVersion == nil || manifest.wordEffectVersion == 1 else { throw ExportError.invalidRequest }
         try manifest.document.validate()
         var urls: [UUID: URL] = [:]
         for asset in manifest.document.ownedMediaAssets where manifest.profile.format == .mp4 {

@@ -25,16 +25,22 @@ public struct CaptionMotionState: Sendable {
 /// clock or UI animation. Version 1 motion remains frozen for legacy projects.
 public enum CaptionMotionEvaluator {
     public static func evaluate(_ units: [CaptionMotionUnit], active: Set<UUID>,
-                                style: CaptionStyle, at time: MediaTime) -> CaptionMotionState {
+                                style: CaptionStyle, at time: MediaTime,
+                                requireWordTiming: Bool = false) -> CaptionMotionState {
         var state = CaptionMotionState()
+        // Opt in for corrected iOS rendering. Existing callers/frozen exports
+        // retain their recorded behavior, including format-1 motion.
+        let timedIDs = Set(units.filter(\.isWordTimed).map(\.id))
+        let wordActive = requireWordTiming ? active.intersection(timedIDs) : active
         let seconds = CMTimeGetSeconds(time.cmTime)
         switch style.effect {
         case .none: break
-        case .highlight: state.highlighted = active
-        case .emphasis: state.emphasized = active
-        case .underline: state.underlined = active
+        case .highlight: state.highlighted = wordActive
+        case .emphasis: state.emphasized = wordActive
+        case .underline: state.underlined = wordActive
         case .karaoke:
             for unit in units {
+                if requireWordTiming && !unit.isWordTimed { continue }
                 if style.formatVersion >= 2 && !unit.isWordTimed {
                     // A phrase can be emphasized as one unit, never swept as
                     // though independently timed words had been recognized.

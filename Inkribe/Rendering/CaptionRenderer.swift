@@ -37,6 +37,7 @@ final class CaptionRenderer {
         let fontSize: CGFloat
         let lines: [Line]
         let fragments: [UUID: [Fragment]]
+        let wordTimedIDs: Set<UUID>
         let backgrounds: [CGRect]
     }
     private struct Cache {
@@ -69,7 +70,8 @@ final class CaptionRenderer {
             }
         }
         let motion = CaptionMotion.evaluate(snapshot.motionPresentation(presentation), style: style,
-            at: try snapshot.timeline.originalTime(forOutput: time))
+            at: try snapshot.timeline.originalTime(forOutput: time), requireWordTiming: snapshot.requireWordTiming,
+            wordTimedIDs: layout.wordTimedIDs)
         let width = CGFloat(snapshot.canvas.width)
         let height = CGFloat(snapshot.canvas.height)
         let fit = min(bounds.width / width, bounds.height / height)
@@ -361,7 +363,8 @@ final class CaptionRenderer {
         if style.backgroundMode == .block {
             backgrounds = [CGRect(origin: .zero, size: size).insetBy(dx: outerInset, dy: outerInset)]
         }
-        return Layout(size: size, fontSize: fontSize, lines: lines, fragments: fragments, backgrounds: backgrounds)
+        return Layout(size: size, fontSize: fontSize, lines: lines, fragments: fragments,
+            wordTimedIDs: Set(words.filter { CaptionMotion.isWordTimed($0) }.map(\.id)), backgrounds: backgrounds)
     }
 
     private func collectFragments(_ line: CTLine, origin: CGPoint, spans: [Span], fontSize: CGFloat,
