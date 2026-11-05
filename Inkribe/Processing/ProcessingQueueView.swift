@@ -108,10 +108,11 @@ struct ProcessingQueueView: View {
             .onAppear { isOpeningProject = false }
             .task { await processing.start(); await model.exports.refreshArtifacts() }
             .refreshable { await model.exports.refreshArtifacts(); await model.refreshStorage() }
-            .confirmationDialog(confirmationTitle, isPresented: $confirming, titleVisibility: .visible) {
+            .alert(confirmationTitle, isPresented: $confirming) {
                 Button(confirmationTitle, role: .destructive) {
                     if let pendingAction { run(pendingAction, keys: actionKeys) }
                 }
+                Button("Cancel", role: .cancel) { }
             } message: {
                 Text(pendingAction == .cancel ?
                     "Saved captions and completed files are kept." :

@@ -92,36 +92,42 @@ struct StorageView: View {
             }
             .refreshable { await model.refreshStorage(); await model.transcription.models.refresh() }
             .alert("Storage problem", isPresented: Binding(
-                get: { sheet == nil && model.alertMessage != nil },
-                set: { if !$0 { model.alertMessage = nil } }
+                get: { canPresentStorageError && model.alertMessage != nil },
+                set: { if !$0 && canPresentStorageError { model.alertMessage = nil } }
             )) {
                 Button("OK", role: .cancel) { model.alertMessage = nil }
             } message: {
                 Text(model.alertMessage ?? "")
             }
-            .confirmationDialog("Clear cached previews?", isPresented: $clearCaches) {
+            .alert("Clear cached previews?", isPresented: $clearCaches) {
                 Button("Clear cache", role: .destructive) {
                     Task { await model.purgeCache() }
                 }
+                Button("Cancel", role: .cancel) { }
             }
-            .confirmationDialog("Empty Project Trash?", isPresented: $clearTrash) {
+            .alert("Empty Project Trash?", isPresented: $clearTrash) {
                 Button("Empty Trash", role: .destructive) {
                     Task { await model.emptyTrash() }
                 }
+                Button("Cancel", role: .cancel) { }
             } message: {
                 Text("Projects and original files in Trash will be permanently removed.")
             }
-            .confirmationDialog("Discard unfinished import?", isPresented: Binding(
+            .alert("Discard unfinished import?", isPresented: Binding(
                 get: { selectedPending != nil },
                 set: { if !$0 { selectedPending = nil } }
-            )) {
+            ), presenting: selectedPending) { id in
                 Button("Discard", role: .destructive) {
-                    guard let id = selectedPending else { return }
                     selectedPending = nil
                     Task { await model.discardPending(id) }
                 }
+                Button("Cancel", role: .cancel) { selectedPending = nil }
             }
         }
+    }
+
+    private var canPresentStorageError: Bool {
+        sheet == nil && !clearCaches && !clearTrash && selectedPending == nil
     }
 
     @ViewBuilder

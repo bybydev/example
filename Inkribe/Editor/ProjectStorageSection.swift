@@ -36,7 +36,7 @@ struct ProjectStorageSection: View {
             Text("Clearing the thumbnail keeps your original media, captions and edits. A thumbnail is recreated when needed. Manage exported files in Export.")
         }
         .task(id: session.document?.contentRevision) { await refresh() }
-        .confirmationDialog("Clear this project’s library thumbnail?", isPresented: $confirmCleanup) {
+        .alert("Clear this project’s library thumbnail?", isPresented: $confirmCleanup) {
             Button("Clear thumbnail", role: .destructive) {
                 clearing = true
                 Task {
@@ -45,6 +45,7 @@ struct ProjectStorageSection: View {
                     catch { self.error = error.localizedDescription }
                 }
             }
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text("Original media, captions, edits and export files are kept.")
         }

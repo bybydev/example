@@ -102,11 +102,10 @@ struct SpeechModelsView: View {
             }
             .interactiveDismissDisabled(model.processing.lifecycle.isSwitchingModel)
             .task { speech.start(); await models.refresh() }
-            .confirmationDialog("Switch active speech model?", isPresented: Binding(
+            .alert("Switch active speech model?", isPresented: Binding(
                 get: { pendingSelection != nil }, set: { if !$0 { pendingSelection = nil } }
-            )) {
+            ), presenting: pendingSelection) { id in
                 Button("Switch model and cancel transcription", role: .destructive) {
-                    guard let id = pendingSelection else { return }
                     pendingSelection = nil
                     Task {
                         do { try await model.processing.switchSpeechModel(to: id) }
@@ -114,18 +113,19 @@ struct SpeechModelsView: View {
                     }
                 }
                 Button("Cancel", role: .cancel) { pendingSelection = nil }
-            } message: {
+            } message: { _ in
                 Text("All queued and running transcription tasks will be cancelled, and model downloads will stop. Exports continue unchanged. Saved captions and edits are kept. New and resumed transcription will use the active model.")
             }
-            .confirmationDialog("Remove downloaded model?", isPresented: Binding(
+            .alert("Remove downloaded model?", isPresented: Binding(
                 get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
-            )) {
+            ), presenting: pendingRemoval) { id in
                 Button("Remove download", role: .destructive) {
-                    guard let id = pendingRemoval, !speech.isAuthorizing else { return }
+                    guard !speech.isAuthorizing else { return }
                     pendingRemoval = nil
                     Task { await models.remove(id, protectedIDs: speech.protectedModelIDs, jobStorageError: speech.persistenceError) }
                 }
-            } message: {
+                Button("Cancel", role: .cancel) { pendingRemoval = nil }
+            } message: { _ in
                 Text("You can download it again later. Bundled models, projects and captions are preserved.")
             }
         }

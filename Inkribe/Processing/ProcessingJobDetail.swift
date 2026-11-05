@@ -66,10 +66,11 @@ struct ProcessingJobDetail: View {
         .navigationBarTitleDisplayMode(.inline)
         .themedSurface()
         .task { if key.kind == .export { await model.exports.refreshArtifacts() } }
-        .confirmationDialog(confirmationTitle, isPresented: $confirming) {
+        .alert(confirmationTitle, isPresented: $confirming) {
             if let pendingAction {
                 Button(confirmationTitle, role: .destructive) { perform(pendingAction) }
             }
+            Button("Cancel", role: .cancel) { }
         } message: { Text(confirmationMessage) }
     }
 
