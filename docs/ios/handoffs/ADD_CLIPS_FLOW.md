@@ -24,10 +24,22 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
   keep one Retry/Remove pair inline. The picker runs full screen because a
   nested page-sheet presentation behaved unreliably. Representation mode is
   .automatic so the system can substitute a complete compatible file instead of
-  stalling on the absolute original. A provider whose types are not registered
-  yet is re-checked after 250 ms, and a rejected file representation gets one
-  loadItem-based acquisition attempt before failing. Per-provider 120 s
-  deadlines, cancellation, retry and late-success cleanup are unchanged.
+  stalling on the absolute original. This entry's single 250 ms type re-check
+  and received-callback-only loadItem fallback are superseded by the
+  2026-11-06 acquisition follow-up below.
+- 2026-11-06 acquisition follow-up (branch
+  fix/import-videos-from-photos-app, stacked on #68): provider acquisition is
+  bounded per attempt instead of trusting one callback. Registered movie
+  identifiers are polled for up to 1.6 s; concrete movie types are preferred
+  (at most three), and each type is requested through the file representation
+  first, then raw item acquisition. The first attempt has a 30 s stall watchdog
+  and later attempts 15 s, all inside the unchanged 120 s overall deadline. A
+  stalled attempt cancels its Progress handle, rejects late callbacks by an
+  attempt generation and advances to the next representation; an owned copy made
+  before a finish is still removed. Rows report Retrying Photos access between
+  attempts. Exhausting every attempt reports the last native error or a
+  no-response failure instead of leaving the row loading. The synchronous
+  owned copy remains inside the provider callback.
 - The editor owns AddClipsModel across the Clips screen, pushed Add screen and
   native pickers. Import preparation never stops on view disappearance. Explicit
   Cancel/pop or Clips dismissal closes its selection; Cancel preparation clears
@@ -47,11 +59,11 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
 
 | Path | Review result |
 |---|---|
-| Photos picker and transfer | Native PHPicker, videos filter, ordered selection and .automatic representation, presented full screen. Selected NSItemProviders survive dismissal; direct file representation copy finishes inside the callback, with one delayed type re-check and one loadItem fallback after a rejection. No PHAsset lookup, library-read permission or whole-video Data loading. |
+| Photos picker and transfer | Native PHPicker, videos filter, ordered selection and .automatic representation, presented full screen. Selected NSItemProviders survive dismissal; direct file representation copy finishes inside the callback, with bounded type polling, concrete-type file-representation attempts, a raw item fallback and a per-attempt stall watchdog. No PHAsset lookup, library-read permission or whole-video Data loading. |
 | Preparation ownership | Editor-owned observable model, separate photo/review/add tasks with a three-wide bounded concurrent load window, no Add-screen onDisappear cleanup. Picker request and selection IDs reject late delegate results. |
 | Completion and cancellation | Photo completion uses generation-guarded defer cleanup; explicit cancellation resets busy state synchronously and registers unfinished items for retry. Old completion cannot clear a newer task's state. |
 | Selection lifetime | Cancel/success/navigation pop and Clips sheet onDismiss end the selection. Captured IDs reject stale picker delegate results, Files results and append navigation callbacks. Late successful photo copies are removed. |
-| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once per provider. Late success is cleaned; failures retain their provider for Retry. Row-level stages report loading, copying, checking and the native failure text. |
+| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once per request. A silent attempt expires after 30 s (first) or 15 s (later), cancels its progress handle and moves to the next representation; late success from any stale attempt is removed. Failures retain their provider for Retry. Row-level stages report loading, retrying, copying, checking and the native failure text. |
 | Files and metadata | Video-only filter plus inspected-kind checks at review and copied-original preparation. Already validated selections are not rechecked on every removal/addition. |
 | Thumbnail completion | MainActor-owned generator/continuation, balanced security scope, completion/cancel/deadline resume once; late callbacks ignored. No thumbnail dependency in Add readiness. |
 | Save/cancel/failure | Existing staging and revision-checked atomic append retained. Preparation remains cancellable; save failure stays on the selection screen. |
@@ -71,7 +83,10 @@ followed by Retry, and closing/reopening Add clips while a provider completes la
 For the instability follow-up also cover several Photos videos at once with
 per-row loading/copying rows, mixed local and iCloud-offloaded originals,
 per-row failures appearing while other rows still load, and Retry of one row
-inside a settled batch.
+inside a settled batch. For the 2026-11-06 acquisition follow-up, verify a
+silent provider moves through Retrying Photos access to either a later
+representation or a bounded failure, and that a stale callback cannot replace a
+newer attempt or leave an owned copy behind.
 
 The source defect was cancellation on Add-screen disappearance invalidating the
 operation before the old task reached its busy-state reset. This path existed on

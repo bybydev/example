@@ -149,6 +149,7 @@ struct AddClipsSheet: View {
     private func photoStageTitle(_ stage: ClipPhotoSelection.Stage) -> String {
         switch stage {
         case .loading: "Loading from Photos…"
+        case .retrying: "Retrying Photos access…"
         case .copying: "Copying video…"
         case .failed: ""
         }
@@ -343,9 +344,9 @@ final class AddClipsModel {
     private func materialize(_ load: PhotoLoad, token: UUID) async {
         guard active, !Task.isCancelled, photoGeneration == token else { return }
         do {
-            let file = try await ClipPhotoFileRequest.load(load.provider) { [self] in
+            let file = try await ClipPhotoFileRequest.load(load.provider) { [self] stage in
                 guard self.active, self.photoGeneration == token else { return }
-                self.advancePhotoStage(load.id, .copying)
+                self.advancePhotoStage(load.id, stage)
             }
             guard !Task.isCancelled, active, photoGeneration == token else {
                 try? FileManager.default.removeItem(at: file.localURL)
@@ -432,6 +433,7 @@ struct ClipPhotoSelection: Identifiable {
 
     enum Stage {
         case loading
+        case retrying
         case copying
         case failed(String)
     }
@@ -493,90 +495,235 @@ private struct ClipPhotosPicker: UIViewControllerRepresentable {
 
 /// Retains the provider and its cancellation handle independently of the picker.
 /// Copy inside the provider callback: its temporary URL expires when it returns.
+/// A stalled representation is abandoned by generation and retried with the next
+/// registered movie type instead of waiting for a callback that may never arrive.
 @MainActor
 private final class ClipPhotoFileRequest {
+    private enum Method {
+        case fileRepresentation
+        case item
+    }
+
+    private struct Attempt {
+        let type: String
+        let method: Method
+    }
+
+    /// A local representation should arrive quickly. A silent provider is
+    /// abandoned per attempt so another representation can be tried, while the
+    /// overall limit still leaves slow iCloud materialization some room.
+    private static let firstAttemptLimit: Duration = .seconds(30)
+    private static let nextAttemptLimit: Duration = .seconds(15)
+    private static let overallLimit: Duration = .seconds(120)
+    private static let typePollCount = 16
+
     private var provider: NSItemProvider?
     private var continuation: CheckedContinuation<PickedMovie, Error>?
     private var progress: Progress?
-    private var deadline: Task<Void, Never>?
+    private var overallDeadline: Task<Void, Never>?
+    private var attemptWatchdog: Task<Void, Never>?
+    private var resolutionTask: Task<Void, Never>?
+    private var attempts: [Attempt] = []
+    private var attemptIndex = 0
+    private var attemptGeneration = 0
+    private var lastError: Error?
+    private var suggestedName: String?
+    private var onStage: (@MainActor (ClipPhotoSelection.Stage) -> Void)?
     private var result: Result<PickedMovie, Error>?
     private var deliveredURL: URL?
 
-    static func load(_ provider: NSItemProvider, onCopying: @escaping @MainActor () -> Void) async throws -> PickedMovie {
+    static func load(_ provider: NSItemProvider,
+                     onStage: @escaping @MainActor (ClipPhotoSelection.Stage) -> Void) async throws -> PickedMovie {
         let request = ClipPhotoFileRequest()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
-                request.start(provider, onCopying: onCopying, continuation: continuation)
+                request.start(provider, onStage: onStage, continuation: continuation)
             }
         } onCancel: {
             Task { @MainActor in request.finish(.failure(CancellationError()), cancelProvider: true) }
         }
     }
 
-    private func start(_ provider: NSItemProvider, onCopying: @escaping @MainActor () -> Void,
+    private func start(_ provider: NSItemProvider,
+                       onStage: @escaping @MainActor (ClipPhotoSelection.Stage) -> Void,
                        continuation: CheckedContinuation<PickedMovie, Error>) {
         if let result { continuation.resume(with: result); return }
         self.continuation = continuation
         self.provider = provider
-        let name = provider.suggestedName
-        // Picker-backed providers register their item types lazily. An immediate
-        // probe can observe no types at all and fail a perfectly good video, so
-        // re-check shortly before deciding the provider has no video.
-        if let type = Self.movieType(provider) {
-            beginLoad(provider, type: type, suggestedName: name, onCopying: onCopying)
-        } else {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(250))
-                guard self.result == nil else { return }
-                let resolved = Self.movieType(provider)
-                    ?? (provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? UTType.movie.identifier : nil)
-                if let type = resolved {
-                    self.beginLoad(provider, type: type, suggestedName: name, onCopying: onCopying)
-                } else {
-                    self.finish(.failure(ProjectStoreError.unsupportedMedia))
-                }
-            }
-        }
-        deadline = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(120))
-                self?.finish(.failure(ClipPhotoFileError.timedOut), cancelProvider: true)
-            } catch { }
-        }
-    }
-
-    @MainActor private static func movieType(_ provider: NSItemProvider) -> String? {
-        provider.registeredTypeIdentifiers.first {
-            UTType($0)?.conforms(to: .movie) == true
-        }
-    }
-
-    private func beginLoad(_ provider: NSItemProvider, type: String, suggestedName: String?,
-                           onCopying: @escaping @MainActor () -> Void) {
-        guard result == nil else { return }
-        progress = provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-            if url != nil, error == nil {
-                Task { @MainActor in if self.result == nil { onCopying() } }
-                // Do not hop to an actor/task before this synchronous owned copy.
-                let result = Self.copyFile(url, error: error, suggestedName: suggestedName, type: type)
-                Task { @MainActor in self.finish(result) }
+        self.suggestedName = provider.suggestedName
+        self.onStage = onStage
+        // Bound the whole request before any provider work starts, including the
+        // lazy type probe, so a provider that never calls back cannot leave the
+        // row loading indefinitely.
+        armOverallDeadline()
+        resolutionTask = Task { @MainActor in
+            guard let provider = self.provider else { return }
+            let types = await Self.resolveMovieTypes(provider)
+            guard self.result == nil else { return }
+            guard !types.isEmpty else {
+                self.finish(.failure(ClipPhotoFileError.missingFile))
                 return
             }
-            // The registered representation can still be rejected or skipped
-            // without data; try the raw item acquisition once before treating
-            // the provider as failed. loadItem has no cancellable handle, so
-            // completion and expiry are guarded by the single-shot finish and
-            // the late-success cleanup instead.
-            provider.loadItem(forTypeIdentifier: type, options: nil) { item, itemError in
-                if item != nil, itemError == nil {
-                    Task { @MainActor in if self.result == nil { onCopying() } }
+            self.attempts = Self.attemptList(for: types)
+            self.beginAttempt(0)
+        }
+    }
+
+    private static func resolveMovieTypes(_ provider: NSItemProvider) async -> [String] {
+        // Picker-backed providers register their types lazily. Poll briefly
+        // instead of rejecting a valid video on an immediately empty list.
+        for _ in 0..<typePollCount {
+            let types = movieTypeCandidates(provider)
+            if !types.isEmpty { return types }
+            if Task.isCancelled { return [] }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            return [UTType.movie.identifier]
+        }
+        return []
+    }
+
+    private static func movieTypeCandidates(_ provider: NSItemProvider) -> [String] {
+        var seen = Set<String>()
+        var concrete: [String] = []
+        var abstract: [String] = []
+        for identifier in provider.registeredTypeIdentifiers {
+            guard let type = UTType(identifier), type.conforms(to: .movie),
+                  seen.insert(identifier).inserted else { continue }
+            if type == .movie { abstract.append(identifier) } else { concrete.append(identifier) }
+        }
+        // Concrete movie types avoid an unnecessary compatibility substitution.
+        // Names are sorted only to keep the attempt order deterministic.
+        return Array((concrete.sorted() + abstract).prefix(3))
+    }
+
+    private static func attemptList(for types: [String]) -> [Attempt] {
+        // Every file representation is requested before raw item acquisition: a
+        // file URL is the only video payload copied without loading the whole
+        // asset into memory.
+        types.map { Attempt(type: $0, method: .fileRepresentation) }
+            + types.map { Attempt(type: $0, method: .item) }
+    }
+
+    private func beginAttempt(_ index: Int) {
+        guard result == nil else { return }
+        guard index < attempts.count else {
+            finish(.failure(lastError ?? ClipPhotoFileError.noResponse))
+            return
+        }
+        attemptIndex = index
+        attemptGeneration += 1
+        let generation = attemptGeneration
+        progress?.cancel()
+        progress = nil
+        if index > 0 { onStage?(.retrying) }
+        armAttemptWatchdog(
+            generation: generation,
+            limit: index == 0 ? Self.firstAttemptLimit : Self.nextAttemptLimit
+        )
+        let attempt = attempts[index]
+        let type = attempt.type
+        let suggestedName = self.suggestedName
+        switch attempt.method {
+        case .fileRepresentation:
+            progress = provider?.loadFileRepresentation(forTypeIdentifier: type) { [weak self] url, error in
+                if let url, error == nil {
+                    Task { @MainActor in self?.reportCopying(generation: generation) }
+                    // Stay inside the callback for this synchronous owned copy.
+                    let copied = Self.copyFile(url, error: nil, suggestedName: suggestedName, type: type)
+                    Task { @MainActor in
+                        guard let self else {
+                            if case .success(let file) = copied {
+                                try? FileManager.default.removeItem(at: file.localURL)
+                            }
+                            return
+                        }
+                        self.deliver(copied, generation: generation)
+                    }
+                } else {
+                    let message = error?.localizedDescription
+                    Task { @MainActor in self?.attemptFailed(generation: generation, message: message) }
+                }
+            }
+        case .item:
+            // loadItem has no cancellable handle; its late completion is rejected
+            // by the attempt generation and any copied file is removed.
+            progress = provider?.loadItem(forTypeIdentifier: type, options: nil) { [weak self] item, error in
+                if item is URL {
+                    Task { @MainActor in self?.reportCopying(generation: generation) }
                 }
                 // Copy synchronously before returning; the acquired item expires too.
-                let result = Self.copyItem(item, error: itemError, suggestedName: suggestedName, type: type)
-                Task { @MainActor in self.finish(result) }
+                let copied = Self.copyItem(item, error: error, suggestedName: suggestedName, type: type)
+                Task { @MainActor in
+                    guard let self else {
+                        if case .success(let file) = copied {
+                            try? FileManager.default.removeItem(at: file.localURL)
+                        }
+                        return
+                    }
+                    self.deliver(copied, generation: generation)
+                }
             }
         }
+    }
+
+    private func armAttemptWatchdog(generation: Int, limit: Duration) {
+        attemptWatchdog?.cancel()
+        attemptWatchdog = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: limit) } catch { return }
+            self?.attemptStalled(generation: generation)
+        }
+    }
+
+    private func armOverallDeadline() {
+        overallDeadline?.cancel()
+        overallDeadline = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: Self.overallLimit) } catch { return }
+            self?.finish(.failure(ClipPhotoFileError.timedOut), cancelProvider: true)
+        }
+    }
+
+    private func reportCopying(generation: Int) {
+        guard result == nil, attemptGeneration == generation else { return }
+        onStage?(.copying)
+    }
+
+    private func attemptStalled(generation: Int) {
+        guard result == nil, attemptGeneration == generation else { return }
+        // Cancelling the progress handle is the only way to release a provider
+        // request that never calls back. A later completion is rejected by the
+        // generation check and its copied file is removed by deliver.
+        progress?.cancel()
+        advanceAttempt(from: generation)
+    }
+
+    private func attemptFailed(generation: Int, message: String?) {
+        guard result == nil, attemptGeneration == generation else { return }
+        lastError = message.map(ClipPhotoFileError.loading) ?? ClipPhotoFileError.noResponse
+        advanceAttempt(from: generation)
+    }
+
+    private func deliver(_ result: Result<PickedMovie, Error>, generation: Int) {
+        guard self.result == nil, attemptGeneration == generation else {
+            if case .success(let file) = result { try? FileManager.default.removeItem(at: file.localURL) }
+            return
+        }
+        switch result {
+        case .success:
+            finish(result)
+        case .failure(let error):
+            lastError = error
+            advanceAttempt(from: generation)
+        }
+    }
+
+    private func advanceAttempt(from generation: Int) {
+        guard result == nil, attemptGeneration == generation else { return }
+        attemptWatchdog?.cancel(); attemptWatchdog = nil
+        progress?.cancel(); progress = nil
+        beginAttempt(attemptIndex + 1)
     }
 
     private func finish(_ result: Result<PickedMovie, Error>, cancelProvider: Bool = false) {
@@ -588,10 +735,17 @@ private final class ClipPhotoFileRequest {
         }
         self.result = result
         if case .success(let file) = result { deliveredURL = file.localURL }
+        // Reject every outstanding callback as stale while still removing any
+        // owned file it managed to copy before this finish was observed.
+        attemptGeneration += 1
         let continuation = self.continuation; self.continuation = nil
-        deadline?.cancel(); deadline = nil
+        overallDeadline?.cancel(); overallDeadline = nil
+        attemptWatchdog?.cancel(); attemptWatchdog = nil
+        resolutionTask?.cancel(); resolutionTask = nil
         let progress = self.progress; self.progress = nil
         provider = nil
+        onStage = nil
+        suggestedName = nil
         if cancelProvider { progress?.cancel() }
         continuation?.resume(with: result)
     }
@@ -631,13 +785,14 @@ private final class ClipPhotoFileRequest {
 }
 
 private enum ClipPhotoFileError: LocalizedError {
-    case loading(String), copying(String), missingFile, timedOut
+    case loading(String), copying(String), missingFile, noResponse, timedOut
 
     var errorDescription: String? {
         switch self {
         case .loading(let detail): "Couldn’t load this video from Photos. \(detail)"
         case .copying(let detail): "Couldn’t copy this video into Inkribe. \(detail)"
         case .missingFile: "Photos did not provide a readable video file."
+        case .noResponse: "Photos stopped responding for this video. Retry, or choose the video again."
         case .timedOut: "Photos did not finish providing this video within two minutes. Retry when the video is available on your iPhone."
         }
     }
