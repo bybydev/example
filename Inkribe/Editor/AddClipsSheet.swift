@@ -628,44 +628,28 @@ private final class ClipPhotoFileRequest {
         let suggestedName = self.suggestedName
         switch attempt.method {
         case .fileRepresentation:
-            progress = provider?.loadFileRepresentation(forTypeIdentifier: type) { [weak self] url, error in
+            progress = provider?.loadFileRepresentation(forTypeIdentifier: type) { url, error in
                 if let url, error == nil {
-                    Task { @MainActor in self?.reportCopying(generation: generation) }
+                    Task { @MainActor in self.reportCopying(generation: generation) }
                     // Stay inside the callback for this synchronous owned copy.
                     let copied = Self.copyFile(url, error: nil, suggestedName: suggestedName, type: type)
-                    Task { @MainActor in
-                        guard let self else {
-                            if case .success(let file) = copied {
-                                try? FileManager.default.removeItem(at: file.localURL)
-                            }
-                            return
-                        }
-                        self.deliver(copied, generation: generation)
-                    }
+                    Task { @MainActor in self.deliver(copied, generation: generation) }
                 } else {
                     let message = error?.localizedDescription
-                    Task { @MainActor in self?.attemptFailed(generation: generation, message: message) }
+                    Task { @MainActor in self.attemptFailed(generation: generation, message: message) }
                 }
             }
         case .item:
             // loadItem returns no progress handle and cannot be cancelled; its
             // late completion is rejected by the attempt generation and any
             // copied file is removed.
-            provider?.loadItem(forTypeIdentifier: type, options: nil) { [weak self] item, error in
+            provider?.loadItem(forTypeIdentifier: type, options: nil) { item, error in
                 if item is URL {
-                    Task { @MainActor in self?.reportCopying(generation: generation) }
+                    Task { @MainActor in self.reportCopying(generation: generation) }
                 }
                 // Copy synchronously before returning; the acquired item expires too.
                 let copied = Self.copyItem(item, error: error, suggestedName: suggestedName, type: type)
-                Task { @MainActor in
-                    guard let self else {
-                        if case .success(let file) = copied {
-                            try? FileManager.default.removeItem(at: file.localURL)
-                        }
-                        return
-                    }
-                    self.deliver(copied, generation: generation)
-                }
+                Task { @MainActor in self.deliver(copied, generation: generation) }
             }
         }
     }
