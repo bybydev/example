@@ -648,9 +648,10 @@ private final class ClipPhotoFileRequest {
                 }
             }
         case .item:
-            // loadItem has no cancellable handle; its late completion is rejected
-            // by the attempt generation and any copied file is removed.
-            progress = provider?.loadItem(forTypeIdentifier: type, options: nil) { [weak self] item, error in
+            // loadItem returns no progress handle and cannot be cancelled; its
+            // late completion is rejected by the attempt generation and any
+            // copied file is removed.
+            provider?.loadItem(forTypeIdentifier: type, options: nil) { [weak self] item, error in
                 if item is URL {
                     Task { @MainActor in self?.reportCopying(generation: generation) }
                 }

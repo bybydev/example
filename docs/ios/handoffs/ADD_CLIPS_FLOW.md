@@ -34,12 +34,12 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
   (at most three), and each type is requested through the file representation
   first, then raw item acquisition. The first attempt has a 30 s stall watchdog
   and later attempts 15 s, all inside the unchanged 120 s overall deadline. A
-  stalled attempt cancels its Progress handle, rejects late callbacks by an
-  attempt generation and advances to the next representation; an owned copy made
-  before a finish is still removed. Rows report Retrying Photos access between
-  attempts. Exhausting every attempt reports the last native error or a
-  no-response failure instead of leaving the row loading. The synchronous
-  owned copy remains inside the provider callback.
+  stalled attempt cancels its Progress handle when the representation provides
+  one, rejects late callbacks by an attempt generation and advances to the next
+  representation; an owned copy made before a finish is still removed. Rows
+  report Retrying Photos access between attempts. Exhausting every attempt
+  reports the last native error or a no-response failure instead of leaving the
+  row loading. The synchronous owned copy remains inside the provider callback.
 - The editor owns AddClipsModel across the Clips screen, pushed Add screen and
   native pickers. Import preparation never stops on view disappearance. Explicit
   Cancel/pop or Clips dismissal closes its selection; Cancel preparation clears
@@ -63,7 +63,7 @@ Branch: feat/ios-add-clips-flow; target: develop. Source-only delivery.
 | Preparation ownership | Editor-owned observable model, separate photo/review/add tasks with a three-wide bounded concurrent load window, no Add-screen onDisappear cleanup. Picker request and selection IDs reject late delegate results. |
 | Completion and cancellation | Photo completion uses generation-guarded defer cleanup; explicit cancellation resets busy state synchronously and registers unfinished items for retry. Old completion cannot clear a newer task's state. |
 | Selection lifetime | Cancel/success/navigation pop and Clips sheet onDismiss end the selection. Captured IDs reject stale picker delegate results, Files results and append navigation callbacks. Late successful photo copies are removed. |
-| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once per request. A silent attempt expires after 30 s (first) or 15 s (later), cancels its progress handle and moves to the next representation; late success from any stale attempt is removed. Failures retain their provider for Retry. Row-level stages report loading, retrying, copying, checking and the native failure text. |
+| Transfer completion | Provider error, missing/empty/non-file data, copy failure, cancellation and 120-second expiry complete once per request. A silent attempt expires after 30 s (first) or 15 s (later), cancels its progress handle when there is one, and moves to the next representation; late success from any stale attempt is removed. Failures retain their provider for Retry. Row-level stages report loading, retrying, copying, checking and the native failure text. |
 | Files and metadata | Video-only filter plus inspected-kind checks at review and copied-original preparation. Already validated selections are not rechecked on every removal/addition. |
 | Thumbnail completion | MainActor-owned generator/continuation, balanced security scope, completion/cancel/deadline resume once; late callbacks ignored. No thumbnail dependency in Add readiness. |
 | Save/cancel/failure | Existing staging and revision-checked atomic append retained. Preparation remains cancellable; save failure stays on the selection screen. |
