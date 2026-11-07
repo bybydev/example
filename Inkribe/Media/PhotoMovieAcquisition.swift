@@ -486,10 +486,9 @@ enum PhotoMovieLoader {
 }
 
 enum PhotoAssetMovieRequest {
-    /// Streams the library resource into app-owned staging. Chunks write
-    /// directly into the staged file, so nothing whole-video sized is held in
-    /// memory, and the streaming write is serialized by Photos' own per-request
-    /// serial callback queue.
+    /// Copies the library resource into app-owned staging with PhotoKit's own
+    /// file writer. Nothing video-sized is held in memory, and the single
+    /// completion callback resolves the wait with the system's own error.
     static func load(assetIdentifier: String,
                                  suggestedName: String?,
                                  onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) async throws -> PickedMovie {
@@ -522,14 +521,19 @@ enum PhotoAssetMovieRequest {
         let delivery = PhotoAssetDelivery(destination: destination,
             storedName: resource.originalFilename, suggestedName: suggestedName,
             representation: resource.uniformTypeIdentifier, onStage: onStage)
+        // PhotoKit performs the copy and reports once with its own error;
+        // the row shows copying from the request's start, the completion
+        // resolves the wait.
+        Task { @MainActor in onStage(.copying) }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                // Registration inside: the request identifier only exists here.
-                let identifier = PHAssetResourceManager.default().requestData(
-                    for: resource, options: options,
-                    dataReceivedHandler: { delivery.receive($0) },
+                // The continuation is parked before the copy starts; the
+                // completion handler is the one wire this delivery owns.
+                delivery.willWrite(continuation)
+                PHAssetResourceManager.default().writeData(
+                    for: resource, toFile: destination, options: options,
                     completionHandler: { delivery.complete(with: $0) })
-                delivery.registeredRequest(identifier)
+                delivery.registeredTransfer()
             }
         } onCancel: {
             delivery.cancelRequest()
@@ -537,10 +541,10 @@ enum PhotoAssetMovieRequest {
     }
 }
 
-/// Owns one PhotoKit resource transfer: chunked disk writes, the single
-/// continuation resume, request cancellation and the delivery deadline.
-/// PhotoKit calls its handlers on an arbitrary serial queue; every mutable
-/// state touch is lock-guarded and the continuation resumes only once, after
+/// Owns one PhotoKit file copy: the single continuation resume, the delivery
+/// deadline and abandonment on cancellation. PhotoKit writes the staged file
+/// itself and calls back once from an arbitrary queue; every mutable state
+/// touch is lock-guarded and the continuation resumes only once, after
 /// the lock is released.
 private final class PhotoAssetDelivery: @unchecked Sendable {
     private static let logger = Logger(subsystem: "com.hoangbkit.inkribe",
@@ -562,13 +566,8 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
     private let representation: String
     private let onStage: @MainActor (PhotoMovieSelection.Stage) -> Void
     private var continuation: CheckedContinuation<PickedMovie, Error>?
-    private var requestID = PHInvalidAssetResourceDataRequestID
-    private var registered = false
     private var completed = false
     private var cancelRequested = false
-    private var file: FileHandle?
-    private var receivedBytes = 0
-    private var copyingReported = false
     private var deadlineTask: Task<Void, Never>?
 
     init(destination: URL, storedName: String?, suggestedName: String?, representation: String,
@@ -580,83 +579,41 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
         self.onStage = onStage
     }
 
-    func registeredRequest(_ identifier: PHAssetResourceDataRequestID) {
+    func willWrite(_ continuation: CheckedContinuation<PickedMovie, Error>) {
         lock.lock()
-        guard !completed, !registered else { lock.unlock(); return }
-        registered = true
-        requestID = identifier
-        let cancelled = cancelRequested
-        lock.unlock()
-        // A cancellation that landed before registration ended the row's task;
-        // the request only exists now, so release it here. Later callbacks are
-        // rejected and resumptions restore cancellation exactly once.
-        guard !cancelled else {
-            if identifier != PHInvalidAssetResourceDataRequestID {
-                PHAssetResourceManager.default().cancelDataRequest(identifier)
-            }
+        guard !completed else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
             return
         }
-        deadlineTask = Task { [weak self] in
-            do { try await Task.sleep(for: Self.deliveryLimit) } catch { return }
-            self?.expire()
-        }
+        self.continuation = continuation
+        lock.unlock()
     }
 
-    func receive(_ chunk: Data) {
-        var failure: Error?
+    /// Arms the delivery deadline after the copy is handed to PhotoKit.
+    /// writeData carries no request identifier to cancel, so an expired or
+    /// cancelled transfer is abandoned here: the staged file is removed and
+    /// any in-flight write drains harmlessly into the unlinked path.
+    func registeredTransfer() {
         lock.lock()
-        if completed {
-            lock.unlock()
-            return
-        }
-        if cancelRequested {
-            failure = CancellationError()
-        } else {
-            if file == nil {
-                if !FileManager.default.createFile(atPath: destination.path, contents: nil) {
-                    failure = PhotoMovieRequestError.copying("The staged video file could not be created.")
-                } else {
-                    file = try? FileHandle(forWritingTo: destination)
-                    if file == nil {
-                        failure = PhotoMovieRequestError.copying("The staged video file could not be opened.")
-                    }
-                }
-            }
-            if failure == nil {
-                do {
-                    try file?.write(contentsOf: chunk)
-                    receivedBytes += Int(chunk.count)
-                } catch {
-                    failure = PhotoMovieRequestError.copying(error.localizedDescription)
-                }
-            }
-        }
-        // Only the first chunk crosses into the user-facing stage; later ones
-        // keep streaming silently into the staged file.
-        let announce = !copyingReported
-        if announce { copyingReported = true }
+        let cancelled = cancelRequested
+        let alreadyCompleted = completed
         lock.unlock()
-        if announce {
-            Task { @MainActor in onStage(.copying) }
-        }
-        if let failure {
-            conclude(.failure(failure))
+        if !cancelled, !alreadyCompleted {
+            deadlineTask = Task { [weak self] in
+                do { try await Task.sleep(for: Self.deliveryLimit) } catch { return }
+                self?.expire()
+            }
         }
     }
 
     func complete(with error: Error?) {
         lock.lock()
-        guard !completed else { lock.unlock(); return }
-        let handle = file
-        file = nil
         let cancelled = cancelRequested
         lock.unlock()
-        try? handle?.close()
         if let error {
-            let mapped: Error = cancelled
-                ? CancellationError()
-                : PhotoMovieRequestError.loading(Self.deliveryDetail(error))
-            conclude(.failure(mapped))
+            conclude(.failure(cancelled ? CancellationError()
+                : PhotoMovieRequestError.loading(Self.deliveryDetail(error))))
             return
         }
         let values = try? destination.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -664,26 +621,24 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
             conclude(.failure(PhotoMovieRequestError.missingFile))
             return
         }
+        if let size = values?.fileSize {
+            Self.logger.info(
+                "Received \(size, privacy: .public) bytes from \(self.representation, privacy: .public)")
+        }
         let identity = [storedName, suggestedName]
             .compactMap { $0 }
             .first { !$0.isEmpty }
-        Self.logger.info(
-            "Copied \(self.receivedBytes, privacy: .public) bytes from \(self.representation, privacy: .public)")
         conclude(.success(PickedMovie(localURL: destination,
             displayName: identity ?? "Imported Video", representation: representation)))
     }
 
     func cancelRequest() {
         lock.lock()
-        let alreadyDone = completed || !registered
+        let alreadyDone = completed
         cancelRequested = true
         lock.unlock()
-        // Before registration the flag drives later paths (registeredRequest,
-        // receive and complete all end in cancellation); once registered, the
-        // release is immediate and deterministic here.
-        if !alreadyDone {
-            conclude(.failure(CancellationError()))
-        }
+        guard !alreadyDone else { return }
+        conclude(.failure(CancellationError()))
     }
 
     private func expire() {
@@ -694,20 +649,14 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
         conclude(.failure(PhotoMovieRequestError.timedOut))
     }
 
-    /// Transitions to done exactly once: closes the staged file, releases the
-    /// PhotoKit request and the deadline, removes partial output on failure,
-    /// then resumes the continuation outside the lock.
+    /// Transitions to done exactly once: releases the deadline, removes
+    /// partial or abandoned output on failure, then resumes the continuation
+    /// outside the lock.
     private func conclude(_ outcome: Result<PickedMovie, Error>) {
         var delivered: CheckedContinuation<PickedMovie, Error>?
         lock.lock()
         if !completed {
             completed = true
-            try? file?.close()
-            file = nil
-            if requestID != PHInvalidAssetResourceDataRequestID {
-                PHAssetResourceManager.default().cancelDataRequest(requestID)
-                requestID = PHInvalidAssetResourceDataRequestID
-            }
             deadlineTask?.cancel()
             deadlineTask = nil
             if case .failure = outcome {
