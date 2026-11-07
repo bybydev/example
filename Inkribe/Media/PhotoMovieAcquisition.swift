@@ -20,7 +20,7 @@ struct PickedMovie: Sendable {
     let displayName: String
 }
 
-/// One Photos selection between receiving the provider and its resolved
+/// One Photos selection between receiving the provider and its queued,
 /// loading, copying or failure stage. Success removes the entry and publishes
 /// an ImportInput carrying the same identity.
 struct PhotoMovieSelection: Identifiable {
@@ -30,6 +30,7 @@ struct PhotoMovieSelection: Identifiable {
     var stage = Stage.loading
 
     enum Stage {
+        case waiting
         case loading
         case retrying
         case copying

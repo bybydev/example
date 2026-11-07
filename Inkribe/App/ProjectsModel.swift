@@ -161,7 +161,12 @@ final class ProjectsModel {
     private var creationID = UUID()
     private var selectionOrder: [UUID] = []
     private var photoGeneration = UUID()
-    private let photoLoadWindow = 3
+    /// Sequential materialization: parallel provider file requests contend for
+    /// the Photos helper and the shared copy path, so even benign attempts
+    /// cross the per-attempt watchdogs and get generation-killed mid-transfer.
+    /// One video at a time keeps the full attempt budget and a high success
+    /// rate; total time stays bounded because each video has its own ladder.
+    private let photoLoadWindow = 1
     var canCreateProject: Bool {
         !selectedSources.isEmpty && !isImporting && !isPreparingPhotos && photoFailures.isEmpty &&
             reviewingSources.isEmpty && selectedSources.allSatisfy {
@@ -407,7 +412,7 @@ final class ProjectsModel {
         // and cancellation leaves unfinished selections retryable.
         for selection in selections {
             var entry = photoEntries[selection.id] ?? selection
-            entry.stage = .loading
+            entry.stage = .waiting
             photoEntries[entry.id] = entry
             if !selectionOrder.contains(entry.id) { selectionOrder.append(entry.id) }
         }
@@ -428,6 +433,8 @@ final class ProjectsModel {
             while index < selections.count {
                 guard !Task.isCancelled, session == selectionSession, photoGeneration == token else { return }
                 let chunk = Array(selections[index..<min(index + photoLoadWindow, selections.count)])
+                // Its turn now: promote the queued rows this chunk will load.
+                for selection in chunk { photoEntries[selection.id]?.stage = .loading }
                 await withTaskGroup(of: Void.self) { group in
                     for selection in chunk {
                         // Strict Sendability bounds: only this Sendable box crosses
@@ -457,6 +464,9 @@ final class ProjectsModel {
             photoEntries[load.id] = nil
             let positions = Dictionary(uniqueKeysWithValues: selectionOrder.enumerated().map { ($0.element, $0.offset) })
             selectedSources.sort { (positions[$0.id] ?? Int.max) < (positions[$1.id] ?? Int.max) }
+            // This source's duration/review starts immediately; its row draws
+            // its own artwork. Later selections keep loading silently.
+            reviewSources()
         } catch {
             guard photoGeneration == token else { return }
             advancePhotoStage(load.id, .failed(error.localizedDescription))

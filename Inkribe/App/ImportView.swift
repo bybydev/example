@@ -162,6 +162,7 @@ struct ImportView: View {
     }
     private func photoStageTitle(_ stage: PhotoMovieSelection.Stage) -> String {
         switch stage {
+        case .waiting: "Waiting…"
         case .loading: "Loading from Photos…"
         case .retrying: "Retrying Photos access…"
         case .copying: "Copying video…"

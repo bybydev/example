@@ -146,6 +146,7 @@ struct AddClipsSheet: View {
 
     private func photoStageTitle(_ stage: PhotoMovieSelection.Stage) -> String {
         switch stage {
+        case .waiting: "Waiting…"
         case .loading: "Loading from Photos…"
         case .retrying: "Retrying Photos access…"
         case .copying: "Copying video…"
@@ -195,7 +196,12 @@ final class AddClipsModel {
     @ObservationIgnored private let reviewer = ImportMediaReviewer()
     /// Concurrent provider loads are windowed so many multi-GB originals cannot
     /// surge library reads and storage writes at the same time.
-    private let loadWindow = 3
+    /// Sequential materialization: parallel provider file requests contend for
+    /// the Photos helper and the shared copy path, so even benign attempts
+    /// cross the per-attempt watchdogs and get generation-killed mid-transfer.
+    /// One video at a time keeps the full attempt budget and a high success
+    /// rate; total time stays bounded because each video has its own ladder.
+    private let loadWindow = 1
     var busy: Bool { preparingPhotos || adding }
 
     /// Failed selections keep their provider for Retry, in selection order.
@@ -264,6 +270,19 @@ final class AddClipsModel {
 
     func reviewSources() {
         guard active, !busy else { return }
+        startReviews()
+    }
+
+    /// Kicked after each successful materialize so a finished row shows its
+    /// cover and duration while later selections still load. Safe during photo
+    /// preparation: the reviewed list is an immutable snapshot taken here, and
+    /// every shared write is MainActor-serialized.
+    func reviewSourcesDuringPreparation() {
+        guard active else { return }
+        startReviews()
+    }
+
+    private func startReviews() {
         reviewTask?.cancel()
         let token = UUID(); reviewGeneration = token
         let selected = sources.filter { reviews[$0.id]?.metadata == nil }
@@ -288,7 +307,7 @@ final class AddClipsModel {
         // and cancellation leaves unfinished selections retryable.
         for item in items {
             var entry = photoEntries[item.id] ?? item
-            entry.stage = .loading
+            entry.stage = .waiting
             photoEntries[item.id] = entry
             if !sourceOrder.contains(item.id) { sourceOrder.append(item.id) }
         }
@@ -309,6 +328,8 @@ final class AddClipsModel {
             while index < items.count {
                 guard !Task.isCancelled, active, photoGeneration == token else { return }
                 let chunk = Array(items[index..<min(index + loadWindow, items.count)])
+                // Its turn now: promote the queued rows this chunk will load.
+                for item in chunk { photoEntries[item.id]?.stage = .loading }
                 await withTaskGroup(of: Void.self) { group in
                     for item in chunk {
                         // Strict Sendability bounds: only this Sendable box crosses
@@ -338,6 +359,8 @@ final class AddClipsModel {
             photoEntries[load.id] = nil
             let positions = Dictionary(uniqueKeysWithValues: sourceOrder.enumerated().map { ($0.element, $0.offset) })
             sources.sort { positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max] }
+            // Finish this row's picture immediately; later selections still load.
+            reviewSourcesDuringPreparation()
         } catch {
             guard active, photoGeneration == token else { return }
             advancePhotoStage(load.id, .failed(error.localizedDescription))
