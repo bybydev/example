@@ -1,5 +1,34 @@
 # Inkribe iOS — current plan
 
+## Phase record (P0–P7 and Pro)
+
+> 2026-10-22 amendment: PR #30 was squash merged as eb89f0f; Pro locking and
+> AppFoundation themes are authorized and source-integrated. Difficulty/value are
+> planning judgments for the compact v1 scope. The old 467-item catalog and the
+> retired P8–P13 roadmap are superseded. Active phase briefs were consolidated
+> into their per-feature handoffs on 2026-11-07.
+
+| Phase | Result | Difficulty | Value | Status |
+|---|---|---|---|---|
+| [P0](handoffs/P0.md) | Target isolation and foundations | High | Essential | Merged #23; source-only evidence |
+| [P1](handoffs/P1.md) | Local projects and import | Medium | Essential | Merged #24; reported source findings corrected, runtime unverified |
+| [P2](handoffs/P2.md) | On-device transcription and word timing | High | Essential | Merged #25 (97d647e); model/native/runtime checks unrun |
+| [P3](handoffs/P3.md) | Caption correction and simple timeline | High | Essential | Merged #26 (11902e6); compilation/runtime unverified |
+| [P4](handoffs/P4.md) | Caption styles and curated animations | High | High | Merged #27 (ab67747); compilation/render/runtime unverified |
+| [P5](handoffs/P5.md) | MP4/SRT export and simple Pro | High | Essential | Merged #28 (3c09e32); Pro deferred by user; compilation/runtime unverified |
+| [P6](handoffs/P6.md) | Basic media editing | Medium–High | High | Merged #29 (e2bb512); compilation/runtime unverified |
+| [P7](handoffs/P7.md) | V1 hardening and release handoff | Medium–High | Essential | Merged #30 (eb89f0f); compilation/runtime/user validation unrun |
+
+The optional-model follow-up and P7 hardening share PR #30; see [MODELS.md](MODELS.md)
+and [handoffs/P7.md](handoffs/P7.md). Everything is merged through PR #67; per-feature
+scope and as-built records now live together under [handoffs/](handoffs/).
+
+## Authorized Pro follow-up
+
+| Phase | Result | Difficulty | Value | Status |
+|---|---|---|---|---|
+| [Pro](handoffs/PRO.md) | Four approved Pro benefits, safe weekly allowance and AF themes/purchases | Medium–High | High | Source-integrated on feat/ios-pro-access-themes (#30) plus the #34 settings follow-up |
+
 ## Current: queue experience — all four source passes complete
 
 2026-11-01. Final JOB.INTEGRATION in PR #57 extends 2923c08b. Source review covers
@@ -7,7 +36,7 @@ single queued actions, 1/3 capacity/current/legacy jobs, project/sheet routes,
 retained files/delivery and continued-task submission, GPU eligibility, interruption
 and recovery. Scoped fixes stabilize scene ownership and real-background recovery,
 one-time export focus/inventory, and post-dismissal project availability. See
-[scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+[handoff](handoffs/QUEUE_EXPERIENCE.md).
 Preserve the settled design/contracts. All four source passes are complete;
 compilation/native/UI acceptance remains unverified. Keep open without auto-merge;
 no automatic next scope, merge or release.
@@ -19,8 +48,7 @@ continued-processing requests only for explicit work/resume, system progress and
 expiration/cleanup over existing JobQueue. Keep speech/export grants independent;
 GPU-enabled video exports require runtime support, with foreground-only export
 fallback when unavailable. Preserve 1/3 capacity, durable inputs/progress/files,
-user pause and all queue/editor design. See [scope](phases/QUEUE_EXPERIENCE.md) and
-[handoff](handoffs/QUEUE_EXPERIENCE.md). Metadata/entitlement source only; no generation
+user pause and all queue/editor design. See [handoff](handoffs/QUEUE_EXPERIENCE.md). Metadata/entitlement source only; no generation
 or execution. Pass 4 awaits the user's signal; leave open without auto-merge.
 
 ## Current: queue experience — pass 2 of four
@@ -30,13 +58,12 @@ Spokio iOS plain queue/scopes/toolbar/compact status/progress/actions; row navig
 to project Captions or the exact export; separate retained-file management and full
 job details. Native dismissal callbacks close the owning presentations before root
 navigation or reuse of the current editor. Preserve pass-1 queue behavior and all
-unrelated editor design. See [scope](phases/QUEUE_EXPERIENCE.md) and
-[source handoff](handoffs/QUEUE_EXPERIENCE.md). Passes 3–4 await separate signals.
+unrelated editor design. See [source handoff](handoffs/QUEUE_EXPERIENCE.md). Passes 3–4 await separate signals.
 Source-only; leave open without auto-merge.
 
 ## Current: queue experience — pass 1 of four
 
-2026-11-01. Implement [queue actions and capacity](phases/QUEUE_EXPERIENCE.md)
+2026-11-01. Implement [queue actions and capacity](handoffs/QUEUE_EXPERIENCE.md)
 in feat/ios-queue-experience -> develop from b51e1b95. One queued Transcribe/Create
 Export flow, project-local export progress after reopening, JobQueue capacity 1/3
 and no shared iOS serialization. Preserve lifecycle cancellation, speech engine,
@@ -47,7 +74,7 @@ Source-only; no automatic next pass, merge or release.
 
 ## Current: timeline-only clip trimming stacked on #55
 
-2026-10-31. Implement the approved [clip trimming](phases/CLIP_TRIMMING.md), from
+2026-10-31. Implement the approved [clip trimming](handoffs/CLIP_TRIMMING.md), from
 #55 head 381b0d2b, in feat/ios-timeline-clip-trimming -> feat/ios-media-form. Scope:
 selected-clip edge handles, main boundary preview, source bounds/restoration,
 piecewise output mapping, one atomic undoable save and removal of Media trim UI.
@@ -58,7 +85,7 @@ Source-only; leave parent and stacked PR open without auto-merge.
 ## Current: Media Form — both source passes complete
 
 2026-10-31. The user's next-pass signal authorizes pass 2 in PR #55 from bb0d1b11.
-Review and scoped fixes complete the two planned [Media Form](phases/MEDIA_FORM.md)
+Review and scoped fixes complete the two planned [Media Form](handoffs/MEDIA_FORM.md)
 source passes. The [handoff matrix](handoffs/MEDIA_FORM.md) records scope/reset,
 local cancellation, stale/write/history/reopen and preview/frozen-export evidence.
 Preserve the approved Form and other editor behavior. Compilation/native/UI
@@ -80,13 +107,13 @@ remains unverified under source-only restrictions; keep the PR open without merg
 controls, waveform and controls-only Music sheet. Import/replacement is staged
 until Done and one saved history entry; Cancel/swipe discards unpublished files.
 Passes 1–2 are source-integrated; pass 3 remains unstarted pending the user's signal.
-See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md). Source-only;
+See [handoff](handoffs/MUSIC_LAYER.md). Source-only;
 no builds/typechecks/tests/native/UI execution and no unrelated editor changes.
 
 ## Current: music layer — pass 1 of three
 
 2026-10-31. Implement MUSIC.FOUNDATION in feat/ios-music-layer -> develop from
-723f333. See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md).
+723f333. See [handoff](handoffs/MUSIC_LAYER.md).
 Pass 1 owns one soundtrack's persistence/import/timing/mix/loop/fades/history and
 preview/export agreement, plus independent original-audio master mute. Schema 12
 reads 1–11. No UI/layout changes in this pass. Pass 2 owns the agreed leading row
@@ -100,7 +127,7 @@ only the historical single-file music exclusion below. No other editor expansion
 feat/ios-native-fullscreen-player -> feat/ios-style-sheet-grid, based on 3f9b8107.
 Scope EDITOR.NATIVE_FULLSCREEN / EXPORT.NATIVE_PREVIEW: live editor composition and
 caption overlay, immutable export MP4 playback, native UI and safe ownership/return.
-See [scope](phases/NATIVE_FULLSCREEN.md) and [handoff](handoffs/NATIVE_FULLSCREEN.md).
+See [handoff](handoffs/NATIVE_FULLSCREEN.md).
 Source-only; keep both PRs open and do not modify the parent.
 
 ## Current: Style form and shared template sample in PR #52
@@ -114,7 +141,7 @@ inline precise X/Y reflected in the sample and saved through Cancel/Done.
 Cancel/Done atomicity and one Undo entry remain. Old frozen export requests keep
 their captured values; new requests use project-wide styling. Existing media scopes,
 clip names, speech/outputs/schema/Mac remain. Source-integrated; no runtime acceptance.
-See [scope](phases/STYLE_SHEET.md) and [handoff](handoffs/STYLE_SHEET.md). Keep #52 open.
+See [handoff](handoffs/STYLE_SHEET.md). Keep #52 open.
 
 ## Current: unified Style sheet and templates grid
 
@@ -125,7 +152,7 @@ controls. Its row pushes a lazy template grid; selection returns to the sheet.
 Caption changes stay local until Done durably commits one undoable edit. Cancel,
 swipe dismissal and failed saves preserve the live project's settings. Keep the
 existing ten templates and existing inheritance/access/renderer/export contracts.
-See [scope](phases/STYLE_SHEET.md) and [source handoff](handoffs/STYLE_SHEET.md).
+See [source handoff](handoffs/STYLE_SHEET.md).
 Source-integrated; compilation/runtime acceptance remains unverified.
 
 ## Current: Graphite in PR #50
@@ -144,7 +171,7 @@ fix below is already squash merged from #51 into #50 as 35b29af, user-validated.
 live video, retain its caption presentation, and restore live video after readiness.
 Source-integrated; compilation/device acceptance unverified. Preserve the full #50
 workflow and one player. No automatic next feature or merge. See
-[scope](phases/PREVIEW_HANDOFF.md) and [handoff](handoffs/PREVIEW_HANDOFF.md).
+[handoff](handoffs/PREVIEW_HANDOFF.md).
 
 ## Current: contextual caption editor
 
@@ -159,8 +186,7 @@ Row taps still select/highlight/seek. The selected row's top-left Edit caption
 pushes the editor; remove list inline editing and Split / Words. Future edits
 require a concrete plan confirmed by the user before implementation.
 Styles/Customize, Media, reset scope and displayed-clock consolidation are deferred.
-See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
-[handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). No automatic next feature or merge.
+See [handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). No automatic next feature or merge.
 
 ## Prior project-sheet passes (merged)
 
@@ -173,7 +199,7 @@ on `feat/ios-editor-sheets` → develop. Leave open without auto-merge.
 | 2 | Reviewed Photos/Files/URL append, confirmed removal, durable expected-state history and caption/coverage/preview integration | Integrated |
 | 3 | Native local reorder with Cancel/Save, exact caption projection, ordering/trim/history integration and source consolidation | Integrated |
 
-See [scope](phases/EDITOR_SHEETS.md) and [marked handoff](handoffs/EDITOR_SHEETS.md).
+See [marked handoff](handoffs/EDITOR_SHEETS.md).
 Compilation and device/output acceptance remain unverified.
 
 ## Product contracts

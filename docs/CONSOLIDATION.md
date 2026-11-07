@@ -87,7 +87,7 @@ Current behavior should be read from:
 - `docs/SETTINGS_PERFORMANCE.md`
 - `docs/RELEASE_HARDENING.md`
 
-The numbered files under `docs/handoffs/` and `docs/V1_IMPLEMENTATION_PLAN.md` are historical implementation records. They remain useful for why a boundary was introduced, but later focused contracts supersede them when wording differs.
+The numbered phase handoffs and `docs/V1_IMPLEMENTATION_PLAN.md` were historical implementation records; they were removed from the tree on 2026-11-07 as superseded (retrievable from git history). Later focused contracts supersede them when wording differs.
 
 ## Reviewed hotspots deliberately left intact
 

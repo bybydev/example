@@ -22,7 +22,7 @@ Source-only; compilation/native/UI/signing acceptance remains unverified.
 | JOB.ACTIONS / JOB.CONCURRENCY / JOB.QUEUE_UI / JOB.PROJECT_ROUTE | Passes 1–2 | Preserved |
 | JOB.INTEGRATION | Final scoped source review | Await pass 4 |
 
-See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+See [handoff](handoffs/QUEUE_EXPERIENCE.md).
 No generation/build/native/UI execution; runtime acceptance remains unverified.
 
 ## Queue experience — pass 2 (2026-11-01)
@@ -35,7 +35,7 @@ No generation/build/native/UI execution; runtime acceptance remains unverified.
 | JOB.ACTIONS / JOB.CONCURRENCY | Single queued actions and JobQueue 1/3 limits from pass 1 | Preserved |
 | JOB.BACKGROUND / JOB.INTEGRATION | Continued processing / final source integration review | Await passes 3 / 4 |
 
-See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+See [handoff](handoffs/QUEUE_EXPERIENCE.md).
 Source-only; compilation/native/UI acceptance remains unverified.
 
 ## Queue experience — pass 1 (2026-11-01)
@@ -48,7 +48,7 @@ Source-only; compilation/native/UI acceptance remains unverified.
 | JOB.BACKGROUND | User-initiated continued processing, progress/expiration and GPU-aware export fallback | Deferred to pass 3 |
 | JOB.INTEGRATION | Final source review of retry/cancellation/recovery/navigation | Deferred to pass 4 |
 
-See [scope](phases/QUEUE_EXPERIENCE.md) and [handoff](handoffs/QUEUE_EXPERIENCE.md).
+See [handoff](handoffs/QUEUE_EXPERIENCE.md).
 Source integration only; compilation/runtime acceptance remains unverified.
 
 ## Timeline clip trimming (2026-10-31, stacked on #55)
@@ -61,7 +61,7 @@ Source integration only; compilation/runtime acceptance remains unverified.
 | EDITOR.CLIP_TRIM_TRANSACTION | Save once on release, expected-state check, atomic adoption, bounded Undo/Redo | Source-integrated |
 | EDITOR.CLIP_TRIM_COMPATIBILITY | Preserve old project windows/hidden clips; schema 13 reads 1–12; frozen exports stay captured | Source-integrated |
 
-See [scope](phases/CLIP_TRIMMING.md) and [handoff](handoffs/CLIP_TRIMMING.md).
+See [handoff](handoffs/CLIP_TRIMMING.md).
 Media trim fields/reset are removed. Compilation/native/UI acceptance is unverified.
 
 ## Media Form — passes 1–2 (2026-10-31)
@@ -74,7 +74,7 @@ Media trim fields/reset are removed. Compilation/native/UI acceptance is unverif
 | EDITOR.CLIP_MEDIA_VALUES | Independent clip framing/volume; standard resets; legacy effective values preserved | Source-integrated |
 | EDITOR.MEDIA_INTEGRATION | Closed-sheet cancellation, preview-independent saving/recovery, one rewrite/sort and speech reconciliation; source lifecycle/history/output review | Source-reviewed and scoped fixes integrated |
 
-See [scope](phases/MEDIA_FORM.md) and [handoff](handoffs/MEDIA_FORM.md).
+See [handoff](handoffs/MEDIA_FORM.md).
 Both source passes are complete; compilation/native/UI acceptance is unverified.
 
 ## Music layer — passes 1–3 (2026-10-31)
@@ -89,7 +89,7 @@ Both source passes are complete; compilation/native/UI acceptance is unverified.
 | MUSIC.SHEET | Controls only; staged Files/replace/settings save once on Done, Cancel/swipe discards; no preview/transport | Source-integrated in pass 2; runtime unverified |
 | MUSIC.INTEGRATION | Sheet lifetime/late completion, rational loop/fade bounds, stable sliders, effective mute, import suitability; source ownership/duration/output review | Source-reviewed and fixes integrated in pass 3; runtime unverified |
 
-See [scope](phases/MUSIC_LAYER.md) and [handoff](handoffs/MUSIC_LAYER.md). No other
+See [handoff](handoffs/MUSIC_LAYER.md). No other
 editor design changes are authorized. Source-only restrictions remain.
 
 ## Native fullscreen playback (2026-10-29, stacked on #52)
@@ -99,7 +99,7 @@ editor design changes are authorized. Source-only restrictions remain.
 | EDITOR.NATIVE_FULLSCREEN | Native fullscreen for both expand entries; current player/live captions, paused same-position return | Source-integrated; runtime unverified |
 | EXPORT.NATIVE_PREVIEW | Native fullscreen for all completed-MP4 preview routes; preserve delivery protection | Source-integrated; runtime unverified |
 
-See [scope](phases/NATIVE_FULLSCREEN.md) and [handoff](handoffs/NATIVE_FULLSCREEN.md).
+See [handoff](handoffs/NATIVE_FULLSCREEN.md).
 
 ## Style form revision (2026-10-29, PR #52)
 
@@ -111,7 +111,7 @@ See [scope](phases/NATIVE_FULLSCREEN.md) and [handoff](handoffs/NATIVE_FULLSCREE
 | EDITOR.CAPTION_PLACEMENT | Global placement in Style: preset menu, inline X/Y, live sample, Cancel/Done | Source-integrated; runtime unverified |
 | EDITOR.ACTIONS | Five equal bottom actions including Export; compact spacing; main Undo/Redo in toolbar | Source-integrated; runtime unverified |
 
-See [scope](phases/STYLE_SHEET.md) and [handoff](handoffs/STYLE_SHEET.md).
+See [handoff](handoffs/STYLE_SHEET.md).
 This supersedes the earlier PR #52 real-video Style preview and clip-caption scope.
 
 ## Unified Style sheet (2026-10-29)
@@ -123,7 +123,7 @@ This supersedes the earlier PR #52 real-video Style preview and clip-caption sco
 | EDITOR.STYLE_TRANSACTION | Cancel/dismiss discard; Done saves before adoption, one history entry; retry remains local | Source-integrated; runtime unverified |
 | EDITOR.STYLE_SCOPE | Project inheritance, sparse clip overrides, named resets and current Pro checks | Source-integrated; runtime unverified |
 
-See [scope](phases/STYLE_SHEET.md) and [source handoff](handoffs/STYLE_SHEET.md).
+See [source handoff](handoffs/STYLE_SHEET.md).
 This supersedes the separate Styles carousel / Customize descriptions below.
 
 ## Timeline width (2026-10-28, PR #50)
@@ -147,7 +147,7 @@ squash merged into #50 as 35b29af after the user reported it working.
 |---|---|---|
 | EDITOR.PREVIEW_HANDOFF | Covered preview retains video/caption frame; one live owner; readiness-gated return; bounded decoded-frame cache and stale callback rejection | Source-integrated; compilation/device acceptance unverified |
 
-See [scope](phases/PREVIEW_HANDOFF.md) and [handoff](handoffs/PREVIEW_HANDOFF.md).
+See [handoff](handoffs/PREVIEW_HANDOFF.md).
 
 ## Contextual caption editor (2026-10-28)
 
@@ -157,8 +157,7 @@ See [scope](phases/PREVIEW_HANDOFF.md) and [handoff](handoffs/PREVIEW_HANDOFF.md
 | EDITOR.CAPTIONS_PREVIEW | Top video preview/play/pause/Undo/Redo, no scrubber/timeline; always highlight current playback row without auto-scroll; retain contextual push/pop | Source-integrated; compilation/device acceptance unverified |
 | EDITOR.CAPTION_ROW_ACTION | Row tap selects/highlights/seeks; selected row's top-left Edit caption pushes editing; no inline text field or Split / Words | Source-integrated; compilation/device acceptance unverified |
 
-See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
-[handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). Other consolidation is deferred.
+See [handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). Other consolidation is deferred.
 
 ## Final project sheets — passes 1–3 (2026-10-28, PR #49)
 
@@ -173,7 +172,7 @@ See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
 | PROJECT.CONSOLIDATION | Shared structural projection, current docs and nonblocking optional artwork | Integrated |
 
 All three passes have source integration; compilation/device/output acceptance remains
-unverified. [Scope](phases/EDITOR_SHEETS.md) and [handoff](handoffs/EDITOR_SHEETS.md)
+unverified. [handoff](handoffs/EDITOR_SHEETS.md)
 supersede earlier intermediate overview/clip-strip and deferred-pass descriptions below.
 
 ## Clip management — pass 2 (2026-10-28, PR #49)
@@ -197,7 +196,7 @@ Pass 1 remains intact. Drag reorder remains pass 3. See
 | PROJECT.CLIPS_SHEET | Two entry points, numbered timeline labels, select and existing rename | Source-integrated |
 | PROJECT.EXPORT_SHEET | Existing sheet owns configuration, activity and retained MP4/SRT files; toolbar-only entry | Source-integrated |
 
-See [scope](phases/EDITOR_SHEETS.md) and [handoff](handoffs/EDITOR_SHEETS.md).
+See [handoff](handoffs/EDITOR_SHEETS.md).
 No clip addition/removal/reorder in this pass. Earlier overview navigation is
 superseded; compilation/device/output acceptance remains unverified.
 
@@ -223,7 +222,7 @@ Older descriptions of a one-scroll inline caption workspace below are superseded
 |---|---|---|
 | V1.MANUAL_CAPTIONS | Explicit user text/timing, correction/hide/delete/undo, saving/duplicate, shared preview/export, retry overlap review | Source-integrated; compilation/device/output acceptance pending |
 
-See [scope](phases/MANUAL_CAPTIONS.md) and [marked handoff](handoffs/MANUAL_CAPTIONS.md).
+See [marked handoff](handoffs/MANUAL_CAPTIONS.md).
 Schema 10 reads 1–9. Phrase timing does not create model word timestamps, charge
 speech usage or mark recognition gaps complete. Whole-cue overlap replacement is
 explicitly warned and reversible. Earlier rows remain delivery history.
@@ -293,9 +292,9 @@ Details and pending acceptance: [PROJECT_EXPERIENCE](handoffs/PROJECT_EXPERIENCE
 
 | Area | Contracts and source evidence |
 |---|---|
-| Projects/import/storage | [Project system](phases/PROJECT_SYSTEM.md), [home/native flow](phases/HOME_NATIVE_FLOW.md); UUID packages, original-safe import/lifecycle, cached library and automatic project saving |
-| Transcription/jobs/delivery | [Recovery](phases/TRANSCRIPTION_RECOVERY.md), [processing](phases/PROCESSING_DELIVERY.md); accepted partial captions, gap retry, native intervals/IDs, quota and independent frozen outputs |
-| Editing/styles | [Editor](phases/EDITOR_EXPERIENCE.md), [caption production](phases/CAPTION_PRODUCTION.md); one scrolling workspace, direct correction/history, resolved versioned looks and shared renderer |
+| Projects/import/storage | [Project system](handoffs/PROJECT_SYSTEM.md), [home/native flow](handoffs/HOME_NATIVE_FLOW.md); UUID packages, original-safe import/lifecycle, cached library and automatic project saving |
+| Transcription/jobs/delivery | [Recovery](handoffs/TRANSCRIPTION_RECOVERY.md), [processing](handoffs/PROCESSING_DELIVERY.md); accepted partial captions, gap retry, native intervals/IDs, quota and independent frozen outputs |
+| Editing/styles | [Editor](handoffs/EDITOR_EXPERIENCE.md), [caption production](handoffs/CAPTION_PRODUCTION.md); one scrolling workspace, direct correction/history, resolved versioned looks and shared renderer |
 | Integration fixes | [Consolidation](CONSOLIDATION.md); strict version-2 decoding, covered player-layer handoff, current error reporting and documentation cleanup |
 | Acceptance/release | [Readiness](PRODUCTION_READINESS.md); all native/build/device/commerce/output evidence remains pending |
 
@@ -303,4 +302,4 @@ The original Fxx catalog and delivery history are historical; no new feature is
 implied. Search/sort/filter, direct URLs and combined imports remain existing
 supported behavior; transcript search and incoming share extension are not required.
 No invented word timing, implicit regrouping or inference on style choices.
-Previous source records are preserved in [the archive](archive/before-consolidation/FEATURES.md).
+Previous source records are preserved in git history.

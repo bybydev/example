@@ -191,8 +191,8 @@ Semantic text, wrapping/adaptive layouts, clear focus/selection/error labels and
 that experience must be validated on SE2 and a larger iPhone. Caption artwork uses
 the renderer, not theme colors. No performance/accessibility acceptance is inferred
 from source inspection. See [readiness](PRODUCTION_READINESS.md) and
-[caption design matrix](phases/CAPTION_PRODUCTION.md).
+[caption design matrix](handoffs/CAPTION_PRODUCTION.md).
 
 Earlier imagery/layout directions are preserved in
-[the archive](archive/before-consolidation/DESIGN.md) and do not authorize new scope.
+git history and do not authorize new scope.
 

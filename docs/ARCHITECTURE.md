@@ -378,7 +378,7 @@ Application code never branches on fixture-vs-production paths.
 - reuse an existing file only if its checksum is valid
 - redownload corruption automatically
 
-`scripts/validate-models.sh` independently verifies required names/paths/checksums and fails the build on mismatch.
+`scripts/verify-models.sh` independently verifies required names/paths/checksums and fails the build on mismatch.
 
 ## XcodeGen / package resolution / Xcode Cloud
 

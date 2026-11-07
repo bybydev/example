@@ -1,6 +1,6 @@
 # V1 decisions
 
-> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [phases/PRO.md](phases/PRO.md) and [handoffs/PRO.md](handoffs/PRO.md) supersede historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
+> Current amendment (2026-10-22): PR #30 is squash merged as eb89f0f. The user has now authorized Pro locking and AF themes; [handoffs/PRO.md](handoffs/PRO.md) supersedes historical Pro deferral, 28/29 accounting and PR #30 review holds below. The new phase stays open on feat/ios-pro-access-themes → develop. All 29 V1 items are source-integrated; compilation/runtime/user validation is unrun.
 
 ## Settled, 2026-10-22
 
@@ -76,7 +76,7 @@ The user explicitly requested fixes for the autosave race and existing URL-downl
 
 ## User-approved Pro amendment
 
-The user approved four benefits (unlimited captioning, all current caption styles/animations, 1080p and AF premium themes), free 5 minutes/week/basic/720p/default, monthly $6.99 and lifetime $24.99, and the existing com.hoangbkit.inkribe.pro.monthly/lifetime product format. The implementation request supersedes the P5 deferral. Use existing AF 0.1.8 APIs, no dependency bump or infrastructure. See phases/PRO and handoffs/PRO for explicit implementation/reset/recovery choices and production inputs. PR #30 was squash merged as eb89f0f before this separate phase.
+The user approved four benefits (unlimited captioning, all current caption styles/animations, 1080p and AF premium themes), free 5 minutes/week/basic/720p/default, monthly $6.99 and lifetime $24.99, and the existing com.hoangbkit.inkribe.pro.monthly/lifetime product format. The implementation request supersedes the P5 deferral. Use existing AF 0.1.8 APIs, no dependency bump or infrastructure. See handoffs/PRO for explicit implementation/reset/recovery choices and production inputs. PR #30 was squash merged as eb89f0f before this separate phase.
 
 
 ## 2026-10-26 — generous free captioning allowance

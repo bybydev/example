@@ -1,6 +1,6 @@
 # Inkribe iOS — start here
 
-2026-11-01. [Queue experience pass 4](phases/QUEUE_EXPERIENCE.md) completes all
+2026-11-01. [Queue experience pass 4](handoffs/QUEUE_EXPERIENCE.md) completes all
 four source passes in PR #57, extending 2923c08b. Final source review covers queue
 admission/actions, same-project/other-project routes, retained files/delivery,
 background grants/resource changes and recovery. Scoped fixes stabilize scene
@@ -9,7 +9,7 @@ focus/inventory and recheck project availability at handoff. See
 [source matrix](handoffs/QUEUE_EXPERIENCE.md). Source-only; runtime acceptance is
 unverified. Keep the PR open without auto-merge; no automatic next feature/release.
 
-2026-11-01. [Queue experience pass 3](phases/QUEUE_EXPERIENCE.md) extends PR #57
+2026-11-01. [Queue experience pass 3](handoffs/QUEUE_EXPERIENCE.md) extends PR #57
 from 7d4b06fd with user-initiated continued background processing, per-kind execution
 grants, system progress/expiration and GPU-aware export fallback. Transcription and
 SRT-only exports use CPU resources; video-containing exports need supported GPU
@@ -17,7 +17,7 @@ access or pause outside the foreground. iOS metadata/capability are source-confi
 no project/plist generation ran. See [handoff](handoffs/QUEUE_EXPERIENCE.md). Passes
 1–2 remain; final pass 4 awaits a signal. Source-only; runtime unverified; keep open.
 
-2026-11-01. [Queue experience pass 2](phases/QUEUE_EXPERIENCE.md) extends PR #57
+2026-11-01. [Queue experience pass 2](handoffs/QUEUE_EXPERIENCE.md) extends PR #57
 from faa33e8c with Spokio-style plain rows/scopes/toolbar/actions and project-tool
 navigation. Rows open Captions or the matching export; retained exports and full
 job details remain available separately. Owner onDismiss callbacks hand off from
@@ -25,7 +25,7 @@ Home/Editor/Captions/Export/Storage/Settings. See [handoff](handoffs/QUEUE_EXPER
 Pass-1 actions/capacity stay intact; background continuation awaits pass 3.
 Source-only; compilation/runtime acceptance unverified; keep open without auto-merge.
 
-2026-11-01. Current work is [queue experience, pass 1](phases/QUEUE_EXPERIENCE.md),
+2026-11-01. Current work is [queue experience, pass 1](handoffs/QUEUE_EXPERIENCE.md),
 from develop b51e1b95 in feat/ios-queue-experience -> develop. One Create Export
 uses the durable queue and project-local activity; Transcribe already follows the
 same queued path. JobQueue capacity is one transcription and three exports, without
@@ -33,7 +33,7 @@ the iOS single-operation gate. See [source handoff](handoffs/QUEUE_EXPERIENCE.md
 Queue redesign/deep links, background continuation and final review remain later
 passes awaiting the user's signal. Source-only; keep open without auto-merge.
 
-2026-10-31. Current work is [timeline clip trimming](phases/CLIP_TRIMMING.md),
+2026-10-31. Current work is [timeline clip trimming](handoffs/CLIP_TRIMMING.md),
 stacked on PR #55 at 381b0d2b and targeting feat/ios-media-form. Timeline edge
 handles are the only trimming UI; the existing main preview auditions boundaries.
 One saved Undo edit closes excluded time without moving native clip/caption data.
@@ -41,7 +41,7 @@ Media has no trim controls. Schema 13 reads 1–12, including old project trim w
 frozen exports remain independent. See [source handoff](handoffs/CLIP_TRIMMING.md).
 Source-only; compilation/native/UI acceptance unverified. Leave both PRs open.
 
-2026-10-31. [Media Form pass 2](phases/MEDIA_FORM.md) completes the two source
+2026-10-31. [Media Form pass 2](handoffs/MEDIA_FORM.md) completes the two source
 passes in PR #55, extending bb0d1b11. Scope/reset/save/history/reopen and shared
 preview/export review preserves the approved Form. Scoped fixes cancel a closed
 sheet's unpublished save, remove preview-preparation waiting from Done, recover
@@ -50,7 +50,7 @@ progress on dismissal. See [review matrix](handoffs/MEDIA_FORM.md). Compilation/
 native/UI acceptance is unverified; keep open without auto-merge. Earlier Media
 preview/default wording is historical where superseded by this scope.
 
-2026-10-31. [Music integration pass 3](phases/MUSIC_LAYER.md) completes the three
+2026-10-31. [Music integration pass 3](handoffs/MUSIC_LAYER.md) completes the three
 source passes in PR #54, extending 73a2323c. Review covers file/history/lifecycle,
 duration/mute behavior and frozen outputs; scoped fixes harden actual-sheet draft
 ownership, late completion/cleanup, rational repeat/fade boundaries, stable fade
@@ -58,7 +58,7 @@ controls, zero-volume feedback and import suitability checks. The approved layou
 is unchanged. See [review matrix](handoffs/MUSIC_LAYER.md). Source-only: no builds,
 tests/typechecks/native/UI runs; runtime acceptance remains unverified. Leave open.
 
-2026-10-31. [Music pass 2](phases/MUSIC_LAYER.md) is now source-integrated in PR #54,
+2026-10-31. [Music pass 2](handoffs/MUSIC_LAYER.md) is now source-integrated in PR #54,
 extending b345f71c. Timeline order is Video/Music/Captions, with leading original
 mute and square music/caption controls before time zero, Add music, a real waveform
 and loop indication. Music has a controls-only large sheet; Files/replace/settings
@@ -66,7 +66,7 @@ publish together on Done, while Cancel/swipe discards staging. Existing editor
 chrome and preview ownership remain. See [handoff](handoffs/MUSIC_LAYER.md). Pass 3
 awaits the user's signal; source-only, no runtime acceptance or auto-merge.
 
-2026-10-31. Current work is [music layer pass 1](phases/MUSIC_LAYER.md), in one
+2026-10-31. Current work is [music layer pass 1](handoffs/MUSIC_LAYER.md), in one
 new feat/ios-music-layer PR from develop 723f333, targeting develop. One soundtrack
 has owned storage, independent output timing/mix/fades/loop, saved edits/history and
 shared preview/MP4 rendering. Schema 12 reads 1–11; speech remains clip-only. Pass 1
@@ -74,14 +74,14 @@ has no editor UI/layout changes; leading controls and the preview-free Music she
 are pass 2 and await the user's next signal. See [handoff](handoffs/MUSIC_LAYER.md).
 Source-only; compilation/runtime unverified; keep the PR open without auto-merge.
 
-2026-10-29. Current work is [native fullscreen playback](phases/NATIVE_FULLSCREEN.md),
+2026-10-29. Current work is [native fullscreen playback](handoffs/NATIVE_FULLSCREEN.md),
 stacked on PR #52 at 3f9b8107 and targeting feat/ios-style-sheet-grid. Editor expands
 use the existing live composition/captions; Export/Queue previews use the selected
 completed MP4. AVKit owns fullscreen controls/dismissal; inline previews remain.
 See [source handoff](handoffs/NATIVE_FULLSCREEN.md). Source-only; runtime unverified.
 Keep parent/stacked PRs open without auto-merge.
 
-2026-10-29. Latest approved revision in PR #52 is the [Style form](phases/STYLE_SHEET.md):
+2026-10-29. Latest approved revision in PR #52 is the [Style form](handoffs/STYLE_SHEET.md):
 shared template sample background/text, live appearance preview with play/pause only,
 native section/row controls and pushed pickers. Caption appearance is project-wide;
 placement stays in Style with live sample feedback; Media retains its actual
@@ -90,7 +90,7 @@ Cancel/Done transaction remain. This supersedes PR #52's first real-video Style
 preview, category tabs and caption scope menu below. See [handoff](handoffs/STYLE_SHEET.md).
 Source-only; compilation and runtime acceptance remain unverified. Keep #52 open.
 
-2026-10-29. Current user-approved work is the [unified Style sheet](phases/STYLE_SHEET.md),
+2026-10-29. Current user-approved work is the [unified Style sheet](handoffs/STYLE_SHEET.md),
 from develop b28beebb in feat/ios-style-sheet-grid, targeting develop. Style contains
 real preview, selected template and inline controls; its template row pushes the
 lazy grid. Cancel discards local settings; Done durably saves one undoable edit.
@@ -116,8 +116,7 @@ Earlier stacked-PR status below is historical.
 `feat/ios-contextual-caption-editor`. Covered hosts keep a still with its caption
 clock/snapshot; live video returns after layer readiness. The single session player,
 all #50 caption flows and preview dimensions remain. Source integration only;
-compilation/device acceptance is unverified. See [scope](phases/PREVIEW_HANDOFF.md)
-and [handoff](handoffs/PREVIEW_HANDOFF.md). Keep both PRs open without auto-merge.
+compilation/device acceptance is unverified. See [handoff](handoffs/PREVIEW_HANDOFF.md). Keep both PRs open without auto-merge.
 
 2026-10-28. Current work is the contextual caption editor, based on develop
 `ba5b422`, in a new PR targeting develop. The bottom Timing action is removed.
@@ -131,8 +130,7 @@ list, with no scrubber/timeline. The current playback row is always highlighted;
 playback does not select rows or automatically scroll the list.
 Tapping row text still selects/highlights/seeks. Caption text in the list is read-only;
 only Edit caption pushes editing. There is no Split / Words or inline text field.
-See [scope](phases/CONTEXTUAL_CAPTION_EDITOR.md) and
-[source handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). Other consolidation waits
+See [source handoff](handoffs/CONTEXTUAL_CAPTION_EDITOR.md). Other consolidation waits
 for a separate user signal. The earlier sheet passes below are merged in the base.
 
 2026-10-28. PR #49 (`feat/ios-editor-sheets` → develop) contains source integration
@@ -154,7 +152,7 @@ clip settings, shared active engine/model, 30-minute Free policy and Mac behavio
 Adding/reordering clips does not start transcription. Current global trim is a
 clock window; reordering can change which footage falls inside it.
 
-Read [scope](phases/EDITOR_SHEETS.md), [marked source handoff](handoffs/EDITOR_SHEETS.md),
+Read [scope](handoffs/EDITOR_SHEETS.md), [marked source handoff](handoffs/EDITOR_SHEETS.md),
 [plan](PLAN.md), [features](FEATURES.md), [workflow](WORKFLOW.md), [architecture](ARCHITECTURE.md)
 and [design](DESIGN.md). Root AGENTS.md and the latest user request control scope.
 Previous phase evidence remains in linked handoffs and the archive.
