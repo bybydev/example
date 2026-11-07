@@ -377,14 +377,14 @@ final class ProjectsModel {
         photoPicker = PhotoPickerRequest(selectionID: selectionSession)
     }
 
-    func receivePhotos(_ providers: [NSItemProvider], request: PhotoPickerRequest) {
+    func receivePhotos(_ picks: [PhotoPick], request: PhotoPickerRequest) {
         guard photoPicker?.id == request.id else { return }
         // Retain providers in the model before dismissing the native picker.
         photoPicker = nil
         guard !isImporting, !isPreparingPhotos, selectionSession == request.selectionID else { return }
-        let selections = providers.enumerated().map { index, provider in
-            PhotoMovieSelection(provider: provider,
-                name: provider.suggestedName ?? "Selected video \(index + 1)")
+        let selections = picks.enumerated().map { index, pick in
+            PhotoMovieSelection(provider: pick.provider, assetID: pick.assetID,
+                name: pick.provider.suggestedName ?? "Selected video \(index + 1)")
         }
         preparePhotos(selections, selectionID: request.selectionID)
     }
@@ -442,7 +442,8 @@ final class ProjectsModel {
                     for selection in chunk {
                         // Strict Sendability bounds: only this Sendable box crosses
                         // into the child task; the provider itself stays there.
-                        let load = PhotoLoad(provider: selection.provider, id: selection.id, name: selection.name)
+                        let load = PhotoLoad(provider: selection.provider, id: selection.id,
+                            name: selection.name, assetID: selection.assetID)
                         group.addTask { await self.materialize(load, token: token) }
                     }
                 }
@@ -454,7 +455,7 @@ final class ProjectsModel {
     private func materialize(_ load: PhotoLoad, token: UUID) async {
         guard !Task.isCancelled, photoGeneration == token else { return }
         do {
-            let file = try await PhotoMovieRequest.load(load.provider) { [self] stage in
+            let file = try await PhotoMovieLoader.load(load) { [self] stage in
                 guard photoGeneration == token else { return }
                 advancePhotoStage(load.id, stage)
             }

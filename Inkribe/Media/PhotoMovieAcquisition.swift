@@ -1,4 +1,6 @@
 import Foundation
+import OSLog
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -6,26 +8,34 @@ import UniformTypeIdentifiers
 
 // MARK: - One Photos video acquisition path
 //
-// New Project and Add clips both import videos through the same native
-// PHPicker + NSItemProvider request. PhotosPickerItem.loadTransferable with
-// preferredItemEncoding .current stalls waiting for the absolute original and
-// can simply never call back; provider file requests against the current
-// representation are bounded, staged per video and retryable instead, and the
-// unsupported loadItem coercion path is never used.
+// New Project and Add clips both import videos through two cooperative paths.
+// PhotoKit originals first: the native picker yields an asset identifier and
+// PhotoMovieLoader streams the asset's own video resource into app-owned
+// staging with real byte progress and explicit errors — the file the library
+// actually stores, never a system substitution. The bounded NSItemProvider
+// request stays as the fallback: provider file requests against the current
+// representation, watched per attempt and retryable, for Limited access,
+// denied access or items without a video resource. PhotosPickerItem
+// loadTransferable and loadItem coercion are never used.
 
 /// An app-owned copy of one Photos-picked video, independent of the provider's
 /// short-lived security scope. Publication copies it into project storage.
 struct PickedMovie: Sendable {
     let localURL: URL
     let displayName: String
+    /// The representation that actually delivered these bytes — a library
+    /// resource UTI or a provider type identifier — for quality diagnostics.
+    let representation: String? = nil
 }
 
-/// One Photos selection between receiving the provider and its queued,
+/// One Photos selection between receiving the picker result and its queued,
 /// loading, copying or failure stage. Success removes the entry and publishes
 /// an ImportInput carrying the same identity.
 struct PhotoMovieSelection: Identifiable {
     let id = UUID()
     let provider: NSItemProvider
+    /// The library asset behind the pick, when the picker handed one.
+    let assetID: String?
     let name: String
     var stage = Stage.loading
 
@@ -51,6 +61,7 @@ struct PhotoLoad: @unchecked Sendable {
     let provider: NSItemProvider
     let id: UUID
     let name: String
+    let assetID: String?
 }
 
 /// One native picker presentation request in either model's selection session.
@@ -59,18 +70,27 @@ struct PhotoPickerRequest: Identifiable {
     let selectionID: UUID
 }
 
-/// Native video picker with ordered selection. No full photo-library permission
-/// or PHAsset lookup is needed. `.current` delivers the representation that
-/// actually exists on the iPhone: a local original completes immediately, and
-/// an offloaded one waits for the download, bounded by the request watchdogs.
+/// One picked item. The provider describes the choice and is the fallback
+/// byte source; the library asset identifier only resolves for it when photo
+/// access is granted, and is the path that delivers the actual original.
+struct PhotoPick {
+    let provider: NSItemProvider
+    let assetID: String?
+}
+
+/// Native video picker with ordered selection. `.shared` makes results carry
+/// asset identifiers so PhotoKit can stream the original file; `.current`
+/// keeps the provider fallback consistent (a local original completes
+/// immediately, an offloaded one waits for its download, watched by the
+/// fallback's request watchdogs).
 @MainActor
 struct PhotosVideoPicker: UIViewControllerRepresentable {
-    let onSelection: ([NSItemProvider]) -> Void
+    let onSelection: ([PhotoPick]) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onSelection: onSelection) }
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration()
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .videos
         configuration.selectionLimit = 0
         configuration.selection = .ordered
@@ -88,15 +108,15 @@ struct PhotosVideoPicker: UIViewControllerRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        private let onSelection: ([NSItemProvider]) -> Void
+        private let onSelection: ([PhotoPick]) -> Void
         private var completed = false
 
-        init(onSelection: @escaping ([NSItemProvider]) -> Void) { self.onSelection = onSelection }
+        init(onSelection: @escaping ([PhotoPick]) -> Void) { self.onSelection = onSelection }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             guard !completed else { return }
             completed = true
-            onSelection(results.map(\.itemProvider))
+            onSelection(results.map { PhotoPick(provider: $0.itemProvider, assetID: $0.assetIdentifier) })
         }
     }
 }
@@ -111,17 +131,22 @@ final class PhotoMovieRequest {
         let type: String
     }
 
-    /// A local representation should arrive quickly. A silent provider is
-    /// abandoned per attempt so another representation can be tried, while the
-    /// overall limit still leaves slow iCloud materialization some room.
-    private static let firstAttemptLimit: Duration = .seconds(30)
-    private static let nextAttemptLimit: Duration = .seconds(15)
-    private static let overallLimit: Duration = .seconds(120)
+    /// Attempt windows are silence windows: the provider earns extensions
+    /// whenever its transfer moves, so a slow-but-alive copy or iCloud
+    /// download is never killed mid-transfer. The overall limit still bounds
+    /// the whole request.
+    private static let firstAttemptLimit: Duration = .seconds(45)
+    private static let nextAttemptLimit: Duration = .seconds(30)
+    // Only attempts that are visibly transferring can reach this cap; silent
+    // providers die at their attempt windows far earlier. Five minutes gives
+    // a real iCloud download room to finish while still bounding a stuck row.
+    private static let overallLimit: Duration = .seconds(300)
     private static let typePollCount = 16
 
     private var provider: NSItemProvider?
     private var continuation: CheckedContinuation<PickedMovie, Error>?
     private var progress: Progress?
+    private var progressObserver: NSKeyValueObservation?
     private var overallDeadline: Task<Void, Never>?
     private var attemptWatchdog: Task<Void, Never>?
     private var resolutionTask: Task<Void, Never>?
@@ -222,8 +247,7 @@ final class PhotoMovieRequest {
         attemptIndex = index
         attemptGeneration += 1
         let generation = attemptGeneration
-        progress?.cancel()
-        progress = nil
+        releaseAttemptProgress()
         if index > 0 { onStage?(.retrying) }
         armAttemptWatchdog(
             generation: generation,
@@ -246,6 +270,30 @@ final class PhotoMovieRequest {
                 Task { @MainActor in self.attemptFailed(generation: generation, message: message) }
             }
         }
+        // The watchdog kills silence, not work: every movement of the
+        // provider's transfer progress re-arms this attempt's window, so a
+        // slow-but-alive large copy or an iCloud download keeps loading. Only
+        // a fully silent window (no motion, no callback) ends it.
+        observeProgressMotion(generation: generation)
+    }
+
+    private func observeProgressMotion(generation: Int) {
+        guard let progress else { return }
+        progressObserver = progress.observe(\.fractionCompleted, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.noteProgressMotion(generation: generation) }
+        }
+    }
+
+    private func noteProgressMotion(generation: Int) {
+        guard result == nil, attemptGeneration == generation, progress != nil else { return }
+        armAttemptWatchdog(generation: generation, limit: Self.nextAttemptLimit)
+    }
+
+    private func releaseAttemptProgress() {
+        progress?.cancel()
+        progress = nil
+        progressObserver?.invalidate()
+        progressObserver = nil
     }
 
     private func armAttemptWatchdog(generation: Int, limit: Duration) {
@@ -271,10 +319,12 @@ final class PhotoMovieRequest {
 
     private func attemptStalled(generation: Int) {
         guard result == nil, attemptGeneration == generation else { return }
-        // Cancelling the progress handle is the only way to release a provider
-        // request that never calls back. A later completion is rejected by the
-        // generation check and its copied file is removed by deliver.
-        progress?.cancel()
+        // Fires only after a full silent window; transfer motion re-arms the
+        // watchdog first. Cancelling the progress handle is the only way to
+        // release a provider request that never calls back. A later completion
+        // is rejected by the generation check and its copied file is removed
+        // by deliver.
+        releaseAttemptProgress()
         advanceAttempt(from: generation)
     }
 
@@ -301,7 +351,7 @@ final class PhotoMovieRequest {
     private func advanceAttempt(from generation: Int) {
         guard result == nil, attemptGeneration == generation else { return }
         attemptWatchdog?.cancel(); attemptWatchdog = nil
-        progress?.cancel(); progress = nil
+        releaseAttemptProgress()
         beginAttempt(attemptIndex + 1)
     }
 
@@ -322,6 +372,7 @@ final class PhotoMovieRequest {
         attemptWatchdog?.cancel(); attemptWatchdog = nil
         resolutionTask?.cancel(); resolutionTask = nil
         let progress = self.progress; self.progress = nil
+        progressObserver?.invalidate(); progressObserver = nil
         provider = nil
         onStage = nil
         suggestedName = nil
@@ -332,7 +383,7 @@ final class PhotoMovieRequest {
     /// The owned copy of a Photos selection must survive the whole selection
     /// session (review, later videos, the Add press), so it stages under
     /// Application Support like the repository's own originals.
-    nonisolated private static func stagingRoot() -> URL {
+    nonisolated static func stagingRoot() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return support.appendingPathComponent("InkribePhotoStaging", isDirectory: true)
@@ -366,7 +417,8 @@ final class PhotoMovieRequest {
             let name: String
             if let suggestedName, !suggestedName.isEmpty { name = suggestedName }
             else { name = url.lastPathComponent }
-            return .success(PickedMovie(localURL: copy, displayName: name.isEmpty ? "Imported Video" : name))
+            return .success(PickedMovie(localURL: copy,
+                displayName: name.isEmpty ? "Imported Video" : name, representation: type))
         } catch {
             try? FileManager.default.removeItem(at: copy)
             return .failure(PhotoMovieRequestError.copying(error.localizedDescription))
@@ -383,8 +435,281 @@ private enum PhotoMovieRequestError: LocalizedError {
         case .copying(let detail): "Couldn’t copy this video into Inkribe. \(detail)"
         case .missingFile: "Photos did not provide a readable video file."
         case .noResponse: "Photos stopped responding for this video. Retry, or choose the video again."
-        case .timedOut: "Photos did not finish providing this video within two minutes. Retry when the video is available on your iPhone."
+        case .timedOut: "Photos did not finish providing this video within five minutes. Retry when the video is available on your iPhone."
         }
+    }
+}
+
+// MARK: - PhotoKit original path
+//
+// The provider pipeline asks "a compatible file for this pick" and the system
+// decides which bytes satisfy it: substitutions, no progress protocol and
+// silent stalls are structural there. The PhotoKit path names the asset's own
+// video resource instead: byte-streamed with real progress, cancellable,
+// explicit errors and deterministic bytes — exactly the file the library
+// stores. PhotoMovieLoader prefers it whenever the picker handed an asset
+// identifier and library access is granted, and falls back to the bounded
+// provider request otherwise (Limited access, denied access, or no video
+// resource). Shared staging keeps both paths' outputs interchangeable.
+
+struct PhotoKitUnresolvable: Error, LocalizedError {
+    let reason: String
+    var errorDescription: String? { reason }
+}
+
+/// Chooses the bytes path for one selection. Both paths publish the same
+/// stages and end in an app-owned staged PickedMovie.
+@MainActor
+enum PhotoMovieLoader {
+    private static let logger = Logger(subsystem: "com.hoangbkit.inkribe",
+                                       category: "PhotoMovieAcquisition")
+
+    static func load(_ load: PhotoLoad,
+                     onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) async throws -> PickedMovie {
+        if let assetID = load.assetID {
+            do {
+                return try await PhotoAssetMovieRequest.load(assetIdentifier: assetID,
+                    suggestedName: load.name, onStage: onStage)
+            } catch let failure as PhotoKitUnresolvable {
+                logger.notice("PhotoKit original unavailable: \(failure.reason, privacy: .public) — provider request continues")
+                return try await PhotoMovieRequest.load(load.provider, onStage: onStage)
+            }
+        }
+        return try await PhotoMovieRequest.load(load.provider, onStage: onStage)
+    }
+}
+
+enum PhotoAssetMovieRequest {
+    private static let logger = Logger(subsystem: "com.hoangbkit.inkribe",
+                                       category: "PhotoAssetMovieRequest")
+    // PhotoKit keeps moving only while Photos itself moves; this generous
+    // deadline still bounds a fully silent request. Transfers with real byte
+    // progress never come close to it, and cancellation is deterministic.
+    private static let deliveryLimit: Duration = .seconds(300)
+
+    /// Streams the library resource into app-owned staging. Chunks write
+    /// directly into the staged file, so nothing whole-video sized is held in
+    /// memory, and the streaming write is serialized by Photos' own per-request
+    /// serial callback queue.
+    nonisolated static func load(assetIdentifier: String,
+                                 suggestedName: String?,
+                                 onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) async throws -> PickedMovie {
+        // One prompt on the first import; Limited access keeps picker-picked
+        // items resolvable, and anything else falls back to the provider path.
+        let authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        guard authorization == .authorized || authorization == .limited else {
+            throw PhotoKitUnresolvable(reason: "Photo library access is not granted")
+        }
+        try Task.checkCancellation()
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil).firstObject,
+              asset.mediaType == .video else {
+            throw PhotoKitUnresolvable(reason: "The selected video is not resolvable in the photo library")
+        }
+        // Prefer the plain video resource; any movie-conforming representation
+        // is acceptable when the plain one is absent.
+        let candidates = PHAssetResource.assetResources(for: asset)
+            .filter { (UTType($0.uniformTypeIdentifier) ?? UTType.movie).conforms(to: .movie) }
+        guard let resource = candidates.first(where: { $0.type == .video }) ?? candidates.first else {
+            throw PhotoKitUnresolvable(reason: "This library item has no video resource")
+        }
+        let directory = PhotoMovieRequest.stagingRoot()
+        let ext = UTType(resource.uniformTypeIdentifier)?.preferredFilenameExtension ?? "mov"
+        let destination = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        let delivery = PhotoAssetDelivery(destination: destination,
+            storedName: resource.originalFilename, suggestedName: suggestedName,
+            representation: resource.uniformTypeIdentifier, onStage: onStage)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                // Registration inside: the request identifier only exists here.
+                let identifier = PHAssetResourceManager.default().requestData(
+                    for: resource, options: options,
+                    dataReceivedHandler: { delivery.receive($0) },
+                    completionHandler: { delivery.complete(with: $0) })
+                delivery.registeredRequest(identifier)
+            }
+        } onCancel: {
+            delivery.cancelRequest()
+        }
+    }
+
+    private static func deliveryDetail(_ error: Error) -> String {
+        let nsError = error as NSError
+        return "\(error.localizedDescription) (\(nsError.domain)-\(nsError.code))"
+    }
+}
+
+/// Owns one PhotoKit resource transfer: chunked disk writes, the single
+/// continuation resume, request cancellation and the delivery deadline.
+/// PhotoKit calls its handlers on an arbitrary serial queue; every mutable
+/// state touch is lock-guarded and the continuation resumes only once, after
+/// the lock is released.
+private final class PhotoAssetDelivery: @unchecked Sendable {
+    private let lock = NSLock()
+    private let destination: URL
+    private let storedName: String?
+    private let suggestedName: String?
+    private let representation: String
+    private let onStage: @MainActor (PhotoMovieSelection.Stage) -> Void
+    private var continuation: CheckedContinuation<PickedMovie, Error>?
+    private var requestID = PHInvalidAssetResourceDataRequestID
+    private var registered = false
+    private var completed = false
+    private var cancelRequested = false
+    private var file: FileHandle?
+    private var receivedBytes = 0
+    private var copyingReported = false
+    private var deadlineTask: Task<Void, Never>?
+
+    init(destination: URL, storedName: String?, suggestedName: String?, representation: String,
+         onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) {
+        self.destination = destination
+        self.storedName = storedName
+        self.suggestedName = suggestedName
+        self.representation = representation
+        self.onStage = onStage
+    }
+
+    func registeredRequest(_ identifier: PHAssetResourceDataRequestID) {
+        lock.lock()
+        guard !completed, !registered else { lock.unlock(); return }
+        registered = true
+        requestID = identifier
+        let cancelled = cancelRequested
+        lock.unlock()
+        // A cancellation that landed before registration ended the row's task;
+        // the request only exists now, so release it here. Later callbacks are
+        // rejected and resumptions restore cancellation exactly once.
+        guard !cancelled else {
+            if identifier != PHInvalidAssetResourceDataRequestID {
+                PHAssetResourceManager.default().cancelDataRequest(identifier)
+            }
+            return
+        }
+        deadlineTask = Task { [weak self] in
+            do { try await Task.sleep(for: PhotoAssetMovieRequest.deliveryLimit) } catch { return }
+            self?.expire()
+        }
+    }
+
+    func receive(_ chunk: Data) {
+        var failure: Error?
+        lock.lock()
+        if completed {
+            lock.unlock()
+            return
+        }
+        if cancelRequested {
+            failure = CancellationError()
+        } else {
+            if file == nil {
+                if !FileManager.default.createFile(atPath: destination.path, contents: nil) {
+                    failure = PhotoMovieRequestError.copying("The staged video file could not be created.")
+                } else {
+                    file = try? FileHandle(forWritingTo: destination)
+                    if file == nil {
+                        failure = PhotoMovieRequestError.copying("The staged video file could not be opened.")
+                    }
+                }
+            }
+            if failure == nil {
+                do {
+                    try file?.write(contentsOf: chunk)
+                    receivedBytes += Int64(chunk.count)
+                } catch {
+                    failure = PhotoMovieRequestError.copying(error.localizedDescription)
+                }
+            }
+        }
+        // Only the first chunk crosses into the user-facing stage; later ones
+        // keep streaming silently into the staged file.
+        let announce = !copyingReported
+        if announce { copyingReported = true }
+        lock.unlock()
+        if announce {
+            Task { @MainActor in onStage(.copying) }
+        }
+        if let failure {
+            conclude(.failure(failure))
+        }
+    }
+
+    func complete(with error: Error?) {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        let handle = file
+        file = nil
+        let cancelled = cancelRequested
+        lock.unlock()
+        try? handle?.close()
+        if let error {
+            let mapped: Error = cancelled
+                ? CancellationError()
+                : PhotoMovieRequestError.loading(PhotoAssetMovieRequest.deliveryDetail(error))
+            conclude(.failure(mapped))
+            return
+        }
+        let values = try? destination.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values?.isRegularFile == true, (values?.fileSize ?? 0) > 0 else {
+            conclude(.failure(PhotoMovieRequestError.missingFile))
+            return
+        }
+        let identity = [storedName, suggestedName]
+            .compactMap { $0 }
+            .first { !$0.isEmpty }
+        PhotoAssetMovieRequest.logger.info(
+            "Copied \(receivedBytes, privacy: .public) bytes from \(representation, privacy: .public)")
+        conclude(.success(PickedMovie(localURL: destination,
+            displayName: identity ?? "Imported Video", representation: representation)))
+    }
+
+    func cancelRequest() {
+        lock.lock()
+        let alreadyDone = completed || !registered
+        cancelRequested = true
+        lock.unlock()
+        // Before registration the flag drives later paths (registeredRequest,
+        // receive and complete all end in cancellation); once registered, the
+        // release is immediate and deterministic here.
+        if !alreadyDone {
+            conclude(.failure(CancellationError()))
+        }
+    }
+
+    private func expire() {
+        lock.lock()
+        let finished = completed
+        lock.unlock()
+        guard !finished else { return }
+        conclude(.failure(PhotoMovieRequestError.timedOut))
+    }
+
+    /// Transitions to done exactly once: closes the staged file, releases the
+    /// PhotoKit request and the deadline, removes partial output on failure,
+    /// then resumes the continuation outside the lock.
+    private func conclude(_ outcome: Result<PickedMovie, Error>) {
+        var delivered: CheckedContinuation<PickedMovie, Error>?
+        lock.lock()
+        if !completed {
+            completed = true
+            try? file?.close()
+            file = nil
+            if requestID != PHInvalidAssetResourceDataRequestID {
+                PHAssetResourceManager.default().cancelDataRequest(requestID)
+                requestID = PHInvalidAssetResourceDataRequestID
+            }
+            deadlineTask?.cancel()
+            deadlineTask = nil
+            if case .failure = outcome {
+                try? FileManager.default.removeItem(at: destination)
+            }
+            delivered = continuation
+            continuation = nil
+        }
+        lock.unlock()
+        delivered?.resume(with: outcome)
     }
 }
 

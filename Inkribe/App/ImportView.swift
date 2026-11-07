@@ -32,8 +32,8 @@ struct ImportView: View {
                 .fullScreenCover(item: Binding(
                     get: { model.photoPicker },
                     set: { model.photoPicker = $0 })) { request in
-                    PhotosVideoPicker { providers in
-                        model.receivePhotos(providers, request: request)
+                    PhotosVideoPicker { picks in
+                        model.receivePhotos(picks, request: request)
                     }
                 }
                 .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in

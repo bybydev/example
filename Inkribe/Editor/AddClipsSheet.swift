@@ -38,8 +38,8 @@ struct AddClipsSheet: View {
         // PHPicker is built for full-screen presentation on iPhone; presenting it
         // inside a nested page sheet proved unreliable on device.
         .fullScreenCover(item: $model.photoPicker) { request in
-            PhotosVideoPicker { providers in
-                model.receivePhotos(providers, request: request)
+            PhotosVideoPicker { picks in
+                model.receivePhotos(picks, request: request)
             }
         }
         .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in
@@ -247,12 +247,12 @@ final class AddClipsModel {
         photoPicker = PhotoPickerRequest(selectionID: selectionID)
     }
 
-    func receivePhotos(_ providers: [NSItemProvider], request: PhotoPickerRequest) {
+    func receivePhotos(_ picks: [PhotoPick], request: PhotoPickerRequest) {
         guard active, selectionID == request.selectionID, photoPicker?.id == request.id else { return }
         // Retain providers in the model before dismissing the native picker.
-        let selections = providers.enumerated().map { index, provider in
-            PhotoMovieSelection(provider: provider,
-                name: provider.suggestedName ?? "Selected video \(index + 1)")
+        let selections = picks.enumerated().map { index, pick in
+            PhotoMovieSelection(provider: pick.provider, assetID: pick.assetID,
+                name: pick.provider.suggestedName ?? "Selected video \(index + 1)")
         }
         photoPicker = nil
         preparePhotos(selections, selectionID: request.selectionID)
@@ -337,7 +337,8 @@ final class AddClipsModel {
                     for item in chunk {
                         // Strict Sendability bounds: only this Sendable box crosses
                         // into the child task; the provider itself stays there.
-                        let load = PhotoLoad(provider: item.provider, id: item.id, name: item.name)
+                        let load = PhotoLoad(provider: item.provider, id: item.id,
+                            name: item.name, assetID: item.assetID)
                         group.addTask { await self.materialize(load, token: token) }
                     }
                 }
@@ -349,7 +350,7 @@ final class AddClipsModel {
     private func materialize(_ load: PhotoLoad, token: UUID) async {
         guard active, !Task.isCancelled, photoGeneration == token else { return }
         do {
-            let file = try await PhotoMovieRequest.load(load.provider) { [self] stage in
+            let file = try await PhotoMovieLoader.load(load) { [self] stage in
                 guard self.active, self.photoGeneration == token else { return }
                 self.advancePhotoStage(load.id, stage)
             }
