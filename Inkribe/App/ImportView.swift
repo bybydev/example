@@ -1,4 +1,3 @@
-import PhotosUI
 import AppFoundation
 import SwiftUI
 import UIKit
@@ -9,7 +8,6 @@ struct ImportView: View {
     @Environment(\.appFoundationTheme) private var theme
     @Environment(ProjectsModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var photosSelection: [PhotosPickerItem] = []
     @State private var isPickingFiles = false
     @State private var fileSelectionID: UUID?
     @State private var preset = CanvasPreset.original
@@ -31,9 +29,12 @@ struct ImportView: View {
                     guard let completion = model.importCompletion, !completion.hasFailures else { return }
                     finish(completion)
                 }
-                .onChange(of: photosSelection) { _, picked in
-                    guard !picked.isEmpty else { return }
-                    photosSelection = []; model.beginPhotoPreparation(picked)
+                .fullScreenCover(item: Binding(
+                    get: { model.photoPicker },
+                    set: { model.photoPicker = $0 })) { request in
+                    PhotosVideoPicker { providers in
+                        model.receivePhotos(providers, request: request)
+                    }
                 }
                 .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.movie], allowsMultipleSelection: true) { result in
                     guard let fileSelectionID, fileSelectionID == model.importSelectionID else { return }
@@ -53,7 +54,7 @@ struct ImportView: View {
 
     private var importForm: some View {
         Form {
-            Group { introduction; sources; photoPreparation; selectedMedia; preparationFailures; projectSettings; creation }
+            Group { introduction; sources; photoPreparation; selectedMedia; projectSettings; creation }
                 .listRowBackground(theme.surfaceColor).listRowSeparatorTint(theme.borderColor)
         }
     }
@@ -64,11 +65,10 @@ struct ImportView: View {
         }
     }
     private var sources: some View {
-        // Keep the picker section's rows fixed while Photos hands off its selection.
-        // Preparation belongs in a separate section, as before the creation refactor.
+        // Photos presents the same native ordered picker as Add clips, so every
+        // video hands off an NSItemProvider instead of a loadTransferable item.
         Section {
-            PhotosPicker(selection: $photosSelection, maxSelectionCount: 0, selectionBehavior: .ordered, matching: .videos,
-                preferredItemEncoding: .current) {
+            Button { model.openPhotos() } label: {
                 Label("Photos", systemImage: "photo.on.rectangle")
             }
             Button("Files", systemImage: "folder") { fileSelectionID = model.importSelectionID; isPickingFiles = true }
@@ -83,18 +83,35 @@ struct ImportView: View {
         }
     }
     @ViewBuilder private var selectedMedia: some View {
-        if !model.selectedSources.isEmpty {
+        if !model.sourceOrder.isEmpty {
             Section {
-                ForEach(Array(model.selectedSources.enumerated()), id: \.element.id) { index, source in sourceRow(source, index: index) }
-            } header: { Text("Clips · \(model.selectedSources.count)") }
-            footer: { Text("Clips play from top to bottom. Originals are copied into this project on your iPhone.") }
+                ForEach(Array(model.sourceOrder.enumerated()), id: \.element) { index, id in
+                    selectionRow(index: index, id: id)
+                }
+            } header: { Text("Clips · \(model.sourceOrder.count)") }
+            footer: {
+                Text(model.photoFailures.isEmpty
+                    ? "Clips play from top to bottom. Originals are copied into this project on your iPhone."
+                    : "Retry or remove these selections before creating the project. Clips play in this order.")
+            }
+        }
+    }
+    @ViewBuilder private func selectionRow(index: Int, id: UUID) -> some View {
+        if let source = model.selectedSources.first(where: { $0.id == id }) {
+            sourceRow(source, index: index)
+        } else if let entry = model.photoEntries[id], case .failed(let message) = entry.stage {
+            failedPhotoRow(entry, number: index + 1, message: message)
+        } else if let entry = model.photoEntries[id] {
+            pendingPhotoRow(entry, number: index + 1)
         }
     }
     private func sourceRow(_ source: ImportInput, index: Int) -> some View {
         let review = model.sourceReviews[source.id]
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                MediaThumbnail(data: review?.thumbnail)
+                if let metadata = review?.metadata {
+                    SourceThumbnail(source: source, duration: metadata.duration)
+                } else { MediaThumbnail(data: nil) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(index + 1). \(source.displayName)").font(.subheadline).lineLimit(2)
                     if let metadata = review?.metadata { Text(EditorTime.display(metadata.duration)).font(.caption).foregroundStyle(.secondary) }
@@ -114,21 +131,41 @@ struct ImportView: View {
             }
         }
     }
-    @ViewBuilder private var preparationFailures: some View {
-        if !model.photoFailures.isEmpty && !model.isPreparingPhotos {
-            Section("Videos not prepared") {
-                ForEach(model.photoFailures) { failure in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(failure.name).font(.subheadline)
-                        Text(failure.message).font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Retry") { model.retryPhotoPreparation(failure.id) }
-                            Button("Remove", role: .destructive) { model.removePhotoFailure(failure.id) }
-                        }.buttonStyle(.borderless)
-                    }
+    private func pendingPhotoRow(_ entry: PhotoMovieSelection, number: Int) -> some View {
+        HStack(spacing: 10) {
+            MediaThumbnail(data: nil)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(number). \(entry.name)").font(.subheadline).lineLimit(2)
+                HStack(spacing: 6) {
+                    ProgressView()
+                    Text(photoStageTitle(entry.stage)).font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Retry or remove these videos before creating the project.").font(.footnote)
             }
+            Spacer(minLength: 0)
+        }
+    }
+    private func failedPhotoRow(_ entry: PhotoMovieSelection, number: Int, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                MediaThumbnail(data: nil)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(number). \(entry.name)").font(.subheadline).lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+            Text(message).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Retry") { model.retryPhotoPreparation(entry.id) }
+                Button("Remove", role: .destructive) { model.removePhotoFailure(entry.id) }
+            }.buttonStyle(.borderless)
+        }
+    }
+    private func photoStageTitle(_ stage: PhotoMovieSelection.Stage) -> String {
+        switch stage {
+        case .loading: "Loading from Photos…"
+        case .retrying: "Retrying Photos access…"
+        case .copying: "Copying video…"
+        case .failed: ""
         }
     }
     private var projectSettings: some View {
