@@ -166,7 +166,13 @@ actor MediaImporter {
                         throw ProjectStoreError.invalidDocument("Choose a video file. Audio-only files can be added in Music.")
                     }
                 } catch is CancellationError { throw CancellationError() }
-                catch { throw ImportItemError(name: input.displayName, detail: error.localizedDescription) }
+                catch {
+                    // The row keeps a human message; the domain/code appendix
+                    // makes the failing operation diagnosable from the text.
+                    let nsError = error as NSError
+                    throw ImportItemError(name: input.displayName,
+                        detail: error.localizedDescription + " (\(nsError.domain)-\(nsError.code))")
+                }
                 let asset = SourceAsset(
                     id: adopted.id, relativeOriginalPath: adopted.path, kind: kind,
                     origin: input.origin, displayName: String(input.displayName.prefix(512)),
@@ -255,9 +261,14 @@ actor MediaImporter {
         let files = FileManager.default
         guard input.localURL.isFileURL else { throw ProjectStoreError.unsupportedURL }
         let id = UUID()
-        let ext = URL(fileURLWithPath: input.displayName).pathExtension
-            .lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
-        let suffix = String(ext.prefix(12))
+        // A Photos display name is a user-facing label that often lacks a file
+        // extension ("IMG_4037"-style), so deriving the copy's extension from
+        // it writes an extensionless file the later inspection can fail to
+        // recognize. The staged file itself carries the verified type; keep it.
+        let ext = input.localURL.pathExtension.isEmpty
+            ? URL(fileURLWithPath: input.displayName).pathExtension
+            : input.localURL.pathExtension
+        let suffix = String(ext.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(12))
         let path = "Originals/" + id.uuidString + (suffix.isEmpty ? "" : "." + suffix)
         let destination = try OwnedPath.secureURL(for: path, base: "Originals", in: staging)
 

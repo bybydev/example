@@ -420,7 +420,13 @@ final class AddClipsModel {
             } catch is CancellationError {
                 if active, self.selectionID == selectionID { notice = "Adding clips cancelled. Your selections are kept." }
             } catch {
-                if active, self.selectionID == selectionID { self.error = error.localizedDescription }
+                // Stage 1 (per-item staging) wraps its own failures; this catch
+                // is stage 2 (publication). The appendix identifies the failing
+                // operation for any report.
+                let nsError = error as NSError
+                if active, self.selectionID == selectionID {
+                    self.error = error.localizedDescription + " (\(nsError.domain)-\(nsError.code))"
+                }
             }
             if let staged { try? await ProjectRepository.shared.discardStaging(staged.staging) }
         }
