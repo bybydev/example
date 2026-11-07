@@ -1,6 +1,7 @@
 import AppFoundation
 import Foundation
 import Observation
+import Photos
 import SwiftUI
 
 /// Pushed inside Clips. Local selection never changes the project before Add.
@@ -244,6 +245,10 @@ final class AddClipsModel {
 
     func openPhotos() {
         guard active, !busy, photoPicker == nil else { return }
+        // Ask for library access while nothing is presented: the system dialog
+        // cannot reliably come up over a dismissing full-screen picker, and the
+        // loader reads the cached status afterwards.
+        Task { _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
         photoPicker = PhotoPickerRequest(selectionID: selectionID)
     }
 

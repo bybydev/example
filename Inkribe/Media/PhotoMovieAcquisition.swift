@@ -493,9 +493,11 @@ enum PhotoAssetMovieRequest {
     static func load(assetIdentifier: String,
                                  suggestedName: String?,
                                  onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) async throws -> PickedMovie {
-        // One prompt on the first import; Limited access keeps picker-picked
-        // items resolvable, and anything else falls back to the provider path.
-        let authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        // The prompt belongs to the picker entry point (openPhotos), never to
+        // a row task: a dialog emerging over a dismissing full-screen picker
+        // breaks the presentation. Here the cached status decides — a denied
+        // or still-unanswered access falls back to the provider request.
+        let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard authorization == .authorized || authorization == .limited else {
             throw PhotoKitUnresolvable(reason: "Photo library access is not granted")
         }

@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import Observation
+import Photos
 import SwiftUI
 
 struct ImportCompletion: Identifiable, Sendable {
@@ -374,6 +375,10 @@ final class ProjectsModel {
 
     func openPhotos() {
         guard !isImporting, !isPreparingPhotos, photoPicker == nil else { return }
+        // Ask for library access while nothing is presented: the system dialog
+        // cannot reliably come up over a dismissing full-screen picker, and the
+        // loader reads the cached status afterwards.
+        Task { _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
         photoPicker = PhotoPickerRequest(selectionID: selectionSession)
     }
 
