@@ -666,7 +666,7 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
             .compactMap { $0 }
             .first { !$0.isEmpty }
         Self.logger.info(
-            "Copied \(receivedBytes, privacy: .public) bytes from \(representation, privacy: .public)")
+            "Copied \(self.receivedBytes, privacy: .public) bytes from \(self.representation, privacy: .public)")
         conclude(.success(PickedMovie(localURL: destination,
             displayName: identity ?? "Imported Video", representation: representation)))
     }
