@@ -222,6 +222,9 @@ final class AddClipsModel {
 
     func beginSelection() {
         endSelection()
+        // No staging can be in flight here; clear anything a crashed session
+        // left in the durable staging area.
+        PhotoMovieAcquisition.sweepStaleStaging()
         active = true
     }
 

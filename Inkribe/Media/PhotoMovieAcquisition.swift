@@ -329,11 +329,31 @@ final class PhotoMovieRequest {
         continuation?.resume(with: result)
     }
 
+    /// The owned copy of a Photos selection must survive the whole selection
+    /// session (review, later videos, the Add press), so it stages under
+    /// Application Support like the repository's own originals.
+    nonisolated private static func stagingRoot() -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return support.appendingPathComponent("InkribePhotoStaging", isDirectory: true)
+    }
+
+    /// Removes the staging root. Only call it where no selection session can be
+    /// staging (a session's beginning): the presenting models delete their own
+    /// owned copies; this clears files left behind by a crashed session.
+    nonisolated static func sweepStaleStaging() {
+        try? FileManager.default.removeItem(at: stagingRoot())
+    }
+
     nonisolated private static func copyFile(_ url: URL?, error: Error?, suggestedName: String?,
                                              type: String) -> Result<PickedMovie, Error> {
         if let error { return .failure(PhotoMovieRequestError.loading(error.localizedDescription)) }
         guard let url, url.isFileURL else { return .failure(PhotoMovieRequestError.missingFile) }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("InkribePhotoTransfers", isDirectory: true)
+        // Durable, app-owned staging: iOS can purge temporaryDirectory at any
+        // backgrounding, which broke the Add step's copy of already-shown rows.
+        // The repository also stages originals under Application Support for
+        // the same reason.
+        let directory = Self.stagingRoot()
         let ext = url.pathExtension.isEmpty ? (UTType(type)?.preferredFilenameExtension ?? "mov") : url.pathExtension
         let copy = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext)
         do {

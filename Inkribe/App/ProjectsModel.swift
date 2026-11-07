@@ -191,8 +191,11 @@ final class ProjectsModel {
         let coordinator = ProcessingCoordinator(access: access)
         processing = coordinator
         editors = EditorSessions(access: access, transcription: coordinator.transcription)
-        // These ingress copies have no durable authority: committed projects
-        // own their originals in the repository. Safe once, before new picks.
+        // These ingress copies have no durable authority after the session
+        // ends: committed projects own their originals in the repository.
+        // Safe once, before new picks. Photos staging itself moved to durable
+        // Application Support; sweep leftovers and the legacy tmp directory.
+        PhotoMovieAcquisition.sweepStaleStaging()
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
             if FileManager.default.fileExists(atPath: directory.path) {
