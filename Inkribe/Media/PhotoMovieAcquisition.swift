@@ -25,7 +25,13 @@ struct PickedMovie: Sendable {
     let displayName: String
     /// The representation that actually delivered these bytes — a library
     /// resource UTI or a provider type identifier — for quality diagnostics.
-    let representation: String? = nil
+    private let representation: String?
+
+    init(localURL: URL, displayName: String, representation: String? = nil) {
+        self.localURL = localURL
+        self.displayName = displayName
+        self.representation = representation
+    }
 }
 
 /// One Photos selection between receiving the picker result and its queued,
@@ -480,18 +486,11 @@ enum PhotoMovieLoader {
 }
 
 enum PhotoAssetMovieRequest {
-    private static let logger = Logger(subsystem: "com.hoangbkit.inkribe",
-                                       category: "PhotoAssetMovieRequest")
-    // PhotoKit keeps moving only while Photos itself moves; this generous
-    // deadline still bounds a fully silent request. Transfers with real byte
-    // progress never come close to it, and cancellation is deterministic.
-    private static let deliveryLimit: Duration = .seconds(300)
-
     /// Streams the library resource into app-owned staging. Chunks write
     /// directly into the staged file, so nothing whole-video sized is held in
     /// memory, and the streaming write is serialized by Photos' own per-request
     /// serial callback queue.
-    nonisolated static func load(assetIdentifier: String,
+    static func load(assetIdentifier: String,
                                  suggestedName: String?,
                                  onStage: @escaping @MainActor (PhotoMovieSelection.Stage) -> Void) async throws -> PickedMovie {
         // One prompt on the first import; Limited access keeps picker-picked
@@ -534,11 +533,6 @@ enum PhotoAssetMovieRequest {
             delivery.cancelRequest()
         }
     }
-
-    private static func deliveryDetail(_ error: Error) -> String {
-        let nsError = error as NSError
-        return "\(error.localizedDescription) (\(nsError.domain)-\(nsError.code))"
-    }
 }
 
 /// Owns one PhotoKit resource transfer: chunked disk writes, the single
@@ -547,6 +541,18 @@ enum PhotoAssetMovieRequest {
 /// state touch is lock-guarded and the continuation resumes only once, after
 /// the lock is released.
 private final class PhotoAssetDelivery: @unchecked Sendable {
+    private static let logger = Logger(subsystem: "com.hoangbkit.inkribe",
+                                       category: "PhotoAssetMovieRequest")
+    // PhotoKit keeps moving only while Photos itself moves; this generous
+    // deadline still bounds a fully silent request. Transfers with real byte
+    // progress never come close to it, and cancellation is deterministic.
+    private static let deliveryLimit: Duration = .seconds(300)
+
+    private static func deliveryDetail(_ error: Error) -> String {
+        let nsError = error as NSError
+        return "\(error.localizedDescription) (\(nsError.domain)-\(nsError.code))"
+    }
+
     private let lock = NSLock()
     private let destination: URL
     private let storedName: String?
@@ -589,7 +595,7 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
             return
         }
         deadlineTask = Task { [weak self] in
-            do { try await Task.sleep(for: PhotoAssetMovieRequest.deliveryLimit) } catch { return }
+            do { try await Task.sleep(for: Self.deliveryLimit) } catch { return }
             self?.expire()
         }
     }
@@ -617,7 +623,7 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
             if failure == nil {
                 do {
                     try file?.write(contentsOf: chunk)
-                    receivedBytes += Int64(chunk.count)
+                    receivedBytes += Int(chunk.count)
                 } catch {
                     failure = PhotoMovieRequestError.copying(error.localizedDescription)
                 }
@@ -647,7 +653,7 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
         if let error {
             let mapped: Error = cancelled
                 ? CancellationError()
-                : PhotoMovieRequestError.loading(PhotoAssetMovieRequest.deliveryDetail(error))
+                : PhotoMovieRequestError.loading(Self.deliveryDetail(error))
             conclude(.failure(mapped))
             return
         }
@@ -659,7 +665,7 @@ private final class PhotoAssetDelivery: @unchecked Sendable {
         let identity = [storedName, suggestedName]
             .compactMap { $0 }
             .first { !$0.isEmpty }
-        PhotoAssetMovieRequest.logger.info(
+        Self.logger.info(
             "Copied \(receivedBytes, privacy: .public) bytes from \(representation, privacy: .public)")
         conclude(.success(PickedMovie(localURL: destination,
             displayName: identity ?? "Imported Video", representation: representation)))
