@@ -9,8 +9,9 @@ import UniformTypeIdentifiers
 // New Project and Add clips both import videos through the same native
 // PHPicker + NSItemProvider request. PhotosPickerItem.loadTransferable with
 // preferredItemEncoding .current stalls waiting for the absolute original and
-// can simply never call back; provider file requests with .automatic
-// substitution are bounded, staged per video and retryable instead.
+// can simply never call back; provider file requests against the current
+// representation are bounded, staged per video and retryable instead, and the
+// unsupported loadItem coercion path is never used.
 
 /// An app-owned copy of one Photos-picked video, independent of the provider's
 /// short-lived security scope. Publication copies it into project storage.
@@ -58,9 +59,9 @@ struct PhotoPickerRequest: Identifiable {
 }
 
 /// Native video picker with ordered selection. No full photo-library permission
-/// or PHAsset lookup is needed. `.automatic` lets the system substitute a
-/// complete, compatible representation when the absolute original cannot be
-/// delivered; `.current` can stall on exactly that wait.
+/// or PHAsset lookup is needed. `.current` delivers the representation that
+/// actually exists on the iPhone: a local original completes immediately, and
+/// an offloaded one waits for the download, bounded by the request watchdogs.
 @MainActor
 struct PhotosVideoPicker: UIViewControllerRepresentable {
     let onSelection: ([NSItemProvider]) -> Void
@@ -72,7 +73,11 @@ struct PhotosVideoPicker: UIViewControllerRepresentable {
         configuration.filter = .videos
         configuration.selectionLimit = 0
         configuration.selection = .ordered
-        configuration.preferredAssetRepresentationMode = .automatic
+        // Apple's documented video pattern: deliver the representation that
+        // exists on the iPhone now. The .automatic substitution handed back
+        // zero-byte copies for ordinary local videos, which the copy gate
+        // rejected as "Photos did not provide a readable video file."
+        configuration.preferredAssetRepresentationMode = .current
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker
@@ -101,14 +106,8 @@ struct PhotosVideoPicker: UIViewControllerRepresentable {
 /// registered movie type instead of waiting for a callback that may never arrive.
 @MainActor
 final class PhotoMovieRequest {
-    private enum Method {
-        case fileRepresentation
-        case item
-    }
-
     private struct Attempt {
         let type: String
-        let method: Method
     }
 
     /// A local representation should arrive quickly. A silent provider is
@@ -202,11 +201,15 @@ final class PhotoMovieRequest {
     }
 
     private static func attemptList(for types: [String]) -> [Attempt] {
-        // Every file representation is requested before raw item acquisition: a
-        // file URL is the only video payload copied without loading the whole
-        // asset into memory.
-        types.map { Attempt(type: $0, method: .fileRepresentation) }
-            + types.map { Attempt(type: $0, method: .item) }
+        // Registered representations first, then the abstract movie type as the
+        // final documented fallback: the provider substitutes a compatible,
+        // complete file for it. loadItem is never attempted: Apple's guidance
+        // states the coercion interface is unsupported by
+        // PHPickerViewController, so its requests simply never complete.
+        var list = types.map { Attempt(type: $0) }
+        let movie = UTType.movie.identifier
+        if !types.contains(movie) { list.append(Attempt(type: movie)) }
+        return list
     }
 
     private func beginAttempt(_ index: Int) {
@@ -225,37 +228,21 @@ final class PhotoMovieRequest {
             generation: generation,
             limit: index == 0 ? Self.firstAttemptLimit : Self.nextAttemptLimit
         )
-        let attempt = attempts[index]
-        let type = attempt.type
+        let type = attempts[index].type
         let suggestedName = self.suggestedName
-        switch attempt.method {
-        // Provider callbacks capture self strongly. Weak captures across these
+        // Provider callback captures self strongly. Weak captures across these
         // two unordered MainActor hops fail Swift 6 strict concurrency, and the
         // only retain chain through the block is broken by finish() cancelling
         // and clearing progress.
-        case .fileRepresentation:
-            progress = provider?.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-                if let url, error == nil {
-                    Task { @MainActor in self.reportCopying(generation: generation) }
-                    // Stay inside the callback for this synchronous owned copy.
-                    let copied = Self.copyFile(url, error: nil, suggestedName: suggestedName, type: type)
-                    Task { @MainActor in self.deliver(copied, generation: generation) }
-                } else {
-                    let message = error?.localizedDescription
-                    Task { @MainActor in self.attemptFailed(generation: generation, message: message) }
-                }
-            }
-        case .item:
-            // loadItem returns no progress handle and cannot be cancelled; its
-            // late completion is rejected by the attempt generation and any
-            // copied file is removed.
-            provider?.loadItem(forTypeIdentifier: type, options: nil) { item, error in
-                if item is URL {
-                    Task { @MainActor in self.reportCopying(generation: generation) }
-                }
-                // Copy synchronously before returning; the acquired item expires too.
-                let copied = Self.copyItem(item, error: error, suggestedName: suggestedName, type: type)
+        progress = provider?.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+            if let url, error == nil {
+                Task { @MainActor in self.reportCopying(generation: generation) }
+                // Stay inside the callback for this synchronous owned copy.
+                let copied = Self.copyFile(url, error: nil, suggestedName: suggestedName, type: type)
                 Task { @MainActor in self.deliver(copied, generation: generation) }
+            } else {
+                let message = error?.localizedDescription
+                Task { @MainActor in self.attemptFailed(generation: generation, message: message) }
             }
         }
     }
@@ -363,15 +350,6 @@ final class PhotoMovieRequest {
             try? FileManager.default.removeItem(at: copy)
             return .failure(PhotoMovieRequestError.copying(error.localizedDescription))
         }
-    }
-
-    /// Last-resort acquisition when the file representation itself is rejected.
-    /// The acquired item is only usable synchronously inside this callback.
-    nonisolated private static func copyItem(_ item: Any?, error: Error?, suggestedName: String?,
-                                             type: String) -> Result<PickedMovie, Error> {
-        if let error { return .failure(PhotoMovieRequestError.loading(error.localizedDescription)) }
-        guard let url = item as? URL, url.isFileURL else { return .failure(PhotoMovieRequestError.missingFile) }
-        return copyFile(url, error: nil, suggestedName: suggestedName, type: type)
     }
 }
 
