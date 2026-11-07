@@ -195,7 +195,7 @@ final class ProjectsModel {
         // ends: committed projects own their originals in the repository.
         // Safe once, before new picks. Photos staging itself moved to durable
         // Application Support; sweep leftovers and the legacy tmp directory.
-        PhotoMovieAcquisition.sweepStaleStaging()
+        PhotoMovieRequest.sweepStaleStaging()
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
             if FileManager.default.fileExists(atPath: directory.path) {
