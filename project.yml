@@ -136,6 +136,7 @@ targets:
     info:
       path: Inkribe/Resources/Info.plist
       properties:
+        NSPhotoLibraryUsageDescription: "Inkribe copies the original files of the videos you pick from Photos into your projects. Library access lets the app load the exact video you selected."
         BGTaskSchedulerPermittedIdentifiers:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).queue.*"
         UIBackgroundModes:

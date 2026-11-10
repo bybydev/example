@@ -23,14 +23,14 @@ CI or builds/typechecks/tests/fixtures. No automatic next pass; leave open.
 PR #57 from faa33e8c, retaining pass 1. Implement the settled Spokio-reference queue
 presentation and project-tool routes only, including necessary presentation-owner
 handoffs and exact export focusing/retained-request visibility. See
-phases/QUEUE_EXPERIENCE.md and handoffs/QUEUE_EXPERIENCE.md. All other editor design,
+handoffs/QUEUE_EXPERIENCE.md. All other editor design,
 processing policy, persistence/contracts and shared/Mac behavior remain. Background
 continuation is still pass 3; final review is pass 4. Source-only restrictions
 remain; keep open without auto-merge and await each next signal.
 
 2026-11-01. The user authorizes only pass 1 of the four-pass queue experience
 in one new feat/ios-queue-experience PR targeting develop from b51e1b95. See
-phases/QUEUE_EXPERIENCE.md and handoffs/QUEUE_EXPERIENCE.md. Implement one queued
+handoffs/QUEUE_EXPERIENCE.md. Implement one queued
 Transcribe/Create Export path and JobQueue 1-transcription/3-export capacity, removing
 iOS global serialization while retaining cancellation/teardown. Preserve current
 editor design and foreground-only lifecycle. Each next pass requires a separate
@@ -38,7 +38,7 @@ signal; keep the PR open without auto-merge. Existing source-only restrictions
 remain. Earlier two-export-action/single-heavy-operation requirements are superseded.
 
 2026-10-31. The user authorizes timeline-only per-clip trimming in a stacked PR
-on #55 at 381b0d2b. Apply phases/CLIP_TRIMMING.md and handoffs/CLIP_TRIMMING.md.
+on #55 at 381b0d2b. Apply handoffs/CLIP_TRIMMING.md.
 Target feat/ios-media-form, keep both PRs open without auto-merge and do not alter
 the parent. The request authorizes the agreed handles/main preview/ripple timing,
 Media trim removal and necessary schema/persistence/output integration. Source-only
@@ -46,7 +46,7 @@ restrictions remain: no builds/typechecks/tests/fixtures, CI, generation/models,
 native processing/exports or UI/device execution. No unrelated design or features.
 
 2026-10-31. The user's next-pass signal authorizes Media Form pass 2 in existing
-PR #55, extending bb0d1b11. Apply phases/MEDIA_FORM.md and handoffs/MEDIA_FORM.md.
+PR #55, extending bb0d1b11. Apply handoffs/MEDIA_FORM.md.
 Complete the source review and scoped fixes only; keep the approved Form/design.
 Both source passes are delivered without runtime validation. No builds/typechecks/
 tests/fixtures, CI, generation, native media/exports or UI/device execution.
@@ -65,15 +65,15 @@ existing editor design and preview-free Music sheet. Pass 3 awaits the next sign
 Existing source-only restrictions and open/no-auto-merge requirement remain.
 
 2026-10-31. The user explicitly starts pass 1 of the agreed three-pass music PR,
-feat/ios-music-layer -> develop, from 723f333. Apply phases/MUSIC_LAYER.md and its
-handoff. Pass 1 is source/data/media integration only; all editor layout and visible
+feat/ios-music-layer -> develop, from 723f333. Apply handoffs/MUSIC_LAYER.md (its
+approved-scope brief is archived inside). Pass 1 is source/data/media integration only; all editor layout and visible
 controls stay as on develop. Next passes await the user's signal, and unrelated
 design changes require approval. Keep the PR open without auto-merge. Existing
 source-only/no-build/no-test/no-CI/no-native-execution restrictions remain.
 
 2026-10-29. The user explicitly authorizes the discussed native fullscreen changes
 in a new stacked PR from #52 head 3f9b8107, targeting feat/ios-style-sheet-grid.
-Apply phases/NATIVE_FULLSCREEN.md and handoffs/NATIVE_FULLSCREEN.md. Preserve the
+Apply handoffs/NATIVE_FULLSCREEN.md. Preserve the
 parent branch and leave both PRs open without auto-merge. No builds/tests/typechecks,
 CI, generation, native playback/export or UI/device execution. Discussion of another
 problem/preference is not authorization; wait for an explicit implementation command.
@@ -86,7 +86,7 @@ Caption placement stays in Style under Layout with preset/inline coordinate
 controls and live sample feedback; media scopes remain separate. Done saves
 project-wide appearance and placement atomically; Cancel discards both.
 Existing frozen exports retain recorded behavior; new exports match the project's
-single style. See phases/STYLE_SHEET.md and handoffs/STYLE_SHEET.md. Source-only
+single style. See handoffs/STYLE_SHEET.md. Source-only
 restrictions and open/no-auto-merge requirements remain. Earlier #52 UI below is
 superseded where it conflicts with this latest approved design.
 
@@ -96,8 +96,7 @@ already approved: actual preview, selected-template row pushing a lazy grid,
 inline customization, top-left Cancel and top-right Done. Its local caption-only
 transaction supersedes immediate style autosaving while the sheet is open. Done
 saves before adopting; Cancel and dismissal never publish the draft. Preserve the
-existing caption/project/preview/Pro/export contracts. See phases/STYLE_SHEET.md
-and handoffs/STYLE_SHEET.md. All source-only restrictions and open/no-auto-merge
+existing caption/project/preview/Pro/export contracts. See handoffs/STYLE_SHEET.md. All source-only restrictions and open/no-auto-merge
 requirements remain. Prior phase statuses below are historical for this scope.
 
 2026-10-28. The user confirmed the concrete Graphite plan in existing PR #50:
@@ -115,7 +114,7 @@ feat/ios-contextual-caption-editor. Keep both PRs open without auto-merge.
 Other edits require a concrete plan and the user's confirmation first. All parent
 caption, project and output contracts remain protected.
 
-Read root AGENTS.md, [scope](phases/PREVIEW_HANDOFF.md),
+Read root AGENTS.md, [scope](handoffs/PREVIEW_HANDOFF.md),
 [marked handoff](handoffs/PREVIEW_HANDOFF.md), README, PLAN, FEATURES, ARCHITECTURE,
 DESIGN and HANDOFF. Current sheet/navigation contracts supersede older overview
 and clip-strip descriptions. Historical handoffs remain evidence, not new scope.

@@ -1,133 +1,8 @@
-import CoreTransferable
 import CoreMedia
 import Foundation
 import Observation
-import PhotosUI
+import Photos
 import SwiftUI
-import UniformTypeIdentifiers
-
-/// PhotosPicker's URL transfers are not durable. Copy while its
-/// FileRepresentation callback owns the security scope; never load movie Data.
-struct PickedMovie: Transferable, Sendable {
-    let localURL: URL
-    let displayName: String
-
-    /// Keep the provider's cancellation handle, and bound how long this request can wait.
-    @MainActor
-    static func load(from item: PhotosPickerItem) async throws -> PickedMovie {
-        let transfer = PhotoMovieTransfer()
-        return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
-            return try await withCheckedThrowingContinuation { continuation in
-                transfer.start(item, continuation: continuation)
-            }
-        } onCancel: {
-            Task { @MainActor in transfer.cancel() }
-        }
-    }
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(importedContentType: .movie) { received in
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("InkribePhotoTransfers", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let ext = received.file.pathExtension
-            let copy = directory.appendingPathComponent(UUID().uuidString
-                + (ext.isEmpty ? ".mov" : "." + ext))
-            do {
-                try Task.checkCancellation()
-                try FileManager.default.copyItem(at: received.file, to: copy)
-                try Task.checkCancellation()
-            } catch {
-                try? FileManager.default.removeItem(at: copy)
-                throw error
-            }
-            // The owned copy has an intentionally opaque name. Keep the
-            // provider's display name separate from that storage identity.
-            let name = received.file.lastPathComponent
-            let stem = received.file.deletingPathExtension().lastPathComponent
-            let displayName = name.isEmpty || UUID(uuidString: stem) != nil ? "Imported Video" : name
-            return PickedMovie(localURL: copy, displayName: displayName)
-        }
-    }
-}
-
-/// Owns one provider request. Main-actor serialization makes completion, cancellation
-/// and expiry mutually exclusive, even if Photos calls back after we stop waiting.
-@MainActor
-private final class PhotoMovieTransfer {
-    private var continuation: CheckedContinuation<PickedMovie, Error>?
-    private var progress: Progress?
-    private var deadline: Task<Void, Never>?
-    private var result: Result<PickedMovie, Error>?
-    private var deliveredURL: URL?
-
-    func start(_ item: PhotosPickerItem, continuation: CheckedContinuation<PickedMovie, Error>) {
-        if let result {
-            continuation.resume(with: result)
-            return
-        }
-        self.continuation = continuation
-        progress = item.loadTransferable(type: PickedMovie.self) { result in
-            Task { @MainActor in
-                switch result {
-                case .success(let movie?):
-                    self.finish(.success(movie))
-                case .success(nil):
-                    self.finish(.failure(ProjectStoreError.unsupportedMedia))
-                case .failure(let error):
-                    self.finish(.failure(error))
-                }
-            }
-        }
-        // A provider that never completes must not hold the creation screen forever.
-        // This task resumes our waiter directly; it does not await provider shutdown.
-        deadline = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(120))
-                self?.finish(.failure(PhotoMovieTransferError.timedOut), cancelProvider: true)
-            } catch { }
-        }
-    }
-
-    func cancel() {
-        finish(.failure(CancellationError()), cancelProvider: true)
-    }
-
-    private func finish(_ result: Result<PickedMovie, Error>, cancelProvider: Bool = false) {
-        guard self.result == nil else {
-            if case .success(let movie) = result, movie.localURL != deliveredURL {
-                try? FileManager.default.removeItem(at: movie.localURL)
-            }
-            return
-        }
-        self.result = result
-        if case .success(let movie) = result { deliveredURL = movie.localURL }
-        let continuation = self.continuation
-        self.continuation = nil
-        deadline?.cancel()
-        deadline = nil
-        let progress = self.progress
-        self.progress = nil
-        if cancelProvider { progress?.cancel() }
-        continuation?.resume(with: result)
-    }
-}
-
-private enum PhotoMovieTransferError: LocalizedError {
-    case timedOut
-
-    var errorDescription: String? {
-        "Photos did not finish loading this video within two minutes. Retry, or save it to Files and import it there."
-    }
-}
-
-struct PhotoPreparationFailure: Identifiable {
-    let id: UUID
-    let item: PhotosPickerItem
-    let name: String
-    var message: String
-}
 
 struct ImportCompletion: Identifiable, Sendable {
     let id = UUID()
@@ -270,11 +145,29 @@ final class ProjectsModel {
     private(set) var selectedSources: [ImportInput] = []
     private(set) var sourceReviews: [UUID: ImportSourceReview] = [:]
     private(set) var reviewingSources: Set<UUID> = []
-    private(set) var photoFailures: [PhotoPreparationFailure] = []
+    var photoFailures: [PhotoMovieSelection] {
+        let positions = Dictionary(uniqueKeysWithValues: selectionOrder.enumerated().map { ($0.element, $0.offset) })
+        return photoEntries.values
+            .filter { $0.isFailed }
+            .sorted { positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max] }
+    }
+
+    /// Registration order of every Files and Photos selection; drives row order.
+    var sourceOrder: [UUID] { selectionOrder }
+    private(set) var photoEntries: [UUID: PhotoMovieSelection] = [:]
+    /// Native Photos picker presentation request for the current selection session.
+    var photoPicker: PhotoPickerRequest?
     private let reviewer = ImportMediaReviewer()
     private var reviewTask: Task<Void, Never>?
     private var creationID = UUID()
     private var selectionOrder: [UUID] = []
+    private var photoGeneration = UUID()
+    /// Sequential materialization: parallel provider file requests contend for
+    /// the Photos helper and the shared copy path, so even benign attempts
+    /// cross the per-attempt watchdogs and get generation-killed mid-transfer.
+    /// One video at a time keeps the full attempt budget and a high success
+    /// rate; total time stays bounded because each video has its own ladder.
+    private let photoLoadWindow = 1
     var canCreateProject: Bool {
         !selectedSources.isEmpty && !isImporting && !isPreparingPhotos && photoFailures.isEmpty &&
             reviewingSources.isEmpty && selectedSources.allSatisfy {
@@ -299,8 +192,11 @@ final class ProjectsModel {
         let coordinator = ProcessingCoordinator(access: access)
         processing = coordinator
         editors = EditorSessions(access: access, transcription: coordinator.transcription)
-        // These ingress copies have no durable authority: committed projects
-        // own their originals in the repository. Safe once, before new picks.
+        // These ingress copies have no durable authority after the session
+        // ends: committed projects own their originals in the repository.
+        // Safe once, before new picks. Photos staging itself moved to durable
+        // Application Support; sweep leftovers and the legacy tmp directory.
+        PhotoMovieRequest.sweepStaleStaging()
         for name in ["InkribePhotoTransfers", "InkribeURLImports"] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
             if FileManager.default.fileExists(atPath: directory.path) {
@@ -467,7 +363,9 @@ final class ProjectsModel {
         reviewTask = Task {
             for source in sources {
                 guard session == selectionSession, !Task.isCancelled else { return }
-                let review = await reviewer.review(source, requireVideo: true)
+                // New Project shows bounded per-row artwork separately; AVAsset
+                // thumbnail generation must never pin a review that gates Create.
+                let review = await reviewer.review(source, requireVideo: true, includeThumbnail: false)
                 guard session == selectionSession, !Task.isCancelled else { return }
                 if selectedSources.contains(where: { $0.id == source.id }) { sourceReviews[source.id] = review }
                 reviewingSources.remove(source.id)
@@ -475,54 +373,119 @@ final class ProjectsModel {
         }
     }
 
-    func beginPhotoPreparation(_ items: [PhotosPickerItem]) {
-        guard !isImporting, !isPreparingPhotos, !items.isEmpty else { return }
-        let additions = items.enumerated().map { index, item in
-            PhotoPreparationFailure(id: UUID(), item: item, name: "Selected video \(index + 1)", message: "Not prepared yet")
+    func openPhotos() {
+        guard !isImporting, !isPreparingPhotos, photoPicker == nil else { return }
+        // Ask for library access while nothing is presented: the system dialog
+        // cannot reliably come up over a dismissing full-screen picker, and the
+        // loader reads the cached status afterwards.
+        Task { _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
+        photoPicker = PhotoPickerRequest(selectionID: selectionSession)
+    }
+
+    func receivePhotos(_ picks: [PhotoPick], request: PhotoPickerRequest) {
+        guard photoPicker?.id == request.id else { return }
+        // Retain providers in the model before dismissing the native picker.
+        photoPicker = nil
+        guard !isImporting, !isPreparingPhotos, selectionSession == request.selectionID else { return }
+        let selections = picks.enumerated().map { index, pick in
+            PhotoMovieSelection(provider: pick.provider, assetID: pick.assetID,
+                name: pick.provider.suggestedName ?? "Selected video \(index + 1)")
         }
-        photoFailures.append(contentsOf: additions)
-        selectionOrder += additions.map(\.id)
-        preparePhotos(additions)
+        preparePhotos(selections, selectionID: request.selectionID)
     }
 
     func retryPhotoPreparation(_ id: UUID) {
-        guard !isImporting, !isPreparingPhotos, let failure = photoFailures.first(where: { $0.id == id }) else { return }
-        preparePhotos([failure])
+        guard !isImporting, !isPreparingPhotos, let entry = photoEntries[id], entry.isFailed else { return }
+        preparePhotos([entry], selectionID: selectionSession)
     }
 
     func removePhotoFailure(_ id: UUID) {
         guard !isImporting, !isPreparingPhotos else { return }
-        photoFailures.removeAll { $0.id == id }
+        photoEntries[id] = nil
+        selectionOrder.removeAll { $0 == id }
+        reviewSources()
     }
 
-    private func preparePhotos(_ items: [PhotoPreparationFailure]) {
-        isPreparingPhotos = true
+    /// Concurrent provider loads are windowed so several originals cannot surge
+    /// library reads and storage writes at once. Rows surface per-video stages,
+    /// like Add clips, and each bounded request ends at loading, copying,
+    /// retrying or a retryable failure instead of waiting forever.
+    func preparePhotos(_ selections: [PhotoMovieSelection], selectionID: UUID) {
+        guard !isImporting, !isPreparingPhotos, selectionSession == selectionID, !selections.isEmpty else { return }
+        reviewTask?.cancel(); reviewTask = nil; reviewingSources = []
         let session = selectionSession
+        let token = UUID(); photoGeneration = token
+        isPreparingPhotos = true
+        // Register every selection first so rows appear immediately, like Files,
+        // and cancellation leaves unfinished selections retryable.
+        for selection in selections {
+            var entry = photoEntries[selection.id] ?? selection
+            entry.stage = .waiting
+            photoEntries[entry.id] = entry
+            if !selectionOrder.contains(entry.id) { selectionOrder.append(entry.id) }
+        }
         photoTask = Task {
-            defer { if session == selectionSession { isPreparingPhotos = false; photoTask = nil; reviewSources() } }
-            for failure in items {
-                do {
-                    try Task.checkCancellation()
-                    guard session == selectionSession else { return }
-                    let file = try await PickedMovie.load(from: failure.item)
-                    guard session == selectionSession, !Task.isCancelled else {
-                        try? FileManager.default.removeItem(at: file.localURL)
-                        return
+            defer {
+                if photoGeneration == token {
+                    isPreparingPhotos = false; photoTask = nil
+                    // A finished batch cannot leave a loading/copying row behind;
+                    // finalize any leftover deterministically as retryable.
+                    let leftoverIDs = photoEntries.filter { !$0.value.isFailed }.map(\.key)
+                    for id in leftoverIDs {
+                        photoEntries[id]?.stage = .failed("Loading did not finish. Retry or remove this video.")
                     }
-                    ownedPhotoURLs.insert(file.localURL)
-                    selectedSources.append(ImportInput(id: failure.id, localURL: file.localURL, origin: .photos, displayName: file.displayName))
-                    let positions = Dictionary(uniqueKeysWithValues: selectionOrder.enumerated().map { ($0.element, $0.offset) })
-                    selectedSources.sort { (positions[$0.id] ?? Int.max) < (positions[$1.id] ?? Int.max) }
-                    photoFailures.removeAll { $0.id == failure.id }
-                } catch is CancellationError { return }
-                catch {
-                    guard session == selectionSession else { return }
-                    if let index = photoFailures.firstIndex(where: { $0.id == failure.id }) {
-                        photoFailures[index].message = error.localizedDescription
-                    }
+                    reviewSources()
                 }
             }
+            var index = 0
+            while index < selections.count {
+                guard !Task.isCancelled, session == selectionSession, photoGeneration == token else { return }
+                let chunk = Array(selections[index..<min(index + photoLoadWindow, selections.count)])
+                // Its turn now: promote the queued rows this chunk will load.
+                for selection in chunk { photoEntries[selection.id]?.stage = .loading }
+                await withTaskGroup(of: Void.self) { group in
+                    for selection in chunk {
+                        // Strict Sendability bounds: only this Sendable box crosses
+                        // into the child task; the provider itself stays there.
+                        let load = PhotoLoad(provider: selection.provider, id: selection.id,
+                            name: selection.name, assetID: selection.assetID)
+                        group.addTask { await self.materialize(load, token: token) }
+                    }
+                }
+                index += chunk.count
+            }
         }
+    }
+
+    private func materialize(_ load: PhotoLoad, token: UUID) async {
+        guard !Task.isCancelled, photoGeneration == token else { return }
+        do {
+            let file = try await PhotoMovieLoader.load(load) { [self] stage in
+                guard photoGeneration == token else { return }
+                advancePhotoStage(load.id, stage)
+            }
+            guard !Task.isCancelled, photoGeneration == token else {
+                try? FileManager.default.removeItem(at: file.localURL)
+                return
+            }
+            ownedPhotoURLs.insert(file.localURL)
+            selectedSources.append(ImportInput(id: load.id, localURL: file.localURL, origin: .photos, displayName: file.displayName))
+            photoEntries[load.id] = nil
+            let positions = Dictionary(uniqueKeysWithValues: selectionOrder.enumerated().map { ($0.element, $0.offset) })
+            selectedSources.sort { (positions[$0.id] ?? Int.max) < (positions[$1.id] ?? Int.max) }
+            // This source's duration/review starts immediately; its row draws
+            // its own artwork. Later selections keep loading silently.
+            reviewSources()
+        } catch {
+            guard photoGeneration == token else { return }
+            advancePhotoStage(load.id, .failed(error.localizedDescription))
+        }
+    }
+
+    private func advancePhotoStage(_ id: UUID, _ stage: PhotoMovieSelection.Stage) {
+        guard var entry = photoEntries[id] else { return }
+        entry.stage = stage
+        photoEntries[id] = entry
     }
 
     func removeSource(_ id: UUID) {
@@ -538,21 +501,27 @@ final class ProjectsModel {
     }
 
     func cancelPhotoPreparation() {
+        photoGeneration = UUID()
         photoTask?.cancel(); photoTask = nil
-        selectionSession = UUID()
         isPreparingPhotos = false
-        for index in photoFailures.indices {
-            photoFailures[index].message = "Preparation cancelled. Retry or remove this video."
+        for id in Array(photoEntries.keys) {
+            guard var entry = photoEntries[id], !entry.isFailed else { continue }
+            entry.stage = .failed("Preparation cancelled. Retry or remove this video.")
+            photoEntries[id] = entry
         }
         reviewSources()
     }
 
     func clearSelection() {
         cancelPhotoPreparation()
+        photoPicker = nil
+        photoGeneration = UUID()
+        photoEntries = [:]
         for url in ownedPhotoURLs { try? FileManager.default.removeItem(at: url) }
         ownedPhotoURLs.removeAll()
         selectedSources.removeAll()
-        sourceReviews.removeAll(); photoFailures.removeAll(); reviewingSources.removeAll(); selectionOrder.removeAll()
+        sourceReviews.removeAll(); reviewingSources.removeAll(); selectionOrder.removeAll()
+        selectionSession = UUID()
         reviewTask?.cancel(); reviewTask = nil
     }
 

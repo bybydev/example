@@ -29,16 +29,17 @@ struct PartialCaptionStatus: View {
                 if let value = progress?.fractionCompleted { ProgressView(value: value) }
             } else {
                 CaptionStatusRow {
-                    Label("Incomplete", systemImage: "exclamationmark.bubble")
+                    Label(record == nil ? "More captions to generate" : "Incomplete", systemImage: "captions.bubble")
                         .font(.caption).foregroundStyle(.secondary)
                 } action: {
-                    Button("Retry missing ranges", systemImage: "arrow.clockwise", action: retry)
+                    Button(record == nil ? "Generate missing captions" : "Retry missing ranges",
+                           systemImage: record == nil ? "captions.bubble" : "arrow.clockwise", action: retry)
                         .font(.caption)
                         .disabled(preparing || speech.isAuthorizing || speech.persistenceError != nil)
                 }
                 DisclosureGroup("Transcription details") {
                     if let error = record?.error { Text(error).font(.caption).foregroundStyle(.secondary) }
-                    Text("Available captions are saved. Missing ranges can be retried without changing your edits.")
+                    Text("Available captions are saved. Generate captions for missing ranges without changing your edits.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Reset retry progress") { confirmReset = true }
                         .font(.caption).disabled(preparing || speech.isAuthorizing || speech.persistenceError != nil)
@@ -46,14 +47,14 @@ struct PartialCaptionStatus: View {
                 .font(.caption)
             }
             if !speech.modelAvailable {
-                Text("Speech recognition for this retry is unavailable. Review Speech Models in Settings, then try again.")
+                Text("Speech recognition is unavailable. Review Speech Models in Settings, then try again.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let error = speech.persistenceError {
                 Text(error).font(.caption).foregroundStyle(.red)
                 Button("Retry job storage") { speech.retryStorage() }.font(.caption)
             }
-            if preparing { ProgressView("Preparing retry…").font(.caption) }
+            if preparing { ProgressView("Preparing transcription…").font(.caption) }
         }
         .alert("Reset saved retry progress?", isPresented: $confirmReset) {
             Button("Reset retry progress", action: reset)

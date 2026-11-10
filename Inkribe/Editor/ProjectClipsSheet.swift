@@ -7,7 +7,9 @@ struct ProjectClipsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appFoundationTheme) private var theme
     let session: EditorSession
+    let clipImport: AddClipsModel
     let onSelect: (UUID) -> Void
+    let onOpenCaptions: () -> Void
     @State private var renamingClip: ProjectClip?
     @State private var addingClips = false
     @State private var removingClip: ProjectClip?
@@ -17,6 +19,7 @@ struct ProjectClipsSheet: View {
     @State private var orderBase: ClipGraphState?
     @State private var orderIDs: [UUID] = []
     @State private var savingOrder = false
+    @State private var addedClipIDs: Set<UUID> = []
     private var isReordering: Bool { orderBase != nil }
     private var canSaveOrder: Bool {
         guard let orderBase else { return false }
@@ -24,19 +27,15 @@ struct ProjectClipsSheet: View {
         return !savingOrder && session.canChangeClips && orderIDs != originalIDs
     }
 
-    init(session: EditorSession, initialClipID: UUID?, onSelect: @escaping (UUID) -> Void) {
-        self.session = session; self.onSelect = onSelect
+    init(session: EditorSession, clipImport: AddClipsModel, initialClipID: UUID?, onOpenCaptions: @escaping () -> Void,
+         onSelect: @escaping (UUID) -> Void) {
+        self.session = session; self.onSelect = onSelect; self.onOpenCaptions = onOpenCaptions
+        self.clipImport = clipImport
         _highlightedClipID = State(initialValue: initialClipID)
     }
 
     var body: some View {
         navigation
-            .sheet(isPresented: $addingClips, onDismiss: { revealRequest = UUID() }) {
-                AddClipsSheet(session: session) { ids in
-                    error = nil; highlightedClipID = ids.first
-                }
-                .presentationDetents([.large]).presentationDragIndicator(.visible)
-            }
             .alert("Remove clip?", isPresented: Binding(
                 get: { removingClip != nil }, set: { if !$0 { removingClip = nil } }), presenting: removingClip) { clip in
                 Button("Remove clip", role: .destructive) { remove(clip) }
@@ -45,7 +44,10 @@ struct ProjectClipsSheet: View {
             .sheet(item: $renamingClip) { clip in
                 ClipRenameView(session: session, clipID: clip.id)
             }
-            .interactiveDismissDisabled(savingOrder)
+            .interactiveDismissDisabled(savingOrder || session.isChangingClips)
+            .onChange(of: addingClips) { _, adding in
+                if !adding { clipImport.endSelection(); revealRequest = UUID() }
+            }
             .onChange(of: session.document?.contentRevision) { _, _ in
                 guard !savingOrder, let orderBase, let document = session.document,
                       ClipGraphState(document) != orderBase else { return }
@@ -61,6 +63,15 @@ struct ProjectClipsSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .themedSurface()
                 .toolbar { clipToolbar }
+                .navigationDestination(isPresented: $addingClips) {
+                    AddClipsSheet(session: session, model: clipImport, selectionID: clipImport.selectionID,
+                                  onCancel: { closeAddClips() }) { ids in
+                        error = nil; highlightedClipID = ids.first
+                        addedClipIDs.formUnion(ids)
+                        if let first = ids.first { session.seekToClip(first) }
+                        closeAddClips()
+                    }
+                }
         }
     }
 
@@ -68,6 +79,7 @@ struct ProjectClipsSheet: View {
         ScrollViewReader { scroll in
             List {
                 controls
+                addedClipsStatus
                 if let document = session.document {
                     let clips = displayedClips(in: document)
                     Section {
@@ -106,7 +118,7 @@ struct ProjectClipsSheet: View {
     private var controls: some View {
         Section {
             if !isReordering {
-                Button("Add clips", systemImage: "plus") { addingClips = true }
+                Button("Add clips", systemImage: "plus") { clipImport.beginSelection(); addingClips = true }
                     .disabled(!session.canChangeClips)
             } else {
                 Text("Drag the handles to change playback order. Captions and settings move with their clips.")
@@ -125,6 +137,26 @@ struct ProjectClipsSheet: View {
         }
     }
 
+    @ViewBuilder private var addedClipsStatus: some View {
+        if !isReordering, let document = session.document {
+            let added = document.clips.filter { addedClipIDs.contains($0.id) }
+            if !added.isEmpty {
+                Section {
+                    Label(added.count == 1 ? "1 clip added" : "\(added.count) clips added",
+                          systemImage: "checkmark.circle")
+                    if (document.recognition == nil || document.recognition?.isIncomplete == true),
+                       added.contains(where: { clip in
+                           document.assets.contains { $0.id == clip.sourceAssetID && $0.metadata.audioTrackCount > 0 }
+                       }) {
+                        Button("Open Captions", systemImage: "captions.bubble", action: onOpenCaptions)
+                    }
+                } footer: {
+                    Text("Clips are saved. Open Captions when you’re ready to generate or edit captions.")
+                }
+            }
+        }
+    }
+
     @ToolbarContentBuilder private var clipToolbar: some ToolbarContent {
         if isReordering {
             ToolbarItem(placement: .cancellationAction) {
@@ -140,6 +172,11 @@ struct ProjectClipsSheet: View {
             }
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
         }
+    }
+
+    private func closeAddClips() {
+        clipImport.endSelection()
+        addingClips = false
     }
 
     private func displayedClips(in document: ProjectDocument) -> [ProjectClip] {

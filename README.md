@@ -161,7 +161,7 @@ A damaged queue store fails closed and remains recoverable from Diagnostics with
 
 Third-party release provenance ships in `InkribeMac/Resources/ThirdPartyNotices.txt` and is readable from Settings → About.
 
-See `docs/RELEASE_HARDENING.md` and `docs/handoffs/PHASE_9.md` for the final v1 hardening contract and handoff.
+See `docs/RELEASE_HARDENING.md` for the final v1 hardening contract.
 
 ## Product identity
 
@@ -198,7 +198,7 @@ See `docs/ARCHITECTURE.md`, `docs/SHARED_PACKAGES.md`, `docs/JOB_QUEUE.md`, `doc
 
 ## Development workflow
 
-The v1 implementation plan is complete. `docs/V1_IMPLEMENTATION_PLAN.md` and `docs/handoffs/PHASE_*.md` are retained as historical implementation records, not as the primary source for current behavior.
+The v1 implementation plan is complete. The old `docs/V1_IMPLEMENTATION_PLAN.md` and `docs/handoffs/PHASE_*.md` historical records were removed on 2026-11-07 as superseded (retrievable from git history); the focused architecture/feature contracts and `docs/ios/` are the primary source for current behavior.
 
 For current ownership and behavior, prefer the focused contracts referenced throughout this README: architecture, queue, model assets, runtimes, transcription pipeline, transcript workspace, local AI, export, settings/performance, and release hardening.
 
@@ -212,5 +212,5 @@ Post-v1 cleanup should consolidate existing ownership rather than weaken establi
 
 ## Manual build releases for mycli
 
-[Build Release setup and inputs](docs/BUILD_RELEASE.md) documents the manual-only GitHub Actions lane, selected iOS/macOS unsigned archives, generated Xcode project ZIP, optional iOS model bundling and local mycli signing. It does not run on pushes/PRs/tags or publish App Store/TestFlight builds. No workflow run is claimed.
+[Release setup and inputs](docs/RELEASE.md) documents the committed-project Xcode Cloud lane and the manual-only GitHub Actions lane with selected iOS/macOS unsigned archives, generated Xcode project ZIP, optional iOS model bundling and local mycli signing. Neither runs on pushes/PRs/tags or publishes App Store/TestFlight builds. No workflow run is claimed.
 

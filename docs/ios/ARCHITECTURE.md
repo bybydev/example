@@ -208,7 +208,7 @@ render/display adapter for native words and user-timed phrases; native model fie
 and checkpoint mapping are unchanged. `ManualCaptionPatch` integrates into the
 existing bounded history/writer. Speech-only rebase requires unchanged manual data.
 `CaptionSnapshot` owns manual precedence and overlap review for every output path.
-See [scope](phases/MANUAL_CAPTIONS.md) and [handoff](handoffs/MANUAL_CAPTIONS.md).
+See [handoff](handoffs/MANUAL_CAPTIONS.md).
 Earlier schema descriptions below are historical where superseded.
 
 
@@ -328,4 +328,4 @@ Native focus/scroll/layer transitions remain unexecuted acceptance scenarios.
 
 See [CONSOLIDATION](CONSOLIDATION.md), phase handoffs and
 [PRODUCTION_READINESS](PRODUCTION_READINESS.md) for evidence limits. Earlier source
-records remain in [the archive](archive/before-consolidation/ARCHITECTURE.md).
+records remain in git history.
