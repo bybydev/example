@@ -118,8 +118,16 @@ struct ProjectClipsSheet: View {
     private var controls: some View {
         Section {
             if !isReordering {
-                Button("Add clips", systemImage: "plus") { clipImport.beginSelection(); addingClips = true }
-                    .disabled(!session.canChangeClips)
+                Button("Add clips", systemImage: "plus") {
+                    let remaining = max(0, ProjectLimits.maximumClips - (session.document?.clips.count ?? 0))
+                    guard remaining > 0 else {
+                        error = "A project can include up to \(ProjectLimits.maximumClips) clips."
+                        return
+                    }
+                    clipImport.beginSelection(remainingCapacity: remaining)
+                    addingClips = true
+                }
+                .disabled(!session.canChangeClips)
             } else {
                 Text("Drag the handles to change playback order. Captions and settings move with their clips.")
                     .font(.footnote).foregroundStyle(.secondary)

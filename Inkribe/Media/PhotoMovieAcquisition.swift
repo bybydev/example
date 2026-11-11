@@ -74,6 +74,7 @@ struct PhotoLoad: @unchecked Sendable {
 struct PhotoPickerRequest: Identifiable {
     let id = UUID()
     let selectionID: UUID
+    let selectionLimit: Int
 }
 
 /// One picked item. The provider describes the choice and is the fallback
@@ -91,6 +92,7 @@ struct PhotoPick {
 /// fallback's request watchdogs).
 @MainActor
 struct PhotosVideoPicker: UIViewControllerRepresentable {
+    let selectionLimit: Int
     let onSelection: ([PhotoPick]) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onSelection: onSelection) }
@@ -98,7 +100,7 @@ struct PhotosVideoPicker: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .videos
-        configuration.selectionLimit = 0
+        configuration.selectionLimit = selectionLimit
         configuration.selection = .ordered
         // Apple's documented video pattern: deliver the representation that
         // exists on the iPhone now. The .automatic substitution handed back

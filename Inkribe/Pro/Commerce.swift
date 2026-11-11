@@ -25,7 +25,7 @@ enum Commerce {
         .init(id: "fullHD", systemImage: "film", title: "Full HD Exports",
               message: "Save your captioned videos in 1080p.", freeValue: "720p", proValue: "1080p"),
         .init(id: "themes", systemImage: "paintpalette.fill", title: "All Premium Themes",
-              message: "Make Inkribe yours with every app theme.", freeValue: "Paper & Graphite", proValue: "All")
+              message: "Make Inkribe yours with every app theme.", freeValue: "Sunset", proValue: "All")
     ]
     @MainActor static var comparison: [LimitReachedComparisonRow] {
         features.map { LimitReachedComparisonRow($0) }

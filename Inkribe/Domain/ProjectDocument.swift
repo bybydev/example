@@ -7,6 +7,10 @@ enum ProjectSchema {
     static let current = 13
 }
 
+enum ProjectLimits {
+    static let maximumClips = 50
+}
+
 typealias ProjectStoreError = InkribeCore.ProjectStoreError
 
 struct ProjectCanvas: Codable, Equatable, Sendable {

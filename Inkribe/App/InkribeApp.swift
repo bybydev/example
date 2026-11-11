@@ -38,7 +38,7 @@ private enum InkribeThemes {
         id: "graphite",
         title: "Graphite",
         symbolName: "moon.fill",
-        access: .free,
+        access: .pro,
         appearance: ThemeAppearance(
             background: ThemeColor(hex: 0x141414),
             gradientStart: ThemeColor(hex: 0x20262D),
@@ -55,9 +55,10 @@ private enum InkribeThemes {
     )
 
     static let catalog = ThemeCatalog(
-        themes: [FoundationThemes.paper.withAccess(.free), graphite]
-            + FoundationThemes.all.filter { $0.id != FoundationThemes.paper.id }
+        themes: [FoundationThemes.sunset.withAccess(.free), FoundationThemes.paper, graphite]
+            + FoundationThemes.all
+                .filter { $0.id != FoundationThemes.sunset.id && $0.id != FoundationThemes.paper.id }
                 .map { $0.withAccess(.pro) },
-        fallbackThemeID: FoundationThemes.paper.id
+        fallbackThemeID: FoundationThemes.sunset.id
     )
 }

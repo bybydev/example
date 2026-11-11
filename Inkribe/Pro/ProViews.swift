@@ -40,7 +40,7 @@ struct ProUpsell: View {
         case .fullHD:
             message = "Export captioned videos in 1080p with Pro. You can keep exporting in 720p and saving SRT subtitles for free."
         case .themes:
-            message = "Unlock every premium app theme. Paper and Graphite stay free."
+            message = "Unlock every premium app theme. Sunset stays free."
         }
         return .init(navigationTitle: feature.title, title: feature.title, message: message,
             symbolName: "crown.fill", rows: Commerce.comparison)

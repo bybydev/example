@@ -7,7 +7,6 @@ import SwiftUI
 struct ImportCompletion: Identifiable, Sendable {
     let id = UUID()
     let projectIDs: [UUID]
-    let hasFailures: Bool
 }
 
 /// Main-actor UI state only. One ProjectRepository actor owns every project
@@ -139,9 +138,9 @@ final class ProjectsModel {
     var cacheGeneration = 0
     private(set) var hasLoadedLibrary = false
     var isImporting = false
+    private(set) var isCommittingProject = false
     private(set) var isPreparingPhotos = false
     var alertMessage: String?
-    var importMessage: String?
     private(set) var selectedSources: [ImportInput] = []
     private(set) var sourceReviews: [UUID: ImportSourceReview] = [:]
     private(set) var reviewingSources: Set<UUID> = []
@@ -170,9 +169,14 @@ final class ProjectsModel {
     private let photoLoadWindow = 1
     var canCreateProject: Bool {
         !selectedSources.isEmpty && !isImporting && !isPreparingPhotos && photoFailures.isEmpty &&
+            sourceOrder.count <= ProjectLimits.maximumClips &&
             reviewingSources.isEmpty && selectedSources.allSatisfy {
                 sourceReviews[$0.id]?.kind == .video && sourceReviews[$0.id]?.metadata != nil
             }
+    }
+    var remainingClipCapacity: Int { max(0, ProjectLimits.maximumClips - sourceOrder.count) }
+    var clipLimitMessage: String {
+        "A project can include up to \(ProjectLimits.maximumClips) clips."
     }
     var storage: ProjectRepository.StorageUsage?
     var trashed: [ProjectRepository.TrashedProject] = []
@@ -319,7 +323,8 @@ final class ProjectsModel {
     func prepareImport() {
         guard !isImporting, !isPreparingPhotos else { return }
         importCompletion = nil
-        importMessage = nil
+        alertMessage = nil
+        isCommittingProject = false
         creationID = UUID()
         clearSelection()
     }
@@ -341,17 +346,24 @@ final class ProjectsModel {
 
     func addFiles(_ urls: [URL], selectionID: UUID) {
         guard selectionID == selectionSession, !isImporting, !isPreparingPhotos else { return }
-        let additions = urls.map { ImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent) }
+        let accepted = Array(urls.prefix(remainingClipCapacity))
+        if accepted.count < urls.count { alertMessage = clipLimitMessage }
+        guard !accepted.isEmpty else { return }
+        let additions = accepted.map { ImportInput(localURL: $0, origin: .files, displayName: $0.lastPathComponent) }
         selectedSources += additions
         selectionOrder += additions.map(\.id)
         reviewSources()
     }
 
     func moveSource(_ id: UUID, offset: Int) {
-        guard !isImporting, !isPreparingPhotos, let index = selectedSources.firstIndex(where: { $0.id == id }),
-              selectedSources.indices.contains(index + offset) else { return }
+        guard !isImporting, !isPreparingPhotos,
+              let index = selectedSources.firstIndex(where: { $0.id == id }),
+              selectedSources.indices.contains(index + offset),
+              let position = selectionOrder.firstIndex(of: id),
+              let otherPosition = selectionOrder.firstIndex(of: selectedSources[index + offset].id)
+        else { return }
         selectedSources.swapAt(index, index + offset)
-        selectionOrder = selectedSources.map(\.id)
+        selectionOrder.swapAt(position, otherPosition)
     }
 
     func reviewSources(retry id: UUID? = nil) {
@@ -375,11 +387,15 @@ final class ProjectsModel {
 
     func openPhotos() {
         guard !isImporting, !isPreparingPhotos, photoPicker == nil else { return }
+        guard remainingClipCapacity > 0 else {
+            alertMessage = clipLimitMessage
+            return
+        }
         // Ask for library access while nothing is presented: the system dialog
         // cannot reliably come up over a dismissing full-screen picker, and the
         // loader reads the cached status afterwards.
         Task { _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-        photoPicker = PhotoPickerRequest(selectionID: selectionSession)
+        photoPicker = PhotoPickerRequest(selectionID: selectionSession, selectionLimit: remainingClipCapacity)
     }
 
     func receivePhotos(_ picks: [PhotoPick], request: PhotoPickerRequest) {
@@ -387,7 +403,10 @@ final class ProjectsModel {
         // Retain providers in the model before dismissing the native picker.
         photoPicker = nil
         guard !isImporting, !isPreparingPhotos, selectionSession == request.selectionID else { return }
-        let selections = picks.enumerated().map { index, pick in
+        let accepted = Array(picks.prefix(remainingClipCapacity))
+        if accepted.count < picks.count { alertMessage = clipLimitMessage }
+        guard !accepted.isEmpty else { return }
+        let selections = accepted.enumerated().map { index, pick in
             PhotoMovieSelection(provider: pick.provider, assetID: pick.assetID,
                 name: pick.provider.suggestedName ?? "Selected video \(index + 1)")
         }
@@ -496,6 +515,7 @@ final class ProjectsModel {
             }
         }
         selectedSources.removeAll { $0.id == id }
+        selectionOrder.removeAll { $0 == id }
         sourceReviews.removeValue(forKey: id)
         reviewSources()
     }
@@ -529,30 +549,36 @@ final class ProjectsModel {
         guard canCreateProject else { return }
         let sources = selectedSources
         let projectID = creationID
-        isImporting = true; importMessage = nil; importCompletion = nil
+        isImporting = true; isCommittingProject = false; importCompletion = nil
         importTask = Task {
-            defer { isImporting = false; importTask = nil }
+            defer { isImporting = false; isCommittingProject = false; importTask = nil }
             do {
                 let document = try await importer.importFiles(sources, projectID: projectID,
-                    preset: preset, customCanvas: canvas, title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title)
-                let stopped = Task.isCancelled
+                    preset: preset, customCanvas: canvas, title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title,
+                    onCommit: { [weak self] in
+                        guard let self else { return }
+                        await self.markProjectCommitStarted()
+                    })
                 clearSelection()
                 await refreshLibrary()
-                importMessage = stopped ? "Your project was saved before cancellation. Open it below." : "Project saved."
-                importCompletion = ImportCompletion(projectIDs: [document.id], hasFailures: stopped)
+                importCompletion = ImportCompletion(projectIDs: [document.id])
                 Task { await generateMissingThumbnails(for: [document]); await refreshStorage() }
             } catch is CancellationError {
-                importMessage = "Creation cancelled. Your selected files are kept for another attempt."
                 await refresh()
             } catch {
-                importMessage = error.localizedDescription
+                alertMessage = error.localizedDescription
                 await refresh()
             }
         }
     }
 
     func cancelImport() {
+        guard !isCommittingProject else { return }
         importTask?.cancel()
+    }
+
+    private func markProjectCommitStarted() {
+        isCommittingProject = true
     }
 
     private enum ThumbnailUpdate: Equatable {

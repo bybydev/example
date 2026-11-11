@@ -32,7 +32,6 @@ fileGroups:
   - README.md
   - Makefile
   - project.yml
-  - docs
   - scripts
   - testfixtures
 

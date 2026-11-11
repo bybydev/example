@@ -39,7 +39,7 @@ struct AddClipsSheet: View {
         // PHPicker is built for full-screen presentation on iPhone; presenting it
         // inside a nested page sheet proved unreliable on device.
         .fullScreenCover(item: $model.photoPicker) { request in
-            PhotosVideoPicker { picks in
+            PhotosVideoPicker(selectionLimit: request.selectionLimit) { picks in
                 model.receivePhotos(picks, request: request)
             }
         }
@@ -195,6 +195,7 @@ final class AddClipsModel {
     @ObservationIgnored private var reviewGeneration = UUID()
     @ObservationIgnored private let importer = MediaImporter(repository: .shared)
     @ObservationIgnored private let reviewer = ImportMediaReviewer()
+    private(set) var remainingCapacity = ProjectLimits.maximumClips
     /// Concurrent provider loads are windowed so many multi-GB originals cannot
     /// surge library reads and storage writes at the same time.
     /// Sequential materialization: parallel provider file requests contend for
@@ -204,6 +205,7 @@ final class AddClipsModel {
     /// rate; total time stays bounded because each video has its own ladder.
     private let loadWindow = 1
     var busy: Bool { preparingPhotos || adding }
+    private var availableClipSlots: Int { max(0, remainingCapacity - sourceOrder.count) }
 
     /// Failed selections keep their provider for Retry, in selection order.
     var photoFailures: [PhotoMovieSelection] {
@@ -217,12 +219,14 @@ final class AddClipsModel {
     }
 
     var isReady: Bool {
-        active && !busy && !sources.isEmpty && photoFailures.isEmpty && reviewing.isEmpty &&
+        active && !busy && !sources.isEmpty && sourceOrder.count <= remainingCapacity &&
+            photoFailures.isEmpty && reviewing.isEmpty &&
             sources.allSatisfy { reviews[$0.id]?.metadata != nil && reviews[$0.id]?.kind == .video }
     }
 
-    func beginSelection() {
+    func beginSelection(remainingCapacity: Int = ProjectLimits.maximumClips) {
         endSelection()
+        self.remainingCapacity = max(0, remainingCapacity)
         // No staging can be in flight here; clear anything a crashed session
         // left in the durable staging area.
         PhotoMovieRequest.sweepStaleStaging()
@@ -245,21 +249,30 @@ final class AddClipsModel {
 
     func openPhotos() {
         guard active, !busy, photoPicker == nil else { return }
+        guard availableClipSlots > 0 else {
+            error = "A project can include up to \(ProjectLimits.maximumClips) clips."
+            return
+        }
         // Ask for library access while nothing is presented: the system dialog
         // cannot reliably come up over a dismissing full-screen picker, and the
         // loader reads the cached status afterwards.
         Task { _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-        photoPicker = PhotoPickerRequest(selectionID: selectionID)
+        photoPicker = PhotoPickerRequest(selectionID: selectionID, selectionLimit: availableClipSlots)
     }
 
     func receivePhotos(_ picks: [PhotoPick], request: PhotoPickerRequest) {
         guard active, selectionID == request.selectionID, photoPicker?.id == request.id else { return }
+        let accepted = Array(picks.prefix(availableClipSlots))
+        if accepted.count < picks.count {
+            error = "A project can include up to \(ProjectLimits.maximumClips) clips."
+        }
         // Retain providers in the model before dismissing the native picker.
-        let selections = picks.enumerated().map { index, pick in
+        let selections = accepted.enumerated().map { index, pick in
             PhotoMovieSelection(provider: pick.provider, assetID: pick.assetID,
                 name: pick.provider.suggestedName ?? "Selected video \(index + 1)")
         }
         photoPicker = nil
+        guard !selections.isEmpty else { return }
         preparePhotos(selections, selectionID: request.selectionID)
     }
 
@@ -267,7 +280,12 @@ final class AddClipsModel {
         guard active, self.selectionID == selectionID, !busy else { return }
         switch result {
         case .success(let urls):
-            let additions = urls.map { ImportInput(localURL: $0, origin: .files) }
+            let accepted = Array(urls.prefix(availableClipSlots))
+            if accepted.count < urls.count {
+                error = "A project can include up to \(ProjectLimits.maximumClips) clips."
+            }
+            guard !accepted.isEmpty else { return }
+            let additions = accepted.map { ImportInput(localURL: $0, origin: .files) }
             sources += additions; sourceOrder += additions.map(\.id)
             reviewSources()
         case .failure(let failure):

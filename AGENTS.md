@@ -1,3 +1,5 @@
+- Must show plan before edit and wait for my permission.
 - Do not run build or test.
 - Do not commit or push unless being asked.
-- Do not auto edit or fix unless beging asked.
+- This project uses xcodegen, project.yml is source of truth.
+- Currently only work on iOS app, ignore macOS target.

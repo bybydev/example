@@ -119,6 +119,9 @@ actor ProjectRepository {
     /// unreferenced originals, never a partially appended document.
     func appendClips(_ imported: PreparedClipImport, basedOn base: ProjectDocument) throws -> ProjectDocument {
         let current = try requireClipEditBase(base)
+        guard current.clips.count + imported.clips.count <= ProjectLimits.maximumClips else {
+            throw ProjectStoreError.invalidDocument("A project can include up to \(ProjectLimits.maximumClips) clips")
+        }
         let parent = try directory("Pending").resolvingSymlinksInPath().standardizedFileURL
         guard imported.staging.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == parent,
               let stagingID = UUID(uuidString: imported.staging.lastPathComponent), activeStaging.contains(stagingID) else {

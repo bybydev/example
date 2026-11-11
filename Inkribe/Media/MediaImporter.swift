@@ -48,14 +48,15 @@ actor MediaImporter {
 
     func importFiles(_ inputs: [ImportInput], projectID: UUID,
                      preset: CanvasPreset = .original, customCanvas: ProjectCanvas? = nil,
-                     title: String? = nil) async throws -> ProjectDocument {
+                     title: String? = nil,
+                     onCommit: @escaping @Sendable () async -> Void) async throws -> ProjectDocument {
         guard !inputs.isEmpty else { throw ProjectStoreError.invalidDocument("No media selected") }
         if preset == .custom {
             guard let customCanvas else { throw ProjectStoreError.invalidDocument("Custom project dimensions are required") }
             try customCanvas.validate()
         }
         return try await createProject(inputs, preset: preset, customCanvas: customCanvas,
-                                       title: title, projectID: projectID)
+                                       title: title, projectID: projectID, onCommit: onCommit)
     }
 
     /// Direct HTTPS media only, with bounded download/cancellation and the same
@@ -137,12 +138,13 @@ actor MediaImporter {
 
     private func createProject(
         _ inputs: [ImportInput], preset: CanvasPreset,
-        customCanvas: ProjectCanvas?, title: String?, projectID: UUID? = nil
+        customCanvas: ProjectCanvas?, title: String?, projectID: UUID? = nil,
+        onCommit: @escaping @Sendable () async -> Void
     ) async throws -> ProjectDocument {
         if let projectID, let existing = try? await repository.open(projectID) { return existing }
         let prepared = try await prepareClips(inputs, requireVideo: true)
         return try await commitPreparedProject(prepared, preset: preset, customCanvas: customCanvas,
-            title: title, projectID: projectID)
+            title: title, projectID: projectID, onCommit: onCommit)
     }
 
     // New Project requires video; editor clip append and Music keep their own policies.
@@ -220,7 +222,8 @@ actor MediaImporter {
     }
 
     private func commitPreparedProject(_ prepared: PreparedClipImport, preset: CanvasPreset,
-                                       customCanvas: ProjectCanvas?, title: String?, projectID: UUID?) async throws -> ProjectDocument {
+                                       customCanvas: ProjectCanvas?, title: String?, projectID: UUID?,
+                                       onCommit: @escaping @Sendable () async -> Void) async throws -> ProjectDocument {
         do {
             try Task.checkCancellation()
             let firstVideo = prepared.assets.first(where: { $0.kind == .video })?.metadata
@@ -240,6 +243,8 @@ actor MediaImporter {
                 preset: preset, canvas: dimensions,
                 assets: prepared.assets, clips: prepared.clips
             )
+            try Task.checkCancellation()
+            await onCommit()
             return try await repository.commitNew(document, stagedAt: prepared.staging)
         } catch {
             try? await repository.discardStaging(prepared.staging)

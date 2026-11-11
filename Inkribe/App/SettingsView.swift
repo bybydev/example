@@ -72,7 +72,11 @@ struct SettingsView: View {
                 Link(destination: Commerce.termsURL) {
                     Label("Terms of Use", systemImage: "doc.text")
                 }
-                LabeledContent("Version", value: appVersion)
+                LabeledContent {
+                    Text(appVersion)
+                } label: {
+                    Label("Version", systemImage: "info.circle")
+                }
             }
             .listRowBackground(theme.surfaceColor)
             .listRowSeparatorTint(theme.borderColor)
