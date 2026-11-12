@@ -201,7 +201,14 @@ struct ImportView: View {
                     Button("Move earlier", systemImage: "arrow.up") { model.moveSource(source.id, offset: -1) }.disabled(position == 0)
                     Button("Move later", systemImage: "arrow.down") { model.moveSource(source.id, offset: 1) }.disabled(position == model.selectedSources.count - 1)
                     Button("Remove", systemImage: "trash", role: .destructive) { model.removeSource(source.id) }
-                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
                 .disabled(busy).accessibilityLabel("Actions for \(source.displayName)")
             }
             if let error = review?.error {

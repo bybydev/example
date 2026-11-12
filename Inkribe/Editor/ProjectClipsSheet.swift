@@ -61,11 +61,7 @@ struct ProjectClipsSheet: View {
                 .themedSurface()
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        if session.isChangingClips || movingClipID != nil {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Button("Done") { requestClose() }
-                        }
+                        Button("Done") { requestClose() }
                     }
                 }
                 .fullScreenCover(item: $clipImport.photoPicker) { request in
@@ -123,9 +119,6 @@ struct ProjectClipsSheet: View {
     }
 
     @ViewBuilder private var clipStatus: some View {
-        if session.isChangingClips || movingClipID != nil {
-            ProgressView("Saving clip changes…")
-        }
         if !session.canChangeClips && !session.isChangingClips {
             Text("Finish or cancel transcription before changing clips.")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -224,7 +217,6 @@ struct ProjectClipsSheet: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .disabled(session.isChangingClips || movingClipID != nil)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
             .accessibilityValue(output == nil ? "Trimmed out" : EditorTime.display(clip.timelineInterval.durationTime))
@@ -244,7 +236,6 @@ struct ProjectClipsSheet: View {
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Actions for \(document.clipName(clip))")
-            .disabled(session.isChangingClips || movingClipID != nil)
         }
         .listRowBackground(clip.id == highlightedClipID ? theme.accentColor.opacity(0.1) : theme.surfaceColor)
         .listRowSeparatorTint(theme.borderColor)
