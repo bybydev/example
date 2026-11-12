@@ -145,7 +145,7 @@ struct ProjectClipsSheet: View {
     @ViewBuilder private var clipsFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
             if clipImport.sourceOrder.isEmpty {
-                Text("Tap a clip to jump to it. Touch and hold for move, rename and removal. Keep at least one clip.")
+                Text("Tap a clip to jump to it. Use the ellipsis for move, rename and removal. Keep at least one clip.")
             } else {
                 if clipImport.hasUnfinishedImports {
                     Text("New clips are saved as soon as they finish. Tap Done to close; you’ll be asked to wait or cancel unfinished clips.")
@@ -154,7 +154,7 @@ struct ProjectClipsSheet: View {
                     Text("Retry or remove the clips that couldn’t be added. Unfinished clips are discarded when you close.")
                 }
                 if !clipImport.hasUnfinishedImports && clipImport.pendingFailureCount == 0 {
-                    Text("Clips are added to the end as they finish. Swipe or touch and hold a clip for more actions.")
+                    Text("Clips are added to the end as they finish. Use the ellipsis or swipe a clip for more actions.")
                 }
             }
             if let count = session.document?.clips.count, count >= ProjectLimits.maximumClips {
@@ -218,18 +218,34 @@ struct ProjectClipsSheet: View {
         let output = OutputTimeline(document).outputInterval(clip.timelineInterval)
         let canEdit = session.canChangeClips && !clipImport.adding &&
             movingClipID == nil && !session.isChangingClips
-        return Button { requestClose(selecting: clip.id) } label: {
-            clipLabel(clip, index: index, document: document, output: output)
+        return HStack(spacing: 4) {
+            Button { requestClose(selecting: clip.id) } label: {
+                clipLabel(clip, index: index, document: document, output: output)
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(session.isChangingClips || movingClipID != nil)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
+            .accessibilityValue(output == nil ? "Trimmed out" : EditorTime.display(clip.timelineInterval.durationTime))
+            .accessibilityHint(output == nil
+                ? "Select to restore footage using the timeline trim handles"
+                : "Jumps to this clip in the editor")
+            .accessibilityAddTraits(clip.id == highlightedClipID ? .isSelected : [])
+
+            Menu {
+                clipActions(clip, index: index, clips: clips, document: document, canEdit: canEdit)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Actions for \(document.clipName(clip))")
+            .disabled(session.isChangingClips || movingClipID != nil)
         }
-        .buttonStyle(.plain)
-        .disabled(session.isChangingClips || movingClipID != nil)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Clip \(index + 1), \(document.clipName(clip))")
-        .accessibilityValue(output == nil ? "Trimmed out" : EditorTime.display(clip.timelineInterval.durationTime))
-        .accessibilityHint(output == nil
-            ? "Select to restore footage using the timeline trim handles"
-            : "Jumps to this clip in the editor")
-        .accessibilityAddTraits(clip.id == highlightedClipID ? .isSelected : [])
         .listRowBackground(clip.id == highlightedClipID ? theme.accentColor.opacity(0.1) : theme.surfaceColor)
         .listRowSeparatorTint(theme.borderColor)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -243,15 +259,7 @@ struct ProjectClipsSheet: View {
             .disabled(document.clips.count <= 1 || !canEdit)
         }
         .contextMenu {
-            Button("Move earlier", systemImage: "arrow.up") { move(clip, offset: -1) }
-                .disabled(index == 0 || !canEdit)
-            Button("Move later", systemImage: "arrow.down") { move(clip, offset: 1) }
-                .disabled(index + 1 >= clips.count || !canEdit)
-            Divider()
-            Button("Rename clip", systemImage: "pencil") { renamingClip = clip }
-                .disabled(!canEdit)
-            Button("Remove clip", systemImage: "trash", role: .destructive) { removingClip = clip }
-                .disabled(document.clips.count <= 1 || !canEdit)
+            clipActions(clip, index: index, clips: clips, document: document, canEdit: canEdit)
         }
         .accessibilityActions {
             if canEdit {
@@ -261,6 +269,19 @@ struct ProjectClipsSheet: View {
                 if document.clips.count > 1 { Button("Remove clip") { removingClip = clip } }
             }
         }
+    }
+
+    @ViewBuilder private func clipActions(_ clip: ProjectClip, index: Int, clips: [ProjectClip],
+                                          document: ProjectDocument, canEdit: Bool) -> some View {
+        Button("Move earlier", systemImage: "arrow.up") { move(clip, offset: -1) }
+            .disabled(index == 0 || !canEdit)
+        Button("Move later", systemImage: "arrow.down") { move(clip, offset: 1) }
+            .disabled(index + 1 >= clips.count || !canEdit)
+        Divider()
+        Button("Rename clip", systemImage: "pencil") { renamingClip = clip }
+            .disabled(!canEdit)
+        Button("Remove clip", systemImage: "trash", role: .destructive) { removingClip = clip }
+            .disabled(document.clips.count <= 1 || !canEdit)
     }
 
     private func move(_ clip: ProjectClip, offset: Int) {
@@ -328,9 +349,6 @@ struct ProjectClipsSheet: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: clip.id == highlightedClipID ? "checkmark" : "chevron.right")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
         .contentShape(Rectangle())

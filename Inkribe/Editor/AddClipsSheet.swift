@@ -72,9 +72,18 @@ struct AddClipsRows: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Remove selection", systemImage: "xmark") { model.removePending(source.id) }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    .frame(width: 44, height: 44).disabled(model.busy)
+                Menu {
+                    pendingActions(source.id)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Actions for \(source.displayName)")
+                .disabled(model.busy)
             }
             if let issue = review?.error {
                 Text(issue).font(.footnote).foregroundStyle(.orange)
@@ -100,9 +109,18 @@ struct AddClipsRows: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Remove selection", systemImage: "xmark") { model.removePending(entry.id) }
-                .labelStyle(.iconOnly).buttonStyle(.borderless)
-                .frame(width: 44, height: 44).disabled(model.busy)
+            Menu {
+                pendingActions(entry.id)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Actions for \(entry.name)")
+            .disabled(model.busy)
         }
         .contextMenu { pendingActions(entry.id) }
     }
@@ -115,9 +133,18 @@ struct AddClipsRows: View {
                     Text("New · \(number). \(entry.name)").lineLimit(2).truncationMode(.middle)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Remove selection", systemImage: "xmark") { model.removePending(entry.id) }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    .frame(width: 44, height: 44).disabled(model.busy)
+                Menu {
+                    pendingActions(entry.id)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Actions for \(entry.name)")
+                .disabled(model.busy)
             }
             Text(message).font(.footnote).foregroundStyle(.orange)
             HStack {
