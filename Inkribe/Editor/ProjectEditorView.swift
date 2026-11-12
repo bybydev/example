@@ -25,7 +25,6 @@ struct ProjectEditorView: View {
     @State private var presentationID = UUID()
     @State private var showClips = false
     @State private var clipImport = AddClipsModel()
-    @State private var openCaptionsAfterClips = false
     @State private var clipsInitialSelection: UUID?
     @State private var addingCaption: ManualCaptionDraft?
     @State private var relinkAsset: UUID?
@@ -126,21 +125,11 @@ struct ProjectEditorView: View {
             .sheet(isPresented: $showClips, onDismiss: {
                 clipImport.endSelection()
                 finishToolEditing()
-                let openCaptions = openCaptionsAfterClips
-                openCaptionsAfterClips = false
-                if openCaptions, !isLeaving, session.document != nil, !hasPresentedSheet {
-                    switchTool(.captions)
-                }
             }) {
-                ProjectClipsSheet(session: session, clipImport: clipImport, initialClipID: clipsInitialSelection, onOpenCaptions: {
-                    openCaptionsAfterClips = true
-                    showClips = false
-                }) { id in
-                    session.seekToClip(id)
-                    showClips = false
-                }
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+                ProjectClipsSheet(session: session, clipImport: clipImport,
+                                  initialClipID: clipsInitialSelection)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
     }
 
