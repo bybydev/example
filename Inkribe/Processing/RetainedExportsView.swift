@@ -142,7 +142,7 @@ private struct RetainedExportRow: View {
                 Text(artifact.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
                 Text(artifact.profile?.format.title ?? "Export").font(.subheadline).foregroundStyle(.secondary)
                 Text(status)
-                    .font(.caption).foregroundStyle(artifact.issue == nil ? .secondary : .red).lineLimit(2)
+                    .font(.caption).foregroundStyle(artifact.issue == nil ? Color.secondary : Color.red).lineLimit(2)
                 Text(ByteCountFormatter.string(fromByteCount: artifact.bytes, countStyle: .file))
                     .font(.caption).foregroundStyle(.secondary)
             }
