@@ -82,7 +82,10 @@ struct ProcessingJobDetail: View {
             Section("Frozen export request") {
                 if let profile = capturedExportProfile {
                     LabeledContent("Format", value: profile.format.title)
-                    if profile.format == .mp4 { LabeledContent("Resolution", value: profile.resolution.title) }
+                    if profile.format == .mp4 {
+                        LabeledContent("Resolution", value: profile.resolution.title)
+                        LabeledContent("Frame rate", value: profile.frameRate.title)
+                    }
                 }
                 if let revision = artifact?.revision { LabeledContent("Saved revision", value: String(revision)) }
                 Text("Uses the saved captions, style, trim and media captured when this export was requested. Later edits or new captions do not change it.")

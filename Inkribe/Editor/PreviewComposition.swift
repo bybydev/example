@@ -33,7 +33,8 @@ enum PreviewComposition {
 
     /// P5 and preview share source/track intersections, placement and orientation.
     /// Trim, framing and original-audio mix are shared, not a second pipeline.
-    static func mediaGraph(document: ProjectDocument, urls: [UUID: URL], size: CGSize) async throws -> MediaGraph {
+    static func mediaGraph(document: ProjectDocument, urls: [UUID: URL], size: CGSize,
+                           frameRate: CMTimeScale = 30) async throws -> MediaGraph {
         try document.validate()
         let composition = AVMutableComposition()
         let timeline = OutputTimeline(document)
@@ -178,8 +179,8 @@ enum PreviewComposition {
         if insertedVideo {
             let videoComposition = AVMutableVideoComposition()
             videoComposition.renderSize = size
-            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-            // Preview and export consume composed 30 fps timing, including VFR
+            videoComposition.frameDuration = CMTime(value: 1, timescale: frameRate)
+            // Preview and export consume composed CFR timing, including VFR
             // sources. Do not derive output cadence from a source track.
             videoComposition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
             videoComposition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2

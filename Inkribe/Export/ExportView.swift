@@ -107,11 +107,16 @@ struct ExportView: View {
                         Text(model.access.hasPro ? "1080p" : "1080p · Pro").tag(ExportResolution.fullHD)
                     }
                     .disabled(model.access.isChecking)
+                    Picker("Frame rate", selection: $profile.frameRate) {
+                        ForEach(ExportFrameRate.allCases, id: \.self) { rate in
+                            Text(rate.title).tag(rate)
+                        }
+                    }
                     if let canvas = session.document?.canvas, let output = try? profile.resolution.canvas(for: canvas) {
-                        LabeledContent("Output", value: "\(output.width) × \(output.height) · 30 fps")
+                        LabeledContent("Output", value: "\(output.width) × \(output.height) · \(profile.frameRate.title)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("H.264 MP4 with burned-in captions and original audio. Audio-only projects use a black canvas.")
+                    Text("H.264 MP4 with burned-in captions and original audio. Higher frame rates create larger files and take longer to export. Audio-only projects use a black canvas.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
                     Text("UTF-8 subtitles with your edited text and project timing. Fonts and animations are part of video exports.")

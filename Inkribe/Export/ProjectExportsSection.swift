@@ -398,7 +398,10 @@ private struct ExportActionsLabel: View {
 
 private func exportProfileMetadata(_ profile: ExportProfile?, duration: MediaTime?) -> [String] {
     var parts: [String] = []
-    if profile?.format == .mp4, let profile { parts.append(profile.resolution.title) }
+    if profile?.format == .mp4, let profile {
+        parts.append(profile.resolution.title)
+        parts.append(profile.frameRate.title)
+    }
     if let duration {
         let display = EditorTime.display(duration)
         parts.append(display.components(separatedBy: ".").first ?? display)

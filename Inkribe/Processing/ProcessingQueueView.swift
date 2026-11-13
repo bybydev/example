@@ -383,7 +383,7 @@ struct ProcessingQueueView: View {
         let profile = artifact?.profile ?? (try? entry.record.decode(ExportJob.self))?.payload.profile
         guard let profile else { return "Export" }
         var parts = profile.format == .mp4
-            ? ["Captioned video", profile.resolution.title]
+            ? ["Captioned video", profile.resolution.title, profile.frameRate.title]
             : ["SRT subtitles"]
         if let duration = artifact?.duration {
             let display = EditorTime.display(duration)
