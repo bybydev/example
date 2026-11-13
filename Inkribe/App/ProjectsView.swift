@@ -29,6 +29,7 @@ struct ProjectsView: View {
     private var searching: Bool { searchPresented || !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
+        @Bindable var bindableModel = model
         NavigationStack(path: $path) { libraryLifecycle }
             .sheet(item: $sheet, onDismiss: finishPresentation) { destination in
                 switch destination {
@@ -55,6 +56,7 @@ struct ProjectsView: View {
                 }
             }
             .environment(\.queueProjectNavigation, QueueProjectNavigation(open: openQueueProject))
+            .confirmationToast($bindableModel.libraryToast)
     }
 
     private var libraryLifecycle: some View {

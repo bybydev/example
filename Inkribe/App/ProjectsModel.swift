@@ -141,6 +141,7 @@ final class ProjectsModel {
     private(set) var isCommittingProject = false
     private(set) var isPreparingPhotos = false
     var alertMessage: String?
+    var libraryToast: ConfirmationToast?
     private(set) var selectedSources: [ImportInput] = []
     private(set) var sourceReviews: [UUID: ImportSourceReview] = [:]
     private(set) var reviewingSources: Set<UUID> = []
@@ -635,18 +636,28 @@ final class ProjectsModel {
         }
     }
 
-    func duplicate(_ id: UUID, includingCaptions: Bool = true) async {
-        guard mutatingProjectIDs.insert(id).inserted else { return }
+    @discardableResult
+    func duplicate(_ id: UUID, includingCaptions: Bool = true) async -> Bool {
+        guard mutatingProjectIDs.insert(id).inserted else { return false }
         defer { mutatingProjectIDs.remove(id) }
         do {
             guard !editors.hasPending(id) else { throw CaptionEditError.unsavedChanges }
             let copied = try await repository.duplicate(id, includingCaptions: includingCaptions)
+            var placed = true
             if organizationReady, let folder = folderID(for: id) {
-                _ = await moveProjects([copied.id], to: folder)
+                placed = await moveProjects([copied.id], to: folder)
             }
             await refresh()
             await generateMissingThumbnails(for: [copied])
-        } catch { alertMessage = error.localizedDescription }
+            if placed {
+                libraryToast = ConfirmationToast(text: includingCaptions
+                    ? "Project duplicated" : "Project duplicated without captions")
+            }
+            return true
+        } catch {
+            alertMessage = error.localizedDescription
+            return false
+        }
     }
 
     func trash(_ id: UUID) async {

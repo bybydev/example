@@ -722,7 +722,9 @@ struct ProjectEditorView: View {
         Task {
             await session.flush()
             guard !session.hasPendingChanges else { return }
-            await model.duplicate(projectID, includingCaptions: includingCaptions)
+            if await model.duplicate(projectID, includingCaptions: includingCaptions) {
+                dismiss()
+            }
         }
     }
 
