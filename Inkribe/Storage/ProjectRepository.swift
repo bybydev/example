@@ -501,13 +501,13 @@ actor ProjectRepository {
         guard result.words.isEmpty, result.cues.isEmpty,
               files.fileExists(atPath: try speechAllowanceURL().path) else { return }
         var value = try loadSpeechAllowance()
-        value.countedVideos.removeAll { $0.recognitionID == result.id }
+        value.countedTranscriptions.removeAll { $0.recognitionID == result.id }
         value.reservations.removeAll { $0.jobID == result.id }
         try writeSpeechAllowance(value)
     }
 
     private func speechAllowanceURL() throws -> URL {
-        try directory("Usage").appendingPathComponent("caption-allowance-v2.json")
+        try directory("Usage").appendingPathComponent("caption-allowance-v3.json")
     }
 
     private func loadSpeechAllowance() throws -> CaptionAllowanceLedger {
@@ -573,12 +573,11 @@ actor ProjectRepository {
         }
         var value = try loadSpeechAllowance()
         guard !value.reservations.contains(where: { $0.jobID == jobID }),
-              !value.countedVideos.contains(where: { $0.recognitionID == jobID }) else {
+              !value.countedTranscriptions.contains(where: { $0.recognitionID == jobID }) else {
             throw SpeechError.busy
         }
         try CaptionAllowanceLedger.requireFreeEligibility(project)
-        let alreadyCounted = value.countedVideos.contains { $0.projectID == projectID }
-        guard alreadyCounted || value.snapshot.remaining > 0 else { throw ProError.requiresPro(.captioning) }
+        guard value.snapshot.remaining > 0 else { throw ProError.requiresPro(.captioning) }
         value.reservations.append(.init(jobID: jobID, projectID: projectID, revision: revision,
                                        weekStart: value.weekStart))
         try writeSpeechAllowance(value)

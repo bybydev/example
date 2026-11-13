@@ -17,9 +17,9 @@ struct CaptionAllowance: Sendable {
 }
 
 /// Owned exclusively by ProjectRepository. Reservations protect queued work;
-/// only a complete recognition published in the document becomes counted usage.
+/// each unique successful transcription becomes exactly one counted video.
 struct CaptionAllowanceLedger: Codable, Equatable {
-    struct CountedVideo: Codable, Equatable {
+    struct CountedTranscription: Codable, Equatable {
         let projectID: UUID
         let recognitionID: UUID
         let weekStart: Date
@@ -30,10 +30,10 @@ struct CaptionAllowanceLedger: Codable, Equatable {
         let revision: UInt64
         let weekStart: Date
     }
-    static let currentVersion = 2
+    static let currentVersion = 3
     var version = CaptionAllowanceLedger.currentVersion
     var weekStart: Date
-    var countedVideos: [CountedVideo] = []
+    var countedTranscriptions: [CountedTranscription] = []
     var reservations: [Reservation] = []
 
     static func week(containing date: Date) -> Date {
@@ -46,36 +46,30 @@ struct CaptionAllowanceLedger: Codable, Equatable {
         let start = Self.week(containing: now)
         guard start > weekStart else { return }
         weekStart = start
-        // Counted videos are retained so retranscribing a project never charges
-        // again. Weekly usage is derived from each entry's original week.
+        // Usage is derived from the week of each successful transcription.
     }
 
     var snapshot: CaptionAllowance {
-        let countedProjects = Set(countedVideos.map(\.projectID))
-        let reserved = Set(reservations.filter {
-            $0.weekStart == weekStart && !countedProjects.contains($0.projectID)
-        }.map(\.projectID)).count
-        return .init(used: countedVideos.filter { $0.weekStart == weekStart }.count,
-            reserved: reserved,
+        .init(used: countedTranscriptions.filter { $0.weekStart == weekStart }.count,
+            reserved: reservations.filter { $0.weekStart == weekStart }.count,
             resetsAt: weekStart.addingTimeInterval(7 * 24 * 60 * 60))
     }
 
     mutating func finish(_ id: UUID) {
         guard let reservation = reservations.first(where: { $0.jobID == id }) else { return }
-        if !countedVideos.contains(where: { $0.projectID == reservation.projectID }) {
-            countedVideos.append(.init(projectID: reservation.projectID,
-                recognitionID: reservation.jobID, weekStart: reservation.weekStart))
+        if !countedTranscriptions.contains(where: { $0.recognitionID == id }) {
+            countedTranscriptions.append(.init(projectID: reservation.projectID,
+                recognitionID: id, weekStart: reservation.weekStart))
         }
         reservations.removeAll { $0.jobID == id }
     }
 
     func validate() throws {
-        let used = countedVideos.filter { $0.weekStart == weekStart }.count
+        let used = countedTranscriptions.filter { $0.weekStart == weekStart }.count
         guard version == Self.currentVersion, weekStart.timeIntervalSince1970.isFinite,
               weekStart == Self.week(containing: weekStart),
-              Set(countedVideos.map(\.projectID)).count == countedVideos.count,
-              Set(countedVideos.map(\.recognitionID)).count == countedVideos.count,
-              countedVideos.allSatisfy({ $0.weekStart.timeIntervalSince1970.isFinite
+              Set(countedTranscriptions.map(\.recognitionID)).count == countedTranscriptions.count,
+              countedTranscriptions.allSatisfy({ $0.weekStart.timeIntervalSince1970.isFinite
                   && $0.weekStart == Self.week(containing: $0.weekStart)
                   && $0.weekStart <= weekStart }),
               used <= Commerce.weeklyVideoLimit,
