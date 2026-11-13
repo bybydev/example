@@ -32,12 +32,11 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     env:
       APP: Inkribe
       PROJECT: Inkribe.xcodeproj
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       BUILD_PLATFORM: ${{ inputs.platform }}
       BUILD_CONFIGURATION: ${{ inputs.configuration }}
       IOS_MODELS: ${{ inputs.ios_models }}
@@ -71,7 +70,7 @@ jobs:
           case "$BUILD_PLATFORM" in iOS|macOS|both) ;; *) exit 1 ;; esac
           case "$BUILD_CONFIGURATION" in Debug|Release) ;; *) exit 1 ;; esac
           case "$IOS_MODELS" in download|bundled) ;; *) exit 1 ;; esac
-          test -d "$DEVELOPER_DIR"
+          echo "Developer dir: $(xcode-select -p)"
           echo "Ref: $GITHUB_REF"
           echo "Commit: $(git rev-parse HEAD)"
           echo "Platform: $BUILD_PLATFORM; configuration: $BUILD_CONFIGURATION; iOS models: $IOS_MODELS"
@@ -136,7 +135,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/Inkribe-SourcePackages
-          key: inkribe-spm-${{ runner.os }}-${{ runner.arch }}-xcode26.3-${{ hashFiles('project*.yml', 'Packages/**/Package.swift', '**/Package.resolved') }}
+          key: inkribe-spm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('project*.yml', 'Packages/**/Package.swift', '**/Package.resolved') }}
 
       - name: Archive unsigned iOS device app
         if: ${{ inputs.platform == 'iOS' || inputs.platform == 'both' }}
