@@ -204,7 +204,8 @@ actor ProjectRepository {
     /// Only the explicit empty-result recovery operation may clear recognition.
     private func writeEdit(_ proposed: ProjectDocument, expectedRevision: UInt64,
                            clearingEmptyRecognitionID: UUID? = nil,
-                           appendingRecognitionID: UUID? = nil) throws -> ProjectDocument {
+                           appendingRecognitionID: UUID? = nil,
+                           replacingRecognitionID: UUID? = nil) throws -> ProjectDocument {
         let current = try open(proposed.id)
         guard current.contentRevision == expectedRevision else {
             throw ProjectStoreError.staleRevision(expected: expectedRevision,
@@ -221,7 +222,14 @@ actor ProjectRepository {
         let clearsEmptyRecognition = current.recognition.map {
             $0.id == clearingEmptyRecognitionID && $0.words.isEmpty && $0.cues.isEmpty && next.recognition == nil
         } ?? false
-        if let raw = current.recognition, !clearsEmptyRecognition, raw.id != appendingRecognitionID {
+        let replacesRecognition = current.recognition.map { existing in
+            existing.id == replacingRecognitionID && !existing.words.isEmpty && !existing.isIncomplete &&
+                next.recognition.map { candidate in
+                    candidate.id != existing.id && !candidate.words.isEmpty && !candidate.isIncomplete
+                } == true
+        } ?? false
+        if let raw = current.recognition, !clearsEmptyRecognition, !replacesRecognition,
+           raw.id != appendingRecognitionID {
             guard let proposed = next.recognition, proposed.id == raw.id,
                   proposed.rawWindows == raw.rawWindows, proposed.modelID == raw.modelID,
                   proposed.modelSHA256 == raw.modelSHA256,
@@ -286,12 +294,40 @@ actor ProjectRepository {
     }
 
     /// Append accepted source units into the latest saved manual edits.
+    /// Re-transcription uses the same checkpoint durability but only swaps the
+    /// document after every window succeeds, so old captions survive failure.
     func publishSpeechProgress(_ checkpoint: SpeechCheckpoint,
-                               chargeOnCompletion: Bool) throws -> ProjectDocument {
+                               chargeOnCompletion: Bool,
+                               replacingRecognitionID: UUID? = nil) throws -> ProjectDocument {
         try Task.checkCancellation()
         var current = try open(checkpoint.projectID)
         guard current.assets == checkpoint.assets, current.clips == checkpoint.clips else {
             throw ProjectStoreError.invalidDocument("Transcription source graph changed")
+        }
+        if let replacingRecognitionID {
+            if let existing = current.recognition {
+                if existing.id == checkpoint.jobID {
+                    guard !existing.isIncomplete else { throw SpeechError.busy }
+                    if chargeOnCompletion { try finishSpeechAllowance(existing.id) }
+                    return current
+                }
+                guard existing.id == replacingRecognitionID, !existing.words.isEmpty,
+                      !existing.isIncomplete else {
+                    throw SpeechError.alreadyTranscribed
+                }
+            } else {
+                throw SpeechError.alreadyTranscribed
+            }
+            guard let result = try checkpoint.publication(merging: nil) else { return current }
+            try result.validate(clips: current.clips, assets: current.assets)
+            guard !result.isIncomplete, !result.words.isEmpty else { return current }
+            let revision = current.contentRevision
+            current.recognition = result
+            current.manualCaptions = nil
+            current = try writeEdit(current, expectedRevision: revision,
+                                    replacingRecognitionID: replacingRecognitionID)
+            if chargeOnCompletion { try finishSpeechAllowance(result.id) }
+            return current
         }
         if let existing = current.recognition {
             guard existing.id == checkpoint.jobID else { throw SpeechError.alreadyTranscribed }
@@ -362,21 +398,49 @@ actor ProjectRepository {
         catch { throw SpeechRecoveryError.corrupt }
     }
 
-    func loadSpeechCheckpoint(matching fresh: SpeechCheckpoint) throws -> SpeechCheckpoint {
+    func loadSpeechCheckpoint(matching fresh: SpeechCheckpoint,
+                              replacingRecognitionID: UUID? = nil) throws -> SpeechCheckpoint {
         let project = try open(fresh.projectID)
-        guard project.recognition == nil ||
-                (project.recognition?.id == fresh.jobID && project.recognition?.isIncomplete == true) else {
-            throw SpeechError.alreadyTranscribed
+        if let replacingRecognitionID {
+            guard project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.alreadyTranscribed
+            }
+        } else {
+            guard project.recognition == nil ||
+                    (project.recognition?.id == fresh.jobID && project.recognition?.isIncomplete == true) else {
+                throw SpeechError.alreadyTranscribed
+            }
+            guard project.contentRevision == fresh.revision else {
+                throw ProjectStoreError.staleRevision(expected: fresh.revision, actual: project.contentRevision)
+            }
         }
-        guard project.contentRevision == fresh.revision else {
-            throw ProjectStoreError.staleRevision(expected: fresh.revision, actual: project.contentRevision)
+        var seeded = replacingRecognitionID == nil ? try fresh.seeded(from: project.recognition) : fresh
+        // During re-transcription the old captions are the durable copy. A
+        // malformed partial checkpoint is disposable and must not block a new
+        // run; saving the fresh checkpoint replaces it.
+        let saved: SpeechCheckpoint?
+        if replacingRecognitionID != nil {
+            saved = try? readSpeechCheckpoint(fresh.projectID)
+        } else {
+            saved = try readSpeechCheckpoint(fresh.projectID)
         }
-        var seeded = try fresh.seeded(from: project.recognition)
-        guard let saved = try readSpeechCheckpoint(fresh.projectID),
-              saved.matches(fresh) || (project.recognition?.isIncomplete == true && saved.matchesInputs(fresh)) else { return seeded }
+        guard let saved else { return seeded }
+        let canResume = saved.matches(fresh) ||
+            (replacingRecognitionID != nil
+                ? saved.matchesInputs(fresh)
+                : (project.recognition?.isIncomplete == true && saved.matchesInputs(fresh)))
+        guard canResume else { return seeded }
         do { try saved.validate(recheckingMapping: true) }
-        catch let error as SpeechRecoveryError { throw error }
-        catch { throw SpeechRecoveryError.corrupt }
+        catch let error as SpeechRecoveryError {
+            guard replacingRecognitionID == nil else { return seeded }
+            throw error
+        }
+        catch {
+            guard replacingRecognitionID == nil else { return seeded }
+            throw SpeechRecoveryError.corrupt
+        }
         var entries = Dictionary(uniqueKeysWithValues: saved.entries.map { ($0.index, $0) })
         for entry in seeded.entries {
             if let prior = entries[entry.index], prior != entry { throw SpeechRecoveryError.corrupt }
@@ -386,13 +450,22 @@ actor ProjectRepository {
         return seeded
     }
 
-    func saveSpeechCheckpoint(_ checkpoint: SpeechCheckpoint) throws -> SpeechCheckpoint {
+    func saveSpeechCheckpoint(_ checkpoint: SpeechCheckpoint,
+                              replacingRecognitionID: UUID? = nil) throws -> SpeechCheckpoint {
         try Task.checkCancellation()
         var value = checkpoint
         let project = try open(value.projectID)
-        guard project.recognition == nil ||
-                (project.recognition?.id == value.jobID && project.recognition?.isIncomplete == true) else {
-            throw SpeechError.alreadyTranscribed
+        if let replacingRecognitionID {
+            guard project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.alreadyTranscribed
+            }
+        } else {
+            guard project.recognition == nil ||
+                    (project.recognition?.id == value.jobID && project.recognition?.isIncomplete == true) else {
+                throw SpeechError.alreadyTranscribed
+            }
         }
         guard project.assets == value.assets, project.clips == value.clips else {
             throw ProjectStoreError.invalidDocument("Transcription source graph changed")
@@ -565,11 +638,24 @@ actor ProjectRepository {
         return value.snapshot
     }
 
-    func reserveSpeechAllowance(jobID: UUID, projectID: UUID, revision: UInt64) throws {
+    func reserveSpeechAllowance(jobID: UUID, projectID: UUID, revision: UInt64,
+                                replacingRecognitionID: UUID? = nil) throws {
         let project = try open(projectID)
-        guard project.contentRevision == revision,
-              project.recognition == nil || (project.recognition?.id == jobID && project.recognition?.isIncomplete == true) else {
+        guard project.contentRevision == revision else {
             throw ProjectStoreError.staleRevision(expected: revision, actual: project.contentRevision)
+        }
+        if let replacingRecognitionID {
+            guard replacingRecognitionID != jobID,
+                  project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.alreadyTranscribed
+            }
+        } else {
+            guard project.recognition == nil ||
+                    (project.recognition?.id == jobID && project.recognition?.isIncomplete == true) else {
+                throw ProjectStoreError.staleRevision(expected: revision, actual: project.contentRevision)
+            }
         }
         var value = try loadSpeechAllowance()
         guard !value.reservations.contains(where: { $0.jobID == jobID }),
@@ -855,7 +941,7 @@ actor ProjectRepository {
 
     /// Duplicates own physical originals. Clip and asset instance IDs never alias
     /// a previous project, so later deletion cannot break another document.
-    func duplicate(_ id: UUID) throws -> ProjectDocument {
+    func duplicate(_ id: UUID, includingCaptions: Bool = true) throws -> ProjectDocument {
         let original = try open(id)
         let staging = try makeStagingDirectory()
         do {
@@ -890,19 +976,28 @@ actor ProjectRepository {
                     sourceInterval: clip.sourceInterval, timelineInterval: clip.timelineInterval)
             }
             let now = Date()
+            let copiedRecognition = includingCaptions
+                ? original.recognition?.duplicated(assetClips: clipMapping) : nil
+            let copiedManualCaptions: [ManualCaption]?
+            if includingCaptions {
+                copiedManualCaptions = try original.manualCaptions?.map { caption in
+                    guard let clipID = clipMapping[caption.clipID] else { throw ManualCaptionError.invalidCaption }
+                    return ManualCaption(id: UUID(), clipID: clipID, text: caption.text, interval: caption.interval)
+                }
+            } else {
+                copiedManualCaptions = nil
+            }
             let copy = ProjectDocument(schemaVersion: ProjectSchema.current,
                 id: UUID(), contentRevision: 1, title: String(original.title.prefix(251)) + " Copy",
                 createdAt: now, updatedAt: now, preset: original.preset,
                 canvas: original.canvas, assets: newAssets, clips: newClips,
-                recognition: original.recognition?.duplicated(assetClips: clipMapping),
+                recognition: copiedRecognition,
                 captionStyle: original.captionStyle, mediaEdits: original.mediaEdits,
                 clipSettings: original.clipSettings?.compactMap { settings in
                     guard let id = clipMapping[settings.id] else { return nil }
                     var copy = settings; copy.id = id; return copy
-                }, manualCaptions: try original.manualCaptions?.map { caption in
-                    guard let clipID = clipMapping[caption.clipID] else { throw ManualCaptionError.invalidCaption }
-                    return ManualCaption(id: UUID(), clipID: clipID, text: caption.text, interval: caption.interval)
-                }, music: copiedMusic, originalAudioMuted: original.originalAudioMuted)
+                }, manualCaptions: copiedManualCaptions, music: copiedMusic,
+                originalAudioMuted: original.originalAudioMuted)
             return try commitNew(copy, stagedAt: staging)
         } catch {
             try? discardStaging(staging)

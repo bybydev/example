@@ -635,12 +635,12 @@ final class ProjectsModel {
         }
     }
 
-    func duplicate(_ id: UUID) async {
+    func duplicate(_ id: UUID, includingCaptions: Bool = true) async {
         guard mutatingProjectIDs.insert(id).inserted else { return }
         defer { mutatingProjectIDs.remove(id) }
         do {
             guard !editors.hasPending(id) else { throw CaptionEditError.unsavedChanges }
-            let copied = try await repository.duplicate(id)
+            let copied = try await repository.duplicate(id, includingCaptions: includingCaptions)
             if organizationReady, let folder = folderID(for: id) {
                 _ = await moveProjects([copied.id], to: folder)
             }

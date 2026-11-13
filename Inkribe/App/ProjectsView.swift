@@ -683,6 +683,7 @@ struct ProjectsView: View {
     @ViewBuilder private func projectActions(_ project: ProjectSummary) -> some View {
         let busy = model.mutatingProjectIDs.contains(project.id)
         let pending = model.editors.hasPending(project.id)
+        let hasCaptions = project.captionState == .saved || project.captionState == .incomplete
         favoriteAction(project)
         Menu {
             Button {
@@ -703,6 +704,10 @@ struct ProjectsView: View {
         Button("Rename", systemImage: "pencil") { beginRename(project) }.disabled(busy)
         Button("Duplicate", systemImage: "plus.square.on.square") { Task { await model.duplicate(project.id) } }
             .disabled(busy || pending || !project.available)
+        Button("Duplicate without Captions", systemImage: "text.bubble") {
+            Task { await model.duplicate(project.id, includingCaptions: false) }
+        }
+        .disabled(busy || pending || !project.available || !hasCaptions)
         Button("Move to Trash", systemImage: "trash", role: .destructive) { trashTarget = project; showingTrash = true }
             .disabled(!canTrash(project))
     }

@@ -9,9 +9,11 @@ public struct TranscriptionRequest: Codable, Sendable {
     public var requiresAllowance: Bool?
     public var windowIndices: [Int]?
     public var projectTitle: String?
+    public var replacingRecognitionID: UUID?
 
     public init(projectID: UUID, expectedRevision: UInt64, languageCode: String?,
-                modelID: String? = nil, requiresAllowance: Bool? = nil, windowIndices: [Int]? = nil, projectTitle: String? = nil) {
+                modelID: String? = nil, requiresAllowance: Bool? = nil, windowIndices: [Int]? = nil,
+                projectTitle: String? = nil, replacingRecognitionID: UUID? = nil) {
         self.projectID = projectID
         self.expectedRevision = expectedRevision
         self.languageCode = languageCode
@@ -19,6 +21,7 @@ public struct TranscriptionRequest: Codable, Sendable {
         self.requiresAllowance = requiresAllowance
         self.windowIndices = windowIndices
         self.projectTitle = projectTitle
+        self.replacingRecognitionID = replacingRecognitionID
     }
 }
 

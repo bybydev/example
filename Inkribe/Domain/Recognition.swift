@@ -207,7 +207,7 @@ struct Recognition: Codable, Equatable, Sendable, Identifiable {
 }
 
 enum SpeechError: LocalizedError {
-    case missingModel, noAudio, emptyAudio, silentAudio, noRecognizedWords, wordTimingUnavailable, invalidUTF8, invalidAudio, busy, alreadyTranscribed
+    case missingModel, noAudio, emptyAudio, silentAudio, noRecognizedWords, wordTimingUnavailable, invalidUTF8, invalidAudio, busy, alreadyTranscribed, noSavedCaptions
     var errorDescription: String? {
         switch self {
         case .missingModel: "Speech recognition is unavailable. Review Speech Models in Settings, then retry."
@@ -220,6 +220,7 @@ enum SpeechError: LocalizedError {
         case .invalidAudio: "The audio could not be decoded into a supported speech window."
         case .busy: "This project already has a transcription in progress."
         case .alreadyTranscribed: "This project already has saved captions. Existing text has been preserved."
+        case .noSavedCaptions: "This project has no saved captions to re-transcribe."
         }
     }
 }

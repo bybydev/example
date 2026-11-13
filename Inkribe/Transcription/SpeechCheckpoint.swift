@@ -74,13 +74,13 @@ struct SpeechCheckpoint: Codable, Sendable {
     }
 
     init(jobID: UUID, project: ProjectDocument, modelID: String,
-         modelSHA256: String, language: String?) {
+         modelSHA256: String, language: String?, retainingExistingCoverage: Bool = true) {
         version = Self.currentVersion; policy = Self.currentPolicy
         self.jobID = jobID; projectID = project.id; revision = project.contentRevision
         self.modelID = modelID; self.modelSHA256 = modelSHA256; self.language = language
         runtimeRevision = WhisperRuntimeRelease.revision
         assets = project.assets; clips = project.clips
-        retainedClipIDs = project.recognition?.progress?.retainedClipIDs
+        retainedClipIDs = retainingExistingCoverage ? project.recognition?.progress?.retainedClipIDs : nil
         entries = []
     }
 
