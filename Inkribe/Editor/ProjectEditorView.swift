@@ -486,8 +486,9 @@ struct ProjectEditorView: View {
                 }
                 .scrollTargetLayout()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16).padding(.bottom, 20)
             }
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .contentMargins(.bottom, 20, for: .scrollContent)
             .disabled(preparingTranscription)
             .scrollDismissesKeyboard(.interactively)
             .scrollPosition(id: scrollBinding(for: tool))
@@ -625,6 +626,9 @@ struct ProjectEditorView: View {
     }
 
     private func scrollBinding(for tool: EditorTool) -> Binding<String?> {
+        // The editor page is a single screen. Restoring a target there can race
+        // first layout and clip the leading inset, so it never owns an anchor.
+        guard tool != .captionEditor else { return .constant(nil) }
         // Capture the tool identity so a retiring scroll view cannot write its
         // last caption anchor into the newly selected tool's context.
         Binding(get: { session.workspace.anchor(for: tool) },
@@ -645,7 +649,6 @@ struct ProjectEditorView: View {
         // without seeking again. Row selection itself remains a separate action.
         if session.selectedCueID != id { session.selectCue(id) }
         captionEditorCueID = id
-        session.workspace.setAnchor("caption-editor", for: .captionEditor)
         if activeToolSheet == .captions {
             // Push in Captions' existing stack; the list keeps its scroll context.
             editingCaptionFromTranscript = true
