@@ -14,7 +14,7 @@ on:
         description: Configuration
         type: choice
         required: true
-        default: Release
+        default: Debug
         options: [Debug, Release]
       ios_models:
         description: iOS models (ignored for macOS-only builds)
