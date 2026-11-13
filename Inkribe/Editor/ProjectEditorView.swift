@@ -631,7 +631,7 @@ struct ProjectEditorView: View {
         guard tool != .captionEditor else { return .constant(nil) }
         // Capture the tool identity so a retiring scroll view cannot write its
         // last caption anchor into the newly selected tool's context.
-        Binding(get: { session.workspace.anchor(for: tool) },
+        return Binding(get: { session.workspace.anchor(for: tool) },
             set: { session.workspace.setAnchor($0, for: tool) })
     }
 
