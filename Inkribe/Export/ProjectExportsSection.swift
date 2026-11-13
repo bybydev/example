@@ -7,9 +7,7 @@ import UIKit
 /// exact saved IDs remain the anchors for queue navigation and new exports.
 struct ProjectExportsSection: View {
     @Environment(ProjectsModel.self) private var model
-    @Environment(\.appFoundationTheme) private var theme
     let session: EditorSession
-    var focusedJobID: UUID? = nil
     var showsUnavailableExport = false
     var requestError: String? = nil
     let onDetails: (UUID) -> Void
@@ -26,7 +24,9 @@ struct ProjectExportsSection: View {
                 entry: records[id] ?? model.processing.entry(.init(kind: .export, jobID: id)),
                 artifact: model.exports.artifacts[id])
         }.sorted {
-            let a = $0.updatedAt ?? .distantPast, b = $1.updatedAt ?? .distantPast
+            // Active jobs refresh updatedAt on every progress event. Order by
+            // immutable creation time so rows never swap while jobs run.
+            let a = $0.createdAt, b = $1.createdAt
             return a == b ? $0.id.uuidString < $1.id.uuidString : a > b
         }
     }
@@ -75,12 +75,7 @@ struct ProjectExportsSection: View {
                 ProjectExportJobRow(jobID: item.id, updatedAt: item.updatedAt, onDetails: { onDetails(item.id) })
             }
         }
-        .padding(focusedJobID == item.id ? 8 : 0)
-        .background(highlight(item.id), in: RoundedRectangle(cornerRadius: 10))
         .id(item.id)
-    }
-    private func highlight(_ id: UUID) -> Color {
-        focusedJobID == id ? theme.accentColor.opacity(0.1) : .clear
     }
 }
 
@@ -90,6 +85,11 @@ private struct ProjectExportListItem: Identifiable {
     let id: UUID
     let entry: ProcessingEntry?
     let artifact: ExportArtifact?
+    /// Stable ordering key. Falls back to the artifact for retained exports
+    /// whose queue record has been removed.
+    var createdAt: Date {
+        entry?.record.createdAt ?? artifact?.createdAt ?? .distantPast
+    }
     var updatedAt: Date? {
         [entry?.record.updatedAt, artifact?.updatedAt, artifact?.createdAt].compactMap { $0 }.max()
     }

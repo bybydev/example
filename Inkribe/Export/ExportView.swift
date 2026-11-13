@@ -29,7 +29,7 @@ struct ExportView: View {
                     Group {
                         configuration
                         if let session {
-                            ProjectExportsSection(session: session, focusedJobID: selectedExportID,
+                            ProjectExportsSection(session: session,
                                 showsUnavailableExport: hasLoadedExports && !exports.isRefreshingArtifacts &&
                                     selectedExportID != nil && exportFocusAnchor == nil,
                                 requestError: error,
