@@ -100,8 +100,10 @@
 		729A45B104073D67819095B8 /* TimelineClipTrimPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85116C2E01037D7849850763 /* TimelineClipTrimPreview.swift */; };
 		755C5531EF341ADAB9527820 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3683FB084EBCF219CCF21EE9 /* AppIcon.icon */; };
 		755E843BC3AFCAD0613056ED /* ProcessingJobDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206602B336BB4E3994E81A00 /* ProcessingJobDetail.swift */; };
+		76519D7FCCEE45ADF3643D46 /* InkribeOnboardingPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0EF154251749939966D4A2D /* InkribeOnboardingPages.swift */; };
 		76D9FECE518671BE94521A77 /* ProViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D6BE651DC59F54316A9F40 /* ProViews.swift */; };
 		77F0B37F0DB613D7F85AB010 /* SpeechEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE23DC2AECC43C265D653874 /* SpeechEngine.swift */; };
+		7BF34627B8DB16076814991D /* InkribeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E059A8E655DEC78EA2F9709 /* InkribeRootView.swift */; };
 		7CA79FA944C423007829CE08 /* FoundationConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8C32984708944E53712604 /* FoundationConfigurationTests.swift */; };
 		802EFF4F124C9391DC890D6C /* TranscriptAIResultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FD4A46D0EB27D52D44DFA9 /* TranscriptAIResultTests.swift */; };
 		804713C730D94D3E1C6D4484 /* InkribeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8CF33DB20B447E773F11E04 /* InkribeApp.swift */; };
@@ -134,6 +136,7 @@
 		B0E7094B1D848BEB98DB7DC0 /* ClipGraphEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449BBC8271875D0D70277DD9 /* ClipGraphEdit.swift */; };
 		B0F2942E9EB9202DD47BB75E /* InkribeStorageSettingsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF68E5521643E42EB73F841 /* InkribeStorageSettingsPane.swift */; };
 		B5714471E0E94027FA4A22C5 /* MusicComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F14F5784876B0E4E2C6203 /* MusicComposition.swift */; };
+		B673076D718904D9444AF68C /* InkribeOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7879F8E23760A4A74D63667D /* InkribeOnboardingView.swift */; };
 		B6CC097AD456FC50D18BBA41 /* CaptionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F313ADE5400DACC03CA7AD0 /* CaptionRenderer.swift */; };
 		B81829F6C33EFFA2B55CD21C /* CaptionMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EE73759216D05CC0AB80F37 /* CaptionMotion.swift */; };
 		B8815FBC2EF16B347253D609 /* InkribeAppState+AI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C7DA4E8C89AEBB2416DA1A /* InkribeAppState+AI.swift */; };
@@ -263,6 +266,7 @@
 		4C6977869290863506E34A88 /* InkribePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribePreferences.swift; sourceTree = "<group>"; };
 		4CC679CE2F0FB7E0325998C8 /* ManualCaption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualCaption.swift; sourceTree = "<group>"; };
 		4D48B56BDBC8587455F267C4 /* MediaPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPanel.swift; sourceTree = "<group>"; };
+		4E059A8E655DEC78EA2F9709 /* InkribeRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeRootView.swift; sourceTree = "<group>"; };
 		4E32B0BF7755F463D1895342 /* Commerce.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commerce.swift; sourceTree = "<group>"; };
 		4FE1243F93A608670C0CE214 /* InkribeCommerce.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeCommerce.swift; sourceTree = "<group>"; };
 		4FF68E5521643E42EB73F841 /* InkribeStorageSettingsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeStorageSettingsPane.swift; sourceTree = "<group>"; };
@@ -296,6 +300,7 @@
 		767FDDCC6EBBBC0C75E181DB /* EditorHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorHistory.swift; sourceTree = "<group>"; };
 		76C1E85E95ACDA651FD6A93B /* MusicDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicDraft.swift; sourceTree = "<group>"; };
 		77E14B0CB3BC1F0A5B6ECC81 /* ClipRenameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipRenameView.swift; sourceTree = "<group>"; };
+		7879F8E23760A4A74D63667D /* InkribeOnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeOnboardingView.swift; sourceTree = "<group>"; };
 		7898CBB5AFCDBC0EFA7DF63A /* ProcessingLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingLifecycle.swift; sourceTree = "<group>"; };
 		7BCD20E9A193504BC95B52EB /* InkribeProAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeProAccess.swift; sourceTree = "<group>"; };
 		7BFB3CC98BFBB9681BD09123 /* MediaTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTime.swift; sourceTree = "<group>"; };
@@ -354,6 +359,7 @@
 		BE23DC2AECC43C265D653874 /* SpeechEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechEngine.swift; sourceTree = "<group>"; };
 		BF5F21EAA2C41ABC6F2C7422 /* TranscriptLocalAIControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptLocalAIControllerTests.swift; sourceTree = "<group>"; };
 		BF88F70674789A4BD8AFB07C /* LocalTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTranscriber.swift; sourceTree = "<group>"; };
+		C0EF154251749939966D4A2D /* InkribeOnboardingPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkribeOnboardingPages.swift; sourceTree = "<group>"; };
 		C2C7DA4E8C89AEBB2416DA1A /* InkribeAppState+AI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "InkribeAppState+AI.swift"; sourceTree = "<group>"; };
 		C3A5E39C96F80F5FED0A1280 /* ProjectMusic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMusic.swift; sourceTree = "<group>"; };
 		C5899D85ADE24AA2ABFB6ABF /* project.yml */ = {isa = PBXFileReference; lastKnownFileType = text.yaml; path = project.yml; sourceTree = "<group>"; };
@@ -824,6 +830,7 @@
 				821FA5A16C308283EE80FAAB /* Export */,
 				B5B8A22F3504DBDF558C3702 /* Media */,
 				229AE0C281BD7C98701B11A7 /* Models */,
+				E9AEEC2CDB750D2BA07F8688 /* Onboarding */,
 				D9BA73ABCCE09E7283E0FCDA /* Pro */,
 				F12DD2E6A6703DA5302B248A /* Processing */,
 				AA6ED60FAC69C1AA0E476D2F /* Rendering */,
@@ -880,12 +887,22 @@
 			path = Domain;
 			sourceTree = "<group>";
 		};
+		E9AEEC2CDB750D2BA07F8688 /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				C0EF154251749939966D4A2D /* InkribeOnboardingPages.swift */,
+				7879F8E23760A4A74D63667D /* InkribeOnboardingView.swift */,
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
 		E9D19DEFA93EB12C1DEC4DF8 /* App */ = {
 			isa = PBXGroup;
 			children = (
 				8DD4A0C7D717042636498E36 /* ConfirmationToast.swift */,
 				20B57D68C76AE97EA10D0B8E /* ImportView.swift */,
 				05FC623C2DDDEA8C842CFAD8 /* InkribeApp.swift */,
+				4E059A8E655DEC78EA2F9709 /* InkribeRootView.swift */,
 				3E389E3998370D600D200038 /* ProjectCard.swift */,
 				E95600552252EC24CF902874 /* ProjectsModel.swift */,
 				90FC61494CFB0828FE1707C5 /* ProjectsView.swift */,
@@ -1177,6 +1194,9 @@
 				23065A590DDEB2B80E4EA43C /* ImportMediaReviewer.swift in Sources */,
 				C90D8D971021F359C070551C /* ImportView.swift in Sources */,
 				BBF1CC3FDFDEFD1041C1F211 /* InkribeApp.swift in Sources */,
+				76519D7FCCEE45ADF3643D46 /* InkribeOnboardingPages.swift in Sources */,
+				B673076D718904D9444AF68C /* InkribeOnboardingView.swift in Sources */,
+				7BF34627B8DB16076814991D /* InkribeRootView.swift in Sources */,
 				3BA9D320E1FD6C8759C99310 /* InkribeScreenshotComponents.swift in Sources */,
 				19B3C789C5A5362D1109115E /* InkribeScreenshotScenes.swift in Sources */,
 				51292ADA44EC9F7BC679BA0A /* InkribeScreenshotStudioView.swift in Sources */,

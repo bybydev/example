@@ -25,7 +25,6 @@ struct ProjectsView: View {
     @State private var projectToDelete: ProjectRepository.TrashedProject?
     @State private var pendingQueueRoute: QueueProjectRoute?
     @State private var queueFallbackDetails: ProcessingJobKey?
-    @State private var didEnterBackground = false
     private var searching: Bool { searchPresented || !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
@@ -43,12 +42,10 @@ struct ProjectsView: View {
             }
             .queueJobDetails($queueFallbackDetails)
             .task {
-                updateProcessingScene(scenePhase)
                 await model.processing.start()
                 await model.refresh()
             }
             .onChange(of: scenePhase) { _, phase in
-                updateProcessingScene(phase)
                 if phase == .active {
                     Task { await model.refresh(); await model.transcription.refreshAllowance() }
                 } else {
@@ -837,13 +834,6 @@ struct ProjectsView: View {
             return
         }
         path.append(.queueProject(route))
-    }
-
-    private func updateProcessingScene(_ phase: ScenePhase) {
-        if phase == .background { didEnterBackground = true }
-        let returning = phase == .active && didEnterBackground
-        if phase == .active { didEnterBackground = false }
-        model.processing.setForeground(phase == .active, recoveringFromBackground: returning)
     }
 }
 
