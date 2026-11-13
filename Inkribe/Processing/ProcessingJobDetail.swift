@@ -38,7 +38,7 @@ struct ProcessingJobDetail: View {
                         Text(pause).foregroundStyle(.secondary)
                     }
                 } else {
-                    Text(artifact == nil ? "This queue record has been removed." : "This retained request/file has no queue record.")
+                    Text(artifact == nil ? "This queue record has been removed." : "This saved request or file has no queue record.")
                         .foregroundStyle(.secondary)
                 }
                 Text(key.jobID.uuidString).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)

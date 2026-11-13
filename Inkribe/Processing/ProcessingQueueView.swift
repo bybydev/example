@@ -255,7 +255,7 @@ struct ProcessingQueueView: View {
                     Text("Exports").tag(Optional(ProcessingKind.export))
                 }
                 Divider()
-                Button("Retained Exports", systemImage: "archivebox") { showingRetained = true }
+                Button("Export Storage", systemImage: "archivebox") { showingRetained = true }
                 if processing.lifecycle.needsResume || processing.activeCount > 0 {
                     Button(processing.lifecycle.needsResume ? "Resume Queue" : "Pause Queue",
                         systemImage: processing.lifecycle.needsResume ? "play.fill" : "pause.fill") {
@@ -342,7 +342,7 @@ struct ProcessingQueueView: View {
         case .discardExport:
             "Deletes only the selected exports' frozen inputs, results and queue records. Save or share the files first if you need a copy. Your projects and original media are kept."
         default:
-            "Only finished records are removed. Captions and export files are kept. Find retained exports in the Queue options menu."
+            "Only finished records are removed. Captions and export files are kept. Find stored exports in Queue options → Export Storage."
         }
     }
     private func confirm(_ action: ProcessingAction, keys: [ProcessingJobKey]) {
