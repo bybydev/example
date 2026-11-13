@@ -69,6 +69,7 @@ struct ProjectExportsSection: View {
             if item.canDeliver, let artifact = item.artifact {
                 ProjectExportFileRow(artifact: artifact, updatedAt: item.updatedAt,
                     currentRevision: session.document?.contentRevision, hasPendingEdits: session.hasPendingChanges,
+                    canRestore: item.entry == nil,
                     onDetails: { onDetails(item.id) }, reuseProfile: onReuseProfile)
             } else {
                 ProjectExportJobRow(jobID: item.id, updatedAt: item.updatedAt, onDetails: { onDetails(item.id) })
@@ -103,9 +104,11 @@ private struct ProjectExportFileRow: View {
     let updatedAt: Date?
     let currentRevision: UInt64?
     let hasPendingEdits: Bool
+    let canRestore: Bool
     let onDetails: () -> Void
     let reuseProfile: (ExportProfile) -> Void
     @State private var deleting = false
+    @State private var recovering = false
     @State private var error: String?
     @State private var thumbnail: Data?
     private var older: Bool {
@@ -143,6 +146,7 @@ private struct ProjectExportFileRow: View {
                 }
                 .contextMenu { fileActions(delivery) }
             }
+            if recovering { ProgressView("Restoring…").font(.caption) }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
         .alert("Delete this local export?", isPresented: $deleting) {
@@ -189,10 +193,24 @@ private struct ProjectExportFileRow: View {
         }
         Button("Details", systemImage: "info.circle", action: onDetails)
             .disabled(model.exports.hasUserDelivery)
+        if canRestore && artifact.issue == nil {
+            Button("Restore to queue", systemImage: "arrow.clockwise") { recover() }
+                .disabled(recovering || model.exports.isDelivering(artifact.id) ||
+                    model.exports.persistenceError != nil)
+        }
         Divider()
         Button("Delete local export", systemImage: "trash", role: .destructive) { deleting = true }
             .disabled(model.exports.isDelivering(artifact.id) || model.exports.persistenceError != nil ||
                 model.exports.mutatingIDs.contains(artifact.id))
+    }
+    private func recover() {
+        error = nil
+        recovering = true
+        Task {
+            defer { recovering = false }
+            do { try await model.exports.recover(artifact.id); await model.refreshStorage() }
+            catch { self.error = error.localizedDescription }
+        }
     }
 }
 
@@ -206,6 +224,7 @@ private struct ProjectExportJobRow: View {
     let onDetails: () -> Void
     @State private var confirming: ProcessingAction?
     @State private var showingConfirmation = false
+    @State private var recovering = false
     @State private var error: String?
     private var key: ProcessingJobKey { .init(kind: .export, jobID: jobID) }
     private var entry: ProcessingEntry? { model.processing.entry(key) }
@@ -261,6 +280,7 @@ private struct ProjectExportJobRow: View {
             }
             .contextMenu { jobActions }
             if model.processing.acting.contains(key) { ProgressView("Updating export…").font(.caption) }
+            if recovering { ProgressView("Restoring…").font(.caption) }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
         .alert(confirming == .cancel ? "Cancel this export?" : "Delete this local export?",
@@ -281,6 +301,11 @@ private struct ProjectExportJobRow: View {
         }
         Button("Details", systemImage: "info.circle", action: onDetails)
             .disabled(model.exports.hasUserDelivery)
+        if entry == nil && artifact != nil && artifact?.issue == nil {
+            Button("Recover saved request", systemImage: "arrow.clockwise") { recover() }
+                .disabled(recovering || model.exports.isDelivering(jobID) ||
+                    model.exports.persistenceError != nil)
+        }
         if model.processing.can(.cancel, key) {
             Divider()
             Button("Cancel export", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel) }
@@ -293,6 +318,15 @@ private struct ProjectExportJobRow: View {
         }
     }
     private func confirm(_ action: ProcessingAction) { confirming = action; showingConfirmation = true }
+    private func recover() {
+        error = nil
+        recovering = true
+        Task {
+            defer { recovering = false }
+            do { try await model.exports.recover(jobID); await model.refreshStorage() }
+            catch { self.error = error.localizedDescription }
+        }
+    }
     private func perform(_ action: ProcessingAction) {
         error = nil
         Task {

@@ -2,14 +2,10 @@ import JobQueue
 import SwiftUI
 
 /// Resolve by compound ID on every render/action, never retain a record snapshot.
+/// Read-only inspection. Mutations belong to the row that owns this job.
 struct ProcessingJobDetail: View {
     @Environment(ProjectsModel.self) private var model
-    @Environment(\.queueProjectNavigation) private var openProject
     let key: ProcessingJobKey
-    @State private var error: String?
-    @State private var pendingAction: ProcessingAction?
-    @State private var confirming = false
-    @State private var recovering = false
     private var processing: ProcessingCoordinator { model.processing }
     private var entry: ProcessingEntry? { processing.entry(key) }
     private var artifact: ExportArtifact? { key.kind == .export ? model.exports.artifacts[key.jobID] : nil }
@@ -50,7 +46,6 @@ struct ProcessingJobDetail: View {
             capturedRequest
             projectSection
             if key.kind == .export { exportSection }
-            actionSection
             if entry?.record.status.isTerminal == false {
                 Section {
                     Text(processing.continuedProcessing.explanation(for: key.kind))
@@ -59,19 +54,11 @@ struct ProcessingJobDetail: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            if let error { Section("Action could not finish") { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
         }
-        .buttonStyle(.borderless)
         .navigationTitle("Job details")
         .navigationBarTitleDisplayMode(.inline)
         .themedSurface()
         .task { if key.kind == .export { await model.exports.refreshArtifacts() } }
-        .alert(confirmationTitle, isPresented: $confirming) {
-            if let pendingAction {
-                Button(confirmationTitle, role: .destructive) { perform(pendingAction) }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: { Text(confirmationMessage) }
     }
 
     @ViewBuilder private var capturedRequest: some View {
@@ -108,9 +95,6 @@ struct ProcessingJobDetail: View {
         Section("Project") {
             if let project {
                 Text(project.title).font(.headline)
-                Button(key.kind == .transcription ? "Open Captions" : "Open Export", systemImage: key.kind.icon) {
-                    if let route = model.queueProjectRoute(for: key) { openProject(route) }
-                }.disabled(model.exports.hasUserDelivery)
                 if !project.available {
                     Text("Some original media is missing or changed. Open the project to relink it; saved captions remain available.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -129,79 +113,19 @@ struct ProcessingJobDetail: View {
     @ViewBuilder private var exportSection: some View {
         Section("Local export") {
             if let artifact {
+                if let url = artifact.outputURL {
+                    Label("Ready to save or share", systemImage: "checkmark.circle")
+                    Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                } else {
+                    Text("The completed file is unavailable. Your project and saved captions are preserved; create a new export from the project.")
+                        .foregroundStyle(.secondary)
+                }
                 LabeledContent("Request and files", value: ByteCountFormatter.string(fromByteCount: artifact.bytes, countStyle: .file))
                 if let issue = artifact.issue { Text(issue).foregroundStyle(.red).textSelection(.enabled) }
-                if entry?.record.status == .completed || (entry == nil && artifact.outputURL != nil) {
-                    ExportResultView(jobID: key.jobID)
-                }
-                if entry == nil && artifact.issue == nil {
-                    Button(artifact.outputURL == nil ? "Recover saved request into queue" : "Restore completed file to queue", systemImage: "arrow.clockwise") {
-                        recovering = true; error = nil
-                        Task {
-                            defer { recovering = false }
-                            do { try await model.exports.recover(key.jobID) }
-                            catch { self.error = error.localizedDescription }
-                        }
-                    }
-                    .disabled(recovering || model.exports.persistenceError != nil || model.exports.isDelivering(key.jobID))
-                }
-                if entry == nil {
-                    Button("Delete local export files", systemImage: "trash", role: .destructive) { confirm(.discardExport) }
-                        .disabled(recovering || model.exports.persistenceError != nil || model.exports.isDelivering(key.jobID))
-                }
             } else {
                 Text("The saved request or output could not be found. Start a new export from the project.")
                     .foregroundStyle(.secondary)
             }
-            if recovering { ProgressView("Recovering request…") }
-        }
-    }
-
-    @ViewBuilder private var actionSection: some View {
-        if entry != nil {
-            Section("Job actions") {
-                if processing.can(.retry, key) {
-                    Button("Retry saved job", systemImage: "arrow.clockwise") { perform(.retry) }
-                }
-                if processing.can(.cancel, key) {
-                    Button("Cancel job", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel) }
-                }
-                if processing.can(.removeRecord, key) {
-                    Button("Remove queue record", systemImage: "list.bullet.rectangle", role: .destructive) { confirm(.removeRecord) }
-                }
-                if processing.can(.discardExport, key) {
-                    Button("Delete local export files", systemImage: "trash", role: .destructive) { confirm(.discardExport) }
-                }
-                if processing.acting.contains(key) { ProgressView("Updating job…") }
-            }
-        }
-    }
-
-    private var confirmationTitle: String {
-        switch pendingAction {
-        case .cancel: "Cancel job"
-        case .removeRecord: "Remove queue record"
-        case .discardExport: "Delete local export files"
-        default: "Update job"
-        }
-    }
-    private var confirmationMessage: String {
-        switch pendingAction {
-        case .cancel: "Saved captions and completed files are kept. Incomplete work can be retried."
-        case .removeRecord: "Your project captions and recovery checkpoints are kept. Export files remain available in Retained Exports from Queue options."
-        case .discardExport: "Deletes only this export's frozen inputs, result and queue record. Save or share the file first if you need a copy. Your project and original media are kept."
-        default: ""
-        }
-    }
-    private func confirm(_ action: ProcessingAction) { pendingAction = action; confirming = true }
-    private func perform(_ action: ProcessingAction) {
-        error = nil
-        Task {
-            do {
-                if action == .discardExport && entry == nil { try await model.exports.discard(key.jobID) }
-                else { try await processing.perform(action, key) }
-                await model.refreshStorage()
-            } catch { self.error = error.localizedDescription }
         }
     }
 }
