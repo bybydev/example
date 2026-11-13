@@ -355,7 +355,7 @@ enum SpeechRecoveryError: LocalizedError {
         case .corrupt: "Saved transcription progress could not be read safely. Discard saved progress to start again. Your project and original media are preserved."
         case .incompatible: "Saved transcription progress uses another model, runtime or recovery policy. Existing captions remain usable. Resume requires the original compatible setup."
         case .tooLarge: "This transcription exceeds the saved-progress limit. Use a shorter source project."
-        case let .incomplete(resolved, total, detail): "Transcription resolved \(resolved) of \(total) windows. \(detail) Retry the missing ranges. Incomplete work has not used your allowance."
+        case let .incomplete(resolved, total, detail): "Transcription resolved \(resolved) of \(total) windows. \(detail) Retry the missing ranges. Incomplete work has not used a free video."
         }
     }
 }

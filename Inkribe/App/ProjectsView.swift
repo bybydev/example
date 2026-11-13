@@ -301,15 +301,15 @@ struct ProjectsView: View {
                             Label("Captioning This Week", systemImage: "waveform")
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                             if speech.allowanceError != nil || speech.persistenceError != nil {
-                                Text("Usage is unavailable. Retry to load your weekly allowance.")
+                                Text("Usage is unavailable. Retry to load your weekly usage.")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else if let usage = speech.allowance {
                                 Text(usage.summary).font(.caption).foregroundStyle(.secondary)
-                                ProgressView(value: min(1, max(0, Double(usage.used + usage.reserved) / Double(Commerce.weeklySeconds))))
+                                ProgressView(value: min(1, max(0, Double(usage.used + usage.reserved) / Double(Commerce.weeklyVideoLimit))))
                                     .tint(theme.accentColor)
-                                    .accessibilityLabel("Weekly captioning allowance used or reserved")
+                                    .accessibilityLabel("Weekly free video usage")
                                 if usage.reserved > 0 {
-                                    Text("\(usage.reserved / 60)m \(usage.reserved % 60)s reserved for queued work")
+                                    Text(usage.reserved == 1 ? "1 queued video reserved" : "\(usage.reserved) queued videos reserved")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")

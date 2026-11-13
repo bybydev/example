@@ -5,24 +5,35 @@ struct CaptionAllowance: Sendable {
     let used: Int
     let reserved: Int
     let resetsAt: Date
-    var remaining: Int { max(0, Commerce.weeklySeconds - used - reserved) }
-    var summary: String { "\(used / 60)m \(used % 60)s of \(Commerce.weeklyMinutes) min used this week" }
+    var remaining: Int { max(0, Commerce.weeklyVideoLimit - used - reserved) }
+    var summary: String { "\(used) of \(Commerce.weeklyVideoLimit) free videos used this week" }
+    var remainingDescription: String {
+        switch remaining {
+        case 0: "No free videos left this week"
+        case 1: "1 free video left this week"
+        default: "\(remaining) free videos left this week"
+        }
+    }
 }
 
 /// Owned exclusively by ProjectRepository. Reservations protect queued work;
-/// only a recognition published in the document becomes charged usage.
+/// only a complete recognition published in the document becomes counted usage.
 struct CaptionAllowanceLedger: Codable, Equatable {
+    struct CountedVideo: Codable, Equatable {
+        let projectID: UUID
+        let recognitionID: UUID
+        let weekStart: Date
+    }
     struct Reservation: Codable, Equatable {
         let jobID: UUID
         let projectID: UUID
         let revision: UInt64
         let weekStart: Date
-        let seconds: Int
     }
-    var version = 1
+    static let currentVersion = 2
+    var version = CaptionAllowanceLedger.currentVersion
     var weekStart: Date
-    var used = 0
-    var charged: Set<UUID> = []
+    var countedVideos: [CountedVideo] = []
     var reservations: [Reservation] = []
 
     static func week(containing date: Date) -> Date {
@@ -34,45 +45,55 @@ struct CaptionAllowanceLedger: Codable, Equatable {
     mutating func advance(at now: Date) {
         let start = Self.week(containing: now)
         guard start > weekStart else { return }
-        weekStart = start; used = 0; charged.removeAll()
-        // Previously authorized work remains valid across a weekly reset.
+        weekStart = start
+        // Counted videos are retained so retranscribing a project never charges
+        // again. Weekly usage is derived from each entry's original week.
     }
 
     var snapshot: CaptionAllowance {
-        .init(used: used,
-            reserved: reservations.filter { $0.weekStart == weekStart }.reduce(0) { $0 + $1.seconds },
+        let countedProjects = Set(countedVideos.map(\.projectID))
+        let reserved = Set(reservations.filter {
+            $0.weekStart == weekStart && !countedProjects.contains($0.projectID)
+        }.map(\.projectID)).count
+        return .init(used: countedVideos.filter { $0.weekStart == weekStart }.count,
+            reserved: reserved,
             resetsAt: weekStart.addingTimeInterval(7 * 24 * 60 * 60))
     }
 
     mutating func finish(_ id: UUID) {
         guard let reservation = reservations.first(where: { $0.jobID == id }) else { return }
-        if reservation.weekStart == weekStart, !charged.contains(id) {
-            used += reservation.seconds
-            charged.insert(id)
+        if !countedVideos.contains(where: { $0.projectID == reservation.projectID }) {
+            countedVideos.append(.init(projectID: reservation.projectID,
+                recognitionID: reservation.jobID, weekStart: reservation.weekStart))
         }
         reservations.removeAll { $0.jobID == id }
     }
 
     func validate() throws {
-        guard version == 1, weekStart.timeIntervalSince1970.isFinite,
-              weekStart == Self.week(containing: weekStart), (0...Commerce.weeklySeconds).contains(used),
-              charged.count <= Commerce.weeklySeconds,
+        let used = countedVideos.filter { $0.weekStart == weekStart }.count
+        guard version == Self.currentVersion, weekStart.timeIntervalSince1970.isFinite,
+              weekStart == Self.week(containing: weekStart),
+              Set(countedVideos.map(\.projectID)).count == countedVideos.count,
+              Set(countedVideos.map(\.recognitionID)).count == countedVideos.count,
+              countedVideos.allSatisfy({ $0.weekStart.timeIntervalSince1970.isFinite
+                  && $0.weekStart == Self.week(containing: $0.weekStart)
+                  && $0.weekStart <= weekStart }),
+              used <= Commerce.weeklyVideoLimit,
               Set(reservations.map(\.jobID)).count == reservations.count,
-              reservations.allSatisfy({ (1...Commerce.weeklySeconds).contains($0.seconds)
-                  && $0.revision > 0 && !charged.contains($0.jobID)
+              reservations.allSatisfy({ $0.revision > 0
                   && $0.weekStart.timeIntervalSince1970.isFinite
-                  && $0.weekStart == Self.week(containing: $0.weekStart) && $0.weekStart <= weekStart }),
-              snapshot.reserved <= Commerce.weeklySeconds - used else { throw ProError.allowanceStorage }
+                  && $0.weekStart == Self.week(containing: $0.weekStart)
+                  && $0.weekStart <= weekStart }),
+              snapshot.reserved <= Commerce.weeklyVideoLimit - used else { throw ProError.allowanceStorage }
     }
 
-    static func seconds(for document: ProjectDocument) throws -> Int {
+    /// Free videos must be strictly shorter than the documented maximum.
+    static func requireFreeEligibility(_ document: ProjectDocument) throws {
         let plan = try SpeechCheckpoint.plan(clips: document.clips, assets: document.assets)
-        let resolved = Set(document.recognition?.progress?.resolved.map(\.index) ?? [])
-        let retained = Set(document.recognition?.progress?.retainedClipIDs ?? [])
-        let duration = plan.filter { !resolved.contains($0.index) && !retained.contains($0.clip.id) }
-            .reduce(0.0) { $0 + CMTimeGetSeconds($1.core.duration) }
+        let duration = plan.reduce(0.0) { $0 + CMTimeGetSeconds($1.core.duration) }
         guard duration.isFinite, duration > 0 else { throw SpeechError.noAudio }
-        guard duration <= Double(Commerce.weeklySeconds) else { throw ProError.requiresPro(.captioning) }
-        return max(1, Int(ceil(duration)))
+        guard duration < Double(Commerce.maximumFreeVideoSeconds) else {
+            throw ProError.requiresPro(.captioning)
+        }
     }
 }

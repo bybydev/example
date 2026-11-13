@@ -31,9 +31,9 @@ struct ProUpsell: View {
             let usage = model.transcription.allowance
             let reset = usage?.resetsAt.formatted(date: .abbreviated, time: .shortened) ?? "the next weekly reset"
             if isUsageOverview {
-                message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. Upgrade to Pro for unlimited captioning. Your allowance resets \(reset). Existing captions and editing stay available."
+                message = "Free includes \(Commerce.weeklyVideoLimit) videos under \(Commerce.maximumFreeVideoSeconds) seconds each week. Upgrade to Pro for unlimited captioning. Your limit resets \(reset). Existing captions and editing stay available."
             } else {
-                message = "Free includes \(Commerce.weeklyMinutes) minutes of captioning each week. This video needs more time than is available. Your allowance resets \(reset). Existing captions and editing stay available."
+                message = "Free includes \(Commerce.weeklyVideoLimit) videos under \(Commerce.maximumFreeVideoSeconds) seconds each week. This video is too long or you've used all free videos. Your limit resets \(reset). Existing captions and editing stay available."
             }
         case .styles:
             message = "Unlock every caption font, template and animation. Basic styling and all your existing captions stay available."

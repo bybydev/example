@@ -492,27 +492,22 @@ actor ProjectRepository {
         }
         // Refund before clearing the document: a crash can leave an empty result
         // to retry again, but never lose the evidence needed for an exact refund.
-        try refundEmptySpeech(result, in: project)
+        try refundEmptySpeech(result)
         project.recognition = nil
         return try writeEdit(project, expectedRevision: expectedRevision, clearingEmptyRecognitionID: result.id)
     }
 
-    private func refundEmptySpeech(_ result: Recognition, in project: ProjectDocument) throws {
+    private func refundEmptySpeech(_ result: Recognition) throws {
         guard result.words.isEmpty, result.cues.isEmpty,
               files.fileExists(atPath: try speechAllowanceURL().path) else { return }
         var value = try loadSpeechAllowance()
-        if value.charged.contains(result.id) {
-            let seconds = try CaptionAllowanceLedger.seconds(for: project)
-            guard value.used >= seconds else { throw ProError.allowanceStorage }
-            value.used -= seconds
-            value.charged.remove(result.id)
-        }
+        value.countedVideos.removeAll { $0.recognitionID == result.id }
         value.reservations.removeAll { $0.jobID == result.id }
         try writeSpeechAllowance(value)
     }
 
     private func speechAllowanceURL() throws -> URL {
-        try directory("Usage").appendingPathComponent("caption-allowance-v1.json")
+        try directory("Usage").appendingPathComponent("caption-allowance-v2.json")
     }
 
     private func loadSpeechAllowance() throws -> CaptionAllowanceLedger {
@@ -577,13 +572,15 @@ actor ProjectRepository {
             throw ProjectStoreError.staleRevision(expected: revision, actual: project.contentRevision)
         }
         var value = try loadSpeechAllowance()
-        guard !value.charged.contains(jobID), !value.reservations.contains(where: { $0.jobID == jobID }) else {
+        guard !value.reservations.contains(where: { $0.jobID == jobID }),
+              !value.countedVideos.contains(where: { $0.recognitionID == jobID }) else {
             throw SpeechError.busy
         }
-        let seconds = try CaptionAllowanceLedger.seconds(for: project)
-        guard seconds <= value.snapshot.remaining else { throw ProError.requiresPro(.captioning) }
+        try CaptionAllowanceLedger.requireFreeEligibility(project)
+        let alreadyCounted = value.countedVideos.contains { $0.projectID == projectID }
+        guard alreadyCounted || value.snapshot.remaining > 0 else { throw ProError.requiresPro(.captioning) }
         value.reservations.append(.init(jobID: jobID, projectID: projectID, revision: revision,
-                                       weekStart: value.weekStart, seconds: seconds))
+                                       weekStart: value.weekStart))
         try writeSpeechAllowance(value)
     }
 
