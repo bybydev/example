@@ -140,6 +140,19 @@ enum MP4Exporter {
             // from its nominal cadence. Do not guess if that mode is ever used.
             composedFrameDuration = .invalid
         }
+        // The reader emits source-timed composed samples with no duration.
+        // frameDuration is only a maximum cadence, so exporting above the
+        // source rate would otherwise credit the terminal source frame with
+        // too little time at EOF. Use the slower of the two frame intervals.
+        let eofFallbackDuration: CMTime
+        if graph.finalVideoFrameDuration.isNumeric,
+           CMTimeCompare(graph.finalVideoFrameDuration, .zero) > 0 {
+            eofFallbackDuration = composedFrameDuration.isNumeric
+                ? CMTimeMaximum(composedFrameDuration, graph.finalVideoFrameDuration)
+                : graph.finalVideoFrameDuration
+        } else {
+            eofFallbackDuration = composedFrameDuration
+        }
 
         func readVideo(at time: CMTime) throws -> CMSampleBuffer? {
             try Task.checkCancellation()
@@ -205,7 +218,7 @@ enum MP4Exporter {
                         if videoEOF, pendingVideo == nil,
                            let finalInterval = graph.videoIntervals.last,
                            !videoReachedEnd(sample, requiredEnd: finalInterval.end.cmTime,
-                                            fallbackDuration: composedFrameDuration, timescale: timescale) {
+                                            fallbackDuration: eofFallbackDuration, timescale: timescale) {
                             throw mediaFailure("The video reader ended before the final video interval",
                                 at: pts, reader: reader, sample: sample, interval: finalInterval)
                         }
@@ -287,8 +300,9 @@ enum MP4Exporter {
         let hasDeclaredDuration = declared.isNumeric && CMTimeCompare(declared, .zero) > 0
         let hasFallback = fallbackDuration.isNumeric && CMTimeCompare(fallbackDuration, .zero) > 0
         guard start.isNumeric, requiredEnd.isNumeric, hasDeclaredDuration || hasFallback else { return false }
-        // A composed frame occupies at least one composition tick. Preserve a
-        // longer declared terminal hold (e.g. a static screen-recording tail).
+        // The fallback is the output cadence or the terminal source frame
+        // interval, whichever is longer. Preserve a longer declared terminal
+        // hold (e.g. a static screen-recording tail).
         let duration: CMTime
         if hasDeclaredDuration, hasFallback {
             duration = CMTimeMaximum(declared, fallbackDuration)
@@ -299,7 +313,8 @@ enum MP4Exporter {
         guard end.isNumeric else { return false }
         if CMTimeCompare(end, requiredEnd) >= 0 { return true }
         // The writer's final frame is clipped to graph.duration. Permit only a
-        // sub-output-frame tail discrepancy, not an arbitrary missing segment.
+        // sub-output-frame tail discrepancy beyond the credited terminal frame,
+        // not an arbitrary missing segment.
         // This allowance is EOF-only; normal frame selection never uses age or
         // duration thresholds.
         let shortfall = CMTimeSubtract(requiredEnd, end)
