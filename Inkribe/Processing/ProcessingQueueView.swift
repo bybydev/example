@@ -114,9 +114,7 @@ struct ProcessingQueueView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text(pendingAction == .cancel ?
-                    "Saved captions and completed files are kept." :
-                    "Only finished records are removed. Captions and export files are kept. Find retained exports in the Queue options menu.")
+                Text(confirmationMessage)
             }
     }
 
@@ -186,15 +184,23 @@ struct ProcessingQueueView: View {
     }
 
     private func jobRow(_ entry: ProcessingEntry) -> some View {
-        Button { open(entry.id) } label: {
-            ProcessingQueueRow(entry: entry, title: title(entry), detail: detail(entry),
-                paused: processing.queue(for: entry.id.kind)?.isPaused == true)
+        HStack(spacing: 4) {
+            Button { details = entry.id } label: {
+                ProcessingQueueRow(entry: entry, title: title(entry), detail: detail(entry),
+                    paused: processing.queue(for: entry.id.kind)?.isPaused == true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens job details")
+            if hasRowActions(entry.id) {
+                Menu { rowActions(entry.id) } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                        .accessibilityLabel("Job actions")
+                }
+            }
         }
-        .buttonStyle(.plain)
         .disabled(isOpeningProject || model.exports.hasUserDelivery)
-        .accessibilityHint(model.queueProjectID(for: entry.id) == nil ? "Opens job details" :
-            entry.id.kind == .transcription ? "Opens project captions" : "Opens this export in its project")
-        .accessibilityAction(named: "Job Details") { details = entry.id }
         .contextMenu { rowActions(entry.id) }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
             if processing.can(.retry, entry.id) {
@@ -204,8 +210,6 @@ struct ProcessingQueueView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if processing.can(.cancel, entry.id) {
                 Button("Cancel", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel, keys: [entry.id]) }
-            } else if processing.can(.removeRecord, entry.id) {
-                Button("Remove Record", systemImage: "trash", role: .destructive) { confirm(.removeRecord, keys: [entry.id]) }
             }
         }
         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
@@ -213,19 +217,23 @@ struct ProcessingQueueView: View {
         .listRowSeparatorTint(theme.borderColor)
     }
 
+    private func hasRowActions(_ key: ProcessingJobKey) -> Bool {
+        model.queueProjectID(for: key) != nil ||
+            processing.can(.retry, key) ||
+            processing.can(.cancel, key) ||
+            processing.can(.discardExport, key)
+    }
+
     @ViewBuilder private func rowActions(_ key: ProcessingJobKey) -> some View {
-        Button("Job Details", systemImage: "info.circle") { details = key }
         if model.queueProjectID(for: key) != nil {
-            Button(key.kind == .transcription ? "Open Captions" : "Open Export",
-                systemImage: key.kind.icon) { open(key) }
+            Button("Jump to Project", systemImage: "arrow.up.forward.app") { jumpToProject(key) }
         }
-        Divider()
         if processing.can(.retry, key) { Button("Retry", systemImage: "arrow.clockwise") { run(.retry, keys: [key]) } }
         if processing.can(.cancel, key) {
             Button("Cancel Job", systemImage: "xmark.circle", role: .destructive) { confirm(.cancel, keys: [key]) }
         }
-        if processing.can(.removeRecord, key) {
-            Button("Remove Record", systemImage: "trash", role: .destructive) { confirm(.removeRecord, keys: [key]) }
+        if processing.can(.discardExport, key) {
+            Button("Delete Local Export", systemImage: "trash", role: .destructive) { confirm(.discardExport, keys: [key]) }
         }
     }
 
@@ -247,7 +255,7 @@ struct ProcessingQueueView: View {
                     Text("Exports").tag(Optional(ProcessingKind.export))
                 }
                 Divider()
-                Button("Retained Exports", systemImage: "archivebox") { showingRetained = true }
+                Button("Export Storage", systemImage: "archivebox") { showingRetained = true }
                 if processing.lifecycle.needsResume || processing.activeCount > 0 {
                     Button(processing.lifecycle.needsResume ? "Resume Queue" : "Pause Queue",
                         systemImage: processing.lifecycle.needsResume ? "play.fill" : "pause.fill") {
@@ -319,8 +327,23 @@ struct ProcessingQueueView: View {
 
     private var confirmationTitle: String {
         let count = actionKeys.count
-        return pendingAction == .cancel ? "Cancel \(count) \(count == 1 ? "job" : "jobs")?" :
-            "Remove \(count) \(count == 1 ? "record" : "records")?"
+        switch pendingAction {
+        case .cancel:
+            return "Cancel \(count) \(count == 1 ? "job" : "jobs")?"
+        case .discardExport:
+            return "Delete \(count) \(count == 1 ? "local export" : "local exports")?"
+        default:
+            return "Remove \(count) \(count == 1 ? "record" : "records")?"
+        }
+    }
+    private var confirmationMessage: String {
+        switch pendingAction {
+        case .cancel: "Saved captions and completed files are kept."
+        case .discardExport:
+            "Deletes only the selected exports' frozen inputs, results and queue records. Save or share the files first if you need a copy. Your projects and original media are kept."
+        default:
+            "Only finished records are removed. Captions and export files are kept. Find stored exports in Queue options → Export Storage."
+        }
     }
     private func confirm(_ action: ProcessingAction, keys: [ProcessingJobKey]) {
         actionKeys = keys.filter { processing.can(action, $0) }
@@ -338,13 +361,11 @@ struct ProcessingQueueView: View {
             await model.refreshStorage()
         }
     }
-    private func open(_ key: ProcessingJobKey) {
-        guard !isOpeningProject, !model.exports.hasUserDelivery else { return }
-        if let route = model.queueProjectRoute(for: key) {
-            isOpeningProject = true
-            openProject(route)
-        }
-        else { details = key }
+    private func jumpToProject(_ key: ProcessingJobKey) {
+        guard !isOpeningProject, !model.exports.hasUserDelivery,
+              let route = model.queueProjectRoute(for: key) else { return }
+        isOpeningProject = true
+        openProject(route)
     }
     private func finishRetainedNavigation() {
         guard let route = retainedProjectRoute else { return }
@@ -358,8 +379,16 @@ struct ProcessingQueueView: View {
     }
     private func detail(_ entry: ProcessingEntry) -> String {
         guard entry.id.kind == .export else { return "Captions" }
-        let profile = model.exports.artifacts[entry.id.jobID]?.profile ?? (try? entry.record.decode(ExportJob.self))?.payload.profile
+        let artifact = model.exports.artifacts[entry.id.jobID]
+        let profile = artifact?.profile ?? (try? entry.record.decode(ExportJob.self))?.payload.profile
         guard let profile else { return "Export" }
-        return profile.format == .mp4 ? "Captioned video · \(profile.resolution.title)" : "SRT subtitles"
+        var parts = profile.format == .mp4
+            ? ["Captioned video", profile.resolution.title, profile.frameRate.title]
+            : ["SRT subtitles"]
+        if let duration = artifact?.duration {
+            let display = EditorTime.display(duration)
+            parts.append(display.components(separatedBy: ".").first ?? display)
+        }
+        return parts.joined(separator: " · ")
     }
 }

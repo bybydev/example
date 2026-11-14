@@ -1,4 +1,5 @@
 import CoreMedia
+import JobQueue
 import SwiftUI
 import AppFoundation
 import UniformTypeIdentifiers
@@ -43,6 +44,7 @@ struct ProjectEditorView: View {
     @State private var captionRenderError: String?
     @State private var showExport = false
     @State private var preparingTranscription = false
+    @State private var confirmingReTranscription = false
     @State private var showProjectInfo = false
     @State private var didRequestInitialRename = false
     @State private var showingRename = false
@@ -396,6 +398,13 @@ struct ProjectEditorView: View {
                     set: { if !$0 { model.alertMessage = nil } })) {
                         Button("OK", role: .cancel) { model.alertMessage = nil }
                     } message: { Text(model.alertMessage ?? "") }
+                .confirmationDialog("Re-transcribe captions?", isPresented: $confirmingReTranscription,
+                    titleVisibility: .visible) {
+                    Button("Re-transcribe") { reTranscribe() }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text(reTranscriptionMessage)
+                }
         }
     }
 
@@ -477,8 +486,9 @@ struct ProjectEditorView: View {
                 }
                 .scrollTargetLayout()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16).padding(.bottom, 20)
             }
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .contentMargins(.bottom, 20, for: .scrollContent)
             .disabled(preparingTranscription)
             .scrollDismissesKeyboard(.interactively)
             .scrollPosition(id: scrollBinding(for: tool))
@@ -510,6 +520,7 @@ struct ProjectEditorView: View {
         switch tool {
         case .captions:
             transcriptHeader(document)
+            reTranscriptionPanel()
             ManualCaptionConflictReview(session: session)
             if document.hasCaptionUnits {
                 if let snapshot = session.snapshot {
@@ -615,9 +626,12 @@ struct ProjectEditorView: View {
     }
 
     private func scrollBinding(for tool: EditorTool) -> Binding<String?> {
+        // The editor page is a single screen. Restoring a target there can race
+        // first layout and clip the leading inset, so it never owns an anchor.
+        guard tool != .captionEditor else { return .constant(nil) }
         // Capture the tool identity so a retiring scroll view cannot write its
         // last caption anchor into the newly selected tool's context.
-        Binding(get: { session.workspace.anchor(for: tool) },
+        return Binding(get: { session.workspace.anchor(for: tool) },
             set: { session.workspace.setAnchor($0, for: tool) })
     }
 
@@ -635,7 +649,6 @@ struct ProjectEditorView: View {
         // without seeking again. Row selection itself remains a separate action.
         if session.selectedCueID != id { session.selectCue(id) }
         captionEditorCueID = id
-        session.workspace.setAnchor("caption-editor", for: .captionEditor)
         if activeToolSheet == .captions {
             // Push in Captions' existing stack; the list keeps its scroll context.
             editingCaptionFromTranscript = true
@@ -686,12 +699,12 @@ struct ProjectEditorView: View {
         Menu {
             Button("Rename", systemImage: "pencil") { beginRenaming() }
             Button("Duplicate project", systemImage: "plus.square.on.square") {
-                Task {
-                    await session.flush()
-                    guard !session.hasPendingChanges else { return }
-                    await model.duplicate(projectID)
-                }
+                duplicateProject(includingCaptions: true)
             }
+            Button("Duplicate without Captions", systemImage: "text.bubble") {
+                duplicateProject(includingCaptions: false)
+            }
+            .disabled(session.document?.hasCaptionUnits != true)
             Button("Project info", systemImage: "info.circle") {
                 finishToolInteraction()
                 showProjectInfo = true
@@ -706,6 +719,16 @@ struct ProjectEditorView: View {
         }
         .accessibilityLabel("Project actions")
         .disabled(isOpening || !session.isReadyToEdit || preparingTranscription)
+    }
+
+    private func duplicateProject(includingCaptions: Bool) {
+        Task {
+            await session.flush()
+            guard !session.hasPendingChanges else { return }
+            if await model.duplicate(projectID, includingCaptions: includingCaptions) {
+                dismiss()
+            }
+        }
     }
 
     private func beginRenaming() {
@@ -987,14 +1010,24 @@ struct ProjectEditorView: View {
             HStack(spacing: 8) {
                 captionSummary(document).fixedSize(horizontal: true, vertical: false)
                 Spacer(minLength: 8)
-                addCaptionButton.fixedSize(horizontal: true, vertical: false)
+                headerCaptionActions(document).fixedSize(horizontal: true, vertical: false)
             }
             VStack(alignment: .leading, spacing: 4) {
                 captionSummary(document)
-                addCaptionButton
+                headerCaptionActions(document)
             }
         }
         .padding(.horizontal, 8)
+    }
+
+    private func headerCaptionActions(_ document: ProjectDocument) -> some View {
+        HStack(spacing: 4) {
+            if canReTranscribe(document) {
+                Button("Re-transcribe", systemImage: "arrow.clockwise") { requestReTranscription() }
+                    .font(.subheadline).frame(minHeight: 44)
+            }
+            addCaptionButton
+        }
     }
 
     private var addCaptionButton: some View {
@@ -1011,6 +1044,147 @@ struct ProjectEditorView: View {
             if let count = document.recognition?.progress.map({ $0.unresolvedCount }), count > 0 {
                 Text(count == 1 ? "1 gap" : "\(count) gaps")
                     .font(.caption2).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func canReTranscribe(_ document: ProjectDocument) -> Bool {
+        guard let recognition = document.recognition,
+              !recognition.words.isEmpty, !recognition.isIncomplete,
+              !model.transcription.isActive(projectID) else { return false }
+        return true
+    }
+
+    private func requestReTranscription() {
+        guard !preparingTranscription else { return }
+        guard !model.access.hasPro else {
+            confirmingReTranscription = true
+            return
+        }
+        // Refresh locally so an exhausted free allowance opens the paywall
+        // before the confirmation instead of failing after it.
+        preparingTranscription = true
+        Task { @MainActor in
+            defer { preparingTranscription = false }
+            model.transcription.start()
+            await model.transcription.waitForAuthorization()
+            await model.transcription.refreshAllowance()
+            if let error = model.transcription.persistenceError ?? model.transcription.allowanceError {
+                model.alertMessage = error
+            } else if model.transcription.allowance?.remaining == 0 {
+                session.proUpsell = .captioning
+            } else {
+                confirmingReTranscription = true
+            }
+        }
+    }
+
+    private var reTranscriptionMessage: String {
+        var text = "Your current captions stay available while transcription runs. When the new transcription succeeds, it will replace them, including any manual captions. If it fails or is cancelled, your current captions stay unchanged."
+        if !model.access.hasPro {
+            text += " This uses 1 free video when it succeeds."
+        }
+        return text
+    }
+
+    private func reTranscribe() {
+        guard !preparingTranscription else { return }
+        preparingTranscription = true
+        Task { @MainActor in
+            defer { preparingTranscription = false }
+            focused = nil
+            session.pause()
+            session.endTyping()
+            session.endMediaEditing()
+            do {
+                let saved = try await session.savedDocument()
+                guard let recognition = saved.recognition,
+                      !recognition.words.isEmpty, !recognition.isIncomplete else {
+                    throw SpeechError.noSavedCaptions
+                }
+                try await model.transcription.reTranscribe(projectID: saved.id,
+                    language: recognition.requestedLanguageCode ?? "auto")
+            } catch ProError.requiresPro(let feature) {
+                session.proUpsell = feature
+            } catch {
+                model.alertMessage = error.localizedDescription
+            }
+            await session.refreshSaved()
+        }
+    }
+
+    private func retryReTranscription(_ record: JobRecord) {
+        guard !preparingTranscription else { return }
+        preparingTranscription = true
+        Task { @MainActor in
+            defer { preparingTranscription = false }
+            focused = nil
+            session.pause()
+            session.endTyping()
+            session.endMediaEditing()
+            do {
+                _ = try await session.savedDocument()
+                let language = try record.decode(SpeechJob.self).payload.languageCode ?? "auto"
+                try await model.transcription.retry(record, language: language)
+            } catch ProError.requiresPro(let feature) {
+                session.proUpsell = feature
+            } catch {
+                model.alertMessage = error.localizedDescription
+            }
+            await session.refreshSaved()
+        }
+    }
+
+    @ViewBuilder
+    private func reTranscriptionPanel() -> some View {
+        let speech = model.transcription
+        if let record = speech.record(for: projectID),
+           let payload = try? record.decode(SpeechJob.self).payload,
+           payload.replacingRecognitionID != nil {
+            if !record.status.isTerminal {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(speech.queue?.isPaused == true ? "Re-transcription paused" :
+                        record.status == .pending ? "Waiting to re-transcribe…" :
+                        record.status == .cancelling ? "Cancelling…" :
+                        speech.queue?.liveProgress[record.id]?.message ?? "Re-transcribing…")
+                        .font(.subheadline)
+                    Text("Current captions stay available until the new run succeeds.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let fraction = speech.queue?.liveProgress[record.id]?.fractionCompleted {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        do { try speech.cancel(record.id) }
+                        catch { model.alertMessage = error.localizedDescription }
+                    }
+                    .disabled(record.status == .cancelling)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            } else if record.status.isRetryable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(record.status == .cancelled
+                        ? "Re-transcription cancelled. Current captions were kept."
+                        : "Re-transcription couldn't finish. Current captions were kept.")
+                        .font(.subheadline)
+                    if let error = record.error {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("Try again", systemImage: "arrow.clockwise") {
+                        retryReTranscription(record)
+                    }
+                    .disabled(preparingTranscription || speech.isAuthorizing ||
+                        speech.persistenceError != nil || !speech.modelAvailable || model.access.isChecking)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            } else if record.status == .unrecoverable {
+                Text("Re-transcription could not be restored. Current captions were kept.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
     }

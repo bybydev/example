@@ -17,7 +17,7 @@ struct InkribeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ProjectsView()
+            InkribeRootView()
                 .environment(projects)
                 .environment(themes)
                 .environment(projects.access)

@@ -3,6 +3,7 @@ import CoreImage
 import CoreMedia
 import CoreVideo
 import Foundation
+import InkribeCore
 import JobQueue
 import OSLog
 import Synchronization
@@ -15,13 +16,18 @@ enum MP4Exporter {
 
     static func write(_ request: FrozenExport, progress: JobProgressReporter) async throws {
         let document = request.manifest.document
-        let canvas = try request.manifest.profile.resolution.canvas(for: document.canvas)
+        let profile = request.manifest.profile
+        let canvas = try profile.resolution.canvas(for: document.canvas)
         let size = CGSize(width: CGFloat(canvas.width), height: CGFloat(canvas.height))
+        let frameRate = profile.frameRate
+        let timescale = frameRate.timescale
+        let videoBitRate = canvas.width * canvas.height * 5 * frameRate.rawValue / 30
         await progress.report(fractionCompleted: 0, message: "Preparing media…")
-        let graph = try await PreviewComposition.mediaGraph(document: document, urls: request.urls, size: size)
+        let graph = try await PreviewComposition.mediaGraph(document: document, urls: request.urls,
+                                                            size: size, frameRate: timescale)
         try Task.checkCancellation()
         let durationSeconds = CMTimeGetSeconds(graph.duration)
-        let estimate = Double(canvas.width * canvas.height * 5) / 8 * durationSeconds * 1.15
+        let estimate = Double(videoBitRate) / 8 * durationSeconds * 1.15
             + durationSeconds * 24_000 + 64 * 1_024 * 1_024
         guard durationSeconds.isFinite, durationSeconds > 0, estimate.isFinite, estimate < Double(Int64.max) else {
             throw ExportError.invalidRequest
@@ -66,8 +72,9 @@ enum MP4Exporter {
             AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2],
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: canvas.width * canvas.height * 5,
-                AVVideoExpectedSourceFrameRateKey: 30, AVVideoMaxKeyFrameIntervalKey: 60,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: videoBitRate,
+                AVVideoExpectedSourceFrameRateKey: frameRate.rawValue,
+                AVVideoMaxKeyFrameIntervalKey: frameRate.rawValue * 2,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]]
         guard writer.canApply(outputSettings: settings, forMediaType: .video) else { throw ExportError.unavailableEncoder }
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
@@ -110,7 +117,7 @@ enum MP4Exporter {
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw ExportError.encoding }
         let bounds = CGRect(origin: .zero, size: size)
         let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: bounds)
-        let frameTime = CMTimeConvertScale(graph.duration, timescale: 30, method: .roundAwayFromZero)
+        let frameTime = CMTimeConvertScale(graph.duration, timescale: timescale, method: .roundAwayFromZero)
         let frames = frameTime.value
         guard frameTime.isNumeric, frames > 0, frames < Int64.max / 2 else { throw ExportError.invalidRequest }
         var frame: Int64 = 0
@@ -132,6 +139,19 @@ enum MP4Exporter {
             // A source-timed composition cannot infer a missing VFR duration
             // from its nominal cadence. Do not guess if that mode is ever used.
             composedFrameDuration = .invalid
+        }
+        // The reader emits source-timed composed samples with no duration.
+        // frameDuration is only a maximum cadence, so exporting above the
+        // source rate would otherwise credit the terminal source frame with
+        // too little time at EOF. Use the slower of the two frame intervals.
+        let eofFallbackDuration: CMTime
+        if graph.finalVideoFrameDuration.isNumeric,
+           CMTimeCompare(graph.finalVideoFrameDuration, .zero) > 0 {
+            eofFallbackDuration = composedFrameDuration.isNumeric
+                ? CMTimeMaximum(composedFrameDuration, graph.finalVideoFrameDuration)
+                : graph.finalVideoFrameDuration
+        } else {
+            eofFallbackDuration = composedFrameDuration
         }
 
         func readVideo(at time: CMTime) throws -> CMSampleBuffer? {
@@ -162,12 +182,12 @@ enum MP4Exporter {
             try Task.checkCancellation()
             if writer.status == .failed { throw writer.error ?? ExportError.encoding }
             if reader.status == .failed {
-                throw mediaFailure("The media reader failed", at: CMTime(value: frame, timescale: 30), reader: reader)
+                throw mediaFailure("The media reader failed", at: CMTime(value: frame, timescale: timescale), reader: reader)
             }
             var advanced = false
             if !videoFinished, videoInput.isReadyForMoreMediaData,
                let outputPixels = try pixelBuffer(from: adaptor.pixelBufferPool) {
-                let pts = CMTime(value: frame, timescale: 30)
+                let pts = CMTime(value: frame, timescale: timescale)
                 try autoreleasepool {
                     if !videoEOF, pendingVideo == nil {
                         pendingVideo = try readVideo(at: pts)
@@ -198,7 +218,7 @@ enum MP4Exporter {
                         if videoEOF, pendingVideo == nil,
                            let finalInterval = graph.videoIntervals.last,
                            !videoReachedEnd(sample, requiredEnd: finalInterval.end.cmTime,
-                                            fallbackDuration: composedFrameDuration) {
+                                            fallbackDuration: eofFallbackDuration, timescale: timescale) {
                             throw mediaFailure("The video reader ended before the final video interval",
                                 at: pts, reader: reader, sample: sample, interval: finalInterval)
                         }
@@ -229,7 +249,7 @@ enum MP4Exporter {
                     } else {
                         if reader.status == .failed {
                             throw mediaFailure("The audio reader failed",
-                                at: CMTime(value: frame, timescale: 30), reader: reader)
+                                at: CMTime(value: frame, timescale: timescale), reader: reader)
                         }
                         audioInput.markAsFinished()
                         audioFinished = true
@@ -274,14 +294,15 @@ enum MP4Exporter {
     }
 
     private static func videoReachedEnd(_ sample: CMSampleBuffer, requiredEnd: CMTime,
-                                        fallbackDuration: CMTime) -> Bool {
+                                        fallbackDuration: CMTime, timescale: CMTimeScale) -> Bool {
         let start = CMSampleBufferGetPresentationTimeStamp(sample)
         let declared = CMSampleBufferGetDuration(sample)
         let hasDeclaredDuration = declared.isNumeric && CMTimeCompare(declared, .zero) > 0
         let hasFallback = fallbackDuration.isNumeric && CMTimeCompare(fallbackDuration, .zero) > 0
         guard start.isNumeric, requiredEnd.isNumeric, hasDeclaredDuration || hasFallback else { return false }
-        // A composed frame occupies at least one composition tick. Preserve a
-        // longer declared terminal hold (e.g. a static screen-recording tail).
+        // The fallback is the output cadence or the terminal source frame
+        // interval, whichever is longer. Preserve a longer declared terminal
+        // hold (e.g. a static screen-recording tail).
         let duration: CMTime
         if hasDeclaredDuration, hasFallback {
             duration = CMTimeMaximum(declared, fallbackDuration)
@@ -292,11 +313,12 @@ enum MP4Exporter {
         guard end.isNumeric else { return false }
         if CMTimeCompare(end, requiredEnd) >= 0 { return true }
         // The writer's final frame is clipped to graph.duration. Permit only a
-        // sub-output-frame tail discrepancy, not an arbitrary missing segment.
+        // sub-output-frame tail discrepancy beyond the credited terminal frame,
+        // not an arbitrary missing segment.
         // This allowance is EOF-only; normal frame selection never uses age or
         // duration thresholds.
         let shortfall = CMTimeSubtract(requiredEnd, end)
-        return shortfall.isNumeric && CMTimeCompare(shortfall, CMTime(value: 1, timescale: 30)) < 0
+        return shortfall.isNumeric && CMTimeCompare(shortfall, CMTime(value: 1, timescale: timescale)) < 0
     }
 
     private static func mediaFailure(_ reason: String, at time: CMTime = .invalid,

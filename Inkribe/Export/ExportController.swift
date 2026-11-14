@@ -232,7 +232,7 @@ final class ExportController {
         await refreshArtifacts()
     }
 
-    /// Record removal preserves the frozen request/result, visible in Retained files.
+    /// Record removal preserves the frozen request/result, visible in Export Storage.
     func removeRecord(_ id: UUID) throws {
         guard let queue, let record = queue.records[id], record.status.isTerminal,
               !queue.executingJobIDs.contains(id), !mutatingIDs.contains(id) else { throw ExportError.busy }

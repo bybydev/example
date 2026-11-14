@@ -4,10 +4,16 @@ import InkribeCore
 
 typealias ExportFormat = InkribeCore.ExportFormat
 typealias ExportResolution = InkribeCore.ExportResolution
+typealias ExportFrameRate = InkribeCore.ExportFrameRate
 typealias ExportProfile = InkribeCore.ExportProfile
 
 extension ExportFormat {
     var title: String { self == .mp4 ? "Captioned video" : "SRT subtitles" }
+}
+
+extension ExportFrameRate {
+    var title: String { "\(rawValue) fps" }
+    var timescale: CMTimeScale { CMTimeScale(rawValue) }
 }
 
 extension ExportResolution {

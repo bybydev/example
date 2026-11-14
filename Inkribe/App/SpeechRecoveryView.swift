@@ -24,7 +24,7 @@ struct SpeechRecoveryView: View {
                     Text("Transcription setup changed. The next attempt will process the full clip.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Text("Compatible saved progress is reused when you retry. Captions appear as they’re ready. Your allowance is used only when transcription completes.")
+                    Text("Compatible saved progress is reused when you retry. Captions appear as they’re ready. A free video is used only when transcription completes.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if summary.words == 0 {

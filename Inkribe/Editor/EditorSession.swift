@@ -1225,8 +1225,8 @@ final class EditorSession {
         if let value = try? EditorTime.stamp(seconds) { seek(to: value) }
     }
 
-    /// Preview and export compositions use a 30 fps output clock. Seek inside
-    /// the last frame rather than to duration, which has no displayable frame.
+    /// Preview uses a 30 fps output clock. Seek inside the last frame rather
+    /// than to duration, which has no displayable frame.
     private var previewEndTime: MediaTime {
         let frames = CMTimeConvertScale(duration.cmTime, timescale: 30, method: .roundAwayFromZero)
         guard frames.isNumeric, frames.value > 0 else { return .zero }

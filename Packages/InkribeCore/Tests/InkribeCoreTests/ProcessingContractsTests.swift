@@ -26,10 +26,19 @@ struct ProcessingContractsTests {
         let request = try JSONDecoder().decode(ExportRequest.self, from: bytes)
         #expect(request.projectID == id)
         #expect(request.profile == ExportProfile(format: .mp4, resolution: .fullHD))
+        #expect(request.profile.frameRate == .fps30)
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
         let profile = encoded?["profile"] as? [String: Any]
         #expect(profile?["format"] as? String == "mp4")
         #expect(profile?["resolution"] as? Int == 1080)
+        #expect(profile?["frameRate"] as? Int == 30)
+    }
+
+    @Test func exportProfileRoundTripsFrameRate() throws {
+        let profile = ExportProfile(format: .mp4, resolution: .fullHD, frameRate: .fps60)
+        let restored = try JSONDecoder().decode(ExportProfile.self, from: JSONEncoder().encode(profile))
+        #expect(restored == profile)
+        #expect(restored.frameRate == .fps60)
     }
 
     @Test func targetedRetryPreservesCapturedBindings() throws {

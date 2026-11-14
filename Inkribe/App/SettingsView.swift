@@ -146,6 +146,16 @@ struct SettingsView: View {
                     systemImage: "sparkles"
                 ) { _ in
                     ProCelebration()
+                },
+                FoundationDeveloperReplay(
+                    id: "onboarding",
+                    title: "Onboarding",
+                    systemImage: "text.book.closed.fill",
+                    presentation: .fullScreen
+                ) { dismiss in
+                    InkribeOnboardingView {
+                        dismiss()
+                    }
                 }
             ],
             additionalSections: [

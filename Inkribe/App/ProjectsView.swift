@@ -25,10 +25,10 @@ struct ProjectsView: View {
     @State private var projectToDelete: ProjectRepository.TrashedProject?
     @State private var pendingQueueRoute: QueueProjectRoute?
     @State private var queueFallbackDetails: ProcessingJobKey?
-    @State private var didEnterBackground = false
     private var searching: Bool { searchPresented || !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
+        @Bindable var bindableModel = model
         NavigationStack(path: $path) { libraryLifecycle }
             .sheet(item: $sheet, onDismiss: finishPresentation) { destination in
                 switch destination {
@@ -42,12 +42,10 @@ struct ProjectsView: View {
             }
             .queueJobDetails($queueFallbackDetails)
             .task {
-                updateProcessingScene(scenePhase)
                 await model.processing.start()
                 await model.refresh()
             }
             .onChange(of: scenePhase) { _, phase in
-                updateProcessingScene(phase)
                 if phase == .active {
                     Task { await model.refresh(); await model.transcription.refreshAllowance() }
                 } else {
@@ -55,6 +53,7 @@ struct ProjectsView: View {
                 }
             }
             .environment(\.queueProjectNavigation, QueueProjectNavigation(open: openQueueProject))
+            .confirmationToast($bindableModel.libraryToast)
     }
 
     private var libraryLifecycle: some View {
@@ -301,15 +300,15 @@ struct ProjectsView: View {
                             Label("Captioning This Week", systemImage: "waveform")
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                             if speech.allowanceError != nil || speech.persistenceError != nil {
-                                Text("Usage is unavailable. Retry to load your weekly allowance.")
+                                Text("Usage is unavailable. Retry to load your weekly usage.")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else if let usage = speech.allowance {
                                 Text(usage.summary).font(.caption).foregroundStyle(.secondary)
-                                ProgressView(value: min(1, max(0, Double(usage.used + usage.reserved) / Double(Commerce.weeklySeconds))))
+                                ProgressView(value: min(1, max(0, Double(usage.used + usage.reserved) / Double(Commerce.weeklyVideoLimit))))
                                     .tint(theme.accentColor)
-                                    .accessibilityLabel("Weekly captioning allowance used or reserved")
+                                    .accessibilityLabel("Weekly free video usage")
                                 if usage.reserved > 0 {
-                                    Text("\(usage.reserved / 60)m \(usage.reserved % 60)s reserved for queued work")
+                                    Text(usage.reserved == 1 ? "1 queued video reserved" : "\(usage.reserved) queued videos reserved")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
@@ -683,6 +682,7 @@ struct ProjectsView: View {
     @ViewBuilder private func projectActions(_ project: ProjectSummary) -> some View {
         let busy = model.mutatingProjectIDs.contains(project.id)
         let pending = model.editors.hasPending(project.id)
+        let hasCaptions = project.captionState == .saved || project.captionState == .incomplete
         favoriteAction(project)
         Menu {
             Button {
@@ -703,6 +703,10 @@ struct ProjectsView: View {
         Button("Rename", systemImage: "pencil") { beginRename(project) }.disabled(busy)
         Button("Duplicate", systemImage: "plus.square.on.square") { Task { await model.duplicate(project.id) } }
             .disabled(busy || pending || !project.available)
+        Button("Duplicate without Captions", systemImage: "text.bubble") {
+            Task { await model.duplicate(project.id, includingCaptions: false) }
+        }
+        .disabled(busy || pending || !project.available || !hasCaptions)
         Button("Move to Trash", systemImage: "trash", role: .destructive) { trashTarget = project; showingTrash = true }
             .disabled(!canTrash(project))
     }
@@ -830,13 +834,6 @@ struct ProjectsView: View {
             return
         }
         path.append(.queueProject(route))
-    }
-
-    private func updateProcessingScene(_ phase: ScenePhase) {
-        if phase == .background { didEnterBackground = true }
-        let returning = phase == .active && didEnterBackground
-        if phase == .active { didEnterBackground = false }
-        model.processing.setForeground(phase == .active, recoveringFromBackground: returning)
     }
 }
 

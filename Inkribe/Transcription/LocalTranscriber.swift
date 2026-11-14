@@ -20,6 +20,7 @@ actor LocalTranscriber {
     func execute(id: UUID, payload: SpeechJob.Payload, progress: JobProgressReporter) async throws {
         try Task.checkCancellation()
         let project = try await repository.open(payload.projectID)
+        let replacingRecognitionID = payload.replacingRecognitionID
         // Do not erase a committed result if the process died before queue completion.
         if let saved = project.recognition, saved.id == id, !saved.isIncomplete {
             guard !saved.words.isEmpty else { throw SpeechError.noRecognizedWords }
@@ -27,10 +28,18 @@ actor LocalTranscriber {
             try? await repository.removePublishedSpeechCheckpoint(projectID: project.id, recognitionID: id)
             return
         }
-        guard project.recognition == nil || (project.recognition?.id == id && project.recognition?.isIncomplete == true) else { throw SpeechError.alreadyTranscribed }
-        guard project.recognition?.isIncomplete == true || project.contentRevision == payload.expectedRevision else {
-            throw ProjectStoreError.staleRevision(expected: payload.expectedRevision,
-                                                      actual: project.contentRevision)
+        if let replacingRecognitionID {
+            guard project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.alreadyTranscribed
+            }
+        } else {
+            guard project.recognition == nil || (project.recognition?.id == id && project.recognition?.isIncomplete == true) else { throw SpeechError.alreadyTranscribed }
+            guard project.recognition?.isIncomplete == true || project.contentRevision == payload.expectedRevision else {
+                throw ProjectStoreError.staleRevision(expected: payload.expectedRevision,
+                                                          actual: project.contentRevision)
+            }
         }
         guard project.assets.contains(where: { $0.metadata.audioTrackCount > 0 }) else { throw SpeechError.noAudio }
         if payload.requiresAllowance == true {
@@ -41,7 +50,9 @@ actor LocalTranscriber {
         try await SpeechEngine.shared.withModel { runtime, model in
             try await self.recognize(project, id: id, language: payload.languageCode,
                 runtime: runtime, model: model, tracker: tracker,
-                chargeAllowance: payload.requiresAllowance == true, windowIndices: payload.windowIndices)
+                chargeAllowance: payload.requiresAllowance == true,
+                windowIndices: replacingRecognitionID == nil ? payload.windowIndices : nil,
+                replacingRecognitionID: replacingRecognitionID)
             // Publication precedes queue success. Saved work survives cancellation.
             try? await self.repository.removePublishedSpeechCheckpoint(projectID: project.id, recognitionID: id)
             await tracker.stage("Captions saved", fraction: 1)
@@ -50,14 +61,17 @@ actor LocalTranscriber {
 
     private func recognize(_ project: ProjectDocument, id: UUID, language: String?,
                            runtime: NativeWhisperRuntime, model: ModelAssetDescriptor,
-                           tracker: SpeechProgress, chargeAllowance: Bool, windowIndices: [Int]?) async throws {
+                           tracker: SpeechProgress, chargeAllowance: Bool, windowIndices: [Int]?,
+                           replacingRecognitionID: UUID?) async throws {
         let current = try await repository.open(project.id)
         guard current.assets == project.assets, current.clips == project.clips else {
             throw ProjectStoreError.invalidDocument("Transcription source graph changed")
         }
         let fresh = SpeechCheckpoint(jobID: id, project: current, modelID: model.id,
-                                     modelSHA256: model.sha256, language: language)
-        var checkpoint = try await repository.loadSpeechCheckpoint(matching: fresh)
+                                     modelSHA256: model.sha256, language: language,
+                                     retainingExistingCoverage: replacingRecognitionID == nil)
+        var checkpoint = try await repository.loadSpeechCheckpoint(matching: fresh,
+            replacingRecognitionID: replacingRecognitionID)
         checkpoint.prepareForResume(preservingSavedWords: checkpoint.retainedClipIDs?.isEmpty == false && current.recognition?.words.isEmpty == false)
         let plan = try SpeechCheckpoint.plan(clips: project.clips, assets: project.assets)
         guard !plan.isEmpty else { throw SpeechError.noAudio }
@@ -68,8 +82,10 @@ actor LocalTranscriber {
         }
         // Persist the binding before inference. A changed model/language/revision
         // starts fresh only after the new checkpoint is durably written.
-        checkpoint = try await repository.saveSpeechCheckpoint(checkpoint)
-        checkpoint = try await publish(checkpoint, chargeAllowance: chargeAllowance)
+        checkpoint = try await repository.saveSpeechCheckpoint(checkpoint,
+            replacingRecognitionID: replacingRecognitionID)
+        checkpoint = try await publish(checkpoint, chargeAllowance: chargeAllowance,
+            replacingRecognitionID: replacingRecognitionID)
         if checkpoint.wordCount > 0, checkpoint.entries.filter({ $0.failure == nil }).count + checkpoint.retainedWindowCount(in: plan) == plan.count { return }
         var entries = Dictionary(uniqueKeysWithValues: checkpoint.entries.map { ($0.index, $0) })
         let total = plan.reduce(0.0) { $0 + CMTimeGetSeconds($1.core.duration) }
@@ -129,8 +145,10 @@ actor LocalTranscriber {
             checkpoint.entries = entries.values.sorted { $0.index < $1.index }
             // Saving is outside the recovery catch. A failed/unsafe write stops
             // the job; the preceding atomic checkpoint remains available.
-            checkpoint = try await repository.saveSpeechCheckpoint(checkpoint)
-            checkpoint = try await publish(checkpoint, chargeAllowance: chargeAllowance)
+            checkpoint = try await repository.saveSpeechCheckpoint(checkpoint,
+                replacingRecognitionID: replacingRecognitionID)
+            checkpoint = try await publish(checkpoint, chargeAllowance: chargeAllowance,
+                replacingRecognitionID: replacingRecognitionID)
             completed += duration
             await tracker.stage(entry.failure == nil ? "Audio window saved" : "Window needs retry; continuing…",
                                 fraction: completed / total * 0.95)
@@ -151,8 +169,10 @@ actor LocalTranscriber {
         guard checkpoint.wordCount > 0 else { throw SpeechError.noRecognizedWords }
     }
 
-    private func publish(_ checkpoint: SpeechCheckpoint, chargeAllowance: Bool) async throws -> SpeechCheckpoint {
-        let document = try await repository.publishSpeechProgress(checkpoint, chargeOnCompletion: chargeAllowance)
+    private func publish(_ checkpoint: SpeechCheckpoint, chargeAllowance: Bool,
+                         replacingRecognitionID: UUID?) async throws -> SpeechCheckpoint {
+        let document = try await repository.publishSpeechProgress(checkpoint,
+            chargeOnCompletion: chargeAllowance, replacingRecognitionID: replacingRecognitionID)
         var updated = checkpoint
         updated.revision = document.contentRevision
         if document.contentRevision != checkpoint.revision { await didPublish() }

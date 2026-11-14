@@ -2,13 +2,23 @@ import AppFoundation
 import JobQueue
 import SwiftUI
 
-/// Compact Spokio-style status row. The enclosing button owns navigation/actions.
+/// Compact Spokio-style status row. The enclosing row owns navigation/actions.
 struct ProcessingQueueRow: View {
     @Environment(\.appFoundationTheme) private var theme
     let entry: ProcessingEntry
     let title: String
     let detail: String
     let paused: Bool
+
+    private var timestamp: Date {
+        if entry.record.status.isTerminal {
+            return entry.record.completedAt ?? entry.record.updatedAt
+        }
+        if entry.processing {
+            return entry.record.startedAt ?? entry.record.createdAt
+        }
+        return entry.record.createdAt
+    }
 
     private var tint: Color {
         if paused && !entry.record.status.isTerminal { return .orange }
@@ -47,7 +57,7 @@ struct ProcessingQueueRow: View {
                 HStack(spacing: 6) {
                     Text(status).font(.caption.weight(.semibold)).foregroundStyle(tint)
                     Text("·").foregroundStyle(.tertiary)
-                    Text(entry.record.createdAt, style: .relative)
+                    Text(timestamp, style: .relative)
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 progress
@@ -58,8 +68,6 @@ struct ProcessingQueueRow: View {
                 }
             }
             Spacer(minLength: 4)
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary).padding(.top, 4).accessibilityHidden(true)
         }
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)

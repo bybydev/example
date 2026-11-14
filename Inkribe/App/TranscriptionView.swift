@@ -50,7 +50,7 @@ struct TranscriptionView: View {
                 }
             } else {
                 if hasEmptyResult {
-                    Text("The previous transcription saved no captions. Check the spoken language, then retry. Your weekly allowance is only used when captions are saved.")
+                    Text("The previous transcription saved no captions. Check the spoken language, then retry. A free video is only used when captions are saved.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 let record = speech.record(for: document.id)
@@ -58,9 +58,14 @@ struct TranscriptionView: View {
                     canDiscard: !speech.isActive(document.id) && !speech.isAuthorizing &&
                         !isPreparingRequest && speech.persistenceError == nil) { confirmingDiscard = true }
                 if !model.access.hasPro, let usage = speech.allowance {
-                    Text("\(usage.remaining / 60)m \(usage.remaining % 60)s available this week")
+                    Text(usage.remainingDescription)
                         .font(.caption).foregroundStyle(.secondary)
-                    if usage.reserved > 0 { Text("Queued work reserves \(usage.reserved)s.").font(.caption) }
+                    if usage.reserved > 0 {
+                        Text(usage.reserved == 1 ? "Queued work reserves 1 video." : "Queued work reserves \(usage.reserved) videos.")
+                            .font(.caption)
+                    }
+                    Text("Free transcriptions must be under \(Commerce.maximumFreeVideoSeconds) seconds.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("Resets \(usage.resetsAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption2).foregroundStyle(.secondary)
                 }

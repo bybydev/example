@@ -8,6 +8,10 @@ struct MediaGraph: @unchecked Sendable {
     let asset: AVComposition
     let videoComposition: AVVideoComposition?
     let videoIntervals: [MediaInterval]
+    /// Nominal source frame duration of the track that owns the terminal video
+    /// interval. EOF validation needs it because composed reader samples are
+    /// source-timed and commonly carry no duration metadata.
+    let finalVideoFrameDuration: CMTime
     let duration: CMTime
     let hasAudio: Bool
     let audioMix: AVAudioMix?
@@ -33,7 +37,8 @@ enum PreviewComposition {
 
     /// P5 and preview share source/track intersections, placement and orientation.
     /// Trim, framing and original-audio mix are shared, not a second pipeline.
-    static func mediaGraph(document: ProjectDocument, urls: [UUID: URL], size: CGSize) async throws -> MediaGraph {
+    static func mediaGraph(document: ProjectDocument, urls: [UUID: URL], size: CGSize,
+                           frameRate: CMTimeScale = 30) async throws -> MediaGraph {
         try document.validate()
         let composition = AVMutableComposition()
         let timeline = OutputTimeline(document)
@@ -51,6 +56,8 @@ enum PreviewComposition {
         let assets = Dictionary(uniqueKeysWithValues: document.assets.map { ($0.id, $0) })
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var videoIntervals: [MediaInterval] = []
+        var finalVideoEnd: MediaTime?
+        var finalVideoFrameDuration = CMTime.invalid
         var cursor = MediaTime.zero
         var inserted = false
         var insertedVideo = false
@@ -89,6 +96,11 @@ enum PreviewComposition {
                     insertedVideo = true
                     videoInterval = interval
                     videoIntervals.append(interval)
+                    if finalVideoEnd.map({ interval.end >= $0 }) ?? true {
+                        finalVideoEnd = interval.end
+                        finalVideoFrameDuration = await sourceFrameDuration(
+                            of: track, nominalFrameRate: source.metadata.nominalFrameRate)
+                    }
                     let transform = try await track.load(.preferredTransform)
                     let natural = try await track.load(.naturalSize)
                     let bounds = CGRect(origin: .zero, size: natural).applying(transform)
@@ -178,8 +190,8 @@ enum PreviewComposition {
         if insertedVideo {
             let videoComposition = AVMutableVideoComposition()
             videoComposition.renderSize = size
-            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-            // Preview and export consume composed 30 fps timing, including VFR
+            videoComposition.frameDuration = CMTime(value: 1, timescale: frameRate)
+            // Preview and export consume composed CFR timing, including VFR
             // sources. Do not derive output cadence from a source track.
             videoComposition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
             videoComposition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
@@ -190,7 +202,8 @@ enum PreviewComposition {
         }
         guard let asset = composition.copy() as? AVComposition else { throw ExportError.invalidRequest }
         return MediaGraph(asset: asset, videoComposition: finalVideo, videoIntervals: videoIntervals,
-                             duration: duration.cmTime, hasAudio: !includedAudio.isEmpty || musicParameters != nil, audioMix: finalMix)
+                             finalVideoFrameDuration: finalVideoFrameDuration, duration: duration.cmTime,
+                             hasAudio: !includedAudio.isEmpty || musicParameters != nil, audioMix: finalMix)
     }
 
     static func originalAudioMix(trackIDs: [CMPersistentTrackID], volume: Double) -> AVAudioMix {
@@ -202,6 +215,22 @@ enum PreviewComposition {
             return parameters
         }
         return (mix.copy() as? AVAudioMix) ?? mix
+    }
+
+    /// Composed reader samples are source-timed and usually lose their sample
+    /// duration. The nominal source frame interval is what EOF validation must
+    /// credit to the terminal frame instead of one output tick.
+    private static func sourceFrameDuration(of track: AVAssetTrack,
+                                            nominalFrameRate: Double?) async -> CMTime {
+        if let nominalFrameRate, nominalFrameRate.isFinite, nominalFrameRate > 0 {
+            let duration = CMTime(seconds: 1 / nominalFrameRate, preferredTimescale: 60_000)
+            if duration.isNumeric, CMTimeCompare(duration, .zero) > 0 { return duration }
+        }
+        if let minimum = try? await track.load(.minFrameDuration),
+           minimum.isNumeric, CMTimeCompare(minimum, .zero) > 0 {
+            return minimum
+        }
+        return .invalid
     }
 
     private static func insert(track: AVAssetTrack, clip: ProjectClip,

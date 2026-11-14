@@ -5,8 +5,8 @@ enum Commerce {
     static let monthlyID = "com.hoangbkit.inkribe.pro.monthly"
     static let yearlyID = "com.hoangbkit.inkribe.pro.yearly"
     static let lifetimeID = "com.hoangbkit.inkribe.pro.lifetime"
-    static let weeklyMinutes = 30
-    static let weeklySeconds = weeklyMinutes * 60
+    static let weeklyVideoLimit = 3
+    static let maximumFreeVideoSeconds = 90
     static let configuration = PurchaseConfiguration(productIDs: [monthlyID, yearlyID, lifetimeID],
         preferredProductID: monthlyID, features: features)
     static let simulatedProducts: [StoreProduct] = [
@@ -19,7 +19,8 @@ enum Commerce {
     ]
     static let features: [PurchaseFeature] = [
         .init(id: "captioning", systemImage: "waveform", title: "Unlimited Captioning",
-              message: "Transcribe your videos without weekly limits.", freeValue: "\(weeklyMinutes) min/week", proValue: "Unlimited"),
+              message: "Transcribe unlimited videos of any length.",
+              freeValue: "\(weeklyVideoLimit) videos/week", proValue: "Unlimited"),
         .init(id: "styles", systemImage: "textformat", title: "All Styles & Animations",
               message: "Unlock every caption font, template and animation.", freeValue: "Basic", proValue: "All"),
         .init(id: "fullHD", systemImage: "film", title: "Full HD Exports",
@@ -73,8 +74,8 @@ enum ProError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .requiresPro(let feature): "\(feature.title) requires Inkribe Pro."
-        case .allowanceStorage: "Caption allowance storage could not be read or saved. Your projects are preserved. Retry after checking device storage."
-        case .authorizationUnavailable: "This transcription's saved allowance authorization is unavailable. Retry the transcription."
+        case .allowanceStorage: "Free video usage could not be read or saved. Your projects are preserved. Retry after checking device storage."
+        case .authorizationUnavailable: "This transcription's saved free-video authorization is unavailable. Retry the transcription."
         }
     }
 }

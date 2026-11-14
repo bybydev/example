@@ -179,7 +179,18 @@ final class TranscriptionController {
         return try await operation()
     }
 
+    func reTranscribe(projectID: UUID, language: String) async throws {
+        let project = try await repository.open(projectID)
+        guard let recognition = project.recognition,
+              !recognition.words.isEmpty, !recognition.isIncomplete else {
+            throw SpeechError.noSavedCaptions
+        }
+        try await enqueue(projectID: projectID, language: language,
+                          replacingRecognitionID: recognition.id)
+    }
+
     func enqueue(projectID: UUID, language: String, replacingEmptyResultID: UUID? = nil,
+                 replacingRecognitionID: UUID? = nil,
                  windowIndices: [Int]? = nil) async throws {
         let generation = lifecycle.workGeneration
         try lifecycle.requireAdmission(generation)
@@ -194,6 +205,7 @@ final class TranscriptionController {
         var project = try await repository.open(projectID)
         // Recheck after suspension so rapid double taps cannot enqueue duplicates.
         guard !isActive(projectID) else { throw SpeechError.busy }
+        guard replacingEmptyResultID == nil || replacingRecognitionID == nil else { throw SpeechError.busy }
         if let replacingEmptyResultID {
             project = try await repository.recoverEmptyRecognition(projectID: projectID,
                 recognitionID: replacingEmptyResultID, expectedRevision: project.contentRevision)
@@ -201,15 +213,28 @@ final class TranscriptionController {
             // authorization later fails. Recovery itself is already durable.
             resultGeneration += 1
         }
-        let partial = project.recognition.flatMap { $0.isIncomplete ? $0 : nil }
-        guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        if let replacingRecognitionID {
+            guard project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.noSavedCaptions
+            }
+        }
+        let partial = replacingRecognitionID == nil
+            ? project.recognition.flatMap { $0.isIncomplete ? $0 : nil } : nil
+        if replacingRecognitionID == nil {
+            guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        }
         guard models.available else { throw SpeechError.missingModel }
         let code = SpeechLanguage.codes.contains(language) && language != "auto" ? language : nil
         // A terminal job can have aged out of JobQueue's bounded history while
         // its project still owns valid unfinished work. Retain that operation ID.
-        let recovery = try await repository.speechRecovery(projectID: projectID)
+        let recovery = replacingRecognitionID == nil
+            ? try await repository.speechRecovery(projectID: projectID) : nil
         let id: UUID
-        if let partial {
+        if replacingRecognitionID != nil {
+            id = UUID()
+        } else if let partial {
             guard !queue.sortedRecords.contains(where: { $0.id == partial.id }) else { throw SpeechError.busy }
             id = partial.id
         } else if let recovery, recovery.reusableRevision,
@@ -219,15 +244,20 @@ final class TranscriptionController {
         let free = !access.hasPro
         if free {
             allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
-            try await repository.reserveSpeechAllowance(jobID: id, projectID: projectID, revision: project.contentRevision)
+            try await repository.reserveSpeechAllowance(jobID: id, projectID: projectID,
+                revision: project.contentRevision, replacingRecognitionID: replacingRecognitionID)
         }
         try Task.checkCancellation()
         guard lifecycle.error == nil, persistenceError == nil else { throw ProjectStoreError.unavailableRoot }
         guard models.available else { throw SpeechError.missingModel }
         try lifecycle.requireAdmission(generation)
         try queue.enqueue(SpeechJob(id: id, payload: .init(projectID: projectID,
-            expectedRevision: project.contentRevision, languageCode: partial != nil ? partial!.requestedLanguageCode : code,
-            requiresAllowance: free, windowIndices: windowIndices, projectTitle: project.title)))
+            expectedRevision: project.contentRevision,
+            languageCode: partial != nil ? partial!.requestedLanguageCode : code,
+            requiresAllowance: free,
+            windowIndices: replacingRecognitionID == nil ? windowIndices : nil,
+            projectTitle: project.title,
+            replacingRecognitionID: replacingRecognitionID)))
         onUserRequestedWork?()
     }
 
@@ -273,6 +303,7 @@ final class TranscriptionController {
         guard let current = queue.records[record.id], current.status.isRetryable,
               current.hasSamePayload(as: record) else { throw SpeechError.busy }
         let previous = try current.decode(SpeechJob.self)
+        let replacingRecognitionID = previous.payload.replacingRecognitionID
         guard !isActive(previous.payload.projectID) else { throw SpeechError.busy }
         let project = try await repository.open(previous.payload.projectID)
         guard !isActive(project.id) else { throw SpeechError.busy }
@@ -283,19 +314,33 @@ final class TranscriptionController {
             onUserRequestedWork?()
             return
         }
-        let partial = project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil }
-        guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        let partial = replacingRecognitionID == nil
+            ? project.recognition.flatMap { $0.isIncomplete && $0.id == record.id ? $0 : nil } : nil
+        if let replacingRecognitionID {
+            guard project.recognition?.id == replacingRecognitionID,
+                  project.recognition?.isIncomplete == false,
+                  project.recognition?.words.isEmpty == false else {
+                throw SpeechError.alreadyTranscribed
+            }
+        } else {
+            guard project.recognition == nil || partial != nil else { throw SpeechError.alreadyTranscribed }
+        }
         guard models.available else { throw SpeechError.missingModel }
-        let recovery = try await repository.speechRecovery(projectID: project.id)
+        let recovery = replacingRecognitionID == nil
+            ? try await repository.speechRecovery(projectID: project.id) : nil
         let keepsCheckpoint = recovery?.jobID == record.id && recovery?.reusableRevision == true
         // A structural edit can remove the old result entirely. That operation's
         // terminal/charged ID must not authorize different new media inputs.
-        let id = project.recognition == nil && !keepsCheckpoint &&
-            previous.payload.expectedRevision != project.contentRevision ? UUID() : record.id
+        let id: UUID
+        if replacingRecognitionID != nil { id = record.id }
+        else if project.recognition == nil && !keepsCheckpoint &&
+            previous.payload.expectedRevision != project.contentRevision { id = UUID() }
+        else { id = record.id }
         let free = !access.hasPro
         if free {
             allowance = try await repository.reconcileSpeechAllowance(activeJobIDs: activeJobIDs)
-            try await repository.reserveSpeechAllowance(jobID: id, projectID: project.id, revision: project.contentRevision)
+            try await repository.reserveSpeechAllowance(jobID: id, projectID: project.id,
+                revision: project.contentRevision, replacingRecognitionID: replacingRecognitionID)
         } else {
             try await repository.releaseSpeechAllowance(id)
         }
@@ -309,8 +354,10 @@ final class TranscriptionController {
         let job = SpeechJob(id: id, payload: .init(projectID: project.id,
             expectedRevision: project.contentRevision,
             languageCode: partial != nil ? partial!.requestedLanguageCode : previous.payload.languageCode,
-            requiresAllowance: free, windowIndices: id == record.id ? windowIndices : nil,
-            projectTitle: project.title))
+            requiresAllowance: free,
+            windowIndices: replacingRecognitionID == nil && id == record.id ? windowIndices : nil,
+            projectTitle: project.title,
+            replacingRecognitionID: replacingRecognitionID))
         if id == record.id { try queue.replace(id: id, with: job) }
         else { try queue.enqueue(job) }
         onUserRequestedWork?()
