@@ -36,6 +36,12 @@ enum SpeechModelCatalog {
         #endif
     }
 
+    /// Models this build can actually offer: bundled weights, plus downloads
+    /// when the build enables them.
+    static var availableModels: [ModelAssetDescriptor] {
+        all.filter { downloadsEnabled || bundledURL($0) != nil }
+    }
+
     private static func model(_ variant: String, bytes: Int64, sha: String) -> ModelAssetDescriptor {
         ModelAssetDescriptor(id: "whisper-\(variant)-multilingual", runtime: .whisper,
             displayName: "Whisper \(variant.capitalized) Multilingual",

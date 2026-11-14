@@ -6,39 +6,16 @@ import SwiftUI
 @MainActor
 @Observable
 final class InkribeScreenshotStudioSettings {
-    var appearance = InkribeScreenshotAppearance.light
+    var themeID = FoundationThemes.sunset.id
     var backgroundStyle = ScreenshotBackgroundStyle.spotlight
-    var backgroundIntensity = 1.0
-
-    var theme: AppTheme { appearance.theme }
-}
-
-enum InkribeScreenshotAppearance: String, CaseIterable, Identifiable {
-    case light, graphite
-    var id: Self { self }
-    var title: String { self == .light ? "Light" : "Graphite" }
+    var backgroundIntensity = 0.9
 
     var theme: AppTheme {
-        let light = self == .light
-        return AppTheme(
-            id: "inkribe-screenshot-" + rawValue,
-            title: title,
-            symbolName: light ? "sun.max" : "moon.fill",
-            access: .free,
-            appearance: ThemeAppearance(
-                background: ThemeColor(hex: light ? 0xEDF5F8 : 0x12191F),
-                gradientStart: ThemeColor(hex: light ? 0xC4E9F8 : 0x173E51),
-                gradientEnd: ThemeColor(hex: light ? 0xEDF5F8 : 0x12191F),
-                accent: ThemeColor(hex: 0x279ED2),
-                primaryForeground: ThemeColor(hex: light ? 0x12212B : 0xF6F8FA),
-                secondaryForeground: ThemeColor(hex: light ? 0x4C6575 : 0xAEBDC8),
-                surface: ThemeColor(hex: light ? 0xFFFFFF : 0x222C35),
-                elevatedSurface: ThemeColor(hex: light ? 0xEDF2F5 : 0x2C3843),
-                border: ThemeColor(hex: light ? 0xDCE5EB : 0x3A4651),
-                shadow: .black.withAlpha(0.12),
-                preferredColorScheme: light ? .light : .dark
-            )
-        )
+        InkribeThemes.catalog.theme(id: themeID) ?? FoundationThemes.sunset
+    }
+
+    var colorScheme: ColorScheme {
+        theme.appearance.preferredColorScheme.colorScheme ?? .dark
     }
 }
 
@@ -51,13 +28,15 @@ struct InkribeScreenshotStudioView: View {
             Section("Screenshot") {
                 LabeledContent("Scene", value: context.selectedScreenshotTitle)
                 LabeledContent("Content", value: context.selectedScreenshotID == "pro"
-                    ? "AppFoundation paywall" : "Static example project")
+                    ? "AppFoundation paywall" : "Static app screen")
             }
         } appConfigurationControls: { _ in
             InkribeScreenshotAppearanceControls(settings: settings)
         }
         .scrollContentBackground(.hidden)
         .background(settings.theme.backgroundColor)
+        .environment(\.colorScheme, settings.colorScheme)
+        .foregroundStyle(settings.theme.primaryForegroundColor)
         .tint(settings.theme.accentColor)
         .accessibilityIdentifier("screenshots.studio")
     }
@@ -80,14 +59,14 @@ struct InkribeScreenshotStudioView: View {
                         backgroundIntensity: settings.backgroundIntensity
                     )
                     .environment(\.appFoundationTheme, settings.theme)
-                    .environment(\.colorScheme, settings.appearance == .light ? .light : .dark)
+                    .environment(\.colorScheme, settings.colorScheme)
                     .dynamicTypeSize(.large)
                 }
             }
             ScreenshotDefinition(id: "pro", title: "Inkribe Pro", filename: "Inkribe Pro") {
                 InkribeScreenshotPaywall(theme: settings.theme)
                     .environment(\.appFoundationTheme, settings.theme)
-                    .environment(\.colorScheme, settings.appearance == .light ? .light : .dark)
+                    .environment(\.colorScheme, settings.colorScheme)
                     .dynamicTypeSize(.large)
             }
         }
@@ -99,10 +78,10 @@ private struct InkribeScreenshotAppearanceControls: View {
     @Bindable var settings: InkribeScreenshotStudioSettings
 
     var body: some View {
-        Section("Campaign Appearance") {
-            Picker("Appearance", selection: $settings.appearance) {
-                ForEach(InkribeScreenshotAppearance.allCases) { appearance in
-                    Text(appearance.title).tag(appearance)
+        Section("Campaign") {
+            Picker("Theme", selection: $settings.themeID) {
+                ForEach(InkribeThemes.catalog.themes) { theme in
+                    Label(theme.title, systemImage: theme.symbolName).tag(theme.id)
                 }
             }
             Picker("Background", selection: $settings.backgroundStyle) {

@@ -1,4 +1,5 @@
 import AppFoundation
+import InkribeModelAssets
 import SwiftUI
 
 struct SpeechModelsView: View {
@@ -14,72 +15,11 @@ struct SpeechModelsView: View {
         NavigationStack {
             List {
                 Group {
-                    Section {
-                        Text("Active: \(models.activeName)")
-                        Text(SpeechModelCatalog.downloadsEnabled ? "Models run on this device. Download once, then transcribe offline. All transcription uses the active model." : "Speech models are included in this build and run entirely on this device.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        Text("New and resumed transcription use the active model. Switching cancels queued and running transcription; saved captions and edits stay available.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        if !SpeechModelCatalog.downloadsEnabled {
-                            Text("This build uses bundled models only.").font(.footnote)
-                        }
-                        if models.isLoading { ProgressView("Checking model storage…") }
-                        if model.processing.lifecycle.isSwitchingModel { ProgressView("Switching model…") }
+                    if hasModelChoices { header(models: models) }
+                    ForEach(SpeechModelCatalog.availableModels) { variant in
+                        modelSection(variant, models: models)
                     }
-                    ForEach(SpeechModelCatalog.all) { variant in
-                        Section {
-                            Button {
-                                if variant.id != models.activeID { pendingSelection = variant.id }
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(variant.displayName).foregroundStyle(.primary)
-                                        Text(ByteCountFormatter.string(fromByteCount: variant.byteCount, countStyle: .file))
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if models.activeID == variant.id {
-                                        Image(systemName: "checkmark.circle.fill").accessibilityLabel("Active")
-                                    }
-                                }
-                            }
-                            .disabled(models.isRemoving || model.processing.lifecycle.isSwitchingModel || !models.isAvailable(variant.id))
-                            .accessibilityAddTraits(models.activeID == variant.id ? .isSelected : [])
-                            .accessibilityHint(models.isAvailable(variant.id) ? "Available offline" :
-                                SpeechModelCatalog.downloadsEnabled ? "Download this model before transcription" : "Not included in this build")
-                            if models.inventory.bundled.contains(variant.id) {
-                                Label("Included in app", systemImage: "shippingbox")
-                            } else if models.inventory.downloaded.contains(variant.id) {
-                                Label("Downloaded", systemImage: "checkmark.circle")
-                            } else if models.inventory.cached.contains(variant.id) {
-                                Text("Incomplete file. Remove it and download again.").font(.footnote)
-                            } else {
-                                Text("Not downloaded").foregroundStyle(.secondary)
-                            }
-                            if models.downloadingID == variant.id {
-                                ProgressView(value: models.fraction) {
-                                    Text(models.fraction >= 0.95 ? "Verifying model…" : "Downloading…")
-                                }
-                                .accessibilityValue("\(Int(models.fraction * 100)) percent")
-                                Button("Cancel download", role: .cancel) { models.cancelDownload() }
-                            } else if !models.isAvailable(variant.id) && SpeechModelCatalog.downloadsEnabled {
-                                Button("Download model", systemImage: "arrow.down.circle") { models.download(variant.id) }
-                                    .disabled(model.processing.lifecycle.isSwitchingModel || models.downloadingID != nil || models.isRemoving || speech.protectedModelIDs.contains(variant.id))
-                            }
-                            if models.inventory.cached.contains(variant.id) {
-                                Button(role: .destructive) { pendingRemoval = variant.id } label: {
-                                    Label("Remove download", systemImage: "trash")
-                                }
-                                    .disabled(model.processing.lifecycle.isSwitchingModel || models.isRemoving || models.downloadingID == variant.id || speech.protectedModelIDs.contains(variant.id) || speech.persistenceError != nil || speech.isAuthorizing)
-                            }
-                        }
-                    }
-                    Section {
-                        LabeledContent("Downloaded model storage",
-                            value: ByteCountFormatter.string(fromByteCount: models.inventory.cachedBytes, countStyle: .file))
-                        Text("Downloads stay in app storage across launches and updates. Keep the app open during download; an interrupted download can be retried. Removing a download never deletes projects or captions. Models: Whisper / whisper.cpp, MIT license.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
+                    footer
                     if let error = models.errorMessage {
                         Section("Model problem") {
                             Text(error).foregroundStyle(.red)
@@ -127,6 +67,99 @@ struct SpeechModelsView: View {
                 Button("Cancel", role: .cancel) { pendingRemoval = nil }
             } message: { _ in
                 Text("You can download it again later. Bundled models, projects and captions are preserved.")
+            }
+        }
+    }
+
+    private var hasModelChoices: Bool { SpeechModelCatalog.availableModels.count > 1 }
+
+    @ViewBuilder
+    private func header(models: SpeechModels) -> some View {
+        Section {
+            Text("Active: \(models.activeName)")
+            Text(SpeechModelCatalog.downloadsEnabled
+                ? "Models run on this device. Download once, then transcribe offline. All transcription uses the active model."
+                : "Speech models are included in this build and run entirely on this device.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Text("New and resumed transcription use the active model. Switching cancels queued and running transcription; saved captions and edits stay available.")
+                .font(.footnote).foregroundStyle(.secondary)
+            if models.isLoading { ProgressView("Checking model storage…") }
+            if model.processing.lifecycle.isSwitchingModel { ProgressView("Switching model…") }
+        }
+    }
+
+    @ViewBuilder
+    private func modelSection(_ variant: ModelAssetDescriptor, models: SpeechModels) -> some View {
+        Section {
+            if hasModelChoices {
+                Button {
+                    if variant.id != models.activeID { pendingSelection = variant.id }
+                } label: {
+                    modelRow(variant, models: models)
+                }
+                .disabled(models.isRemoving || model.processing.lifecycle.isSwitchingModel || !models.isAvailable(variant.id))
+                .accessibilityAddTraits(models.activeID == variant.id ? .isSelected : [])
+                .accessibilityHint(models.isAvailable(variant.id) ? "Available offline" :
+                    SpeechModelCatalog.downloadsEnabled ? "Download this model before transcription" : "Not included in this build")
+            } else {
+                modelRow(variant, models: models)
+                    .accessibilityAddTraits(.isSelected)
+            }
+            if models.inventory.bundled.contains(variant.id) {
+                Label("Included in app", systemImage: "shippingbox")
+            } else if models.inventory.downloaded.contains(variant.id) {
+                Label("Downloaded", systemImage: "checkmark.circle")
+            } else if models.inventory.cached.contains(variant.id) {
+                Text("Incomplete file. Remove it and download again.").font(.footnote)
+            } else if SpeechModelCatalog.downloadsEnabled {
+                Text("Not downloaded").foregroundStyle(.secondary)
+            }
+            if SpeechModelCatalog.downloadsEnabled {
+                if models.downloadingID == variant.id {
+                    ProgressView(value: models.fraction) {
+                        Text(models.fraction >= 0.95 ? "Verifying model…" : "Downloading…")
+                    }
+                    .accessibilityValue("\(Int(models.fraction * 100)) percent")
+                    Button("Cancel download", role: .cancel) { models.cancelDownload() }
+                } else if !models.isAvailable(variant.id) {
+                    Button("Download model", systemImage: "arrow.down.circle") { models.download(variant.id) }
+                        .disabled(model.processing.lifecycle.isSwitchingModel || models.downloadingID != nil || models.isRemoving || model.transcription.protectedModelIDs.contains(variant.id))
+                }
+            }
+            if models.inventory.cached.contains(variant.id) {
+                Button(role: .destructive) { pendingRemoval = variant.id } label: {
+                    Label("Remove download", systemImage: "trash")
+                }
+                    .disabled(model.processing.lifecycle.isSwitchingModel || models.isRemoving || models.downloadingID == variant.id || model.transcription.protectedModelIDs.contains(variant.id) || model.transcription.persistenceError != nil || model.transcription.isAuthorizing)
+            }
+        }
+    }
+
+    private func modelRow(_ variant: ModelAssetDescriptor, models: SpeechModels) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(variant.displayName).foregroundStyle(.primary)
+                Text(ByteCountFormatter.string(fromByteCount: variant.byteCount, countStyle: .file))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if models.activeID == variant.id {
+                Image(systemName: "checkmark.circle.fill").accessibilityLabel("Active")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        Section {
+            if SpeechModelCatalog.downloadsEnabled {
+                LabeledContent("Downloaded model storage",
+                    value: ByteCountFormatter.string(fromByteCount: model.transcription.models.inventory.cachedBytes, countStyle: .file))
+                Text("Downloads stay in app storage across launches and updates. Keep the app open during download; an interrupted download can be retried. Removing a download never deletes projects or captions. Models: Whisper / whisper.cpp, MIT license.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text("Models: Whisper / whisper.cpp, MIT license.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
     }

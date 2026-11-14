@@ -38,25 +38,44 @@ struct SettingsView: View {
             .listRowBackground(theme.surfaceColor)
             .listRowSeparatorTint(theme.borderColor)
 
-            Section("Engine") {
-                Button {
-                    sheet = .models
-                } label: {
+            Section {
+                if canSwitchSpeechModel {
+                    Button {
+                        sheet = .models
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Active speech model")
+                                Text(model.transcription.models.activeName)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "cpu")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Active speech model")
-                            Text(model.transcription.models.activeName)
+                            Text("Speech model")
+                            Text("\(model.transcription.models.activeName) · Included in app")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } icon: {
                         Image(systemName: "cpu")
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
                 }
                 Button {
                     sheet = .storage
                 } label: {
                     Label("Storage", systemImage: "internaldrive")
+                }
+            } header: {
+                Text("Engine")
+            } footer: {
+                if !canSwitchSpeechModel {
+                    Text("Speech recognition: Whisper / whisper.cpp, MIT license.")
                 }
             }
             .listRowBackground(theme.surfaceColor)
@@ -122,6 +141,8 @@ struct SettingsView: View {
         pendingQueueRoute = nil
         openQueueProject(route)
     }
+
+    private var canSwitchSpeechModel: Bool { SpeechModelCatalog.availableModels.count > 1 }
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"

@@ -33,7 +33,8 @@ struct InkribeApp: App {
 }
 
 /// App-owned ordering/access plus Graphite; existing palettes come from AppFoundation.
-private enum InkribeThemes {
+/// Shared with the DEBUG screenshot studio so campaign art uses the real catalog.
+enum InkribeThemes {
     static let graphite = AppTheme(
         id: "graphite",
         title: "Graphite",
