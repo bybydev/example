@@ -490,6 +490,20 @@ private struct TargetModelRow: View {
 
   @Environment(\.appFoundationTheme) private var theme
 
+  private var details: String {
+    var parts: [String] = []
+    if let context = record.model.contextWindow {
+      parts.append("\(context.formatted(.number.notation(.compactName))) ctx")
+    }
+    if record.model.inputModalities.contains("image") {
+      parts.append("Vision")
+    }
+    if record.model.inputModalities.contains("file") {
+      parts.append("Files")
+    }
+    return parts.joined(separator: " • ")
+  }
+
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       VStack(alignment: .leading, spacing: 5) {
@@ -503,19 +517,12 @@ private struct TargetModelRow: View {
           .font(.caption.monospaced())
           .foregroundStyle(theme.secondaryForegroundColor)
           .lineLimit(2)
-        HStack(spacing: 8) {
-          if let context = record.model.contextWindow {
-            Text("\(context.formatted(.number.notation(.compactName))) ctx")
-          }
-          if record.model.inputModalities.contains("image") {
-            Label("Vision", systemImage: "photo")
-          }
-          if record.model.inputModalities.contains("file") {
-            Label("Files", systemImage: "doc")
-          }
+        if !details.isEmpty {
+          Text(details)
+            .font(.caption2)
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .lineLimit(1)
         }
-        .font(.caption2)
-        .foregroundStyle(theme.secondaryForegroundColor)
       }
       Spacer(minLength: 8)
     }
@@ -551,6 +558,7 @@ private struct TargetModelChoiceList: View {
     List {
       if filtered.isEmpty {
         ContentUnavailableView.search(text: searchText)
+          .listRowBackground(Color.clear)
       } else {
         ForEach(filtered) { record in
           Button {
@@ -563,6 +571,8 @@ private struct TargetModelChoiceList: View {
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
+          .listRowBackground(theme.surfaceColor)
+          .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
           .disabled(!record.isAvailable)
           .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if record.isManual {
@@ -584,6 +594,7 @@ private struct TargetModelChoiceList: View {
         manualModelID = ""
         showingManualModelPrompt = true
       }
+      .listRowBackground(theme.surfaceColor)
     }
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
@@ -591,15 +602,6 @@ private struct TargetModelChoiceList: View {
     .navigationTitle("Choose Model")
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $searchText, prompt: "Search models")
-    .safeAreaInset(edge: .bottom) {
-      if filtered.contains(where: { $0.isManual }) {
-        Text("Swipe left or long-press a custom model to remove it. Done saves changes.")
-          .font(.caption2)
-          .foregroundStyle(theme.secondaryForegroundColor)
-          .padding(.horizontal, 16)
-          .padding(.vertical, 6)
-      }
-    }
     .alert("Enter Model ID", isPresented: $showingManualModelPrompt) {
       TextField("Exact model ID", text: $manualModelID)
         .textInputAutocapitalization(.never)

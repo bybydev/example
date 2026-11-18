@@ -44,12 +44,12 @@ private actor NativeMockTransport: ProviderHTTPTransport {
 
 @Test func anthropicDiscoveryKeepsMissingAndNegativeCapabilitiesDistinct() async throws {
   let data = Data("""
-    {"data":[{"id":"claude-sonnet-5","display_name":"Sonnet","capabilities":{"image_input":{"supported":false},"thinking":{"supported":false}}},{"id":"claude-unknown","display_name":"Unknown"}]}
+    {"data":[{"id":"claude-sonnet-5-5","display_name":"Sonnet","capabilities":{"image_input":{"supported":false},"thinking":{"supported":false}}},{"id":"claude-unknown","display_name":"Unknown"}]}
     """.utf8)
   let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic,
     transport: NativeMockTransport(data: data))
   let models = try await adapter.listModels(account: nativeAccount("anthropic"))
-  let sonnet = try #require(models.first { $0.id == "claude-sonnet-5" })
+  let sonnet = try #require(models.first { $0.id == "claude-sonnet-5-5" })
   let unknown = try #require(models.first { $0.id == "claude-unknown" })
   let resolved = ModelCapabilityResolver.resolve(kind: .anthropic, modelID: sonnet.id, model: sonnet)
   #expect(resolved[.imageInput] == .unsupported)

@@ -46,7 +46,8 @@ struct ProviderManagementModelTests {
     #expect(environment.model.errorMessage == nil)
     #expect(environment.model.defaultAccountID == second.id)
     #expect(environment.model.accounts.first?.id == second.id)
-    #expect(storedDefault == second.id)
+    // Failover is in-memory only; the snapshot read does not repair the store.
+    #expect(storedDefault == first.id)
   }
 
   @Test("Hidden default model leaves stored state untouched; chat falls back in memory")

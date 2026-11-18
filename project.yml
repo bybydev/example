@@ -12,7 +12,7 @@ packages:
     path: .
   AppFoundation:
     url: https://github.com/hoangbkit/AppFoundation
-    exactVersion: 1.6.4
+    exactVersion: 1.7.0
   MacAppFoundation:
     url: https://github.com/hoangbkit/MacAppFoundation
     exactVersion: 1.5.0
@@ -40,6 +40,8 @@ targets:
       path: BYOKchat/Resources/Info.plist
       properties:
         CFBundleDisplayName: BYOK Chat
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         NSPhotoLibraryAddUsageDescription: BYOK Chat saves images to your photo library when you choose Save Image.
         NSLocalNetworkUsageDescription: BYOKchat uses your local network to connect to AI providers you configure on nearby devices.
@@ -54,7 +56,7 @@ targets:
         DEVELOPMENT_TEAM: J458WW3452
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: 1.0
+        MARKETING_VERSION: 1.1
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 6.0
         SWIFT_STRICT_CONCURRENCY: complete

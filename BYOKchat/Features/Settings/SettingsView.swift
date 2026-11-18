@@ -22,6 +22,7 @@ struct SettingsView: View {
   @State private var showThemeUpsell = false
   @State private var showPaywall = false
   @State private var toastCenter = BYOKToastCenter()
+  @AppStorage(BYOKAppAnalytics.preferenceKey) private var shareUsageData = true
 
   private enum ImportKind {
     case backup
@@ -228,17 +229,30 @@ struct SettingsView: View {
       .listRowBackground(theme.surfaceColor)
       #endif
 
+      Section {
+        Toggle("Share Anonymous Usage Data", isOn: $shareUsageData)
+          .onChange(of: shareUsageData) { _, enabled in
+            Task { await BYOKAppAnalytics.setEnabled(enabled) }
+          }
+      } header: {
+        Text("Analytics")
+      } footer: {
+        Text("Sends anonymous product usage counters to help improve BYOKchat. Messages, prompts, and file names are never collected.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
       Section("About") {
-        Link(destination: URL(string: "https://byok.pro")!) {
+        Link(destination: URL(string: "https://spokiostudio.com/byokchat")!) {
           Label("Website", systemImage: "globe")
         }
-        Link(destination: URL(string: "https://byok.pro/contact")!) {
+        Link(destination: URL(string: "https://spokiostudio.com/byokchat/contact")!) {
           Label("Contact Us", systemImage: "envelope")
         }
-        Link(destination: URL(string: "https://byok.pro/privacy")!) {
+        Link(destination: URL(string: "https://spokiostudio.com/byokchat/privacy")!) {
           Label("Privacy Policy", systemImage: "hand.raised")
         }
-        Link(destination: URL(string: "https://byok.pro/terms")!) {
+        Link(destination: URL(string: "https://spokiostudio.com/byokchat/terms")!) {
           Label("Terms of Use", systemImage: "doc.text")
         }
         LabeledContent {
@@ -287,6 +301,9 @@ struct SettingsView: View {
   private func handleImportResult(_ result: Result<[URL], any Error>) {
     guard case .success(let urls) = result, let url = urls.first else {
       if case .failure(let error) = result {
+        if case .providers = importKind {
+          BYOKAppAnalytics.reportError("provider_config_import_failed", component: "data")
+        }
         model.dataPortability.errorMessage = error.localizedDescription
       }
       return
@@ -310,6 +327,7 @@ struct SettingsView: View {
     case .success:
       toastCenter.success("Export completed.")
     case .failure(let error):
+      BYOKAppAnalytics.reportError("data_export_failed", component: "data")
       model.dataPortability.errorMessage = error.localizedDescription
     }
   }

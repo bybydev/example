@@ -34,6 +34,9 @@ final class AppBootstrapController {
 
       state = .loading(.loadingProviders)
       await model.providers.load()
+      if model.providers.errorMessage != nil {
+        BYOKAppAnalytics.reportError("provider_load_failed", component: "provider")
+      }
       try Self.throwIfModelFailed(model.providers.errorMessage, stage: .loadingProviders)
 
       state = .loading(.loadingProjects)
@@ -82,6 +85,15 @@ final class AppBootstrapController {
       selectInitialConversation(initialConversationID)
       state = .ready
     } catch {
+      if case .preparingStorage = currentStage {
+        BYOKAppAnalytics.reportError(
+          "local_store_open_failed", component: "storage", severity: .fatal
+        )
+      } else {
+        BYOKAppAnalytics.reportError(
+          "workspace_recovery_failed", component: "startup", severity: .fatal
+        )
+      }
       state = .failed(AppBootstrapFailure(stage: currentStage, error: error))
     }
   }

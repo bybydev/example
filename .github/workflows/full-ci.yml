@@ -2,12 +2,22 @@ name: Full CI
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to validate
+        required: true
+        type: choice
+        default: iOS
+        options:
+          - iOS
+          - macOS
+          - Both
 
 permissions:
   contents: read
 
 concurrency:
-  group: byokchat-full-ci-${{ github.repository }}-${{ github.ref }}
+  group: byokchat-full-ci-${{ github.repository }}-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: true
 
 jobs:
@@ -60,6 +70,7 @@ jobs:
             byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Select iPhone simulator for active SDK
+        if: inputs.platform == 'iOS' || inputs.platform == 'Both'
         id: simulator
         shell: bash
         run: |
@@ -88,6 +99,7 @@ jobs:
           echo "Using iOS SDK $SDK_VERSION with simulator $SIMULATOR_UDID"
 
       - name: Run iOS unit tests
+        if: inputs.platform == 'iOS' || inputs.platform == 'Both'
         shell: bash
         run: |
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
@@ -102,6 +114,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO
 
       - name: Run macOS unit tests
+        if: inputs.platform == 'macOS' || inputs.platform == 'Both'
         shell: bash
         run: |
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"

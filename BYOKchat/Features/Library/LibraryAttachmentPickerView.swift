@@ -296,6 +296,7 @@ struct LibraryAttachmentPickerView: View {
         // Rows hold metadata only; fetch the original now that it is
         // actually being attached.
         guard let data = await chats.attachmentData(item.id), !data.isEmpty else {
+          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
           errorMessage = "The file '\(item.attachment.filename)' could not be loaded."
           return
         }
@@ -306,6 +307,7 @@ struct LibraryAttachmentPickerView: View {
     case .saved:
       for entry in selectedEntries {
         guard let data = await library.data(for: entry), !data.isEmpty else {
+          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
           errorMessage = "The file '\(entry.filename)' could not be loaded."
           return
         }

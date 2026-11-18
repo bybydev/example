@@ -110,7 +110,7 @@ struct HighlightedCodeBlock: View {
       .labelStyle(.iconOnly)
       .frame(width: 34, height: 30)
 
-      CopyButton(text: content, accessibilityTitle: "Copy Code", size: .compact, analyticsDimension: .code)
+      CopyButton(text: content, accessibilityTitle: "Copy Code", size: .compact)
     }
     .font(.system(size: 13, weight: .semibold))
     .foregroundStyle(theme.secondaryForegroundColor)
@@ -244,7 +244,7 @@ private struct FullScreenCodeView: View {
           ShareLink(item: content) {
             Image(systemName: "square.and.arrow.up")
           }
-          CopyButton(text: content, accessibilityTitle: "Copy Code", size: .toolbar, analyticsDimension: .code)
+          CopyButton(text: content, accessibilityTitle: "Copy Code", size: .toolbar)
           Button("Done") { dismiss() }
         }
       }
@@ -302,7 +302,7 @@ struct MermaidAnswerView: View {
         .labelStyle(.iconOnly)
         .frame(width: 34, height: 30)
 
-        CopyButton(text: source, accessibilityTitle: "Copy Mermaid Source", size: .compact, analyticsDimension: .diagram)
+        CopyButton(text: source, accessibilityTitle: "Copy Mermaid Source", size: .compact)
       }
       .buttonStyle(.plain)
       .foregroundStyle(theme.secondaryForegroundColor)
@@ -394,7 +394,7 @@ private struct FullScreenMermaidView: View {
           ShareLink(item: source) {
             Image(systemName: "square.and.arrow.up")
           }
-          CopyButton(text: source, accessibilityTitle: "Copy Mermaid Source", size: .toolbar, analyticsDimension: .diagram)
+          CopyButton(text: source, accessibilityTitle: "Copy Mermaid Source", size: .toolbar)
           Button("Done") { dismiss() }
         }
       }

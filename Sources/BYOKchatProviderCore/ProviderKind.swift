@@ -210,6 +210,21 @@ public extension ProviderKind {
           contextWindow: 1_050_000, maxOutputTokens: 128_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6.2-astra", displayName: "GPT-6.2 Astra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6.2-sol", displayName: "GPT-6.2 Sol",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6.1-terra", displayName: "GPT-6.1 Terra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
       ]
     case .xAI:
       [
@@ -289,6 +304,31 @@ public extension ProviderKind {
           contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
           supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
           inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "anthropic", id: "claude-fable-5-1", displayName: "Claude Fable 5.1",
+          contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
+          supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "anthropic", id: "claude-mythos-5-1", displayName: "Claude Mythos 5.1",
+          contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
+          supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "anthropic", id: "claude-haiku-5-5", displayName: "Claude Haiku 5.5",
+          contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
+          supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "anthropic", id: "claude-fable-5-2", displayName: "Claude Fable 5.2",
+          contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
+          supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "anthropic", id: "claude-mythos-5-2", displayName: "Claude Mythos 5.2",
+          contextWindow: 1_000_000, contextWindowKind: .inputOnly, maxOutputTokens: 128_000,
+          supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
+          inputModalities: ["text", "image", "file"]),
       ]
     case .gemini:
       [
@@ -297,6 +337,21 @@ public extension ProviderKind {
           contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
           inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "gemini", id: "gemini-4-carbon", displayName: "Gemini 4 Carbon",
+          contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
+          supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
+          inputModalities: ["text", "image", "audio", "file"]),
+        .init(
+          providerID: "gemini", id: "gemini-4-argon", displayName: "Gemini 4 Argon",
+          contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
+          supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
+          inputModalities: ["text", "image", "audio", "file"]),
+        .init(
+          providerID: "gemini", id: "gemini-4-hydrogen", displayName: "Gemini 4 Hydrogen",
+          contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
+          supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
+          inputModalities: ["text", "image", "audio", "file"]),
       ]
     case .openAICompatible:
       []

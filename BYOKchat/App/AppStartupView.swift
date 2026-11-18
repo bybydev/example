@@ -187,6 +187,7 @@ struct AppStartupFailureView: View {
         )
         showRecoveryExporter = true
       } catch {
+        BYOKAppAnalytics.reportError("data_export_failed", component: "data")
         recoveryError = error.localizedDescription
       }
     }
@@ -204,6 +205,9 @@ struct AppStartupFailureView: View {
         isWorking = false
         restartApp()
       } catch {
+        BYOKAppAnalytics.reportError(
+          "reset_application_failed", component: "data", severity: .fatal
+        )
         isWorking = false
         recoveryError = error.localizedDescription
       }

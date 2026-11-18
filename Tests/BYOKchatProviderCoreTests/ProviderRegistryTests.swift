@@ -21,8 +21,8 @@ import Testing
   #expect(openAI.chatCompletionsPath == "/responses")
   #expect(openAI.seedModels.contains { $0.id == "gpt-6-astra" })
   #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-sol" })
-  #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-terra" })
-  #expect(openAI.seedModels.contains { $0.id == "gpt-5.6-luna" })
+  #expect(openAI.seedModels.contains { $0.id == "gpt-6.1-sol" })
+  #expect(openAI.seedModels.contains { $0.id == "gpt-6-luna" })
 
   let xAI = try #require(definitions.first { $0.id == "xai" })
   #expect(xAI.defaultBaseURL.absoluteString == "https://api.x.ai/v1")
@@ -35,7 +35,7 @@ import Testing
   #expect(xAI.seedModels.contains { $0.id == "grok-4.20-0309-reasoning" })
   #expect(xAI.seedModels.contains { $0.id == "grok-4.20-non-reasoning" })
   #expect(xAI.seedModels.contains { $0.id == "grok-4.20-multi-agent" })
-  #expect(xAI.seedModels.contains { $0.id == "grok-4.3" })
+  #expect(xAI.seedModels.contains { $0.id == "grok-4.7" })
 
   #expect(ProviderKind.catalog.contains(.xAI))
   #expect(ProviderKind.xAI.defaultProviderID == "xai")
@@ -43,13 +43,13 @@ import Testing
   #expect(ProviderKind.xAI.reasoningDefault == .init(enabled: true, effort: .high))
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
-  let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5" })
+  let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5-5" })
   #expect(sonnet.contextWindow == 1_000_000)
   #expect(sonnet.maxOutputTokens == 128_000)
   #expect(sonnet.supportedParameters.contains("temperature") == false)
 
   let gemini = try #require(definitions.first { $0.id == "gemini" })
-  let flash = try #require(gemini.seedModels.first { $0.id == "gemini-3.6-flash" })
+  let flash = try #require(gemini.seedModels.first { $0.id == "gemini-3.8-flash" })
   #expect(flash.contextWindow == 1_048_576)
   #expect(flash.maxOutputTokens == 65_536)
   #expect(flash.supportedParameters.contains("temperature") == false)

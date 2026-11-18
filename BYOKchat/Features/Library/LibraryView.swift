@@ -167,8 +167,9 @@ struct LibraryView: View {
       get: { quickLookFiles.map(LibraryQuickLookPresentation.init) },
       set: { quickLookFiles = $0?.files }
     )) { presentation in
-      LibraryQuickLookView(files: presentation.files)
-        .ignoresSafeArea()
+      LibraryQuickLookView(files: presentation.files) {
+        quickLookFiles = nil
+      }
     }
     .alert("Rename File", isPresented: Binding(
       get: { renameTarget != nil },
@@ -490,6 +491,7 @@ struct LibraryView: View {
         try await LibraryPhotoWriter.save(image)
         toastCenter.success("Saved to Photos")
       } catch {
+        BYOKAppAnalytics.reportError("library_export_failed", component: "library")
         toastCenter.dismiss()
         library.errorMessage = error.localizedDescription
       }
@@ -520,6 +522,7 @@ struct LibraryView: View {
             onError: handleSaveError
           )
         } catch {
+          BYOKAppAnalytics.reportError("library_import_failed", component: "library")
           library.errorMessage = error.localizedDescription
         }
       }
@@ -529,6 +532,7 @@ struct LibraryView: View {
   private func handleFileImport(_ result: Result<[URL], Error>) {
     switch result {
     case .failure(let error):
+      BYOKAppAnalytics.reportError("library_import_failed", component: "library")
       library.errorMessage = error.localizedDescription
     case .success(let urls):
       Task { @MainActor in
@@ -562,6 +566,7 @@ struct LibraryView: View {
               )
             }
           } catch {
+            BYOKAppAnalytics.reportError("library_import_failed", component: "library")
             library.errorMessage = error.localizedDescription
           }
         }
@@ -570,6 +575,7 @@ struct LibraryView: View {
   }
 
   private func handleSaveError(_ error: Error) {
+    BYOKAppAnalytics.reportError("library_import_failed", component: "library")
     library.errorMessage = error.localizedDescription
   }
 

@@ -127,6 +127,7 @@ final class ProviderManagementModel {
       BYOKAppAnalytics.track(.connectionCreated, dimension: .init(providerKind: kind))
       return account.id
     } catch {
+      BYOKAppAnalytics.reportError("provider_save_failed", component: "provider")
       if let createdAccountID {
         _ = try? await accountManager.deleteAccount(createdAccountID)
         try? await reloadSnapshot()
@@ -220,7 +221,12 @@ final class ProviderManagementModel {
       else if let defaultModelID { updated.defaultModelID = defaultModelID }
       try await accountManager.updateAccount(updated)
       if let newCredential, !newCredential.isEmpty {
-        try await accountManager.setCredential(newCredential, accountID: accountID)
+        do {
+          try await accountManager.setCredential(newCredential, accountID: accountID)
+        } catch {
+          BYOKAppAnalytics.reportError("provider_credential_save_failed", component: "provider")
+          throw error
+        }
       }
       if defaultModelID != nil || discoveredModels != nil || !manualModelIDs.isEmpty {
         try await saveModels(
@@ -305,10 +311,9 @@ final class ProviderManagementModel {
     let succeeded = await performResult() {
       try await runtime.testConnection(accountID: accountID, modelID: modelID)
     }
-    BYOKAppAnalytics.track(
-      succeeded ? .connectionTestSucceeded : .connectionTestFailed,
-      dimension: .init(providerKind: kind)
-    )
+    if !succeeded {
+      BYOKAppAnalytics.track(.connectionTestFailed, dimension: .init(providerKind: kind))
+    }
     return succeeded
   }
 
@@ -405,6 +410,7 @@ final class ProviderManagementModel {
       catalogRefreshFailures[accountID] = nil
       return .refreshed
     } catch {
+      BYOKAppAnalytics.reportError("provider_refresh_failed", component: "provider")
       catalogRefreshFailures[accountID] = now
       throw error
     }
@@ -581,6 +587,7 @@ final class ProviderManagementModel {
     do {
       try await operation()
     } catch {
+      BYOKAppAnalytics.reportError("provider_operation_failed", component: "provider")
       errorMessage = error.localizedDescription
     }
   }
@@ -593,6 +600,7 @@ final class ProviderManagementModel {
       try await operation()
       return true
     } catch {
+      BYOKAppAnalytics.reportError("provider_operation_failed", component: "provider")
       errorMessage = error.localizedDescription
       return false
     }

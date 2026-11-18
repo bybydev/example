@@ -2,12 +2,22 @@ name: Fast CI
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to validate
+        required: true
+        type: choice
+        default: iOS
+        options:
+          - iOS
+          - macOS
+          - Both
 
 permissions:
   contents: read
 
 concurrency:
-  group: byokchat-fast-ci-${{ github.repository }}-${{ github.ref }}
+  group: byokchat-fast-ci-${{ github.repository }}-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: true
 
 jobs:
@@ -59,34 +69,62 @@ jobs:
           restore-keys: |
             byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build iOS app
+      - name: Select iPhone simulator for active SDK
+        if: inputs.platform == 'iOS' || inputs.platform == 'Both'
+        id: simulator
+        shell: bash
+        run: |
+          SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          RUNTIME_ID="$(
+            xcrun simctl list runtimes -j | python3 -c 'import json, sys; sdk = sys.argv[1]; data = json.load(sys.stdin); print(next((runtime["identifier"] for runtime in data.get("runtimes", []) if runtime.get("isAvailable", True) and runtime.get("version") == sdk), ""))' "$SDK_VERSION"
+          )"
+          if [[ -z "$RUNTIME_ID" ]]; then
+            echo "error: no available simulator runtime matches iOS SDK $SDK_VERSION" >&2
+            xcrun simctl list runtimes
+            exit 1
+          fi
+
+          SIMULATOR_UDID="$(
+            xcrun simctl list devices available -j | python3 -c 'import json, sys; runtime = sys.argv[1]; data = json.load(sys.stdin); print(next((device["udid"] for device in data.get("devices", {}).get(runtime, []) if device.get("isAvailable") and device.get("name", "").startswith("iPhone")), ""))' "$RUNTIME_ID"
+          )"
+          if [[ -z "$SIMULATOR_UDID" ]]; then
+            echo "error: no available iPhone simulator found for $RUNTIME_ID" >&2
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+          echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "runtime_id=$RUNTIME_ID" >> "$GITHUB_OUTPUT"
+          echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+          echo "Using iOS SDK $SDK_VERSION with simulator $SIMULATOR_UDID"
+
+      - name: Run iOS unit tests on simulator
+        if: inputs.platform == 'iOS' || inputs.platform == 'Both'
         shell: bash
         run: |
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
-          xcodebuild \
+          xcodebuild test \
             -project BYOKchat.xcodeproj \
             -scheme BYOKchat \
             -configuration Debug \
-            -sdk iphonesimulator \
-            -destination "generic/platform=iOS Simulator" \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -derivedDataPath "$RUNNER_TEMP/BYOKchat-fast-iOS" \
             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -only-testing:BYOKchatTests \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+            CODE_SIGNING_REQUIRED=NO
 
-      - name: Build macOS app
+      - name: Run macOS unit tests
+        if: inputs.platform == 'macOS' || inputs.platform == 'Both'
         shell: bash
         run: |
           SOURCE_PACKAGES="$RUNNER_TEMP/BYOKchat-SourcePackages"
-          xcodebuild \
+          xcodebuild test \
             -project BYOKchat.xcodeproj \
             -scheme BYOKmac \
             -configuration Debug \
-            -sdk macosx \
             -destination "platform=macOS,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/BYOKchat-fast-macOS" \
             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+            CODE_SIGNING_REQUIRED=NO

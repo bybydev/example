@@ -428,6 +428,7 @@ struct ProjectEditorView: View {
   private func importProjectFiles(_ result: Result<[URL], Error>) {
     switch result {
     case .failure(let error):
+      BYOKAppAnalytics.reportError("project_file_picker_failed", component: "projects")
       projects.errorMessage = error.localizedDescription
     case .success(let urls):
       do {
@@ -487,6 +488,7 @@ struct ProjectEditorView: View {
         let combined = projectFiles + additions
         projectFiles = combined
       } catch {
+        BYOKAppAnalytics.reportError("project_file_import_failed", component: "projects")
         projects.errorMessage = error.localizedDescription
       }
     }

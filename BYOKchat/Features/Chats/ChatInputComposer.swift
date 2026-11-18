@@ -540,6 +540,32 @@ enum ComposerTargetLabelFormatter {
     return effort.isEmpty ? modelLabel : "\(modelLabel) · \(effort)"
   }
 
+  /// Server-safe analytics version of the composer target label.
+  static func analyticsDimension(
+    providerID: ProviderID,
+    providerName: String,
+    modelName: String,
+    modelID: String,
+    supportedParameters: Set<String>,
+    reasoning: ReasoningOptions?,
+    capabilities: ResolvedModelCapabilities? = nil
+  ) -> String? {
+    let label = make(
+      providerID: providerID,
+      providerName: providerName,
+      modelName: modelName,
+      modelID: modelID,
+      supportedParameters: supportedParameters,
+      reasoning: reasoning,
+      capabilities: capabilities
+    )
+    let sanitized = label
+      .replacingOccurrences(of: " · ", with: "-")
+      .filter { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.:/+".contains($0)) }
+    guard let first = sanitized.first, first.isLetter || first.isNumber else { return nil }
+    return String(sanitized.prefix(64))
+  }
+
   private static func compactModelName(
     _ value: String, providerID: ProviderID, providerName: String
   ) -> String {

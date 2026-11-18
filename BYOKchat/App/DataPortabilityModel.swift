@@ -138,6 +138,7 @@ final class DataPortabilityModel {
         )
       }
       if !cleanupMessages.isEmpty {
+        BYOKAppAnalytics.reportError("credential_cleanup_failed", component: "data")
         errorMessage = cleanupMessages.joined(separator: "\n\n")
       }
     }

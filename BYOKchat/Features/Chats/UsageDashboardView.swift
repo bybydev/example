@@ -225,7 +225,6 @@ struct UsageDashboardView: View {
         showProUpsell = true
       } else if accessibleRange != value {
         range = value
-        BYOKAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: value))
       }
     } label: {
       if locked {

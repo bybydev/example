@@ -137,6 +137,7 @@ struct ResponseImageSaveSheet: View {
       }
     }
     if !failures.isEmpty {
+      BYOKAppAnalytics.reportError("library_share_failed", component: "library")
       errorMessage = failures.joined(separator: "\n")
     } else {
       onSaved(savedCount)

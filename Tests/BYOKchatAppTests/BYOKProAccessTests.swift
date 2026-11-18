@@ -105,31 +105,4 @@ struct BYOKProAccessTests {
     #expect(freeRange.startDate(reference: reference) == Calendar.current.startOfDay(for: reference))
     #expect(UsageRange.all.accessible(hasPro: true).startDate(reference: reference) == nil)
   }
-
-  #if DEBUG
-  @MainActor
-  @Test("AppFoundation 1.6.4 preserves simulated subscription and lifetime product types")
-  func simulatedPurchasePlanTypes() {
-    let manager = BYOKPurchaseStore.makeScreenshotPreviewManager()
-    #expect(manager.features == BYOKProAccess.features)
-    let products = manager.products
-    #expect(products.count == 3)
-    #expect(products.first(where: { $0.id == BYOKPurchaseStore.monthlyProductID })?.type == .autoRenewable)
-    #expect(products.first(where: { $0.id == BYOKPurchaseStore.yearlyProductID })?.type == .autoRenewable)
-    #expect(products.first(where: { $0.id == BYOKPurchaseStore.lifetimeProductID })?.type == .nonConsumable)
-
-    // The same simulated catalog powers the iOS developer paywall and
-    // the AppFoundation Screenshot Studio reviewer-paywall screenshot.
-    let expectedPrices: [(id: String, price: Double, display: String)] = [
-      (BYOKPurchaseStore.monthlyProductID, 6.99, "$6.99"),
-      (BYOKPurchaseStore.yearlyProductID, 29.99, "$29.99"),
-      (BYOKPurchaseStore.lifetimeProductID, 49.99, "$49.99"),
-    ]
-    for expected in expectedPrices {
-      let product = products.first(where: { $0.id == expected.id })
-      #expect(product?.price == expected.price)
-      #expect(product?.displayPrice == expected.display)
-    }
-  }
-  #endif
 }

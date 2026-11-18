@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -27,10 +27,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>BYOK Chat saves images to your photo library when you choose Save Image.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>BYOKchat uses your local network to connect to AI providers you configure on nearby devices.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BYOK Chat saves images to your photo library when you choose Save Image.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

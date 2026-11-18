@@ -56,8 +56,8 @@ final class BYOKPurchaseStore {
     subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
-    privacyURL: URL(string: "https://byok.pro/privacy")!,
-    termsURL: URL(string: "https://byok.pro/terms")!
+    privacyURL: URL(string: "https://spokiostudio.com/byokchat/privacy")!,
+    termsURL: URL(string: "https://spokiostudio.com/byokchat/terms")!
   )
 
   private static let simulatedProducts: [PurchaseProduct] = [

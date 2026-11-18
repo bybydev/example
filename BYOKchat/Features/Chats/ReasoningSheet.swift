@@ -28,7 +28,7 @@ struct ReasoningSheet: View {
           Button("Close") { dismiss() }
         }
         ToolbarItem(placement: .primaryAction) {
-          CopyButton(text: reasoning, accessibilityTitle: "Copy reasoning", size: .toolbar, analyticsDimension: .reasoning)
+          CopyButton(text: reasoning, accessibilityTitle: "Copy reasoning", size: .toolbar)
         }
       }
     }

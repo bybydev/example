@@ -6,7 +6,7 @@ on:
       platform:
         description: Platform to build
         required: true
-        default: macOS
+        default: iOS
         type: choice
         options:
           - macOS
@@ -15,7 +15,7 @@ on:
       configuration:
         description: Build configuration
         required: true
-        default: Release
+        default: Debug
         type: choice
         options:
           - Debug

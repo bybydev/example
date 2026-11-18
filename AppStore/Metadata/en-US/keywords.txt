@@ -1,1 +1,0 @@
-assistant,chatbot,model,provider,prompt,reasoning,project,server,keychain,analytics,markdown,files

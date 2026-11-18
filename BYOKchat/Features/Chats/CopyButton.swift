@@ -34,7 +34,6 @@ struct CopyButton: View {
   var accessibilityTitle = "Copy"
   var size: Size = .regular
   var alignment: Alignment = .center
-  var analyticsDimension: BYOKAppAnalytics.Dimension = .message
 
   @Environment(\.appFoundationTheme) private var theme
   @State private var isCopied = false
@@ -43,7 +42,6 @@ struct CopyButton: View {
   var body: some View {
     Button {
       UIPasteboard.general.string = text
-      BYOKAppAnalytics.track(.contentCopied, dimension: analyticsDimension)
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
       withAnimation(.snappy(duration: 0.2)) {
         isCopied = true

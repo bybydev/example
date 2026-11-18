@@ -33,6 +33,7 @@ final class AppModel {
       coreServices = try BYOKCoreServices.secure(environment: storageEnvironment)
       startupCompositionFailure = nil
     } catch {
+      BYOKAppAnalytics.reportError("credential_store_failed", component: "storage")
       // AppModel exists before AppBootstrapController, so composition must not
       // trap here. Build a recovery-only empty-provider graph and let startup
       // present the normal failure/recovery UI without touching user stores.
@@ -380,6 +381,7 @@ final class MCPManagementModel {
       }
       return server
     } catch {
+      BYOKAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return nil
     }
@@ -394,7 +396,6 @@ final class MCPManagementModel {
     do {
       _ = try await runtime.refreshServer(server.id, force: true)
       statusMessage = "MCP server saved and tools discovered"
-      BYOKAppAnalytics.track(.mcpDiscoverySucceeded)
     } catch {
       BYOKAppAnalytics.track(.mcpDiscoveryFailed)
       appendSaveWarning("Server saved, but tool discovery failed: \(error.localizedDescription)")

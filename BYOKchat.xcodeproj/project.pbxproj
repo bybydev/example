@@ -95,7 +95,6 @@
 		691E79BE21D033FCAAB67A42 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0246EC65F20ED232EFD28182 /* ChatView.swift */; };
 		6A5F9C578F011AE0B98E6E36 /* BYOKchatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2925788434A51E9708D31261 /* BYOKchatApp.swift */; };
 		6B2977D193799E76B2B6C92B /* UsageFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4385A8F564BE91DE118ED12A /* UsageFormatting.swift */; };
-		6D6DFE77E56D1AB04AC320F8 /* BYOKScreenshotStudioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0D4AC9D58FE751C26BBE28 /* BYOKScreenshotStudioTests.swift */; };
 		6E47201781645FC494717B81 /* ConversationPortabilityRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728A86DAB307D55AC10B1F30 /* ConversationPortabilityRegressionTests.swift */; };
 		6F168B662F2EDF4D85613F02 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 95591C20C763E5B80CF2B26B /* PrivacyInfo.xcprivacy */; };
 		700EA4A5D8A5EE830975111D /* MacTranscriptScrollPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95D2C269D303BD36378E7BAE /* MacTranscriptScrollPolicyTests.swift */; };
@@ -330,7 +329,6 @@
 		69FC4066F07CA30E394EBFF9 /* ChatContextWindowKindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContextWindowKindTests.swift; sourceTree = "<group>"; };
 		6AFF68D481D27633C90818A5 /* MacMarkdownMessageContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownMessageContent.swift; sourceTree = "<group>"; };
 		6B0B1E6C2F141A8C1C01F883 /* PricingContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingContextTests.swift; sourceTree = "<group>"; };
-		6B0D4AC9D58FE751C26BBE28 /* BYOKScreenshotStudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKScreenshotStudioTests.swift; sourceTree = "<group>"; };
 		6ED7B38BCC93227198286EEF /* AppStartupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStartupView.swift; sourceTree = "<group>"; };
 		728A86DAB307D55AC10B1F30 /* ConversationPortabilityRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPortabilityRegressionTests.swift; sourceTree = "<group>"; };
 		734A22A22060A2EE5DCF2E55 /* MacAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppModel.swift; sourceTree = "<group>"; };
@@ -690,7 +688,6 @@
 				E5AE6A97A9D345C136F9C272 /* AnswerContentParserTests.swift */,
 				A594041D48DB62469463EFF9 /* AppStorageBootstrapTests.swift */,
 				5EB221613E5E37407DAF6036 /* BYOKProAccessTests.swift */,
-				6B0D4AC9D58FE751C26BBE28 /* BYOKScreenshotStudioTests.swift */,
 				E13BF9908B7CE54A91F65630 /* ComposerTargetLabelFormatterTests.swift */,
 				6383A2377DE304E234778AC7 /* ProviderManagementModelTests.swift */,
 			);
@@ -1140,7 +1137,6 @@
 				C2F791F56D65CB170F723692 /* BYOKCoreServicesTests.swift in Sources */,
 				5EFF461D520C1865F85DCF68 /* BYOKProAccessTests.swift in Sources */,
 				EC364B1032B3AC7170ACA4A0 /* BYOKProPolicyTests.swift in Sources */,
-				6D6DFE77E56D1AB04AC320F8 /* BYOKScreenshotStudioTests.swift in Sources */,
 				8E127AF940719C7522156EAA /* ChatContextManagementTests.swift in Sources */,
 				12F8FE7AEFD3390233FEF943 /* ChatContextOutputReserveTests.swift in Sources */,
 				61276AEA59509155C9A5E7E6 /* ChatContextToolLoopTests.swift in Sources */,
@@ -1392,7 +1388,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_NAME = BYOKchat;
 				SDKROOT = iphoneos;
@@ -1666,7 +1662,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_NAME = BYOKchat;
 				SDKROOT = iphoneos;
@@ -1772,7 +1768,7 @@
 			repositoryURL = "https://github.com/hoangbkit/AppFoundation";
 			requirement = {
 				kind = exactVersion;
-				version = 1.6.4;
+				version = 1.7.0;
 			};
 		};
 		DD3C1E666F04E1347131D722 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {

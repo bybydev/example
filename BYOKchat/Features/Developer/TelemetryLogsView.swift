@@ -136,6 +136,7 @@ struct TelemetryLogsView: View {
       exportDocument = JSONExportDocument(data: data)
       showExporter = true
     } catch {
+      BYOKAppAnalytics.reportError("diagnostics_export_failed", component: "diagnostics")
       exportError = error.localizedDescription
     }
   }

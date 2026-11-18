@@ -517,6 +517,7 @@ struct ChatView: View {
           )
           imported.append(attachment)
         } catch {
+          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
           chats.errorMessage = error.localizedDescription
         }
       }
@@ -528,12 +529,14 @@ struct ChatView: View {
   private func importFiles(_ result: Result<[URL], Error>) {
     switch result {
     case .failure(let error):
+      BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
       chats.errorMessage = error.localizedDescription
     case .success(let urls):
       do {
         let attachments = try urls.map(loadFileAttachment)
         appendAttachments(attachments)
       } catch {
+        BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
         chats.errorMessage = error.localizedDescription
       }
     }

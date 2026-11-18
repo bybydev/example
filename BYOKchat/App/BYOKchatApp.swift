@@ -46,7 +46,12 @@ enum BYOKAppAnalytics {
   typealias Event = BYOKProductAnalyticsEvent
   typealias Dimension = BYOKProductAnalyticsDimension
 
-  private static let isEnabled = false
+  static let preferenceKey = "byokchat.analytics.shareUsageData"
+
+  static var isEnabled: Bool {
+    get { UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true }
+    set { UserDefaults.standard.set(newValue, forKey: preferenceKey) }
+  }
 
   static let client = AppAnalyticsClient(
     configuration: AppAnalyticsConfiguration(
@@ -54,9 +59,34 @@ enum BYOKAppAnalytics {
       appKey: Bundle.main.bundleIdentifier ?? "com.hoangbkit.byokchat",
       baseURL: URL(string: "https://analytics.133043.xyz")!,
       enabled: isEnabled,
-      uploadInterval: 60
+      storageMode: .inMemory
     )
   )
+
+  static func setEnabled(_ enabled: Bool) async {
+    isEnabled = enabled
+    await client.setEnabled(enabled)
+  }
+
+  static func reportError(
+    _ code: String,
+    component: String,
+    severity: AppAnalyticsErrorSeverity = .error
+  ) {
+    guard isEnabled else { return }
+    Task {
+      try? await client.trackError(code, component: component, severity: severity)
+    }
+  }
+
+  static func track(_ event: Event, detail: String?) {
+    guard isEnabled else { return }
+    let previousTrack = pendingTrack
+    pendingTrack = Task {
+      await previousTrack?.value
+      try? await client.track(event.rawValue, dimension: detail)
+    }
+  }
 
   private static var pendingTrack: Task<Void, Never>?
 
@@ -67,16 +97,6 @@ enum BYOKAppAnalytics {
       await previousTrack?.value
       try? await client.track(event.rawValue, dimension: dimension?.rawValue)
     }
-  }
-
-  /// Records activation once on this installation after the first persisted
-  /// successful response observed by this version of the app.
-  static func trackFirstResponse() {
-    guard isEnabled else { return }
-    let key = "byokchat.analytics.firstResponseCompleted.v1"
-    guard !UserDefaults.standard.bool(forKey: key) else { return }
-    UserDefaults.standard.set(true, forKey: key)
-    track(.firstResponseCompleted)
   }
 }
 

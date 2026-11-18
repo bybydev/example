@@ -257,6 +257,7 @@ final class ChatManagementModel {
       try await conversationStore.load()
       try await reloadSnapshot()
     } catch {
+      BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
     }
   }
@@ -279,6 +280,35 @@ final class ChatManagementModel {
       await self?.loadConversation(id)
     }
     return nil
+  }
+
+  /// Composer-style provider · model · effort label, sanitized for analytics.
+  private func analyticsDimension(
+    conversationID: ConversationID?,
+    providerID: ProviderID? = nil
+  ) async -> String? {
+    guard let conversationID,
+      let conversation = hydratedConversations[conversationID] ?? summary(conversationID)
+    else { return nil }
+    let resolvedProviderID = providerID ?? conversation.providerID
+    let kind = ProviderKind(providerID: resolvedProviderID)
+    let providerName = kind.displayName.isEmpty ? resolvedProviderID.rawValue : kind.displayName
+    let modelID = conversation.modelID
+    let modelRecord = await providerWorkspace.modelRecords(
+      for: conversation.accountID, includeHidden: true
+    ).first { $0.model.id == modelID }
+    let capabilities = ModelCapabilityResolver.resolve(
+      kind: kind, modelID: modelID, model: modelRecord?.model
+    )
+    return ComposerTargetLabelFormatter.analyticsDimension(
+      providerID: resolvedProviderID,
+      providerName: providerName,
+      modelName: modelRecord?.model.displayName ?? modelID.rawValue,
+      modelID: modelID.rawValue,
+      supportedParameters: modelRecord?.model.supportedParameters ?? [],
+      reasoning: conversation.options.reasoning,
+      capabilities: capabilities
+    )
   }
 
   /// Index-backed metadata lookup; never schedules a conversation shard read.
@@ -308,6 +338,7 @@ final class ChatManagementModel {
         self.conversationLoadFailures.remove(id)
         try await self.reloadSnapshot()
       } catch {
+        BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
         self.conversationLoadFailures.insert(id)
         self.errorMessage = error.localizedDescription
       }
@@ -501,6 +532,7 @@ final class ChatManagementModel {
       try await reloadSnapshot()
       return conversation.id
     } catch {
+      BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
       if managedNewChat, let createdID {
         abandonedNewChatIDs.insert(createdID)
@@ -535,6 +567,7 @@ final class ChatManagementModel {
       if activeNewChatID == id { activeNewChatID = nil }
       try await reloadSnapshot()
     } catch {
+      BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
     }
   }
@@ -548,6 +581,7 @@ final class ChatManagementModel {
       try await reloadSnapshot()
       succeeded = true
     } catch {
+      BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
     }
   }
@@ -580,6 +614,7 @@ final class ChatManagementModel {
       succeeded = true
       return true
     } catch {
+      BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
       errorMessage = error.localizedDescription
       return false
     }
@@ -771,14 +806,8 @@ final class ChatManagementModel {
             reportedPersistence = true
             finishSendPreparation(conversationID, committed: true, action: action)
             onMessagePersisted?(true)
-            if case .turnStarted(let turn) = event {
-              BYOKAppAnalytics.track(
-                .chatTurnStarted, dimension: .provider(turn.assistantMessage.providerID)
-              )
-            }
             switch action {
             case .send(_, let attachments):
-              BYOKAppAnalytics.track(.messageSent)
               if !attachments.isEmpty {
                 let dimension: BYOKAppAnalytics.Dimension = attachments.allSatisfy({ $0.isImage })
                   ? .image : (attachments.contains(where: { $0.isImage }) ? .mixed : .file)
@@ -796,18 +825,33 @@ final class ChatManagementModel {
           case .completed(let message):
             if !didRecordAnalyticsOutcome {
               didRecordAnalyticsOutcome = true
-              BYOKAppAnalytics.track(.chatTurnCompleted, dimension: .provider(message.providerID))
-              BYOKAppAnalytics.trackFirstResponse()
+              BYOKAppAnalytics.track(
+                .chatTurnCompleted,
+                detail: await analyticsDimension(
+                  conversationID: conversationID, providerID: message.providerID
+                )
+              )
             }
           case .cancelled(let message):
             if !didRecordAnalyticsOutcome {
               didRecordAnalyticsOutcome = true
-              BYOKAppAnalytics.track(.chatTurnCancelled, dimension: .provider(message.providerID))
+              BYOKAppAnalytics.track(
+                .chatTurnCancelled,
+                detail: await analyticsDimension(
+                  conversationID: conversationID, providerID: message.providerID
+                )
+              )
             }
           case .failed(let message):
             if !didRecordAnalyticsOutcome {
               didRecordAnalyticsOutcome = true
-              BYOKAppAnalytics.track(.chatTurnFailed, dimension: .provider(message.providerID))
+              BYOKAppAnalytics.reportError("chat_generation_failed", component: "chat")
+              BYOKAppAnalytics.track(
+                .chatTurnFailed,
+                detail: await analyticsDimension(
+                  conversationID: conversationID, providerID: message.providerID
+                )
+              )
             }
           default:
             break
@@ -821,16 +865,23 @@ final class ChatManagementModel {
         if !didRecordAnalyticsOutcome, reportedPersistence {
           didRecordAnalyticsOutcome = true
           BYOKAppAnalytics.track(
-            .chatTurnCancelled, dimension: .provider(conversation(conversationID)?.providerID)
+            .chatTurnCancelled,
+            detail: await analyticsDimension(conversationID: conversationID)
           )
         }
         try? await reloadSnapshot()
       } catch {
         if !didRecordAnalyticsOutcome {
           didRecordAnalyticsOutcome = true
+          BYOKAppAnalytics.reportError("chat_generation_failed", component: "chat")
+          if !reportedPersistence {
+            BYOKAppAnalytics.reportError(
+              "conversation_prepare_failed", component: "chat_storage"
+            )
+          }
           BYOKAppAnalytics.track(
             reportedPersistence ? .chatTurnFailed : .chatPreparationFailed,
-            dimension: .provider(conversation(conversationID)?.providerID)
+            detail: await analyticsDimension(conversationID: conversationID)
           )
         }
         if !didReceiveInlineFailure {
@@ -841,9 +892,12 @@ final class ChatManagementModel {
       // A cancelled AsyncThrowingStream may end without throwing or draining
       // its terminal event; still record one outcome for an accepted turn.
       if reportedPersistence, !didRecordAnalyticsOutcome {
+        if !Task.isCancelled {
+          BYOKAppAnalytics.reportError("chat_generation_failed", component: "chat")
+        }
         BYOKAppAnalytics.track(
           Task.isCancelled ? .chatTurnCancelled : .chatTurnFailed,
-          dimension: .provider(conversation(conversationID)?.providerID)
+          detail: await analyticsDimension(conversationID: conversationID)
         )
       }
       if !reportedPersistence {
@@ -902,7 +956,6 @@ final class ChatManagementModel {
       activeToolCallsByConversation[conversationID] = calls
       advanceStreamRevision(for: conversationID)
     case .toolRound(let messageID, _):
-      BYOKAppAnalytics.track(.toolRoundCompleted)
       await flushStreamPresentation(messageID, conversationID: conversationID)
       activeToolCallsByConversation.removeValue(forKey: conversationID)
       let live = LiveMessage()

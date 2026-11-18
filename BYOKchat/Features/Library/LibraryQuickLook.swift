@@ -6,19 +6,39 @@ import SwiftUI
 struct LibraryQuickLookView: UIViewControllerRepresentable {
   /// (filename with extension, bytes) pairs; extensions drive the preview.
   let files: [(filename: String, data: Data)]
+  let onDismiss: () -> Void
 
-  func makeUIViewController(context: Context) -> QLPreviewController {
-    let controller = QLPreviewController()
+  func makeUIViewController(context: Context) -> UINavigationController {
+    let controller = DismissibleQuickLookController()
     controller.dataSource = context.coordinator
-    return controller
+    controller.onDismiss = onDismiss
+    return UINavigationController(rootViewController: controller)
   }
 
-  func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+  func updateUIViewController(_ navigation: UINavigationController, context: Context) {
+    guard let controller = navigation.viewControllers.first as? DismissibleQuickLookController
+    else { return }
     context.coordinator.update(files: files)
     controller.reloadData()
   }
 
   func makeCoordinator() -> Coordinator { Coordinator(files: files) }
+
+  /// Quick Look adds its own Done button only when presented modally by UIKit;
+  /// inside a SwiftUI sheet it is a child controller, so supply one explicitly.
+  final class DismissibleQuickLookController: QLPreviewController {
+    var onDismiss: (() -> Void)?
+
+    override func viewDidLoad() {
+      super.viewDidLoad()
+      navigationItem.rightBarButtonItem = UIBarButtonItem(
+        barButtonSystemItem: .done, target: self, action: #selector(done))
+    }
+
+    @objc private func done() {
+      onDismiss?()
+    }
+  }
 
   final class Coordinator: NSObject, QLPreviewControllerDataSource {
     private var urls: [URL] = []
@@ -39,6 +59,9 @@ struct LibraryQuickLookView: UIViewControllerRepresentable {
           try file.data.write(to: url, options: .atomic)
           return url
         } catch {
+          Task { @MainActor in
+            BYOKAppAnalytics.reportError("library_preview_failed", component: "library")
+          }
           return nil
         }
       }

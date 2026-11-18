@@ -216,8 +216,8 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
 
   // Curated chat models remain available even if the account's /models payload omits them.
   #expect(ids.contains("gpt-5.6-sol"))
-  #expect(ids.contains("gpt-5.6-terra"))
-  #expect(ids.contains("gpt-5.6-luna"))
+  #expect(ids.contains("gpt-6.1-sol"))
+  #expect(ids.contains("gpt-6-luna"))
 
   let astra = try #require(models.first { $0.id == "gpt-6-astra" })
   #expect(astra.displayName == "GPT-6 Astra")
