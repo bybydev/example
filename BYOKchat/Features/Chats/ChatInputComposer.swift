@@ -501,7 +501,8 @@ enum ComposerTargetLabelFormatter {
   /// Only match the beginning of the model name, not an arbitrary substring.
   private static let recognizableFamilies = [
     "gpt", "o1", "o3", "o4", "claude", "sonnet", "opus", "haiku",
-    "gemini", "deepseek", "glm", "qwen", "llama", "mistral", "grok", "kimi",
+    "gemini", "deepseek", "glm", "qwen", "llama", "mistral", "codestral",
+    "devstral", "magistral", "ministral", "grok", "kimi",
     "nemotron", "phi", "command r", "minimax",
   ]
 
@@ -591,8 +592,8 @@ enum ComposerTargetLabelFormatter {
     // Strip vendor metadata, not the distinctive model family. On OpenRouter,
     // for example, "Claude" or "DeepSeek" must remain in the visible name.
     for prefix in [
-      "Google DeepMind", "Meta AI", "Moonshot AI", "Zhipu AI", "OpenAI", "Anthropic", "Google",
-      "Meta", "Alibaba", "NVIDIA", "Moonshot", "Zhipu", "Z.ai",
+      "Google DeepMind", "Meta AI", "Mistral AI", "Moonshot AI", "Zhipu AI", "OpenAI",
+      "Anthropic", "Google", "Meta", "Alibaba", "NVIDIA", "Moonshot", "Zhipu", "Z.ai",
     ] {
       if let stripped = removingPrefix(text, prefix) {
         text = stripped
@@ -623,7 +624,8 @@ enum ComposerTargetLabelFormatter {
     let familyNames: [String: String] = [
       "claude": "Claude", "sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku",
       "gemini": "Gemini", "deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "qwen": "Qwen",
-      "llama": "Llama", "mistral": "Mistral", "grok": "Grok",
+      "llama": "Llama", "mistral": "Mistral", "codestral": "Codestral",
+      "devstral": "Devstral", "magistral": "Magistral", "ministral": "Ministral", "grok": "Grok",
       "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
       "flash": "Flash", "flashx": "FlashX", "air": "Air", "airx": "AirX",
       "pro": "Pro", "highspeed": "Highspeed", "mini": "Mini", "nano": "Nano",
@@ -713,6 +715,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.zAIID: return "Z.ai"
     case BuiltInProviders.moonshotID: return "Moonshot"
     case BuiltInProviders.minimaxID: return "MiniMax"
+    case BuiltInProviders.mistralID: return "Mistral"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     default:

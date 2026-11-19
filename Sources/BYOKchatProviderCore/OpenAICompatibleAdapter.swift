@@ -56,7 +56,12 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } catch {
       throw ProviderError.invalidResponse
     }
-    let discovered = decoded.data.map { wire in
+    let discovered: [ProviderModel] = decoded.data.compactMap { wire in
+      if definition.behavior == .mistral,
+        wire.archived == true || wire.capabilities?.completionChat == false
+      {
+        return nil
+      }
       var evidence = ModelCapabilityEvidence()
       // OpenRouter specifies exhaustive lists. Custom-compatible catalogs may
       // provide partial hints using the same field names.
@@ -64,7 +69,20 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       evidence.modalities(wire.architecture?.inputModalities, input: true, exhaustive: exhaustive)
       evidence.modalities(wire.architecture?.outputModalities, input: false, exhaustive: exhaustive)
       evidence.parameters(wire.supportedParameters, exhaustive: exhaustive)
+      var supportedParameters = Set(wire.supportedParameters ?? [])
+      var inputModalities = Set(wire.architecture?.inputModalities ?? ["text"])
+      if let capabilities = wire.capabilities {
+        if let functionCalling = capabilities.functionCalling {
+          evidence.set(.tools, supported: functionCalling, source: .discovery)
+          if functionCalling { supportedParameters.insert("tools") }
+        }
+        if let vision = capabilities.vision {
+          evidence.set(.imageInput, supported: vision, source: .discovery)
+          if vision { inputModalities.insert("image") }
+        }
+      }
       let contextWindow = wire.contextLength.flatMap { $0 > 0 ? $0 : nil }
+        ?? wire.maxContextLength.flatMap { $0 > 0 ? $0 : nil }
         ?? wire.topProvider?.contextLength.flatMap { $0 > 0 ? $0 : nil }
       let outputLimit = wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
       if contextWindow != nil { evidence.contextWindowSource = .discovery }
@@ -75,8 +93,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         displayName: wire.name ?? wire.id,
         contextWindow: contextWindow,
         maxOutputTokens: outputLimit,
-        supportedParameters: Set(wire.supportedParameters ?? []),
-        inputModalities: Set(wire.architecture?.inputModalities ?? ["text"]),
+        supportedParameters: supportedParameters,
+        inputModalities: inputModalities,
         outputModalities: Set(wire.architecture?.outputModalities ?? ["text"]),
         promptPricePerToken: wire.pricing?.prompt,
         completionPricePerToken: wire.pricing?.completion,
@@ -114,7 +132,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       throw ProviderError.provider(status: response.statusCode, message: error.message)
     }
     let message = decoded.choices.first?.message
-    let text = message?.content ?? ""
+    let text = message?.textContent ?? ""
     let reasoning = message?.normalizedReasoning ?? ""
     let toolCalls = try normalizedToolCalls(message?.toolCalls ?? [])
     guard
@@ -290,7 +308,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     }
     if let choice = decoded.choices.first {
       if let value = choice.finishReason { finishReason = value }
-      if let delta = choice.delta.content, !delta.isEmpty {
+      if let delta = choice.delta.textDelta, !delta.isEmpty {
         text += delta
         continuation.yield(.textDelta(delta))
       }

@@ -320,7 +320,7 @@ public enum ProviderAPIFamily: String, Codable, Sendable {
 }
 
 public enum ProviderBehaviorID: String, Codable, Sendable {
-  case deepSeek, zAI, moonshot, minimax, openRouter, nvidia, anthropic, gemini, genericOpenAICompatible
+  case deepSeek, zAI, moonshot, minimax, mistral, openRouter, nvidia, anthropic, gemini, genericOpenAICompatible
 }
 
 public enum ProviderAuthentication: Codable, Sendable, Equatable {

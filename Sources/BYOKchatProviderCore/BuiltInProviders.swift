@@ -7,6 +7,7 @@ public enum BuiltInProviders {
   public static let zAIID: ProviderID = "zai"
   public static let moonshotID: ProviderID = "moonshot"
   public static let minimaxID: ProviderID = "minimax"
+  public static let mistralID: ProviderID = "mistral"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let anthropicID: ProviderID = "anthropic"
@@ -99,6 +100,18 @@ public enum BuiltInProviders {
     seedModels: ProviderKind.minimax.seedModels,
     isBuiltIn: true,
     kind: .minimax
+  )
+
+  public static let mistral = ProviderDefinition(
+    id: mistralID,
+    displayName: "Mistral AI",
+    behavior: .mistral,
+    defaultBaseURL: URL(string: "https://api.mistral.ai/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: ProviderKind.mistral.seedModels,
+    isBuiltIn: true,
+    kind: .mistral
   )
 
   public static let openRouter = ProviderDefinition(
@@ -203,5 +216,5 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, minimax, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, openRouter, nvidia, anthropic, gemini]
 }

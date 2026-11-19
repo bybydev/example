@@ -300,6 +300,30 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "MiniMax-M3.1-Flash", model: nil) == nil)
 }
 
+@Test func mistralPricingResolvesForDefaultEndpointOnly() throws {
+  let account = ProviderAccount(kind: .mistral, id: "mis", providerID: "mistral", label: "Mistral AI")
+  let large4 = try #require(ModelPriceResolver.resolve(account: account, modelID: "mistral-large-4-0", model: nil))
+  #expect(large4.source == "bundledCatalog")
+  #expect(large4.rates.input == "0.7")
+  #expect(large4.rates.output == "2.1")
+  #expect(large4.rates.cachedInput == "0.07")
+
+  let small4 = try #require(ModelPriceResolver.resolve(account: account, modelID: "mistral-small-2603", model: nil))
+  #expect(small4.rates.input == "0.15")
+  #expect(small4.rates.output == "0.6")
+  #expect(small4.rates.cachedInput == "0.015")
+
+  let devstral = try #require(ModelPriceResolver.resolve(account: account, modelID: "devstral-2512", model: nil))
+  #expect(devstral.rates.input == "0.4")
+  #expect(devstral.rates.output == "2")
+
+  let regionalAccount = ProviderAccount(
+    kind: .mistral, id: "mis-eu", providerID: "mistral", label: "Mistral EU",
+    baseURLOverride: URL(string: "https://eu.api.mistral.ai/v1")!
+  )
+  #expect(ModelPriceResolver.resolve(account: regionalAccount, modelID: "mistral-large-4-0", model: nil) == nil)
+}
+
 @Test func timePricingRejectsCrossedBucketsEvenWithMatchingEndpoints() throws {
   let start = try #require(ISO8601DateFormatter().date(from: "2026-10-07T00:30:00Z"))
   let end = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:30:00Z"))

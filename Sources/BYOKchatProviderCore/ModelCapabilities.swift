@@ -364,6 +364,18 @@ public enum ModelCapabilityResolver {
       if id == "minimax-m3" || id.hasPrefix("minimax-m3-") {
         return .init(kind: .fixed, allowsOff: true, offWireValue: "disabled", source: .adapter)
       }
+    case .mistral:
+      if id.hasPrefix("mistral-large-4") {
+        return efforts([.low, .medium, .high], defaultEffort: .high)
+      }
+      if id.hasPrefix("mistral-small-2603") || id.hasPrefix("mistral-small-4")
+        || id.hasPrefix("mistral-medium-3-5") || id.hasPrefix("mistral-medium-3.5")
+      {
+        return efforts([.high], defaultEffort: nil, off: "none")
+      }
+      if id.hasPrefix("magistral") {
+        return .init(kind: .fixed, source: .adapter)
+      }
     case .gemini:
       if id.hasPrefix("gemini-3-pro") { return efforts([.low, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.1-pro") { return efforts([.low, .medium, .high], defaultEffort: .high) }
@@ -433,6 +445,7 @@ extension ProviderDefinition {
     case .zAI: return .zAI
     case .moonshot: return .moonshot
     case .minimax: return .minimax
+    case .mistral: return .mistral
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

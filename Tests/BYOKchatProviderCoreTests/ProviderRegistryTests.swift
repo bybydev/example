@@ -8,7 +8,7 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["openai", "xai", "deepseek", "zai", "moonshot", "minimax", "openrouter", "nvidia", "anthropic", "gemini"]
+      == ["openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "openrouter", "nvidia", "anthropic", "gemini"]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
@@ -110,6 +110,28 @@ import Testing
   #expect(ProviderKind.minimax.defaultProviderID == "minimax")
   #expect(ProviderKind.minimax.logo == .brand(assetName: "provider.minimax"))
   #expect(ProviderKind.minimax.reasoningDefault == nil)
+
+  let mistral = try #require(definitions.first { $0.id == "mistral" })
+  #expect(mistral.defaultBaseURL.absoluteString == "https://api.mistral.ai/v1")
+  #expect(mistral.apiFamily == .openAIChatCompletions)
+  #expect(mistral.behavior == .mistral)
+  #expect(mistral.authentication == .bearer)
+  #expect(mistral.modelsPath == "/models")
+  #expect(mistral.chatCompletionsPath == "/chat/completions")
+  #expect(mistral.kind == .mistral)
+  #expect(
+    mistral.seedModels.map(\.id)
+      == ["mistral-large-4-0", "mistral-small-2603", "devstral-2512", "codestral-2508"]
+  )
+  let large4 = try #require(mistral.seedModels.first)
+  #expect(large4.id == "mistral-large-4-0")
+  #expect(large4.contextWindow == 1_048_576)
+  #expect(large4.inputModalities.contains("image"))
+
+  #expect(ProviderKind.catalog.contains(.mistral))
+  #expect(ProviderKind.mistral.defaultProviderID == "mistral")
+  #expect(ProviderKind.mistral.logo == .brand(assetName: "provider.mistral"))
+  #expect(ProviderKind.mistral.reasoningDefault == nil)
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5-5" })

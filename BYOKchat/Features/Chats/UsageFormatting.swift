@@ -8,6 +8,7 @@ func usageDisplayName(_ raw: String) -> String {
   case "zai": "Z.ai"
   case "moonshot": "Moonshot AI"
   case "minimax": "MiniMax"
+  case "mistral": "Mistral AI"
   case "anthropic": "Anthropic"
   case "gemini": "Gemini"
   case "nvidia": "NVIDIA"

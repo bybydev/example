@@ -221,6 +221,39 @@ struct ComposerTargetLabelFormatterTests {
     )
     #expect(lowercased == "MiniMax M3 · Off")
   }
+
+  @Test("Mistral AI models preserve family names and explicit effort")
+  func mistralLabels() {
+    let large4 = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.mistralID,
+      providerName: "Mistral AI",
+      modelName: "Mistral Large 4",
+      modelID: "mistral-large-4-0",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(large4 == "Mistral Large 4 · High")
+
+    let small4Off = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.mistralID,
+      providerName: "Mistral AI",
+      modelName: "Mistral Small 4",
+      modelID: "mistral-small-2603",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(small4Off == "Mistral Small 4 · Off")
+
+    let devstral = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.mistralID,
+      providerName: "Mistral AI",
+      modelName: "Devstral 2",
+      modelID: "devstral-2512",
+      supportedParameters: ["tools"],
+      reasoning: nil
+    )
+    #expect(devstral == "Devstral 2")
+  }
 }
 
 @Suite("Composer layout policy")

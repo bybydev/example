@@ -133,6 +133,21 @@ struct ModelCapabilityPolicyTests {
     #expect(m3.choices == [.providerDefault, .off, .on])
     #expect(m3.normalize(.init(enabled: false))?.enabled == false)
     #expect(m3.normalize(.init(enabled: true, effort: .high)) == nil)
+
+    let large4 = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "mistral-large-4-0")
+    #expect(large4.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(large4.label(for: nil) == "Default (High)")
+    #expect(large4.normalize(.init(enabled: false)) == nil)
+    #expect(large4.normalize(.init(enabled: true, effort: .medium))?.effort == .medium)
+
+    let small4 = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "mistral-small-2603")
+    #expect(small4.choices == [.providerDefault, .off, .effort(.high)])
+    #expect(small4.normalize(.init(enabled: false))?.enabled == false)
+    #expect(small4.normalize(.init(enabled: true, effort: .medium)) == nil)
+    #expect(small4.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let magistral = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "magistral-medium-2509")
+    #expect(magistral.choices == [.providerDefault, .on])
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

@@ -312,6 +312,9 @@ struct ProviderLogoCatalogTests {
     #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.minimax)
         == "provider.minimax")
+    #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.mistral)
+        == "provider.mistral")
   }
 
   @Test("Custom provider name resolves a prepared brand")

@@ -1,7 +1,95 @@
 import Foundation
 
+enum MessageContentWire: Decodable {
+  case string(String)
+  case chunks([MessageContentChunkWire])
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let text = try? container.decode(String.self) {
+      self = .string(text)
+    } else if let chunks = try? container.decode([MessageContentChunkWire].self) {
+      self = .chunks(chunks)
+    } else {
+      throw DecodingError.typeMismatch(
+        MessageContentWire.self,
+        .init(
+          codingPath: decoder.codingPath,
+          debugDescription: "Expected string or content chunk array"
+        )
+      )
+    }
+  }
+
+  var text: String? {
+    switch self {
+    case .string(let value):
+      return value
+    case .chunks(let chunks):
+      let joined = chunks.compactMap(\.textValue).joined()
+      return joined.isEmpty ? nil : joined
+    }
+  }
+
+  var reasoningFragments: [String] {
+    switch self {
+    case .string:
+      return []
+    case .chunks(let chunks):
+      return chunks.flatMap(\.reasoningValues)
+    }
+  }
+}
+
+struct MessageContentChunkWire: Decodable {
+  var type: String?
+  var text: String?
+  var thinking: ThinkingContentWire?
+
+  var textValue: String? {
+    guard type == nil || type == "text" else { return nil }
+    return text
+  }
+
+  var reasoningValues: [String] {
+    guard type == "thinking" || type == "reasoning" else { return [] }
+    if let thinking {
+      return thinking.fragments
+    }
+    return text.map { [$0] } ?? []
+  }
+}
+
+enum ThinkingContentWire: Decodable {
+  case string(String)
+  case parts([ThinkingTextPartWire])
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let text = try? container.decode(String.self) {
+      self = .string(text)
+    } else if let parts = try? container.decode([ThinkingTextPartWire].self) {
+      self = .parts(parts)
+    } else {
+      self = .parts([])
+    }
+  }
+
+  var fragments: [String] {
+    switch self {
+    case .string(let value): return [value]
+    case .parts(let parts): return parts.compactMap(\.text)
+    }
+  }
+}
+
+struct ThinkingTextPartWire: Decodable {
+  var type: String?
+  var text: String?
+}
+
 struct ChatCompletionMessageWire: Decodable {
-  var content: String?
+  var content: MessageContentWire?
   var reasoning: String?
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
@@ -12,9 +100,12 @@ struct ChatCompletionMessageWire: Decodable {
     case reasoningDetails = "reasoning_details"
     case toolCalls = "tool_calls"
   }
+  var textContent: String? { content?.text }
   var normalizedReasoning: String? {
     let details = reasoningDetails?.compactMap { $0.text ?? $0.summary }.joined() ?? ""
-    let values = [reasoning, reasoningContent, details].compactMap { $0 }.filter { !$0.isEmpty }
+    let values =
+      ([reasoning, reasoningContent, details].compactMap { $0 } + (content?.reasoningFragments ?? []))
+      .filter { !$0.isEmpty }
     return values.isEmpty ? nil : values.joined()
   }
 }
@@ -53,13 +144,13 @@ struct ChatCompletionChoiceWire: Decodable {
 }
 
 struct ChatCompletionDeltaWire: Decodable {
-  var content: String?
+  var content: MessageContentWire?
   var reasoning: String?
   var reasoningContent: String?
   var reasoningDetails: [ReasoningDetailWire]?
   var toolCalls: [ToolCallWire]?
   init(
-    content: String? = nil, reasoning: String? = nil, reasoningContent: String? = nil,
+    content: MessageContentWire? = nil, reasoning: String? = nil, reasoningContent: String? = nil,
     reasoningDetails: [ReasoningDetailWire]? = nil, toolCalls: [ToolCallWire]? = nil
   ) {
     self.content = content
@@ -74,9 +165,11 @@ struct ChatCompletionDeltaWire: Decodable {
     case reasoningDetails = "reasoning_details"
     case toolCalls = "tool_calls"
   }
+  var textDelta: String? { content?.text }
   var reasoningFragments: [String] {
     [reasoning, reasoningContent].compactMap { $0 }
       + (reasoningDetails?.compactMap { $0.text ?? $0.summary } ?? [])
+      + (content?.reasoningFragments ?? [])
   }
 }
 
@@ -173,15 +266,29 @@ struct ModelWire: Decodable {
   var id: String
   var name: String?
   var contextLength: Int?
+  var maxContextLength: Int?
   var supportedParameters: [String]?
   var architecture: ArchitectureWire?
   var topProvider: TopProviderWire?
   var pricing: PricingWire?
+  var capabilities: ModelCapabilitiesWire?
+  var archived: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, name, architecture, pricing
+    case id, name, architecture, pricing, capabilities, archived
     case contextLength = "context_length"
+    case maxContextLength = "max_context_length"
     case supportedParameters = "supported_parameters"
     case topProvider = "top_provider"
+  }
+}
+struct ModelCapabilitiesWire: Decodable {
+  var completionChat: Bool?
+  var functionCalling: Bool?
+  var vision: Bool?
+  enum CodingKeys: String, CodingKey {
+    case completionChat = "completion_chat"
+    case functionCalling = "function_calling"
+    case vision
   }
 }
 struct ArchitectureWire: Decodable {

@@ -545,3 +545,157 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(m3OnRoot["thinking"] == .object(["type": .string("adaptive")]))
   #expect(m3OnRoot["reasoning_effort"] == nil)
 }
+
+@Test func mistralStreamDecodesThinkingChunksAndFormatsToolMessages() async throws {
+  let stream = """
+    data: {"id":"mis1","model":"mistral-large-4-0","choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"Step 1 "}]}]},"finish_reason":null}]}
+
+    data: {"id":"mis1","model":"mistral-large-4-0","choices":[{"delta":{"content":[{"type":"text","text":"Answer"}]},"finish_reason":"stop"}]}
+
+    data: {"id":"mis1","model":"mistral-large-4-0","choices":[],"usage":{"prompt_tokens":128,"completion_tokens":16,"prompt_tokens_details":{"cached_tokens":64}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.mistral, transport: transport)
+  let call = ChatToolCall(id: "v9a8b7c6d", name: "lookup", arguments: .object(["q": .string("m4")]))
+  let result = ChatToolResult(callID: "v9a8b7c6d", name: "lookup", content: .string("ok"))
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "mistral-large-4-0",
+      messages: [
+        .init(role: .user, content: "Check"),
+        .init(role: .assistant, content: "", toolCalls: [call]),
+        .init(role: .tool, content: "", toolResults: [result]),
+      ],
+      options: .init(temperature: 0.4, reasoning: .init(enabled: true, effort: .medium))
+    ),
+    account: account(providerID: "mistral")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.mistral.ai/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["reasoning_effort"] == .string("medium"))
+  #expect(root["temperature"] == .number(0.4))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+  if case .array(let messages)? = root["messages"],
+    case .object(let assistantMsg) = messages[1],
+    case .object(let toolMsg) = messages[2]
+  {
+    #expect(assistantMsg["content"] == .string(""))
+    #expect(toolMsg["name"] == .string("lookup"))
+    #expect(toolMsg["tool_call_id"] == .string("v9a8b7c6d"))
+  } else {
+    Issue.record("Missing assistant/tool messages")
+  }
+
+  #expect(events.contains(.reasoningDelta("Step 1 ")))
+  #expect(events.contains(.textDelta("Answer")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Step 1 ")
+  #expect(response.text == "Answer")
+  #expect(response.usage?.inputTokens == 128)
+  #expect(response.usage?.cachedInputTokens == 64)
+}
+
+@Test func mistralGenerateDecodesThinkingArrayAndHonorsReasoningBoundaries() async throws {
+  let responseJSON = Data(
+    #"""
+    {"id":"mis2","model":"mistral-large-4-0","choices":[{"message":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Check math"}],"closed":true},{"type":"text","text":"42"}]},"finish_reason":"stop"}]}
+    """#.utf8
+  )
+  let transport = MockTransport(data: responseJSON)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.mistral, transport: transport)
+
+  // Large 4 cannot disable reasoning: Off normalizes to provider default (omitted).
+  let largeResponse = try await adapter.generate(
+    request: ProviderRequest(
+      model: "mistral-large-4-0",
+      messages: [.init(role: .user, content: "What is 6*7?")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "mistral")
+  )
+  #expect(largeResponse.reasoning == "Check math")
+  #expect(largeResponse.text == "42")
+  let largeBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let largeRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: largeBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(largeRoot["reasoning_effort"] == nil)
+
+  // Small 4 supports reasoning_effort = "none".
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "mistral-small-2603",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "mistral")
+  )
+  let smallBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let smallRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: smallBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(smallRoot["reasoning_effort"] == .string("none"))
+}
+
+@Test func mistralDiscoveryFiltersNonChatAndReadsCapabilities() async throws {
+  let modelsJSON = Data(
+    #"""
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "ministral-8b-2512",
+          "name": "Ministral 3 8B",
+          "max_context_length": 262144,
+          "capabilities": { "completion_chat": true, "function_calling": true, "vision": true },
+          "archived": false
+        },
+        {
+          "id": "mistral-embed",
+          "name": "Mistral Embed",
+          "max_context_length": 8192,
+          "capabilities": { "completion_chat": false, "function_calling": false, "vision": false },
+          "archived": false
+        },
+        {
+          "id": "mistral-legacy-archived",
+          "name": "Legacy",
+          "max_context_length": 32768,
+          "capabilities": { "completion_chat": true },
+          "archived": true
+        }
+      ]
+    }
+    """#.utf8
+  )
+  let transport = MockTransport(data: modelsJSON)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.mistral, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "mistral"))
+
+  let ministral = try #require(models.first { $0.id == "ministral-8b-2512" })
+  #expect(ministral.contextWindow == 262_144)
+  #expect(ministral.inputModalities.contains("image"))
+  #expect(ministral.supportedParameters.contains("tools"))
+  #expect(!models.contains { $0.id == "mistral-embed" })
+  #expect(!models.contains { $0.id == "mistral-legacy-archived" })
+}

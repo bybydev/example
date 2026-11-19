@@ -63,7 +63,9 @@ enum ProviderLogoCatalog {
     .init("openrouter", aliases: ["openrouter"], hosts: ["openrouter.ai"]),
     .init("nvidia", aliases: ["nvidia", "nvidia-nim", "nim"], hosts: ["api.nvidia.com"]),
     .init("xai", aliases: ["xai", "x-ai", "grok"], hosts: ["api.x.ai"]),
-    .init("mistral", aliases: ["mistral", "mistral-ai"], hosts: ["api.mistral.ai"]),
+    .init(
+      "mistral", aliases: ["mistral", "mistral-ai"],
+      hosts: ["api.mistral.ai", "codestral.mistral.ai"]),
     .init("cohere", aliases: ["cohere"], hosts: ["api.cohere.com"]),
     .init("ai21", aliases: ["ai21", "ai21-labs"], hosts: ["api.ai21.com"]),
     .init("groq", aliases: ["groq", "groqcloud"], hosts: ["api.groq.com"]),

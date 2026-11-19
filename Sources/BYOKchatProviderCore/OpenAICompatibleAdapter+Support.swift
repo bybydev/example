@@ -174,6 +174,17 @@ extension OpenAICompatibleAdapter {
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])
       }
+    case .mistral:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["reasoning_effort"] = .string("none")
+        } else if let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .openRouter:
       if let reasoning = request.options.reasoning {
         var object: [String: JSONValue] = [:]
@@ -226,11 +237,15 @@ extension OpenAICompatibleAdapter {
   private func requestMessageValues(_ message: ProviderMessage) -> [JSONValue] {
     if message.role == .tool {
       return (message.toolResults ?? []).map { result in
-        .object([
+        var object: [String: JSONValue] = [
           "role": .string("tool"),
           "tool_call_id": .string(result.callID),
           "content": .string(result.content.compactJSONString()),
-        ])
+        ]
+        if definition.behavior == .mistral {
+          object["name"] = .string(result.name)
+        }
+        return .object(object)
       }
     }
 
@@ -238,7 +253,11 @@ extension OpenAICompatibleAdapter {
     var object: [String: JSONValue] = ["role": .string(message.role.rawValue)]
 
     if attachments.isEmpty {
-      object["content"] = message.content.isEmpty ? .null : .string(message.content)
+      if definition.behavior == .mistral {
+        object["content"] = .string(message.content)
+      } else {
+        object["content"] = message.content.isEmpty ? .null : .string(message.content)
+      }
     } else {
       var parts: [JSONValue] = []
       if !message.content.isEmpty {

@@ -15,6 +15,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case zAI = "zai"
   case moonshot
   case minimax
+  case mistral
   case openRouter
   case nvidia
   case openAICompatible
@@ -22,7 +23,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   /// The catalog order used for provider pickers and lists. `.openAICompatible`
   /// is excluded: user-defined servers are configured, not catalogued.
   public static var catalog: [ProviderKind] {
-    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .openRouter, .nvidia]
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia]
   }
 
   /// The canonical provider ID for built-in kinds; `.openAICompatible` has no
@@ -37,6 +38,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     case .zAI: "zai"
     case .moonshot: "moonshot"
     case .minimax: "minimax"
+    case .mistral: "mistral"
     case .openRouter: "openrouter"
     case .nvidia: "nvidia"
     case .openAICompatible: nil
@@ -106,6 +108,7 @@ public extension ProviderKind {
     case .zAI: "Z.ai"
     case .moonshot: "Moonshot AI"
     case .minimax: "MiniMax"
+    case .mistral: "Mistral AI"
     case .openRouter: "OpenRouter"
     case .nvidia: "NVIDIA"
     case .openAICompatible: ""
@@ -117,7 +120,7 @@ public extension ProviderKind {
     case .anthropic: .anthropicMessages
     case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .deepSeek, .zAI, .moonshot, .minimax, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -125,7 +128,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .openRouter, .nvidia: .bearer
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia: .bearer
     case .openAICompatible: .userChoice
     }
   }
@@ -139,6 +142,7 @@ public extension ProviderKind {
     case .zAI: .fixed(chat: "/chat/completions", models: "/models")
     case .moonshot: .fixed(chat: "/chat/completions", models: "/models")
     case .minimax: .fixed(chat: "/chat/completions", models: "/models")
+    case .mistral: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
     case .nvidia: .fixed(chat: "/chat/completions", models: nil)
     case .openAICompatible: .userEditable
@@ -165,6 +169,7 @@ public extension ProviderKind {
     case .zAI: .brand(assetName: "provider.zai")
     case .moonshot: .brand(assetName: "provider.moonshot")
     case .minimax: .brand(assetName: "provider.minimax")
+    case .mistral: .brand(assetName: "provider.mistral")
     case .openRouter: .brand(assetName: "provider.openrouter")
     case .nvidia: .brand(assetName: "provider.nvidia")
     case .openAICompatible: .monogram
@@ -177,14 +182,14 @@ public extension ProviderKind {
     switch self {
     case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
-    case .openai, .zAI, .moonshot, .minimax, .openRouter, .nvidia, .openAICompatible: nil
+    case .openai, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: nil
     }
   }
 
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .openRouter, .nvidia, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: .combined
     }
   }
 
@@ -369,6 +374,27 @@ public extension ProviderKind {
           contextWindow: 1_000_000, maxOutputTokens: 512_000,
           supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "tools"],
           inputModalities: ["text", "image"]),
+      ]
+    case .mistral:
+      [
+        .init(
+          providerID: "mistral", id: "mistral-large-4-0", displayName: "Mistral Large 4",
+          contextWindow: 1_048_576,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"],
+          inputModalities: ["text", "image"]),
+        .init(
+          providerID: "mistral", id: "mistral-small-2603", displayName: "Mistral Small 4",
+          contextWindow: 262_144,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"],
+          inputModalities: ["text", "image"]),
+        .init(
+          providerID: "mistral", id: "devstral-2512", displayName: "Devstral 2",
+          contextWindow: 262_144,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"]),
+        .init(
+          providerID: "mistral", id: "codestral-2508", displayName: "Codestral",
+          contextWindow: 262_144,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"]),
       ]
     case .openRouter:
       [
@@ -586,6 +612,7 @@ public extension ProviderKind {
     case .zAI: URL(string: "https://api.z.ai/api/paas/v4")
     case .moonshot: URL(string: "https://api.moonshot.ai/v1")
     case .minimax: URL(string: "https://api.minimax.io/v1")
+    case .mistral: URL(string: "https://api.mistral.ai/v1")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
     case .nvidia: URL(string: "https://integrate.api.nvidia.com/v1")
     case .openAICompatible: nil
@@ -601,6 +628,7 @@ public extension ProviderKind {
     case .zAI: .zAI
     case .moonshot: .moonshot
     case .minimax: .minimax
+    case .mistral: .mistral
     case .openRouter: .openRouter
     case .nvidia: .nvidia
     case .openAICompatible: .genericOpenAICompatible
