@@ -127,7 +127,10 @@ extension OpenAICompatibleAdapter {
           || normalizedModelID.hasPrefix("kimi-k2.6")
           || normalizedModelID.hasPrefix("kimi-k2.5")))
     if !suppressesSamplingParameters {
-      if let value = request.options.temperature { body["temperature"] = .number(value) }
+      if let value = request.options.temperature {
+        let temperature = definition.behavior == .minimax ? min(max(value, 0.01), 1.0) : value
+        body["temperature"] = .number(temperature)
+      }
       if let value = request.options.topP { body["top_p"] = .number(value) }
     }
     if let value = request.options.maxOutputTokens {
@@ -153,6 +156,19 @@ extension OpenAICompatibleAdapter {
           body["thinking"] = .object(["type": .string("disabled")])
         } else if let effort = reasoning.effort {
           body["reasoning_effort"] = .string(effort.rawValue)
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
+    case .minimax:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["thinking"] = .object(["type": .string("disabled")])
+        } else if let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        } else if reasoning.enabled == true {
+          body["thinking"] = .object(["type": .string("adaptive")])
         }
       }
       if streaming {
@@ -260,7 +276,7 @@ extension OpenAICompatibleAdapter {
     }
 
     if let calls = message.toolCalls, !calls.isEmpty {
-      if definition.behavior == .moonshot,
+      if (definition.behavior == .moonshot || definition.behavior == .minimax),
         message.role == .assistant,
         let reasoning = message.reasoning,
         !reasoning.isEmpty

@@ -7,6 +7,7 @@ func usageDisplayName(_ raw: String) -> String {
   case "deepseek": "DeepSeek"
   case "zai": "Z.ai"
   case "moonshot": "Moonshot AI"
+  case "minimax": "MiniMax"
   case "anthropic": "Anthropic"
   case "gemini": "Gemini"
   case "nvidia": "NVIDIA"

@@ -28,7 +28,7 @@ public enum BYOKProductAnalyticsEvent: String, CaseIterable, Sendable {
 
 /// Only fixed categories may be uploaded; never content or resource identifiers.
 public enum BYOKProductAnalyticsDimension: String, Sendable {
-  case anthropic, openai, xai, gemini, deepseek, zai, moonshot, openrouter, nvidia, custom
+  case anthropic, openai, xai, gemini, deepseek, zai, moonshot, minimax, openrouter, nvidia, custom
   case image, file, mixed
   case message, code, diagram, reasoning
   case providers, library, projects, mcp, analytics, settings, themes
@@ -44,6 +44,7 @@ public enum BYOKProductAnalyticsDimension: String, Sendable {
     case .deepSeek: self = .deepseek
     case .zAI: self = .zai
     case .moonshot: self = .moonshot
+    case .minimax: self = .minimax
     case .openRouter: self = .openrouter
     case .nvidia: self = .nvidia
     case .openAICompatible: self = .custom

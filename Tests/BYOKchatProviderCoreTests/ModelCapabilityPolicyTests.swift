@@ -119,6 +119,20 @@ struct ModelCapabilityPolicyTests {
     let kimiK25 = ModelCapabilityResolver.reasoningControl(kind: .moonshot, modelID: "kimi-k2.5")
     #expect(kimiK25.choices == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.max)])
     #expect(kimiK25.normalize(.init(enabled: false))?.enabled == false)
+
+    let m31Flash = ModelCapabilityResolver.reasoningControl(kind: .minimax, modelID: "MiniMax-M3.1-Flash")
+    #expect(
+      m31Flash.choices
+        == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh), .effort(.max)]
+    )
+    #expect(m31Flash.label(for: nil) == "Default (Max)")
+    #expect(m31Flash.normalize(.init(enabled: false)) == nil)
+    #expect(m31Flash.normalize(.init(enabled: true, effort: .xhigh))?.effort == .xhigh)
+
+    let m3 = ModelCapabilityResolver.reasoningControl(kind: .minimax, modelID: "MiniMax-M3")
+    #expect(m3.choices == [.providerDefault, .off, .on])
+    #expect(m3.normalize(.init(enabled: false))?.enabled == false)
+    #expect(m3.normalize(.init(enabled: true, effort: .high)) == nil)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

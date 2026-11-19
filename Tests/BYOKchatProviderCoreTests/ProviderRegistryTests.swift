@@ -8,7 +8,7 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["openai", "xai", "deepseek", "zai", "moonshot", "openrouter", "nvidia", "anthropic", "gemini"]
+      == ["openai", "xai", "deepseek", "zai", "moonshot", "minimax", "openrouter", "nvidia", "anthropic", "gemini"]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
@@ -90,6 +90,26 @@ import Testing
   #expect(ProviderKind.moonshot.defaultProviderID == "moonshot")
   #expect(ProviderKind.moonshot.logo == .brand(assetName: "provider.moonshot"))
   #expect(ProviderKind.moonshot.reasoningDefault == nil)
+
+  let minimax = try #require(definitions.first { $0.id == "minimax" })
+  #expect(minimax.defaultBaseURL.absoluteString == "https://api.minimax.io/v1")
+  #expect(minimax.apiFamily == .openAIChatCompletions)
+  #expect(minimax.behavior == .minimax)
+  #expect(minimax.authentication == .bearer)
+  #expect(minimax.modelsPath == "/models")
+  #expect(minimax.chatCompletionsPath == "/chat/completions")
+  #expect(minimax.kind == .minimax)
+  #expect(minimax.seedModels.map(\.id) == ["MiniMax-M3.1-Flash", "MiniMax-M3"])
+  let m31Flash = try #require(minimax.seedModels.first)
+  #expect(m31Flash.id == "MiniMax-M3.1-Flash")
+  #expect(m31Flash.contextWindow == 1_000_000)
+  #expect(m31Flash.maxOutputTokens == 512_000)
+  #expect(m31Flash.inputModalities.contains("image"))
+
+  #expect(ProviderKind.catalog.contains(.minimax))
+  #expect(ProviderKind.minimax.defaultProviderID == "minimax")
+  #expect(ProviderKind.minimax.logo == .brand(assetName: "provider.minimax"))
+  #expect(ProviderKind.minimax.reasoningDefault == nil)
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5-5" })

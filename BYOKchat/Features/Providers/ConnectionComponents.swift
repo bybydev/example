@@ -100,7 +100,9 @@ enum ProviderLogoCatalog {
       "moonshot", aliases: ["moonshot", "moonshot-ai", "kimi"],
       hosts: ["api.moonshot.ai", "api.moonshot.cn"]),
     .init("siliconflow", aliases: ["siliconflow", "silicon-cloud"], hosts: ["api.siliconflow.cn"]),
-    .init("minimax", aliases: ["minimax"], hosts: ["api.minimax.io", "api.minimaxi.com"]),
+    .init(
+      "minimax", aliases: ["minimax", "minimax-ai"],
+      hosts: ["api.minimax.io", "api.minimaxi.com", "api.minimax.chat"]),
     .init(
       "zai", aliases: ["zai", "z-ai", "zhipu", "chatglm", "glm"],
       hosts: ["api.z.ai", "open.bigmodel.cn"]),

@@ -276,6 +276,30 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "kimi-k3.1-pro", model: nil) == nil)
 }
 
+@Test func minimaxPricingResolvesForGlobalEndpointWithLongContextTier() throws {
+  let account = ProviderAccount(kind: .minimax, id: "mm", providerID: "minimax", label: "MiniMax")
+  let flash = try #require(ModelPriceResolver.resolve(account: account, modelID: "MiniMax-M3.1-Flash", model: nil))
+  #expect(flash.source == "bundledCatalog")
+  #expect(flash.rates.input == "0.15")
+  #expect(flash.rates.output == "0.6")
+  #expect(flash.rates.cachedInput == "0.015")
+
+  let m3 = try #require(ModelPriceResolver.resolve(account: account, modelID: "MiniMax-M3", model: nil))
+  #expect(m3.rates.input == "0.3")
+  #expect(m3.rates.output == "1.2")
+  #expect(m3.rates.cachedInput == "0.06")
+  let longRates = m3.rates(for: ProviderUsage(inputTokens: 600_000, outputTokens: 1_000))
+  #expect(longRates.input == "0.6")
+  #expect(longRates.output == "2.4")
+  #expect(longRates.cachedInput == "0.12")
+
+  let chinaAccount = ProviderAccount(
+    kind: .minimax, id: "mm-cn", providerID: "minimax", label: "MiniMax CN",
+    baseURLOverride: URL(string: "https://api.minimaxi.com/v1")!
+  )
+  #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "MiniMax-M3.1-Flash", model: nil) == nil)
+}
+
 @Test func timePricingRejectsCrossedBucketsEvenWithMatchingEndpoints() throws {
   let start = try #require(ISO8601DateFormatter().date(from: "2026-10-07T00:30:00Z"))
   let end = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:30:00Z"))

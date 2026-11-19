@@ -294,6 +294,35 @@
         "output": "15",
         "cachedInput": "0.3"
       }
+    },
+    {
+      "provider": "minimax",
+      "modelIDs": [
+        "MiniMax-M3.1-Flash"
+      ],
+      "sourceURL": "https://platform.minimax.io/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-11-19",
+      "rates": {
+        "input": "0.15",
+        "output": "0.6",
+        "cachedInput": "0.015"
+      }
+    },
+    {
+      "provider": "minimax",
+      "modelIDs": [
+        "MiniMax-M3"
+      ],
+      "sourceURL": "https://platform.minimax.io/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-11-19",
+      "rates": {
+        "input": "0.3",
+        "output": "1.2",
+        "cachedInput": "0.06"
+      },
+      "longContextThreshold": 512000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "2"
     }
   ]
 }

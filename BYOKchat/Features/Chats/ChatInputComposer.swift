@@ -645,6 +645,9 @@ enum ComposerTargetLabelFormatter {
       if token.first?.lowercased() == "k", token.dropFirst().first?.isNumber == true {
         return "K" + String(token.dropFirst())
       }
+      if token.first?.lowercased() == "m", token.dropFirst().first?.isNumber == true {
+        return "M" + String(token.dropFirst())
+      }
       return token
     }.joined(separator: " ")
   }
@@ -709,6 +712,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.deepSeekID: return "DS"
     case BuiltInProviders.zAIID: return "Z.ai"
     case BuiltInProviders.moonshotID: return "Moonshot"
+    case BuiltInProviders.minimaxID: return "MiniMax"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     default:

@@ -18,6 +18,7 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.deepSeekID,
         BuiltInProviders.zAIID,
         BuiltInProviders.moonshotID,
+        BuiltInProviders.minimaxID,
       ]
     )
   }

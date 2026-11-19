@@ -419,3 +419,129 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(root["thinking"] == nil)
   #expect(root["reasoning_effort"] == nil)
 }
+
+@Test func minimaxStreamSendsEffortClampsTemperatureAndPreservesToolReasoning() async throws {
+  let stream = """
+    data: {"id":"mm1","model":"MiniMax-M3.1-Flash","choices":[{"delta":{"reasoning_content":"Plan "},"finish_reason":null}]}
+
+    data: {"id":"mm1","model":"MiniMax-M3.1-Flash","choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}
+
+    data: {"id":"mm1","model":"MiniMax-M3.1-Flash","choices":[],"usage":{"prompt_tokens":30,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":10}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.minimax, transport: transport)
+  let call = ChatToolCall(id: "call_mm1", name: "lookup", arguments: .object(["q": .string("m3")]))
+  let result = ChatToolResult(callID: "call_mm1", name: "lookup", content: .string("ok"))
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "MiniMax-M3.1-Flash",
+      messages: [
+        .init(role: .user, content: "Check"),
+        .init(role: .assistant, content: "", reasoning: "Need tool", toolCalls: [call]),
+        .init(role: .tool, content: "", toolResults: [result]),
+      ],
+      options: .init(temperature: 0.0, topP: 0.95, reasoning: .init(enabled: true, effort: .xhigh))
+    ),
+    account: account(providerID: "minimax")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.minimax.io/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["thinking"] == nil)
+  #expect(root["reasoning_effort"] == .string("xhigh"))
+  #expect(root["temperature"] == .number(0.01))
+  #expect(root["top_p"] == .number(0.95))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+  if case .array(let messages)? = root["messages"],
+    case .object(let assistantMsg) = messages[1]
+  {
+    #expect(assistantMsg["reasoning_content"] == .string("Need tool"))
+  } else {
+    Issue.record("Missing assistant tool-call message")
+  }
+
+  #expect(events.contains(.reasoningDelta("Plan ")))
+  #expect(events.contains(.textDelta("Done")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Plan ")
+  #expect(response.text == "Done")
+  #expect(response.usage?.inputTokens == 30)
+  #expect(response.usage?.cachedInputTokens == 10)
+}
+
+@Test func minimaxReasoningToggleHonorsModelBoundaries() async throws {
+  let okResponse = Data(
+    #"{"id":"mm","model":"MiniMax-M3.1-Flash","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#.utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.minimax, transport: transport)
+
+  // M3.1-Flash cannot disable thinking: Off normalizes to provider default (omitted).
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "MiniMax-M3.1-Flash",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(temperature: 1.5, reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "minimax")
+  )
+  let flashBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let flashRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: flashBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(flashRoot["thinking"] == nil)
+  #expect(flashRoot["reasoning_effort"] == nil)
+  #expect(flashRoot["temperature"] == .number(1.0))
+
+  // Base M3 supports disabling thinking and explicit adaptive thinking.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "MiniMax-M3",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "minimax")
+  )
+  let m3OffBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let m3OffRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: m3OffBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(m3OffRoot["thinking"] == .object(["type": .string("disabled")]))
+  #expect(m3OffRoot["reasoning_effort"] == nil)
+
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "MiniMax-M3",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true))
+    ),
+    account: account(providerID: "minimax")
+  )
+  let m3OnBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let m3OnRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: m3OnBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(m3OnRoot["thinking"] == .object(["type": .string("adaptive")]))
+  #expect(m3OnRoot["reasoning_effort"] == nil)
+}

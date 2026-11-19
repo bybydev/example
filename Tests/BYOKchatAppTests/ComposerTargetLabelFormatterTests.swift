@@ -198,6 +198,29 @@ struct ComposerTargetLabelFormatterTests {
     )
     #expect(highspeed == "Kimi K3.1 Pro Highspeed")
   }
+
+  @Test("MiniMax models preserve MiniMax M-series casing and explicit effort")
+  func minimaxLabels() {
+    let flash = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.minimaxID,
+      providerName: "MiniMax",
+      modelName: "MiniMax-M3.1-Flash",
+      modelID: "MiniMax-M3.1-Flash",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .xhigh)
+    )
+    #expect(flash == "MiniMax M3.1 Flash · X-High")
+
+    let lowercased = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.minimaxID,
+      providerName: "MiniMax",
+      modelName: "minimax-m3",
+      modelID: "MiniMax-M3",
+      supportedParameters: ["thinking"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(lowercased == "MiniMax M3 · Off")
+  }
 }
 
 @Suite("Composer layout policy")

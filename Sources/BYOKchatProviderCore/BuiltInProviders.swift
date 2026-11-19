@@ -6,6 +6,7 @@ public enum BuiltInProviders {
   public static let deepSeekID: ProviderID = "deepseek"
   public static let zAIID: ProviderID = "zai"
   public static let moonshotID: ProviderID = "moonshot"
+  public static let minimaxID: ProviderID = "minimax"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let anthropicID: ProviderID = "anthropic"
@@ -86,6 +87,18 @@ public enum BuiltInProviders {
     seedModels: ProviderKind.moonshot.seedModels,
     isBuiltIn: true,
     kind: .moonshot
+  )
+
+  public static let minimax = ProviderDefinition(
+    id: minimaxID,
+    displayName: "MiniMax",
+    behavior: .minimax,
+    defaultBaseURL: URL(string: "https://api.minimax.io/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: ProviderKind.minimax.seedModels,
+    isBuiltIn: true,
+    kind: .minimax
   )
 
   public static let openRouter = ProviderDefinition(
@@ -190,5 +203,5 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, minimax, openRouter, nvidia, anthropic, gemini]
 }
