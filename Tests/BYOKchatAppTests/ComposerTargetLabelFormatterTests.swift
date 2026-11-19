@@ -152,6 +152,29 @@ struct ComposerTargetLabelFormatterTests {
     )
     #expect(label == "PE · supergptish large")
   }
+
+  @Test("Z.ai GLM models preserve GLM casing and explicit effort")
+  func zAILabels() {
+    let flagship = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.zAIID,
+      providerName: "Z.ai",
+      modelName: "glm-5.3-flash",
+      modelID: "glm-5.3-flash",
+      supportedParameters: ["thinking", "reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(flagship == "GLM-5.3 Flash · High")
+
+    let vision = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.zAIID,
+      providerName: "Z.ai",
+      modelName: "glm-5v-turbo",
+      modelID: "glm-5v-turbo",
+      supportedParameters: ["thinking"],
+      reasoning: nil
+    )
+    #expect(vision == "GLM-5V Turbo")
+  }
 }
 
 @Suite("Composer layout policy")

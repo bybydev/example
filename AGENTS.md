@@ -1,6 +1,6 @@
-- Must show plan and ask permission before edit.
-- Focus on iOS only, ignore macOS related code.
+- Focus on iOS app only, ignore macOS target.
 - Do not run build or tests.
+- Do not open xcode or iOS simulator.
 - All CI workflows must be triggered manually only.
-- Only commit and push if asked
+- Only commit and push if asked.
 - This project use xcodegen so don't edit xcodeproj directly

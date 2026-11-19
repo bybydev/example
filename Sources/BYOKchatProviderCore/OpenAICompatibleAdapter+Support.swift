@@ -130,7 +130,7 @@ extension OpenAICompatibleAdapter {
     }
 
     switch definition.behavior {
-    case .deepSeek:
+    case .deepSeek, .zAI:
       if let reasoning = request.options.reasoning {
         if let enabled = reasoning.enabled {
           body["thinking"] = .object(["type": .string(enabled ? "enabled" : "disabled")])

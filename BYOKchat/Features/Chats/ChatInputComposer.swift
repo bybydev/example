@@ -501,7 +501,7 @@ enum ComposerTargetLabelFormatter {
   /// Only match the beginning of the model name, not an arbitrary substring.
   private static let recognizableFamilies = [
     "gpt", "o1", "o3", "o4", "claude", "sonnet", "opus", "haiku",
-    "gemini", "deepseek", "qwen", "llama", "mistral", "grok", "kimi",
+    "gemini", "deepseek", "glm", "qwen", "llama", "mistral", "grok", "kimi",
     "nemotron", "phi", "command r", "minimax",
   ]
 
@@ -577,10 +577,12 @@ enum ComposerTargetLabelFormatter {
       text = String(text.split(separator: "/").last ?? Substring(text))
     }
 
-    // Normalize model-ID separators but preserve the familiar "GPT-5.x" spelling.
+    // Normalize model-ID separators but preserve the familiar "GPT-5.x" and "GLM-5.x" spellings.
     text = text.replacingOccurrences(of: "_", with: " ")
     if text.lowercased().hasPrefix("gpt-") {
       text = "GPT-" + String(text.dropFirst(4)).replacingOccurrences(of: "-", with: " ")
+    } else if text.lowercased().hasPrefix("glm-") {
+      text = "GLM-" + String(text.dropFirst(4)).replacingOccurrences(of: "-", with: " ")
     } else {
       text = text.replacingOccurrences(of: "-", with: " ")
     }
@@ -589,8 +591,8 @@ enum ComposerTargetLabelFormatter {
     // Strip vendor metadata, not the distinctive model family. On OpenRouter,
     // for example, "Claude" or "DeepSeek" must remain in the visible name.
     for prefix in [
-      "Google DeepMind", "Meta AI", "OpenAI", "Anthropic", "Google",
-      "Meta", "Alibaba", "NVIDIA",
+      "Google DeepMind", "Meta AI", "Zhipu AI", "OpenAI", "Anthropic", "Google",
+      "Meta", "Alibaba", "NVIDIA", "Zhipu", "Z.ai",
     ] {
       if let stripped = removingPrefix(text, prefix) {
         text = stripped
@@ -620,10 +622,11 @@ enum ComposerTargetLabelFormatter {
     // only to known family tokens, leaving version numbers and suffixes intact.
     let familyNames: [String: String] = [
       "claude": "Claude", "sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku",
-      "gemini": "Gemini", "deepseek": "DeepSeek", "gpt": "GPT", "qwen": "Qwen",
+      "gemini": "Gemini", "deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "qwen": "Qwen",
       "llama": "Llama", "mistral": "Mistral", "grok": "Grok",
       "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
-      "flash": "Flash", "pro": "Pro", "mini": "Mini", "nano": "Nano",
+      "flash": "Flash", "flashx": "FlashX", "air": "Air", "airx": "AirX",
+      "pro": "Pro", "mini": "Mini", "nano": "Nano",
       "turbo": "Turbo", "lite": "Lite", "preview": "Preview",
       "instruct": "Instruct", "reasoner": "Reasoner", "coder": "Coder",
       "chat": "Chat", "thinking": "Thinking", "sol": "Sol",
@@ -631,6 +634,11 @@ enum ComposerTargetLabelFormatter {
     return value.split(separator: " ").map { piece in
       let token = String(piece)
       if let styled = familyNames[token.lowercased()] { return styled }
+      if token.hasPrefix("GLM-"), token.hasSuffix("v"),
+        let beforeV = token.dropLast().last, beforeV.isNumber
+      {
+        return String(token.dropLast()) + "V"
+      }
       if token.first?.lowercased() == "v", token.dropFirst().first?.isNumber == true {
         return "V" + String(token.dropFirst())
       }
@@ -696,6 +704,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.openRouterID: return "OR"
     case BuiltInProviders.nvidiaID: return "NV"
     case BuiltInProviders.deepSeekID: return "DS"
+    case BuiltInProviders.zAIID: return "Z.ai"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     default:

@@ -4,6 +4,7 @@ public enum BuiltInProviders {
   public static let openAIID: ProviderID = "openai"
   public static let xAIID: ProviderID = "xai"
   public static let deepSeekID: ProviderID = "deepseek"
+  public static let zAIID: ProviderID = "zai"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let anthropicID: ProviderID = "anthropic"
@@ -60,6 +61,18 @@ public enum BuiltInProviders {
     ],
     isBuiltIn: true,
     kind: .deepSeek
+  )
+
+  public static let zAI = ProviderDefinition(
+    id: zAIID,
+    displayName: "Z.ai",
+    behavior: .zAI,
+    defaultBaseURL: URL(string: "https://api.z.ai/api/paas/v4")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: ProviderKind.zAI.seedModels,
+    isBuiltIn: true,
+    kind: .zAI
   )
 
   public static let openRouter = ProviderDefinition(
@@ -164,5 +177,5 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, xAI, deepSeek, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, xAI, deepSeek, zAI, openRouter, nvidia, anthropic, gemini]
 }

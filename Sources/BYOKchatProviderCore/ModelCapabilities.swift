@@ -335,6 +335,18 @@ public enum ModelCapabilityResolver {
       if id == "deepseek-flash" || id == "deepseek-pro" {
         return efforts([.low, .high, .max], defaultEffort: .high, off: "disabled")
       }
+    case .zAI:
+      if id.hasPrefix("glm-5.3") {
+        return efforts([.low, .high, .max], defaultEffort: .max)
+      }
+      if id.hasPrefix("glm-5.2") {
+        return efforts([.low, .high, .max], defaultEffort: .max, off: "disabled")
+      }
+      if id.hasPrefix("glm-5") || id.hasPrefix("glm-4.7")
+        || id.hasPrefix("glm-4.6") || id.hasPrefix("glm-4.5")
+      {
+        return .init(kind: .fixed, allowsOff: true, offWireValue: "disabled", source: .adapter)
+      }
     case .gemini:
       if id.hasPrefix("gemini-3-pro") { return efforts([.low, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.1-pro") { return efforts([.low, .medium, .high], defaultEffort: .high) }
@@ -401,6 +413,7 @@ extension ProviderDefinition {
     if let kind { return kind }
     switch behavior {
     case .deepSeek: return .deepSeek
+    case .zAI: return .zAI
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

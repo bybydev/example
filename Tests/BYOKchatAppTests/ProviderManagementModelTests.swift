@@ -303,6 +303,9 @@ struct ProviderLogoCatalogTests {
     #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.anthropic)
         == "provider.anthropic")
+    #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.zAI)
+        == "provider.zai")
   }
 
   @Test("Custom provider name resolves a prepared brand")

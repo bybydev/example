@@ -84,6 +84,26 @@ struct ModelCapabilityPolicyTests {
     #expect(pro.label(for: nil) == "Default (High)")
     let fixed = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-4.20-0309-reasoning")
     #expect(fixed.choices == [.providerDefault, .on])
+
+    let glm53 = ModelCapabilityResolver.reasoningControl(kind: .zAI, modelID: "glm-5.3")
+    #expect(glm53.choices == [.providerDefault, .effort(.low), .effort(.high), .effort(.max)])
+    #expect(glm53.label(for: nil) == "Default (Max)")
+    #expect(glm53.normalize(.init(enabled: false)) == nil)
+    #expect(glm53.normalize(.init(enabled: true, effort: .medium)) == nil)
+    #expect(glm53.normalize(.init(enabled: true, effort: .low))?.effort == .low)
+
+    let glm53Flash = ModelCapabilityResolver.reasoningControl(kind: .zAI, modelID: "glm-5.3-flash")
+    #expect(!glm53Flash.choices.contains(.off))
+    #expect(glm53Flash.efforts == [.low, .high, .max])
+
+    let glm52 = ModelCapabilityResolver.reasoningControl(kind: .zAI, modelID: "glm-5.2")
+    #expect(glm52.choices == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.max)])
+    #expect(glm52.normalize(.init(enabled: false))?.enabled == false)
+
+    let glm51 = ModelCapabilityResolver.reasoningControl(kind: .zAI, modelID: "glm-5.1")
+    #expect(glm51.choices == [.providerDefault, .off, .on])
+    #expect(glm51.normalize(.init(enabled: true, effort: .high)) == nil)
+    #expect(glm51.normalize(.init(enabled: false))?.enabled == false)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

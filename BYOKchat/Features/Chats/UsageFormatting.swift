@@ -5,6 +5,7 @@ func usageDisplayName(_ raw: String) -> String {
   switch raw.lowercased() {
   case "openrouter": "OpenRouter"
   case "deepseek": "DeepSeek"
+  case "zai": "Z.ai"
   case "anthropic": "Anthropic"
   case "gemini": "Gemini"
   case "nvidia": "NVIDIA"

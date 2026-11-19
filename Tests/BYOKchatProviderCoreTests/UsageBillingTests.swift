@@ -223,13 +223,32 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   let date = try #require(ISO8601DateFormatter().date(from: "2026-10-07T02:00:00Z"))
   let account = ProviderAccount(kind: .deepSeek, id: "d", providerID: "deepseek", label: "D")
   let peak = try #require(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: date))
-  #expect(peak.rates.input == "0.3" && peak.version == "2026-10-08:peak")
+  #expect(peak.rates.input == "0.3" && peak.version == "2026-11-19:peak")
   #expect(peak.timeRule != nil)
   let offPeakDate = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: offPeakDate)?.rates.input == "0.15")
   let gemini = ProviderAccount(kind: .gemini, id: "g", providerID: "gemini", label: "G")
   let expiry = try #require(ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-3.6-flash", model: nil, at: expiry) == nil)
+}
+
+@Test func zAIPricingResolvesForDefaultEndpointOnly() throws {
+  let account = ProviderAccount(kind: .zAI, id: "z", providerID: "zai", label: "Z.ai")
+  let glm53 = try #require(ModelPriceResolver.resolve(account: account, modelID: "glm-5.3", model: nil))
+  #expect(glm53.source == "bundledCatalog")
+  #expect(glm53.rates.input == "1.4")
+  #expect(glm53.rates.output == "4.4")
+  #expect(glm53.rates.cachedInput == "0.26")
+
+  let glm53Flash = try #require(ModelPriceResolver.resolve(account: account, modelID: "glm-5.3-flash", model: nil))
+  #expect(glm53Flash.rates.input == "0.15")
+  #expect(glm53Flash.rates.output == "0.5")
+
+  let codingPlanAccount = ProviderAccount(
+    kind: .zAI, id: "z-coding", providerID: "zai", label: "Z.ai Coding",
+    baseURLOverride: URL(string: "https://api.z.ai/api/coding/paas/v4")!
+  )
+  #expect(ModelPriceResolver.resolve(account: codingPlanAccount, modelID: "glm-5.3", model: nil) == nil)
 }
 
 @Test func timePricingRejectsCrossedBucketsEvenWithMatchingEndpoints() throws {

@@ -16,6 +16,7 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.nvidiaID,
         BuiltInProviders.openRouterID,
         BuiltInProviders.deepSeekID,
+        BuiltInProviders.zAIID,
       ]
     )
   }

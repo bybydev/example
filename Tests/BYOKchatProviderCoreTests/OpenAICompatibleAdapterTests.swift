@@ -242,3 +242,93 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   let receipt = ChatBilling.requestBilling(metadata: [:], usage: .init(inputTokens: 100, outputTokens: 10), pricing: pricing)
   #expect(!receipt.isComplete && receipt.costUSD != nil)
 }
+
+@Test func zAIStreamSendsThinkingAndEffortAndSeparatesReasoning() async throws {
+  let stream = """
+    data: {"id":"z1","model":"glm-5.3","choices":[{"delta":{"reasoning_content":"Plan "},"finish_reason":null}]}
+
+    data: {"id":"z1","model":"glm-5.3","choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":6,"prompt_tokens_details":{"cached_tokens":4}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.zAI, transport: transport)
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "glm-5.3",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(temperature: 0.7, reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "zai")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.z.ai/api/paas/v4/chat/completions")
+  let body = try #require(sent.httpBody)
+  let decoded = try JSONDecoder.provider.decode(JSONValue.self, from: body)
+  guard case .object(let root) = decoded else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["thinking"] == .object(["type": .string("enabled")]))
+  #expect(root["reasoning_effort"] == .string("high"))
+  #expect(root["temperature"] == .number(0.7))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+
+  #expect(events.contains(.reasoningDelta("Plan ")))
+  #expect(events.contains(.textDelta("Done")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Plan ")
+  #expect(response.text == "Done")
+  #expect(response.usage?.inputTokens == 12)
+  #expect(response.usage?.cachedInputTokens == 4)
+}
+
+@Test func zAIForcedThinkingNeverSendsDisabledWhileGLM52AllowsDisabling() async throws {
+  let okResponse = Data(
+    #"{"id":"z","model":"glm-5.3","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#.utf8
+  )
+  let transport53 = MockTransport(data: okResponse)
+  let adapter53 = OpenAICompatibleAdapter(definition: BuiltInProviders.zAI, transport: transport53)
+  _ = try await adapter53.generate(
+    request: ProviderRequest(
+      model: "glm-5.3",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "zai")
+  )
+  let body53 = try #require(await transport53.lastRequest()?.httpBody)
+  guard case .object(let root53) = try JSONDecoder.provider.decode(JSONValue.self, from: body53) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root53["thinking"] == nil)
+  #expect(root53["reasoning_effort"] == nil)
+
+  let transport52 = MockTransport(data: okResponse)
+  let adapter52 = OpenAICompatibleAdapter(definition: BuiltInProviders.zAI, transport: transport52)
+  _ = try await adapter52.generate(
+    request: ProviderRequest(
+      model: "glm-5.2",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "zai")
+  )
+  let body52 = try #require(await transport52.lastRequest()?.httpBody)
+  guard case .object(let root52) = try JSONDecoder.provider.decode(JSONValue.self, from: body52) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root52["thinking"] == .object(["type": .string("disabled")]))
+  #expect(root52["reasoning_effort"] == nil)
+}
