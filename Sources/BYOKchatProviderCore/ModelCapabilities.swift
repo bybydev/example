@@ -377,12 +377,22 @@ public enum ModelCapabilityResolver {
         return .init(kind: .fixed, source: .adapter)
       }
     case .gemini:
+      if id.contains("image") || id.contains("tts") || id.contains("live")
+        || id.contains("transcribe")
+      {
+        return .init()
+      }
+      if id.hasPrefix("gemini-4-hydrogen") || id.hasPrefix("gemini-4-neon") {
+        return efforts([.low, .medium, .high, .xhigh], defaultEffort: .high)
+      }
+      if id.hasPrefix("gemini-4") {
+        return efforts([.low, .medium, .high], defaultEffort: .medium)
+      }
       if id.hasPrefix("gemini-3-pro") { return efforts([.low, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.1-pro") { return efforts([.low, .medium, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.8-flash") || id.hasPrefix("gemini-3.7-flash") {
         return efforts([.low, .medium, .high])
       }
-      if id.contains("image") { return .init() }
       if id.hasPrefix("gemini-3.1-flash-lite") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .minimal) }
       if id.hasPrefix("gemini-3-flash") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.5-flash-lite") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .minimal) }

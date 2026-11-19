@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-11-19",
+  "version": "2026-11-20",
   "currency": "USD",
   "units": "USD per 1000000 tokens",
   "entries": [
@@ -81,6 +81,79 @@
         "cachedInput": "0.075"
       },
       "validUntil": "2027-01-01",
+      "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-3.8-flash"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "0.75",
+        "output": "3.75",
+        "cachedInput": "0.075"
+      },
+      "validUntil": "2027-01-01",
+      "contextNote": "Introductory paid-tier token estimate through 2026-12-31; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-4-carbon"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.1"
+      },
+      "validUntil": "2026-12-01",
+      "contextNote": "Introductory paid-tier token estimate through 2026-11-30; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-4-argon"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.1"
+      },
+      "validUntil": "2026-12-01",
+      "contextNote": "Introductory paid-tier token estimate through 2026-11-30; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-4-neon"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "3",
+        "output": "15",
+        "cachedInput": "0.15"
+      },
+      "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+    },
+    {
+      "provider": "gemini",
+      "modelIDs": [
+        "gemini-4-hydrogen"
+      ],
+      "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "1.5",
+        "output": "7.5",
+        "cachedInput": "0.075"
+      },
       "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
     },
     {

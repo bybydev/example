@@ -174,6 +174,10 @@ import Testing
   #expect(flash.contextWindow == 1_048_576)
   #expect(flash.maxOutputTokens == 65_536)
   #expect(flash.supportedParameters.contains("temperature") == false)
+  #expect(
+    Set(gemini.seedModels.map(\.id))
+      == ["gemini-3.8-flash", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon", "gemini-4-hydrogen"]
+  )
 }
 
 @Test func duplicateProviderIsRejected() throws {

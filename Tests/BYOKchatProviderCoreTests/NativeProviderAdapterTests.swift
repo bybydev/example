@@ -371,3 +371,135 @@ private func nativeAccount(_ providerID: ProviderID) -> ResolvedProviderAccount 
   #expect(response.usage?.reasoningTokens == 20)
   #expect(response.usage?.hasUnpricedCharges == true)
 }
+
+@Test func gemini4HydrogenSendsThinkingLevelXHighAndStripsSamplingParameters() async throws {
+  let response = Data(
+    """
+    {"responseId":"resp_g4","modelVersion":"gemini-4-hydrogen","candidates":[{"content":{"role":"model","parts":[{"text":"Plan","thought":true},{"text":"Done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"thoughtsTokenCount":18}}
+    """.utf8
+  )
+  let transport = NativeMockTransport(data: response)
+  let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: transport)
+
+  let result = try await adapter.generate(
+    request: ProviderRequest(
+      model: "gemini-4-hydrogen",
+      messages: [.init(role: .user, content: "Solve this.")],
+      options: .init(
+        temperature: 0.5,
+        topP: 0.8,
+        maxOutputTokens: 1_024,
+        reasoning: .init(enabled: true, effort: .xhigh)
+      )
+    ),
+    account: nativeAccount("gemini")
+  )
+  #expect(result.text == "Done")
+  #expect(result.reasoning == "Plan")
+  #expect(result.usage?.outputTokens == 18)
+  #expect(result.usage?.reasoningTokens == 18)
+
+  let request = try #require(await transport.lastRequest())
+  let bytes = try #require(request.httpBody)
+  let root = try #require(JSONDecoder.provider.decode(JSONValue.self, from: bytes).objectValue)
+  let generation = try #require(root["generationConfig"]?.objectValue)
+  let thinking = try #require(generation["thinkingConfig"]?.objectValue)
+  #expect(generation["temperature"] == nil)
+  #expect(generation["topP"] == nil)
+  #expect(thinking["includeThoughts"] == .bool(true))
+  #expect(thinking["thinkingLevel"] == .string("xhigh"))
+  #expect(thinking["thinkingBudget"] == nil)
+}
+
+private actor QueuedMockTransport: ProviderHTTPTransport {
+  var responses: [ProviderHTTPResponse]
+  var requests: [URLRequest] = []
+
+  init(responses: [ProviderHTTPResponse]) {
+    self.responses = responses
+  }
+
+  func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
+    requests.append(request)
+    return responses.removeFirst()
+  }
+
+  func stream(for request: URLRequest) async throws -> ProviderHTTPByteStream {
+    requests.append(request)
+    return ProviderHTTPByteStream(
+      statusCode: 200,
+      headers: [:],
+      chunks: AsyncThrowingStream { $0.finish() }
+    )
+  }
+
+  func recordedRequests() -> [URLRequest] { requests }
+}
+
+@Test func geminiModelDiscoveryPaginatesAndPrefersCallableResourceName() async throws {
+  let page1 = Data(
+    """
+    {"models":[{"name":"models/gemini-3.1-pro-preview","baseModelId":"gemini-3.1-pro","displayName":"Gemini 3.1 Pro Preview","inputTokenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateContent"],"thinking":true}],"nextPageToken":"page-2"}
+    """.utf8
+  )
+  let page2 = Data(
+    """
+    {"models":[{"name":"models/gemini-4-neon","baseModelId":"","displayName":"Gemini 4 Neon","inputTokenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateContent"],"thinking":true}]}
+    """.utf8
+  )
+  let transport = QueuedMockTransport(responses: [
+    ProviderHTTPResponse(statusCode: 200, headers: [:], data: page1),
+    ProviderHTTPResponse(statusCode: 200, headers: [:], data: page2),
+  ])
+  let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: transport)
+  let models = try await adapter.listModels(account: nativeAccount("gemini"))
+
+  let preview = try #require(models.first { $0.id == "gemini-3.1-pro-preview" })
+  #expect(preview.supportedParameters.contains("thinkingConfig"))
+  let neon = try #require(models.first { $0.id == "gemini-4-neon" })
+  #expect(neon.supportedParameters.contains("temperature") == false)
+  #expect(neon.supportedParameters.contains("topP") == false)
+
+  let requests = await transport.recordedRequests()
+  #expect(requests.count == 2)
+  #expect(requests[0].url?.query?.contains("pageSize=1000") == true)
+  #expect(requests[1].url?.query?.contains("pageToken=page-2") == true)
+}
+
+@Test func geminiSurfacesPromptFeedbackBlockReasonInGenerateAndStream() async throws {
+  let blockedJSON = Data(
+    """
+    {"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":"Blocked for safety."}}
+    """.utf8
+  )
+  let generateAdapter = GeminiGenerateContentAdapter(
+    definition: BuiltInProviders.gemini,
+    transport: NativeMockTransport(data: blockedJSON)
+  )
+  do {
+    _ = try await generateAdapter.generate(
+      request: .init(model: "gemini-4-carbon", messages: [.init(role: .user, content: "Test")]),
+      account: nativeAccount("gemini")
+    )
+    Issue.record("Expected promptFeedback block error in generate")
+  } catch ProviderError.provider(_, let message) {
+    #expect(message.contains("SAFETY"))
+    #expect(message.contains("Blocked for safety."))
+  }
+
+  let sse = "data: {\"promptFeedback\":{\"blockReason\":\"PROHIBITED_CONTENT\"}}\n\n"
+  let streamAdapter = GeminiGenerateContentAdapter(
+    definition: BuiltInProviders.gemini,
+    transport: NativeMockTransport(streamChunks: [Data(sse.utf8)])
+  )
+  do {
+    for try await _ in streamAdapter.stream(
+      request: .init(model: "gemini-4-carbon", messages: [.init(role: .user, content: "Test")]),
+      account: nativeAccount("gemini")
+    ) {}
+    Issue.record("Expected promptFeedback block error in stream")
+  } catch ProviderError.midStreamProvider(let code, let message) {
+    #expect(code == "PROHIBITED_CONTENT")
+    #expect(message.contains("PROHIBITED_CONTENT"))
+  }
+}

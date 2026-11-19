@@ -82,6 +82,37 @@ struct ModelCapabilityPolicyTests {
     let pro = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-3-pro-preview")
     #expect(pro.normalize(.init(enabled: true, effort: .medium)) == nil)
     #expect(pro.label(for: nil) == "Default (High)")
+
+    let gemini4Carbon = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-4-carbon")
+    #expect(gemini4Carbon.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(gemini4Carbon.label(for: nil) == "Default (Medium)")
+    #expect(gemini4Carbon.normalize(.init(enabled: false)) == nil)
+    #expect(gemini4Carbon.normalize(.init(enabled: true, effort: .xhigh)) == nil)
+    #expect(gemini4Carbon.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let gemini4Argon = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-4-argon")
+    #expect(gemini4Argon.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(gemini4Argon.label(for: nil) == "Default (Medium)")
+
+    let gemini4Hydrogen = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-4-hydrogen")
+    #expect(
+      gemini4Hydrogen.choices
+        == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh)]
+    )
+    #expect(gemini4Hydrogen.label(for: nil) == "Default (High)")
+    #expect(gemini4Hydrogen.normalize(.init(enabled: true, effort: .minimal)) == nil)
+    #expect(gemini4Hydrogen.normalize(.init(enabled: true, effort: .xhigh))?.effort == .xhigh)
+
+    let gemini4Neon = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-4-neon")
+    #expect(
+      gemini4Neon.choices
+        == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh)]
+    )
+    #expect(gemini4Neon.label(for: nil) == "Default (High)")
+
+    let geminiImage = ModelCapabilityResolver.reasoningControl(kind: .gemini, modelID: "gemini-3-pro-image-preview")
+    #expect(geminiImage.kind == .unknown)
+    #expect(geminiImage.choices.isEmpty)
     let fixed = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-4.20-0309-reasoning")
     #expect(fixed.choices == [.providerDefault, .on])
 

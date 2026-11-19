@@ -223,13 +223,54 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   let date = try #require(ISO8601DateFormatter().date(from: "2026-10-07T02:00:00Z"))
   let account = ProviderAccount(kind: .deepSeek, id: "d", providerID: "deepseek", label: "D")
   let peak = try #require(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: date))
-  #expect(peak.rates.input == "0.3" && peak.version == "2026-11-19:peak")
+  #expect(peak.rates.input == "0.3" && peak.version == "2026-11-20:peak")
   #expect(peak.timeRule != nil)
   let offPeakDate = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: offPeakDate)?.rates.input == "0.15")
   let gemini = ProviderAccount(kind: .gemini, id: "g", providerID: "gemini", label: "G")
   let expiry = try #require(ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-3.6-flash", model: nil, at: expiry) == nil)
+}
+
+@Test func geminiCurrentCatalogPricingResolvesAndRespectsExpiry() throws {
+  let active = try #require(ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z"))
+  let carbonExpiry = try #require(ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"))
+  let flashExpiry = try #require(ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z"))
+  let gemini = ProviderAccount(kind: .gemini, id: "g", providerID: "gemini", label: "Gemini")
+
+  let flash38 = try #require(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-3.8-flash", model: nil, at: active))
+  #expect(flash38.rates.input == "0.75")
+  #expect(flash38.rates.output == "3.75")
+  #expect(flash38.rates.cachedInput == "0.075")
+  #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-3.8-flash", model: nil, at: flashExpiry) == nil)
+
+  let carbon = try #require(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-carbon", model: nil, at: active))
+  #expect(carbon.rates.input == "2")
+  #expect(carbon.rates.output == "10")
+  #expect(carbon.rates.cachedInput == "0.1")
+  #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-carbon", model: nil, at: carbonExpiry) == nil)
+
+  let argon = try #require(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-argon", model: nil, at: active))
+  #expect(argon.rates.input == "2")
+  #expect(argon.rates.output == "10")
+  #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-argon", model: nil, at: carbonExpiry) == nil)
+  #expect(
+    ModelPriceResolver.responseModelMatches(
+      account: gemini,
+      requestedModelID: "gemini-4-carbon",
+      responseModelID: "gemini-4-argon"
+    ) == false
+  )
+
+  let neon = try #require(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-neon", model: nil, at: active))
+  #expect(neon.rates.input == "3")
+  #expect(neon.rates.output == "15")
+  #expect(neon.rates.cachedInput == "0.15")
+
+  let hydrogen = try #require(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-4-hydrogen", model: nil, at: active))
+  #expect(hydrogen.rates.input == "1.5")
+  #expect(hydrogen.rates.output == "7.5")
+  #expect(hydrogen.rates.cachedInput == "0.075")
 }
 
 @Test func zAIPricingResolvesForDefaultEndpointOnly() throws {

@@ -139,13 +139,13 @@ enum BYOKScreenshotFixtures {
     )
     let gemini = ProviderModel(
       providerID: BuiltInProviders.geminiID,
-      id: "gemini-3.6-flash",
-      displayName: "Gemini 3.6 Flash",
+      id: "gemini-3.8-flash",
+      displayName: "Gemini 3.8 Flash",
       contextWindow: 1_048_576,
       contextWindowKind: .inputOnly,
       maxOutputTokens: 65_536,
       supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
-      inputModalities: ["text", "image", "file"]
+      inputModalities: ["text", "image", "audio", "file"]
     )
 
     let accounts = [
@@ -389,7 +389,7 @@ enum BYOKScreenshotFixtures {
       updatedAt: assistantDate,
       providerID: BuiltInProviders.geminiID,
       accountID: geminiAccountID,
-      modelID: "gemini-3.6-flash",
+      modelID: "gemini-3.8-flash",
       messages: [
         ChatMessage(
           id: "screenshot-travel-user",
@@ -400,7 +400,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.geminiID,
           accountID: geminiAccountID,
-          modelID: "gemini-3.6-flash"
+          modelID: "gemini-3.8-flash"
         ),
         ChatMessage(
           id: "screenshot-travel-assistant",
@@ -411,7 +411,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.geminiID,
           accountID: geminiAccountID,
-          modelID: "gemini-3.6-flash",
+          modelID: "gemini-3.8-flash",
           finishReason: "stop",
           usage: ProviderUsage(inputTokens: 980, outputTokens: 241),
           metadata: [
@@ -479,7 +479,7 @@ enum BYOKScreenshotFixtures {
         symbolName: "airplane",
         accentID: "orange",
         accountID: geminiAccountID,
-        modelID: "gemini-3.6-flash",
+        modelID: "gemini-3.8-flash",
         instructions: "Prefer calm neighborhoods, simple transit, and flexible evenings.",
         createdAt: now.addingTimeInterval(-86_400 * 6),
         updatedAt: now.addingTimeInterval(-12_900)

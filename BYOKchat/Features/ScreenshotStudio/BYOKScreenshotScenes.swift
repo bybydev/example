@@ -238,7 +238,7 @@ private struct BYOKStudioProvidersFixture: View {
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "Gemini",
-            detail: "Gemini 3.6 Flash",
+            detail: "Gemini 3.8 Flash",
             symbol: "diamond.fill"
           )
           BYOKStudioProviderTile(

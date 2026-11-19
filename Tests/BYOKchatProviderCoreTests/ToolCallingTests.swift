@@ -333,6 +333,98 @@ import Testing
   #expect(signatures["call_1"] == .string("sig-gemini"))
 }
 
+@Test func geminiHandlesOptionalFunctionCallIDWithoutSendingSyntheticIDOnWire() async throws {
+  let responseData = Data(
+    """
+    {"responseId":"resp_noid","modelVersion":"gemini-2.5-flash","candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}]},"finishReason":"STOP"}]}
+    """.utf8
+  )
+  let transport = ToolMockTransport(data: responseData)
+  let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini, transport: transport)
+
+  let response = try await adapter.generate(
+    request: ProviderRequest(
+      model: "gemini-2.5-flash",
+      messages: [.init(role: .user, content: "Weather?")],
+      tools: [weatherTool()]
+    ),
+    account: toolAccount("gemini")
+  )
+  let call = try #require(response.toolCalls.first)
+  #expect(call.name == "get_weather")
+  #expect(call.arguments == .object(["city": .string("Paris")]))
+  #expect(!call.id.isEmpty)
+
+  let result = ChatToolResult(
+    callID: call.id,
+    name: call.name,
+    content: .object(["temperature": .number(21)])
+  )
+  let body = adapter.requestBody(
+    ProviderRequest(
+      model: "gemini-2.5-flash",
+      messages: [
+        .init(role: .user, content: "Weather?"),
+        .init(role: .assistant, content: "", toolCalls: [call]),
+        .init(role: .tool, content: "", toolResults: [result]),
+      ],
+      tools: [weatherTool()]
+    )
+  )
+  guard case .array(let contents)? = body["contents"], contents.count == 3,
+    case .object(let modelContent) = contents[1],
+    case .array(let modelParts)? = modelContent["parts"],
+    case .object(let callPart) = modelParts[0],
+    case .object(let functionCall)? = callPart["functionCall"],
+    case .object(let userContent) = contents[2],
+    case .array(let resultParts)? = userContent["parts"],
+    case .object(let resultPart) = resultParts[0],
+    case .object(let functionResponse)? = resultPart["functionResponse"]
+  else {
+    Issue.record("Missing Gemini optional-ID function history")
+    return
+  }
+  #expect(functionCall["id"] == nil)
+  #expect(callPart["thoughtSignature"] == nil)
+  #expect(functionResponse["id"] == nil)
+  #expect(functionResponse["name"] == .string("get_weather"))
+}
+
+@Test func geminiCrossProviderToolHistoryInjectsSkipThoughtSignatureValidatorForGemini3And4() {
+  let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini)
+  let firstCall = ChatToolCall(id: "openai_call_1", name: "get_weather", arguments: .object(["city": .string("Paris")]))
+  let secondCall = ChatToolCall(id: "openai_call_2", name: "get_weather", arguments: .object(["city": .string("Tokyo")]))
+  let body = adapter.requestBody(
+    ProviderRequest(
+      model: "gemini-4-carbon",
+      messages: [
+        .init(role: .user, content: "Weather?"),
+        .init(role: .assistant, content: "", toolCalls: [firstCall, secondCall]),
+        .init(
+          role: .tool,
+          content: "",
+          toolResults: [
+            ChatToolResult(callID: firstCall.id, name: firstCall.name, content: .object(["temperature": .number(21)])),
+            ChatToolResult(callID: secondCall.id, name: secondCall.name, content: .object(["temperature": .number(19)])),
+          ]
+        ),
+      ],
+      tools: [weatherTool()]
+    )
+  )
+  guard case .array(let contents)? = body["contents"], contents.count == 3,
+    case .object(let modelContent) = contents[1],
+    case .array(let modelParts)? = modelContent["parts"], modelParts.count == 2,
+    case .object(let firstPart) = modelParts[0],
+    case .object(let secondPart) = modelParts[1]
+  else {
+    Issue.record("Missing Gemini 4 parallel function call parts")
+    return
+  }
+  #expect(firstPart["thoughtSignature"] == .string("skip_thought_signature_validator"))
+  #expect(secondPart["thoughtSignature"] == nil)
+}
+
 @Test func chatRuntimeExecutesToolPersistsRoundAndContinuesModel() async throws {
   let providerWorkspace = ProviderWorkspaceStore(
     persistence: InMemoryProviderWorkspacePersistence()

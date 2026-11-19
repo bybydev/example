@@ -525,7 +525,7 @@ public extension ProviderKind {
           providerID: "gemini", id: "gemini-3.8-flash", displayName: "Gemini 3.8 Flash",
           contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
-          inputModalities: ["text", "image", "file"]),
+          inputModalities: ["text", "image", "audio", "file"]),
         .init(
           providerID: "gemini", id: "gemini-4-carbon", displayName: "Gemini 4 Carbon",
           contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
@@ -533,6 +533,11 @@ public extension ProviderKind {
           inputModalities: ["text", "image", "audio", "file"]),
         .init(
           providerID: "gemini", id: "gemini-4-argon", displayName: "Gemini 4 Argon",
+          contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
+          supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
+          inputModalities: ["text", "image", "audio", "file"]),
+        .init(
+          providerID: "gemini", id: "gemini-4-neon", displayName: "Gemini 4 Neon",
           contextWindow: 1_048_576, contextWindowKind: .inputOnly, maxOutputTokens: 65_536,
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
           inputModalities: ["text", "image", "audio", "file"]),

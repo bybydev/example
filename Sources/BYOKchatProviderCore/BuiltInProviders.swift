@@ -202,18 +202,7 @@ public enum BuiltInProviders {
     chatCompletionsPath: "/models",
     modelsPath: "/models",
     authentication: .header(name: "x-goog-api-key"),
-    seedModels: [
-      .init(
-        providerID: geminiID,
-        id: "gemini-3.8-flash",
-        displayName: "Gemini 3.8 Flash",
-        contextWindow: 1_048_576,
-        contextWindowKind: .inputOnly,
-        maxOutputTokens: 65_536,
-        supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
-        inputModalities: ["text", "image", "file"]
-      )
-    ],
+    seedModels: ProviderKind.gemini.seedModels,
     isBuiltIn: true,
     kind: .gemini
   )

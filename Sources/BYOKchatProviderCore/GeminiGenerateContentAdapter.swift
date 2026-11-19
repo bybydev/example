@@ -28,27 +28,52 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     )
   }
 
+  private static let syntheticCallIDPrefix = "gemini-call-"
+  private static let skipThoughtSignatureValidator = "skip_thought_signature_validator"
+
   public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     guard let path = definition.modelsPath else { return definition.seedModels }
-    let url = try ProviderHTTP.endpoint(
+    let baseEndpoint = try ProviderHTTP.endpoint(
       baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
       path: path,
       allowsLocalHTTP: definition.allowsLocalHTTP
     )
-    let request = try makeRequest(url: url, method: "GET", account: account, streaming: false)
-    let response = try await transport.data(for: request)
-    try validate(response)
 
-    let decoded: GeminiModelsResponse
-    do {
-      decoded = try JSONDecoder.provider.decode(GeminiModelsResponse.self, from: response.data)
-    } catch {
-      throw ProviderError.invalidResponse
+    var wires: [GeminiModelWire] = []
+    var seenTokens: Set<String> = []
+    var pageToken: String?
+    let maxPages = 20
+
+    for _ in 0..<maxPages {
+      let pageURL = try modelsPageURL(baseEndpoint: baseEndpoint, pageToken: pageToken)
+      let request = try makeRequest(url: pageURL, method: "GET", account: account, streaming: false)
+      let response = try await transport.data(for: request)
+      try validate(response)
+
+      let decoded: GeminiModelsResponse
+      do {
+        decoded = try JSONDecoder.provider.decode(GeminiModelsResponse.self, from: response.data)
+      } catch {
+        throw ProviderError.invalidResponse
+      }
+      wires.append(contentsOf: decoded.models)
+
+      guard let next = decoded.nextPageToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !next.isEmpty,
+        seenTokens.insert(next).inserted
+      else {
+        break
+      }
+      pageToken = next
     }
 
-    let discovered = decoded.models.compactMap { wire -> ProviderModel? in
+    let discovered = wires.compactMap { wire -> ProviderModel? in
       guard wire.supportedGenerationMethods?.contains("generateContent") != false else { return nil }
-      let id = wire.baseModelID ?? wire.name.replacingOccurrences(of: "models/", with: "")
+      let strippedName = wire.name
+        .replacingOccurrences(of: "models/", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      let fallbackBaseID = wire.baseModelID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let id = !strippedName.isEmpty ? strippedName : fallbackBaseID
       guard !id.isEmpty else { return nil }
       var evidence = ModelCapabilityEvidence()
       evidence.set(.reasoning, supported: wire.thinking, source: .discovery)
@@ -104,6 +129,9 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     }
     if let error = decoded.error {
       throw ProviderError.provider(status: error.code ?? response.statusCode, message: error.message)
+    }
+    if let blocked = promptBlockError(decoded.promptFeedback) {
+      throw ProviderError.provider(status: response.statusCode, message: blocked.message)
     }
 
     let output = try collectOutput(decoded)
@@ -260,6 +288,9 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     if let error = decoded.error {
       throw ProviderError.midStreamProvider(code: error.status, message: error.message)
     }
+    if let blocked = promptBlockError(decoded.promptFeedback) {
+      throw ProviderError.midStreamProvider(code: blocked.code, message: blocked.message)
+    }
 
     if let value = decoded.responseID { responseID = value }
     if let value = decoded.modelVersion { modelVersion = value }
@@ -279,7 +310,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         }
       }
       if let functionCall = part.functionCall {
-        let call = try normalizedToolCall(functionCall)
+        let call = try normalizedToolCall(functionCall, index: toolCalls.count)
         if let index = toolCalls.firstIndex(where: { $0.id == call.id }) {
           toolCalls[index] = call
         } else {
@@ -361,8 +392,13 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
       .filter { !$0.isEmpty }
       .joined(separator: "\n\n")
 
+    let needsThoughtSignature = requiresThoughtSignature(request.model.rawValue)
     var body: [String: JSONValue] = [
-      "contents": .array(request.messages.filter { $0.role != .system }.map(messageValue))
+      "contents": .array(
+        request.messages
+          .filter { $0.role != .system }
+          .map { messageValue($0, requiresThoughtSignature: needsThoughtSignature) }
+      )
     ]
     if !system.isEmpty {
       body["systemInstruction"] = .object([
@@ -417,7 +453,10 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     return body
   }
 
-  private func messageValue(_ message: ProviderMessage) -> JSONValue {
+  private func messageValue(
+    _ message: ProviderMessage,
+    requiresThoughtSignature: Bool
+  ) -> JSONValue {
     if message.role == .tool {
       let parts = (message.toolResults ?? []).map { result -> JSONValue in
         let response: JSONValue
@@ -428,13 +467,14 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         } else {
           response = .object(["result": result.content])
         }
-        return .object([
-          "functionResponse": .object([
-            "name": .string(result.name),
-            "id": .string(result.callID),
-            "response": response,
-          ])
-        ])
+        var functionResponse: [String: JSONValue] = [
+          "name": .string(result.name),
+          "response": response,
+        ]
+        if !result.callID.hasPrefix(Self.syntheticCallIDPrefix) {
+          functionResponse["id"] = .string(result.callID)
+        }
+        return .object(["functionResponse": .object(functionResponse)])
       }
       return .object(["role": .string("user"), "parts": .array(parts)])
     }
@@ -471,20 +511,47 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     if !message.content.isEmpty {
       parts.append(.object(["text": .string(message.content)]))
     }
-    for call in message.toolCalls ?? [] {
+    let calls = message.toolCalls ?? []
+    let hasStoredSignature = calls.contains { call in
+      if case .string(let signature)? = signatures[call.id], !signature.isEmpty { return true }
+      return false
+    }
+    for (index, call) in calls.enumerated() {
+      var functionCall: [String: JSONValue] = [
+        "name": .string(call.name),
+        "args": call.arguments,
+      ]
+      if !call.id.hasPrefix(Self.syntheticCallIDPrefix) {
+        functionCall["id"] = .string(call.id)
+      }
       var part: [String: JSONValue] = [
-        "functionCall": .object([
-          "name": .string(call.name),
-          "args": call.arguments,
-          "id": .string(call.id),
-        ])
+        "functionCall": .object(functionCall)
       ]
       if case .string(let signature)? = signatures[call.id], !signature.isEmpty {
         part["thoughtSignature"] = .string(signature)
+      } else if requiresThoughtSignature, !hasStoredSignature, index == 0 {
+        part["thoughtSignature"] = .string(Self.skipThoughtSignatureValidator)
       }
       parts.append(.object(part))
     }
     return .object(["role": .string(role), "parts": .array(parts)])
+  }
+
+  private func modelsPageURL(baseEndpoint: URL, pageToken: String?) throws -> URL {
+    guard var components = URLComponents(url: baseEndpoint, resolvingAgainstBaseURL: false) else {
+      throw ProviderError.invalidEndpoint
+    }
+    var items = components.queryItems ?? []
+    if !items.contains(where: { $0.name == "pageSize" }) {
+      items.append(URLQueryItem(name: "pageSize", value: "1000"))
+    }
+    if let pageToken {
+      items.removeAll { $0.name == "pageToken" }
+      items.append(URLQueryItem(name: "pageToken", value: pageToken))
+    }
+    components.queryItems = items
+    guard let result = components.url else { throw ProviderError.invalidEndpoint }
+    return result
   }
 
   private func generationURL(baseURL: URL, model: ModelID, streaming: Bool) throws -> URL {
@@ -565,7 +632,7 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
         if part.thought == true { reasoning += value } else { text += value }
       }
       if let functionCall = part.functionCall {
-        let call = try normalizedToolCall(functionCall)
+        let call = try normalizedToolCall(functionCall, index: toolCalls.count)
         toolCalls.append(call)
         if let signature = part.thoughtSignature, !signature.isEmpty {
           signatures[call.id] = signature
@@ -575,11 +642,30 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
     return (text, reasoning, toolCalls, signatures)
   }
 
-  private func normalizedToolCall(_ value: GeminiFunctionCall) throws -> ChatToolCall {
+  private func normalizedToolCall(_ value: GeminiFunctionCall, index: Int) throws -> ChatToolCall {
     guard let name = value.name, !name.isEmpty else { throw ProviderError.invalidResponse }
-    let id = value.id?.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let id, !id.isEmpty else { throw ProviderError.invalidResponse }
+    let rawID = value.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let id: String
+    if let rawID, !rawID.isEmpty {
+      id = rawID
+    } else {
+      id = "\(Self.syntheticCallIDPrefix)\(index)-\(UUID().uuidString.lowercased())"
+    }
     return ChatToolCall(id: id, name: name, arguments: value.args ?? .object([:]))
+  }
+
+  private func promptBlockError(_ feedback: GeminiPromptFeedback?) -> (code: String, message: String)? {
+    guard let reason = feedback?.blockReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !reason.isEmpty
+    else { return nil }
+    let detail = feedback?.blockReasonMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let message: String
+    if let detail, !detail.isEmpty {
+      message = "Prompt blocked by Gemini (\(reason)): \(detail)"
+    } else {
+      message = "Prompt blocked by Gemini (\(reason))."
+    }
+    return (reason, message)
   }
 
   private func geminiContinuation(
@@ -609,12 +695,32 @@ public struct GeminiGenerateContentAdapter: ProviderAdapter, Sendable {
 
   private func supportsSamplingParameters(_ modelID: String) -> Bool {
     let id = modelID.lowercased()
-    return !id.hasPrefix("gemini-3.6") && !id.hasPrefix("gemini-3.5-flash-lite")
+    return !id.hasPrefix("gemini-4")
+      && !id.hasPrefix("gemini-3.8")
+      && !id.hasPrefix("gemini-3.7")
+      && !id.hasPrefix("gemini-3.6")
+      && !id.hasPrefix("gemini-3.5-flash-lite")
+  }
+
+  private func requiresThoughtSignature(_ modelID: String) -> Bool {
+    let id = modelID.lowercased()
+    return id.hasPrefix("gemini-3") || id.hasPrefix("gemini-4")
   }
 }
 
 private struct GeminiModelsResponse: Decodable {
   var models: [GeminiModelWire]
+  var nextPageToken: String?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    models = try container.decodeIfPresent([GeminiModelWire].self, forKey: .models) ?? []
+    nextPageToken = try container.decodeIfPresent(String.self, forKey: .nextPageToken)
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case models, nextPageToken
+  }
 }
 
 private struct GeminiModelWire: Decodable {
@@ -634,6 +740,7 @@ private struct GeminiModelWire: Decodable {
 
 private struct GeminiGenerateResponse: Decodable {
   var candidates: [GeminiCandidate]
+  var promptFeedback: GeminiPromptFeedback?
   var usageMetadata: GeminiUsage?
   var modelVersion: String?
   var responseID: String?
@@ -642,6 +749,7 @@ private struct GeminiGenerateResponse: Decodable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     candidates = try container.decodeIfPresent([GeminiCandidate].self, forKey: .candidates) ?? []
+    promptFeedback = try container.decodeIfPresent(GeminiPromptFeedback.self, forKey: .promptFeedback)
     usageMetadata = try container.decodeIfPresent(GeminiUsage.self, forKey: .usageMetadata)
     modelVersion = try container.decodeIfPresent(String.self, forKey: .modelVersion)
     responseID = try container.decodeIfPresent(String.self, forKey: .responseID)
@@ -649,9 +757,14 @@ private struct GeminiGenerateResponse: Decodable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case candidates, usageMetadata, modelVersion, error
+    case candidates, promptFeedback, usageMetadata, modelVersion, error
     case responseID = "responseId"
   }
+}
+
+private struct GeminiPromptFeedback: Decodable {
+  var blockReason: String?
+  var blockReasonMessage: String?
 }
 
 private struct GeminiCandidate: Decodable {
@@ -688,9 +801,17 @@ private struct GeminiUsage: Decodable {
   var thoughtsTokenCount: Int?
 
   var normalized: ProviderUsage {
-    ProviderUsage(
+    let outputTokens: Int?
+    if let candidatesTokenCount {
+      outputTokens = candidatesTokenCount + (thoughtsTokenCount ?? 0)
+    } else if let thoughtsTokenCount {
+      outputTokens = thoughtsTokenCount
+    } else {
+      outputTokens = nil
+    }
+    return ProviderUsage(
       inputTokens: promptTokenCount,
-      outputTokens: candidatesTokenCount.map { $0 + (thoughtsTokenCount ?? 0) },
+      outputTokens: outputTokens,
       cachedInputTokens: cachedContentTokenCount ?? (promptTokenCount == nil ? nil : 0),
       reasoningTokens: thoughtsTokenCount,
       hasUnpricedCharges: (cachedContentTokenCount ?? 0) > 0 ? true : nil
