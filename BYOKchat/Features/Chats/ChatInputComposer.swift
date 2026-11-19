@@ -718,6 +718,8 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.mistralID: return "Mistral"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
+    case BuiltInProviders.ollamaID: return "Ollama"
+    case BuiltInProviders.lmStudioID: return "LM Studio"
     default:
       let words = displayName
         .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })

@@ -12,6 +12,8 @@ func usageDisplayName(_ raw: String) -> String {
   case "anthropic": "Anthropic"
   case "gemini": "Gemini"
   case "nvidia": "NVIDIA"
+  case "ollama": "Ollama"
+  case "lmstudio": "LM Studio"
   default: raw
   }
 }

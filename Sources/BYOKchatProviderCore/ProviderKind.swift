@@ -18,12 +18,24 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case mistral
   case openRouter
   case nvidia
+  case ollama
+  case lmStudio = "lmstudio"
   case openAICompatible
 
-  /// The catalog order used for provider pickers and lists. `.openAICompatible`
+  /// Cloud providers shown under the "Cloud Providers" group in pickers.
+  public static var cloudCatalog: [ProviderKind] {
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia]
+  }
+
+  /// Local and custom providers shown under the "Local & Custom" group in pickers.
+  public static var localAndCustomCatalog: [ProviderKind] {
+    [.ollama, .lmStudio, .openAICompatible]
+  }
+
+  /// The catalog order used for built-in provider lists. `.openAICompatible`
   /// is excluded: user-defined servers are configured, not catalogued.
   public static var catalog: [ProviderKind] {
-    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia]
+    cloudCatalog + [.ollama, .lmStudio]
   }
 
   /// The canonical provider ID for built-in kinds; `.openAICompatible` has no
@@ -41,6 +53,8 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     case .mistral: "mistral"
     case .openRouter: "openrouter"
     case .nvidia: "nvidia"
+    case .ollama: "ollama"
+    case .lmStudio: "lmstudio"
     case .openAICompatible: nil
     }
   }
@@ -111,6 +125,8 @@ public extension ProviderKind {
     case .mistral: "Mistral AI"
     case .openRouter: "OpenRouter"
     case .nvidia: "NVIDIA"
+    case .ollama: "Ollama"
+    case .lmStudio: "LM Studio"
     case .openAICompatible: ""
     }
   }
@@ -120,7 +136,7 @@ public extension ProviderKind {
     case .anthropic: .anthropicMessages
     case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -128,9 +144,52 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia: .bearer
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio: .bearer
     case .openAICompatible: .userChoice
     }
+  }
+
+  /// Whether an account of this kind must store an API key to send requests.
+  /// Local and custom OpenAI-compatible servers treat credentials as optional.
+  var requiresCredential: Bool {
+    switch self {
+    case .ollama, .lmStudio, .openAICompatible: false
+    default: true
+    }
+  }
+
+  /// Whether cleartext `http://` is allowed for private/LAN hosts.
+  var allowsLocalHTTP: Bool {
+    switch self {
+    case .ollama, .lmStudio, .openAICompatible: true
+    default: false
+    }
+  }
+
+  /// True for first-class local server kinds (Ollama, LM Studio).
+  var isLocalServer: Bool {
+    switch self {
+    case .ollama, .lmStudio: true
+    default: false
+    }
+  }
+
+  /// Auto-appends `/v1` when an Ollama or LM Studio base URL omits a path.
+  func normalizedBaseURL(_ url: URL) -> URL {
+    guard isLocalServer,
+      var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else {
+      return url
+    }
+    if components.path.isEmpty || components.path == "/" {
+      components.path = "/v1"
+      return components.url ?? url
+    }
+    if components.path == "/v1/" {
+      components.path = "/v1"
+      return components.url ?? url
+    }
+    return url
   }
 
   var pathSpec: ProviderPathSpec {
@@ -145,6 +204,7 @@ public extension ProviderKind {
     case .mistral: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
     case .nvidia: .fixed(chat: "/chat/completions", models: nil)
+    case .ollama, .lmStudio: .fixed(chat: "/chat/completions", models: "/models")
     case .openAICompatible: .userEditable
     }
   }
@@ -172,6 +232,8 @@ public extension ProviderKind {
     case .mistral: .brand(assetName: "provider.mistral")
     case .openRouter: .brand(assetName: "provider.openrouter")
     case .nvidia: .brand(assetName: "provider.nvidia")
+    case .ollama: .brand(assetName: "provider.ollama")
+    case .lmStudio: .brand(assetName: "provider.lmstudio")
     case .openAICompatible: .monogram
     }
   }
@@ -182,14 +244,14 @@ public extension ProviderKind {
     switch self {
     case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
-    case .openai, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: nil
+    case .openai, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: nil
     }
   }
 
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .combined
     }
   }
 
@@ -480,7 +542,7 @@ public extension ProviderKind {
           supportedParameters: ["maxOutputTokens", "thinkingConfig", "tools"],
           inputModalities: ["text", "image", "audio", "file"]),
       ]
-    case .openAICompatible:
+    case .ollama, .lmStudio, .openAICompatible:
       []
     }
   }
@@ -566,7 +628,8 @@ public extension ProviderKind {
         authentication: authentication ?? .bearer,
         seedModels: (seedModelIDs ?? []).map {
           .init(providerID: providerID, id: ModelID(rawValue: $0), displayName: $0)
-        }
+        },
+        kind: .openAICompatible
       )
     default:
       let chat: String
@@ -615,6 +678,8 @@ public extension ProviderKind {
     case .mistral: URL(string: "https://api.mistral.ai/v1")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
     case .nvidia: URL(string: "https://integrate.api.nvidia.com/v1")
+    case .ollama: URL(string: "http://localhost:11434/v1")
+    case .lmStudio: URL(string: "http://localhost:1234/v1")
     case .openAICompatible: nil
     }
   }
@@ -631,7 +696,7 @@ public extension ProviderKind {
     case .mistral: .mistral
     case .openRouter: .openRouter
     case .nvidia: .nvidia
-    case .openAICompatible: .genericOpenAICompatible
+    case .ollama, .lmStudio, .openAICompatible: .genericOpenAICompatible
     }
   }
 }

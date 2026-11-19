@@ -699,3 +699,79 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(!models.contains { $0.id == "mistral-embed" })
   #expect(!models.contains { $0.id == "mistral-legacy-archived" })
 }
+
+@Test func localProvidersSupportOptionalAPIKeyAndAutoV1Path() async throws {
+  let modelsJSON = Data(#"{"object":"list","data":[{"id":"qwen3:8b","name":"Qwen 3 8B"}]}"#.utf8)
+  let transport = MockTransport(data: modelsJSON)
+  let ollamaAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.ollama, transport: transport)
+  let localAccount = ResolvedProviderAccount(
+    kind: .ollama,
+    id: "ollama-local",
+    providerID: BuiltInProviders.ollamaID,
+    label: "Ollama",
+    apiKey: nil,
+    baseURLOverride: URL(string: "http://192.168.1.42:11434")
+  )
+
+  let models = try await ollamaAdapter.listModels(account: localAccount)
+  #expect(models.map(\.id) == ["qwen3:8b"])
+  let discoveryRequest = try #require(await transport.lastRequest())
+  #expect(discoveryRequest.url?.absoluteString == "http://192.168.1.42:11434/v1/models")
+  #expect(discoveryRequest.value(forHTTPHeaderField: "Authorization") == nil)
+  #expect(discoveryRequest.timeoutInterval == 120)
+
+  let chatJSON = Data(
+    #"{"id":"local-1","model":"qwen3:8b","choices":[{"message":{"content":"Hi"},"finish_reason":"stop"}]}"#
+      .utf8
+  )
+  let chatTransport = MockTransport(data: chatJSON)
+  let lmAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.lmStudio, transport: chatTransport)
+  let noKeyLM = ResolvedProviderAccount(
+    kind: .lmStudio,
+    id: "lm-local",
+    providerID: BuiltInProviders.lmStudioID,
+    label: "LM Studio",
+    apiKey: "",
+    baseURLOverride: URL(string: "http://macbook.local:1234")
+  )
+  let noKeyResponse = try await lmAdapter.generate(
+    request: ProviderRequest(model: "qwen3:8b", messages: [.init(role: .user, content: "Hello")]),
+    account: noKeyLM
+  )
+  #expect(noKeyResponse.text == "Hi")
+  let noKeyReq = try #require(await chatTransport.lastRequest())
+  #expect(noKeyReq.url?.absoluteString == "http://macbook.local:1234/v1/chat/completions")
+  #expect(noKeyReq.value(forHTTPHeaderField: "Authorization") == nil)
+
+  var keyedLM = noKeyLM
+  keyedLM.apiKey = "lm-secret"
+  _ = try await lmAdapter.generate(
+    request: ProviderRequest(model: "qwen3:8b", messages: [.init(role: .user, content: "Hello")]),
+    account: keyedLM
+  )
+  let keyedReq = try #require(await chatTransport.lastRequest())
+  #expect(keyedReq.value(forHTTPHeaderField: "Authorization") == "Bearer lm-secret")
+
+  let customAccount = ResolvedProviderAccount(
+    kind: .openAICompatible,
+    id: "custom-local",
+    providerID: "custom-local",
+    label: "vLLM",
+    apiKey: nil,
+    baseURLOverride: URL(string: "http://homelab:8000/v1"),
+    chatCompletionsPath: "/chat/completions",
+    modelsPath: "/models",
+    authChoice: .bearer
+  )
+  let customAdapter = OpenAICompatibleAdapter(
+    definition: customAccount.definition, transport: chatTransport)
+  _ = try await customAdapter.generate(
+    request: ProviderRequest(model: "llama-3", messages: [.init(role: .user, content: "Hello")]),
+    account: customAccount
+  )
+  let customReq = try #require(await chatTransport.lastRequest())
+  #expect(customReq.url?.absoluteString == "http://homelab:8000/v1/chat/completions")
+  #expect(customReq.value(forHTTPHeaderField: "Authorization") == nil)
+}

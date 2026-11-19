@@ -262,6 +262,87 @@ struct ProviderManagementModelTests {
     #expect(environment.model.errorMessage == nil)
   }
 
+  @Test("Local Ollama connection auto-appends /v1, tests via /models, and is ready without API key")
+  func ollamaReadyWithoutAPIKeyAndAutoV1() async throws {
+    let transport = EditorDiscoveryTransport()
+    let environment = try await makeEnvironment(transport: transport)
+    let draft = ResolvedProviderAccount(
+      kind: .ollama,
+      id: "",
+      providerID: BuiltInProviders.ollamaID,
+      label: "Ollama",
+      apiKey: nil,
+      baseURLOverride: URL(string: "http://192.168.1.25:11434")
+    )
+    let discovered = try await environment.model.previewModels(for: draft)
+    #expect(discovered.map(\.id) == ["new-model"])
+    let previewRequest = try #require(await transport.lastRequest())
+    #expect(previewRequest.url?.absoluteString == "http://192.168.1.25:11434/v1/models")
+    #expect(previewRequest.value(forHTTPHeaderField: "Authorization") == nil)
+
+    let created = await environment.model.createConnection(
+      kind: .ollama,
+      label: "Ollama",
+      credential: "",
+      baseURL: "http://192.168.1.25:11434",
+      defaultModel: "new-model",
+      headers: [:],
+      metadata: [:],
+      discoveredModels: discovered
+    )
+    let id = try #require(created)
+    let account = try await environment.workspace.account(id: id)
+    #expect(account.baseURLOverride?.absoluteString == "http://192.168.1.25:11434/v1")
+    #expect(environment.model.isReady(account))
+  }
+
+  @Test("LM Studio optional API key can be cleared on edit and remains ready")
+  func lmStudioOptionalCredentialCanBeCleared() async throws {
+    let environment = try await makeEnvironment()
+    let created = await environment.model.createConnection(
+      kind: .lmStudio,
+      label: "LM Studio",
+      credential: "optional-token",
+      baseURL: "http://macbook.local:1234",
+      defaultModel: "qwen3",
+      headers: [:],
+      metadata: [:]
+    )
+    let id = try #require(created)
+    #expect(environment.model.credentialAccountIDs.contains(id))
+
+    let updated = await environment.model.updateAccount(
+      accountID: id,
+      clearCredential: true,
+      baseURLString: "http://macbook.local:1234"
+    )
+    #expect(updated)
+    #expect(!environment.model.credentialAccountIDs.contains(id))
+    let account = try await environment.workspace.account(id: id)
+    #expect(account.baseURLOverride?.absoluteString == "http://macbook.local:1234/v1")
+    #expect(environment.model.isReady(account))
+  }
+
+  @Test("Custom bearer connection is ready without an API key")
+  func customBearerReadyWithoutAPIKey() async throws {
+    let environment = try await makeEnvironment()
+    let created = await environment.model.createConnection(
+      kind: .openAICompatible,
+      label: "vLLM",
+      credential: "",
+      baseURL: "http://homelab:8000/v1",
+      defaultModel: "llama-3",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: "/models",
+      authChoice: .bearer
+    )
+    let id = try #require(created)
+    let account = try await environment.workspace.account(id: id)
+    #expect(environment.model.isReady(account))
+  }
+
   private func makeEnvironment(
     transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
   ) async throws -> (
@@ -315,6 +396,12 @@ struct ProviderLogoCatalogTests {
     #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.mistral)
         == "provider.mistral")
+    #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.ollama)
+        == "provider.ollama")
+    #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.lmStudio)
+        == "provider.lmstudio")
   }
 
   @Test("Custom provider name resolves a prepared brand")

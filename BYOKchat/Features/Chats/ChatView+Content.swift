@@ -372,7 +372,7 @@ extension ChatView {
     }
     guard
       providers.credentialAccountIDs.contains(account.id)
-        || providers.provider(for: account.providerID)?.authentication == ProviderAuthentication.none
+        || !(providers.provider(for: account.providerID)?.requiresCredential ?? account.definition.requiresCredential)
     else {
       return "The selected account is missing its credential."
     }
@@ -1159,10 +1159,7 @@ extension ChatView {
 
   func providerRequiresCredential(_ providerID: ProviderID) -> Bool {
     guard let provider = providers.provider(for: providerID) else { return true }
-    switch provider.authentication {
-    case .none: return false
-    case .bearer, .header: return true
-    }
+    return provider.requiresCredential
   }
 }
 

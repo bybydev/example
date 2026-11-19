@@ -2,10 +2,21 @@ import Foundation
 
 extension ProviderDefinition {
   public var allowsLocalHTTP: Bool {
+    if let kind, kind.allowsLocalHTTP {
+      return true
+    }
     guard defaultBaseURL.scheme?.lowercased() == "http", let host = defaultBaseURL.host else {
       return false
     }
     return ProviderHTTP.isPrivateNetworkHost(host)
+  }
+
+  public var requiresCredential: Bool {
+    guard authentication != .none else { return false }
+    if let kind {
+      return kind.requiresCredential
+    }
+    return isBuiltIn
   }
 
   public init(

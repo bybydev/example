@@ -8,7 +8,10 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "openrouter", "nvidia", "anthropic", "gemini"]
+      == [
+        "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "openrouter",
+        "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
+      ]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
@@ -132,6 +135,33 @@ import Testing
   #expect(ProviderKind.mistral.defaultProviderID == "mistral")
   #expect(ProviderKind.mistral.logo == .brand(assetName: "provider.mistral"))
   #expect(ProviderKind.mistral.reasoningDefault == nil)
+
+  let ollama = try #require(definitions.first { $0.id == "ollama" })
+  #expect(ollama.defaultBaseURL.absoluteString == "http://localhost:11434/v1")
+  #expect(ollama.apiFamily == .openAIChatCompletions)
+  #expect(ollama.behavior == .genericOpenAICompatible)
+  #expect(ollama.authentication == .bearer)
+  #expect(ollama.modelsPath == "/models")
+  #expect(ollama.chatCompletionsPath == "/chat/completions")
+  #expect(ollama.kind == .ollama)
+  #expect(ollama.allowsLocalHTTP)
+  #expect(!ollama.requiresCredential)
+  #expect(ollama.seedModels.isEmpty)
+  #expect(ProviderKind.localAndCustomCatalog == [.ollama, .lmStudio, .openAICompatible])
+  #expect(ProviderKind.ollama.logo == .brand(assetName: "provider.ollama"))
+
+  let lmStudio = try #require(definitions.first { $0.id == "lmstudio" })
+  #expect(lmStudio.defaultBaseURL.absoluteString == "http://localhost:1234/v1")
+  #expect(lmStudio.apiFamily == .openAIChatCompletions)
+  #expect(lmStudio.behavior == .genericOpenAICompatible)
+  #expect(lmStudio.authentication == .bearer)
+  #expect(lmStudio.modelsPath == "/models")
+  #expect(lmStudio.chatCompletionsPath == "/chat/completions")
+  #expect(lmStudio.kind == .lmStudio)
+  #expect(lmStudio.allowsLocalHTTP)
+  #expect(!lmStudio.requiresCredential)
+  #expect(lmStudio.seedModels.isEmpty)
+  #expect(ProviderKind.lmStudio.logo == .brand(assetName: "provider.lmstudio"))
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5-5" })

@@ -177,10 +177,7 @@ func connectionStatus(model: ProviderManagementModel, account: ProviderAccount) 
 }
 
 func connectionRequiresCredential(_ provider: ProviderDefinition) -> Bool {
-  switch provider.authentication {
-  case .none: false
-  case .bearer, .header: true
-  }
+  provider.requiresCredential
 }
 
 @MainActor

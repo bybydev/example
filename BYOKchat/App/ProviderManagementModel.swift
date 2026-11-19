@@ -194,6 +194,7 @@ final class ProviderManagementModel {
     accountID: ProviderAccountID,
     label: String? = nil,
     newCredential: String? = nil,
+    clearCredential: Bool = false,
     baseURLString: String? = nil,
     headers: [String: String]? = nil,
     metadata: [String: String]? = nil,
@@ -220,7 +221,14 @@ final class ProviderManagementModel {
       if clearDefaultModel { updated.defaultModelID = nil }
       else if let defaultModelID { updated.defaultModelID = defaultModelID }
       try await accountManager.updateAccount(updated)
-      if let newCredential, !newCredential.isEmpty {
+      if clearCredential {
+        do {
+          try await accountManager.setCredential(nil, accountID: accountID)
+        } catch {
+          BYOKAppAnalytics.reportError("provider_credential_save_failed", component: "provider")
+          throw error
+        }
+      } else if let newCredential, !newCredential.isEmpty {
         do {
           try await accountManager.setCredential(newCredential, accountID: accountID)
         } catch {
@@ -324,14 +332,27 @@ final class ProviderManagementModel {
     storedCredentialAccountID: ProviderAccountID? = nil
   ) async throws -> [ProviderModel] {
     var resolved = account
-    try ProviderRegistry.validate(resolved.definition)
-    if resolved.definition.authentication != .none {
+    if let baseURL = resolved.baseURLOverride {
+      resolved.baseURLOverride = resolved.kind.normalizedBaseURL(baseURL)
+    }
+    let definition = resolved.definition
+    try ProviderRegistry.validate(definition)
+    if let baseURL = resolved.baseURLOverride, resolved.kind != .openAICompatible {
+      try ProviderHTTP.validateBaseURL(
+        baseURL,
+        allowsLocalHTTP: definition.allowsLocalHTTP
+      )
+    }
+    if definition.authentication != .none {
       if resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-        let storedCredentialAccountID {
+        let storedCredentialAccountID
+      {
         resolved.apiKey = try await accountManager.resolvedAccount(id: storedCredentialAccountID).apiKey
       }
-      guard resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-        throw ProviderError.missingCredential(resolved.providerID)
+      if definition.requiresCredential {
+        guard resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+          throw ProviderError.missingCredential(resolved.providerID)
+        }
       }
     }
     return try await runtime.listModels(account: resolved)
@@ -532,12 +553,7 @@ final class ProviderManagementModel {
     // be non-Sendable across that hop.
     var credentialRequiredByProvider: [ProviderID: Bool] = [:]
     for definition in definitions {
-      let required: Bool
-      switch definition.authentication {
-      case .none: required = false
-      case .bearer, .header: required = true
-      }
-      credentialRequiredByProvider[definition.id] = required
+      credentialRequiredByProvider[definition.id] = definition.requiresCredential
     }
 
     defaultAccountID = await workspace.resolvedDefaultAccountID(
@@ -559,10 +575,7 @@ final class ProviderManagementModel {
   /// picker, chat creation policy).
   func isReady(_ account: ProviderAccount) -> Bool {
     guard account.isEnabled, let definition = provider(for: account.providerID) else { return false }
-    switch definition.authentication {
-    case .none:
-      break
-    case .bearer, .header:
+    if definition.requiresCredential {
       guard credentialAccountIDs.contains(account.id) else { return false }
     }
     let available = (modelsByAccount[account.id] ?? []).contains { $0.isAvailable && !$0.isHidden }

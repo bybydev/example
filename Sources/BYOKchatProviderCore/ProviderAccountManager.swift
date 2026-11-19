@@ -55,19 +55,20 @@ public actor ProviderAccountManager {
       providerID
       ?? kind.defaultProviderID
       ?? ProviderID(rawValue: UUID().uuidString.lowercased())
+    let normalizedBaseURL = baseURLOverride.map { kind.normalizedBaseURL($0) }
     let definition = kind.definition(
       providerID: resolvedProviderID,
       displayName: label,
-      baseURLOverride: kind == .openAICompatible ? baseURLOverride : nil,
+      baseURLOverride: kind == .openAICompatible ? normalizedBaseURL : nil,
       chatPath: chatCompletionsPath,
       modelsPath: modelsPath,
       authentication: authChoice,
       seedModelIDs: seedModelIDs
     )
     try ProviderRegistry.validate(definition)
-    if let baseURLOverride, kind != .openAICompatible {
+    if let normalizedBaseURL, kind != .openAICompatible {
       _ = try ProviderHTTP.endpoint(
-        baseURL: baseURLOverride,
+        baseURL: normalizedBaseURL,
         path: definition.chatCompletionsPath,
         allowsLocalHTTP: definition.allowsLocalHTTP
       )
@@ -87,7 +88,7 @@ public actor ProviderAccountManager {
       modelsPath: kind == .openAICompatible ? modelsPath : nil,
       authChoice: kind == .openAICompatible ? authChoice : nil,
       seedModelIDs: kind == .openAICompatible ? seedModelIDs : nil,
-      baseURLOverride: baseURLOverride,
+      baseURLOverride: normalizedBaseURL,
       additionalHeaders: additionalHeaders,
       metadata: metadata,
       defaultModelID: defaultModelID
@@ -103,19 +104,24 @@ public actor ProviderAccountManager {
   }
 
   public func updateAccount(_ account: ProviderAccount) async throws {
-    let definition = account.definition
+    var normalizedAccount = account
+    normalizedAccount.baseURLOverride = account.baseURLOverride.map {
+      account.kind.normalizedBaseURL($0)
+    }
+    let definition = normalizedAccount.definition
     try ProviderRegistry.validate(definition)
-    if let url = account.baseURLOverride {
+    if let url = normalizedAccount.baseURLOverride {
       _ = try ProviderHTTP.endpoint(
         baseURL: url,
-        path: account.kind == .openAICompatible ? definition.chatCompletionsPath : "/",
+        path: normalizedAccount.kind == .openAICompatible ? definition.chatCompletionsPath : "/",
         allowsLocalHTTP: definition.allowsLocalHTTP
       )
     }
-    for name in account.additionalHeaders.keys where ProviderHTTP.isForbiddenCustomHeader(name) {
+    for name in normalizedAccount.additionalHeaders.keys
+    where ProviderHTTP.isForbiddenCustomHeader(name) {
       throw ProviderError.unsafeHeader(name)
     }
-    try await workspace.upsertAccount(account)
+    try await workspace.upsertAccount(normalizedAccount)
   }
 
   public func setCredential(_ value: String?, accountID: ProviderAccountID) async throws {
@@ -134,7 +140,7 @@ public actor ProviderAccountManager {
     let account = try await workspace.account(id: id)
     let secret = try await vault.secret(accountID: id, field: Self.apiKeyField)
     let definition = account.definition
-    if definition.authentication != .none,
+    if definition.requiresCredential,
       secret?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     {
       throw ProviderError.missingCredential(account.providerID)

@@ -131,6 +131,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport, @unchecked
   private static func makeDefaultSession() -> URLSession {
     #if canImport(Darwin)
       let configuration = URLSessionConfiguration.ephemeral
+      configuration.timeoutIntervalForRequest = 120
       configuration.httpShouldSetCookies = false
       configuration.httpCookieAcceptPolicy = .never
       configuration.urlCache = nil
@@ -233,23 +234,44 @@ public enum ProviderHTTP {
     let value = host.lowercased().trimmingCharacters(
       in: CharacterSet(charactersIn: "[]")
     )
+    guard !value.isEmpty else { return false }
     if value == "localhost" || value.hasSuffix(".localhost") || value.hasSuffix(".local") {
       return true
     }
 
     if let parts = parseIPv4(value) {
       if parts[0] == 10 || parts[0] == 127 { return true }
+      if parts[0] == 100 && (64...127).contains(parts[1]) { return true }
       if parts[0] == 169 && parts[1] == 254 { return true }
       if parts[0] == 192 && parts[1] == 168 { return true }
       if parts[0] == 172 && (16...31).contains(parts[1]) { return true }
       return false
     }
 
-    guard let groups = parseIPv6(value) else { return false }
-    let first = groups[0]
-    if first & 0xFE00 == 0xFC00 { return true }
-    if first & 0xFFC0 == 0xFE80 { return true }
-    return groups.dropLast().allSatisfy { $0 == 0 } && groups.last == 1
+    if let groups = parseIPv6(value) {
+      let first = groups[0]
+      if first & 0xFE00 == 0xFC00 { return true }
+      if first & 0xFFC0 == 0xFE80 { return true }
+      return groups.dropLast().allSatisfy { $0 == 0 } && groups.last == 1
+    }
+
+    return isUnqualifiedHostname(value)
+  }
+
+  public static func isLoopbackHost(_ host: String) -> Bool {
+    let value = host.lowercased().trimmingCharacters(
+      in: CharacterSet(charactersIn: "[]")
+    )
+    if value == "localhost" || value.hasSuffix(".localhost") {
+      return true
+    }
+    if let parts = parseIPv4(value) {
+      return parts[0] == 127
+    }
+    if let groups = parseIPv6(value) {
+      return groups.dropLast().allSatisfy { $0 == 0 } && groups.last == 1
+    }
+    return false
   }
 
   public static func isSameOriginRedirect(
@@ -334,6 +356,39 @@ public enum ProviderHTTP {
       "transfer-encoding",
       "cookie",
     ].contains(normalized)
+  }
+
+  private static func isUnqualifiedHostname(_ value: String) -> Bool {
+    guard !value.isEmpty, value.count <= 63, !value.contains("."), !value.contains(":") else {
+      return false
+    }
+    let scalars = value.unicodeScalars
+    guard let first = scalars.first, let last = scalars.last,
+      isASCIIAlphaNumeric(first), isASCIIAlphaNumeric(last)
+    else {
+      return false
+    }
+    var hasLetter = false
+    for scalar in scalars {
+      if isASCIIAlpha(scalar) {
+        hasLetter = true
+      } else if !isASCIIDigit(scalar) && scalar != "-" {
+        return false
+      }
+    }
+    return hasLetter
+  }
+
+  private static func isASCIIAlpha(_ scalar: UnicodeScalar) -> Bool {
+    (scalar >= "a" && scalar <= "z") || (scalar >= "A" && scalar <= "Z")
+  }
+
+  private static func isASCIIDigit(_ scalar: UnicodeScalar) -> Bool {
+    scalar >= "0" && scalar <= "9"
+  }
+
+  private static func isASCIIAlphaNumeric(_ scalar: UnicodeScalar) -> Bool {
+    isASCIIAlpha(scalar) || isASCIIDigit(scalar)
   }
 
   private static func parseIPv4(_ value: String) -> [Int]? {

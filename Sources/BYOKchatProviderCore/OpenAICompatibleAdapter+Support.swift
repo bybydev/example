@@ -34,7 +34,7 @@ extension OpenAICompatibleAdapter {
     }
     try validateTools(request.tools)
 
-    if definition.authentication != .none {
+    if definition.requiresCredential {
       guard let key = account.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
       else {
         throw ProviderError.missingCredential(definition.id)

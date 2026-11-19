@@ -201,6 +201,7 @@ public enum ModelPriceResolver {
     account: ProviderAccount, modelID: ModelID, catalog: ModelPricingCatalog
   ) -> ModelPricingCatalog.Entry? {
     guard account.kind != .openAICompatible,
+      !account.kind.isLocalServer,
       account.providerID == account.kind.defaultProviderID,
       let endpoint = account.kind.defaultEndpoint
     else { return nil }

@@ -10,6 +10,8 @@ public enum BuiltInProviders {
   public static let mistralID: ProviderID = "mistral"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
+  public static let ollamaID: ProviderID = "ollama"
+  public static let lmStudioID: ProviderID = "lmstudio"
   public static let anthropicID: ProviderID = "anthropic"
   public static let geminiID: ProviderID = "gemini"
 
@@ -216,5 +218,32 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, openRouter, nvidia, anthropic, gemini]
+  public static let ollama = ProviderDefinition(
+    id: ollamaID,
+    displayName: "Ollama",
+    behavior: .genericOpenAICompatible,
+    defaultBaseURL: URL(string: "http://localhost:11434/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: [],
+    isBuiltIn: true,
+    kind: .ollama
+  )
+
+  public static let lmStudio = ProviderDefinition(
+    id: lmStudioID,
+    displayName: "LM Studio",
+    behavior: .genericOpenAICompatible,
+    defaultBaseURL: URL(string: "http://localhost:1234/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: [],
+    isBuiltIn: true,
+    kind: .lmStudio
+  )
+
+  public static let all = [
+    openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, openRouter, nvidia, anthropic, gemini,
+    ollama, lmStudio,
+  ]
 }

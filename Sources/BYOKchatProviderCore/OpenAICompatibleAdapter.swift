@@ -41,8 +41,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
 
   public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     guard let path = definition.modelsPath else { return definition.seedModels }
+    let baseURL = account.kind.normalizedBaseURL(
+      account.baseURLOverride ?? definition.defaultBaseURL)
     let url = try ProviderHTTP.endpoint(
-      baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
+      baseURL: baseURL,
       path: path,
       allowsLocalHTTP: definition.allowsLocalHTTP
     )
@@ -111,8 +113,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     -> ProviderResponse
   {
     let validated = try validate(request: request, account: account)
+    let baseURL = account.kind.normalizedBaseURL(
+      account.baseURLOverride ?? definition.defaultBaseURL)
     let url = try ProviderHTTP.endpoint(
-      baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
+      baseURL: baseURL,
       path: definition.chatCompletionsPath,
       allowsLocalHTTP: definition.allowsLocalHTTP
     )
@@ -163,8 +167,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       let task = Task { @Sendable in
         do {
           let validated = try validate(request: request, account: account)
+          let baseURL = account.kind.normalizedBaseURL(
+            account.baseURLOverride ?? definition.defaultBaseURL)
           let url = try ProviderHTTP.endpoint(
-            baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
+            baseURL: baseURL,
             path: definition.chatCompletionsPath,
             allowsLocalHTTP: definition.allowsLocalHTTP
           )

@@ -28,7 +28,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>BYOKchat uses your local network to connect to AI providers you configure on nearby devices.</string>
+	<string>BYOK Chat uses your local network to connect to local AI servers such as Ollama or LM Studio on your Wi-Fi network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>BYOK Chat saves images to your photo library when you choose Save Image.</string>
 	<key>UILaunchScreen</key>

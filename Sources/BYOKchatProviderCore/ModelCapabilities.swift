@@ -271,7 +271,7 @@ public enum ModelCapabilityResolver {
       }
     }
     if facts[.reasoning]?.support == .unsupported { reasoning = .init(kind: .unsupported) }
-    if kind == .nvidia || kind == .openAICompatible {
+    if kind == .nvidia || kind == .ollama || kind == .lmStudio || kind == .openAICompatible {
       // These adapters have no verified configurable reasoning wire contract.
       // A native-looking model name or imported control metadata cannot add one.
       reasoning = .init(kind: facts[.reasoning]?.support == .unsupported ? .unsupported : .unknown)
@@ -429,7 +429,7 @@ public enum ModelCapabilityResolver {
       if id.hasPrefix("grok-4.5") { return efforts([.low, .medium, .high], defaultEffort: .high) }
       if id.hasPrefix("grok-4.3") { return efforts([.low, .medium, .high], defaultEffort: .high, off: "none") }
       if id.hasPrefix("grok-4.20") { return .init(kind: .fixed, source: .adapter) }
-    case .openRouter, .nvidia, .openAICompatible:
+    case .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible:
       // A parameter name does not establish the routed/custom model's valid values.
       break
     }
@@ -453,6 +453,8 @@ extension ProviderDefinition {
     case .genericOpenAICompatible:
       if id == BuiltInProviders.openAIID { return .openai }
       if id == BuiltInProviders.xAIID { return .xAI }
+      if id == BuiltInProviders.ollamaID { return .ollama }
+      if id == BuiltInProviders.lmStudioID { return .lmStudio }
       return .openAICompatible
     }
   }

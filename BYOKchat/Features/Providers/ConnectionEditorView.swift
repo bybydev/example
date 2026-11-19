@@ -50,9 +50,11 @@ struct ConnectionEditorView: View {
   @State private var discoveryID: UUID?
   @State private var isDiscoveryRunning = false
   @State private var discoveryWarning: String?
+  @State private var connectionTestState: ConnectionTestState = .idle
   @State private var showDelete = false
   @State private var isSaving = false
   @State private var replaceCredential = false
+  @State private var clearCredential = false
   @State private var isDirty = false
   @State private var isRevealingCredential = false
   @State private var revealedCredential: String?
@@ -83,7 +85,8 @@ struct ConnectionEditorView: View {
       _httpReferer = State(initialValue: existing.metadata["httpReferer"] ?? "")
     } else {
       let initial = initialKind ?? .anthropic
-      _baseURL = State(initialValue: initial.defaultEndpoint?.absoluteString ?? "")
+      _baseURL = State(
+        initialValue: initial.isLocalServer ? "" : (initial.defaultEndpoint?.absoluteString ?? ""))
       _selectedModelID = State(initialValue: initial.seedModels.first?.id)
     }
   }
@@ -93,6 +96,10 @@ struct ConnectionEditorView: View {
   private var kind: ProviderKind { existing?.kind ?? selectedKind }
 
   private var isCustom: Bool { kind == .openAICompatible }
+
+  private var isLocalServer: Bool { kind.isLocalServer }
+
+  private var showsServerSection: Bool { isLocalServer || isCustom }
 
   /// In edit mode the kind's derived definition supplies defaults; in create
   /// mode it is built from the typed custom-provider fields.
@@ -119,26 +126,50 @@ struct ConnectionEditorView: View {
     .withKind(kind)
   }
 
-  private var requiresCredential: Bool {
+  private var showsCredentialField: Bool {
     draftDefinition.authentication != .none
+  }
+
+  private var requiresCredential: Bool {
+    draftDefinition.requiresCredential
   }
 
   private var hasStoredCredential: Bool {
     existing.map { model.credentialAccountIDs.contains($0.id) } ?? false
   }
 
-  private var canShowKeyField: Bool {
-    requiresCredential && (!isCreate && !hasStoredCredential || replaceCredential || isCreate)
+  private var resolvedDraftEndpoint: URL? {
+    let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+      return isLocalServer && isCreate ? nil : kind.defaultEndpoint
+    }
+    guard let parsed = URL(string: trimmed) else { return nil }
+    return kind.normalizedBaseURL(parsed)
+  }
+
+  private var showsPhysicalDeviceLoopbackWarning: Bool {
+    #if targetEnvironment(simulator)
+      return false
+    #else
+      let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard let host = URL(string: trimmed)?.host else { return false }
+      return ProviderHTTP.isLoopbackHost(host)
+    #endif
   }
 
   private var canSave: Bool {
     if isCustom && isCreate {
       guard !customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-        URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        resolvedDraftEndpoint != nil
       else { return false }
       if customAuth == .header, customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         return false
       }
+    } else if isCustom {
+      guard resolvedDraftEndpoint != nil else { return false }
+    }
+    if isLocalServer {
+      guard resolvedDraftEndpoint != nil else { return false }
     }
     if requiresCredential && isCreate, credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return false
@@ -163,6 +194,9 @@ struct ConnectionEditorView: View {
       if isCreate {
         createProviderSection
         nameSection
+        if isLocalServer {
+          localServerSection
+        }
         credentialSection
         if isCustom {
           customWireSection
@@ -172,6 +206,11 @@ struct ConnectionEditorView: View {
       } else {
         lockedProviderHeader
         nameSection
+        if isLocalServer {
+          localServerSection
+        } else if isCustom {
+          customEditServerSection
+        }
         credentialSection
         modelSection
         advancedSection
@@ -270,15 +309,23 @@ struct ConnectionEditorView: View {
   private var createProviderSection: some View {
     Section {
       Picker("Provider", selection: $selectedKind) {
-        ForEach(ProviderKind.catalog, id: \.self) { candidate in
-          Text(candidate.displayName).tag(candidate)
+        Section("Cloud Providers") {
+          ForEach(ProviderKind.cloudCatalog, id: \.self) { candidate in
+            Text(candidate.displayName).tag(candidate)
+          }
         }
-        Text("OpenAI-compatible…").tag(ProviderKind.openAICompatible)
+        Section("Local & Custom") {
+          ForEach(ProviderKind.localAndCustomCatalog, id: \.self) { candidate in
+            Text(candidate == .openAICompatible ? "Custom (OpenAI-Compatible)" : candidate.displayName)
+              .tag(candidate)
+          }
+        }
       }
       .onChange(of: selectedKind) { _, newValue in
         invalidateDiscovery()
-        baseURL = newValue.defaultEndpoint?.absoluteString ?? ""
+        baseURL = newValue.isLocalServer ? "" : (newValue.defaultEndpoint?.absoluteString ?? "")
         credential = ""
+        clearCredential = false
         headersText = ""
         appTitle = ""
         httpReferer = ""
@@ -291,10 +338,122 @@ struct ConnectionEditorView: View {
     } header: {
       Text("Provider")
     } footer: {
-      Text("One connection per API key. Add the same provider twice to use two keys.")
+      Text("One connection per server or API key. Add the same provider twice to use multiple configurations.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
+  }
+
+  private var localServerPlaceholder: String {
+    switch kind {
+    case .ollama: "http://192.168.1.x:11434/v1"
+    case .lmStudio: "http://192.168.1.x:1234/v1"
+    default: "http://192.168.1.x:11434/v1"
+    }
+  }
+
+  private var localServerHint: String {
+    switch kind {
+    case .ollama: "Enable 'Expose Ollama to the network' in Ollama settings."
+    case .lmStudio: "Enable 'Serve on Local Network' in LM Studio's Developer tab."
+    default: "HTTPS is required for internet hosts; HTTP is allowed for local and LAN hosts."
+    }
+  }
+
+  private var localServerSection: some View {
+    Section {
+      TextField(localServerPlaceholder, text: $baseURL)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .keyboardType(.URL)
+        .onChange(of: baseURL) { _, _ in isDirty = true }
+      if showsPhysicalDeviceLoopbackWarning {
+        loopbackWarningLabel
+      }
+      testConnectionButton
+      connectionTestStatusRow
+    } header: {
+      Text("Server")
+    } footer: {
+      Text(localServerHint)
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var customEditServerSection: some View {
+    Section {
+      TextField("https://example.com/v1", text: $baseURL)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .keyboardType(.URL)
+        .onChange(of: baseURL) { _, _ in isDirty = true }
+      if showsPhysicalDeviceLoopbackWarning {
+        loopbackWarningLabel
+      }
+      if draftDefinition.modelsPath != nil {
+        testConnectionButton
+        connectionTestStatusRow
+      }
+    } header: {
+      Text("Server")
+    } footer: {
+      Text("HTTPS is required for internet hosts; HTTP is allowed for local and LAN addresses.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var loopbackWarningLabel: some View {
+    Label(
+      "localhost refers to this device. Use your computer's LAN IP or .local hostname instead.",
+      systemImage: "exclamationmark.triangle"
+    )
+    .font(.caption)
+    .foregroundStyle(.orange)
+  }
+
+  private var testConnectionButton: some View {
+    Button {
+      fetchModels(recordConnectionTest: true)
+    } label: {
+      HStack {
+        Label("Test Connection", systemImage: "network")
+        Spacer()
+        if isDiscoveryRunning {
+          ProgressView().controlSize(.small)
+        }
+      }
+    }
+    .disabled(
+      isDiscoveryRunning
+        || resolvedDraftEndpoint == nil
+        || (requiresCredential && !keyAvailableForDiscovery)
+    )
+  }
+
+  @ViewBuilder
+  private var connectionTestStatusRow: some View {
+    switch connectionTestState {
+    case .idle:
+      EmptyView()
+    case .testing:
+      Text("Testing connection…")
+        .font(.caption)
+        .foregroundStyle(theme.secondaryForegroundColor)
+    case .connected(let count):
+      let summary =
+        count == 0
+        ? "Connected — no models loaded yet"
+        : "Connected — \(count) \(count == 1 ? "model" : "models") found"
+      Label(summary, systemImage: "checkmark.circle.fill")
+        .font(.caption)
+        .foregroundStyle(.green)
+    case .failed(let message):
+      Label(message, systemImage: "exclamationmark.triangle.fill")
+        .font(.caption)
+        .foregroundStyle(.orange)
+    }
   }
 
   private var customWireSection: some View {
@@ -308,6 +467,9 @@ struct ConnectionEditorView: View {
         .autocorrectionDisabled()
         .keyboardType(.URL)
         .onChange(of: baseURL) { _, _ in isDirty = true }
+      if showsPhysicalDeviceLoopbackWarning {
+        loopbackWarningLabel
+      }
       Picker("Authentication", selection: $customAuth) {
         ForEach(AuthenticationChoice.allCases) { choice in
           Text(choice.title).tag(choice)
@@ -324,10 +486,14 @@ struct ConnectionEditorView: View {
       TextField("Models path (optional)", text: $customModelsPath)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+      if draftDefinition.modelsPath != nil {
+        testConnectionButton
+        connectionTestStatusRow
+      }
     } header: {
       Text("OpenAI-Compatible Server")
     } footer: {
-      Text("HTTPS is required for internet hosts; HTTP only for private or loopback addresses.")
+      Text("HTTPS is required for internet hosts; HTTP is allowed for local and LAN addresses.")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
@@ -336,13 +502,13 @@ struct ConnectionEditorView: View {
   private var credentialSection: some View {
     Section {
       if isCreate {
-        if requiresCredential {
+        if showsCredentialField {
           credentialField
         } else {
           Label("No API key required", systemImage: "checkmark.shield")
         }
-      } else if requiresCredential {
-        if hasStoredCredential && !replaceCredential {
+      } else if showsCredentialField {
+        if hasStoredCredential && !replaceCredential && !clearCredential {
           HStack(spacing: 12) {
             Image(systemName: "checkmark.shield.fill")
               .foregroundStyle(theme.secondaryForegroundColor)
@@ -367,24 +533,48 @@ struct ConnectionEditorView: View {
 
             Button("Replace") {
               replaceCredential = true
+              clearCredential = false
               revealedCredential = nil
             }
             .font(.system(size: 14, weight: .semibold))
+
+            if !requiresCredential {
+              Button("Remove", role: .destructive) {
+                clearCredential = true
+                replaceCredential = false
+                credential = ""
+                revealedCredential = nil
+                isDirty = true
+              }
+              .font(.system(size: 14, weight: .semibold))
+            }
           }
         } else {
           credentialField
+          if clearCredential {
+            Text("Saved API key will be removed when you tap Done.")
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
         }
       } else {
         Label("This provider does not require an API key.", systemImage: "checkmark.shield")
       }
     } header: {
-      Text("API Key")
+      Text(showsCredentialField && !requiresCredential ? "API Key (Optional)" : "API Key")
     } footer: {
-      if requiresCredential {
-        Text(
-          "Stored in Keychain and sent only to \(providerTitle) when BYOKchat makes a request."
-        )
-        .foregroundStyle(theme.secondaryForegroundColor)
+      if showsCredentialField {
+        if requiresCredential {
+          Text(
+            "Stored in Keychain and sent only to \(providerTitle) when BYOKchat makes a request."
+          )
+          .foregroundStyle(theme.secondaryForegroundColor)
+        } else {
+          Text(
+            "Optional. Only sent when configured on your server. Stored in Keychain if provided."
+          )
+          .foregroundStyle(theme.secondaryForegroundColor)
+        }
       }
     }
     .listRowBackground(theme.surfaceColor)
@@ -392,18 +582,28 @@ struct ConnectionEditorView: View {
 
   @ViewBuilder
   private var credentialField: some View {
+    let placeholder =
+      !requiresCredential
+      ? (hasStoredCredential && replaceCredential ? "New API key (optional)" : "Optional API key")
+      : (hasStoredCredential ? "New API key" : "Paste your API key")
     // Reveal-while-typing: eye toggles between SecureField and TextField for
     // the credential being entered (create or replace).
     if isCredentialVisible {
-      TextField("API key", text: $credential)
+      TextField(placeholder, text: $credential)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
-        .onChange(of: credential) { _, _ in isDirty = true }
+        .onChange(of: credential) { _, newValue in
+          if !newValue.isEmpty { clearCredential = false }
+          isDirty = true
+        }
     } else {
-      SecureField(hasStoredCredential ? "New API key" : "Paste your API key", text: $credential)
+      SecureField(placeholder, text: $credential)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
-        .onChange(of: credential) { _, _ in isDirty = true }
+        .onChange(of: credential) { _, newValue in
+          if !newValue.isEmpty { clearCredential = false }
+          isDirty = true
+        }
     }
   }
 
@@ -445,7 +645,11 @@ struct ConnectionEditorView: View {
             }
           }
         }
-        .disabled(isDiscoveryRunning || (requiresCredential && !keyAvailableForDiscovery))
+        .disabled(
+          isDiscoveryRunning
+            || resolvedDraftEndpoint == nil
+            || (requiresCredential && !keyAvailableForDiscovery)
+        )
       }
 
       modelSelectionRow
@@ -589,7 +793,7 @@ struct ConnectionEditorView: View {
     Section {
       DisclosureGroup("Advanced") {
         VStack(alignment: .leading, spacing: 10) {
-          if !(isCreate && isCustom) {
+          if !showsServerSection {
             Text("Endpoint Override")
               .font(.caption.weight(.semibold))
               .foregroundStyle(theme.secondaryForegroundColor)
@@ -734,6 +938,7 @@ struct ConnectionEditorView: View {
     let kind: ProviderKind
     let endpoint: String
     let credential: String
+    let clearCredential: Bool
     let headers: String
     let appTitle: String
     let referer: String
@@ -745,8 +950,8 @@ struct ConnectionEditorView: View {
 
   private var discoveryInput: DiscoveryInput {
     DiscoveryInput(
-      kind: kind, endpoint: baseURL, credential: credential, headers: headersText,
-      appTitle: appTitle, referer: httpReferer, chatPath: customChatPath,
+      kind: kind, endpoint: baseURL, credential: credential, clearCredential: clearCredential,
+      headers: headersText, appTitle: appTitle, referer: httpReferer, chatPath: customChatPath,
       modelsPath: customModelsPath, auth: customAuth, headerName: customHeaderName)
   }
 
@@ -772,18 +977,16 @@ struct ConnectionEditorView: View {
     cancelDiscovery()
     discoveredModels = nil
     discoveryWarning = nil
+    connectionTestState = .idle
   }
 
-  private func fetchModels() {
-    let endpointText = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    let endpoint: URL?
-    if endpointText.isEmpty {
-      endpoint = kind.defaultEndpoint
-    } else {
-      endpoint = URL(string: endpointText)
-    }
-    guard let endpoint else {
-      discoveryWarning = "Enter a valid endpoint to fetch models."
+  private func fetchModels(recordConnectionTest: Bool = false) {
+    guard let endpoint = resolvedDraftEndpoint else {
+      let message = "Enter a valid server URL first."
+      discoveryWarning = message
+      if recordConnectionTest || showsServerSection {
+        connectionTestState = .failed(message)
+      }
       return
     }
     let headers: [String: String]
@@ -791,14 +994,20 @@ struct ConnectionEditorView: View {
       headers = try parseHeadersStrict(headersText)
     } catch {
       discoveryWarning = error.localizedDescription
+      if recordConnectionTest || showsServerSection {
+        connectionTestState = .failed(error.localizedDescription)
+      }
       return
     }
     let input = discoveryInput
     let requestID = UUID()
     let definition = draftDefinition
+    let previewLabel = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? (suggestedName.isEmpty ? "Custom" : suggestedName)
+      : label
     let resolved = ResolvedProviderAccount(
       kind: kind, id: existing?.id ?? "", providerID: existing?.providerID ?? definition.id,
-      label: label.isEmpty ? suggestedName : label,
+      label: previewLabel,
       apiKey: credential.isEmpty ? nil : credential,
       baseURLOverride: endpoint, additionalHeaders: headers, metadata: draftMetadata,
       chatCompletionsPath: existing?.chatCompletionsPath
@@ -807,10 +1016,15 @@ struct ConnectionEditorView: View {
         ?? (isCustom ? draftDefinition.modelsPath : nil),
       authChoice: isCustom ? definition.authentication : nil,
       seedModelIDs: existing?.seedModelIDs ?? [])
+    let storedCredentialID = clearCredential ? nil : existing?.id
+    let tracksTestState = recordConnectionTest || showsServerSection
     discoveryTask?.cancel()
     discoveryID = requestID
     isDiscoveryRunning = true
     discoveryWarning = nil
+    if tracksTestState {
+      connectionTestState = .testing
+    }
     discoveryTask = Task { @MainActor in
       defer {
         if discoveryID == requestID {
@@ -820,9 +1034,12 @@ struct ConnectionEditorView: View {
       }
       do {
         let models = try await model.previewModels(
-          for: resolved, storedCredentialAccountID: existing?.id)
+          for: resolved, storedCredentialAccountID: storedCredentialID)
         guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
         discoveredModels = models
+        if tracksTestState {
+          connectionTestState = .connected(modelCount: models.count)
+        }
         if !modelRecords.contains(where: { $0.model.id == selectedModelID }) {
           selectedModelID = modelRecords.first?.model.id
         }
@@ -831,6 +1048,9 @@ struct ConnectionEditorView: View {
         }
       } catch {
         guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
+        if tracksTestState {
+          connectionTestState = .failed("Connection failed: \(error.localizedDescription)")
+        }
         discoveryWarning = "Model discovery failed: \(error.localizedDescription) Enter a model ID manually to continue."
       }
     }
@@ -882,6 +1102,7 @@ struct ConnectionEditorView: View {
           accountID: existing.id,
           label: finalLabel,
           newCredential: credential.isEmpty ? nil : credential,
+          clearCredential: clearCredential && credential.isEmpty,
           baseURLString: baseURL,
           headers: parsedHeaders,
           metadata: metadata,
@@ -913,6 +1134,13 @@ struct ConnectionEditorView: View {
       dismiss()
       onFinished?()
     }
+  }
+
+  private enum ConnectionTestState: Equatable {
+    case idle
+    case testing
+    case connected(modelCount: Int)
+    case failed(String)
   }
 
   private enum AuthenticationChoice: String, CaseIterable, Identifiable {
