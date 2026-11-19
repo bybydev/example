@@ -503,3 +503,94 @@ private actor QueuedMockTransport: ProviderHTTPTransport {
     #expect(message.contains("PROHIBITED_CONTENT"))
   }
 }
+
+@Test func anthropicModelDiscoveryPaginatesWithLimitAndAfterID() async throws {
+  let page1 = Data(
+    """
+    {"data":[{"id":"claude-sonnet-5-5","display_name":"Claude Sonnet 5.5","max_input_tokens":1000000,"max_tokens":128000}],"has_more":true,"last_id":"claude-sonnet-5-5"}
+    """.utf8
+  )
+  let page2 = Data(
+    """
+    {"data":[{"id":"claude-haiku-5-5","display_name":"Claude Haiku 5.5","max_input_tokens":1000000,"max_tokens":128000}],"has_more":false,"last_id":"claude-haiku-5-5"}
+    """.utf8
+  )
+  let transport = QueuedMockTransport(responses: [
+    ProviderHTTPResponse(statusCode: 200, headers: [:], data: page1),
+    ProviderHTTPResponse(statusCode: 200, headers: [:], data: page2),
+  ])
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: transport)
+  let models = try await adapter.listModels(account: nativeAccount("anthropic"))
+  #expect(models.contains { $0.id == "claude-sonnet-5-5" })
+  #expect(models.contains { $0.id == "claude-haiku-5-5" })
+
+  let requests = await transport.recordedRequests()
+  #expect(requests.count == 2)
+  #expect(requests[0].url?.query?.contains("limit=1000") == true)
+  #expect(requests[1].url?.query?.contains("after_id=claude-sonnet-5-5") == true)
+}
+
+@Test func anthropicUsesHigherDefaultMaxTokensWhenReasoningIsActive() async throws {
+  let data = Data(#"{"id":"msg_1","model":"claude-haiku-5-5","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}"#.utf8)
+  let transport = NativeMockTransport(data: data)
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: transport)
+
+  _ = try await adapter.generate(
+    request: .init(
+      model: "claude-haiku-5-5",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: nativeAccount("anthropic")
+  )
+  let withReasoning = try #require(await transport.lastRequest()?.httpBody)
+  let withReasoningBody = try #require(JSONDecoder.provider.decode(JSONValue.self, from: withReasoning).objectValue)
+  #expect(withReasoningBody["max_tokens"] == .number(16_384))
+  #expect(withReasoningBody["output_config"] == .object(["effort": .string("high")]))
+
+  _ = try await adapter.generate(
+    request: .init(
+      model: "claude-haiku-5-5",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: nativeAccount("anthropic")
+  )
+  let withoutReasoning = try #require(await transport.lastRequest()?.httpBody)
+  let withoutReasoningBody = try #require(JSONDecoder.provider.decode(JSONValue.self, from: withoutReasoning).objectValue)
+  #expect(withoutReasoningBody["max_tokens"] == .number(4_096))
+  #expect(withoutReasoningBody["thinking"] == .object(["type": .string("disabled")]))
+  #expect(withoutReasoningBody["output_config"] == nil)
+}
+
+@Test func anthropicSurfacesRefusalStopReasonAndOverloaded529() async throws {
+  let refusalData = Data(#"{"id":"msg_ref","model":"claude-sonnet-5-5","content":[],"stop_reason":"refusal"}"#.utf8)
+  let refusalAdapter = AnthropicMessagesAdapter(
+    definition: BuiltInProviders.anthropic,
+    transport: NativeMockTransport(data: refusalData)
+  )
+  do {
+    _ = try await refusalAdapter.generate(
+      request: .init(model: "claude-sonnet-5-5", messages: [.init(role: .user, content: "Test")]),
+      account: nativeAccount("anthropic")
+    )
+    Issue.record("Expected refusal error in generate")
+  } catch ProviderError.provider(_, let message) {
+    #expect(message.lowercased().contains("refused"))
+  }
+
+  let overloadedAdapter = AnthropicMessagesAdapter(
+    definition: BuiltInProviders.anthropic,
+    transport: NativeMockTransport(data: Data(), statusCode: 529)
+  )
+  do {
+    _ = try await overloadedAdapter.generate(
+      request: .init(model: "claude-sonnet-5-5", messages: [.init(role: .user, content: "Test")]),
+      account: nativeAccount("anthropic")
+    )
+    Issue.record("Expected 529 overloaded error")
+  } catch ProviderError.provider(let status, let message) {
+    #expect(status == 529)
+    #expect(message.lowercased().contains("overloaded"))
+  }
+}

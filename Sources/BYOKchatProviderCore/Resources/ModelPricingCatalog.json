@@ -69,6 +69,114 @@
       }
     },
     {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-sonnet-5-5"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.1",
+        "cacheWrite": "2.5",
+        "longCacheWrite": "4"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-opus-5-5"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "4",
+        "output": "20",
+        "cachedInput": "0.2",
+        "cacheWrite": "5",
+        "longCacheWrite": "8"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-haiku-5-5"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "0.1",
+        "output": "0.5",
+        "cachedInput": "0.01",
+        "cacheWrite": "0.125",
+        "longCacheWrite": "0.2"
+      },
+      "longContextThreshold": 100001,
+      "longContextInputMultiplier": "5",
+      "longContextOutputMultiplier": "5"
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-fable-5-2"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "8",
+        "output": "40",
+        "cachedInput": "0.2",
+        "cacheWrite": "10",
+        "longCacheWrite": "16"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-mythos-5-2"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "8",
+        "output": "40",
+        "cachedInput": "0.2",
+        "cacheWrite": "10",
+        "longCacheWrite": "16"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-fable-5-1"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "10",
+        "output": "50",
+        "cachedInput": "0.25",
+        "cacheWrite": "12.5",
+        "longCacheWrite": "20"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "modelIDs": [
+        "claude-mythos-5-1"
+      ],
+      "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "10",
+        "output": "50",
+        "cachedInput": "0.25",
+        "cacheWrite": "12.5",
+        "longCacheWrite": "20"
+      }
+    },
+    {
       "provider": "gemini",
       "modelIDs": [
         "gemini-3.6-flash"

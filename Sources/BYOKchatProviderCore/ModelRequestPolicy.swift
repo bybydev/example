@@ -23,6 +23,9 @@ public enum ModelRequestPolicy {
       }
     }
     if kind == .anthropic {
+      if attachment.isImage, attachment.byteCount > 5 * 1_024 * 1_024 {
+        return "\(attachment.filename) exceeds Anthropic's 5 MB image limit."
+      }
       if !attachment.isImage, attachment.utf8Text == nil, mime != "application/pdf" {
         return "Anthropic supports text files, images, and PDFs. \(attachment.filename) must be converted first."
       }
@@ -102,8 +105,16 @@ public enum ModelRequestPolicy {
     var request = original
     let capabilities = request.capabilities ?? ModelCapabilityResolver.resolve(kind: kind, modelID: request.model)
     request.capabilities = capabilities
-    if let error = capabilities.reasoning.budgetValidationMessage(request.options.reasoning,
-      outputLimit: kind == .anthropic ? (request.options.maxOutputTokens ?? 4_096) : nil) {
+    if let error = capabilities.reasoning.budgetValidationMessage(
+      request.options.reasoning,
+      outputLimit: kind == .anthropic
+        ? (request.options.maxOutputTokens
+          ?? AnthropicMessagesAdapter.defaultMaxTokens(
+            reasoning: request.options.reasoning,
+            capabilities: capabilities
+          ))
+        : nil
+    ) {
       throw ProviderError.invalidRequest(error)
     }
     request.options.reasoning = capabilities.reasoning.normalize(request.options.reasoning)

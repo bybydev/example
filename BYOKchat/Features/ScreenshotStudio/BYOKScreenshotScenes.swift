@@ -229,7 +229,7 @@ private struct BYOKStudioProvidersFixture: View {
           BYOKStudioProviderTile(
             theme: settings.theme,
             name: "Anthropic",
-            detail: "Claude Sonnet 5",
+            detail: "Claude Sonnet 5.5",
             symbol: "sparkles"
           )
         }
@@ -258,7 +258,7 @@ private struct BYOKStudioProvidersFixture: View {
               Text("Default model")
                 .font(.caption.bold())
                 .foregroundStyle(settings.theme.secondaryForegroundColor)
-              Text("Claude Sonnet 5 · Anthropic")
+              Text("Claude Sonnet 5.5 · Anthropic")
                 .font(.headline)
             }
             Spacer()

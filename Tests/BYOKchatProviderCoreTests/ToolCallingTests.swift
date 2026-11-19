@@ -248,6 +248,78 @@ import Testing
   #expect(thinking["signature"] == .string("sig-123"))
 }
 
+@Test func anthropicStreamAppendsSignatureChunksAndPreservesRedactedThinkingForToolContinuation() async throws {
+  let stream = """
+    event: message_start
+    data: {"type":"message_start","message":{"id":"msg_redacted","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":0}}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+    event: content_block_delta
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Check weather."}}
+
+    event: content_block_delta
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-part-1-"}}
+
+    event: content_block_delta
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-part-2"}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":0}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque-redacted-blob"}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":1}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call_1","name":"get_weather","input":{}}}
+
+    event: content_block_delta
+    data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\\"city\\\":\\\"Paris\\\"}"}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":2}
+
+    event: message_delta
+    data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}
+
+    event: message_stop
+    data: {"type":"message_stop"}
+
+    """
+  let transport = ToolMockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = AnthropicMessagesAdapter(definition: BuiltInProviders.anthropic, transport: transport)
+
+  var final: ProviderResponse?
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "claude-opus-5-5",
+      messages: [.init(role: .user, content: "Weather?")],
+      tools: [weatherTool()]
+    ),
+    account: toolAccount("anthropic")
+  ) {
+    if case .completed(let response) = event { final = response }
+  }
+
+  let response = try #require(final)
+  guard let continuation = response.toolContinuation,
+    case .array(let blocks) = continuation.payload,
+    blocks.count == 2,
+    case .object(let thinking) = blocks[0],
+    case .object(let redacted) = blocks[1]
+  else {
+    Issue.record("Expected thinking and redacted_thinking continuation blocks")
+    return
+  }
+  #expect(thinking["signature"] == .string("sig-part-1-sig-part-2"))
+  #expect(redacted["type"] == .string("redacted_thinking"))
+  #expect(redacted["data"] == .string("opaque-redacted-blob"))
+}
+
 @Test func geminiToolHistoryReplaysThoughtSignatureAndFunctionResponse() {
   let adapter = GeminiGenerateContentAdapter(definition: BuiltInProviders.gemini)
   let call = weatherCall()

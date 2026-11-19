@@ -119,8 +119,8 @@ enum BYOKScreenshotFixtures {
   private static func providerState(now: Date) -> ProviderWorkspaceState {
     let claude = ProviderModel(
       providerID: BuiltInProviders.anthropicID,
-      id: "claude-sonnet-5",
-      displayName: "Claude Sonnet 5",
+      id: "claude-sonnet-5-5",
+      displayName: "Claude Sonnet 5.5",
       contextWindow: 1_000_000,
       contextWindowKind: .inputOnly,
       maxOutputTokens: 128_000,
@@ -129,8 +129,8 @@ enum BYOKScreenshotFixtures {
     )
     let openRouter = ProviderModel(
       providerID: BuiltInProviders.openRouterID,
-      id: "anthropic/claude-sonnet-5",
-      displayName: "Claude Sonnet 5",
+      id: "anthropic/claude-sonnet-5-5",
+      displayName: "Claude Sonnet 5.5",
       contextWindow: 1_000_000,
       contextWindowKind: .combined,
       maxOutputTokens: 128_000,
@@ -273,7 +273,7 @@ enum BYOKScreenshotFixtures {
       updatedAt: assistantDate,
       providerID: BuiltInProviders.anthropicID,
       accountID: anthropicAccountID,
-      modelID: "claude-sonnet-5",
+      modelID: "claude-sonnet-5-5",
       systemPrompt: "Be concise, practical, and release-focused.",
       options: ProviderRequestOptions(
         reasoning: ReasoningOptions(enabled: true, effort: .high)
@@ -289,7 +289,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.anthropicID,
           accountID: anthropicAccountID,
-          modelID: "claude-sonnet-5"
+          modelID: "claude-sonnet-5-5"
         ),
         ChatMessage(
           id: "screenshot-launch-assistant",
@@ -312,7 +312,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.anthropicID,
           accountID: anthropicAccountID,
-          modelID: "claude-sonnet-5",
+          modelID: "claude-sonnet-5-5",
           finishReason: "stop",
           usage: ProviderUsage(
             inputTokens: 4_280,
@@ -342,7 +342,7 @@ enum BYOKScreenshotFixtures {
       updatedAt: assistantDate,
       providerID: BuiltInProviders.openRouterID,
       accountID: openRouterAccountID,
-      modelID: "anthropic/claude-sonnet-5",
+      modelID: "anthropic/claude-sonnet-5-5",
       messages: [
         ChatMessage(
           id: "screenshot-research-user",
@@ -353,7 +353,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.openRouterID,
           accountID: openRouterAccountID,
-          modelID: "anthropic/claude-sonnet-5"
+          modelID: "anthropic/claude-sonnet-5-5"
         ),
         ChatMessage(
           id: "screenshot-research-assistant",
@@ -364,7 +364,7 @@ enum BYOKScreenshotFixtures {
           status: .complete,
           providerID: BuiltInProviders.openRouterID,
           accountID: openRouterAccountID,
-          modelID: "anthropic/claude-sonnet-5",
+          modelID: "anthropic/claude-sonnet-5-5",
           finishReason: "stop",
           usage: ProviderUsage(inputTokens: 1_120, outputTokens: 286),
           metadata: [
@@ -448,7 +448,7 @@ enum BYOKScreenshotFixtures {
         symbolName: "app.badge.checkmark",
         accentID: "blue",
         accountID: anthropicAccountID,
-        modelID: "claude-sonnet-5",
+        modelID: "claude-sonnet-5-5",
         instructions: "Keep recommendations practical and focused on shipping a polished iPhone release.",
         createdAt: now.addingTimeInterval(-86_400 * 10),
         updatedAt: now.addingTimeInterval(-1_800),
@@ -467,7 +467,7 @@ enum BYOKScreenshotFixtures {
         symbolName: "sparkles",
         accentID: "purple",
         accountID: openRouterAccountID,
-        modelID: "anthropic/claude-sonnet-5",
+        modelID: "anthropic/claude-sonnet-5-5",
         instructions: "Compare models by quality, latency, privacy, context, and cost.",
         createdAt: now.addingTimeInterval(-86_400 * 8),
         updatedAt: now.addingTimeInterval(-6_900),

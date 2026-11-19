@@ -168,6 +168,13 @@ import Testing
   #expect(sonnet.contextWindow == 1_000_000)
   #expect(sonnet.maxOutputTokens == 128_000)
   #expect(sonnet.supportedParameters.contains("temperature") == false)
+  #expect(
+    Set(anthropic.seedModels.map(\.id))
+      == [
+        "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5",
+        "claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5-2", "claude-mythos-5-2",
+      ]
+  )
 
   let gemini = try #require(definitions.first { $0.id == "gemini" })
   let flash = try #require(gemini.seedModels.first { $0.id == "gemini-3.8-flash" })

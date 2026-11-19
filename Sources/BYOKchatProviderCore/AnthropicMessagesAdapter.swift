@@ -28,25 +28,57 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
     )
   }
 
+  public static func defaultMaxTokens(
+    reasoning: ReasoningOptions?,
+    capabilities: ResolvedModelCapabilities?
+  ) -> Int {
+    let reasoningActive =
+      reasoning?.enabled == true || reasoning?.effort != nil || reasoning?.maxTokens != nil
+    let preferred = reasoningActive ? 16_384 : 4_096
+    if let modelMaximum = capabilities?.maxOutputTokens, modelMaximum > 0 {
+      return min(preferred, modelMaximum)
+    }
+    return preferred
+  }
+
   public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     guard let path = definition.modelsPath else { return definition.seedModels }
-    let url = try ProviderHTTP.endpoint(
+    let baseEndpoint = try ProviderHTTP.endpoint(
       baseURL: account.baseURLOverride ?? definition.defaultBaseURL,
       path: path,
       allowsLocalHTTP: definition.allowsLocalHTTP
     )
-    let request = try makeRequest(url: url, method: "GET", account: account, streaming: false)
-    let response = try await transport.data(for: request)
-    try validate(response)
 
-    let decoded: AnthropicModelsResponse
-    do {
-      decoded = try JSONDecoder.provider.decode(AnthropicModelsResponse.self, from: response.data)
-    } catch {
-      throw ProviderError.invalidResponse
+    var wires: [AnthropicModelWire] = []
+    var seenCursors: Set<String> = []
+    var afterID: String?
+    let maxPages = 20
+
+    for _ in 0..<maxPages {
+      let pageURL = try modelsPageURL(baseEndpoint: baseEndpoint, afterID: afterID)
+      let request = try makeRequest(url: pageURL, method: "GET", account: account, streaming: false)
+      let response = try await transport.data(for: request)
+      try validate(response)
+
+      let decoded: AnthropicModelsResponse
+      do {
+        decoded = try JSONDecoder.provider.decode(AnthropicModelsResponse.self, from: response.data)
+      } catch {
+        throw ProviderError.invalidResponse
+      }
+      wires.append(contentsOf: decoded.data)
+
+      guard decoded.hasMore == true,
+        let next = decoded.lastID?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !next.isEmpty,
+        seenCursors.insert(next).inserted
+      else {
+        break
+      }
+      afterID = next
     }
 
-    let discovered = decoded.data.map { wire in
+    let discovered = wires.map { wire in
       var evidence = ModelCapabilityEvidence()
       evidence.set(.imageInput, supported: wire.capabilities?.imageInput?.supported, source: .discovery)
       evidence.set(.fileInput, supported: wire.capabilities?.pdfInput?.supported, source: .discovery)
@@ -108,6 +140,12 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !toolCalls.isEmpty
     else {
+      if decoded.stopReason == "refusal" {
+        throw ProviderError.provider(
+          status: response.statusCode,
+          message: "Anthropic refused to answer this request."
+        )
+      }
       throw ProviderError.emptyOutput
     }
 
@@ -199,6 +237,12 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
             || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !toolCalls.isEmpty
           else {
+            if finishReason == "refusal" {
+              throw ProviderError.midStreamProvider(
+                code: "refusal",
+                message: "Anthropic refused to answer this request."
+              )
+            }
             throw ProviderError.emptyOutput
           }
 
@@ -267,8 +311,14 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
           toolFragments[index] = AnthropicToolAccumulator(id: block.id, name: block.name)
         } else if block.type == "thinking" {
           thinkingFragments[index] = AnthropicThinkingAccumulator(
+            kind: .thinking,
             thinking: block.thinking ?? "",
             signature: block.signature
+          )
+        } else if block.type == "redacted_thinking", let redactedData = block.data, !redactedData.isEmpty {
+          thinkingFragments[index] = AnthropicThinkingAccumulator(
+            kind: .redacted,
+            redactedData: redactedData
           )
         }
       }
@@ -289,7 +339,7 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
         let index = decoded.index
       {
         var accumulator = thinkingFragments[index] ?? AnthropicThinkingAccumulator()
-        accumulator.signature = value
+        accumulator.signature = (accumulator.signature ?? "") + value
         thinkingFragments[index] = accumulator
       } else if delta.type == "input_json_delta",
         let index = decoded.index,
@@ -374,6 +424,9 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.invalidRequest("Attachments in one message cannot exceed 40 MB total.")
     }
     let imageMIMEs: Set<String> = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if let bad = attachments.first(where: { $0.isImage && $0.byteCount > 5 * 1_024 * 1_024 }) {
+      throw ProviderError.invalidRequest("\(bad.filename) exceeds Anthropic's 5 MB image limit.")
+    }
     if let bad = attachments.first(where: { $0.isImage && !imageMIMEs.contains($0.mimeType.lowercased()) }) {
       throw ProviderError.invalidRequest("Unsupported Anthropic image type for \(bad.filename).")
     }
@@ -387,9 +440,15 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   }
 
   func requestBody(_ request: ProviderRequest, streaming: Bool) throws -> [String: JSONValue] {
+    let maxTokens =
+      request.options.maxOutputTokens
+      ?? Self.defaultMaxTokens(
+        reasoning: request.options.reasoning,
+        capabilities: request.capabilities
+      )
     var body: [String: JSONValue] = [
       "model": .string(request.model.rawValue),
-      "max_tokens": .number(Double(request.options.maxOutputTokens ?? 4_096)),
+      "max_tokens": .number(Double(maxTokens)),
       "messages": .array(try request.messages.filter { $0.role != .system }.map(messageValue)),
       "stream": .bool(streaming),
     ]
@@ -543,14 +602,20 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   ) -> ProviderToolContinuation? {
     guard hasToolCalls else { return nil }
     let blocks = content.compactMap { block -> JSONValue? in
-      guard block.type == "thinking", let signature = block.signature, !signature.isEmpty else {
-        return nil
+      if block.type == "thinking", let signature = block.signature, !signature.isEmpty {
+        return .object([
+          "type": .string("thinking"),
+          "thinking": .string(block.thinking ?? ""),
+          "signature": .string(signature),
+        ])
       }
-      return .object([
-        "type": .string("thinking"),
-        "thinking": .string(block.thinking ?? ""),
-        "signature": .string(signature),
-      ])
+      if block.type == "redacted_thinking", let data = block.data, !data.isEmpty {
+        return .object([
+          "type": .string("redacted_thinking"),
+          "data": .string(data),
+        ])
+      }
+      return nil
     }
     guard !blocks.isEmpty else { return nil }
     return ProviderToolContinuation(apiFamily: .anthropicMessages, payload: .array(blocks))
@@ -562,17 +627,42 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
   ) -> ProviderToolContinuation? {
     guard hasToolCalls else { return nil }
     let blocks = thinkingFragments.keys.sorted().compactMap { index -> JSONValue? in
-      guard let block = thinkingFragments[index],
-        let signature = block.signature, !signature.isEmpty
-      else { return nil }
-      return .object([
-        "type": .string("thinking"),
-        "thinking": .string(block.thinking),
-        "signature": .string(signature),
-      ])
+      guard let block = thinkingFragments[index] else { return nil }
+      switch block.kind {
+      case .thinking:
+        guard let signature = block.signature, !signature.isEmpty else { return nil }
+        return .object([
+          "type": .string("thinking"),
+          "thinking": .string(block.thinking),
+          "signature": .string(signature),
+        ])
+      case .redacted:
+        guard let data = block.redactedData, !data.isEmpty else { return nil }
+        return .object([
+          "type": .string("redacted_thinking"),
+          "data": .string(data),
+        ])
+      }
     }
     guard !blocks.isEmpty else { return nil }
     return ProviderToolContinuation(apiFamily: .anthropicMessages, payload: .array(blocks))
+  }
+
+  private func modelsPageURL(baseEndpoint: URL, afterID: String?) throws -> URL {
+    guard var components = URLComponents(url: baseEndpoint, resolvingAgainstBaseURL: false) else {
+      throw ProviderError.invalidEndpoint
+    }
+    var items = components.queryItems ?? []
+    if !items.contains(where: { $0.name == "limit" }) {
+      items.append(URLQueryItem(name: "limit", value: "1000"))
+    }
+    if let afterID {
+      items.removeAll { $0.name == "after_id" }
+      items.append(URLQueryItem(name: "after_id", value: afterID))
+    }
+    components.queryItems = items
+    guard let result = components.url else { throw ProviderError.invalidEndpoint }
+    return result
   }
 
   private func makeRequest(
@@ -601,7 +691,11 @@ public struct AnthropicMessagesAdapter: ProviderAdapter, Sendable {
 
   private func mapHTTPError(status: Int, headers: [String: String], data: Data) -> ProviderError {
     let envelope = try? JSONDecoder.provider.decode(AnthropicErrorEnvelope.self, from: data)
-    let message = envelope?.error?.message ?? HTTPURLResponse.localizedString(forStatusCode: status)
+    let fallbackMessage =
+      status == 529
+      ? "Anthropic is temporarily overloaded. Try again in a moment."
+      : HTTPURLResponse.localizedString(forStatusCode: status)
+    let message = envelope?.error?.message ?? fallbackMessage
     let lowered = message.lowercased()
     switch status {
     case 401: return .authenticationFailed
@@ -655,12 +749,30 @@ private struct AnthropicToolAccumulator: Sendable {
 }
 
 private struct AnthropicThinkingAccumulator: Sendable {
+  enum Kind: Sendable { case thinking, redacted }
+  var kind: Kind = .thinking
   var thinking = ""
   var signature: String?
+  var redactedData: String?
 }
 
 private struct AnthropicModelsResponse: Decodable {
   var data: [AnthropicModelWire]
+  var hasMore: Bool?
+  var lastID: String?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    data = try container.decodeIfPresent([AnthropicModelWire].self, forKey: .data) ?? []
+    hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore)
+    lastID = try container.decodeIfPresent(String.self, forKey: .lastID)
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case data
+    case hasMore = "has_more"
+    case lastID = "last_id"
+  }
 }
 
 private struct AnthropicModelWire: Decodable {
@@ -712,6 +824,7 @@ private struct AnthropicContentBlock: Decodable {
   var text: String?
   var thinking: String?
   var signature: String?
+  var data: String?
   var id: String?
   var name: String?
   var input: JSONValue?

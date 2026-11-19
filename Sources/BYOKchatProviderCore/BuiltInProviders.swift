@@ -167,28 +167,7 @@ public enum BuiltInProviders {
     chatCompletionsPath: "/v1/messages",
     modelsPath: "/v1/models",
     authentication: .header(name: "x-api-key"),
-    seedModels: [
-      .init(
-        providerID: anthropicID,
-        id: "claude-sonnet-5-5",
-        displayName: "Claude Sonnet 5.5",
-        contextWindow: 1_000_000,
-        contextWindowKind: .inputOnly,
-        maxOutputTokens: 128_000,
-        supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
-        inputModalities: ["text", "image", "file"]
-      ),
-      .init(
-        providerID: anthropicID,
-        id: "claude-opus-5-5",
-        displayName: "Claude Opus 5.5",
-        contextWindow: 1_000_000,
-        contextWindowKind: .inputOnly,
-        maxOutputTokens: 128_000,
-        supportedParameters: ["max_tokens", "thinking", "effort", "tools"],
-        inputModalities: ["text", "image", "file"]
-      ),
-    ],
+    seedModels: ProviderKind.anthropic.seedModels,
     isBuiltIn: true,
     kind: .anthropic
   )

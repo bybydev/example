@@ -179,6 +179,17 @@ struct ModelCapabilityPolicyTests {
 
     let magistral = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "magistral-medium-2509")
     #expect(magistral.choices == [.providerDefault, .on])
+
+    let haiku55 = ModelCapabilityResolver.reasoningControl(kind: .anthropic, modelID: "claude-haiku-5-5")
+    #expect(
+      haiku55.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh), .effort(.max)]
+    )
+    #expect(haiku55.label(for: nil) == "Default (Medium)")
+    let haikuOff = haiku55.normalize(.init(enabled: false, effort: .max))
+    #expect(haikuOff?.enabled == false)
+    #expect(haikuOff?.effort == nil)
+    #expect(haiku55.normalize(.init(enabled: true, effort: .xhigh))?.effort == .xhigh)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")
@@ -284,6 +295,15 @@ struct ModelCapabilityPolicyTests {
     try ModelRequestPolicy.validateAttachments([image], kind: .openAICompatible, capabilities: unknown)
     let svg = ChatAttachment(kind: .image, filename: "diagram.svg", mimeType: "image/svg+xml", data: Data([1]))
     #expect(ModelRequestPolicy.attachmentError(svg, kind: .openai, capabilities: unknown) != nil)
+    let largeAnthropicImage = ChatAttachment(
+      kind: .image,
+      filename: "huge.png",
+      mimeType: "image/png",
+      data: Data(repeating: 0, count: 5 * 1_024 * 1_024 + 1)
+    )
+    #expect(
+      ModelRequestPolicy.attachmentError(largeAnthropicImage, kind: .anthropic, capabilities: unknown) != nil
+    )
   }
 
   @Test("Unsupported tool definitions are removed before context budgeting")

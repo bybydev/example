@@ -407,6 +407,9 @@ public enum ModelCapabilityResolver {
       }
       if id.hasPrefix("gemini-2.0") || id.hasPrefix("gemini-1") { return .init(kind: .unsupported, source: .adapter) }
     case .anthropic:
+      if id.hasPrefix("claude-haiku-5") {
+        return efforts([.low, .medium, .high, .xhigh, .max], defaultEffort: .medium, off: "disabled")
+      }
       let v5 = id.hasPrefix("claude-opus-5") || id.hasPrefix("claude-sonnet-5")
         || id.hasPrefix("claude-fable-5") || id.hasPrefix("claude-mythos-5")
       if v5 {

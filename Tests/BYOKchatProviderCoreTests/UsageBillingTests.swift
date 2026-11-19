@@ -273,6 +273,43 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(hydrogen.rates.cachedInput == "0.075")
 }
 
+@Test func anthropicCurrentCatalogPricingResolvesIncludingHaikuLongContextTier() throws {
+  let account = ProviderAccount(kind: .anthropic, id: "a", providerID: "anthropic", label: "Anthropic")
+
+  let sonnet55 = try #require(ModelPriceResolver.resolve(account: account, modelID: "claude-sonnet-5-5", model: nil))
+  #expect(sonnet55.rates.input == "2")
+  #expect(sonnet55.rates.output == "10")
+  #expect(sonnet55.rates.cachedInput == "0.1")
+  #expect(sonnet55.rates.cacheWrite == "2.5")
+  #expect(sonnet55.rates.longCacheWrite == "4")
+
+  let opus55 = try #require(ModelPriceResolver.resolve(account: account, modelID: "claude-opus-5-5", model: nil))
+  #expect(opus55.rates.input == "4")
+  #expect(opus55.rates.output == "20")
+  #expect(opus55.rates.cachedInput == "0.2")
+  #expect(opus55.rates.cacheWrite == "5")
+  #expect(opus55.rates.longCacheWrite == "8")
+
+  let haiku55 = try #require(ModelPriceResolver.resolve(account: account, modelID: "claude-haiku-5-5", model: nil))
+  let standardRates = haiku55.rates(for: ProviderUsage(inputTokens: 100_000, outputTokens: 1_000))
+  #expect(standardRates.input == "0.1")
+  #expect(standardRates.output == "0.5")
+  #expect(standardRates.cachedInput == "0.01")
+  let longRates = haiku55.rates(for: ProviderUsage(inputTokens: 100_001, outputTokens: 1_000))
+  #expect(longRates.input == "0.5")
+  #expect(longRates.output == "2.5")
+  #expect(longRates.cachedInput == "0.05")
+
+  let fable52 = try #require(ModelPriceResolver.resolve(account: account, modelID: "claude-fable-5-2", model: nil))
+  #expect(fable52.rates.input == "8")
+  #expect(fable52.rates.output == "40")
+  #expect(fable52.rates.cachedInput == "0.2")
+
+  let fable51 = try #require(ModelPriceResolver.resolve(account: account, modelID: "claude-fable-5-1", model: nil))
+  #expect(fable51.rates.input == "10")
+  #expect(fable51.rates.output == "50")
+}
+
 @Test func zAIPricingResolvesForDefaultEndpointOnly() throws {
   let account = ProviderAccount(kind: .zAI, id: "z", providerID: "zai", label: "Z.ai")
   let glm53 = try #require(ModelPriceResolver.resolve(account: account, modelID: "glm-5.3", model: nil))

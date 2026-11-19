@@ -87,17 +87,30 @@ struct TargetPickerView: View {
     }
   }
 
+  private var resolvedCapabilities: ResolvedModelCapabilities? {
+    guard let account = selectedAccount, let modelID else { return nil }
+    return ModelCapabilityResolver.resolve(kind: account.kind, modelID: modelID, model: selectedRecord?.model)
+  }
+
   private var reasoningControl: ModelReasoningControl {
-    guard let account = selectedAccount, let modelID else { return .init() }
-    return ModelCapabilityResolver.resolve(kind: account.kind, modelID: modelID, model: selectedRecord?.model).reasoning
+    resolvedCapabilities?.reasoning ?? .init()
   }
 
   private var reasoningError: String? {
     let outputLimit: Int?
     if selectedAccount?.kind == .anthropic {
-      if case .existingChat(let conversation, _) = mode { outputLimit = conversation.options.maxOutputTokens ?? 4_096 }
-      else { outputLimit = 4_096 }
-    } else { outputLimit = nil }
+      let fallback = AnthropicMessagesAdapter.defaultMaxTokens(
+        reasoning: reasoning,
+        capabilities: resolvedCapabilities
+      )
+      if case .existingChat(let conversation, _) = mode {
+        outputLimit = conversation.options.maxOutputTokens ?? fallback
+      } else {
+        outputLimit = fallback
+      }
+    } else {
+      outputLimit = nil
+    }
     return reasoningControl.budgetValidationMessage(reasoning, outputLimit: outputLimit)
   }
 

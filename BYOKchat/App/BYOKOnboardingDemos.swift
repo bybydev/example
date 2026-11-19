@@ -175,7 +175,7 @@ struct BYOKOnboardingProvidersDemo: View {
   @State private var showsDirectConnection = false
 
   private let providers = [
-    DemoProvider(name: "Anthropic", detail: "Claude Sonnet 4", symbol: "sparkles"),
+    DemoProvider(name: "Anthropic", detail: "Claude Sonnet 5.5", symbol: "sparkles"),
     DemoProvider(name: "OpenRouter", detail: "240+ models", symbol: "bolt.horizontal.fill"),
     DemoProvider(name: "Local Server", detail: "192.168.1.42", symbol: "network"),
   ]
