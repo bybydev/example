@@ -13,6 +13,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case gemini
   case deepSeek
   case zAI = "zai"
+  case moonshot
   case openRouter
   case nvidia
   case openAICompatible
@@ -20,7 +21,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   /// The catalog order used for provider pickers and lists. `.openAICompatible`
   /// is excluded: user-defined servers are configured, not catalogued.
   public static var catalog: [ProviderKind] {
-    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .openRouter, .nvidia]
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .openRouter, .nvidia]
   }
 
   /// The canonical provider ID for built-in kinds; `.openAICompatible` has no
@@ -33,6 +34,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     case .gemini: "gemini"
     case .deepSeek: "deepseek"
     case .zAI: "zai"
+    case .moonshot: "moonshot"
     case .openRouter: "openrouter"
     case .nvidia: "nvidia"
     case .openAICompatible: nil
@@ -100,6 +102,7 @@ public extension ProviderKind {
     case .gemini: "Gemini"
     case .deepSeek: "DeepSeek"
     case .zAI: "Z.ai"
+    case .moonshot: "Moonshot AI"
     case .openRouter: "OpenRouter"
     case .nvidia: "NVIDIA"
     case .openAICompatible: ""
@@ -111,7 +114,7 @@ public extension ProviderKind {
     case .anthropic: .anthropicMessages
     case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .deepSeek, .zAI, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .zAI, .moonshot, .openRouter, .nvidia, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -119,7 +122,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .xAI, .deepSeek, .zAI, .openRouter, .nvidia: .bearer
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .openRouter, .nvidia: .bearer
     case .openAICompatible: .userChoice
     }
   }
@@ -131,6 +134,7 @@ public extension ProviderKind {
     case .gemini: .fixed(chat: "/models", models: "/models")
     case .deepSeek: .fixed(chat: "/chat/completions", models: "/models")
     case .zAI: .fixed(chat: "/chat/completions", models: "/models")
+    case .moonshot: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
     case .nvidia: .fixed(chat: "/chat/completions", models: nil)
     case .openAICompatible: .userEditable
@@ -155,6 +159,7 @@ public extension ProviderKind {
     case .gemini: .brand(assetName: "provider.gemini")
     case .deepSeek: .brand(assetName: "provider.deepseek")
     case .zAI: .brand(assetName: "provider.zai")
+    case .moonshot: .brand(assetName: "provider.moonshot")
     case .openRouter: .brand(assetName: "provider.openrouter")
     case .nvidia: .brand(assetName: "provider.nvidia")
     case .openAICompatible: .monogram
@@ -167,14 +172,14 @@ public extension ProviderKind {
     switch self {
     case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
-    case .openai, .zAI, .openRouter, .nvidia, .openAICompatible: nil
+    case .openai, .zAI, .moonshot, .openRouter, .nvidia, .openAICompatible: nil
     }
   }
 
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .xAI, .deepSeek, .zAI, .openRouter, .nvidia, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .openRouter, .nvidia, .openAICompatible: .combined
     }
   }
 
@@ -327,6 +332,25 @@ public extension ProviderKind {
           providerID: "zai", id: "glm-4.7-flash", displayName: "GLM-4.7 Flash",
           contextWindow: 200_000, maxOutputTokens: 128_000,
           supportedParameters: ["temperature", "top_p", "max_tokens", "thinking", "tools"]),
+      ]
+    case .moonshot:
+      [
+        .init(
+          providerID: "moonshot", id: "kimi-k3.1-pro", displayName: "Kimi K3.1 Pro",
+          contextWindow: 1_048_576,
+          supportedParameters: ["max_tokens", "reasoning_effort", "tools"],
+          inputModalities: ["text", "image"]),
+        .init(
+          providerID: "moonshot", id: "kimi-k3.1-pro-highspeed",
+          displayName: "Kimi K3.1 Pro Highspeed",
+          contextWindow: 1_048_576,
+          supportedParameters: ["max_tokens", "reasoning_effort", "tools"],
+          inputModalities: ["text", "image"]),
+        .init(
+          providerID: "moonshot", id: "kimi-k3", displayName: "Kimi K3",
+          contextWindow: 1_048_576,
+          supportedParameters: ["max_tokens", "reasoning_effort", "tools"],
+          inputModalities: ["text", "image"]),
       ]
     case .openRouter:
       [
@@ -542,6 +566,7 @@ public extension ProviderKind {
     case .gemini: URL(string: "https://generativelanguage.googleapis.com/v1beta")
     case .deepSeek: URL(string: "https://api.deepseek.com")
     case .zAI: URL(string: "https://api.z.ai/api/paas/v4")
+    case .moonshot: URL(string: "https://api.moonshot.ai/v1")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
     case .nvidia: URL(string: "https://integrate.api.nvidia.com/v1")
     case .openAICompatible: nil
@@ -555,6 +580,7 @@ public extension ProviderKind {
     case .gemini: .gemini
     case .deepSeek: .deepSeek
     case .zAI: .zAI
+    case .moonshot: .moonshot
     case .openRouter: .openRouter
     case .nvidia: .nvidia
     case .openAICompatible: .genericOpenAICompatible

@@ -175,6 +175,29 @@ struct ComposerTargetLabelFormatterTests {
     )
     #expect(vision == "GLM-5V Turbo")
   }
+
+  @Test("Moonshot AI Kimi models preserve K-series casing and explicit effort")
+  func moonshotLabels() {
+    let pro = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.moonshotID,
+      providerName: "Moonshot AI",
+      modelName: "kimi-k3.1-pro",
+      modelID: "kimi-k3.1-pro",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(pro == "Kimi K3.1 Pro · High")
+
+    let highspeed = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.moonshotID,
+      providerName: "Moonshot AI",
+      modelName: "kimi-k3.1-pro-highspeed",
+      modelID: "kimi-k3.1-pro-highspeed",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: nil
+    )
+    #expect(highspeed == "Kimi K3.1 Pro Highspeed")
+  }
 }
 
 @Suite("Composer layout policy")

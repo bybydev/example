@@ -17,6 +17,7 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.openRouterID,
         BuiltInProviders.deepSeekID,
         BuiltInProviders.zAIID,
+        BuiltInProviders.moonshotID,
       ]
     )
   }

@@ -8,7 +8,7 @@ import Testing
   let definitions = await registry.allDefinitions()
   #expect(
     Set(definitions.map(\.id))
-      == ["openai", "xai", "deepseek", "zai", "openrouter", "nvidia", "anthropic", "gemini"]
+      == ["openai", "xai", "deepseek", "zai", "moonshot", "openrouter", "nvidia", "anthropic", "gemini"]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
   #expect(definitions.first { $0.id == "gemini" }?.apiFamily == .geminiGenerateContent)
@@ -70,6 +70,26 @@ import Testing
   #expect(ProviderKind.zAI.defaultProviderID == "zai")
   #expect(ProviderKind.zAI.logo == .brand(assetName: "provider.zai"))
   #expect(ProviderKind.zAI.reasoningDefault == nil)
+
+  let moonshot = try #require(definitions.first { $0.id == "moonshot" })
+  #expect(moonshot.defaultBaseURL.absoluteString == "https://api.moonshot.ai/v1")
+  #expect(moonshot.apiFamily == .openAIChatCompletions)
+  #expect(moonshot.behavior == .moonshot)
+  #expect(moonshot.authentication == .bearer)
+  #expect(moonshot.modelsPath == "/models")
+  #expect(moonshot.chatCompletionsPath == "/chat/completions")
+  #expect(moonshot.kind == .moonshot)
+  #expect(moonshot.seedModels.map(\.id) == ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"])
+  let kimiPro = try #require(moonshot.seedModels.first)
+  #expect(kimiPro.id == "kimi-k3.1-pro")
+  #expect(kimiPro.contextWindow == 1_048_576)
+  #expect(kimiPro.inputModalities.contains("image"))
+  #expect(kimiPro.supportedParameters.contains("temperature") == false)
+
+  #expect(ProviderKind.catalog.contains(.moonshot))
+  #expect(ProviderKind.moonshot.defaultProviderID == "moonshot")
+  #expect(ProviderKind.moonshot.logo == .brand(assetName: "provider.moonshot"))
+  #expect(ProviderKind.moonshot.reasoningDefault == nil)
 
   let anthropic = try #require(definitions.first { $0.id == "anthropic" })
   let sonnet = try #require(anthropic.seedModels.first { $0.id == "claude-sonnet-5-5" })

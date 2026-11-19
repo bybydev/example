@@ -347,6 +347,16 @@ public enum ModelCapabilityResolver {
       {
         return .init(kind: .fixed, allowsOff: true, offWireValue: "disabled", source: .adapter)
       }
+    case .moonshot:
+      if id.hasPrefix("kimi-k3") {
+        return efforts([.low, .high, .max], defaultEffort: .max)
+      }
+      if id.hasPrefix("kimi-k2.6") || id.hasPrefix("kimi-k2.5") {
+        return efforts([.low, .high, .max], defaultEffort: .high, off: "disabled")
+      }
+      if id.hasPrefix("kimi-k2-thinking") {
+        return .init(kind: .fixed, source: .adapter)
+      }
     case .gemini:
       if id.hasPrefix("gemini-3-pro") { return efforts([.low, .high], defaultEffort: .high) }
       if id.hasPrefix("gemini-3.1-pro") { return efforts([.low, .medium, .high], defaultEffort: .high) }
@@ -414,6 +424,7 @@ extension ProviderDefinition {
     switch behavior {
     case .deepSeek: return .deepSeek
     case .zAI: return .zAI
+    case .moonshot: return .moonshot
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

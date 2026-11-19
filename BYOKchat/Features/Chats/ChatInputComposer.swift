@@ -591,8 +591,8 @@ enum ComposerTargetLabelFormatter {
     // Strip vendor metadata, not the distinctive model family. On OpenRouter,
     // for example, "Claude" or "DeepSeek" must remain in the visible name.
     for prefix in [
-      "Google DeepMind", "Meta AI", "Zhipu AI", "OpenAI", "Anthropic", "Google",
-      "Meta", "Alibaba", "NVIDIA", "Zhipu", "Z.ai",
+      "Google DeepMind", "Meta AI", "Moonshot AI", "Zhipu AI", "OpenAI", "Anthropic", "Google",
+      "Meta", "Alibaba", "NVIDIA", "Moonshot", "Zhipu", "Z.ai",
     ] {
       if let stripped = removingPrefix(text, prefix) {
         text = stripped
@@ -626,7 +626,7 @@ enum ComposerTargetLabelFormatter {
       "llama": "Llama", "mistral": "Mistral", "grok": "Grok",
       "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
       "flash": "Flash", "flashx": "FlashX", "air": "Air", "airx": "AirX",
-      "pro": "Pro", "mini": "Mini", "nano": "Nano",
+      "pro": "Pro", "highspeed": "Highspeed", "mini": "Mini", "nano": "Nano",
       "turbo": "Turbo", "lite": "Lite", "preview": "Preview",
       "instruct": "Instruct", "reasoner": "Reasoner", "coder": "Coder",
       "chat": "Chat", "thinking": "Thinking", "sol": "Sol",
@@ -641,6 +641,9 @@ enum ComposerTargetLabelFormatter {
       }
       if token.first?.lowercased() == "v", token.dropFirst().first?.isNumber == true {
         return "V" + String(token.dropFirst())
+      }
+      if token.first?.lowercased() == "k", token.dropFirst().first?.isNumber == true {
+        return "K" + String(token.dropFirst())
       }
       return token
     }.joined(separator: " ")
@@ -705,6 +708,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.nvidiaID: return "NV"
     case BuiltInProviders.deepSeekID: return "DS"
     case BuiltInProviders.zAIID: return "Z.ai"
+    case BuiltInProviders.moonshotID: return "Moonshot"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     default:

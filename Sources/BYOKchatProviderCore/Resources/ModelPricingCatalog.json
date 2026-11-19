@@ -255,6 +255,45 @@
         "output": "0",
         "cachedInput": "0"
       }
+    },
+    {
+      "provider": "moonshot",
+      "modelIDs": [
+        "kimi-k3.1-pro"
+      ],
+      "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+      "verifiedAt": "2026-11-19",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.2"
+      }
+    },
+    {
+      "provider": "moonshot",
+      "modelIDs": [
+        "kimi-k3.1-pro-highspeed"
+      ],
+      "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+      "verifiedAt": "2026-11-19",
+      "rates": {
+        "input": "4",
+        "output": "20",
+        "cachedInput": "0.2"
+      }
+    },
+    {
+      "provider": "moonshot",
+      "modelIDs": [
+        "kimi-k3"
+      ],
+      "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+      "verifiedAt": "2026-11-19",
+      "rates": {
+        "input": "3",
+        "output": "15",
+        "cachedInput": "0.3"
+      }
     }
   ]
 }

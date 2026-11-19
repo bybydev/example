@@ -5,6 +5,7 @@ public enum BuiltInProviders {
   public static let xAIID: ProviderID = "xai"
   public static let deepSeekID: ProviderID = "deepseek"
   public static let zAIID: ProviderID = "zai"
+  public static let moonshotID: ProviderID = "moonshot"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let anthropicID: ProviderID = "anthropic"
@@ -73,6 +74,18 @@ public enum BuiltInProviders {
     seedModels: ProviderKind.zAI.seedModels,
     isBuiltIn: true,
     kind: .zAI
+  )
+
+  public static let moonshot = ProviderDefinition(
+    id: moonshotID,
+    displayName: "Moonshot AI",
+    behavior: .moonshot,
+    defaultBaseURL: URL(string: "https://api.moonshot.ai/v1")!,
+    modelsPath: "/models",
+    authentication: .bearer,
+    seedModels: ProviderKind.moonshot.seedModels,
+    isBuiltIn: true,
+    kind: .moonshot
   )
 
   public static let openRouter = ProviderDefinition(
@@ -177,5 +190,5 @@ public enum BuiltInProviders {
     kind: .gemini
   )
 
-  public static let all = [openAI, xAI, deepSeek, zAI, openRouter, nvidia, anthropic, gemini]
+  public static let all = [openAI, xAI, deepSeek, zAI, moonshot, openRouter, nvidia, anthropic, gemini]
 }

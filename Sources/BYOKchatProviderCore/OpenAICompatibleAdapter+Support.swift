@@ -119,9 +119,14 @@ extension OpenAICompatibleAdapter {
       body["tools"] = .array(request.tools.map(toolValue))
     }
 
-    let deepSeekThinkingEnabled =
-      definition.behavior == .deepSeek && request.options.reasoning?.enabled != false
-    if !deepSeekThinkingEnabled {
+    let normalizedModelID = request.model.rawValue.lowercased().replacingOccurrences(of: "_", with: "-")
+    let suppressesSamplingParameters =
+      (definition.behavior == .deepSeek && request.options.reasoning?.enabled != false)
+      || (definition.behavior == .moonshot
+        && (normalizedModelID.hasPrefix("kimi-k3")
+          || normalizedModelID.hasPrefix("kimi-k2.6")
+          || normalizedModelID.hasPrefix("kimi-k2.5")))
+    if !suppressesSamplingParameters {
       if let value = request.options.temperature { body["temperature"] = .number(value) }
       if let value = request.options.topP { body["top_p"] = .number(value) }
     }
@@ -136,6 +141,17 @@ extension OpenAICompatibleAdapter {
           body["thinking"] = .object(["type": .string(enabled ? "enabled" : "disabled")])
         }
         if reasoning.enabled != false, let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
+    case .moonshot:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["thinking"] = .object(["type": .string("disabled")])
+        } else if let effort = reasoning.effort {
           body["reasoning_effort"] = .string(effort.rawValue)
         }
       }
@@ -244,6 +260,13 @@ extension OpenAICompatibleAdapter {
     }
 
     if let calls = message.toolCalls, !calls.isEmpty {
+      if definition.behavior == .moonshot,
+        message.role == .assistant,
+        let reasoning = message.reasoning,
+        !reasoning.isEmpty
+      {
+        object["reasoning_content"] = .string(reasoning)
+      }
       object["tool_calls"] = .array(calls.map { call in
         .object([
           "id": .string(call.id),

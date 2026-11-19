@@ -96,7 +96,9 @@ enum ProviderLogoCatalog {
     .init("meta", aliases: ["meta", "meta-ai", "llama"]),
     .init("alibaba", aliases: ["alibaba", "alibaba-cloud"], hosts: ["dashscope.aliyuncs.com"]),
     .init("qwen", aliases: ["qwen", "tongyi-qianwen"]),
-    .init("moonshot", aliases: ["moonshot", "moonshot-ai", "kimi"], hosts: ["api.moonshot.ai"]),
+    .init(
+      "moonshot", aliases: ["moonshot", "moonshot-ai", "kimi"],
+      hosts: ["api.moonshot.ai", "api.moonshot.cn"]),
     .init("siliconflow", aliases: ["siliconflow", "silicon-cloud"], hosts: ["api.siliconflow.cn"]),
     .init("minimax", aliases: ["minimax"], hosts: ["api.minimax.io", "api.minimaxi.com"]),
     .init(

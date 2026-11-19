@@ -251,6 +251,31 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(ModelPriceResolver.resolve(account: codingPlanAccount, modelID: "glm-5.3", model: nil) == nil)
 }
 
+@Test func moonshotPricingResolvesForGlobalEndpointOnly() throws {
+  let account = ProviderAccount(kind: .moonshot, id: "m", providerID: "moonshot", label: "Moonshot AI")
+  let k31Pro = try #require(ModelPriceResolver.resolve(account: account, modelID: "kimi-k3.1-pro", model: nil))
+  #expect(k31Pro.source == "bundledCatalog")
+  #expect(k31Pro.rates.input == "2")
+  #expect(k31Pro.rates.output == "10")
+  #expect(k31Pro.rates.cachedInput == "0.2")
+
+  let highspeed = try #require(ModelPriceResolver.resolve(account: account, modelID: "kimi-k3.1-pro-highspeed", model: nil))
+  #expect(highspeed.rates.input == "4")
+  #expect(highspeed.rates.output == "20")
+  #expect(highspeed.rates.cachedInput == "0.2")
+
+  let k3 = try #require(ModelPriceResolver.resolve(account: account, modelID: "kimi-k3", model: nil))
+  #expect(k3.rates.input == "3")
+  #expect(k3.rates.output == "15")
+  #expect(k3.rates.cachedInput == "0.3")
+
+  let chinaAccount = ProviderAccount(
+    kind: .moonshot, id: "m-cn", providerID: "moonshot", label: "Moonshot CN",
+    baseURLOverride: URL(string: "https://api.moonshot.cn/v1")!
+  )
+  #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "kimi-k3.1-pro", model: nil) == nil)
+}
+
 @Test func timePricingRejectsCrossedBucketsEvenWithMatchingEndpoints() throws {
   let start = try #require(ISO8601DateFormatter().date(from: "2026-10-07T00:30:00Z"))
   let end = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:30:00Z"))

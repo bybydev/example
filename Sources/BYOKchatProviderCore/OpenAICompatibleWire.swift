@@ -82,6 +82,7 @@ struct ChatCompletionDeltaWire: Decodable {
 
 struct UsageWire: Decodable {
   var promptTokens: Int?
+  var cachedTokens: Int?
   var promptCacheHitTokens: Int?
   var completionTokens: Int?
   var promptTokensDetails: PromptTokensDetailsWire?
@@ -92,6 +93,7 @@ struct UsageWire: Decodable {
     case cost
     case isBYOK = "is_byok"
     case promptTokens = "prompt_tokens"
+    case cachedTokens = "cached_tokens"
     case promptCacheHitTokens = "prompt_cache_hit_tokens"
     case completionTokens = "completion_tokens"
     case promptTokensDetails = "prompt_tokens_details"
@@ -101,7 +103,7 @@ struct UsageWire: Decodable {
     .init(
       inputTokens: promptTokens,
       outputTokens: completionTokens,
-      cachedInputTokens: promptTokensDetails?.cachedTokens ?? promptCacheHitTokens,
+      cachedInputTokens: promptTokensDetails?.cachedTokens ?? cachedTokens ?? promptCacheHitTokens,
       reasoningTokens: completionTokensDetails?.reasoningTokens,
       cacheWriteTokens: promptTokensDetails?.cacheWriteTokens,
       hasUnpricedCharges: (promptTokensDetails?.audioTokens ?? 0) > 0

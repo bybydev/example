@@ -332,3 +332,90 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(root52["thinking"] == .object(["type": .string("disabled")]))
   #expect(root52["reasoning_effort"] == nil)
 }
+
+@Test func moonshotStreamSendsEffortOmitsTemperatureAndPreservesToolReasoning() async throws {
+  let stream = """
+    data: {"id":"m1","model":"kimi-k3.1-pro","choices":[{"delta":{"reasoning_content":"Inspect "},"finish_reason":null}]}
+
+    data: {"id":"m1","model":"kimi-k3.1-pro","choices":[{"delta":{"content":"Result"},"finish_reason":"stop"}]}
+
+    data: {"id":"m1","model":"kimi-k3.1-pro","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":8,"cached_tokens":5}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.moonshot, transport: transport)
+  let call = ChatToolCall(id: "call_1", name: "lookup", arguments: .object(["q": .string("k3")]))
+  let result = ChatToolResult(callID: "call_1", name: "lookup", content: .string("ok"))
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "kimi-k3.1-pro",
+      messages: [
+        .init(role: .user, content: "Check"),
+        .init(role: .assistant, content: "", reasoning: "Need tool", toolCalls: [call]),
+        .init(role: .tool, content: "", toolResults: [result]),
+      ],
+      options: .init(temperature: 0.7, topP: 0.8, reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "moonshot")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.moonshot.ai/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["thinking"] == nil)
+  #expect(root["reasoning_effort"] == .string("high"))
+  #expect(root["temperature"] == nil)
+  #expect(root["top_p"] == nil)
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+  if case .array(let messages)? = root["messages"],
+    case .object(let assistantMsg) = messages[1]
+  {
+    #expect(assistantMsg["reasoning_content"] == .string("Need tool"))
+  } else {
+    Issue.record("Missing assistant tool-call message")
+  }
+
+  #expect(events.contains(.reasoningDelta("Inspect ")))
+  #expect(events.contains(.textDelta("Result")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Inspect ")
+  #expect(response.text == "Result")
+  #expect(response.usage?.inputTokens == 20)
+  #expect(response.usage?.cachedInputTokens == 5)
+}
+
+@Test func moonshotK3NeverSendsThinkingDisabled() async throws {
+  let okResponse = Data(
+    #"{"id":"m","model":"kimi-k3.1-pro","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#.utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.moonshot, transport: transport)
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "kimi-k3.1-pro",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "moonshot")
+  )
+  let body = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["thinking"] == nil)
+  #expect(root["reasoning_effort"] == nil)
+}

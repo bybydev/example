@@ -104,6 +104,21 @@ struct ModelCapabilityPolicyTests {
     #expect(glm51.choices == [.providerDefault, .off, .on])
     #expect(glm51.normalize(.init(enabled: true, effort: .high)) == nil)
     #expect(glm51.normalize(.init(enabled: false))?.enabled == false)
+
+    let kimiK31 = ModelCapabilityResolver.reasoningControl(kind: .moonshot, modelID: "kimi-k3.1-pro")
+    #expect(kimiK31.choices == [.providerDefault, .effort(.low), .effort(.high), .effort(.max)])
+    #expect(kimiK31.label(for: nil) == "Default (Max)")
+    #expect(kimiK31.normalize(.init(enabled: false)) == nil)
+    #expect(kimiK31.normalize(.init(enabled: true, effort: .medium)) == nil)
+    #expect(kimiK31.normalize(.init(enabled: true, effort: .low))?.effort == .low)
+
+    let kimiK3 = ModelCapabilityResolver.reasoningControl(kind: .moonshot, modelID: "kimi-k3")
+    #expect(!kimiK3.choices.contains(.off))
+    #expect(kimiK3.efforts == [.low, .high, .max])
+
+    let kimiK25 = ModelCapabilityResolver.reasoningControl(kind: .moonshot, modelID: "kimi-k2.5")
+    #expect(kimiK25.choices == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.max)])
+    #expect(kimiK25.normalize(.init(enabled: false))?.enabled == false)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")
