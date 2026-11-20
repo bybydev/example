@@ -20,6 +20,7 @@ struct ProvidersView: View {
   @State private var showAddConnection = false
   @State private var showProUpsell = false
   @State private var didHandleInitialSetup = false
+  @State private var isVisible = false
 
   init(
     model: ProviderManagementModel,
@@ -81,10 +82,12 @@ struct ProvidersView: View {
     .sheet(isPresented: $showProUpsell) {
       BYOKProUpsellFlow(feature: .providerAccounts)
     }
+    .onAppear { isVisible = true }
+    .onDisappear { isVisible = false }
     .alert(
       "Connection Error",
       isPresented: Binding(
-        get: { !showAddConnection && model.errorMessage != nil },
+        get: { isVisible && !showAddConnection && model.errorMessage != nil },
         set: { if !$0 { model.errorMessage = nil } }
       )
     ) {
@@ -111,7 +114,11 @@ struct ProvidersView: View {
   @ViewBuilder
   private func connectionLink(_ account: ProviderAccount) -> some View {
     NavigationLink {
-      ConnectionEditorView(model: model, existing: account)
+      ConnectionEditorView(
+        model: model,
+        existing: account,
+        onFinished: onConnectionReady == nil ? nil : { finishEditSetup(accountID: account.id) }
+      )
     } label: {
       ProviderRow(model: model, account: account)
     }
@@ -137,6 +144,15 @@ struct ProvidersView: View {
     else { return }
     didHandleInitialSetup = true
     addConnection()
+  }
+
+  private func finishEditSetup(accountID: ProviderAccountID) {
+    guard onConnectionReady != nil else { return }
+    if let updated = model.accounts.first(where: { $0.id == accountID }),
+      model.isReady(updated)
+    {
+      finishConnectionSetup()
+    }
   }
 
   private func finishConnectionSetup() {

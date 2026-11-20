@@ -343,6 +343,127 @@ struct ProviderManagementModelTests {
     #expect(environment.model.isReady(account))
   }
 
+  @Test("Editing a custom connection updates wire paths, auth, enabled state, and clears key on .none")
+  func editCustomWireSettingsAndEnabledState() async throws {
+    let environment = try await makeEnvironment()
+    let created = await environment.model.createConnection(
+      kind: .openAICompatible,
+      label: "Proxy",
+      credential: "secret-key",
+      baseURL: "https://proxy.example/v1",
+      defaultModel: "model-a",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: "/models",
+      authChoice: .bearer
+    )
+    let id = try #require(created)
+    #expect(environment.model.credentialAccountIDs.contains(id))
+
+    let firstEdit = await environment.model.updateAccount(
+      accountID: id,
+      isEnabled: false,
+      chatCompletionsPath: "/openai/chat/completions",
+      modelsPath: "/openai/models",
+      authChoice: .header(name: "X-Custom-Key")
+    )
+    #expect(firstEdit)
+    let afterFirst = try await environment.workspace.account(id: id)
+    #expect(!afterFirst.isEnabled)
+    #expect(afterFirst.chatCompletionsPath == "/openai/chat/completions")
+    #expect(afterFirst.modelsPath == "/openai/models")
+    #expect(afterFirst.authChoice == .header(name: "X-Custom-Key"))
+    #expect(environment.model.credentialAccountIDs.contains(id))
+    let firstDef = try #require(environment.model.provider(for: afterFirst.providerID))
+    #expect(firstDef.authentication == .header(name: "X-Custom-Key"))
+    #expect(firstDef.modelsPath == "/openai/models")
+
+    let renameOnly = await environment.model.updateAccount(
+      accountID: id,
+      label: "Proxy Renamed"
+    )
+    #expect(renameOnly)
+    #expect(environment.model.credentialAccountIDs.contains(id))
+
+    let secondEdit = await environment.model.updateAccount(
+      accountID: id,
+      isEnabled: true,
+      clearModelsPath: true,
+      authChoice: ProviderAuthentication.none
+    )
+    #expect(secondEdit)
+    let afterSecond = try await environment.workspace.account(id: id)
+    #expect(afterSecond.isEnabled)
+    #expect(afterSecond.modelsPath == nil)
+    #expect(afterSecond.authChoice == ProviderAuthentication.none)
+    #expect(!environment.model.credentialAccountIDs.contains(id))
+    let secondDef = try #require(environment.model.provider(for: afterSecond.providerID))
+    #expect(secondDef.authentication == ProviderAuthentication.none)
+    #expect(secondDef.modelsPath == nil)
+    #expect(environment.model.isReady(afterSecond))
+  }
+
+  @Test("Re-adding a manual model staged for removal preserves it on save")
+  func editReAddingRemovedManualModelKeepsIt() async throws {
+    let environment = try await makeEnvironment()
+    let created = await environment.model.createConnection(
+      kind: .deepSeek,
+      label: "DeepSeek",
+      credential: "key",
+      baseURL: "",
+      defaultModel: "custom-model",
+      headers: [:],
+      metadata: [:],
+      manualModelIDs: ["custom-model"]
+    )
+    let id = try #require(created)
+
+    let succeeded = await environment.model.updateAccount(
+      accountID: id,
+      defaultModelID: "custom-model",
+      manualModelIDs: ["custom-model"],
+      removedManualModelIDs: ["custom-model"]
+    )
+    #expect(succeeded)
+    let records = await environment.workspace.modelRecords(for: id)
+    #expect(records.contains(where: { $0.model.id == "custom-model" && $0.isManual }))
+    let account = try await environment.workspace.account(id: id)
+    #expect(account.defaultModelID == "custom-model")
+  }
+
+  @Test("Editing unrelated fields leaves a hidden default model hidden and unchanged")
+  func editUnrelatedFieldPreservesHiddenDefault() async throws {
+    let environment = try await makeEnvironment()
+    let created = await environment.model.createConnection(
+      kind: .openai,
+      label: "OpenAI",
+      credential: "key",
+      baseURL: "",
+      defaultModel: "hidden-model",
+      headers: [:],
+      metadata: [:],
+      discoveredModels: [
+        ProviderModel(providerID: BuiltInProviders.openAIID, id: "hidden-model", displayName: "Hidden")
+      ]
+    )
+    let id = try #require(created)
+    try await environment.workspace.setHidden(true, modelID: "hidden-model", accountID: id)
+    await environment.model.reloadFromStorage()
+
+    let succeeded = await environment.model.updateAccount(
+      accountID: id,
+      label: "Renamed OpenAI"
+    )
+    #expect(succeeded)
+    let account = try await environment.workspace.account(id: id)
+    #expect(account.label == "Renamed OpenAI")
+    #expect(account.defaultModelID == "hidden-model")
+    let record = await environment.workspace.modelRecords(for: id, includeHidden: true)
+      .first { $0.model.id == "hidden-model" }
+    #expect(record?.isHidden == true)
+  }
+
   private func makeEnvironment(
     transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
   ) async throws -> (

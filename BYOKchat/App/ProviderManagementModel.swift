@@ -193,11 +193,16 @@ final class ProviderManagementModel {
   func updateAccount(
     accountID: ProviderAccountID,
     label: String? = nil,
+    isEnabled: Bool? = nil,
     newCredential: String? = nil,
     clearCredential: Bool = false,
     baseURLString: String? = nil,
     headers: [String: String]? = nil,
     metadata: [String: String]? = nil,
+    chatCompletionsPath: String? = nil,
+    modelsPath: String? = nil,
+    clearModelsPath: Bool = false,
+    authChoice: ProviderAuthentication? = nil,
     defaultModelID: ModelID? = nil,
     clearDefaultModel: Bool = false,
     discoveredModels: [ProviderModel]? = nil,
@@ -213,15 +218,35 @@ final class ProviderManagementModel {
         }
         updated.label = trimmed
       }
+      if let isEnabled {
+        updated.isEnabled = isEnabled
+      }
       if let baseURLString {
         updated.baseURLOverride = try optionalURL(baseURLString)
       }
       if let headers { updated.additionalHeaders = headers }
       if let metadata { updated.metadata = metadata }
+      if updated.kind == .openAICompatible {
+        if let chatCompletionsPath {
+          updated.chatCompletionsPath = chatCompletionsPath.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        }
+        if clearModelsPath {
+          updated.modelsPath = nil
+        } else if let modelsPath {
+          let trimmed = modelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+          updated.modelsPath = trimmed.isEmpty ? nil : trimmed
+        }
+        if let authChoice {
+          updated.authChoice = authChoice
+        }
+      }
       if clearDefaultModel { updated.defaultModelID = nil }
       else if let defaultModelID { updated.defaultModelID = defaultModelID }
       try await accountManager.updateAccount(updated)
-      if clearCredential {
+      let shouldClearCredential =
+        clearCredential || (updated.kind == .openAICompatible && authChoice == .some(.none))
+      if shouldClearCredential {
         do {
           try await accountManager.setCredential(nil, accountID: accountID)
         } catch {
@@ -243,8 +268,18 @@ final class ProviderManagementModel {
           markRefreshed: discoveredModels != nil
         )
       }
-      if !removedManualModelIDs.isEmpty {
-        try await workspace.removeManualModels(removedManualModelIDs, for: accountID)
+      let addedManualIDs = Set(
+        manualModelIDs
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { !$0.isEmpty }
+          .map(ModelID.init(rawValue:))
+      )
+      var effectiveRemoved = removedManualModelIDs.subtracting(addedManualIDs)
+      if let defaultModelID, !clearDefaultModel {
+        effectiveRemoved.remove(defaultModelID)
+      }
+      if !effectiveRemoved.isEmpty {
+        try await workspace.removeManualModels(effectiveRemoved, for: accountID)
       }
       try await reloadSnapshot()
     }
@@ -521,10 +556,11 @@ final class ProviderManagementModel {
   private func reloadSnapshot() async throws {
     let registeredDefinitions = await registry.allDefinitions()
     let loadedAccounts = await workspace.allAccounts()
-    // New compatible accounts are self-contained and need no legacy custom
-    // definition. Include their derived definitions in presentation/readiness.
+    // Compatible accounts are self-contained and carry their own wire settings,
+    // so always prefer their derived definition in presentation and readiness.
     var definitionsByID = Dictionary(uniqueKeysWithValues: registeredDefinitions.map { ($0.id, $0) })
-    for account in loadedAccounts where definitionsByID[account.providerID] == nil {
+    for account in loadedAccounts
+    where account.kind == .openAICompatible || definitionsByID[account.providerID] == nil {
       definitionsByID[account.providerID] = account.definition
     }
     definitions = definitionsByID.values.sorted {

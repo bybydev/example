@@ -4,8 +4,8 @@ import SwiftUI
 
 /// One editor for every provider account, create and edit. Fields are
 /// conditioned on the account's (or prospective) `ProviderKind`: built-in
-/// kinds hide wire configuration, `.openAICompatible` accounts show auth and
-/// paths once at create. Nothing is persisted in create mode until Save.
+/// kinds hide wire configuration, `.openAICompatible` accounts expose auth and
+/// paths in both create and edit. Nothing is persisted until Save/Done.
 struct ConnectionEditorView: View {
   /// What a presenting surface wants fixed or focused.
   enum FocusRequest: Hashable {
@@ -26,7 +26,7 @@ struct ConnectionEditorView: View {
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var focusedField: FocusRequest?
 
-  // Create-mode state
+  // Provider & custom wire state
   @State private var selectedKind: ProviderKind
   @State private var customAuth: AuthenticationChoice = .bearer
   @State private var customHeaderName = "X-API-Key"
@@ -35,12 +35,14 @@ struct ConnectionEditorView: View {
 
   // Shared field state
   @State private var label = ""
+  @State private var isEnabled = true
   @State private var credential = ""
   @State private var isDraftCredentialVisible = false
   @State private var baseURL = ""
   @State private var headersText = ""
   @State private var appTitle = ""
   @State private var httpReferer = ""
+  @State private var isAdvancedExpanded = false
   @State private var selectedModelID: ModelID?
   @State private var manualModelID = ""
   @State private var discoveredModels: [ProviderModel]? = nil
@@ -59,6 +61,7 @@ struct ConnectionEditorView: View {
   @State private var isDirty = false
   @State private var isRevealingCredential = false
   @State private var revealedCredential: String?
+  @State private var revealFailed = false
   /// False until the user edits the name field; while false, the name
   /// pre-fills/updates with the provider-named suggestion.
   @State private var didEditName = false
@@ -80,11 +83,35 @@ struct ConnectionEditorView: View {
       initialValue: existing?.kind ?? initialKind ?? .anthropic)
     if let existing {
       _label = State(initialValue: existing.label)
+      _isEnabled = State(initialValue: existing.isEnabled)
       _baseURL = State(initialValue: existing.baseURLOverride?.absoluteString ?? "")
       _headersText = State(initialValue: serializeHeaders(existing.additionalHeaders))
       _selectedModelID = State(initialValue: existing.defaultModelID)
       _appTitle = State(initialValue: existing.metadata["appTitle"] ?? "")
       _httpReferer = State(initialValue: existing.metadata["httpReferer"] ?? "")
+      if existing.kind == .openAICompatible {
+        let definition = existing.definition
+        switch definition.authentication {
+        case .bearer:
+          _customAuth = State(initialValue: .bearer)
+        case .header(let name):
+          _customAuth = State(initialValue: .header)
+          _customHeaderName = State(initialValue: name)
+        case .none:
+          _customAuth = State(initialValue: .none)
+        }
+        _customChatPath = State(initialValue: definition.chatCompletionsPath)
+        _customModelsPath = State(initialValue: definition.modelsPath ?? "")
+      }
+      let hasEndpointOverride =
+        !existing.kind.isLocalServer && existing.kind != .openAICompatible
+        && existing.baseURLOverride != nil
+      let hasHeaders = !existing.additionalHeaders.isEmpty
+      let hasOpenRouterMeta =
+        !(existing.metadata["appTitle"] ?? "").isEmpty
+        || !(existing.metadata["httpReferer"] ?? "").isEmpty
+      _isAdvancedExpanded = State(
+        initialValue: hasEndpointOverride || hasHeaders || hasOpenRouterMeta)
     } else {
       let initial = initialKind ?? .anthropic
       // Built-in cloud providers inherit `kind.defaultEndpoint` when left empty
@@ -96,6 +123,11 @@ struct ConnectionEditorView: View {
 
   private var isCreate: Bool { existing == nil }
 
+  private var currentAccount: ProviderAccount? {
+    guard let existing else { return nil }
+    return model.accounts.first { $0.id == existing.id } ?? existing
+  }
+
   private var kind: ProviderKind { existing?.kind ?? selectedKind }
 
   private var isCustom: Bool { kind == .openAICompatible }
@@ -104,27 +136,30 @@ struct ConnectionEditorView: View {
 
   private var showsServerSection: Bool { isLocalServer || isCustom }
 
-  /// In edit mode the kind's derived definition supplies defaults; in create
-  /// mode it is built from the typed custom-provider fields.
+  private var draftAuthentication: ProviderAuthentication {
+    switch customAuth {
+    case .bearer: .bearer
+    case .header: .header(name: customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines))
+    case .none: .none
+    }
+  }
+
+  /// For built-in kinds in edit mode, the account's derived definition supplies
+  /// fixed wire defaults; for `.openAICompatible` (create or edit) and create
+  /// mode, it is built from the live form fields.
   private var draftDefinition: ProviderDefinition {
-    if let existing { return existing.definition }
-    let endpoint = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))
-    let auth: ProviderAuthentication =
-      switch customAuth {
-      case .bearer: .bearer
-      case .header: .header(name: customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines))
-      case .none: .none
-      }
+    if let existing, !isCustom { return existing.definition }
+    let endpoint = resolvedDraftEndpoint
     let chatPath = customChatPath.trimmingCharacters(in: .whitespacesAndNewlines)
     let modelsPath = customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
     return kind.definition(
-      providerID: kind.defaultProviderID ?? "custom",
+      providerID: existing?.providerID ?? kind.defaultProviderID ?? "custom",
       displayName: label.trimmingCharacters(in: .whitespacesAndNewlines),
       baseURLOverride: endpoint,
       chatPath: chatPath,
       modelsPath: modelsPath.isEmpty ? nil : modelsPath,
-      authentication: auth,
-      seedModelIDs: []
+      authentication: draftAuthentication,
+      seedModelIDs: existing?.seedModelIDs ?? []
     )
     .withKind(kind)
   }
@@ -148,7 +183,9 @@ struct ConnectionEditorView: View {
   private var resolvedDraftEndpoint: URL? {
     let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-      return ((isLocalServer && isCreate) || isCustom) ? nil : kind.defaultEndpoint
+      let requiresExplicitURL =
+        isCustom || (isLocalServer && (isCreate || existing?.baseURLOverride != nil))
+      return requiresExplicitURL ? nil : kind.defaultEndpoint
     }
     guard let parsed = URL(string: trimmed),
       let scheme = parsed.scheme?.lowercased(),
@@ -169,35 +206,39 @@ struct ConnectionEditorView: View {
   }
 
   private var canSave: Bool {
-    if isCustom && isCreate {
-      guard resolvedDraftEndpoint != nil,
-        !customChatPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      else { return false }
+    guard resolvedDraftEndpoint != nil else { return false }
+    if isCustom {
+      guard !customChatPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return false
+      }
       if customAuth == .header,
         customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       {
         return false
       }
-    } else if isCustom {
-      guard resolvedDraftEndpoint != nil else { return false }
-    }
-    if isLocalServer {
-      guard resolvedDraftEndpoint != nil else { return false }
     }
     if requiresCredential && isCreate, trimmedCredential.isEmpty {
       return false
     }
-    if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      suggestedName.isEmpty
-    {
+    let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    if isCreate {
+      if trimmedLabel.isEmpty, suggestedName.isEmpty {
+        return false
+      }
+    } else if trimmedLabel.isEmpty {
       return false
     }
     if !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-    guard let selectedModelID else {
-      // Allow removing the final manual model from an existing connection.
-      return existing != nil && !removedManualModelIDs.isEmpty && modelRecords.isEmpty
+    let records = modelRecords
+    if let existing {
+      if records.isEmpty { return true }
+      if let selectedModelID, records.contains(where: { $0.model.id == selectedModelID }) {
+        return true
+      }
+      return selectedModelID == existing.defaultModelID
     }
-    return modelRecords.contains { $0.model.id == selectedModelID }
+    guard let selectedModelID else { return false }
+    return records.contains { $0.model.id == selectedModelID }
   }
 
   var body: some View {
@@ -219,7 +260,7 @@ struct ConnectionEditorView: View {
         if isLocalServer {
           localServerSection
         } else if isCustom {
-          customEditServerSection
+          customWireSection
         }
         credentialSection
         modelSection
@@ -235,6 +276,7 @@ struct ConnectionEditorView: View {
     .navigationTitle(isCreate ? "Add Connection" : "Edit Connection")
     .navigationBarTitleDisplayMode(.inline)
     .interactiveDismissDisabled(isSaving)
+    .navigationBarBackButtonHidden(isSaving)
     .toolbar {
       if isCreate {
         ToolbarItem(placement: .cancellationAction) {
@@ -259,18 +301,23 @@ struct ConnectionEditorView: View {
     }
     .confirmationDialog("Delete this connection?", isPresented: $showDelete) {
       Button("Delete Connection", role: .destructive) {
+        guard let id = existing?.id else { return }
+        isSaving = true
         Task { @MainActor in
-          await model.deleteAccount(existing?.id ?? "")
-          dismiss()
-          onFinished?()
+          defer { isSaving = false }
+          await model.deleteAccount(id)
+          if !model.accounts.contains(where: { $0.id == id }) {
+            dismiss()
+          }
         }
       }
       Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "This removes the saved connection settings and API key from Keychain. Your existing chats will not be deleted."
+      )
     }
     .onAppear {
-      if !isDirty, baseURL.isEmpty, let existing {
-        baseURL = existing.baseURLOverride?.absoluteString ?? ""
-      }
       // Pre-fill the name with the suggestion without marking the form dirty.
       if isCreate, !didEditName {
         applySuggestedLabel()
@@ -289,9 +336,13 @@ struct ConnectionEditorView: View {
   private var lockedProviderHeader: some View {
     Section {
       HStack(spacing: 12) {
-        ConnectionProviderMark(definition: existing?.definition, size: 38)
+        ConnectionProviderMark(
+          definition: isCustom ? draftDefinition : currentAccount?.definition,
+          size: 38
+        )
         VStack(alignment: .leading, spacing: 2) {
-          Text(providerTitle).font(.system(size: 15, weight: .medium))
+          Text(isCustom ? "Custom (OpenAI-Compatible)" : kind.displayName)
+            .font(.system(size: 15, weight: .medium))
           Text("Provider is fixed for this connection")
             .font(.caption)
             .foregroundStyle(theme.secondaryForegroundColor)
@@ -391,29 +442,6 @@ struct ConnectionEditorView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var customEditServerSection: some View {
-    Section {
-      TextField("https://example.com/v1", text: $baseURL)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .keyboardType(.URL)
-        .onChange(of: baseURL) { _, _ in isDirty = true }
-      if showsPhysicalDeviceLoopbackWarning {
-        loopbackWarningLabel
-      }
-      if draftDefinition.modelsPath != nil {
-        testConnectionButton
-        connectionTestStatusRow
-      }
-    } header: {
-      Text("Server")
-    } footer: {
-      Text("HTTPS is required for internet hosts; HTTP is allowed for local and LAN addresses.")
-        .foregroundStyle(theme.secondaryForegroundColor)
-    }
-    .listRowBackground(theme.surfaceColor)
-  }
-
   private var loopbackWarningLabel: some View {
     Label(
       "localhost refers to this device. Use your computer's LAN IP or .local hostname instead.",
@@ -481,17 +509,28 @@ struct ConnectionEditorView: View {
           Text(choice.title).tag(choice)
         }
       }
+      .onChange(of: customAuth) { _, newValue in
+        isDirty = true
+        if newValue == .none {
+          credential = ""
+          isDraftCredentialVisible = false
+          replaceCredential = false
+        }
+      }
       if customAuth == .header {
         TextField("Header name", text: $customHeaderName)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
+          .onChange(of: customHeaderName) { _, _ in isDirty = true }
       }
       TextField("Chat path", text: $customChatPath)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .onChange(of: customChatPath) { _, _ in isDirty = true }
       TextField("Models path (optional)", text: $customModelsPath)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .onChange(of: customModelsPath) { _, _ in isDirty = true }
       if draftDefinition.modelsPath != nil {
         testConnectionButton
         connectionTestStatusRow
@@ -520,52 +559,78 @@ struct ConnectionEditorView: View {
               .foregroundStyle(theme.secondaryForegroundColor)
             VStack(alignment: .leading, spacing: 3) {
               Text("API Key").font(.system(size: 15, weight: .medium))
-              Text(revealedCredential == nil ? "Saved securely in Keychain" : maskedSummary)
+              Text(storedCredentialSubtitle)
                 .font(.caption)
-                .foregroundStyle(theme.secondaryForegroundColor)
+                .foregroundStyle(revealFailed ? .orange : theme.secondaryForegroundColor)
                 .lineLimit(1)
             }
-            Spacer()
-            // Eye: reveal/hide the stored key without replacing it.
+            Spacer(minLength: 8)
             Button {
               toggleReveal()
             } label: {
-              Image(systemName: revealedCredential == nil ? "eye" : "eye.slash")
-                .frame(width: 36, height: 36)
+              if isRevealingCredential {
+                ProgressView()
+                  .controlSize(.small)
+                  .frame(width: 36, height: 36)
+              } else {
+                Image(systemName: revealedCredential == nil ? "eye" : "eye.slash")
+                  .frame(width: 36, height: 36)
+              }
             }
             .buttonStyle(.plain)
             .disabled(isRevealingCredential)
             .accessibilityLabel(revealedCredential == nil ? "Reveal API key" : "Hide API key")
+          }
 
-            Button("Replace") {
-              replaceCredential = true
-              clearCredential = false
+          Button("Replace API Key") {
+            replaceCredential = true
+            clearCredential = false
+            revealedCredential = nil
+            revealFailed = false
+            isDraftCredentialVisible = false
+            focusedField = .apiKey
+          }
+
+          if !requiresCredential {
+            Button("Remove API Key", role: .destructive) {
+              clearCredential = true
+              replaceCredential = false
+              credential = ""
               revealedCredential = nil
+              revealFailed = false
               isDraftCredentialVisible = false
-            }
-            .font(.system(size: 14, weight: .semibold))
-
-            if !requiresCredential {
-              Button("Remove", role: .destructive) {
-                clearCredential = true
-                replaceCredential = false
-                credential = ""
-                revealedCredential = nil
-                isDirty = true
-              }
-              .font(.system(size: 14, weight: .semibold))
+              isDirty = true
             }
           }
         } else {
           credentialField
-          if clearCredential {
+          if hasStoredCredential && clearCredential {
             Text("Saved API key will be removed when you tap Done.")
               .font(.caption)
               .foregroundStyle(theme.secondaryForegroundColor)
+            Button("Keep Saved Key") {
+              clearCredential = false
+              credential = ""
+              isDraftCredentialVisible = false
+            }
+          } else if hasStoredCredential && replaceCredential {
+            Text("Leave blank to keep your saved key.")
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+            Button("Keep Saved Key") {
+              replaceCredential = false
+              credential = ""
+              isDraftCredentialVisible = false
+            }
           }
         }
       } else {
         Label("This provider does not require an API key.", systemImage: "checkmark.shield")
+        if hasStoredCredential {
+          Text("Saved API key will be removed when you tap Done.")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
       }
     } header: {
       Text(showsCredentialField && !requiresCredential ? "API Key (Optional)" : "API Key")
@@ -585,6 +650,11 @@ struct ConnectionEditorView: View {
       }
     }
     .listRowBackground(theme.surfaceColor)
+  }
+
+  private var storedCredentialSubtitle: String {
+    if revealFailed { return "Unable to read saved key from Keychain" }
+    return revealedCredential == nil ? "Saved securely in Keychain" : maskedSummary
   }
 
   @ViewBuilder
@@ -624,20 +694,30 @@ struct ConnectionEditorView: View {
   }
 
   private var maskedSummary: String {
-    guard let value = revealedCredential, value.count > 8 else { return "Key revealed" }
-    return "\(value.prefix(4))···\(value.suffix(4))  (\(value.count) chars)"
+    guard let value = revealedCredential else { return "" }
+    if value.count > 8 {
+      return "\(value.prefix(4))···\(value.suffix(4))  (\(value.count) chars)"
+    }
+    if value.count > 2 {
+      return "\(value.prefix(1))···\(value.suffix(1))  (\(value.count) chars)"
+    }
+    return "•••  (\(value.count) \(value.count == 1 ? "char" : "chars"))"
   }
 
   private func toggleReveal() {
     if revealedCredential != nil {
       revealedCredential = nil
+      revealFailed = false
       return
     }
     guard let id = existing?.id else { return }
     isRevealingCredential = true
+    revealFailed = false
     Task { @MainActor in
       defer { isRevealingCredential = false }
-      revealedCredential = await model.revealCredential(accountID: id)
+      let secret = await model.revealCredential(accountID: id)
+      revealedCredential = secret
+      revealFailed = (secret == nil)
     }
   }
 
@@ -686,8 +766,10 @@ struct ConnectionEditorView: View {
     } header: {
       Text("Models")
     } footer: {
-      Text("Choose a default or enter its exact model ID. Fetch previews models; Save or Done keeps your changes.")
-        .foregroundStyle(theme.secondaryForegroundColor)
+      Text(
+        "Choose a default or enter its exact model ID. Fetch previews models; \(isCreate ? "Save" : "Done") keeps your changes."
+      )
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -740,8 +822,17 @@ struct ConnectionEditorView: View {
   private var selectedModelTitle: String {
     let typed = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
     if !typed.isEmpty { return typed }
-    return modelRecords.first { $0.model.id == selectedModelID }?.model.displayName
-      ?? "Choose model"
+    if let match = modelRecords.first(where: { $0.model.id == selectedModelID }) {
+      return match.model.displayName
+    }
+    if let selectedModelID, let existing,
+      let hidden = model.models(for: existing.id, includeHidden: true).first(where: {
+        $0.model.id == selectedModelID
+      })
+    {
+      return hidden.isHidden ? "\(hidden.model.displayName) (Hidden)" : hidden.model.displayName
+    }
+    return "Choose model"
   }
 
   private var modelRecords: [AccountModelRecord] {
@@ -752,11 +843,13 @@ struct ConnectionEditorView: View {
       records[record.model.id] = record
     }
     for value in catalog {
-      var record = stored.first { $0.model.id == value.id }
-        ?? AccountModelRecord(accountID: existing?.id ?? "", model: value)
-      record.model = value
-      record.isAvailable = true
-      records[value.id] = record
+      if var existingRecord = stored.first(where: { $0.model.id == value.id }) {
+        existingRecord.model = value.mergingCapabilities(from: existingRecord.model)
+        existingRecord.isAvailable = true
+        records[value.id] = existingRecord
+      } else {
+        records[value.id] = AccountModelRecord(accountID: existing?.id ?? "", model: value)
+      }
     }
     for value in manualModels {
       if var record = records[value.id] {
@@ -808,7 +901,7 @@ struct ConnectionEditorView: View {
 
   private var advancedSection: some View {
     Section {
-      DisclosureGroup("Advanced") {
+      DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
         VStack(alignment: .leading, spacing: 10) {
           if !showsServerSection {
             Text("Endpoint Override")
@@ -915,18 +1008,13 @@ struct ConnectionEditorView: View {
 
   private var enabledSection: some View {
     Section {
-      Toggle(
-        "Enabled",
-        isOn: Binding(
-          get: { existing?.isEnabled ?? false },
-          set: { enabled in
-            guard let id = existing?.id else { return }
-            Task { @MainActor in
-              _ = await model.setAccountEnabled(enabled, accountID: id)
-            }
-          }
-        )
+      Toggle("Enabled", isOn: $isEnabled)
+        .onChange(of: isEnabled) { _, _ in isDirty = true }
+    } footer: {
+      Text(
+        "Disabled connections are hidden from chat pickers while keeping your saved settings and API key."
       )
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -934,13 +1022,13 @@ struct ConnectionEditorView: View {
   /// Audit metadata for an existing connection.
   private var infoSection: some View {
     Section {
-      if let created = existing?.createdAt {
+      if let created = currentAccount?.createdAt {
         LabeledContent("Created") {
           Text(created.formatted(date: .abbreviated, time: .shortened))
             .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
-      if let updated = existing?.updatedAt {
+      if let updated = currentAccount?.updatedAt {
         LabeledContent("Updated") {
           Text(updated.formatted(date: .abbreviated, time: .shortened))
             .foregroundStyle(theme.secondaryForegroundColor)
@@ -1039,13 +1127,12 @@ struct ConnectionEditorView: View {
       label: previewLabel,
       apiKey: trimmedCredential.isEmpty ? nil : trimmedCredential,
       baseURLOverride: endpoint, additionalHeaders: headers, metadata: draftMetadata,
-      chatCompletionsPath: existing?.chatCompletionsPath
-        ?? (isCustom ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil),
-      modelsPath: existing?.modelsPath
-        ?? (isCustom ? draftDefinition.modelsPath : nil),
+      chatCompletionsPath: isCustom
+        ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+      modelsPath: isCustom ? definition.modelsPath : nil,
       authChoice: isCustom ? definition.authentication : nil,
       seedModelIDs: existing?.seedModelIDs ?? [])
-    let storedCredentialID = clearCredential ? nil : existing?.id
+    let storedCredentialID = (clearCredential || (isCustom && customAuth == .none)) ? nil : existing?.id
     let tracksTestState = recordConnectionTest || showsServerSection
     discoveryTask?.cancel()
     discoveryID = requestID
@@ -1066,6 +1153,7 @@ struct ConnectionEditorView: View {
           for: resolved, storedCredentialAccountID: storedCredentialID)
         guard !Task.isCancelled, discoveryID == requestID, discoveryInput == input else { return }
         discoveredModels = models
+        isDirty = true
         if tracksTestState {
           connectionTestState = .connected(modelCount: models.count)
         }
@@ -1080,7 +1168,9 @@ struct ConnectionEditorView: View {
         if tracksTestState {
           connectionTestState = .failed("Connection failed: \(error.localizedDescription)")
         }
-        discoveryWarning = "Model discovery failed: \(error.localizedDescription) Enter a model ID manually to continue."
+        if !showsServerSection {
+          discoveryWarning = "Model discovery failed: \(error.localizedDescription) Enter a model ID manually to continue."
+        }
       }
     }
   }
@@ -1089,11 +1179,57 @@ struct ConnectionEditorView: View {
     dismiss()
   }
 
+  private func normalizedCloudBaseURL(_ trimmedBaseURL: String) -> String {
+    guard !isCustom && !isLocalServer else { return trimmedBaseURL }
+    guard !trimmedBaseURL.isEmpty else { return "" }
+    let defaultString = kind.defaultEndpoint?.absoluteString
+    let withoutTrailingSlash =
+      trimmedBaseURL.hasSuffix("/") ? String(trimmedBaseURL.dropLast()) : trimmedBaseURL
+    if trimmedBaseURL == defaultString || withoutTrailingSlash == defaultString {
+      return ""
+    }
+    return trimmedBaseURL
+  }
+
+  private func hasUnsavedChanges(
+    against existing: ProviderAccount,
+    finalLabel: String,
+    persistedBaseURL: String,
+    parsedHeaders: [String: String],
+    metadata: [String: String],
+    sanitizedCredential: String,
+    shouldClearCredential: Bool,
+    resolvedModelID: ModelID?,
+    manualIDs: [String],
+    effectiveRemoved: Set<ModelID>,
+    preview: [ProviderModel]?
+  ) -> Bool {
+    if finalLabel != existing.label { return true }
+    if isEnabled != existing.isEnabled { return true }
+    if persistedBaseURL != (existing.baseURLOverride?.absoluteString ?? "") { return true }
+    if parsedHeaders != existing.additionalHeaders { return true }
+    if metadata != existing.metadata { return true }
+    if !sanitizedCredential.isEmpty || (shouldClearCredential && hasStoredCredential) { return true }
+    if resolvedModelID != existing.defaultModelID { return true }
+    if preview != nil || !manualIDs.isEmpty || !effectiveRemoved.isEmpty { return true }
+    if isCustom {
+      let existingDef = existing.definition
+      let trimmedChat = customChatPath.trimmingCharacters(in: .whitespacesAndNewlines)
+      let trimmedModels = customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+      let normalizedModels: String? = trimmedModels.isEmpty ? nil : trimmedModels
+      if trimmedChat != existingDef.chatCompletionsPath { return true }
+      if normalizedModels != existingDef.modelsPath { return true }
+      if draftAuthentication != existingDef.authentication { return true }
+    }
+    return false
+  }
+
   private func save() {
     let parsedHeaders: [String: String]
     do {
       parsedHeaders = try parseHeadersStrict(headersText)
     } catch {
+      isAdvancedExpanded = true
       model.errorMessage = error.localizedDescription
       return
     }
@@ -1103,67 +1239,96 @@ struct ConnectionEditorView: View {
     let resolvedModelID = typedModel.isEmpty ? selectedModelID : ModelID(rawValue: typedModel)
     let preview = discoveredModels
     let manualIDs = manualModels.map { $0.id.rawValue } + (typedModel.isEmpty ? [] : [typedModel])
-    let sanitizedCredential = trimmedCredential
+    let sanitizedCredential = (isCustom && customAuth == .none) ? "" : trimmedCredential
+    let shouldClearCredential =
+      (clearCredential || (isCustom && customAuth == .none)) && sanitizedCredential.isEmpty
     let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    let persistedBaseURL: String =
-      if !isCustom && !isLocalServer,
-        trimmedBaseURL == kind.defaultEndpoint?.absoluteString
-      {
-        ""
-      } else {
-        trimmedBaseURL
-      }
+    let persistedBaseURL = normalizedCloudBaseURL(trimmedBaseURL)
+    let trimmedCustomChatPath = customChatPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedCustomModelsPath = customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    let effectiveAuth = draftAuthentication
+    let effectiveRemoved = removedManualModelIDs.subtracting(
+      Set(manualIDs.map(ModelID.init(rawValue:)))
+    )
+
     // Capture values before suspension; invalidate the outstanding preview.
     discoveryTask?.cancel()
     discoveryID = nil
     isDiscoveryRunning = false
 
-    // Single name path: the field is pre-filled with the suggestion, so
-    // whatever is here (or a fallback recompute if somehow cleared) saves.
     let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-    let finalLabel = trimmedLabel.isEmpty
-      ? model.autoName(for: kind)
-      : trimmedLabel
+    let finalLabel = trimmedLabel.isEmpty ? suggestedName : trimmedLabel
     guard !finalLabel.isEmpty else { return }
+
+    if let existing {
+      let latest = currentAccount ?? existing
+      if !hasUnsavedChanges(
+        against: latest,
+        finalLabel: finalLabel,
+        persistedBaseURL: persistedBaseURL,
+        parsedHeaders: parsedHeaders,
+        metadata: metadata,
+        sanitizedCredential: sanitizedCredential,
+        shouldClearCredential: shouldClearCredential,
+        resolvedModelID: resolvedModelID,
+        manualIDs: manualIDs,
+        effectiveRemoved: effectiveRemoved,
+        preview: preview
+      ) {
+        dismiss()
+        return
+      }
+      let modelSelectionChanged =
+        !typedModel.isEmpty
+        || resolvedModelID != latest.defaultModelID
+        || (resolvedModelID == nil && !effectiveRemoved.isEmpty)
+      isSaving = true
+      Task { @MainActor in
+        defer { isSaving = false }
+        guard await model.updateAccount(
+          accountID: existing.id,
+          label: finalLabel,
+          isEnabled: isEnabled,
+          newCredential: sanitizedCredential.isEmpty ? nil : sanitizedCredential,
+          clearCredential: shouldClearCredential,
+          baseURLString: persistedBaseURL,
+          headers: parsedHeaders,
+          metadata: metadata,
+          chatCompletionsPath: isCustom ? trimmedCustomChatPath : nil,
+          modelsPath: isCustom && !trimmedCustomModelsPath.isEmpty ? trimmedCustomModelsPath : nil,
+          clearModelsPath: isCustom && trimmedCustomModelsPath.isEmpty,
+          authChoice: isCustom ? effectiveAuth : nil,
+          defaultModelID: modelSelectionChanged ? resolvedModelID : nil,
+          clearDefaultModel: modelSelectionChanged && resolvedModelID == nil,
+          discoveredModels: preview,
+          manualModelIDs: manualIDs,
+          removedManualModelIDs: effectiveRemoved
+        ) else { return }
+        dismiss()
+        onFinished?()
+      }
+      return
+    }
 
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
-      if let existing {
-        guard resolvedModelID != nil || !removedManualModelIDs.isEmpty else { return }
-        guard await model.updateAccount(
-          accountID: existing.id,
-          label: finalLabel,
-          newCredential: sanitizedCredential.isEmpty ? nil : sanitizedCredential,
-          clearCredential: clearCredential && sanitizedCredential.isEmpty,
-          baseURLString: persistedBaseURL,
-          headers: parsedHeaders,
-          metadata: metadata,
-          defaultModelID: resolvedModelID,
-          clearDefaultModel: resolvedModelID == nil,
-          discoveredModels: preview,
-          manualModelIDs: manualIDs,
-          removedManualModelIDs: removedManualModelIDs
-        ) else { return }
-      } else {
-        let created = await model.createConnection(
-          kind: kind,
-          label: finalLabel,
-          credential: sanitizedCredential,
-          baseURL: persistedBaseURL,
-          defaultModel: resolvedModelID?.rawValue ?? "",
-          headers: parsedHeaders,
-          metadata: metadata,
-          chatCompletionsPath: isCustom
-            ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
-          modelsPath: isCustom ? draftDefinition.modelsPath : nil,
-          authChoice: isCustom ? draftDefinition.authentication : nil,
-          seedModelIDs: [],
-          discoveredModels: preview,
-          manualModelIDs: manualIDs
-        )
-        guard created != nil else { return }
-      }
+      let created = await model.createConnection(
+        kind: kind,
+        label: finalLabel,
+        credential: sanitizedCredential,
+        baseURL: persistedBaseURL,
+        defaultModel: resolvedModelID?.rawValue ?? "",
+        headers: parsedHeaders,
+        metadata: metadata,
+        chatCompletionsPath: isCustom ? trimmedCustomChatPath : nil,
+        modelsPath: isCustom && !trimmedCustomModelsPath.isEmpty ? trimmedCustomModelsPath : nil,
+        authChoice: isCustom ? effectiveAuth : nil,
+        seedModelIDs: [],
+        discoveredModels: preview,
+        manualModelIDs: manualIDs
+      )
+      guard created != nil else { return }
       dismiss()
       onFinished?()
     }
@@ -1238,8 +1403,17 @@ struct ConnectionModelPickerView: View {
   var body: some View {
     List {
       if filtered.isEmpty {
-        ContentUnavailableView.search(text: searchText)
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          ContentUnavailableView(
+            "No Models",
+            systemImage: "square.stack.3d.up.slash",
+            description: Text("Fetch models or enter a model ID manually.")
+          )
           .listRowBackground(Color.clear)
+        } else {
+          ContentUnavailableView.search(text: searchText)
+            .listRowBackground(Color.clear)
+        }
       } else {
         ForEach(filtered) { record in
           let details = modelDetails(record)
