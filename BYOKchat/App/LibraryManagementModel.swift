@@ -16,6 +16,7 @@ final class LibraryManagementModel {
 
   private let store: LibraryStore
   private var analyticsRecordedEntryIDs: Set<LibraryEntryID> = []
+  private var activeOperationCount = 0
 
   init(store: LibraryStore) {
     self.store = store
@@ -137,8 +138,12 @@ final class LibraryManagementModel {
   }
 
   private func perform(_ operation: () async throws -> Void) async {
+    activeOperationCount += 1
     isBusy = true
-    defer { isBusy = false }
+    defer {
+      activeOperationCount -= 1
+      isBusy = activeOperationCount > 0
+    }
     do {
       try await operation()
       entries = await store.entries()
@@ -153,8 +158,12 @@ final class LibraryManagementModel {
     onError: ((Error) -> Void)? = nil,
     _ operation: () async throws -> T?
   ) async -> T? {
+    activeOperationCount += 1
     isBusy = true
-    defer { isBusy = false }
+    defer {
+      activeOperationCount -= 1
+      isBusy = activeOperationCount > 0
+    }
     do {
       let result = try await operation()
       entries = await store.entries()

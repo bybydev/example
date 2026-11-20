@@ -589,7 +589,9 @@ struct AppRootView: View {
 
   /// A library entry saved from a chat jumps back to its source message.
   private func openLibrarySourceChat(_ entry: LibraryEntry) {
-    guard case let .chat(conversationID, messageID) = entry.source else { return }
+    guard case let .chat(conversationID, messageID) = entry.source,
+      model.chats.hasConversation(conversationID)
+    else { return }
     selectSearchResult(
       ConversationSearchResult(
         conversationID: conversationID,

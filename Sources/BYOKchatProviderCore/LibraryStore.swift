@@ -214,12 +214,16 @@ public actor LibraryStore {
     guard !trimmed.isEmpty else {
       throw ProviderError.invalidRequest("A library entry needs a filename.")
     }
+    guard !trimmed.contains("/"), !trimmed.contains("\0"), trimmed != ".", trimmed != ".." else {
+      throw ProviderError.invalidRequest("Filenames cannot contain '/'.")
+    }
 
     await beginMutation()
     defer { endMutation() }
 
     var candidate = state
     guard let index = candidate.entries.firstIndex(where: { $0.id == id }) else { return }
+    guard candidate.entries[index].filename != trimmed else { return }
     candidate.entries[index].filename = trimmed
     candidate.entries[index].updatedAt = .now
     try await commit(candidate)

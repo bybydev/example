@@ -203,6 +203,50 @@ struct LibraryStoreTransactionTests {
     _ = try await (first, second)
     #expect(await store.entries().count == 2)
   }
+
+  @Test("Rename rejects path separators and dot-only filenames")
+  func renameRejectsPathSeparators() async throws {
+    let store = LibraryStore(
+      persistence: InMemoryLibraryWorkspacePersistence(),
+      blobs: InMemoryAttachmentBlobStore()
+    )
+    try await store.load()
+    let entry = try await store.add(
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+      data: Data("pdf".utf8)
+    )
+
+    for invalid in ["2026/04 report.pdf", ".", "..", "nested/path/file.txt"] {
+      var threw = false
+      do {
+        try await store.rename(entry.id, filename: invalid)
+      } catch {
+        threw = true
+      }
+      #expect(threw)
+    }
+    #expect(await store.entry(id: entry.id)?.filename == "report.pdf")
+  }
+
+  @Test("No-op rename skips persistence and keeps updatedAt unchanged")
+  func renameNoOpSkipsPersistence() async throws {
+    let persistence = ToggleFailureLibraryPersistence()
+    let store = LibraryStore(
+      persistence: persistence,
+      blobs: InMemoryAttachmentBlobStore()
+    )
+    try await store.load()
+    let entry = try await store.add(
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      data: Data("hello".utf8)
+    )
+
+    await persistence.setFailSaves(true)
+    try await store.rename(entry.id, filename: "  notes.md  ")
+    #expect(await store.entry(id: entry.id)?.updatedAt == entry.updatedAt)
+  }
 }
 
 private enum LibraryTransactionTestError: Error {
