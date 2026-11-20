@@ -348,7 +348,8 @@ public extension ProviderKind {
           contextWindow: 1_000_000, maxOutputTokens: 384_000,
           supportedParameters: [
             "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
-          ]),
+          ],
+          inputModalities: ["text", "image"]),
         .init(
           providerID: "deepseek", id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
           contextWindow: 1_000_000, maxOutputTokens: 384_000,

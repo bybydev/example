@@ -54,6 +54,17 @@ import Testing
   #expect(ProviderKind.xAI.logo == .brand(assetName: "provider.xai"))
   #expect(ProviderKind.xAI.reasoningDefault == .init(enabled: true, effort: .high))
 
+  let deepSeek = try #require(definitions.first { $0.id == "deepseek" })
+  #expect(deepSeek.defaultBaseURL.absoluteString == "https://api.deepseek.com")
+  #expect(deepSeek.behavior == .deepSeek)
+  let deepSeekFlash = try #require(deepSeek.seedModels.first { $0.id == "deepseek-flash" })
+  #expect(deepSeekFlash.inputModalities.contains("image"))
+  #expect(deepSeekFlash.capabilityEvidence?.facts[.imageInput]?.support == .supported)
+  let deepSeekPro = try #require(deepSeek.seedModels.first { $0.id == "deepseek-v4-pro" })
+  #expect(!deepSeekPro.inputModalities.contains("image"))
+  #expect(deepSeekPro.contextWindow == 1_000_000)
+  #expect(deepSeekPro.maxOutputTokens == 384_000)
+
   let zAI = try #require(definitions.first { $0.id == "zai" })
   #expect(zAI.defaultBaseURL.absoluteString == "https://api.z.ai/api/paas/v4")
   #expect(zAI.apiFamily == .openAIChatCompletions)

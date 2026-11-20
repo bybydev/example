@@ -50,20 +50,7 @@ public enum BuiltInProviders {
     defaultBaseURL: URL(string: "https://api.deepseek.com")!,
     modelsPath: "/models",
     authentication: .bearer,
-    seedModels: [
-      .init(
-        providerID: deepSeekID, id: "deepseek-flash", displayName: "DeepSeek Flash",
-        contextWindow: 1_000_000, maxOutputTokens: 384_000,
-        supportedParameters: [
-          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
-        ]),
-      .init(
-        providerID: deepSeekID, id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
-        contextWindow: 1_000_000, maxOutputTokens: 384_000,
-        supportedParameters: [
-          "temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools",
-        ]),
-    ],
+    seedModels: ProviderKind.deepSeek.seedModels,
     isBuiltIn: true,
     kind: .deepSeek
   )

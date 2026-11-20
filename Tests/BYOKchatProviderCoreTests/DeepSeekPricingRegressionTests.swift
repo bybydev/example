@@ -11,7 +11,8 @@ func deepSeekVerifiedFlashAliasesUseTheSameSavedRule(model: String) throws {
     account: account, modelID: ModelID(rawValue: model), model: nil, at: date))
   #expect(pricing.source == "bundledCatalog")
   #expect(pricing.modelID == model)
-  #expect(pricing.verifiedAt == "2026-10-08")
+  #expect(pricing.verifiedAt == "2026-11-20")
+  #expect(pricing.contextNote?.contains("Chinese public holiday") == true)
   let receipt = ChatBilling.requestBilling(metadata: [:], usage: .init(
     inputTokens: 1_000, outputTokens: 100, cachedInputTokens: 200), pricing: pricing,
     modelMatches: ModelPriceResolver.responseModelMatches(

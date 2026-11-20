@@ -775,3 +775,240 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(customReq.url?.absoluteString == "http://homelab:8000/v1/chat/completions")
   #expect(customReq.value(forHTTPHeaderField: "Authorization") == nil)
 }
+
+@Test func deepSeekPreservesReasoningContentAcrossToolTurnsAndOmitsWithoutTools() async throws {
+  let okResponse = Data(
+    #"{"id":"ds-1","model":"deepseek-flash","choices":[{"message":{"content":"Done"},"finish_reason":"stop"}]}"#
+      .utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek, transport: transport)
+  let tool = ChatToolDefinition(
+    name: "lookup",
+    description: "Look up data",
+    inputSchema: .object(["type": .string("object")])
+  )
+  let call1 = ChatToolCall(id: "call_1", name: "lookup", arguments: .object(["q": .string("a")]))
+  let result1 = ChatToolResult(callID: "call_1", name: "lookup", content: .string("1"))
+  let call2 = ChatToolCall(id: "call_2", name: "lookup", arguments: .object(["q": .string("b")]))
+  let result2 = ChatToolResult(callID: "call_2", name: "lookup", content: .string("2"))
+
+  // Request with tools: prior assistant turn, tool-call turn with reasoning, and
+  // tool-call turn missing reasoning (e.g., after model switch) all carry reasoning_content.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "deepseek-flash",
+      messages: [
+        .init(role: .user, content: "First question"),
+        .init(role: .assistant, content: "First answer", reasoning: "Turn 1 thought"),
+        .init(role: .user, content: "Use tools"),
+        .init(role: .assistant, content: "", reasoning: "Need lookup a", toolCalls: [call1]),
+        .init(role: .tool, content: "", toolResults: [result1]),
+        .init(role: .assistant, content: "", reasoning: nil, toolCalls: [call2]),
+        .init(role: .tool, content: "", toolResults: [result2]),
+      ],
+      options: .init(reasoning: .init(enabled: true, effort: .high)),
+      tools: [tool]
+    ),
+    account: account(providerID: "deepseek")
+  )
+
+  let toolBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let toolRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: toolBody),
+    case .array(let toolMessages)? = toolRoot["messages"],
+    toolMessages.count == 7,
+    case .object(let userMsg) = toolMessages[0],
+    case .object(let priorAssistant) = toolMessages[1],
+    case .object(let toolCallWithReasoning) = toolMessages[3],
+    case .object(let toolCallWithoutReasoning) = toolMessages[5]
+  else {
+    Issue.record("Missing expected DeepSeek tool messages")
+    return
+  }
+  #expect(userMsg["reasoning_content"] == nil)
+  #expect(priorAssistant["reasoning_content"] == .string("Turn 1 thought"))
+  #expect(toolCallWithReasoning["reasoning_content"] == .string("Need lookup a"))
+  #expect(toolCallWithoutReasoning["reasoning_content"] == .string(""))
+
+  // Plain multi-turn request without tools omits reasoning_content to avoid unnecessary payload bloat.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "deepseek-flash",
+      messages: [
+        .init(role: .user, content: "Hi"),
+        .init(role: .assistant, content: "Hello", reasoning: "Old thought"),
+        .init(role: .user, content: "Next"),
+      ],
+      options: .init(reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "deepseek")
+  )
+
+  let plainBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let plainRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: plainBody),
+    case .array(let plainMessages)? = plainRoot["messages"],
+    case .object(let plainAssistant) = plainMessages[1]
+  else {
+    Issue.record("Missing expected DeepSeek plain messages")
+    return
+  }
+  #expect(plainAssistant["reasoning_content"] == nil)
+}
+
+@Test func deepSeekDiscoveryDecodesLimitsModalitiesAndEffortLevels() async throws {
+  let modelsJSON = Data(
+    #"""
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "deepseek-flash",
+          "object": "model",
+          "owned_by": "deepseek",
+          "name": "DeepSeek-V4.1-Flash",
+          "context_window": 1000000,
+          "max_output_tokens": 384000,
+          "input_modalities": ["text", "image"],
+          "output_modalities": ["text"],
+          "effort": {
+            "supported_levels": ["low", "high", "max"],
+            "default_level": "high"
+          }
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "object": "model",
+          "owned_by": "deepseek",
+          "name": "DeepSeek-V4-Pro",
+          "context_window": 1000000,
+          "max_output_tokens": 384000,
+          "input_modalities": ["text"],
+          "output_modalities": ["text"],
+          "effort": {
+            "supported_levels": ["low", "high", "max"],
+            "default_level": "high"
+          }
+        },
+        {
+          "id": "deepseek-v5-preview",
+          "object": "model",
+          "owned_by": "deepseek",
+          "name": "DeepSeek V5 Preview",
+          "context_window": 2000000,
+          "max_output_tokens": 256000,
+          "input_modalities": ["text", "image"],
+          "output_modalities": ["text"],
+          "effort": {
+            "supported_levels": ["low", "medium", "high", "max"],
+            "default_level": "high"
+          }
+        }
+      ]
+    }
+    """#.utf8
+  )
+  let transport = MockTransport(data: modelsJSON)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "deepseek"))
+
+  let flash = try #require(models.first { $0.id == "deepseek-flash" })
+  let flashCaps = ModelCapabilityResolver.resolve(kind: .deepSeek, modelID: flash.id, model: flash)
+  #expect(flashCaps.contextWindow == 1_000_000)
+  #expect(flashCaps.maxOutputTokens == 384_000)
+  #expect(flashCaps[.imageInput] == .supported)
+  #expect(flashCaps[.fileInput] == .unsupported)
+  #expect(flashCaps.reasoning.efforts == [.low, .high, .max])
+  #expect(flashCaps.reasoning.allowsOff)
+
+  let pro = try #require(models.first { $0.id == "deepseek-v4-pro" })
+  let proCaps = ModelCapabilityResolver.resolve(kind: .deepSeek, modelID: pro.id, model: pro)
+  #expect(proCaps[.imageInput] == .unsupported)
+  #expect(proCaps[.fileInput] == .unsupported)
+  #expect(proCaps.reasoning.efforts == [.low, .high, .max])
+
+  let v5 = try #require(models.first { $0.id == "deepseek-v5-preview" })
+  let v5Caps = ModelCapabilityResolver.resolve(kind: .deepSeek, modelID: v5.id, model: v5)
+  #expect(v5Caps.contextWindow == 2_000_000)
+  #expect(v5Caps.maxOutputTokens == 256_000)
+  #expect(v5Caps[.imageInput] == .supported)
+  #expect(v5Caps.reasoning.efforts == [.low, .medium, .high, .max])
+  #expect(v5Caps.reasoning.defaultEffort == .high)
+  #expect(v5Caps.reasoning.source == .discovery)
+}
+
+@Test func deepSeekTestConnectionDisablesThinkingForKnownModelsAndBudgetsUnknownModels() async throws {
+  let okResponse = Data(
+    #"{"id":"ds-ok","model":"deepseek-flash","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+      .utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.deepSeek, transport: transport)
+
+  try await adapter.testConnection(account: account(providerID: "deepseek"), model: "deepseek-flash")
+  let knownBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let knownRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: knownBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(knownRoot["thinking"] == .object(["type": .string("disabled")]))
+  #expect(knownRoot["reasoning_effort"] == nil)
+  #expect(knownRoot["max_tokens"] == .number(16))
+
+  try await adapter.testConnection(account: account(providerID: "deepseek"), model: "deepseek-future")
+  let unknownBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let unknownRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: unknownBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(unknownRoot["max_tokens"] == .number(1024))
+}
+
+@Test func openAICompatibleEmptyContentSurfacesContentFilterAndLengthFinishReasons() async throws {
+  let filteredJSON = Data(
+    #"{"id":"ds-cf","model":"deepseek-flash","choices":[{"message":{"content":""},"finish_reason":"content_filter"}]}"#
+      .utf8
+  )
+  let adapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.deepSeek,
+    transport: MockTransport(data: filteredJSON)
+  )
+  do {
+    _ = try await adapter.generate(
+      request: ProviderRequest(model: "deepseek-flash", messages: [.init(role: .user, content: "Hi")]),
+      account: account(providerID: "deepseek")
+    )
+    Issue.record("Expected content_filter error")
+  } catch let error as ProviderError {
+    if case .provider(_, let message) = error {
+      #expect(message.localizedCaseInsensitiveContains("content filter"))
+    } else {
+      Issue.record("Expected .provider error for content_filter, got \(error)")
+    }
+  }
+
+  let lengthStream = """
+    data: {"id":"ds-len","model":"deepseek-flash","choices":[{"delta":{"content":""},"finish_reason":"length"}]}
+
+    data: [DONE]
+
+    """
+  let streamAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.deepSeek,
+    transport: MockTransport(streamChunks: [Data(lengthStream.utf8)])
+  )
+  do {
+    for try await _ in streamAdapter.stream(
+      request: ProviderRequest(model: "deepseek-flash", messages: [.init(role: .user, content: "Hi")]),
+      account: account(providerID: "deepseek")
+    ) {}
+    Issue.record("Expected length limit error")
+  } catch let error as ProviderError {
+    if case .provider(_, let message) = error {
+      #expect(message.localizedCaseInsensitiveContains("token limit"))
+    } else {
+      Issue.record("Expected .provider error for length, got \(error)")
+    }
+  }
+}

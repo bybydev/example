@@ -29,11 +29,33 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
   }
 
   public func testConnection(account: ResolvedProviderAccount, model: ModelID) async throws {
+    let control = ModelCapabilityResolver.reasoningControl(
+      kind: definition.capabilityKind, modelID: model
+    )
+    let probeReasoning: ReasoningOptions?
+    let probeMaxTokens: Int
+    if control.allowsOff {
+      probeReasoning = .init(enabled: false)
+      probeMaxTokens = 16
+    } else if control.kind == .efforts, let lowest = control.efforts.first {
+      probeReasoning = .init(enabled: true, effort: lowest)
+      probeMaxTokens = 1_024
+    } else if control.kind == .fixed {
+      probeReasoning = nil
+      probeMaxTokens = 1_024
+    } else if definition.behavior == .deepSeek {
+      probeReasoning = nil
+      probeMaxTokens = 1_024
+    } else {
+      probeReasoning = nil
+      probeMaxTokens = 16
+    }
+
     _ = try await generate(
       request: .init(
         model: model,
         messages: [.init(role: .user, content: "Return exactly OK.")],
-        options: .init(maxOutputTokens: 16)
+        options: .init(maxOutputTokens: probeMaxTokens, reasoning: probeReasoning)
       ),
       account: account
     )
@@ -65,14 +87,17 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         return nil
       }
       var evidence = ModelCapabilityEvidence()
-      // OpenRouter specifies exhaustive lists. Custom-compatible catalogs may
-      // provide partial hints using the same field names.
-      let exhaustive = definition.behavior == .openRouter
-      evidence.modalities(wire.architecture?.inputModalities, input: true, exhaustive: exhaustive)
-      evidence.modalities(wire.architecture?.outputModalities, input: false, exhaustive: exhaustive)
-      evidence.parameters(wire.supportedParameters, exhaustive: exhaustive)
+      // OpenRouter and DeepSeek supply exhaustive modality lists when present.
+      // Custom-compatible catalogs may provide partial hints using the same field names.
+      let rawInputModalities = wire.architecture?.inputModalities ?? wire.inputModalities
+      let rawOutputModalities = wire.architecture?.outputModalities ?? wire.outputModalities
+      let exhaustiveModalities = definition.behavior == .openRouter || definition.behavior == .deepSeek
+      let exhaustiveParameters = definition.behavior == .openRouter
+      evidence.modalities(rawInputModalities, input: true, exhaustive: exhaustiveModalities)
+      evidence.modalities(rawOutputModalities, input: false, exhaustive: exhaustiveModalities)
+      evidence.parameters(wire.supportedParameters, exhaustive: exhaustiveParameters)
       var supportedParameters = Set(wire.supportedParameters ?? [])
-      var inputModalities = Set(wire.architecture?.inputModalities ?? ["text"])
+      var inputModalities = Set(rawInputModalities ?? ["text"])
       if let capabilities = wire.capabilities {
         if let functionCalling = capabilities.functionCalling {
           evidence.set(.tools, supported: functionCalling, source: .discovery)
@@ -83,10 +108,38 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           if vision { inputModalities.insert("image") }
         }
       }
+      if definition.behavior == .deepSeek, let effortWire = wire.effort {
+        var parsedEfforts: [ReasoningEffort] = []
+        for rawLevel in effortWire.supportedLevels ?? [] {
+          if let level = ReasoningEffort(rawValue: rawLevel.lowercased()),
+            !parsedEfforts.contains(level)
+          {
+            parsedEfforts.append(level)
+          }
+        }
+        if !parsedEfforts.isEmpty {
+          let defaultEffort = effortWire.defaultLevel
+            .flatMap { ReasoningEffort(rawValue: $0.lowercased()) }
+            .flatMap { parsedEfforts.contains($0) ? $0 : nil }
+            ?? (parsedEfforts.contains(.high) ? .high : parsedEfforts.first)
+          evidence.set(.reasoning, supported: true, source: .discovery)
+          evidence.reasoningControl = ModelReasoningControl(
+            kind: .efforts,
+            efforts: parsedEfforts,
+            defaultEffort: defaultEffort,
+            allowsOff: true,
+            offWireValue: "disabled",
+            source: .discovery
+          )
+          supportedParameters.formUnion(["thinking", "reasoning_effort"])
+        }
+      }
       let contextWindow = wire.contextLength.flatMap { $0 > 0 ? $0 : nil }
         ?? wire.maxContextLength.flatMap { $0 > 0 ? $0 : nil }
+        ?? wire.contextWindow.flatMap { $0 > 0 ? $0 : nil }
         ?? wire.topProvider?.contextLength.flatMap { $0 > 0 ? $0 : nil }
-      let outputLimit = wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
+      let outputLimit = wire.maxOutputTokens.flatMap { $0 > 0 ? $0 : nil }
+        ?? wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
       if contextWindow != nil { evidence.contextWindowSource = .discovery }
       if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
       return ProviderModel(
@@ -97,7 +150,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         maxOutputTokens: outputLimit,
         supportedParameters: supportedParameters,
         inputModalities: inputModalities,
-        outputModalities: Set(wire.architecture?.outputModalities ?? ["text"]),
+        outputModalities: Set(rawOutputModalities ?? ["text"]),
         promptPricePerToken: wire.pricing?.prompt,
         completionPricePerToken: wire.pricing?.completion,
         capabilityEvidence: evidence,
@@ -139,12 +192,13 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     let text = message?.textContent ?? ""
     let reasoning = message?.normalizedReasoning ?? ""
     let toolCalls = try normalizedToolCalls(message?.toolCalls ?? [])
+    let finishReason = decoded.choices.first?.finishReason
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !toolCalls.isEmpty
     else {
-      throw ProviderError.emptyOutput
+      throw emptyOutputError(finishReason: finishReason)
     }
     return .init(
       id: decoded.id,
@@ -153,7 +207,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       providerID: definition.id,
       accountID: account.id,
       modelID: ModelID(rawValue: decoded.model ?? validated.model.rawValue),
-      finishReason: decoded.choices.first?.finishReason,
+      finishReason: finishReason,
       usage: decoded.usage?.normalized,
       metadata: responseMetadata(response.headers, decoded),
       toolCalls: toolCalls
@@ -238,7 +292,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || !toolCalls.isEmpty
           else {
-            throw ProviderError.emptyOutput
+            throw emptyOutputError(finishReason: finishReason)
           }
           continuation.yield(
             .completed(
@@ -360,6 +414,23 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         name: name,
         arguments: try parseToolArguments(value.arguments)
       )
+    }
+  }
+
+  private func emptyOutputError(finishReason: String?) -> ProviderError {
+    switch finishReason?.lowercased() {
+    case "content_filter":
+      return .provider(
+        status: 200,
+        message: "The response was blocked by the provider's content filter."
+      )
+    case "length":
+      return .provider(
+        status: 200,
+        message: "The model reached the maximum output token limit before producing a response."
+      )
+    default:
+      return .emptyOutput
     }
   }
 

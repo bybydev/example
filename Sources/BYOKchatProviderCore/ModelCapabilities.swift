@@ -338,8 +338,7 @@ public enum ModelCapabilityResolver {
       }
       if id.hasPrefix("gpt-4") || id.hasPrefix("chatgpt-4") { return .init(kind: .unsupported, source: .adapter) }
     case .deepSeek:
-      if id.hasPrefix("deepseek-v4") { return efforts([.high, .max], defaultEffort: .high, off: "disabled") }
-      if id == "deepseek-flash" || id == "deepseek-pro" {
+      if id.hasPrefix("deepseek-v4") || id == "deepseek-flash" || id == "deepseek-pro" {
         return efforts([.low, .high, .max], defaultEffort: .high, off: "disabled")
       }
     case .zAI:

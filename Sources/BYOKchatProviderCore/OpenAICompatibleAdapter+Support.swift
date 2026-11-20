@@ -109,9 +109,15 @@ extension OpenAICompatibleAdapter {
   }
 
   func requestBody(_ request: ProviderRequest, streaming: Bool) -> [String: JSONValue] {
+    let hasTools = !request.tools.isEmpty
+    let thinkingEnabled = request.options.reasoning?.enabled != false
     var body: [String: JSONValue] = [
       "model": .string(request.model.rawValue),
-      "messages": .array(request.messages.flatMap(requestMessageValues)),
+      "messages": .array(
+        request.messages.flatMap {
+          requestMessageValues($0, hasTools: hasTools, thinkingEnabled: thinkingEnabled)
+        }
+      ),
       "stream": .bool(streaming),
     ]
 
@@ -234,7 +240,11 @@ extension OpenAICompatibleAdapter {
     ])
   }
 
-  private func requestMessageValues(_ message: ProviderMessage) -> [JSONValue] {
+  private func requestMessageValues(
+    _ message: ProviderMessage,
+    hasTools: Bool,
+    thinkingEnabled: Bool
+  ) -> [JSONValue] {
     if message.role == .tool {
       return (message.toolResults ?? []).map { result in
         var object: [String: JSONValue] = [
@@ -292,6 +302,15 @@ extension OpenAICompatibleAdapter {
         }
       }
       object["content"] = .array(parts)
+    }
+
+    if definition.behavior == .deepSeek, message.role == .assistant {
+      let hasToolCalls = !(message.toolCalls ?? []).isEmpty
+      if let reasoning = message.reasoning, !reasoning.isEmpty, hasToolCalls || hasTools {
+        object["reasoning_content"] = .string(reasoning)
+      } else if hasToolCalls, thinkingEnabled {
+        object["reasoning_content"] = .string("")
+      }
     }
 
     if let calls = message.toolCalls, !calls.isEmpty {

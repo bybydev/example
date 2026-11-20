@@ -364,13 +364,14 @@
         "deepseek-v4-flash-vision-exp"
       ],
       "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verifiedAt": "2026-10-08",
+      "verifiedAt": "2026-11-20",
       "rates": {
         "input": "0.15",
         "output": "0.6",
         "cachedInput": "0.003"
       },
-      "peakMultiplier": "2"
+      "peakMultiplier": "2",
+      "contextNote": "Peak hours apply Mon–Fri 01:00–04:00 and 06:00–10:00 UTC; Chinese public holiday off-peak discounts are not inferred."
     },
     {
       "provider": "deepseek",
@@ -378,13 +379,14 @@
         "deepseek-v4-pro"
       ],
       "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verifiedAt": "2026-10-07",
+      "verifiedAt": "2026-11-20",
       "rates": {
         "input": "0.66",
         "output": "1.98",
         "cachedInput": "0.022"
       },
-      "peakMultiplier": "2"
+      "peakMultiplier": "2",
+      "contextNote": "Peak hours apply Mon–Fri 01:00–04:00 and 06:00–10:00 UTC; Chinese public holiday off-peak discounts are not inferred."
     },
     {
       "provider": "zai",

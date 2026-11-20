@@ -239,6 +239,24 @@ struct ModelCapabilityPolicyTests {
 
     let grok3 = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-3")
     #expect(grok3.kind == .unsupported)
+
+    let deepSeekFlash = ModelCapabilityResolver.reasoningControl(kind: .deepSeek, modelID: "deepseek-flash")
+    #expect(
+      deepSeekFlash.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.max)]
+    )
+    #expect(deepSeekFlash.label(for: nil) == "Default (High)")
+    #expect(deepSeekFlash.normalize(.init(enabled: false))?.enabled == false)
+    #expect(deepSeekFlash.normalize(.init(enabled: true, effort: .low))?.effort == .low)
+    #expect(deepSeekFlash.normalize(.init(enabled: true, effort: .medium)) == nil)
+
+    let deepSeekPro = ModelCapabilityResolver.reasoningControl(kind: .deepSeek, modelID: "deepseek-v4-pro")
+    #expect(
+      deepSeekPro.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.max)]
+    )
+    #expect(deepSeekPro.normalize(.init(enabled: true, effort: .low))?.effort == .low)
+    #expect(deepSeekPro.normalize(.init(enabled: false))?.enabled == false)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

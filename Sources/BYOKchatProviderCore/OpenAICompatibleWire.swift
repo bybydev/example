@@ -267,6 +267,11 @@ struct ModelWire: Decodable {
   var name: String?
   var contextLength: Int?
   var maxContextLength: Int?
+  var contextWindow: Int?
+  var maxOutputTokens: Int?
+  var inputModalities: [String]?
+  var outputModalities: [String]?
+  var effort: ModelEffortWire?
   var supportedParameters: [String]?
   var architecture: ArchitectureWire?
   var topProvider: TopProviderWire?
@@ -274,11 +279,23 @@ struct ModelWire: Decodable {
   var capabilities: ModelCapabilitiesWire?
   var archived: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, name, architecture, pricing, capabilities, archived
+    case id, name, architecture, pricing, capabilities, archived, effort
     case contextLength = "context_length"
     case maxContextLength = "max_context_length"
+    case contextWindow = "context_window"
+    case maxOutputTokens = "max_output_tokens"
+    case inputModalities = "input_modalities"
+    case outputModalities = "output_modalities"
     case supportedParameters = "supported_parameters"
     case topProvider = "top_provider"
+  }
+}
+struct ModelEffortWire: Decodable {
+  var supportedLevels: [String]?
+  var defaultLevel: String?
+  enum CodingKeys: String, CodingKey {
+    case supportedLevels = "supported_levels"
+    case defaultLevel = "default_level"
   }
 }
 struct ModelCapabilitiesWire: Decodable {
