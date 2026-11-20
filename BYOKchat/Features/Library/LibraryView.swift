@@ -78,6 +78,45 @@ struct LibraryView: View {
   }
 
   var body: some View {
+    contentWithSheets
+      .alert("Rename File", isPresented: isRenameAlertPresented) {
+        TextField("Filename", text: $renameText)
+        Button("Cancel", role: .cancel) { renameTarget = nil }
+        Button("Save") {
+          guard let target = renameTarget, canSaveRename else { return }
+          let updatedName = trimmedRenameText
+          renameTarget = nil
+          Task { await library.rename(target.id, filename: updatedName) }
+        }
+        .disabled(!canSaveRename)
+      } message: {
+        if let message = renameAlertMessage {
+          Text(message)
+        }
+      }
+      .confirmationDialog(
+        deleteTargets.count == 1 ? "Delete file?" : "Delete \(deleteTargets.count) files?",
+        isPresented: isDeleteConfirmationPresented,
+        titleVisibility: .visible
+      ) {
+        Button("Delete", role: .destructive) {
+          let targets = deleteTargets
+          deleteTargets = []
+          if isInSelectMode { exitSelectMode() }
+          Task { await library.deleteEntries(targets) }
+        }
+        Button("Cancel", role: .cancel) { deleteTargets = [] }
+      } message: {
+        Text(deleteMessage)
+      }
+      .alert("Library Error", isPresented: isErrorAlertPresented) {
+        Button("OK") { library.errorMessage = nil }
+      } message: {
+        Text(library.errorMessage ?? "Unknown error")
+      }
+  }
+
+  private var mainContent: some View {
     Group {
       if library.entries.isEmpty {
         emptyState
@@ -93,163 +132,155 @@ struct LibraryView: View {
     .navigationTitle(navigationTitleText)
     .navigationBarTitleDisplayMode(.inline)
     .searchable(text: $searchText, prompt: "Search files")
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        if isInSelectMode {
-          Button("Cancel") { exitSelectMode() }
-        } else {
-          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
-            .labelStyle(.iconOnly)
-            .accessibilityLabel("Open sidebar")
-        }
-      }
-      ToolbarItemGroup(placement: .primaryAction) {
-        if isInSelectMode {
-          Button(allSelected ? "Deselect All" : "Select All") { toggleSelectAll() }
-            .disabled(visibleEntries.isEmpty)
+    .toolbar { libraryToolbar }
+  }
 
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            requestDelete(selectedEntryIDs)
-          }
-          .disabled(selectedEntryIDs.isEmpty)
-        } else {
-          if !visibleEntries.isEmpty {
-            Button("Select") { enterSelectMode() }
-          }
-
-          if !library.entries.isEmpty {
-            kindFilterMenu
-          }
-
-          if activeImportCount > 0 {
-            ProgressView()
-              .controlSize(.small)
-              .accessibilityLabel("Importing files")
-          } else {
-            Menu {
-              Button("Photo", systemImage: "photo") { isPhotoPickerPresented = true }
-              Button("File", systemImage: "doc") { isFileImporterPresented = true }
-            } label: {
-              Image(systemName: "plus")
-                .font(.system(size: 17, weight: .semibold))
-            }
-            .accessibilityLabel("Save a file to the library")
-          }
-        }
-      }
-    }
-    .photosPicker(
-      isPresented: $isPhotoPickerPresented,
-      selection: $photoPickerItems,
-      matching: .images
-    )
-    .fileImporter(
-      isPresented: $isFileImporterPresented,
-      allowedContentTypes: [.item],
-      allowsMultipleSelection: true
-    ) { result in
-      handleFileImport(result)
-    }
-    .onChange(of: photoPickerItems) { _, items in
-      importPhotos(items)
-    }
-    .onChange(of: visibleEntryIDs) { _, ids in
-      selectedEntryIDs.formIntersection(ids)
-    }
-    .onChange(of: library.entries.isEmpty) { _, isEmpty in
-      if isEmpty {
-        if isInSelectMode { exitSelectMode() }
-        kindFilter = .all
-        sourceFilter = .all
-      }
-    }
-    .onChange(of: hasProjectEntries) { _, hasProjects in
-      if !hasProjects && sourceFilter == .projects {
-        sourceFilter = .all
-      }
-    }
-    .onDisappear {
-      if viewerPresentation == nil {
-        cleanupViewerTempDirectory()
-      }
-      if sharePayload == nil {
-        cleanupShareTempDirectory()
-      }
-    }
-    .sheet(item: $viewerPresentation, onDismiss: {
-      cleanupViewerTempDirectory()
-    }) { presentation in
-      LibraryImageViewerView(
-        entry: presentation.entry,
-        image: presentation.image,
-        shareFileURL: presentation.shareFileURL,
-        onSaveToPhotos: {
-          do {
-            try await LibraryPhotoWriter.save(presentation.image)
-          } catch {
-            BYOKAppAnalytics.reportError("library_export_failed", component: "library")
-            throw error
-          }
-        }
+  private var contentWithImportersAndObservers: some View {
+    mainContent
+      .photosPicker(
+        isPresented: $isPhotoPickerPresented,
+        selection: $photoPickerItems,
+        matching: .images
       )
-    }
-    .sheet(item: $quickLookPresentation) { presentation in
-      LibraryQuickLookView(files: presentation.files) {
-        quickLookPresentation = nil
+      .fileImporter(
+        isPresented: $isFileImporterPresented,
+        allowedContentTypes: [.item],
+        allowsMultipleSelection: true
+      ) { result in
+        handleFileImport(result)
+      }
+      .onChange(of: photoPickerItems) { _, items in
+        importPhotos(items)
+      }
+      .onChange(of: visibleEntryIDs) { _, ids in
+        selectedEntryIDs.formIntersection(ids)
+      }
+      .onChange(of: library.entries.isEmpty) { _, isEmpty in
+        handleEntriesEmptyChange(isEmpty)
+      }
+      .onChange(of: hasProjectEntries) { _, hasProjects in
+        handleHasProjectEntriesChange(hasProjects)
+      }
+      .onDisappear {
+        if viewerPresentation == nil {
+          cleanupViewerTempDirectory()
+        }
+        if sharePayload == nil {
+          cleanupShareTempDirectory()
+        }
+      }
+  }
+
+  private var contentWithSheets: some View {
+    contentWithImportersAndObservers
+      .sheet(item: $viewerPresentation, onDismiss: {
+        cleanupViewerTempDirectory()
+      }) { presentation in
+        LibraryImageViewerView(
+          entry: presentation.entry,
+          image: presentation.image,
+          shareFileURL: presentation.shareFileURL,
+          onSaveToPhotos: {
+            do {
+              try await LibraryPhotoWriter.save(presentation.image)
+            } catch {
+              BYOKAppAnalytics.reportError("library_export_failed", component: "library")
+              throw error
+            }
+          }
+        )
+      }
+      .sheet(item: $quickLookPresentation) { presentation in
+        LibraryQuickLookView(files: presentation.files) {
+          quickLookPresentation = nil
+        }
+      }
+      .sheet(item: $sharePayload, onDismiss: {
+        cleanupShareTempDirectory()
+      }) { payload in
+        ActivityShareSheet(items: [payload.fileURL])
+          .ignoresSafeArea()
+      }
+  }
+
+  @ToolbarContentBuilder
+  private var libraryToolbar: some ToolbarContent {
+    ToolbarItem(placement: .cancellationAction) {
+      if isInSelectMode {
+        Button("Cancel") { exitSelectMode() }
+      } else {
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
       }
     }
-    .alert("Rename File", isPresented: Binding(
+    ToolbarItemGroup(placement: .primaryAction) {
+      if isInSelectMode {
+        Button(allSelected ? "Deselect All" : "Select All") { toggleSelectAll() }
+          .disabled(visibleEntries.isEmpty)
+
+        Button("Delete", systemImage: "trash", role: .destructive) {
+          requestDelete(selectedEntryIDs)
+        }
+        .disabled(selectedEntryIDs.isEmpty)
+      } else {
+        if !visibleEntries.isEmpty {
+          Button("Select") { enterSelectMode() }
+        }
+
+        if !library.entries.isEmpty {
+          kindFilterMenu
+        }
+
+        if activeImportCount > 0 {
+          ProgressView()
+            .controlSize(.small)
+            .accessibilityLabel("Importing files")
+        } else {
+          Menu {
+            Button("Photo", systemImage: "photo") { isPhotoPickerPresented = true }
+            Button("File", systemImage: "doc") { isFileImporterPresented = true }
+          } label: {
+            Image(systemName: "plus")
+              .font(.system(size: 17, weight: .semibold))
+          }
+          .accessibilityLabel("Save a file to the library")
+        }
+      }
+    }
+  }
+
+  private var isRenameAlertPresented: Binding<Bool> {
+    Binding(
       get: { renameTarget != nil },
       set: { if !$0 { renameTarget = nil } }
-    )) {
-      TextField("Filename", text: $renameText)
-      Button("Cancel", role: .cancel) { renameTarget = nil }
-      Button("Save") {
-        guard let target = renameTarget, canSaveRename else { return }
-        let updatedName = trimmedRenameText
-        renameTarget = nil
-        Task { await library.rename(target.id, filename: updatedName) }
-      }
-      .disabled(!canSaveRename)
-    } message: {
-      if let message = renameAlertMessage {
-        Text(message)
-      }
-    }
-    .confirmationDialog(
-      deleteTargets.count == 1 ? "Delete file?" : "Delete \(deleteTargets.count) files?",
-      isPresented: Binding(
-        get: { !deleteTargets.isEmpty },
-        set: { if !$0 { deleteTargets = [] } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button("Delete", role: .destructive) {
-        let targets = deleteTargets
-        deleteTargets = []
-        if isInSelectMode { exitSelectMode() }
-        Task { await library.deleteEntries(targets) }
-      }
-      Button("Cancel", role: .cancel) { deleteTargets = [] }
-    } message: {
-      Text(deleteMessage)
-    }
-    .sheet(item: $sharePayload, onDismiss: {
-      cleanupShareTempDirectory()
-    }) { payload in
-      ActivityShareSheet(items: [payload.fileURL])
-        .ignoresSafeArea()
-    }
-    .alert(
-      "Library Error",
-      isPresented: Binding(
-        get: { library.errorMessage != nil },
-        set: { if !$0 { library.errorMessage = nil } }
-      )
-    ) {
-      Button("OK") { library.errorMessage = nil }
-    } message: {
-      Text(library.errorMessage ?? "Unknown error")
+    )
+  }
+
+  private var isDeleteConfirmationPresented: Binding<Bool> {
+    Binding(
+      get: { !deleteTargets.isEmpty },
+      set: { if !$0 { deleteTargets = [] } }
+    )
+  }
+
+  private var isErrorAlertPresented: Binding<Bool> {
+    Binding(
+      get: { library.errorMessage != nil },
+      set: { if !$0 { library.errorMessage = nil } }
+    )
+  }
+
+  private func handleEntriesEmptyChange(_ isEmpty: Bool) {
+    guard isEmpty else { return }
+    if isInSelectMode { exitSelectMode() }
+    kindFilter = .all
+    sourceFilter = .all
+  }
+
+  private func handleHasProjectEntriesChange(_ hasProjects: Bool) {
+    if !hasProjects && sourceFilter == .projects {
+      sourceFilter = .all
     }
   }
 
