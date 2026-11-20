@@ -297,3 +297,50 @@ struct MCPUISupportTests {
     #expect(payload["tags"] == .array([.string("ios"), .string("mcp")]))
   }
 }
+
+@Suite("Local analytics formatting")
+struct LocalAnalyticsFormattingTests {
+  @Test("Provider display names cover OpenAI, xAI, custom accounts, and deleted UUIDs")
+  func providerDisplayNames() {
+    let customUUID = "7f8b9c21-3d4e-4567-89ab-0123456789ab"
+    let deletedUUID = "11111111-2222-3333-4444-555555555555"
+    let customAccount = ProviderAccount(
+      kind: .openAICompatible,
+      id: "custom-1",
+      providerID: ProviderID(rawValue: customUUID),
+      label: "My vLLM Server"
+    )
+
+    #expect(usageDisplayName("openai") == "OpenAI")
+    #expect(usageDisplayName("xai") == "xAI")
+    #expect(usageDisplayName(customUUID, accounts: [customAccount]) == "My vLLM Server")
+    #expect(usageDisplayName(deletedUUID, accounts: [customAccount]) == "Custom Provider")
+  }
+
+  @Test("Currency, token, duration, request count, and error labels handle boundary values")
+  func formattingEdgeCases() {
+    #expect(usageFormatUSD(0) == "$0.00")
+    #expect(usageFormatUSD(Decimal(string: "0.000021")!) == "$0.000021")
+    #expect(usageFormatUSD(Decimal(string: "0.0009999")!) == "$0.0010")
+    #expect(usageFormatUSD(Decimal(string: "0.99999")!) == "$1.00")
+    #expect(usageFormatUSD(Decimal(string: "12.5")!) == "$12.50")
+
+    #expect(usageCompactTokens(999) == "999")
+    #expect(usageCompactTokens(999_949) == "999.9K")
+    #expect(usageCompactTokens(999_950) == "1.00M")
+
+    #expect(usageDuration(999.4) == "999 ms")
+    #expect(usageDuration(999.6) == "1.00 s")
+    #expect(usageDuration(9_999.9) == "10.0 s")
+
+    #expect(usageRequestCountLabel(0) == "0 requests")
+    #expect(usageRequestCountLabel(1) == "1 request")
+    #expect(usageRequestCountLabel(2) == "2 requests")
+
+    #expect(usageCategoryTitle(.mcp) == "MCP")
+    #expect(usageCategoryTitle(.provider) == "Provider")
+    #expect(usageErrorTitle("provider_http") == "Provider HTTP")
+    #expect(usageErrorTitle("invalid_base_url") == "Invalid Base URL")
+    #expect(usageErrorTitle("unsupported_api_family") == "Unsupported API Family")
+  }
+}

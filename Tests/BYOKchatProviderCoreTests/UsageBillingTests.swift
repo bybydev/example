@@ -514,3 +514,82 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   #expect(luna6.rates.cachedInput == "0.01")
   #expect(luna6.rates.cacheWrite == "0.125")
 }
+
+@Test func preflightFailedPlaceholderDoesNotPoisonSpendTotalsOrGhostBreakdowns() {
+  let reference = Date(timeIntervalSince1970: 1_700_000_000)
+  let pricedReceipt = ChatBilling.requestBilling(
+    metadata: ["costUSD": "0.02"],
+    usage: ProviderUsage(inputTokens: 100, outputTokens: 50),
+    pricing: nil
+  )
+  let pricedMessage = ChatMessage(
+    role: .assistant,
+    createdAt: reference,
+    updatedAt: reference,
+    status: .complete,
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    usage: ProviderUsage(inputTokens: 100, outputTokens: 50),
+    metadata: ChatBilling.metadata(existing: [:], requests: [pricedReceipt], toolCallCount: 0)
+  )
+  let preflightFailed = ChatMessage(
+    role: .assistant,
+    createdAt: reference,
+    updatedAt: reference,
+    status: .failed,
+    providerID: "anthropic",
+    accountID: "ant",
+    modelID: "claude-sonnet-5-5"
+  )
+
+  let aggregate = ChatBilling.aggregate(messages: [pricedMessage, preflightFailed])
+  #expect(aggregate.assistantMessageCount == 1)
+  #expect(aggregate.modelRequestCount == 1)
+  #expect(aggregate.costUSD == Decimal(string: "0.02"))
+  #expect(!aggregate.hasPartialCost)
+
+  let conversation = ChatConversation(
+    id: "chat-preflight",
+    title: "Preflight",
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    messages: [pricedMessage, preflightFailed]
+  )
+  let preflightEvent = TelemetryEvent(
+    timestamp: reference,
+    dataClass: .analytics,
+    category: .chat,
+    name: .chatTurnFailed,
+    severity: .error,
+    outcome: .failure,
+    conversationID: conversation.id,
+    providerID: "anthropic",
+    modelID: "claude-sonnet-5-5",
+    errorCode: "context_window_exceeded",
+    metadata: ["classification": "context"]
+  )
+
+  let overview = UsageAnalytics.snapshot(
+    conversations: [conversation],
+    telemetryEvents: [preflightEvent],
+    range: .all,
+    reference: reference
+  )
+  #expect(overview.failureBreakdown.count == 1)
+  #expect(overview.failureBreakdown.first?.errorCode == "context_window_exceeded")
+  // Anthropic had only a pre-flight error and zero requests, so it must not
+  // appear as an empty ghost row in provider/model breakdowns.
+  #expect(overview.providerBreakdown.map(\.id) == ["openai"])
+  #expect(overview.modelBreakdown.map(\.id) == ["gpt-6.2-sol"])
+
+  let detail = UsageAnalytics.conversationSnapshot(
+    conversation: conversation,
+    telemetryEvents: [preflightEvent],
+    range: .all,
+    reference: reference
+  )
+  #expect(detail.failureBreakdown.count == 1)
+  #expect(detail.failureBreakdown.first?.errorCode == "context_window_exceeded")
+}

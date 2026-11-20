@@ -163,6 +163,10 @@ final class AppModel {
     guard mcp.errorMessage == nil else { return }
     await sweepOrphanFilesAtStartup()
     hasLoaded = true
+    let recorder = telemetryRecorder
+    Task.detached(priority: .utility) {
+      await recorder.performMaintenance()
+    }
   }
 }
 

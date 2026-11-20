@@ -109,16 +109,31 @@ public actor TelemetrySQLiteStore {
 
     insertsSinceMaintenance += 1
     if insertsSinceMaintenance >= configuration.maintenanceInsertInterval {
-      try performMaintenance(referenceDate: .now)
+      insertsSinceMaintenance = 0
+      // Maintenance runs after the event is committed; a failed compaction or
+      // prune must not turn a successful insert into a recorder failure loop.
+      try? performMaintenance(referenceDate: .now)
     }
   }
 
   public func recentEvents(limit: Int = 500) throws -> [TelemetryEvent] {
+    try recentEvents(dataClass: nil, limit: limit)
+  }
+
+  public func recentAnalyticsEvents(limit: Int = 500) throws -> [TelemetryEvent] {
+    try recentEvents(dataClass: .analytics, limit: limit)
+  }
+
+  public func recentEvents(
+    dataClass: TelemetryDataClass?,
+    limit: Int = 500
+  ) throws -> [TelemetryEvent] {
     let database = try database()
     let safeLimit = min(
       max(limit, 1),
       TelemetryStoreConfiguration.maximumRecentEventQueryCount
     )
+    let whereClause = dataClass != nil ? "WHERE data_class = ?\n      " : ""
     let sql = """
       SELECT
         id, timestamp, data_class, category, name, severity, outcome,
@@ -128,13 +143,18 @@ public actor TelemetrySQLiteStore {
         input_tokens, output_tokens, cached_input_tokens, reasoning_tokens,
         model_request_count, tool_call_count, http_status, error_code, metadata_json
       FROM telemetry_events
-      ORDER BY timestamp DESC
+      \(whereClause)ORDER BY timestamp DESC
       LIMIT ?;
       """
 
     let statement = try prepare(sql, on: database)
     defer { sqlite3_finalize(statement) }
-    try bind(safeLimit, at: 1, to: statement, on: database)
+    if let dataClass {
+      try bind(dataClass.rawValue, at: 1, to: statement, on: database)
+      try bind(safeLimit, at: 2, to: statement, on: database)
+    } else {
+      try bind(safeLimit, at: 1, to: statement, on: database)
+    }
 
     var events: [TelemetryEvent] = []
     while true {
@@ -237,6 +257,9 @@ public actor TelemetrySQLiteStore {
       return opened
     } catch {
       closeConnection()
+      guard isRecoverableByRecreation(error) else {
+        throw error
+      }
       try? removeDatabaseFiles()
 
       do {
@@ -247,6 +270,16 @@ public actor TelemetrySQLiteStore {
         closeConnection()
         throw error
       }
+    }
+  }
+
+  private func isRecoverableByRecreation(_ error: any Error) -> Bool {
+    guard let storeError = error as? TelemetryStoreError else { return false }
+    switch storeError {
+    case .invalidDatabaseState, .unsupportedSchemaVersion:
+      return true
+    case .sqlite(_, let code, _):
+      return code == SQLITE_CORRUPT || code == SQLITE_NOTADB
     }
   }
 

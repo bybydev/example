@@ -10,8 +10,3 @@ struct UsageBreakdown: Identifiable {
 
 /// Both platforms share date-range access and filtering semantics.
 typealias UsageRange = UsageAnalyticsRange
-
-struct ConversationAnalyticsSnapshot {
-  let aggregate: ChatUsageAggregate
-  let performance: TelemetryPerformanceAggregate
-}

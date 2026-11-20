@@ -52,6 +52,19 @@ public struct ChatUsageAggregate: Sendable, Equatable {
 
   public mutating func add(_ message: ChatMessage) {
     guard message.role == .assistant else { return }
+    let billing = ChatBilling.snapshot(for: message)
+    // Ignore pre-flight failed/cancelled placeholders that never attempted a
+    // model request and carry no usage or cost, so local validation failures do
+    // not mark spend totals as "(partial)" or "Unavailable".
+    if message.status != .complete,
+      billing.modelRequestCount == 0,
+      billing.requests.isEmpty,
+      billing.costUSD == nil,
+      message.usage == nil
+    {
+      return
+    }
+
     assistantMessageCount += 1
     if let usage = message.usage {
       inputTokens += usage.inputTokens ?? 0
@@ -60,7 +73,6 @@ public struct ChatUsageAggregate: Sendable, Equatable {
       reasoningTokens += usage.reasoningTokens ?? 0
     }
 
-    let billing = ChatBilling.snapshot(for: message)
     modelRequestCount += billing.modelRequestCount
     toolCallCount += billing.toolCallCount
     if !billing.isComplete { incompleteCostMessageCount += 1 }

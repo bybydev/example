@@ -50,7 +50,7 @@ struct MCPTransportTelemetry: Sendable {
     metadata["responseMode"] = responseMode
     let succeeded = (200..<300).contains(statusCode)
     let legacyProbeFallback =
-      context.method == "server/discover" && [400, 404, 405].contains(statusCode)
+      context.method == "server/discover" && [400, 404, 405, 501].contains(statusCode)
     if legacyProbeFallback {
       metadata["classification"] = "protocol_fallback"
       metadata["expectedFallback"] = "true"

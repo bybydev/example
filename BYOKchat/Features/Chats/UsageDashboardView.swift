@@ -21,6 +21,8 @@ struct UsageDashboardView: View {
   @State private var hasLoadedTelemetry = false
   @State private var telemetryUnavailable = false
   @State private var isLoadingTelemetry = false
+  @State private var isClearingTelemetry = false
+  @State private var confirmClearTelemetry = false
   @State private var showProUpsell = false
   @State private var didTrackOpening = false
   #if DEBUG
@@ -56,100 +58,27 @@ struct UsageDashboardView: View {
   }
 
   private var dashboard: some View {
-    List {
-      usageSummarySection
+    let referenceDate = Date.now
+    let activeRange = accessibleRange
+    let activeTelemetry = telemetryUnavailable ? [] : telemetryEvents
+    let filteredEvents = UsageAnalytics.filteredAnalyticsEvents(
+      activeTelemetry,
+      range: activeRange,
+      reference: referenceDate
+    )
+    let snapshot = UsageAnalytics.snapshot(
+      conversations: conversations,
+      telemetryEvents: activeTelemetry,
+      range: activeRange,
+      reference: referenceDate
+    )
 
-      if telemetryUnavailable {
-        Section {
-          ContentUnavailableView(
-            "Performance Data Unavailable",
-            systemImage: "exclamationmark.triangle",
-            description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
-          )
-          Button("Retry") { Task { await loadTelemetry(retry: true) } }
-            .disabled(isLoadingTelemetry)
-        }
-        .listRowBackground(theme.surfaceColor)
-      } else if hasPerformanceData {
-        performanceSection
-        reliabilitySection
-        if !failureBreakdown.isEmpty {
-          failureSection
-        }
-      } else if hasLoadedTelemetry {
-        Section {
-          ContentUnavailableView(
-            "No Performance Data Yet",
-            systemImage: "waveform.path.ecg",
-            description: Text("Send a few messages to start collecting local performance metrics.")
-          )
-        }
-        .listRowBackground(theme.surfaceColor)
-      }
-
-      if let conversation = currentConversation {
-        Section("This conversation") {
-          NavigationLink {
-            ConversationAnalyticsView(
-              conversation: conversation,
-              range: accessibleRange,
-              telemetryEvents: filteredTelemetryEvents,
-              telemetryAvailable: !telemetryUnavailable
-            )
-          } label: {
-            conversationSummaryLabel(conversation)
-          }
-        }
-        .listRowBackground(theme.surfaceColor)
-      }
-
-      if !providerBreakdown.isEmpty {
-        Section("Providers") {
-          ForEach(providerBreakdown) { row in
-            UsageBreakdownRowView(row: row)
-          }
-        }
-        .listRowBackground(theme.surfaceColor)
-      }
-
-      if !modelBreakdown.isEmpty {
-        Section("Models") {
-          ForEach(modelBreakdown) { row in
-            UsageBreakdownRowView(row: row)
-          }
-        }
-        .listRowBackground(theme.surfaceColor)
-      }
-
-      #if DEBUG
-      monthlyBudgetSection
-      #endif
-
-      Section {
-        if telemetryUnavailable {
-          LabeledContent("Telemetry", value: "Unavailable")
-        } else {
-          LabeledContent("Telemetry events", value: filteredTelemetryEvents.count.formatted())
-        }
-        if telemetryStatistics.databaseBytes > 0 {
-          LabeledContent(
-            "Local database",
-            value: ByteCountFormatter.string(
-              fromByteCount: telemetryStatistics.databaseBytes,
-              countStyle: .file
-            )
-          )
-        }
-      } header: {
-        Text("Local analytics")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      } footer: {
-        Text(telemetryFootnote)
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
-      .listRowBackground(theme.surfaceColor)
-
-    }
+    return dashboardList(
+      snapshot: snapshot,
+      filteredEvents: filteredEvents,
+      range: activeRange,
+      referenceDate: referenceDate
+    )
     .scrollContentBackground(.hidden)
     .refreshable {
       await loadTelemetry()
@@ -194,6 +123,54 @@ struct UsageDashboardView: View {
     .sheet(isPresented: $showProUpsell) {
       BYOKProUpsellFlow(feature: .analytics)
     }
+    .confirmationDialog(
+      "Clear local telemetry?",
+      isPresented: $confirmClearTelemetry,
+      titleVisibility: .visible
+    ) {
+      Button("Clear Local Telemetry", role: .destructive) {
+        Task { await clearTelemetry() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Removes locally stored performance and reliability events. Saved chat history, usage, and spend are unaffected.")
+    }
+  }
+
+  private func dashboardList(
+    snapshot: UsageAnalyticsSnapshot,
+    filteredEvents: [TelemetryEvent],
+    range: UsageRange,
+    referenceDate: Date
+  ) -> some View {
+    List {
+      usageSummarySection(snapshot.aggregate, range: range)
+
+      telemetryStatusSections(snapshot: snapshot)
+
+      if let conversation = currentConversation {
+        currentConversationSection(
+          conversation,
+          filteredEvents: filteredEvents,
+          range: range,
+          referenceDate: referenceDate
+        )
+      }
+
+      if !snapshot.providerBreakdown.isEmpty {
+        providersSection(snapshot.providerBreakdown)
+      }
+
+      if !snapshot.modelBreakdown.isEmpty {
+        modelsSection(snapshot.modelBreakdown)
+      }
+
+      #if DEBUG
+      monthlyBudgetSection(referenceDate: referenceDate)
+      #endif
+
+      localAnalyticsSection(filteredEventCount: filteredEvents.count)
+    }
   }
 
   /// This value, not the raw picker state, drives all aggregates and details.
@@ -225,6 +202,7 @@ struct UsageDashboardView: View {
         showProUpsell = true
       } else if accessibleRange != value {
         range = value
+        BYOKAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: value))
       }
     } label: {
       if locked {
@@ -242,32 +220,80 @@ struct UsageDashboardView: View {
     .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
-  private var usageSummarySection: some View {
+  private func usageSummarySection(_ aggregate: ChatUsageAggregate, range: UsageRange) -> some View {
     Section {
-      LabeledContent("Spend", value: usageAggregateCostText(filteredAggregate))
-      LabeledContent("Model requests", value: filteredAggregate.modelRequestCount.formatted())
-      LabeledContent("Input", value: usageCompactTokens(filteredAggregate.inputTokens))
-      LabeledContent("Output", value: usageCompactTokens(filteredAggregate.outputTokens))
-      if filteredAggregate.cachedInputTokens > 0 {
-        LabeledContent("Cached input", value: usageCompactTokens(filteredAggregate.cachedInputTokens))
+      LabeledContent("Spend", value: usageAggregateCostText(aggregate))
+      LabeledContent("Model requests", value: aggregate.modelRequestCount.formatted())
+      LabeledContent("Input", value: usageCompactTokens(aggregate.inputTokens))
+      LabeledContent("Output", value: usageCompactTokens(aggregate.outputTokens))
+      if aggregate.cachedInputTokens > 0 {
+        LabeledContent("Cached input", value: usageCompactTokens(aggregate.cachedInputTokens))
       }
-      if filteredAggregate.reasoningTokens > 0 {
-        LabeledContent("Reasoning", value: usageCompactTokens(filteredAggregate.reasoningTokens))
+      if aggregate.reasoningTokens > 0 {
+        LabeledContent("Reasoning", value: usageCompactTokens(aggregate.reasoningTokens))
       }
-      if filteredAggregate.toolCallCount > 0 {
-        LabeledContent("Tool calls", value: filteredAggregate.toolCallCount.formatted())
+      if aggregate.toolCallCount > 0 {
+        LabeledContent("Tool calls", value: aggregate.toolCallCount.formatted())
       }
     } header: {
-      Text("Usage · \(accessibleRange.label)")
+      Text("Usage · \(range.label)")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
-      Text(usageHistoryFootnote(filteredAggregate))
+      Text(usageHistoryFootnote(aggregate))
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var performanceSection: some View {
+  @ViewBuilder
+  private func telemetryStatusSections(snapshot: UsageAnalyticsSnapshot) -> some View {
+    let performance = snapshot.performance
+    let hasActivity = hasTelemetryActivity(performance)
+
+    if telemetryUnavailable {
+      Section {
+        ContentUnavailableView(
+          "Performance Data Unavailable",
+          systemImage: "exclamationmark.triangle",
+          description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
+        )
+        Button("Retry") { Task { await loadTelemetry(retry: true) } }
+          .disabled(isLoadingTelemetry || isClearingTelemetry)
+      }
+      .listRowBackground(theme.surfaceColor)
+    } else if !hasLoadedTelemetry {
+      Section {
+        HStack(spacing: 10) {
+          ProgressView()
+          Text("Loading performance data…")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      }
+      .listRowBackground(theme.surfaceColor)
+    } else {
+      if performance.hasLatencyOrSpeedMetrics {
+        performanceSection(performance)
+      }
+      if hasActivity {
+        reliabilitySection(performance)
+      }
+      if !snapshot.failureBreakdown.isEmpty {
+        failureSection(snapshot.failureBreakdown)
+      }
+      if !hasActivity && snapshot.failureBreakdown.isEmpty {
+        Section {
+          ContentUnavailableView(
+            "No Performance Data Yet",
+            systemImage: "waveform.path.ecg",
+            description: Text("Send a few messages to start collecting local performance metrics.")
+          )
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+    }
+  }
+
+  private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
     Section("Performance") {
       LabeledContent("Median TTFT", value: usageDuration(performance.medianTTFTMilliseconds))
       LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
@@ -278,17 +304,22 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var reliabilitySection: some View {
+  private func reliabilitySection(_ performance: TelemetryPerformanceAggregate) -> some View {
     Section {
-      LabeledContent("Success rate", value: usagePercent(performance.providerSuccessRate))
-      LabeledContent("Succeeded", value: performance.providerSuccessCount.formatted())
-      LabeledContent("Failed", value: performance.providerFailureCount.formatted())
-      if performance.providerCancelledCount > 0 {
-        LabeledContent("Cancelled", value: performance.providerCancelledCount.formatted())
+      if performance.providerRequestCount > 0 {
+        LabeledContent("Success rate", value: usagePercent(performance.providerSuccessRate))
+        LabeledContent("Succeeded", value: performance.providerSuccessCount.formatted())
+        LabeledContent("Failed", value: performance.providerFailureCount.formatted())
+        if performance.providerCancelledCount > 0 {
+          LabeledContent("Cancelled", value: performance.providerCancelledCount.formatted())
+        }
       }
       if performance.toolCallCount > 0 {
         LabeledContent("Tool success", value: usagePercent(performance.toolSuccessRate))
         LabeledContent("Tool calls", value: performance.toolCallCount.formatted())
+        if performance.toolCancelledCount > 0 {
+          LabeledContent("Tool cancelled", value: performance.toolCancelledCount.formatted())
+        }
       }
       if performance.mcpRequestCount > 0 {
         LabeledContent("MCP requests", value: performance.mcpRequestCount.formatted())
@@ -304,16 +335,18 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var failureSection: some View {
+  private func failureSection(_ failures: [TelemetryFailureBreakdown]) -> some View {
     Section {
-      ForEach(Array(failureBreakdown.prefix(8))) { failure in
+      ForEach(Array(failures.prefix(8))) { failure in
         HStack(alignment: .firstTextBaseline) {
           VStack(alignment: .leading, spacing: 2) {
-            Text(errorTitle(failure.errorCode))
+            Text(usageErrorTitle(failure.errorCode))
               .lineLimit(1)
-            Text("\(failure.category.rawValue.capitalized) · \(failure.classification.replacingOccurrences(of: "_", with: " "))")
-              .font(.caption)
-              .foregroundStyle(theme.secondaryForegroundColor)
+            Text(
+              "\(usageCategoryTitle(failure.category)) · \(failure.classification.replacingOccurrences(of: "_", with: " "))"
+            )
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
           }
           Spacer(minLength: 12)
           Text(failure.count.formatted())
@@ -331,9 +364,113 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  #if DEBUG
-  private var monthlyBudgetSection: some View {
+  private func currentConversationSection(
+    _ conversation: ChatConversation,
+    filteredEvents: [TelemetryEvent],
+    range: UsageRange,
+    referenceDate: Date
+  ) -> some View {
+    let conversationSnapshot = UsageAnalytics.conversationSnapshot(
+      conversation: conversation,
+      telemetryEvents: filteredEvents,
+      range: range,
+      reference: referenceDate
+    )
+
+    return Section("This conversation") {
+      NavigationLink {
+        ConversationAnalyticsView(
+          conversation: conversation,
+          range: range,
+          telemetryEvents: filteredEvents,
+          telemetryAvailable: !telemetryUnavailable
+        )
+      } label: {
+        conversationSummaryLabel(conversationSnapshot)
+      }
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func providersSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
+    let accounts = model.providers.accounts
+    return Section("Providers") {
+      ForEach(rows) { item in
+        UsageBreakdownRowView(
+          row: UsageBreakdown(
+            id: item.id,
+            title: usageDisplayName(item.id, accounts: accounts),
+            aggregate: item.aggregate,
+            performance: item.performance
+          )
+        )
+      }
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func modelsSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
+    Section("Models") {
+      ForEach(rows) { item in
+        UsageBreakdownRowView(
+          row: UsageBreakdown(
+            id: item.id,
+            title: item.id,
+            aggregate: item.aggregate,
+            performance: item.performance
+          )
+        )
+      }
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func localAnalyticsSection(filteredEventCount: Int) -> some View {
     Section {
+      if telemetryUnavailable {
+        LabeledContent("Telemetry", value: "Unavailable")
+      } else if !hasLoadedTelemetry {
+        LabeledContent("Telemetry events", value: "Loading…")
+      } else {
+        LabeledContent("Telemetry events", value: filteredEventCount.formatted())
+      }
+      if telemetryStatistics.databaseBytes > 0 {
+        LabeledContent(
+          "Local database",
+          value: ByteCountFormatter.string(
+            fromByteCount: telemetryStatistics.databaseBytes,
+            countStyle: .file
+          )
+        )
+      }
+      if telemetryStatistics.eventCount > 0 || telemetryUnavailable {
+        Button("Clear Local Telemetry", role: .destructive) {
+          confirmClearTelemetry = true
+        }
+        .disabled(isLoadingTelemetry || isClearingTelemetry)
+      }
+    } header: {
+      Text("Local analytics")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text(telemetryFootnote)
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  #if DEBUG
+  private func monthlyBudgetSection(referenceDate: Date) -> some View {
+    let budgetRange: UsageRange = purchaseManager.hasPro ? .month : .today
+    let aggregate = ChatBilling.aggregate(
+      messages: UsageAnalytics.filteredMessages(
+        conversations: conversations,
+        range: budgetRange,
+        reference: referenceDate
+      )
+    )
+
+    return Section {
       HStack {
         Text("Budget")
         Spacer()
@@ -354,17 +491,20 @@ struct UsageDashboardView: View {
       }
 
       if monthlyBudgetUSD > 0 {
-        LabeledContent(purchaseManager.hasPro ? "This month" : "Today only", value: usageAggregateCostText(budgetAggregate))
-        if budgetAggregate.assistantMessageCount == 0 {
+        LabeledContent(
+          purchaseManager.hasPro ? "This month" : "Today only",
+          value: usageAggregateCostText(aggregate)
+        )
+        if aggregate.assistantMessageCount == 0 {
           Text(purchaseManager.hasPro ? "No saved requests this month." : "No saved requests today.")
-        } else if !budgetAggregate.hasKnownCost {
+        } else if !aggregate.hasKnownCost {
           Label("Budget status unavailable: request costs are unknown.", systemImage: "questionmark.circle")
         } else {
-          if !budgetAggregate.hasPartialCost { ProgressView(value: budgetProgress) }
-          if budgetWarningReached {
-            Label(budgetWarningText, systemImage: "exclamationmark.triangle.fill")
+          if !aggregate.hasPartialCost { ProgressView(value: budgetProgress(for: aggregate)) }
+          if budgetWarningReached(for: aggregate) {
+            Label(budgetWarningText(for: aggregate), systemImage: "exclamationmark.triangle.fill")
               .foregroundStyle(.orange)
-          } else if budgetAggregate.hasPartialCost {
+          } else if aggregate.hasPartialCost {
             Label("Budget status uncertain: incomplete costs may already exceed the threshold; estimates may differ in either direction.", systemImage: "questionmark.circle")
           }
         }
@@ -382,33 +522,7 @@ struct UsageDashboardView: View {
   }
   #endif
 
-  private var filteredMessages: [ChatMessage] {
-    messages(since: accessibleRange.startDate(reference: .now))
-  }
-
-  private var filteredAggregate: ChatUsageAggregate {
-    ChatBilling.aggregate(messages: filteredMessages)
-  }
-
-  private var filteredTelemetryEvents: [TelemetryEvent] {
-    guard !telemetryUnavailable else { return [] }
-    let startDate = accessibleRange.startDate(reference: .now)
-    return telemetryEvents.filter { event in
-      guard event.dataClass == .analytics else { return false }
-      guard let startDate else { return true }
-      return event.timestamp >= startDate
-    }
-  }
-
-  private var performance: TelemetryPerformanceAggregate {
-    TelemetryAnalytics.aggregate(events: filteredTelemetryEvents)
-  }
-
-  private var failureBreakdown: [TelemetryFailureBreakdown] {
-    TelemetryAnalytics.failureBreakdown(events: filteredTelemetryEvents)
-  }
-
-  private var hasPerformanceData: Bool {
+  private func hasTelemetryActivity(_ performance: TelemetryPerformanceAggregate) -> Bool {
     performance.providerRequestCount > 0 || performance.toolCallCount > 0 || performance.mcpRequestCount > 0
   }
 
@@ -417,99 +531,25 @@ struct UsageDashboardView: View {
     return conversations.first(where: { $0.id == currentConversationID })
   }
 
-  #if DEBUG
-  /// Budget thresholds remain monthly. Without Pro, only today's portion of
-  /// the month can be evaluated; never read or display earlier days.
-  private var budgetAggregate: ChatUsageAggregate {
-    let budgetRange: UsageRange = purchaseManager.hasPro ? .month : .today
-    return ChatBilling.aggregate(messages: messages(since: budgetRange.startDate(reference: .now)))
-  }
-  #endif
-
-  private var providerBreakdown: [UsageBreakdown] {
-    breakdown(
-      messageKey: { $0.providerID?.rawValue },
-      eventKey: { $0.providerID?.rawValue },
-      title: usageDisplayName
-    )
-  }
-
-  private var modelBreakdown: [UsageBreakdown] {
-    breakdown(
-      messageKey: { $0.modelID?.rawValue },
-      eventKey: { $0.modelID?.rawValue },
-      title: { $0 }
-    )
-  }
-
-  private func breakdown(
-    messageKey: (ChatMessage) -> String?,
-    eventKey: (TelemetryEvent) -> String?,
-    title: (String) -> String
-  ) -> [UsageBreakdown] {
-    var usageByKey: [String: ChatUsageAggregate] = [:]
-    for message in filteredMessages where message.role == .assistant {
-      guard let key = messageKey(message), !key.isEmpty else { continue }
-      var aggregate = usageByKey[key] ?? ChatUsageAggregate()
-      aggregate.add(message)
-      usageByKey[key] = aggregate
-    }
-
-    var eventsByKey: [String: [TelemetryEvent]] = [:]
-    for event in filteredTelemetryEvents {
-      guard let key = eventKey(event), !key.isEmpty else { continue }
-      eventsByKey[key, default: []].append(event)
-    }
-
-    let keys = Set(usageByKey.keys).union(eventsByKey.keys)
-    return keys.map { key in
-      UsageBreakdown(
-        id: key,
-        title: title(key),
-        aggregate: usageByKey[key] ?? ChatUsageAggregate(),
-        performance: TelemetryAnalytics.aggregate(events: eventsByKey[key] ?? [])
-      )
-    }
-    .sorted { lhs, rhs in
-      if lhs.aggregate.costUSD != rhs.aggregate.costUSD {
-        return lhs.aggregate.costUSD > rhs.aggregate.costUSD
-      }
-      let lhsTokens = lhs.aggregate.inputTokens + lhs.aggregate.outputTokens
-      let rhsTokens = rhs.aggregate.inputTokens + rhs.aggregate.outputTokens
-      if lhsTokens != rhsTokens { return lhsTokens > rhsTokens }
-      return lhs.performance.providerRequestCount > rhs.performance.providerRequestCount
-    }
-  }
-
-  private func messages(since startDate: Date?) -> [ChatMessage] {
-    conversations.flatMap(\.messages).filter { message in
-      guard message.role == .assistant else { return false }
-      guard let startDate else { return true }
-      return message.updatedAt >= startDate
-    }
-  }
-
-  private func conversationSummaryLabel(_ conversation: ChatConversation) -> some View {
-    let startDate = accessibleRange.startDate(reference: .now)
-    let messages = conversation.messages.filter { message in
-      guard message.role == .assistant else { return false }
-      guard let startDate else { return true }
-      return message.updatedAt >= startDate
-    }
-    let aggregate = ChatBilling.aggregate(messages: messages)
-    let events = filteredTelemetryEvents.filter { $0.conversationID == conversation.id }
-    let performance = TelemetryAnalytics.aggregate(events: events)
+  private func conversationSummaryLabel(_ snapshot: ConversationUsageAnalyticsSnapshot) -> some View {
+    let aggregate = snapshot.aggregate
+    let performance = snapshot.performance
+    let hasSavedMessages = aggregate.assistantMessageCount > 0
 
     return VStack(alignment: .leading, spacing: 4) {
       HStack {
         Text("Details")
         Spacer()
-        Text(usageAggregateCostText(aggregate))
+        Text(hasSavedMessages || performance.providerRequestCount == 0
+          ? usageAggregateCostText(aggregate)
+          : "—")
           .foregroundStyle(theme.secondaryForegroundColor)
           .monospacedDigit()
       }
       HStack(spacing: 6) {
-        Text("\(aggregate.modelRequestCount.formatted()) requests")
+        Text(usageRequestCountLabel(hasSavedMessages
+          ? aggregate.modelRequestCount
+          : performance.providerRequestCount))
         if performance.providerSuccessRate != nil {
           Text("·")
           Text("\(usagePercent(performance.providerSuccessRate)) success")
@@ -525,20 +565,19 @@ struct UsageDashboardView: View {
   }
 
   #if DEBUG
-  private var budgetProgress: Double {
+  private func budgetProgress(for aggregate: ChatUsageAggregate) -> Double {
     guard monthlyBudgetUSD > 0 else { return 0 }
-    let spent = NSDecimalNumber(decimal: budgetAggregate.costUSD).doubleValue
+    let spent = NSDecimalNumber(decimal: aggregate.costUSD).doubleValue
     return min(max(spent / monthlyBudgetUSD, 0), 1)
   }
 
-  private var budgetWarningReached: Bool {
+  private func budgetWarningReached(for aggregate: ChatUsageAggregate) -> Bool {
     guard monthlyBudgetUSD > 0 else { return false }
-    let spent = NSDecimalNumber(decimal: budgetAggregate.costUSD).doubleValue
+    let spent = NSDecimalNumber(decimal: aggregate.costUSD).doubleValue
     return spent >= monthlyBudgetUSD * budgetWarningFraction
   }
 
-  private var budgetWarningText: String {
-    let aggregate = budgetAggregate
+  private func budgetWarningText(for aggregate: ChatUsageAggregate) -> String {
     if aggregate.hasPartialCost {
       return aggregate.hasEstimatedCost
         ? "Partial estimate reached the warning threshold"
@@ -554,18 +593,11 @@ struct UsageDashboardView: View {
     if !purchaseManager.hasPro {
       return "Only today's local telemetry is shown. Historical ranges require Pro. Events are retained on device for up to 30 days by default, and saved chat usage is retained with your messages."
     }
-    if telemetryStatistics.eventCount > telemetryEvents.count {
+    if telemetryStatistics.analyticsEventCount > telemetryEvents.count {
       let queryLimit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
-      return "Performance and reliability use the latest \(queryLimit) local telemetry events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
+      return "Performance and reliability use the latest \(queryLimit) local analytics events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
     }
     return "Performance and reliability are calculated from device-local telemetry retained for up to 30 days by default. Chat usage and spend remain available from message history even if telemetry is cleared."
-  }
-
-  private func errorTitle(_ raw: String) -> String {
-    raw.replacingOccurrences(of: "_", with: " ")
-      .split(separator: " ")
-      .map { $0.capitalized }
-      .joined(separator: " ")
   }
 
   private func loadTelemetry(retry: Bool = false) async {
@@ -586,6 +618,14 @@ struct UsageDashboardView: View {
     }
     hasLoadedTelemetry = true
   }
+
+  private func clearTelemetry() async {
+    guard !isClearingTelemetry else { return }
+    isClearingTelemetry = true
+    defer { isClearingTelemetry = false }
+    await model.telemetryRecorder.clearAllTelemetry()
+    await loadTelemetry(retry: true)
+  }
 }
 
 private struct UsageBreakdownRowView: View {
@@ -593,15 +633,27 @@ private struct UsageBreakdownRowView: View {
 
   @Environment(\.appFoundationTheme) private var theme
 
+  private var hasSavedMessages: Bool {
+    row.aggregate.assistantMessageCount > 0
+  }
+
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 3) {
         Text(row.title)
           .lineLimit(1)
 
-        Text("\(usageCompactTokens(row.aggregate.inputTokens + row.aggregate.outputTokens)) tokens · \(row.aggregate.modelRequestCount.formatted()) requests")
+        if hasSavedMessages {
+          Text(
+            "\(usageCompactTokens(row.aggregate.inputTokens + row.aggregate.outputTokens)) tokens · \(usageRequestCountLabel(row.aggregate.modelRequestCount))"
+          )
           .font(.caption)
           .foregroundStyle(theme.secondaryForegroundColor)
+        } else if row.performance.providerRequestCount > 0 {
+          Text("\(usageRequestCountLabel(row.performance.providerRequestCount)) · no saved messages")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
 
         if row.performance.providerRequestCount > 0 {
           HStack(spacing: 4) {
@@ -616,7 +668,9 @@ private struct UsageBreakdownRowView: View {
         }
       }
       Spacer(minLength: 12)
-      Text(usageAggregateCostText(row.aggregate))
+      Text(hasSavedMessages || row.performance.providerRequestCount == 0
+        ? usageAggregateCostText(row.aggregate)
+        : "—")
         .foregroundStyle(theme.secondaryForegroundColor)
         .monospacedDigit()
     }

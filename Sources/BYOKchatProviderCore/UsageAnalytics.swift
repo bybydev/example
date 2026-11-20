@@ -85,13 +85,16 @@ public struct UsageAnalyticsSnapshot: Sendable, Equatable {
 public struct ConversationUsageAnalyticsSnapshot: Sendable, Equatable {
   public let aggregate: ChatUsageAggregate
   public let performance: TelemetryPerformanceAggregate
+  public let failureBreakdown: [TelemetryFailureBreakdown]
 
   public init(
     aggregate: ChatUsageAggregate,
-    performance: TelemetryPerformanceAggregate
+    performance: TelemetryPerformanceAggregate,
+    failureBreakdown: [TelemetryFailureBreakdown] = []
   ) {
     self.aggregate = aggregate
     self.performance = performance
+    self.failureBreakdown = failureBreakdown
   }
 }
 
@@ -152,7 +155,8 @@ public enum UsageAnalytics {
 
     return ConversationUsageAnalyticsSnapshot(
       aggregate: ChatBilling.aggregate(messages: messages),
-      performance: TelemetryAnalytics.aggregate(events: events)
+      performance: TelemetryAnalytics.aggregate(events: events),
+      failureBreakdown: TelemetryAnalytics.failureBreakdown(events: events)
     )
   }
 
@@ -203,11 +207,16 @@ public enum UsageAnalytics {
     }
 
     let keys = Set(usageByKey.keys).union(eventsByKey.keys)
-    return keys.map { key in
-      UsageAnalyticsBreakdown(
+    return keys.compactMap { key -> UsageAnalyticsBreakdown? in
+      let aggregate = usageByKey[key] ?? ChatUsageAggregate()
+      let performance = TelemetryAnalytics.aggregate(events: eventsByKey[key] ?? [])
+      guard aggregate.assistantMessageCount > 0 || performance.providerRequestCount > 0 else {
+        return nil
+      }
+      return UsageAnalyticsBreakdown(
         id: key,
-        aggregate: usageByKey[key] ?? ChatUsageAggregate(),
-        performance: TelemetryAnalytics.aggregate(events: eventsByKey[key] ?? [])
+        aggregate: aggregate,
+        performance: performance
       )
     }
     .sorted { lhs, rhs in
@@ -217,7 +226,10 @@ public enum UsageAnalytics {
       let lhsTokens = lhs.aggregate.inputTokens + lhs.aggregate.outputTokens
       let rhsTokens = rhs.aggregate.inputTokens + rhs.aggregate.outputTokens
       if lhsTokens != rhsTokens { return lhsTokens > rhsTokens }
-      return lhs.performance.providerRequestCount > rhs.performance.providerRequestCount
+      if lhs.performance.providerRequestCount != rhs.performance.providerRequestCount {
+        return lhs.performance.providerRequestCount > rhs.performance.providerRequestCount
+      }
+      return lhs.id < rhs.id
     }
   }
 }

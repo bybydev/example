@@ -12,7 +12,7 @@ struct TelemetryLogDetailView: View {
     List {
       Section("Event") {
         LabeledContent("Name", value: event.name.rawValue)
-        LabeledContent("Category", value: event.category.rawValue.capitalized)
+        LabeledContent("Category", value: usageCategoryTitle(event.category))
         LabeledContent("Class", value: event.dataClass.rawValue.capitalized)
         LabeledContent("Severity", value: event.severity.rawValue.capitalized)
         if let outcome = event.outcome {

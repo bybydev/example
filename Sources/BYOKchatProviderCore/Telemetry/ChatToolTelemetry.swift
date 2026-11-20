@@ -71,6 +71,7 @@ struct ChatToolTelemetry: Sendable {
     )
     metadata["interactiveRoundCount"] = String(max(0, interactiveRoundCount))
     metadata["elicitationCount"] = String(max(0, elicitationCount))
+    if resultIsError { metadata["classification"] = "tool_result" }
     if let approvalDecision { metadata["approvalDecision"] = approvalDecision }
 
     emit(

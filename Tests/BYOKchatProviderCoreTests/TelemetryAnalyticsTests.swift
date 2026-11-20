@@ -170,4 +170,96 @@ import Testing
   #expect(aggregate.medianDurationMilliseconds == nil)
   #expect(aggregate.medianTTFTMilliseconds == nil)
   #expect(aggregate.medianOutputTokensPerSecond == nil)
+  #expect(!aggregate.hasLatencyOrSpeedMetrics)
+}
+
+@Test func telemetryAnalyticsExcludesMCPTransportProtocolFallbackAndTieBreaksDeterministically() {
+  let events: [TelemetryEvent] = [
+    TelemetryEvent(
+      dataClass: .analytics,
+      category: .mcp,
+      name: .mcpRequestFailed,
+      outcome: .failure,
+      httpStatus: 501,
+      errorCode: "legacy_probe_fallback",
+      metadata: ["classification": "protocol_fallback", "expectedFallback": "true"]
+    ),
+    TelemetryEvent(
+      dataClass: .analytics,
+      category: .mcp,
+      name: .mcpRequestCompleted,
+      outcome: .success
+    ),
+    TelemetryEvent(
+      dataClass: .analytics,
+      category: .tool,
+      name: .toolCallFailed,
+      outcome: .failure,
+      errorCode: "shared_code",
+      metadata: ["classification": "z_class"]
+    ),
+    TelemetryEvent(
+      dataClass: .analytics,
+      category: .tool,
+      name: .toolCallFailed,
+      outcome: .failure,
+      errorCode: "shared_code",
+      metadata: ["classification": "a_class"]
+    ),
+  ]
+
+  let aggregate = TelemetryAnalytics.aggregate(events: events)
+  #expect(aggregate.mcpRequestCount == 2)
+  #expect(aggregate.mcpFailureCount == 0)
+  #expect(!aggregate.hasLatencyOrSpeedMetrics)
+
+  let failures = TelemetryAnalytics.failureBreakdown(events: events)
+  #expect(failures.count == 2)
+  #expect(failures.map(\.classification) == ["a_class", "z_class"])
+}
+
+@Test func singleChunkBurstDoesNotReportInflatedTokensPerSecond() async throws {
+  let location = FileManager.default.temporaryDirectory
+    .appendingPathComponent("BYOKchatSingleChunkSpeed-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: location) }
+  let recorder = TelemetryRecorder(
+    databaseURL: location.appendingPathComponent("telemetry.sqlite"),
+    deviceID: "speed-device",
+    sessionID: "speed-session"
+  )
+  let telemetry = ChatRuntimeTelemetry(recorder: recorder)
+  let conversation = ChatConversation(
+    id: "speed-chat",
+    title: "Speed",
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-astra"
+  )
+  telemetry.providerRequestCompleted(
+    conversation: conversation,
+    messageID: "msg-1",
+    requestIndex: 1,
+    response: ProviderResponse(
+      text: "Hello world",
+      providerID: "openai",
+      accountID: "oai",
+      modelID: "gpt-6.2-astra"
+    ),
+    usage: ProviderUsage(inputTokens: 10, outputTokens: 50),
+    durationMilliseconds: 1_000,
+    timeToFirstTokenMilliseconds: 999.8
+  )
+
+  var completed: TelemetryEvent?
+  for _ in 0..<100 {
+    let events = await recorder.recentEvents(limit: 10)
+    if let match = events.first(where: { $0.name == .providerRequestCompleted }) {
+      completed = match
+      break
+    }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  let event = try #require(completed)
+  let speed = try #require(event.metadata["outputTokensPerSecond"].flatMap(Double.init))
+  #expect(abs(speed - 50.0) < 0.5)
 }

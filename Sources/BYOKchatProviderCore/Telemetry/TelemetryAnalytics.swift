@@ -65,6 +65,14 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
     guard samples > 0 else { return nil }
     return Double(toolSuccessCount) / Double(samples)
   }
+
+  public var hasLatencyOrSpeedMetrics: Bool {
+    medianTTFTMilliseconds != nil
+      || p95TTFTMilliseconds != nil
+      || medianDurationMilliseconds != nil
+      || p95DurationMilliseconds != nil
+      || medianOutputTokensPerSecond != nil
+  }
 }
 
 public struct TelemetryFailureBreakdown: Sendable, Equatable, Identifiable {
@@ -149,8 +157,7 @@ public enum TelemetryAnalytics {
 
       case .mcpRequestFailed:
         mcpRequestCount += 1
-        let classification = event.metadata["classification"]
-        if classification != "legacy_fallback" {
+        if !isExpectedMCPLegacyFallback(event) {
           mcpFailureCount += 1
         }
 
@@ -204,7 +211,7 @@ public enum TelemetryAnalytics {
       case .providerRequestFailed, .toolCallFailed, .purchaseFailed, .syncFailed:
         break
       case .mcpRequestFailed:
-        if classification == "legacy_fallback" { continue }
+        if isExpectedMCPLegacyFallback(event) { continue }
       case .chatTurnFailed:
         guard localChatClassifications.contains(classification) else { continue }
       default:
@@ -228,8 +235,16 @@ public enum TelemetryAnalytics {
       if lhs.category.rawValue != rhs.category.rawValue {
         return lhs.category.rawValue < rhs.category.rawValue
       }
-      return lhs.errorCode < rhs.errorCode
+      if lhs.errorCode != rhs.errorCode { return lhs.errorCode < rhs.errorCode }
+      return lhs.classification < rhs.classification
     }
+  }
+
+  private static func isExpectedMCPLegacyFallback(_ event: TelemetryEvent) -> Bool {
+    if event.metadata["expectedFallback"] == "true" { return true }
+    if event.errorCode == "legacy_probe_fallback" { return true }
+    let classification = event.metadata["classification"]
+    return classification == "legacy_fallback" || classification == "protocol_fallback"
   }
 
   private static func validMetric(_ value: Double?) -> Double? {

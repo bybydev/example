@@ -27,7 +27,14 @@ public enum TelemetryAnalyticsLoadResult: Sendable {
 
 protocol TelemetryAnalyticsReading: Sendable {
   func recentEvents(limit: Int) async throws -> [TelemetryEvent]
+  func recentAnalyticsEvents(limit: Int) async throws -> [TelemetryEvent]
   func statistics() async throws -> TelemetryStoreStatistics
+}
+
+extension TelemetryAnalyticsReading {
+  func recentAnalyticsEvents(limit: Int) async throws -> [TelemetryEvent] {
+    try await recentEvents(limit: limit).filter { $0.dataClass == .analytics }
+  }
 }
 
 extension TelemetrySQLiteStore: TelemetryAnalyticsReading {}
@@ -121,7 +128,7 @@ public actor TelemetryRecorder {
   public func loadAnalytics(limit: Int = 500) async -> TelemetryAnalyticsLoadResult {
     guard !isDisabledForSession else { return .unavailable }
     do {
-      let events = try await analyticsReader.recentEvents(limit: limit)
+      let events = try await analyticsReader.recentAnalyticsEvents(limit: limit)
       let statistics = try await analyticsReader.statistics()
       // Neither read can mask failure of the other by resetting health.
       markSuccess()

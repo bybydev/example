@@ -157,11 +157,17 @@ struct ChatRuntimeTelemetry: Sendable {
       metadata["routedProvider"] = routedProvider
     }
     if let outputTokens = usage?.outputTokens, outputTokens > 0 {
-      let generationMilliseconds = max(
-        durationMilliseconds - (timeToFirstTokenMilliseconds ?? 0),
-        1
-      )
-      let tokensPerSecond = Double(outputTokens) * 1_000 / generationMilliseconds
+      let decodeMilliseconds: Double
+      if let ttft = timeToFirstTokenMilliseconds {
+        let remaining = durationMilliseconds - ttft
+        // Single-chunk or buffered bursts can finish within a few milliseconds
+        // of the first token; fall back to total request duration instead of
+        // clamping to 1 ms and reporting tens of thousands of tok/s.
+        decodeMilliseconds = remaining >= 50 ? remaining : max(durationMilliseconds, 1)
+      } else {
+        decodeMilliseconds = max(durationMilliseconds, 1)
+      }
+      let tokensPerSecond = Double(outputTokens) * 1_000 / decodeMilliseconds
       metadata["outputTokensPerSecond"] = String(
         format: "%.2f",
         locale: Locale(identifier: "en_US_POSIX"),

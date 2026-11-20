@@ -1,30 +1,42 @@
 import BYOKchatProviderCore
 import Foundation
 
-func usageDisplayName(_ raw: String) -> String {
-  switch raw.lowercased() {
-  case "openrouter": "OpenRouter"
-  case "deepseek": "DeepSeek"
-  case "zai": "Z.ai"
-  case "moonshot": "Moonshot AI"
-  case "minimax": "MiniMax"
-  case "mistral": "Mistral AI"
-  case "anthropic": "Anthropic"
-  case "gemini": "Gemini"
-  case "nvidia": "NVIDIA"
-  case "ollama": "Ollama"
-  case "lmstudio": "LM Studio"
-  default: raw
+nonisolated func usageDisplayName(
+  _ raw: String,
+  accounts: [ProviderAccount] = [],
+  fallbackLabel: String? = nil
+) -> String {
+  let kind = ProviderKind(providerID: ProviderID(rawValue: raw.lowercased()))
+  if !kind.displayName.isEmpty {
+    return kind.displayName
   }
+  if let matched = accounts.first(where: {
+    $0.providerID.rawValue.caseInsensitiveCompare(raw) == .orderedSame
+  }) {
+    let trimmed = matched.label.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmed.isEmpty { return trimmed }
+  }
+  if let fallbackLabel {
+    let trimmed = fallbackLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmed.isEmpty { return trimmed }
+  }
+  if UUID(uuidString: raw) != nil {
+    return "Custom Provider"
+  }
+  return raw
 }
 
-func usageTokenCount(_ value: Int) -> String {
+nonisolated func usageRequestCountLabel(_ count: Int) -> String {
+  count == 1 ? "1 request" : "\(count.formatted()) requests"
+}
+
+nonisolated func usageTokenCount(_ value: Int) -> String {
   value.formatted(.number.grouping(.automatic))
 }
 
-func usageCompactTokens(_ value: Int) -> String {
+nonisolated func usageCompactTokens(_ value: Int) -> String {
   let number = Double(value)
-  if value >= 1_000_000 {
+  if value >= 999_950 {
     return String(format: "%.2fM", number / 1_000_000)
   }
   if value >= 1_000 {
@@ -33,51 +45,81 @@ func usageCompactTokens(_ value: Int) -> String {
   return value.formatted()
 }
 
-func usagePricePerMillion(_ perToken: Decimal) -> String {
+nonisolated func usagePricePerMillion(_ perToken: Decimal) -> String {
   usageFormatUSD(perToken * Decimal(1_000_000))
 }
 
-func usageAggregateCostText(_ aggregate: ChatUsageAggregate) -> String {
+nonisolated func usageAggregateCostText(_ aggregate: ChatUsageAggregate) -> String {
   guard aggregate.assistantMessageCount > 0 else { return "No requests" }
   guard aggregate.hasKnownCost else { return "Unavailable" }
   let prefix = aggregate.isLowerBound ? "≥" : (aggregate.hasEstimatedCost ? "~" : "")
   return prefix + usageFormatUSD(aggregate.costUSD) + (aggregate.hasPartialCost ? " (partial)" : "")
 }
 
-func usageFormatUSD(_ cost: Decimal) -> String {
+nonisolated func usageFormatUSD(_ cost: Decimal) -> String {
   let value = NSDecimalNumber(decimal: cost).doubleValue
-  if abs(value) < 0.001 {
+  let magnitude = abs(value)
+  if magnitude == 0 {
+    return "$0.00"
+  }
+  if magnitude < 0.0009995 {
     return String(format: "$%.6f", value)
   }
-  if abs(value) < 1 {
+  if magnitude < 0.99995 {
     return String(format: "$%.4f", value)
   }
   return String(format: "$%.2f", value)
 }
 
-func usageDuration(_ milliseconds: Double?) -> String {
+nonisolated func usageDuration(_ milliseconds: Double?) -> String {
   guard let milliseconds, milliseconds.isFinite, milliseconds >= 0 else { return "—" }
-  if milliseconds < 1_000 {
+  if milliseconds < 999.5 {
     return "\(Int(milliseconds.rounded())) ms"
   }
-  if milliseconds < 10_000 {
+  if milliseconds < 9_995 {
     return String(format: "%.2f s", milliseconds / 1_000)
   }
   return String(format: "%.1f s", milliseconds / 1_000)
 }
 
-func usageRate(_ value: Double?) -> String {
+nonisolated func usageRate(_ value: Double?) -> String {
   guard let value, value.isFinite, value >= 0 else { return "—" }
   return String(format: "%.1f tok/s", value)
 }
 
-func usagePercent(_ value: Double?) -> String {
+nonisolated func usagePercent(_ value: Double?) -> String {
   guard let value, value.isFinite else { return "—" }
   return value.formatted(.percent.precision(.fractionLength(0...1)))
 }
 
+nonisolated func usageCategoryTitle(_ category: TelemetryCategory) -> String {
+  switch category {
+  case .mcp: "MCP"
+  default: category.rawValue.capitalized
+  }
+}
 
-func usageHistoryFootnote(_ aggregate: ChatUsageAggregate) -> String {
+nonisolated func usageErrorTitle(_ raw: String) -> String {
+  let acronyms: [String: String] = [
+    "http": "HTTP",
+    "mcp": "MCP",
+    "url": "URL",
+    "api": "API",
+    "id": "ID",
+    "json": "JSON",
+    "sse": "SSE",
+  ]
+  return raw
+    .replacingOccurrences(of: "_", with: " ")
+    .split(separator: " ")
+    .map { part in
+      let lower = part.lowercased()
+      return acronyms[lower] ?? part.capitalized
+    }
+    .joined(separator: " ")
+}
+
+nonisolated func usageHistoryFootnote(_ aggregate: ChatUsageAggregate) -> String {
   let cost = aggregate.hasPartialCost
     ? "Costs are incomplete: some requests lack usage, pricing, or supported billing details. Estimates may differ from provider charges. "
     : "Calculated costs are estimates; provider-reported costs use the reported billing scope. "

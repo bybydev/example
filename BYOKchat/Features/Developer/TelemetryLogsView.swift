@@ -192,7 +192,7 @@ private struct TelemetryLogRow: View {
   }
 
   private var contextLine: String {
-    var parts = [event.category.rawValue.capitalized]
+    var parts = [usageCategoryTitle(event.category)]
     if let provider = event.providerID?.rawValue { parts.append(provider) }
     if let model = event.modelID?.rawValue { parts.append(model) }
     if let outcome = event.outcome?.rawValue { parts.append(outcome) }

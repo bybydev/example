@@ -311,6 +311,50 @@ import Testing
   #expect(await recorder.recentEvents().isEmpty)
 }
 
+@Test func loadAnalyticsFiltersAnalyticsClassSoDiagnosticsCannotCrowdItOut() async throws {
+  let location = temporaryTelemetryLocation()
+  defer { try? FileManager.default.removeItem(at: location.directory) }
+
+  let recorder = TelemetryRecorder(
+    databaseURL: location.database,
+    configuration: testConfiguration(),
+    deviceID: "device-filter",
+    sessionID: "session-filter"
+  )
+  let base = Date(timeIntervalSince1970: 20_000)
+
+  await recorder.record(
+    TelemetryEvent(
+      timestamp: base,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success
+    )
+  )
+  for index in 1...4 {
+    await recorder.record(
+      TelemetryEvent(
+        timestamp: base.addingTimeInterval(Double(index)),
+        dataClass: .diagnostic,
+        category: .storage,
+        name: "storage.diagnostic_noise"
+      )
+    )
+  }
+
+  let loaded = await recorder.loadAnalytics(limit: 2)
+  guard case .loaded(let events, let statistics) = loaded else {
+    Issue.record("Expected analytics load to succeed")
+    return
+  }
+  #expect(events.count == 1)
+  #expect(events.first?.dataClass == .analytics)
+  #expect(statistics.analyticsEventCount == 1)
+  #expect(statistics.diagnosticEventCount == 4)
+  #expect(statistics.eventCount == 5)
+}
+
 private func testConfiguration() -> TelemetryStoreConfiguration {
   TelemetryStoreConfiguration(
     maximumAge: 30 * 24 * 60 * 60,
