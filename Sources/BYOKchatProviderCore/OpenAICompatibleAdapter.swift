@@ -83,157 +83,176 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } catch {
       throw ProviderError.invalidResponse
     }
-    let discovered: [ProviderModel] = decoded.data.compactMap { wire in
-      if definition.behavior == .mistral,
-        wire.archived == true || wire.capabilities?.completionChat == false
-      {
-        return nil
+    let discovered = decoded.data.compactMap(discoveredModel(from:))
+    return mergeModels(seed: definition.seedModels, discovered: discovered)
+  }
+
+  private func discoveredModel(from wire: ModelWire) -> ProviderModel? {
+    if definition.behavior == .mistral,
+      wire.archived == true || wire.capabilities?.completionChat == false
+    {
+      return nil
+    }
+    if definition.behavior == .nvidia, !Self.isLikelyNVIDIAChatModel(id: wire.id) {
+      return nil
+    }
+    var evidence = ModelCapabilityEvidence()
+    // OpenRouter and DeepSeek supply exhaustive modality lists when present.
+    // Custom-compatible catalogs may provide partial hints using the same field names.
+    let rawInputModalities = wire.architecture?.inputModalities ?? wire.inputModalities
+    let rawOutputModalities = wire.architecture?.outputModalities ?? wire.outputModalities
+    let exhaustiveModalities = definition.behavior == .openRouter || definition.behavior == .deepSeek
+    let exhaustiveParameters = definition.behavior == .openRouter
+    evidence.modalities(rawInputModalities, input: true, exhaustive: exhaustiveModalities)
+    evidence.modalities(rawOutputModalities, input: false, exhaustive: exhaustiveModalities)
+    evidence.parameters(wire.supportedParameters, exhaustive: exhaustiveParameters)
+    var supportedParameters = Set(wire.supportedParameters ?? [])
+    var inputModalities = Set(rawInputModalities ?? ["text"])
+    if let capabilities = wire.capabilities {
+      if let functionCalling = capabilities.functionCalling {
+        evidence.set(.tools, supported: functionCalling, source: .discovery)
+        if functionCalling { supportedParameters.insert("tools") }
       }
-      if definition.behavior == .nvidia, !Self.isLikelyNVIDIAChatModel(id: wire.id) {
-        return nil
+      if let vision = capabilities.vision {
+        evidence.set(.imageInput, supported: vision, source: .discovery)
+        if vision { inputModalities.insert("image") }
       }
-      var evidence = ModelCapabilityEvidence()
-      // OpenRouter and DeepSeek supply exhaustive modality lists when present.
-      // Custom-compatible catalogs may provide partial hints using the same field names.
-      let rawInputModalities = wire.architecture?.inputModalities ?? wire.inputModalities
-      let rawOutputModalities = wire.architecture?.outputModalities ?? wire.outputModalities
-      let exhaustiveModalities = definition.behavior == .openRouter || definition.behavior == .deepSeek
-      let exhaustiveParameters = definition.behavior == .openRouter
-      evidence.modalities(rawInputModalities, input: true, exhaustive: exhaustiveModalities)
-      evidence.modalities(rawOutputModalities, input: false, exhaustive: exhaustiveModalities)
-      evidence.parameters(wire.supportedParameters, exhaustive: exhaustiveParameters)
-      var supportedParameters = Set(wire.supportedParameters ?? [])
-      var inputModalities = Set(rawInputModalities ?? ["text"])
-      if let capabilities = wire.capabilities {
-        if let functionCalling = capabilities.functionCalling {
-          evidence.set(.tools, supported: functionCalling, source: .discovery)
-          if functionCalling { supportedParameters.insert("tools") }
+    }
+    if definition.behavior == .deepSeek, let effortWire = wire.effort {
+      var parsedEfforts: [ReasoningEffort] = []
+      for rawLevel in effortWire.supportedLevels ?? [] {
+        if let level = ReasoningEffort(rawValue: rawLevel.lowercased()),
+          !parsedEfforts.contains(level)
+        {
+          parsedEfforts.append(level)
         }
-        if let vision = capabilities.vision {
-          evidence.set(.imageInput, supported: vision, source: .discovery)
-          if vision { inputModalities.insert("image") }
-        }
       }
-      if definition.behavior == .deepSeek, let effortWire = wire.effort {
+      if !parsedEfforts.isEmpty {
+        let fallbackEffort: ReasoningEffort? = parsedEfforts.contains(.high) ? .high : parsedEfforts.first
+        let defaultEffort = Self.parsedEffort(effortWire.defaultLevel, allowed: parsedEfforts)
+          ?? fallbackEffort
+        evidence.set(.reasoning, supported: true, source: .discovery)
+        evidence.reasoningControl = ModelReasoningControl(
+          kind: .efforts,
+          efforts: parsedEfforts,
+          defaultEffort: defaultEffort,
+          allowsOff: true,
+          offWireValue: "disabled",
+          source: .discovery
+        )
+        supportedParameters.formUnion(["thinking", "reasoning_effort"])
+      }
+    }
+    let contextWindow = Self.firstPositive(
+      wire.contextLength,
+      wire.maxContextLength,
+      wire.contextWindow,
+      wire.topProvider?.contextLength
+    )
+    let outputLimit = Self.firstPositive(
+      wire.maxOutputTokens,
+      wire.topProvider?.maxCompletionTokens
+    )
+    if definition.behavior == .openRouter {
+      if let reasoningWire = wire.reasoning {
+        let rawLevels = reasoningWire.supportedEfforts ?? []
+        let hasNone = rawLevels.contains { $0.lowercased() == "none" }
         var parsedEfforts: [ReasoningEffort] = []
-        for rawLevel in effortWire.supportedLevels ?? [] {
+        for rawLevel in rawLevels {
           if let level = ReasoningEffort(rawValue: rawLevel.lowercased()),
             !parsedEfforts.contains(level)
           {
             parsedEfforts.append(level)
           }
         }
+        let allowsOff = reasoningWire.mandatory == true
+          ? false
+          : (reasoningWire.mandatory == false || hasNone)
+        let offWireValue: String? = allowsOff ? (hasNone ? "none" : "disabled") : nil
+        let defaultEffort = Self.parsedEffort(reasoningWire.defaultEffort, allowed: parsedEfforts)
+        let budget: ReasoningBudgetControl?
+        if reasoningWire.supportsMaxTokens == true, outputLimit == nil || (outputLimit ?? 0) >= 1_024 {
+          let defaultTokens = max(1_024, min(2_048, outputLimit ?? 2_048))
+          budget = .init(minimum: 1_024, maximum: outputLimit, defaultTokens: defaultTokens)
+        } else {
+          budget = nil
+        }
+        let control: ModelReasoningControl
         if !parsedEfforts.isEmpty {
-          let defaultEffort = effortWire.defaultLevel
-            .flatMap { ReasoningEffort(rawValue: $0.lowercased()) }
-            .flatMap { parsedEfforts.contains($0) ? $0 : nil }
-            ?? (parsedEfforts.contains(.high) ? .high : parsedEfforts.first)
-          evidence.set(.reasoning, supported: true, source: .discovery)
-          evidence.reasoningControl = ModelReasoningControl(
+          control = ModelReasoningControl(
             kind: .efforts,
             efforts: parsedEfforts,
             defaultEffort: defaultEffort,
-            allowsOff: true,
-            offWireValue: "disabled",
+            allowsOff: allowsOff,
+            offWireValue: offWireValue,
+            budget: budget,
+            combinesEffortAndBudget: false,
             source: .discovery
           )
-          supportedParameters.formUnion(["thinking", "reasoning_effort"])
-        }
-      }
-      let contextWindow = wire.contextLength.flatMap { $0 > 0 ? $0 : nil }
-        ?? wire.maxContextLength.flatMap { $0 > 0 ? $0 : nil }
-        ?? wire.contextWindow.flatMap { $0 > 0 ? $0 : nil }
-        ?? wire.topProvider?.contextLength.flatMap { $0 > 0 ? $0 : nil }
-      let outputLimit = wire.maxOutputTokens.flatMap { $0 > 0 ? $0 : nil }
-        ?? wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
-      if definition.behavior == .openRouter {
-        if let reasoningWire = wire.reasoning {
-          let rawLevels = reasoningWire.supportedEfforts ?? []
-          let hasNone = rawLevels.contains { $0.lowercased() == "none" }
-          var parsedEfforts: [ReasoningEffort] = []
-          for rawLevel in rawLevels {
-            if let level = ReasoningEffort(rawValue: rawLevel.lowercased()),
-              !parsedEfforts.contains(level)
-            {
-              parsedEfforts.append(level)
-            }
-          }
-          let allowsOff = reasoningWire.mandatory == true
-            ? false
-            : (reasoningWire.mandatory == false || hasNone)
-          let offWireValue: String? = allowsOff ? (hasNone ? "none" : "disabled") : nil
-          let defaultEffort = reasoningWire.defaultEffort
-            .flatMap { ReasoningEffort(rawValue: $0.lowercased()) }
-            .flatMap { parsedEfforts.contains($0) ? $0 : nil }
-          let budget: ReasoningBudgetControl? =
-            (reasoningWire.supportsMaxTokens == true && (outputLimit == nil || (outputLimit ?? 0) >= 1_024))
-            ? .init(
-              minimum: 1_024,
-              maximum: outputLimit,
-              defaultTokens: max(1_024, min(2_048, outputLimit ?? 2_048))
-            )
-            : nil
-          let control: ModelReasoningControl
-          if !parsedEfforts.isEmpty {
-            control = ModelReasoningControl(
-              kind: .efforts,
-              efforts: parsedEfforts,
-              defaultEffort: defaultEffort,
-              allowsOff: allowsOff,
-              offWireValue: offWireValue,
-              budget: budget,
-              combinesEffortAndBudget: false,
-              source: .discovery
-            )
-          } else if let budget {
-            control = ModelReasoningControl(
-              kind: .budget,
-              allowsOff: allowsOff,
-              offWireValue: offWireValue,
-              budget: budget,
-              source: .discovery
-            )
-          } else {
-            control = ModelReasoningControl(
-              kind: .fixed,
-              allowsOff: allowsOff,
-              offWireValue: offWireValue,
-              source: .discovery
-            )
-          }
-          evidence.set(.reasoning, supported: true, source: .discovery)
-          evidence.reasoningControl = control
-          supportedParameters.insert("reasoning")
-        } else if supportedParameters.contains("reasoning") {
-          evidence.reasoningControl = ModelReasoningControl(
-            kind: .efforts,
-            efforts: [.low, .medium, .high],
-            defaultEffort: nil,
-            allowsOff: false,
+        } else if let budget {
+          control = ModelReasoningControl(
+            kind: .budget,
+            allowsOff: allowsOff,
+            offWireValue: offWireValue,
+            budget: budget,
+            source: .discovery
+          )
+        } else {
+          control = ModelReasoningControl(
+            kind: .fixed,
+            allowsOff: allowsOff,
+            offWireValue: offWireValue,
             source: .discovery
           )
         }
+        evidence.set(.reasoning, supported: true, source: .discovery)
+        evidence.reasoningControl = control
+        supportedParameters.insert("reasoning")
+      } else if supportedParameters.contains("reasoning") {
+        evidence.reasoningControl = ModelReasoningControl(
+          kind: .efforts,
+          efforts: [.low, .medium, .high],
+          defaultEffort: nil,
+          allowsOff: false,
+          source: .discovery
+        )
       }
-      if contextWindow != nil { evidence.contextWindowSource = .discovery }
-      if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
-      return ProviderModel(
-        providerID: definition.id,
-        id: ModelID(rawValue: wire.id),
-        displayName: wire.name ?? wire.id,
-        contextWindow: contextWindow,
-        maxOutputTokens: outputLimit,
-        supportedParameters: supportedParameters,
-        inputModalities: inputModalities,
-        outputModalities: Set(rawOutputModalities ?? ["text"]),
-        promptPricePerToken: wire.pricing?.prompt,
-        completionPricePerToken: wire.pricing?.completion,
-        capabilityEvidence: evidence,
-        cachedInputPricePerToken: wire.pricing?.cachedInput,
-        cacheWritePricePerToken: wire.pricing?.cacheWrite,
-        hasAdditionalPricingDimensions: wire.pricing?.hasAdditionalPricingDimensions
-      )
     }
-    return mergeModels(seed: definition.seedModels, discovered: discovered)
+    if contextWindow != nil { evidence.contextWindowSource = .discovery }
+    if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
+    return ProviderModel(
+      providerID: definition.id,
+      id: ModelID(rawValue: wire.id),
+      displayName: wire.name ?? wire.id,
+      contextWindow: contextWindow,
+      maxOutputTokens: outputLimit,
+      supportedParameters: supportedParameters,
+      inputModalities: inputModalities,
+      outputModalities: Set(rawOutputModalities ?? ["text"]),
+      promptPricePerToken: wire.pricing?.prompt,
+      completionPricePerToken: wire.pricing?.completion,
+      capabilityEvidence: evidence,
+      cachedInputPricePerToken: wire.pricing?.cachedInput,
+      cacheWritePricePerToken: wire.pricing?.cacheWrite,
+      hasAdditionalPricingDimensions: wire.pricing?.hasAdditionalPricingDimensions
+    )
+  }
+
+  private static func firstPositive(_ candidates: Int?...) -> Int? {
+    for value in candidates {
+      if let value, value > 0 { return value }
+    }
+    return nil
+  }
+
+  private static func parsedEffort(
+    _ raw: String?,
+    allowed: [ReasoningEffort]
+  ) -> ReasoningEffort? {
+    guard let raw, let level = ReasoningEffort(rawValue: raw.lowercased()),
+      allowed.contains(level)
+    else { return nil }
+    return level
   }
 
   public func generate(request: ProviderRequest, account: ResolvedProviderAccount) async throws
