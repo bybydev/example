@@ -217,6 +217,28 @@ struct ModelCapabilityPolicyTests {
     let codexMini = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "codex-mini-latest")
     #expect(codexMini.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
     #expect(codexMini.normalize(.init(enabled: false)) == nil)
+
+    let grok43 = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-4.3")
+    #expect(
+      grok43.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh)]
+    )
+    #expect(grok43.label(for: nil) == "Default (Low)")
+    #expect(grok43.normalize(.init(enabled: false))?.enabled == false)
+
+    let grok3Mini = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-3-mini")
+    #expect(grok3Mini.choices == [.providerDefault, .off, .effort(.low), .effort(.high)])
+
+    let grok4FastReasoning = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-4-fast-reasoning")
+    #expect(grok4FastReasoning.kind == .fixed)
+
+    let grok4FastNonReasoning = ModelCapabilityResolver.reasoningControl(
+      kind: .xAI, modelID: "grok-4-fast-non-reasoning"
+    )
+    #expect(grok4FastNonReasoning.kind == .unsupported)
+
+    let grok3 = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: "grok-3")
+    #expect(grok3.kind == .unsupported)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

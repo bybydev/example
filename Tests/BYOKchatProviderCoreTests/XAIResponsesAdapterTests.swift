@@ -333,3 +333,159 @@ func xAIResponsesMapsReasoningToolsVisionUsageAndExactCost(_ effort: ReasoningEf
   #expect(nonReasoning.supportedParameters.contains("temperature"))
   #expect(nonReasoning.supportedParameters.contains("top_p"))
 }
+
+@Test func xAIResponsesEncodesFallbackAssistantHistoryWithOutputText() async throws {
+  let response = Data(
+    """
+    {"id":"resp_hist","model":"grok-4.7","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Continued"}]}]}
+    """.utf8
+  )
+  let transport = XAIResponsesMockTransport(dataResponses: [response])
+  let adapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: transport)
+
+  let result = try await adapter.generate(
+    request: ProviderRequest(
+      model: "grok-4.7",
+      messages: [
+        .init(role: .user, content: "First question"),
+        .init(role: .assistant, content: "Answer from another model"),
+        .init(role: .user, content: "Follow up"),
+      ]
+    ),
+    account: xAIAccount()
+  )
+  #expect(result.text == "Continued")
+
+  let root = try xAIRoot(from: try #require(await transport.lastRequest()))
+  guard case .array(let input)? = root["input"], input.count == 3,
+    case .object(let assistantMsg) = input[1],
+    case .array(let assistantParts)? = assistantMsg["content"],
+    case .object(let assistantPart) = assistantParts.first
+  else {
+    Issue.record("Missing encoded xAI assistant history")
+    return
+  }
+  #expect(assistantMsg["role"] == .string("assistant"))
+  #expect(assistantPart["type"] == .string("output_text"))
+  #expect(assistantPart["text"] == .string("Answer from another model"))
+}
+
+@Test func xAIConnectionProbeUsesLowestEffortAndSafeBudgetForReasoningMandatoryModels() async throws {
+  let grok47Response = Data(
+    """
+    {"id":"resp_47","model":"grok-4.7","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}
+    """.utf8
+  )
+  let grok43Response = Data(
+    """
+    {"id":"resp_43","model":"grok-4.3","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}
+    """.utf8
+  )
+  let transport = XAIResponsesMockTransport(dataResponses: [grok47Response, grok43Response])
+  let adapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: transport)
+  let account = xAIAccount()
+
+  try await adapter.testConnection(account: account, model: "grok-4.7")
+  try await adapter.testConnection(account: account, model: "grok-4.3")
+
+  let grok47Root = try xAIRoot(from: try #require(await transport.request(at: 0)))
+  #expect(grok47Root["max_output_tokens"] == .number(1_024))
+  #expect(grok47Root["reasoning"] == .object(["effort": .string("low")]))
+
+  let grok43Root = try xAIRoot(from: try #require(await transport.request(at: 1)))
+  #expect(grok43Root["max_output_tokens"] == .number(256))
+  #expect(grok43Root["reasoning"] == .object(["effort": .string("none")]))
+}
+
+@Test func xAIResponsesParsesReasoningContentTextHandlesIncompleteCancelledAndRespectsDiscoveryNegatives()
+  async throws
+{
+  let reasoningContentResponse = Data(
+    """
+    {"id":"resp_rc","model":"grok-4.7","status":"completed","output":[{"id":"rs_1","type":"reasoning","encrypted_content":"opaque","summary":[],"content":[{"type":"reasoning_text","text":"Step A."},{"type":"reasoning_text","text":"Step B."}]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Answer"}]}]}
+    """.utf8
+  )
+  let contentFilterResponse = Data(
+    """
+    {"id":"resp_cf","model":"grok-4.7","status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[]}
+    """.utf8
+  )
+  let textOnlyDiscovery = Data(
+    """
+    {"models":[{"id":"grok-4-text-only","context_length":256000,"input_modalities":["text"],"output_modalities":["text"]}]}
+    """.utf8
+  )
+  let transport = XAIResponsesMockTransport(
+    dataResponses: [reasoningContentResponse, contentFilterResponse, textOnlyDiscovery]
+  )
+  let adapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: transport)
+  let account = xAIAccount()
+
+  let parsed = try await adapter.generate(
+    request: ProviderRequest(model: "grok-4.7", messages: [.init(role: .user, content: "Hi")]),
+    account: account
+  )
+  #expect(parsed.reasoning == "Step A.\n\nStep B.")
+
+  do {
+    _ = try await adapter.generate(
+      request: ProviderRequest(model: "grok-4.7", messages: [.init(role: .user, content: "Hi")]),
+      account: account
+    )
+    Issue.record("Expected content_filter incomplete error")
+  } catch ProviderError.provider(_, let message) {
+    #expect(message.lowercased().contains("content filtering"))
+  }
+
+  let models = try await adapter.listModels(account: account)
+  let textOnly = try #require(models.first { $0.id == "grok-4-text-only" })
+  #expect(textOnly.inputModalities.contains("image") == false)
+  #expect(textOnly.inputModalities.contains("file"))
+
+  let cancelledStream = """
+    event: response.reasoning_summary_part.added
+    data: {"type":"response.reasoning_summary_part.added"}
+
+    event: response.reasoning_summary_text.delta
+    data: {"type":"response.reasoning_summary_text.delta","delta":"Part 1"}
+
+    event: response.reasoning_summary_part.added
+    data: {"type":"response.reasoning_summary_part.added"}
+
+    event: response.reasoning_summary_text.delta
+    data: {"type":"response.reasoning_summary_text.delta","delta":"Part 2"}
+
+    event: response.cancelled
+    data: {"type":"response.cancelled","response":{"id":"resp_cancel","status":"cancelled"}}
+
+    """
+  let streamTransport = XAIResponsesMockTransport(streamChunks: [[Data(cancelledStream.utf8)]])
+  let streamAdapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: streamTransport)
+
+  var deltas: [String] = []
+  do {
+    for try await event in streamAdapter.stream(
+      request: ProviderRequest(model: "grok-4.7", messages: [.init(role: .user, content: "Hi")]),
+      account: account
+    ) {
+      if case .reasoningDelta(let delta) = event { deltas.append(delta) }
+    }
+    Issue.record("Expected cancellation error")
+  } catch ProviderError.midStreamProvider(let code, let message) {
+    #expect(code == "cancelled")
+    #expect(message.lowercased().contains("cancelled"))
+  }
+  #expect(deltas == ["Part 1", "\n\n", "Part 2"])
+
+  let authTransport = XAIResponsesMockTransport(
+    dataResponses: [Data(#"{"error":{"message":"Invalid key"}}"#.utf8)],
+    statusCode: 401
+  )
+  let authAdapter = XAIResponsesAdapter(definition: BuiltInProviders.xAI, transport: authTransport)
+  do {
+    _ = try await authAdapter.listModels(account: account)
+    Issue.record("Expected authentication failure without fallback")
+  } catch ProviderError.authenticationFailed {
+    #expect(await authTransport.request(at: 1) == nil)
+  }
+}

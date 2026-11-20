@@ -311,8 +311,18 @@ public extension ProviderKind {
     case .xAI:
       [
         .init(
+          providerID: "xai", id: "grok-4.7", displayName: "Grok 4.7",
+          contextWindow: 500_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
           providerID: "xai", id: "grok-4.6", displayName: "Grok 4.6",
           contextWindow: 500_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "xai", id: "grok-4.3", displayName: "Grok 4.3",
+          contextWindow: 1_000_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
         .init(
@@ -328,11 +338,6 @@ public extension ProviderKind {
         .init(
           providerID: "xai", id: "grok-4.20-multi-agent",
           displayName: "Grok 4.20 Multi-Agent", contextWindow: 1_000_000,
-          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
-          inputModalities: ["text", "image", "file"]),
-        .init(
-          providerID: "xai", id: "grok-4.7", displayName: "Grok 4.7",
-          contextWindow: 1_000_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),
       ]

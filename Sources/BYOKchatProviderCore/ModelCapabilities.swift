@@ -447,8 +447,24 @@ public enum ModelCapabilityResolver {
         return efforts([.low, .medium, .high, .xhigh], defaultEffort: .high)
       }
       if id.hasPrefix("grok-4.5") { return efforts([.low, .medium, .high], defaultEffort: .high) }
-      if id.hasPrefix("grok-4.3") { return efforts([.low, .medium, .high], defaultEffort: .high, off: "none") }
-      if id.hasPrefix("grok-4.20") { return .init(kind: .fixed, source: .adapter) }
+      if id.hasPrefix("grok-4.3") {
+        return efforts([.low, .medium, .high, .xhigh], defaultEffort: .low, off: "none")
+      }
+      if id.hasPrefix("grok-3-mini") {
+        return efforts([.low, .high], defaultEffort: .low, off: "none")
+      }
+      if id.hasPrefix("grok-4.20")
+        || id.hasPrefix("grok-4-fast")
+        || id.hasPrefix("grok-4-1-fast")
+        || id.hasPrefix("grok-4-0709")
+        || id == "grok-4"
+        || id.hasPrefix("grok-code-fast")
+      {
+        return .init(kind: .fixed, source: .adapter)
+      }
+      if id == "grok-3" || id.hasPrefix("grok-3-") {
+        return .init(kind: .unsupported, source: .adapter)
+      }
     case .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible:
       // A parameter name does not establish the routed/custom model's valid values.
       break

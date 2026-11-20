@@ -11,7 +11,7 @@ import Testing
   let payload = Data(
     """
     {"models":[
-      {"id":"grok-4.6","input_modalities":["text","image"],"output_modalities":["text"],"prompt_text_token_price":20000,"completion_text_token_price":60000}
+      {"id":"grok-4.6","input_modalities":["text","image"],"output_modalities":["text"],"prompt_text_token_price":20000,"cached_prompt_text_token_price":5000,"completion_text_token_price":60000}
     ]}
     """.utf8
   )
@@ -24,6 +24,7 @@ import Testing
   #expect(model.displayName == "Grok 4.6")
   #expect(model.contextWindow == 500_000)
   #expect(model.promptPricePerToken == "0.000002")
+  #expect(model.cachedInputPricePerToken == "0.0000005")
   #expect(model.completionPricePerToken == "0.000006")
   #expect(model.inputModalities.contains("image"))
   #expect(model.inputModalities.contains("file"))
@@ -68,4 +69,24 @@ private func xAIPricingAccount() -> ResolvedProviderAccount {
     account: xAIPricingAccount())
   #expect(response.metadata["xai.costInUSDTicks"] == "9007199254740993")
   #expect(ChatBilling.providerReportedCost(from: response.metadata) == Decimal(string: "900719.9254740993"))
+}
+
+@Test func xAIBundledPricingResolvesFallbackRatesAndLongContextMultipliers() throws {
+  let account = ProviderAccount(kind: .xAI, id: "xai", providerID: "xai", label: "xAI")
+
+  let grok47 = try #require(ModelPriceResolver.resolve(account: account, modelID: "grok-4.7", model: nil))
+  #expect(grok47.source == "bundledCatalog")
+  #expect(grok47.rates.input == "2")
+  #expect(grok47.rates.output == "6")
+  #expect(grok47.rates.cachedInput == "0.5")
+  #expect(grok47.longContextThreshold == 200_000)
+  let grok47Long = grok47.rates(for: ProviderUsage(inputTokens: 250_000, outputTokens: 1_000))
+  #expect(grok47Long.input == "4")
+  #expect(grok47Long.output == "12")
+  #expect(grok47Long.cachedInput == "1")
+
+  let grok43 = try #require(ModelPriceResolver.resolve(account: account, modelID: "grok-4.3", model: nil))
+  #expect(grok43.rates.input == "1.25")
+  #expect(grok43.rates.output == "2.5")
+  #expect(grok43.rates.cachedInput == "0.2")
 }

@@ -23,13 +23,30 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
   }
 
   public func testConnection(account: ResolvedProviderAccount, model: ModelID) async throws {
+    let control = ModelCapabilityResolver.reasoningControl(kind: .xAI, modelID: model)
+    let probeReasoning: ReasoningOptions?
+    let probeMaxTokens: Int
+    if control.allowsOff {
+      probeReasoning = .init(enabled: false)
+      probeMaxTokens = 256
+    } else if control.kind == .efforts, let lowest = control.efforts.first {
+      probeReasoning = .init(enabled: true, effort: lowest, excludeFromResponse: true)
+      probeMaxTokens = 1_024
+    } else if control.kind == .fixed {
+      probeReasoning = nil
+      probeMaxTokens = 1_024
+    } else {
+      probeReasoning = .init(enabled: false)
+      probeMaxTokens = 256
+    }
+
     _ = try await generate(
       request: ProviderRequest(
         model: model,
         messages: [.init(role: .user, content: "Return exactly OK.")],
         options: .init(
-          maxOutputTokens: 256,
-          reasoning: .init(enabled: false)
+          maxOutputTokens: probeMaxTokens,
+          reasoning: probeReasoning
         )
       ),
       account: account
@@ -39,7 +56,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
   public func listModels(account: ResolvedProviderAccount) async throws -> [ProviderModel] {
     do {
       return try await listLanguageModels(account: account)
-    } catch {
+    } catch let error as ProviderError where shouldFallbackFromLanguageModels(error) {
       // `/language-models` is xAI's richer first-class discovery endpoint. If
       // an older/alternate xAI-compatible deployment does not expose it, keep
       // `/models` compatibility rather than making refresh unusable.
@@ -53,6 +70,17 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
           return enrichDiscoveredModel(model)
         }
       )
+    }
+  }
+
+  private func shouldFallbackFromLanguageModels(_ error: ProviderError) -> Bool {
+    switch error {
+    case .invalidEndpoint, .invalidResponse:
+      return true
+    case .provider(let status, _):
+      return status == 404 || status == 405 || status == 501
+    default:
+      return false
     }
   }
 
@@ -229,7 +257,8 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         outputModalities: outputModalities.isEmpty ? ["text"] : outputModalities,
         promptPricePerToken: tokenPricePerToken(model["prompt_text_token_price"]),
         completionPricePerToken: tokenPricePerToken(model["completion_text_token_price"]),
-        capabilityEvidence: evidence
+        capabilityEvidence: evidence,
+        cachedInputPricePerToken: tokenPricePerToken(model["cached_prompt_text_token_price"])
       )
       // xAI Files attachments are an adapter route layered on language
       // models rather than a modality reported by `/language-models`.
@@ -263,7 +292,10 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       result.supportedParameters.remove("reasoning")
     }
     if model.id.rawValue.lowercased().hasPrefix("grok-4") {
-      result.inputModalities.formUnion(["text", "image", "file"])
+      result.inputModalities.formUnion(["text", "file"])
+      if result.capabilityEvidence?.facts[.imageInput]?.support != .unsupported {
+        result.inputModalities.insert("image")
+      }
     }
     return result
   }
@@ -417,13 +449,23 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
 
     var values: [JSONValue] = []
     var contentParts: [JSONValue] = []
+    let textPartType = message.role == .assistant ? "output_text" : "input_text"
     if !message.content.isEmpty {
       contentParts.append(
-        .object(["type": .string("input_text"), "text": .string(message.content)])
+        .object(["type": .string(textPartType), "text": .string(message.content)])
       )
     }
 
     for attachment in message.attachments ?? [] {
+      if message.role == .assistant {
+        if let text = attachment.utf8Text {
+          contentParts.append(.object([
+            "type": .string("output_text"),
+            "text": .string("File: \(attachment.filename)\n\n\(text)"),
+          ]))
+        }
+        continue
+      }
       if attachment.isImage {
         contentParts.append(
           .object([
@@ -515,7 +557,7 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
     account: ResolvedProviderAccount
   ) async throws -> [String: String] {
     var result: [String: String] = [:]
-    for message in request.messages {
+    for message in request.messages where message.role != .assistant {
       for attachment in message.attachments ?? [] where !attachment.isImage && attachment.utf8Text == nil {
         if result[attachment.id] != nil { continue }
         result[attachment.id] = try await uploadFile(attachment, account: account)
@@ -607,11 +649,31 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
           }
         }
       case "reasoning":
+        var reasoningParts: [String] = []
         for part in arrayValue(value["summary"]) ?? [] {
           guard case .object(let summary) = part else { continue }
-          if stringValue(summary["type"]) == "summary_text" {
-            reasoning += stringValue(summary["text"]) ?? ""
+          if stringValue(summary["type"]) == "summary_text",
+            let summaryText = stringValue(summary["text"]),
+            !summaryText.isEmpty
+          {
+            reasoningParts.append(summaryText)
           }
+        }
+        if reasoningParts.isEmpty {
+          for part in arrayValue(value["content"]) ?? [] {
+            guard case .object(let content) = part else { continue }
+            if stringValue(content["type"]) == "reasoning_text",
+              let reasoningText = stringValue(content["text"]),
+              !reasoningText.isEmpty
+            {
+              reasoningParts.append(reasoningText)
+            }
+          }
+        }
+        if !reasoningParts.isEmpty {
+          let joined = reasoningParts.joined(separator: "\n\n")
+          if !reasoning.isEmpty { reasoning += "\n\n" }
+          reasoning += joined
         }
       case "function_call":
         guard let name = stringValue(value["name"]), !name.isEmpty,
@@ -633,15 +695,36 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.provider(status: 200, message: message)
     }
 
+    let incompleteObject = object["incomplete_details"]?.objectValue
+    let incompleteReason = incompleteObject.flatMap { stringValue($0["reason"]) }
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !toolCalls.isEmpty
-    else { throw ProviderError.emptyOutput }
+    else {
+      if status == "incomplete", let incompleteReason {
+        switch incompleteReason {
+        case "content_filter":
+          throw ProviderError.provider(
+            status: 200,
+            message: "xAI blocked this response due to content filtering."
+          )
+        case "max_output_tokens":
+          throw ProviderError.provider(
+            status: 200,
+            message: "xAI reached the maximum output token limit before producing a visible response."
+          )
+        default:
+          throw ProviderError.provider(
+            status: 200,
+            message: "xAI response was incomplete (\(incompleteReason))."
+          )
+        }
+      }
+      throw ProviderError.emptyOutput
+    }
 
     let usage = usageValue(object["usage"])
-    let incompleteObject = object["incomplete_details"]?.objectValue
-    let incompleteReason = incompleteObject.flatMap { stringValue($0["reason"]) }
     let finishReason: String? = {
       if let incompleteReason { return incompleteReason }
       if !toolCalls.isEmpty { return "tool_calls" }
@@ -727,6 +810,11 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
         visibleText += delta
         continuation.yield(.textDelta(delta))
       }
+    case "response.reasoning_summary_part.added":
+      if !reasoningSummary.isEmpty {
+        reasoningSummary += "\n\n"
+        continuation.yield(.reasoningDelta("\n\n"))
+      }
     case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
       if let delta = stringValue(object["delta"]), !delta.isEmpty {
         reasoningSummary += delta
@@ -749,6 +837,13 @@ public struct XAIResponsesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.midStreamProvider(
         code: errorObject.flatMap { stringValue($0["code"]) },
         message: errorObject.flatMap { stringValue($0["message"]) } ?? "xAI response failed."
+      )
+    case "response.cancelled":
+      let responseObject = object["response"]?.objectValue
+      let errorObject = responseObject?["error"]?.objectValue
+      throw ProviderError.midStreamProvider(
+        code: errorObject.flatMap { stringValue($0["code"]) } ?? "cancelled",
+        message: errorObject.flatMap { stringValue($0["message"]) } ?? "xAI response was cancelled."
       )
     case "error":
       let error = object["error"]?.objectValue ?? object
