@@ -45,9 +45,6 @@ final class ProjectManagementModel {
     guard errorForPresenter(presenterID)?.id == error.id else { return }
     operationError = nil
   }
-  /// App-layer hook fired after snapshot refreshes; AppModel runs the
-  /// orphan-file sweep in response (project file pointers may have shrunk).
-  var onFileReferencesChanged: (() -> Void)?
 
   private let workspace: ProjectWorkspaceStore
 
@@ -141,6 +138,7 @@ final class ProjectManagementModel {
     instructions: String,
     files: [ProjectFile]? = nil,
     mcpConfiguration: MCPChatToolConfiguration? = nil,
+    clearMCPConfiguration: Bool = false,
     promptPresets: [ProjectPromptPreset]? = nil,
     toolPresets: [ProjectToolPreset]? = nil
   ) async -> Bool {
@@ -155,9 +153,18 @@ final class ProjectManagementModel {
         instructions: instructions,
         files: files,
         mcpConfiguration: mcpConfiguration,
+        clearMCPConfiguration: clearMCPConfiguration,
         promptPresets: promptPresets,
         toolPresets: toolPresets
       )
+      await reloadSnapshot()
+    }
+  }
+
+  @discardableResult
+  func removeProjectFile(_ fileID: String, from projectID: ProjectID) async -> Bool {
+    await performResult("File removed") {
+      _ = try await workspace.removeProjectFile(fileID, from: projectID)
       await reloadSnapshot()
     }
   }
@@ -209,7 +216,6 @@ final class ProjectManagementModel {
         return (ConversationID(rawValue: key), ProjectID(rawValue: value))
       }
     )
-    onFileReferencesChanged?()
   }
 
   private func perform(

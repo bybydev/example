@@ -251,6 +251,214 @@ import Testing
   }
 }
 
+@Test func createProjectReturnsOffloadedMetadataOnlyFiles() async throws {
+  let blobs = InMemoryAttachmentBlobStore()
+  let workspace = ProjectWorkspaceStore(
+    persistence: InMemoryProjectWorkspacePersistence(),
+    blobs: blobs
+  )
+  try await workspace.load()
+
+  let payload = Data("spec".utf8)
+  let file = ProjectFile(filename: "spec.txt", mimeType: "text/plain", data: payload)
+  let created = try await workspace.createProject(
+    name: "Spec",
+    symbolName: "folder.fill",
+    accentID: "blue",
+    accountID: nil,
+    modelID: nil,
+    instructions: "",
+    files: [file]
+  )
+
+  #expect(created.projectFiles.count == 1)
+  #expect(created.projectFiles[0].data.isEmpty)
+  #expect(created.projectFiles[0].declaredByteCount == payload.count)
+  #expect(await workspace.fileData(file.id) == payload)
+}
+
+@Test func projectWorkspaceSurfacesSpecificValidationErrorsAndCanClearMCPConfig() async throws {
+  let workspace = ProjectWorkspaceStore(persistence: InMemoryProjectWorkspacePersistence())
+  try await workspace.load()
+
+  await #expect(throws: ProjectWorkspaceError.nameTooLong) {
+    _ = try await workspace.createProject(
+      name: String(repeating: "a", count: 81),
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: ""
+    )
+  }
+
+  await #expect(throws: ProjectWorkspaceError.emptyFile("empty.txt")) {
+    _ = try await workspace.createProject(
+      name: "EmptyFile",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      files: [ProjectFile(filename: "empty.txt", mimeType: "text/plain", data: Data())]
+    )
+  }
+
+  let duplicateFile = ProjectFile(id: "dup-id", filename: "a.txt", mimeType: "text/plain", data: Data("a".utf8))
+  await #expect(throws: ProjectWorkspaceError.duplicateFileID) {
+    _ = try await workspace.createProject(
+      name: "DupFile",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      files: [duplicateFile, duplicateFile]
+    )
+  }
+
+  await #expect(throws: ProjectWorkspaceError.presetNameTooLong) {
+    _ = try await workspace.createProject(
+      name: "LongPreset",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      promptPresets: [
+        ProjectPromptPreset(name: String(repeating: "p", count: 61), prompt: "Run")
+      ]
+    )
+  }
+
+  let tooMany = (0..<25).map { ProjectPromptPreset(name: "Preset \($0)", prompt: "Body") }
+  await #expect(throws: ProjectWorkspaceError.tooManyPresets) {
+    _ = try await workspace.createProject(
+      name: "TooManyPresets",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      promptPresets: tooMany
+    )
+  }
+
+  let config = MCPChatToolConfiguration(enabledServerIDs: [MCPServerID(rawValue: "srv")])
+  let project = try await workspace.createProject(
+    name: "Tools",
+    symbolName: "folder.fill",
+    accentID: "blue",
+    accountID: nil,
+    modelID: nil,
+    instructions: "",
+    mcpConfiguration: config
+  )
+  #expect(project.mcpConfiguration == config)
+
+  let cleared = try await workspace.updateProject(
+    id: project.id,
+    name: "Tools",
+    symbolName: "folder.fill",
+    accentID: "blue",
+    accountID: nil,
+    modelID: nil,
+    instructions: "",
+    mcpConfiguration: nil,
+    clearMCPConfiguration: true
+  )
+  #expect(cleared.mcpConfiguration == nil)
+}
+
+@Test func projectWorkspaceLoadPreservesUnsupportedVersionAndAvoidsStatePollution() async throws {
+  let unsupportedJSON = """
+  {
+    "schemaVersion": 99,
+    "projects": [],
+    "conversationProjectIDs": {}
+  }
+  """
+  let unsupportedPersistence = InMemoryProjectWorkspacePersistence(data: Data(unsupportedJSON.utf8))
+  let unsupportedStore = ProjectWorkspaceStore(persistence: unsupportedPersistence)
+
+  await #expect(throws: ProjectWorkspaceError.unsupportedVersion(99)) {
+    try await unsupportedStore.load()
+  }
+  // Future-version file stays intact (not quarantined/cleared) and writes are blocked.
+  #expect(await unsupportedPersistence.loadData() != nil)
+  await #expect(throws: ProjectWorkspaceError.writesBlockedAfterLoadFailure) {
+    _ = try await unsupportedStore.createProject(
+      name: "Blocked",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: ""
+    )
+  }
+
+  // Invalid sanitized payload must not pollute live state after load fails.
+  let invalidState = ProjectWorkspaceState(
+    projects: [
+      ChatProject(
+        name: "Bad",
+        promptPresets: [
+          ProjectPromptPreset(name: "Dup", prompt: "A"),
+          ProjectPromptPreset(name: "dup", prompt: "B"),
+        ]
+      )
+    ]
+  )
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  let invalidStore = ProjectWorkspaceStore(
+    persistence: InMemoryProjectWorkspacePersistence(data: try encoder.encode(invalidState))
+  )
+  await #expect(throws: ProjectWorkspaceError.loadFailurePreserved) {
+    try await invalidStore.load()
+  }
+  #expect(await invalidStore.allProjects().isEmpty)
+}
+
+@Test func projectPortabilityRoundTripsDiacriticsAndPreservesValidationErrors() async throws {
+  let workspace = ProjectWorkspaceStore(persistence: InMemoryProjectWorkspacePersistence())
+  try await workspace.load()
+  _ = try await workspace.createProject(
+    name: "Cafe",
+    symbolName: "folder.fill",
+    accentID: "blue",
+    accountID: nil,
+    modelID: nil,
+    instructions: ""
+  )
+  _ = try await workspace.createProject(
+    name: "Café",
+    symbolName: "folder.fill",
+    accentID: "teal",
+    accountID: nil,
+    modelID: nil,
+    instructions: ""
+  )
+
+  let portability = ProjectPortabilityService(workspace: workspace)
+  let exported = await portability.exportWorkspace()
+  let validated = try await ProjectPortabilityService.validatedState(exported)
+  #expect(validated.projects.count == 2)
+
+  // Validation errors surface specifically instead of .loadFailurePreserved.
+  let futureState = ProjectWorkspaceState(schemaVersion: 42)
+  await #expect(throws: ProjectWorkspaceError.unsupportedVersion(42)) {
+    _ = try await ProjectPortabilityService.validatedState(futureState)
+  }
+
+  let longNameState = ProjectWorkspaceState(
+    projects: [ChatProject(name: String(repeating: "x", count: 81))]
+  )
+  await #expect(throws: ProjectWorkspaceError.nameTooLong) {
+    _ = try await ProjectPortabilityService.validatedState(longNameState)
+  }
+}
+
 /// Simulates storage that cannot move unreadable data aside (for example a read-only volume),
 /// where overwriting would destroy the only copy of the user's projects.
 private struct RefusingQuarantinePersistence: ProjectWorkspacePersistence {

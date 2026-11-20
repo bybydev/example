@@ -60,34 +60,7 @@ public actor ProjectPortabilityService {
   public static func validatedState(_ state: ProjectWorkspaceState) async throws
     -> ProjectWorkspaceState
   {
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    let data = try encoder.encode(state)
-    let temporary = ProjectWorkspaceStore(
-      persistence: InMemoryProjectWorkspacePersistence(data: data)
-    )
-    try await temporary.load()
-    let result = await temporary.snapshot()
-
-    var projectIDs: Set<ProjectID> = []
-    var names: Set<String> = []
-    for project in result.projects {
-      guard projectIDs.insert(project.id).inserted else {
-        throw ProviderError.importConflict(
-          "The project workspace contains duplicate project IDs."
-        )
-      }
-      let normalizedName = project.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !normalizedName.isEmpty else { throw ProjectWorkspaceError.invalidName }
-      let folded = normalizedName.folding(
-        options: [.caseInsensitive, .diacriticInsensitive],
-        locale: .current
-      )
-      guard names.insert(folded).inserted else {
-        throw ProjectWorkspaceError.duplicateName
-      }
-    }
-    return result
+    try ProjectWorkspaceStore.validatedForImport(state)
   }
 
   private func replace(
@@ -203,17 +176,24 @@ public actor ProjectPortabilityService {
   }
 
   private static func uniqueName(_ proposed: String, existing: [String]) -> String {
-    guard !existing.contains(where: { $0.caseInsensitiveCompare(proposed) == .orderedSame }) else {
+    let trimmed = String(
+      proposed.trimmingCharacters(in: .whitespacesAndNewlines)
+        .prefix(ProjectWorkspaceStore.maxNameLength)
+    )
+    guard !existing.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
       var index = 2
       while true {
-        let candidate = "\(proposed) (Imported \(index))"
+        let suffix = " (Imported \(index))"
+        let maxBase = max(1, ProjectWorkspaceStore.maxNameLength - suffix.count)
+        let base = String(trimmed.prefix(maxBase)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = "\(base.isEmpty ? "Project" : base)\(suffix)"
         if !existing.contains(where: { $0.caseInsensitiveCompare(candidate) == .orderedSame }) {
           return candidate
         }
         index += 1
       }
     }
-    return proposed
+    return trimmed
   }
 
   private static func projectSort(_ lhs: ChatProject, _ rhs: ChatProject) -> Bool {

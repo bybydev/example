@@ -9,7 +9,6 @@ struct SidebarProjectsView: View {
   @Bindable var providers: ProviderManagementModel
   @Bindable var mcp: MCPManagementModel
   let newChat: (ProjectID?) -> Void
-  let openChat: (ConversationID) -> Void
   /// Opens the sidebar drawer; this view renders as the app's main screen
   /// inside the root navigation stack rather than as a sheet.
   var openSidebar: () -> Void = {}
@@ -23,11 +22,14 @@ struct SidebarProjectsView: View {
   var body: some View {
     Group {
       if projects.projects.isEmpty {
-        ContentUnavailableView(
-          "No Projects",
-          systemImage: "folder",
-          description: Text("Projects keep reusable instructions, files, models, and tools together.")
-        )
+        ContentUnavailableView {
+          Label("No Projects", systemImage: "folder")
+        } description: {
+          Text("Projects keep reusable instructions, files, models, and tools together.")
+        } actions: {
+          Button("New Project", action: requestNewProject)
+            .buttonStyle(.borderedProminent)
+        }
       } else {
         List(projects.projects) { project in
           NavigationLink(value: AppRoute.project(project.id)) {
@@ -77,16 +79,7 @@ struct SidebarProjectsView: View {
           .accessibilityLabel("Open sidebar")
       }
       ToolbarItem(placement: .primaryAction) {
-        Button("New Project", systemImage: "plus") {
-          if BYOKProAccess.canCreateProject(
-            currentCount: projects.projects.count,
-            hasPro: purchaseManager.hasPro
-          ) {
-            showNewProjectEditor = true
-          } else {
-            showProUpsell = true
-          }
-        }
+        Button("New Project", systemImage: "plus", action: requestNewProject)
       }
     }
     .sheet(isPresented: $showNewProjectEditor) {
@@ -121,6 +114,17 @@ struct SidebarProjectsView: View {
       Text("Chats in this project will be kept and moved back to standalone chats.")
     }
     .projectErrorPresenter(projects)
+  }
+
+  private func requestNewProject() {
+    if BYOKProAccess.canCreateProject(
+      currentCount: projects.projects.count,
+      hasPro: purchaseManager.hasPro
+    ) {
+      showNewProjectEditor = true
+    } else {
+      showProUpsell = true
+    }
   }
 
   private func projectDetail(_ project: ChatProject) -> String {

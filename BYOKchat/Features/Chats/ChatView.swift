@@ -40,6 +40,10 @@ struct ChatView: View {
   let openSidebar: () -> Void
   let startNewChat: () -> Void
   let openProject: () -> Void
+  /// Called after deleting a root-level conversation, passing the project it
+  /// belonged to before deletion so the coordinator can return to that project
+  /// or start a replacement chat in the same scope.
+  var onDeleted: (ProjectID?) -> Void = { _ in }
   /// Setup-only fallback asks the root coordinator to open a real conversation.
   var onReadyForConversation: () -> Void = {}
 
@@ -95,7 +99,8 @@ struct ChatView: View {
     onReadyForConversation: @escaping () -> Void = {},
     openSidebar: @escaping () -> Void = {},
     startNewChat: @escaping () -> Void = {},
-    openProject: @escaping () -> Void = {}
+    openProject: @escaping () -> Void = {},
+    onDeleted: @escaping (ProjectID?) -> Void = { _ in }
   ) {
     self.subject = subject
     // Setup never uses this editor identity for storage or configuration.
@@ -113,6 +118,7 @@ struct ChatView: View {
     self.openSidebar = openSidebar
     self.startNewChat = startNewChat
     self.openProject = openProject
+    self.onDeleted = onDeleted
   }
 
   var isFresh: Bool {
@@ -277,6 +283,7 @@ struct ChatView: View {
             }
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {
+              let sourceProjectID = project?.id
               Task { @MainActor in
                 await chats.deleteConversation(conversationID)
                 await projects.reloadFromStorage()
@@ -286,8 +293,7 @@ struct ChatView: View {
                   // here would push and immediately pop it.
                   dismiss()
                 } else {
-                  startNewChat()
-                  dismiss()
+                  onDeleted(sourceProjectID)
                 }
               }
             }
@@ -428,22 +434,23 @@ struct ChatView: View {
       }
 
       if let project {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-          Menu {
-            if !project.projectPromptPresets.isEmpty {
-              Menu("Prompts", systemImage: "text.bubble") {
-                ForEach(project.projectPromptPresets) { preset in
-                  Button(preset.name) { applyPromptPreset(preset) }
-                }
-              }
-            }
-            Button("Project Settings", systemImage: "folder.badge.gearshape") {
-              showProjectEditorSheet = true
-            }
-          } label: {
-            Image(systemName: "ellipsis")
+        ToolbarItem(placement: .principal) {
+          HStack(spacing: 6) {
+            ProjectIconView(project: project, size: 20)
+            Text(project.name)
+              .font(.subheadline.weight(.semibold))
+              .lineLimit(1)
           }
-          .accessibilityLabel("More options")
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Project \(project.name)")
+        }
+
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button("Project Settings", systemImage: "folder.badge.gearshape") {
+            showProjectEditorSheet = true
+          }
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Project settings")
         }
       } else {
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -606,6 +613,7 @@ struct ChatView: View {
   /// metadata-only, so the original bytes are fetched on demand; a missing
   /// blob surfaces an error instead of a silent empty attachment.
   func attachProjectFile(_ file: ProjectFile) async {
+    guard !pendingAttachments.contains(where: { $0.id == file.id }) else { return }
     guard let data = await projects.fileData(file.id), !data.isEmpty else {
       chats.errorMessage = "The file '\(file.filename)' could not be loaded."
       return
@@ -681,7 +689,7 @@ private struct ConversationToolsView: View {
             ContentUnavailableView(
               "No MCP Servers",
               systemImage: "server.rack",
-              description: Text("Add a remote MCP server in Settings first.")
+              description: Text("Add a remote MCP server in MCP Servers first.")
             )
           }
           .listRowBackground(theme.surfaceColor)
@@ -742,13 +750,13 @@ private struct ConversationToolsView: View {
         VStack(alignment: .leading, spacing: 3) {
           Text("Enable for This Chat")
           if !server.isEnabled {
-            Text("This server is disabled globally in Settings.")
+            Text("This server is disabled globally in MCP Servers.")
               .font(.caption)
               .foregroundStyle(.orange)
           }
         }
       }
-      .disabled(!server.isEnabled || mcp.isBusy)
+      .disabled((!server.isEnabled && !enabledForChat) || mcp.isBusy)
 
       if server.isEnabled && enabledForChat {
         if bindings.isEmpty {

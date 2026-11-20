@@ -346,9 +346,20 @@ struct ChatComposer: View {
         Button("From Library…", systemImage: "books.vertical", action: pickFromLibrary)
       }
       if !projectFiles.isEmpty {
+        let attachedIDs = Set(attachments.map(\.id))
         Menu("Project Files", systemImage: "folder.badge.plus") {
           ForEach(projectFiles) { file in
-            Button(file.filename) { attachProjectFile(file) }
+            let isAttached = attachedIDs.contains(file.id)
+            Button {
+              attachProjectFile(file)
+            } label: {
+              if isAttached {
+                Label(file.filename, systemImage: "checkmark")
+              } else {
+                Text(file.filename)
+              }
+            }
+            .disabled(isAttached)
           }
         }
       }

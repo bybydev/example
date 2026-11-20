@@ -1059,7 +1059,11 @@ extension ChatView {
       .buttonStyle(.borderedProminent)
       .tint(theme.accentColor)
 
-      Text("Connections keep your provider, API key, and default model together in one place.")
+      Text(
+        needsProjectDefaultRepair
+          ? "Edit this project's defaults to pick another provider account or model, or switch back to App Default."
+          : "Connections keep your provider, API key, and default model together in one place."
+      )
         .font(.caption)
         .multilineTextAlignment(.center)
         .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
@@ -1068,22 +1072,36 @@ extension ChatView {
     .frame(maxWidth: .infinity)
   }
 
+  private var needsProjectDefaultRepair: Bool {
+    (project?.accountID != nil && defaultAccount == nil)
+      || (project?.modelID != nil && defaultModelID == nil)
+  }
+
   private var setupIcon: String {
+    if needsProjectDefaultRepair {
+      return "folder.badge.questionmark"
+    }
     switch readiness {
-    case .noConnection: "link"
-    case .missingCredential: "key.slash"
-    case .noModel: "rectangle.stack.badge.plus"
-    case .ready: "bubble.left.and.bubble.right"
+    case .noConnection: return "link"
+    case .missingCredential: return "key.slash"
+    case .noModel: return "rectangle.stack.badge.plus"
+    case .ready: return "bubble.left.and.bubble.right"
     }
   }
 
   private var setupTitle: String {
     switch readiness {
     case .noConnection:
+      if project?.accountID != nil && defaultAccount == nil {
+        return "Project connection unavailable"
+      }
       return project == nil ? "Connect your AI" : "Set up a connection"
     case .missingCredential:
       return "Finish setting up \(defaultProvider?.displayName ?? defaultAccount?.label ?? "connection")"
     case .noModel:
+      if project?.modelID != nil && defaultModelID == nil {
+        return "Project model unavailable"
+      }
       return "Choose a model"
     case .ready:
       return "How can I help?"
@@ -1094,6 +1112,9 @@ extension ChatView {
     switch readiness {
     case .noConnection:
       if let project {
+        if project.accountID != nil && defaultAccount == nil {
+          return "The provider account selected for \(project.name) is unavailable or disabled. Choose another account in project defaults."
+        }
         return "Add a connection before starting a chat in \(project.name)."
       }
       return "Connect an AI provider with your own API key to start chatting."
@@ -1110,28 +1131,32 @@ extension ChatView {
   }
 
   private var primarySetupTitle: String {
+    if needsProjectDefaultRepair {
+      return "Edit Project Defaults"
+    }
     switch readiness {
-    case .noConnection: "Set Up Connection"
-    case .missingCredential, .noModel: "Open Connections"
-    case .ready: "Start Chatting"
+    case .noConnection: return "Set Up Connection"
+    case .missingCredential, .noModel: return "Open Connections"
+    case .ready: return "Start Chatting"
     }
   }
 
   private var primarySetupIcon: String {
+    if needsProjectDefaultRepair {
+      return "folder.badge.gearshape"
+    }
     switch readiness {
-    case .noConnection: "plus.circle.fill"
-    case .missingCredential: "key.fill"
-    case .noModel: "rectangle.stack.fill"
-    case .ready: "arrow.up.circle.fill"
+    case .noConnection: return "plus.circle.fill"
+    case .missingCredential: return "key.fill"
+    case .noModel: return "rectangle.stack.fill"
+    case .ready: return "arrow.up.circle.fill"
     }
   }
 
   private func primarySetupAction() {
     switch readiness {
     case .noConnection, .missingCredential, .noModel:
-      if (project?.accountID != nil && defaultAccount == nil)
-        || (project?.modelID != nil && defaultModelID == nil)
-      {
+      if needsProjectDefaultRepair {
         showProjectEditorSheet = true
       } else {
         showConnections = true
@@ -1146,9 +1171,7 @@ extension ChatView {
     case .ready:
       if isFresh { onReadyForConversation() } else { showTargetSettings = true }
     case .noConnection, .missingCredential, .noModel:
-      if (project?.accountID != nil && defaultAccount == nil)
-        || (project?.modelID != nil && defaultModelID == nil)
-      {
+      if needsProjectDefaultRepair {
         showProjectEditorSheet = true
       } else {
         showConnections = true

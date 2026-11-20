@@ -121,7 +121,6 @@ struct AppRootView: View {
               selectedConversationID: selectedConversationID,
               newChat: startNewChat(in:),
               selectConversation: selectConversation,
-              selectProjectConversation: selectProjectConversation,
               selectSearchResult: selectSearchResult,
               openDestination: openMainScreen,
               openSettings: openSettings,
@@ -154,9 +153,10 @@ struct AppRootView: View {
       }
     }
     .onChange(of: model.projects.projects.map(\.id)) { _, ids in
-      if let activeProjectViewID, !ids.contains(activeProjectViewID) {
-        self.activeProjectViewID = nil
-      }
+      handleProjectListChange(ids)
+    }
+    .onChange(of: model.projects.statusMessage) { _, message in
+      handleProjectStatusMessage(message)
     }
     .onChange(of: scenePhase) { _, phase in
       if phase != .active {
@@ -284,7 +284,8 @@ struct AppRootView: View {
             startNewChat: {
               startNewChat(in: model.projects.projectID(for: selectedConversationID))
             },
-            openProject: exitToProjectView
+            openProject: exitToProjectView,
+            onDeleted: handleRootConversationDeleted
           )
           .id(
             ChatPresentationID(
@@ -325,7 +326,6 @@ struct AppRootView: View {
               providers: model.providers,
               mcp: model.mcp,
               newChat: startNewChat(in:),
-              openChat: selectProjectConversation,
               openSidebar: openSidebar
             )
           case .plugins:
@@ -394,9 +394,7 @@ struct AppRootView: View {
             pushedFromStack: true,
             openSidebar: {},
             startNewChat: {
-              if let projectID = model.projects.projectID(for: conversationID) {
-                startNewChat(in: projectID)
-              }
+              startNewChat(in: model.projects.projectID(for: conversationID))
             },
             openProject: {}
           )
@@ -433,6 +431,27 @@ struct AppRootView: View {
       }
   }
 
+  private func handleProjectListChange(_ ids: [ProjectID]) {
+    let valid = Set(ids)
+    if let activeProjectViewID, !valid.contains(activeProjectViewID) {
+      self.activeProjectViewID = nil
+    }
+    navigationPath.removeAll { route in
+      switch route {
+      case .project(let id), .newChatSetup(let id):
+        return !valid.contains(id)
+      case .chat:
+        return false
+      }
+    }
+  }
+
+  private func handleProjectStatusMessage(_ message: String?) {
+    guard let message else { return }
+    toastCenter.success(message)
+    model.projects.statusMessage = nil
+  }
+
   private func openSidebar() {
     withAnimation { isSidebarPresented = true }
   }
@@ -465,6 +484,8 @@ struct AppRootView: View {
     {
       return // Repeated New Chat preserves the active unsent session and edits.
     }
+
+    let pushInStack = projectID != nil && (!navigationPath.isEmpty || selectedConversationID == nil)
 
     invalidateNewChatRequest()
     let revision = newChatRequestRevision
@@ -503,12 +524,14 @@ struct AppRootView: View {
       }
       isCreatingNewChat = false
       guard let id else {
-        if let projectID, navigationPath.last != .newChatSetup(projectID) {
+        if let projectID, shouldPresentProjectSetup(for: projectID),
+          navigationPath.last != .newChatSetup(projectID)
+        {
           navigationPath.append(.newChatSetup(projectID))
         }
         return
       }
-      if projectID != nil {
+      if pushInStack {
         if navigationPath.last?.chatID == id { return }
         // Starting after a sent project chat replaces that top chat, preserving
         // the project's Back destination rather than stacking another chat.
@@ -520,7 +543,44 @@ struct AppRootView: View {
         navigationPath.append(.chat(id))
       } else {
         selectedConversationID = id
+        initialScrollMessageID = nil
       }
+    }
+  }
+
+  /// Only push `.newChatSetup(projectID)` when the project still exists and
+  /// genuinely lacks a usable provider account or available model; storage or
+  /// not-found failures are already reported via `chats.errorMessage` and would
+  /// otherwise spin forever on a `.ready` setup screen.
+  private func shouldPresentProjectSetup(for projectID: ProjectID) -> Bool {
+    guard let project = model.projects.project(projectID) else { return false }
+    let enabledAccounts = model.providers.accounts.filter(\.isEnabled)
+    let resolvedAccount: ProviderAccount?
+    if let accountID = project.accountID {
+      resolvedAccount = enabledAccounts.first { $0.id == accountID }
+    } else if let defaultAccount = model.providers.resolvedDefaultAccount, defaultAccount.isEnabled {
+      resolvedAccount = defaultAccount
+    } else {
+      resolvedAccount = enabledAccounts.first
+    }
+    guard let account = resolvedAccount else { return true }
+    let availableModels = model.providers.models(for: account.id).filter(\.isAvailable)
+    if let modelID = project.modelID {
+      return !availableModels.contains(where: { $0.model.id == modelID })
+    }
+    return availableModels.isEmpty
+  }
+
+  private func handleRootConversationDeleted(in projectID: ProjectID?) {
+    let validProjectID = projectID.flatMap { model.projects.project($0)?.id }
+    if openedChatFromProject, let validProjectID {
+      invalidateNewChatRequest()
+      activeProjectViewID = validProjectID
+      openedChatFromProject = false
+      selectedConversationID = nil
+      initialScrollMessageID = nil
+    } else {
+      startNewChat(in: validProjectID)
     }
   }
 

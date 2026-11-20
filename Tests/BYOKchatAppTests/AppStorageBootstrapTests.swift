@@ -140,3 +140,81 @@ struct LibraryViewSupportTests {
     #expect(formatted == "Error A\nError B\nError C\nAnd 2 more errors.")
   }
 }
+
+@Suite("Project view support")
+struct ProjectViewSupportTests {
+  @Test("File detail shows token estimates only for text-like files")
+  func projectFileDetailRespectsMIMEType() {
+    let textFile = ProjectFile(
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      data: Data(repeating: 0x61, count: 400)
+    )
+    #expect(projectFileDetail(textFile).contains("tokens"))
+
+    let jsonFile = ProjectFile(
+      filename: "config.json",
+      mimeType: "application/json",
+      data: Data(repeating: 0x7b, count: 400)
+    )
+    #expect(projectFileDetail(jsonFile).contains("tokens"))
+
+    let imageFile = ProjectFile(
+      filename: "diagram.jpg",
+      mimeType: "IMAGE/JPEG",
+      data: Data(repeating: 0xFF, count: 40_000)
+    )
+    #expect(ProjectFileImportSupport.isImageMIMEType(imageFile.mimeType))
+    #expect(!projectFileDetail(imageFile).contains("tokens"))
+
+    let pdfFile = ProjectFile(
+      filename: "manual.pdf",
+      mimeType: "application/pdf",
+      data: Data(repeating: 0x25, count: 40_000)
+    )
+    #expect(!projectFileDetail(pdfFile).contains("tokens"))
+  }
+
+  @Test("Project tools summary formats singular, plural, and combined counts")
+  func toolsSummaryFormatting() {
+    let preset1 = ProjectToolPreset(name: "P1", configuration: MCPChatToolConfiguration())
+    let preset2 = ProjectToolPreset(name: "P2", configuration: MCPChatToolConfiguration())
+    let oneServer = MCPChatToolConfiguration(enabledServerIDs: [MCPServerID(rawValue: "a")])
+    let twoServers = MCPChatToolConfiguration(
+      enabledServerIDs: [MCPServerID(rawValue: "a"), MCPServerID(rawValue: "b")]
+    )
+
+    #expect(projectToolsSummary(configuration: nil, toolPresets: []) == "None")
+    #expect(projectToolsSummary(configuration: nil, toolPresets: [preset1]) == "1 preset")
+    #expect(projectToolsSummary(configuration: nil, toolPresets: [preset1, preset2]) == "2 presets")
+    #expect(projectToolsSummary(configuration: oneServer, toolPresets: []) == "1 server")
+    #expect(projectToolsSummary(configuration: twoServers, toolPresets: [preset1]) == "2 servers · 1 preset")
+  }
+
+  @Test("Project file import rejects empty files and loads non-empty text files")
+  func importFilesValidation() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ProjectImportTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let emptyURL = dir.appendingPathComponent("empty.txt")
+    try Data().write(to: emptyURL)
+    #expect(throws: ProjectWorkspaceError.emptyFile("empty.txt")) {
+      _ = try ProjectFileImportSupport.importFiles(from: [emptyURL], existingCount: 0, existingBytes: 0)
+    }
+
+    let validURL = dir.appendingPathComponent("brief.txt")
+    let content = Data("Project brief".utf8)
+    try content.write(to: validURL)
+    let imported = try ProjectFileImportSupport.importFiles(
+      from: [validURL],
+      existingCount: 0,
+      existingBytes: 0
+    )
+    #expect(imported.count == 1)
+    #expect(imported[0].filename == "brief.txt")
+    #expect(imported[0].mimeType == "text/plain")
+    #expect(imported[0].data == content)
+  }
+}

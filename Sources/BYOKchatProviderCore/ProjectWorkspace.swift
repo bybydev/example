@@ -261,11 +261,16 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
   case unsupportedVersion(Int)
   case projectNotFound(ProjectID)
   case invalidName
+  case nameTooLong
   case duplicateName
   case tooManyFiles
+  case emptyFile(String)
+  case duplicateFileID
   case fileTooLarge(String)
   case filesTooLarge
   case invalidPresetName
+  case presetNameTooLong
+  case tooManyPresets
   case duplicatePresetName
   case loadFailurePreserved
   case writesBlockedAfterLoadFailure
@@ -278,16 +283,26 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
       "The project could not be found."
     case .invalidName:
       "Enter a project name."
+    case .nameTooLong:
+      "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
     case .duplicateName:
       "A project with this name already exists."
     case .tooManyFiles:
-      "A project can contain at most 8 reference files."
+      "A project can contain at most \(ProjectWorkspaceStore.maxFileCount) reference files."
+    case .emptyFile(let filename):
+      "\(filename) is empty and cannot be added to a project."
+    case .duplicateFileID:
+      "Duplicate reference files cannot be saved in the same project."
     case .fileTooLarge(let filename):
       "\(filename) is larger than 20 MB."
     case .filesTooLarge:
       "Project reference files cannot exceed 40 MB total."
     case .invalidPresetName:
       "Enter a preset name."
+    case .presetNameTooLong:
+      "Preset names must be \(ProjectWorkspaceStore.maxPresetNameLength) characters or fewer."
+    case .tooManyPresets:
+      "A project can contain at most \(ProjectWorkspaceStore.maxPresetCount) presets."
     case .duplicatePresetName:
       "Preset names must be unique within a project."
     case .loadFailurePreserved:
@@ -299,6 +314,13 @@ public enum ProjectWorkspaceError: LocalizedError, Sendable, Equatable {
 }
 
 public actor ProjectWorkspaceStore {
+  public static let maxNameLength = 80
+  public static let maxFileCount = 8
+  public static let maxFileBytes = 20 * 1_024 * 1_024
+  public static let maxTotalFileBytes = 40 * 1_024 * 1_024
+  public static let maxPresetCount = 24
+  public static let maxPresetNameLength = 60
+
   private var state = ProjectWorkspaceState()
   private let persistence: any ProjectWorkspacePersistence
   /// Reference-file bytes rest here; the JSON carries metadata only.
@@ -330,12 +352,22 @@ public actor ProjectWorkspaceStore {
       decoder.dateDecodingStrategy = .iso8601
       let decoded = try decoder.decode(ProjectWorkspaceState.self, from: data)
       guard decoded.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
+        // Leave newer-schema files intact on disk and block writes instead of
+        // renaming them to .corrupt.
+        blocksWritesAfterFailedLoad = true
         throw ProjectWorkspaceError.unsupportedVersion(decoded.schemaVersion)
       }
-      state = decoded
-      state = try Self.sanitized(state)
-      state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
+      var validated = try Self.sanitized(decoded, allowUnbackfilledMetadata: true)
+      validated.tombstones = SyncTombstonePolicy.pruned(validated.tombstones)
+      state = validated
       await backfillFileByteCounts()
+    } catch let error as ProjectWorkspaceError {
+      if case .unsupportedVersion = error {
+        throw error
+      }
+      let quarantined = (try? await persistence.quarantineData()) ?? false
+      blocksWritesAfterFailedLoad = !quarantined
+      throw ProjectWorkspaceError.loadFailurePreserved
     } catch {
       // Preserve the unreadable file so a later save cannot replace it with empty state.
       // When it cannot be moved aside, block all writes outright.
@@ -430,7 +462,7 @@ public actor ProjectWorkspaceStore {
 
     let committed = try await committedState(candidate, mutatingProject: project.id)
     state = committed
-    return project
+    return committed.projects.last(where: { $0.id == project.id }) ?? project
   }
 
   @discardableResult
@@ -444,6 +476,7 @@ public actor ProjectWorkspaceStore {
     instructions: String,
     files: [ProjectFile]? = nil,
     mcpConfiguration: MCPChatToolConfiguration? = nil,
+    clearMCPConfiguration: Bool = false,
     promptPresets: [ProjectPromptPreset]? = nil,
     toolPresets: [ProjectToolPreset]? = nil,
     at date: Date = .now
@@ -460,7 +493,9 @@ public actor ProjectWorkspaceStore {
         try Self.validateFiles(files)
         project.files = files.isEmpty ? nil : files
       }
-      if let mcpConfiguration {
+      if clearMCPConfiguration {
+        project.mcpConfiguration = nil
+      } else if let mcpConfiguration {
         project.mcpConfiguration = mcpConfiguration
       }
       if let promptPresets {
@@ -727,7 +762,7 @@ public actor ProjectWorkspaceStore {
   ) throws -> String {
     let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalized.isEmpty else { throw ProjectWorkspaceError.invalidName }
-    guard normalized.count <= 80 else { throw ProjectWorkspaceError.invalidName }
+    guard normalized.count <= Self.maxNameLength else { throw ProjectWorkspaceError.nameTooLong }
     guard !projects.contains(where: {
       $0.id != id && $0.name.caseInsensitiveCompare(normalized) == .orderedSame
     }) else {
@@ -827,7 +862,7 @@ public actor ProjectWorkspaceStore {
     guard imported.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
       throw ProjectWorkspaceError.unsupportedVersion(imported.schemaVersion)
     }
-    var candidate = try Self.sanitized(imported)
+    var candidate = try Self.sanitized(imported, allowUnbackfilledMetadata: true)
     candidate.tombstones = SyncTombstonePolicy.pruned(candidate.tombstones)
     for projectID in candidate.projects.map(\.id) {
       candidate = try await stateByOffloadingFileBlobs(projectID: projectID, in: candidate)
@@ -900,7 +935,40 @@ public actor ProjectWorkspaceStore {
     return encoder
   }
 
-  private static func sanitized(_ value: ProjectWorkspaceState) throws -> ProjectWorkspaceState {
+  /// Validates an imported backup workspace without routing through `load()`
+  /// (so specific schema/validation errors are preserved rather than masked as
+  /// local file corruption).
+  static func validatedForImport(_ value: ProjectWorkspaceState) throws -> ProjectWorkspaceState {
+    guard value.schemaVersion == ProjectWorkspaceState.currentSchemaVersion else {
+      throw ProjectWorkspaceError.unsupportedVersion(value.schemaVersion)
+    }
+    var result = try sanitized(value, allowUnbackfilledMetadata: false)
+    result.tombstones = SyncTombstonePolicy.pruned(result.tombstones)
+
+    var projectIDs: Set<ProjectID> = []
+    var validatedProjects: [ChatProject] = []
+    validatedProjects.reserveCapacity(result.projects.count)
+    for var project in result.projects {
+      guard projectIDs.insert(project.id).inserted else {
+        throw ProviderError.importConflict(
+          "The project workspace contains duplicate project IDs."
+        )
+      }
+      project.name = try validatedName(
+        project.name,
+        excluding: nil,
+        projects: validatedProjects
+      )
+      validatedProjects.append(project)
+    }
+    result.projects = validatedProjects
+    return result
+  }
+
+  private static func sanitized(
+    _ value: ProjectWorkspaceState,
+    allowUnbackfilledMetadata: Bool = false
+  ) throws -> ProjectWorkspaceState {
     var result = value
     let validProjectIDs = Set(result.projects.map { $0.id.rawValue })
     result.conversationProjectIDs = result.conversationProjectIDs.filter {
@@ -908,7 +976,7 @@ public actor ProjectWorkspaceStore {
     }
     for index in result.projects.indices {
       let files = result.projects[index].projectFiles
-      try validateFiles(files)
+      try validateFiles(files, allowUnbackfilledMetadata: allowUnbackfilledMetadata)
       result.projects[index].files = files.isEmpty ? nil : files
       let prompts = try validatedPromptPresets(result.projects[index].projectPromptPresets)
       result.projects[index].promptPresets = prompts.isEmpty ? nil : prompts
@@ -918,31 +986,45 @@ public actor ProjectWorkspaceStore {
     return result
   }
 
-  private static func validateFiles(_ files: [ProjectFile]) throws {
-    guard files.count <= 8 else { throw ProjectWorkspaceError.tooManyFiles }
+  private static func validateFiles(
+    _ files: [ProjectFile],
+    allowUnbackfilledMetadata: Bool = false
+  ) throws {
+    guard files.count <= Self.maxFileCount else { throw ProjectWorkspaceError.tooManyFiles }
     var total = 0
     var ids: Set<String> = []
     for file in files {
-      guard ids.insert(file.id).inserted else { throw ProjectWorkspaceError.tooManyFiles }
-      guard file.byteCount <= 20 * 1_024 * 1_024 else {
+      guard ids.insert(file.id).inserted else { throw ProjectWorkspaceError.duplicateFileID }
+      let isUnbackfilledLegacyRow = allowUnbackfilledMetadata
+        && file.data.isEmpty
+        && file.declaredByteCount == nil
+      if !isUnbackfilledLegacyRow {
+        guard file.byteCount > 0 else {
+          throw ProjectWorkspaceError.emptyFile(file.filename)
+        }
+      }
+      guard file.byteCount <= Self.maxFileBytes else {
         throw ProjectWorkspaceError.fileTooLarge(file.filename)
       }
       total += file.byteCount
     }
-    guard total <= 40 * 1_024 * 1_024 else { throw ProjectWorkspaceError.filesTooLarge }
+    guard total <= Self.maxTotalFileBytes else { throw ProjectWorkspaceError.filesTooLarge }
   }
 
   private static func validatedPromptPresets(_ presets: [ProjectPromptPreset]) throws
     -> [ProjectPromptPreset]
   {
-    guard presets.count <= 24 else { throw ProjectWorkspaceError.invalidPresetName }
+    guard presets.count <= Self.maxPresetCount else { throw ProjectWorkspaceError.tooManyPresets }
     var names: Set<String> = []
     return try presets.map { preset in
       var value = preset
       value.name = value.name.trimmingCharacters(in: .whitespacesAndNewlines)
       value.prompt = value.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !value.name.isEmpty, value.name.count <= 60, !value.prompt.isEmpty else {
+      guard !value.name.isEmpty, !value.prompt.isEmpty else {
         throw ProjectWorkspaceError.invalidPresetName
+      }
+      guard value.name.count <= Self.maxPresetNameLength else {
+        throw ProjectWorkspaceError.presetNameTooLong
       }
       let key = value.name.lowercased()
       guard names.insert(key).inserted else { throw ProjectWorkspaceError.duplicatePresetName }
@@ -953,13 +1035,16 @@ public actor ProjectWorkspaceStore {
   private static func validatedToolPresets(_ presets: [ProjectToolPreset]) throws
     -> [ProjectToolPreset]
   {
-    guard presets.count <= 24 else { throw ProjectWorkspaceError.invalidPresetName }
+    guard presets.count <= Self.maxPresetCount else { throw ProjectWorkspaceError.tooManyPresets }
     var names: Set<String> = []
     return try presets.map { preset in
       var value = preset
       value.name = value.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !value.name.isEmpty, value.name.count <= 60 else {
+      guard !value.name.isEmpty else {
         throw ProjectWorkspaceError.invalidPresetName
+      }
+      guard value.name.count <= Self.maxPresetNameLength else {
+        throw ProjectWorkspaceError.presetNameTooLong
       }
       let key = value.name.lowercased()
       guard names.insert(key).inserted else { throw ProjectWorkspaceError.duplicatePresetName }

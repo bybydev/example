@@ -26,9 +26,6 @@ struct ChatSidebarView: View {
   let selectedConversationID: ConversationID?
   let newChat: (ProjectID?) -> Void
   let selectConversation: (ConversationID) -> Void
-  /// Distinct from `selectConversation` so the root can remember the chat was
-  /// reached from a project and offer a back chevron instead of the hamburger.
-  let selectProjectConversation: (ConversationID) -> Void
   let selectSearchResult: (ConversationSearchResult) -> Void
   /// Swaps the app's main screen to the chosen menu destination.
   let openDestination: (SidebarDestination) -> Void
