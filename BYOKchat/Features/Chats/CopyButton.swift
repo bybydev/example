@@ -13,18 +13,18 @@ struct CopyButton: View {
 
     var width: CGFloat? {
       switch self {
-      case .regular: 38
-      case .messageAction: 30
-      case .compact: 34
+      case .regular: 40
+      case .messageAction: 40
+      case .compact: 40
       case .toolbar: nil
       }
     }
 
     var height: CGFloat? {
       switch self {
-      case .regular: 38
-      case .messageAction: 38
-      case .compact: 30
+      case .regular: 40
+      case .messageAction: 42
+      case .compact: 38
       case .toolbar: nil
       }
     }
@@ -59,6 +59,7 @@ struct CopyButton: View {
         .contentShape(Rectangle())
     }
     .disabled(text.isEmpty)
+    .opacity(text.isEmpty ? 0.35 : 1)
     .accessibilityLabel(isCopied ? "Copied" : accessibilityTitle)
     .task(id: feedbackRevision) {
       guard isCopied else { return }

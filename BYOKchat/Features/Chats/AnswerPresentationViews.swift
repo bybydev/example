@@ -12,29 +12,60 @@ struct BrowserDestination: Identifiable, Equatable {
   var id: String { url.absoluteString }
 }
 
+enum HighlightedCodeBlockSupport {
+  static let collapsedLineLimit = 14
+  static let collapsedCharacterLimit = 1_800
+
+  struct Preview: Equatable, Sendable {
+    let displayedContent: String
+    let isLong: Bool
+    let toggleLabel: String
+  }
+
+  static func preview(for content: String, isExpanded: Bool) -> Preview {
+    let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+    let exceedsLines = lines.count > collapsedLineLimit
+    let exceedsCharacters = content.count > collapsedCharacterLimit
+    let isLong = exceedsLines || exceedsCharacters
+
+    let displayedContent: String
+    if isLong, !isExpanded {
+      let lineCapped = exceedsLines ? lines.prefix(collapsedLineLimit).joined(separator: "\n") : content
+      let capped = lineCapped.count > collapsedCharacterLimit
+        ? String(lineCapped.prefix(collapsedCharacterLimit))
+        : lineCapped
+      displayedContent = capped + "\n…"
+    } else {
+      displayedContent = content
+    }
+
+    let toggleLabel: String
+    if isExpanded {
+      toggleLabel = "Collapse code"
+    } else if exceedsLines {
+      toggleLabel = "Show all \(lines.count) lines"
+    } else {
+      toggleLabel = "Show full code"
+    }
+
+    return Preview(
+      displayedContent: displayedContent,
+      isLong: isLong,
+      toggleLabel: toggleLabel
+    )
+  }
+}
+
 struct HighlightedCodeBlock: View {
   let language: String?
   let content: String
+  var isComplete: Bool = true
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.colorScheme) private var colorScheme
+  @ScaledMetric(relativeTo: .callout) private var codeFontSize: CGFloat = 14
   @State private var isExpanded = false
   @State private var showFullScreen = false
-
-  private let collapsedLineLimit = 14
-
-  private var lines: [Substring] {
-    content.split(separator: "\n", omittingEmptySubsequences: false)
-  }
-
-  private var isLong: Bool {
-    lines.count > collapsedLineLimit || content.count > 1_800
-  }
-
-  private var displayedContent: String {
-    guard isLong, !isExpanded else { return content }
-    return lines.prefix(collapsedLineLimit).joined(separator: "\n") + "\n…"
-  }
 
   private var languageLabel: String {
     let value = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -42,6 +73,8 @@ struct HighlightedCodeBlock: View {
   }
 
   var body: some View {
+    let preview = HighlightedCodeBlockSupport.preview(for: content, isExpanded: isExpanded)
+
     VStack(spacing: 0) {
       header
 
@@ -51,15 +84,17 @@ struct HighlightedCodeBlock: View {
 
       ScrollView(.horizontal) {
         HighlightedCodeText(
-          code: displayedContent,
+          code: preview.displayedContent,
           language: language,
-          colorScheme: colorScheme
+          colorScheme: colorScheme,
+          fontSize: codeFontSize,
+          isComplete: isComplete
         )
         .padding(14)
       }
       .scrollIndicators(.visible)
 
-      if isLong {
+      if preview.isLong {
         Rectangle()
           .fill(theme.borderColor)
           .frame(height: 0.5)
@@ -68,12 +103,13 @@ struct HighlightedCodeBlock: View {
           withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
         } label: {
           Label(
-            isExpanded ? "Collapse code" : "Show all \(lines.count) lines",
+            preview.toggleLabel,
             systemImage: isExpanded ? "chevron.up" : "chevron.down"
           )
           .font(.system(size: 12, weight: .semibold))
           .frame(maxWidth: .infinity)
-          .frame(height: 38)
+          .frame(height: 40)
+          .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(theme.secondaryForegroundColor)
@@ -92,7 +128,7 @@ struct HighlightedCodeBlock: View {
   }
 
   private var header: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 4) {
       Circle()
         .fill(theme.accentColor)
         .frame(width: 6, height: 6)
@@ -101,6 +137,7 @@ struct HighlightedCodeBlock: View {
         .font(.system(size: 11, weight: .semibold, design: .monospaced))
         .foregroundStyle(theme.secondaryForegroundColor)
         .lineLimit(1)
+        .padding(.leading, 4)
 
       Spacer(minLength: 8)
 
@@ -108,7 +145,8 @@ struct HighlightedCodeBlock: View {
         showFullScreen = true
       }
       .labelStyle(.iconOnly)
-      .frame(width: 34, height: 30)
+      .frame(width: 40, height: 38)
+      .contentShape(Rectangle())
 
       CopyButton(text: content, accessibilityTitle: "Copy Code", size: .compact)
     }
@@ -116,41 +154,68 @@ struct HighlightedCodeBlock: View {
     .foregroundStyle(theme.secondaryForegroundColor)
     .buttonStyle(.plain)
     .padding(.leading, 13)
-    .padding(.trailing, 7)
+    .padding(.trailing, 4)
     .frame(minHeight: 42)
     .background(theme.elevatedSurfaceColor)
   }
 }
 
 private struct HighlightedCodeText: View {
+  private struct RenderKey: Equatable {
+    let code: String
+    let language: String?
+    let isDark: Bool
+    let fontSize: Int
+    let isComplete: Bool
+  }
+
   let code: String
   let language: String?
   let colorScheme: ColorScheme
+  let fontSize: CGFloat
+  var isComplete: Bool = true
 
   @State private var highlighted: AttributedString?
+  @State private var highlightedKey: RenderKey?
 
   var body: some View {
     Group {
-      if let highlighted {
+      if let highlighted, highlightedKey == renderKey {
         Text(highlighted)
       } else {
         Text(code)
-          .font(.system(size: 14, design: .monospaced))
+          .font(.system(size: fontSize, design: .monospaced))
       }
     }
     .fixedSize(horizontal: true, vertical: true)
     .textSelection(.enabled)
-    .task(id: renderID) {
-      highlighted = await SyntaxHighlighting.shared.render(
+    .task(id: renderKey) {
+      guard isComplete else {
+        highlighted = nil
+        highlightedKey = nil
+        return
+      }
+      let key = renderKey
+      let rendered = await SyntaxHighlighting.shared.render(
         code: code,
         language: language,
-        isDark: colorScheme == .dark
+        isDark: colorScheme == .dark,
+        fontSize: fontSize
       )
+      guard !Task.isCancelled else { return }
+      highlighted = rendered
+      highlightedKey = rendered != nil ? key : nil
     }
   }
 
-  private var renderID: String {
-    "\(colorScheme == .dark ? "dark" : "light")::\(language ?? "auto")::\(code.hashValue)"
+  private var renderKey: RenderKey {
+    RenderKey(
+      code: code,
+      language: language,
+      isDark: colorScheme == .dark,
+      fontSize: Int(fontSize.rounded()),
+      isComplete: isComplete
+    )
   }
 }
 
@@ -159,10 +224,14 @@ private actor SyntaxHighlighting {
     let code: String
     let language: String?
     let isDark: Bool
+    let fontSize: Int
   }
 
   static let shared = SyntaxHighlighting()
 
+  private var highlighter: Highlighter?
+  private var configuredTheme: String?
+  private var configuredFontSize: Int?
   private var cache: [CacheKey: AttributedString] = [:]
   private var cacheOrder: [CacheKey] = []
   private let cacheLimit = 64
@@ -170,20 +239,33 @@ private actor SyntaxHighlighting {
   func render(
     code: String,
     language: String?,
-    isDark: Bool
+    isDark: Bool,
+    fontSize: CGFloat = 14
   ) -> AttributedString? {
-    let key = CacheKey(code: code, language: language, isDark: isDark)
+    guard !Task.isCancelled else { return nil }
+    let roundedFontSize = max(11, min(32, Int(fontSize.rounded())))
+    let key = CacheKey(code: code, language: language, isDark: isDark, fontSize: roundedFontSize)
     if let cached = cache[key] {
       return cached
     }
 
-    guard let highlighter = Highlighter() else { return nil }
-    _ = highlighter.setTheme(
-      isDark ? "github-dark" : "github",
-      withFont: "Menlo-Regular",
-      ofSize: 14
-    )
+    if highlighter == nil {
+      highlighter = Highlighter()
+    }
+    guard let highlighter else { return nil }
 
+    let themeName = isDark ? "github-dark" : "github"
+    if configuredTheme != themeName || configuredFontSize != roundedFontSize {
+      _ = highlighter.setTheme(
+        themeName,
+        withFont: "Menlo-Regular",
+        ofSize: CGFloat(roundedFontSize)
+      )
+      configuredTheme = themeName
+      configuredFontSize = roundedFontSize
+    }
+
+    guard !Task.isCancelled else { return nil }
     let normalizedLanguage = normalize(language)
     guard let value = highlighter.highlight(code, as: normalizedLanguage) else {
       return nil
@@ -229,12 +311,18 @@ private struct FullScreenCodeView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.colorScheme) private var colorScheme
+  @ScaledMetric(relativeTo: .callout) private var codeFontSize: CGFloat = 14
 
   var body: some View {
     NavigationStack {
       ScrollView([.horizontal, .vertical]) {
-        HighlightedCodeText(code: content, language: language, colorScheme: colorScheme)
-          .padding(20)
+        HighlightedCodeText(
+          code: content,
+          language: language,
+          colorScheme: colorScheme,
+          fontSize: codeFontSize
+        )
+        .padding(20)
       }
       .background(theme.backgroundColor)
       .navigationTitle(language?.uppercased() ?? "Code")
@@ -256,6 +344,7 @@ struct MathAnswerView: View {
   let expression: String
 
   @Environment(\.appFoundationTheme) private var theme
+  @ScaledMetric(relativeTo: .body) private var mathFontSize: CGFloat = 17
 
   var body: some View {
     LaTeX("$$\(expression)$$")
@@ -265,7 +354,7 @@ struct MathAnswerView: View {
       .errorMode(.original)
       .imageRenderingMode(.template)
       .imageAccessibility(.sre)
-      .font(.system(size: 17))
+      .font(.system(size: mathFontSize))
       .foregroundStyle(theme.primaryForegroundColor)
       .frame(maxWidth: .infinity, alignment: .center)
       .padding(.horizontal, 12)
@@ -280,6 +369,7 @@ struct MathAnswerView: View {
 
 struct MermaidAnswerView: View {
   let source: String
+  var isComplete: Bool = true
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.colorScheme) private var colorScheme
@@ -289,7 +379,7 @@ struct MermaidAnswerView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: 4) {
         Label("DIAGRAM", systemImage: "point.3.connected.trianglepath.dotted")
           .font(.system(size: 11, weight: .semibold, design: .monospaced))
           .foregroundStyle(theme.secondaryForegroundColor)
@@ -300,19 +390,42 @@ struct MermaidAnswerView: View {
           showFullScreen = true
         }
         .labelStyle(.iconOnly)
-        .frame(width: 34, height: 30)
+        .frame(width: 40, height: 38)
+        .contentShape(Rectangle())
+        .disabled(!isComplete)
+        .opacity(isComplete ? 1 : 0.35)
 
         CopyButton(text: source, accessibilityTitle: "Copy Mermaid Source", size: .compact)
       }
       .buttonStyle(.plain)
       .foregroundStyle(theme.secondaryForegroundColor)
-      .padding(.horizontal, 10)
+      .padding(.leading, 12)
+      .padding(.trailing, 4)
       .frame(minHeight: 42)
       .background(theme.elevatedSurfaceColor)
 
       Rectangle().fill(theme.borderColor).frame(height: 0.5)
 
-      if let parseError {
+      if !isComplete {
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Rendering diagram…")
+              .font(.caption.weight(.medium))
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+          if !source.isEmpty {
+            ScrollView(.horizontal) {
+              Text(source)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(theme.secondaryForegroundColor)
+                .fixedSize(horizontal: true, vertical: true)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+      } else if let parseError {
         VStack(alignment: .leading, spacing: 8) {
           Label("Could not render this diagram", systemImage: "exclamationmark.triangle")
             .font(.subheadline.weight(.semibold))
@@ -354,6 +467,16 @@ struct MermaidAnswerView: View {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
         .stroke(theme.borderColor, lineWidth: 0.75)
     )
+    .onChange(of: source) { _, _ in
+      parseError = nil
+      diagramBounds = .zero
+    }
+    .onChange(of: isComplete) { _, complete in
+      if complete {
+        parseError = nil
+        diagramBounds = .zero
+      }
+    }
     .sheet(isPresented: $showFullScreen) {
       FullScreenMermaidView(source: source)
     }
@@ -398,6 +521,10 @@ private struct FullScreenMermaidView: View {
           Button("Done") { dismiss() }
         }
       }
+      .onChange(of: source) { _, _ in
+        parseError = nil
+        diagramBounds = .zero
+      }
       .overlay {
         if let parseError {
           ContentUnavailableView(
@@ -425,6 +552,7 @@ struct AnswerSourcesSheet: View {
         VStack(alignment: .leading, spacing: 9) {
           ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
             Button {
+              guard AnswerContentParser.isValidBrowsableURL(source.url) else { return }
               browserDestination = BrowserDestination(url: source.url)
             } label: {
               HStack(spacing: 11) {

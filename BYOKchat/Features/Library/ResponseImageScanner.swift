@@ -1,8 +1,9 @@
+import CryptoKit
 import Foundation
 
 /// One savable image found inside an assistant reply.
-struct ResponseImageCandidate: Identifiable, Equatable {
-  enum Source: Equatable {
+struct ResponseImageCandidate: Identifiable, Equatable, Sendable {
+  enum Source: Equatable, Sendable {
     case url(URL)
     case data(Data, fileExtension: String)
   }
@@ -13,33 +14,35 @@ struct ResponseImageCandidate: Identifiable, Equatable {
 }
 
 enum ResponseImageScanner {
-  private static let markdownImagePattern =
-    #"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#
+  private static let markdownImageRegex = try? NSRegularExpression(
+    pattern: #"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#
+  )
 
-  /// Finds markdown image references and inline data-URI images. Results are
-  /// de-duplicated by location so the same image linked twice offers once.
+  /// Finds markdown image references and inline data-URI images outside fenced
+  /// code blocks. Results are de-duplicated by location so the same image
+  /// linked twice offers once.
   static func imageCandidates(in content: String) -> [ResponseImageCandidate] {
-    guard !content.isEmpty else { return [] }
+    guard !content.isEmpty, content.contains("!["), let regex = markdownImageRegex else {
+      return []
+    }
 
     var candidates: [ResponseImageCandidate] = []
     var seen = Set<String>()
 
-    if let regex = try? NSRegularExpression(pattern: markdownImagePattern) {
-      let range = NSRange(content.startIndex..., in: content)
-      for match in regex.matches(in: content, range: range) {
+    for block in AnswerContentParser.parse(content) {
+      guard case .markdown(let markdown) = block, markdown.contains("![") else { continue }
+      let range = NSRange(markdown.startIndex..., in: markdown)
+      for match in regex.matches(in: markdown, range: range) {
         guard
-          let altRange = Range(match.range(at: 1), in: content),
-          let urlRange = Range(match.range(at: 2), in: content)
+          let altRange = Range(match.range(at: 1), in: markdown),
+          let urlRange = Range(match.range(at: 2), in: markdown)
         else { continue }
-        let alt = String(content[altRange])
-        let rawURL = String(content[urlRange])
+        let alt = String(markdown[altRange])
+        let rawURL = String(markdown[urlRange])
 
         guard seen.insert(rawURL).inserted else { continue }
 
-        if let url = URL(string: rawURL),
-          let scheme = url.scheme?.lowercased(),
-          scheme == "http" || scheme == "https"
-        {
+        if let url = URL(string: rawURL), AnswerContentParser.isValidBrowsableURL(url) {
           let derived = sanitizeFilename(url.lastPathComponent)
           candidates.append(
             ResponseImageCandidate(
@@ -49,10 +52,13 @@ enum ResponseImageScanner {
             )
           )
         } else if let decoded = decodeDataURI(rawURL) {
-          seen.insert(rawURL)
+          let digest = SHA256.hash(data: Data(rawURL.utf8))
+            .prefix(16)
+            .map { String(format: "%02x", $0) }
+            .joined()
           candidates.append(
             ResponseImageCandidate(
-              id: "data::\(rawURL.prefix(64))",
+              id: "data::\(digest)",
               label: alt.isEmpty ? "image-\(candidates.count + 1).\(decoded.extension)" : alt,
               source: .data(decoded.data, fileExtension: decoded.extension)
             )

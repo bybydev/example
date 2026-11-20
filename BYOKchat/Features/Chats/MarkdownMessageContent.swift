@@ -8,23 +8,25 @@ struct MarkdownMessageContent: View {
   /// Stretch every block to the offered width. Off inside right-hugging user
   /// bubbles so the capsule shrinks to its content instead of filling the row.
   var fillsWidth = true
+  var isStreaming = false
 
   @Environment(\.appFoundationTheme) private var theme
+  @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = 17
   @State private var browserDestination: BrowserDestination?
 
   var body: some View {
-    let blocks = AnswerContentParser.parse(text)
+    let blocks = AnswerContentParser.parseDetailed(text)
 
     VStack(alignment: .leading, spacing: 12) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-        blockView(block)
+      ForEach(Array(blocks.enumerated()), id: \.offset) { _, parsed in
+        blockView(parsed)
       }
     }
     .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     .environment(
       \.openURL,
       OpenURLAction { url in
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+        guard AnswerContentParser.isValidBrowsableURL(url) else {
           return .systemAction
         }
         browserDestination = BrowserDestination(url: url)
@@ -38,39 +40,26 @@ struct MarkdownMessageContent: View {
   }
 
   @ViewBuilder
-  private func blockView(_ block: AnswerContentBlock) -> some View {
-    switch block {
+  private func blockView(_ parsed: ParsedAnswerBlock) -> some View {
+    switch parsed.block {
     case .markdown(let markdown):
-      if shouldUseInlineMathRenderer(markdown) {
-        LaTeX(markdown)
-          .parsingMode(.onlyEquations)
-          .blockMode(.blockViews)
-          .processEscapes()
-          .renderingStyle(.redactedOriginal)
-          .renderingAnimation(.easeOut(duration: 0.18))
-          .errorMode(.original)
-          .imageRenderingMode(.template)
-          .imageAccessibility(.sre)
-          .font(.system(size: 17))
-          .foregroundStyle(theme.primaryForegroundColor)
-          .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+      let segments = AnswerContentParser.splitMarkdownForInlineMath(markdown)
+      if segments.count == 1, let only = segments.first {
+        markdownSegmentView(only)
       } else {
-        Markdown(markdown)
-          .markdownTheme(
-            chatTheme(
-              columnAlignments: tableColumnAlignments(in: markdown) ?? []
-            )
-          )
-          .textSelection(.enabled)
-          .tint(theme.accentColor)
-          .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+        VStack(alignment: .leading, spacing: 10) {
+          ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+            markdownSegmentView(segment)
+          }
+        }
       }
 
     case .code(let language, let content):
+      let blockComplete = parsed.isClosed || !isStreaming
       if AnswerContentParser.isMermaidLanguage(language) {
-        MermaidAnswerView(source: content)
+        MermaidAnswerView(source: content, isComplete: blockComplete)
       } else {
-        HighlightedCodeBlock(language: language, content: content)
+        HighlightedCodeBlock(language: language, content: content, isComplete: blockComplete)
       }
 
     case .math(let expression):
@@ -78,23 +67,33 @@ struct MarkdownMessageContent: View {
     }
   }
 
-  private func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
-    guard AnswerContentParser.containsInlineMath(markdown) else { return false }
-
-    for line in markdown.components(separatedBy: .newlines) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      if trimmed.hasPrefix("#")
-        || trimmed.hasPrefix(">")
-        || trimmed.hasPrefix("- ")
-        || trimmed.hasPrefix("* ")
-        || trimmed.hasPrefix("+ ")
-        || trimmed.hasPrefix("|")
-        || trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil
-      {
-        return false
-      }
+  @ViewBuilder
+  private func markdownSegmentView(_ segment: MarkdownMathSegment) -> some View {
+    if segment.useLaTeX {
+      LaTeX(segment.text)
+        .parsingMode(.onlyEquations)
+        .blockMode(.blockViews)
+        .processEscapes()
+        .renderingStyle(.redactedOriginal)
+        .renderingAnimation(.easeOut(duration: 0.18))
+        .errorMode(.original)
+        .imageRenderingMode(.template)
+        .imageAccessibility(.sre)
+        .font(.system(size: bodyFontSize))
+        .foregroundStyle(theme.primaryForegroundColor)
+        .textSelection(.enabled)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+    } else {
+      Markdown(segment.text)
+        .markdownTheme(
+          chatTheme(
+            columnAlignments: tableColumnAlignments(in: segment.text) ?? []
+          )
+        )
+        .textSelection(.enabled)
+        .tint(theme.accentColor)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     }
-    return true
   }
 
   /// Recovers GFM column alignments from a table's delimiter row
@@ -157,7 +156,7 @@ struct MarkdownMessageContent: View {
     MarkdownUI.Theme.basic
       .text {
         ForegroundColor(theme.primaryForegroundColor)
-        FontSize(17)
+        FontSize(bodyFontSize)
       }
       .code {
         FontFamilyVariant(.monospaced)

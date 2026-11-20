@@ -1132,7 +1132,7 @@ enum LibraryDateGrouper {
 /// Retained across the UIKit completion callback so success is shown only
 /// after Photos finishes writing, and denied access/storage failures surface.
 @MainActor
-private final class LibraryPhotoWriter: NSObject {
+final class LibraryPhotoWriter: NSObject {
   private var continuation: CheckedContinuation<Void, any Error>?
 
   static func save(_ image: UIImage) async throws {

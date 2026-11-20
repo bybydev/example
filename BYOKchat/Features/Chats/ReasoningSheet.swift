@@ -1,18 +1,18 @@
 import AppFoundation
 import SwiftUI
-import UIKit
 
 struct ReasoningSheet: View {
   let reasoning: String
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
+  @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
 
   var body: some View {
     NavigationStack {
       ScrollView {
         Text(reasoning)
-          .font(.system(size: 15))
+          .font(.system(size: fontSize))
           .lineSpacing(5)
           .foregroundStyle(theme.primaryForegroundColor)
           .textSelection(.enabled)

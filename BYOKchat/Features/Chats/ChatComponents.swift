@@ -83,6 +83,8 @@ struct ChatAttachmentStrip: View {
   /// remote-image model: tiles fetch on demand). Composer tiles hold fresh
   /// in-memory bytes and can render without it.
   var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
+  /// Tap handler for previewing sent/received attachments in full screen or QuickLook.
+  var onOpenAttachment: ((ChatAttachment) -> Void)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
 
@@ -133,17 +135,16 @@ struct ChatAttachmentStrip: View {
   @ViewBuilder
   private func attachmentView(_ attachment: ChatAttachment) -> some View {
     ZStack(alignment: .topTrailing) {
-      if attachment.isImage {
-        AsyncAttachmentThumbnail(
-          attachment: attachment,
-          sideLength: presentation.imageWidth,
-          height: presentation.imageHeight,
-          cornerRadius: presentation.cornerRadius,
-          loadThumbnail: loadThumbnail
-        )
-        .accessibilityLabel("Image attachment \(attachment.filename)")
+      if presentation != .composer, let onOpenAttachment {
+        Button {
+          onOpenAttachment(attachment)
+        } label: {
+          attachmentTileBody(attachment)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Double tap to preview")
       } else {
-        fileTile(attachment)
+        attachmentTileBody(attachment)
       }
 
       if let removeAttachment {
@@ -164,6 +165,22 @@ struct ChatAttachmentStrip: View {
       }
     }
     .contextMenu { tileContextItems(for: attachment) }
+  }
+
+  @ViewBuilder
+  private func attachmentTileBody(_ attachment: ChatAttachment) -> some View {
+    if attachment.isImage {
+      AsyncAttachmentThumbnail(
+        attachment: attachment,
+        sideLength: presentation.imageWidth,
+        height: presentation.imageHeight,
+        cornerRadius: presentation.cornerRadius,
+        loadThumbnail: loadThumbnail
+      )
+      .accessibilityLabel("Image attachment \(attachment.filename)")
+    } else {
+      fileTile(attachment)
+    }
   }
 
   @ViewBuilder
@@ -425,12 +442,20 @@ struct AsyncAttachmentThumbnail: View {
 }
 
 struct ChatMessageView: View {
+  private struct AnalysisKey: Equatable, Sendable {
+    let role: ChatMessageRole
+    let isStreaming: Bool
+    let content: String
+    let hasLibraryContext: Bool
+  }
+
   let message: ChatMessage
   let accountLabel: String?
   /// Identity line for remote failures, e.g. "Work · OpenAI · gpt-4o".
   /// Local failures pass nil so the error stands alone above its Retry pill.
   var failureContext: String? = nil
   let canEdit: Bool
+  var isLatestAssistant: Bool = false
   let canRegenerate: Bool
   /// Library saving ("Save to Library" / "Save Images…") is only offered when
   /// both are provided.
@@ -440,6 +465,7 @@ struct ChatMessageView: View {
   /// Async thumbnail fetch for persisted attachment blobs (nil hides the
   /// loading/unavailable pipeline; only in-memory bytes render).
   var loadThumbnail: ((String, CGFloat) async -> Data?)? = nil
+  var onOpenAttachment: ((ChatAttachment) -> Void)? = nil
   let edit: () -> Void
   let regenerate: () -> Void
   let copy: () -> Void
@@ -451,10 +477,20 @@ struct ChatMessageView: View {
   @State private var showSourcesSheet = false
   @State private var showImageSaveSheet = false
   @State private var pendingSavedImageCount = 0
+  @State private var cachedSources: [AnswerSource] = []
+  @State private var cachedImageCandidates: [ResponseImageCandidate] = []
 
-  private var imageCandidates: [ResponseImageCandidate] {
-    guard library != nil, conversationID != nil, !message.content.isEmpty else { return [] }
-    return ResponseImageScanner.imageCandidates(in: message.content)
+  private var isMessageStreaming: Bool {
+    message.status == .pending || message.status == .streaming
+  }
+
+  private var analysisKey: AnalysisKey {
+    AnalysisKey(
+      role: message.role,
+      isStreaming: isMessageStreaming,
+      content: isMessageStreaming ? "" : message.content,
+      hasLibraryContext: library != nil && conversationID != nil
+    )
   }
 
   var body: some View {
@@ -469,22 +505,33 @@ struct ChatMessageView: View {
     .accessibilityElement(children: .contain)
   }
 
+  @ViewBuilder
   private var userMessage: some View {
-    HStack(alignment: .top) {
+    let hasContextActions = !message.content.isEmpty || canEdit
+    let row = HStack(alignment: .top) {
       Spacer(minLength: 54)
       userBubble
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
-    .contextMenu {
-      if !message.content.isEmpty {
-        Button("Copy", systemImage: "doc.on.doc", action: copy)
-        ShareLink(item: message.content) {
-          Label("Share", systemImage: "square.and.arrow.up")
+
+    if hasContextActions {
+      row.contextMenu {
+        if !message.content.isEmpty {
+          Button("Copy", systemImage: "doc.on.doc") {
+            copy()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            toastCenter.success("Copied")
+          }
+          ShareLink(item: message.content) {
+            Label("Share", systemImage: "square.and.arrow.up")
+          }
+        }
+        if canEdit {
+          Button("Edit and Resend", systemImage: "pencil", action: edit)
         }
       }
-      if canEdit {
-        Button("Edit and Resend", systemImage: "pencil", action: edit)
-      }
+    } else {
+      row
     }
   }
 
@@ -502,7 +549,8 @@ struct ChatMessageView: View {
           attachments: attachments,
           presentation: .bubble,
           saveToLibrary: attachmentSaveClosure,
-          loadThumbnail: loadThumbnail
+          loadThumbnail: loadThumbnail,
+          onOpenAttachment: onOpenAttachment
         )
       }
 
@@ -545,18 +593,41 @@ struct ChatMessageView: View {
       messageBody
 
       if message.status == .failed {
-        // The failure footer owns the retry action, so failed turns never
-        // render the icon row with its dead copy/share buttons.
         failureFooter
+        assistantActions(includeRetry: false, hideEmptyContentActions: true)
       } else {
         footer
 
-        if message.status != .pending && message.status != .streaming {
-          assistantActions
+        if !isMessageStreaming {
+          assistantActions(
+            includeRetry: isLatestAssistant || canRegenerate,
+            hideEmptyContentActions: false
+          )
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .task(id: analysisKey) {
+      let key = analysisKey
+      guard key.role == .assistant, !key.isStreaming, !key.content.isEmpty else {
+        cachedSources = []
+        cachedImageCandidates = []
+        return
+      }
+      let content = key.content
+      let hasLibraryContext = key.hasLibraryContext
+      let analyzed = await Task.detached(priority: .utility) {
+        let blocks = AnswerContentParser.parse(content)
+        let sources = AnswerContentParser.sources(in: blocks)
+        let images = hasLibraryContext
+          ? ResponseImageScanner.imageCandidates(in: content)
+          : []
+        return (sources, images)
+      }.value
+      guard !Task.isCancelled else { return }
+      cachedSources = analyzed.0
+      cachedImageCandidates = analyzed.1
+    }
     .sheet(isPresented: $showMessageInfo) {
       MessageInfoView(message: message, accountLabel: accountLabel)
     }
@@ -564,7 +635,7 @@ struct ChatMessageView: View {
       ReasoningSheet(reasoning: message.reasoning)
     }
     .sheet(isPresented: $showSourcesSheet) {
-      AnswerSourcesSheet(sources: messageSources)
+      AnswerSourcesSheet(sources: cachedSources)
     }
     .sheet(isPresented: $showImageSaveSheet, onDismiss: {
       guard pendingSavedImageCount > 0 else { return }
@@ -574,7 +645,7 @@ struct ChatMessageView: View {
     }) {
       if let conversationID, let library {
         ResponseImageSaveSheet(
-          candidates: imageCandidates,
+          candidates: cachedImageCandidates,
           conversationID: conversationID,
           messageID: message.id,
           library: library,
@@ -584,38 +655,42 @@ struct ChatMessageView: View {
     }
   }
 
-
-  /// Links extracted from the answer body. They stay tappable inline in the
-  /// markdown; this list is the consolidated index behind the More menu.
-  private var messageSources: [AnswerSource] {
-    guard message.role == .assistant, !message.content.isEmpty else { return [] }
-    return AnswerContentParser.sources(in: AnswerContentParser.parse(message.content))
-  }
-
-  private var assistantActions: some View {
-    HStack(spacing: 2) {
-      CopyButton(text: message.content, size: .messageAction, alignment: .leading)
-
-      actionButton("Retry", systemImage: "arrow.clockwise", action: regenerate)
-        .disabled(!canRegenerate)
-
-      ShareLink(item: message.content) {
-        Image(systemName: "square.and.arrow.up")
-          .frame(
-            width: CopyButton.Size.messageAction.width,
-            height: CopyButton.Size.messageAction.height,
-            alignment: .leading
-          )
-          .contentShape(Rectangle())
+  private func assistantActions(
+    includeRetry: Bool,
+    hideEmptyContentActions: Bool
+  ) -> some View {
+    let showContentActions = !hideEmptyContentActions || !message.content.isEmpty
+    return HStack(spacing: 4) {
+      if showContentActions {
+        CopyButton(text: message.content, size: .messageAction, alignment: .leading)
       }
-      .disabled(message.content.isEmpty)
-      .accessibilityLabel("Share")
+
+      if includeRetry {
+        actionButton("Retry", systemImage: "arrow.clockwise", action: regenerate)
+          .disabled(!canRegenerate)
+          .opacity(canRegenerate ? 1 : 0.35)
+      }
+
+      if showContentActions {
+        ShareLink(item: message.content) {
+          Image(systemName: "square.and.arrow.up")
+            .frame(
+              width: CopyButton.Size.messageAction.width,
+              height: CopyButton.Size.messageAction.height,
+              alignment: .leading
+            )
+            .contentShape(Rectangle())
+        }
+        .disabled(message.content.isEmpty)
+        .opacity(message.content.isEmpty ? 0.35 : 1)
+        .accessibilityLabel("Share")
+      }
 
       Menu {
         Button("Message Info", systemImage: "info.circle") {
           showMessageInfo = true
         }
-        if !messageSources.isEmpty {
+        if !cachedSources.isEmpty {
           Button("Sources", systemImage: "link") {
             showSourcesSheet = true
           }
@@ -623,6 +698,8 @@ struct ChatMessageView: View {
         if !message.reasoning.isEmpty {
           Button("Copy Reasoning", systemImage: "doc.on.doc") {
             UIPasteboard.general.string = message.reasoning
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            toastCenter.success("Reasoning copied")
           }
         }
         libraryActions
@@ -669,7 +746,7 @@ struct ChatMessageView: View {
       }
       .disabled(message.content.isEmpty)
 
-      if !imageCandidates.isEmpty {
+      if !cachedImageCandidates.isEmpty {
         Button("Save Images…", systemImage: "photo.on.rectangle") {
           showImageSaveSheet = true
         }
@@ -688,12 +765,21 @@ struct ChatMessageView: View {
         attachments: attachments,
         presentation: .message,
         saveToLibrary: attachmentSaveClosure,
-        loadThumbnail: loadThumbnail
+        loadThumbnail: loadThumbnail,
+        onOpenAttachment: onOpenAttachment
       )
     }
 
     if !message.content.isEmpty {
-      MarkdownMessageContent(text: message.content)
+      MarkdownMessageContent(text: message.content, isStreaming: isMessageStreaming)
+    } else if message.status == .complete,
+      message.reasoning.isEmpty,
+      message.attachments?.isEmpty ?? true,
+      message.toolRounds?.isEmpty ?? true
+    {
+      Text("No response")
+        .font(.callout)
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
   }
 
@@ -702,7 +788,7 @@ struct ChatMessageView: View {
   }
 
   private var isReasoningActive: Bool {
-    (message.status == .pending || message.status == .streaming) && message.content.isEmpty
+    isMessageStreaming && message.content.isEmpty
   }
 
   private var reasoningDisclosure: some View {
@@ -731,6 +817,8 @@ struct ChatMessageView: View {
       }
       .font(.system(size: 13, weight: .semibold))
       .foregroundStyle(theme.secondaryForegroundColor)
+      .padding(.vertical, 6)
+      .frame(minHeight: 36)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -796,19 +884,21 @@ struct ChatMessageView: View {
           .foregroundStyle(theme.secondaryForegroundColor)
           .fixedSize(horizontal: false, vertical: true)
 
-        Button(action: regenerate) {
-          Label("Retry", systemImage: "arrow.clockwise")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(canRegenerate ? theme.accentColor : theme.secondaryForegroundColor)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(theme.surfaceColor, in: Capsule())
-            .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.75))
-            .opacity(canRegenerate ? 1 : 0.45)
+        if isLatestAssistant || canRegenerate {
+          Button(action: regenerate) {
+            Label("Retry", systemImage: "arrow.clockwise")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(canRegenerate ? theme.accentColor : theme.secondaryForegroundColor)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 7)
+              .background(theme.surfaceColor, in: Capsule())
+              .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.75))
+              .opacity(canRegenerate ? 1 : 0.45)
+          }
+          .buttonStyle(.plain)
+          .disabled(!canRegenerate)
+          .accessibilityLabel("Retry")
         }
-        .buttonStyle(.plain)
-        .disabled(!canRegenerate)
-        .accessibilityLabel("Retry")
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -823,14 +913,16 @@ struct MessageEditorSheet: View {
   let cancel: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
+  @FocusState private var isEditorFocused: Bool
 
   var body: some View {
     NavigationStack {
       Form {
         Section {
           TextEditor(text: $text)
-            .font(.system(size: 17))
+            .font(.body)
             .frame(minHeight: 220)
+            .focused($isEditorFocused)
         } footer: {
           Text("Saving removes every later message and generates a new response in linear history.")
             .foregroundStyle(theme.secondaryForegroundColor)
@@ -848,10 +940,11 @@ struct MessageEditorSheet: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Save & Resend", action: save)
-            .disabled(
-              text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text == original
-            )
+            .disabled(!ChatViewSupport.canSaveEditedMessage(draft: text, original: original))
         }
+      }
+      .onAppear {
+        isEditorFocused = true
       }
     }
   }

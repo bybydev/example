@@ -3,6 +3,11 @@ import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
+private struct ChatTimelineGeometry: Equatable {
+  let contentHeight: CGFloat
+  let containerHeight: CGFloat
+}
+
 extension ChatView {
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
@@ -24,16 +29,16 @@ extension ChatView {
         }
       } else {
         scrollViewContent(conversation)
+          .overlay(alignment: .bottom) {
+            if showJumpToLatest {
+              jumpToLatestButton
+                .padding(.bottom, 6)
+            }
+          }
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      VStack(spacing: 4) {
-        if !isUntouched && showJumpToLatest {
-          jumpToLatestButton
-        }
-
-        chatComposer(for: conversation, isGenerating: !isUntouched && chats.isGenerating(conversationID))
-      }
+      chatComposer(for: conversation, isGenerating: !isUntouched && chats.isGenerating(conversationID))
     }
   }
 
@@ -89,7 +94,8 @@ extension ChatView {
   }
 
   private func scrollViewContent(_ conversation: ChatConversation) -> some View {
-    ScrollViewReader { proxy in
+    let canMutateConversation = configurationIssue(conversation) == nil && chats.canSend(conversation.id)
+    return ScrollViewReader { proxy in
       ScrollView {
         VStack(spacing: 0) {
           LazyVStack(spacing: 24) {
@@ -109,18 +115,24 @@ extension ChatView {
 
             ForEach(conversation.messages) { stored in
                 let displayed = chats.displayMessage(stored)
+                let isLatest = stored.id == latestAssistantID
                 VStack(alignment: .leading, spacing: 10) {
                   ChatMessageView(
                     message: displayed,
                     accountLabel: accountLabel(for: stored),
                     failureContext: failureContextLabel(for: stored),
-                    canEdit: stored.role == .user && !chats.isGenerating(conversationID),
-                    canRegenerate: stored.id == latestAssistantID
-                      && !chats.isGenerating(conversationID),
+                    canEdit: stored.role == .user
+                      && !chats.isGenerating(conversationID)
+                      && canMutateConversation,
+                    isLatestAssistant: isLatest,
+                    canRegenerate: isLatest
+                      && !chats.isGenerating(conversationID)
+                      && canMutateConversation,
                     conversationID: conversationID,
                     library: library,
                     onLibraryError: handleLibraryError,
                     loadThumbnail: chats.attachmentThumbnail,
+                    onOpenAttachment: openAttachment,
                     edit: {
                       editText = stored.content
                       editTarget = stored
@@ -201,6 +213,7 @@ extension ChatView {
       .onScrollPhaseChange { _, newPhase in
         switch newPhase {
         case .tracking, .interacting, .decelerating:
+          isProgrammaticScroll = false
           isUserDraggingTimeline = true
           if !isNearBottom {
             followsLatest = false
@@ -209,30 +222,48 @@ extension ChatView {
         case .idle:
           let wasUserDriven = isUserDraggingTimeline
           isUserDraggingTimeline = false
+          isProgrammaticScroll = false
           if isNearBottom {
             followsLatest = true
             showJumpToLatest = false
-          } else if wasUserDriven {
+          } else if wasUserDriven || !chats.isGenerating(conversationID) {
             followsLatest = false
             showJumpToLatest = true
           }
         case .animating:
-          isUserDraggingTimeline = false
+          // Non-programmatic animating transitions include status-bar tap to top
+          // and VoiceOver scroll; treat them as user-driven so auto-follow pauses.
+          if !isProgrammaticScroll {
+            isUserDraggingTimeline = true
+            if !isNearBottom {
+              followsLatest = false
+              showJumpToLatest = true
+            }
+          } else {
+            isUserDraggingTimeline = false
+          }
         @unknown default:
           break
         }
       }
-      .onScrollGeometryChange(for: CGFloat.self) { geometry in
-        geometry.contentSize.height
-      } action: { oldHeight, newHeight in
-        guard oldHeight != newHeight,
-          hasCompletedInitialScroll,
+      .onScrollGeometryChange(for: ChatTimelineGeometry.self) { geometry in
+        ChatTimelineGeometry(
+          contentHeight: geometry.contentSize.height,
+          containerHeight: geometry.containerSize.height
+        )
+      } action: { oldGeometry, newGeometry in
+        guard hasCompletedInitialScroll,
           followsLatest,
-          !isUserDraggingTimeline,
-          chats.isGenerating(conversationID)
+          !isUserDraggingTimeline
         else { return }
 
-        scrollToBottom(animated: false)
+        if oldGeometry.contentHeight != newGeometry.contentHeight,
+          chats.isGenerating(conversationID)
+        {
+          scrollToBottom(animated: false)
+        } else if newGeometry.containerHeight < oldGeometry.containerHeight {
+          scrollToBottom(animated: false)
+        }
       }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
@@ -244,8 +275,9 @@ extension ChatView {
       }
       .task(id: conversationID) {
         hasCompletedInitialScroll = false
+        isProgrammaticScroll = false
         followsLatest = initialScrollMessageID == nil
-        showJumpToLatest = initialScrollMessageID != nil
+        showJumpToLatest = false
 
         guard initialScrollMessageID != nil else {
           await Task.yield()
@@ -253,17 +285,25 @@ extension ChatView {
           return
         }
 
+        isProgrammaticScroll = true
         await Task.yield()
         scrollToInitialTarget(proxy)
 
         do {
           try await Task.sleep(for: .milliseconds(32))
         } catch {
+          isProgrammaticScroll = false
           return
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else {
+          isProgrammaticScroll = false
+          return
+        }
         scrollToInitialTarget(proxy)
+        await Task.yield()
+        isProgrammaticScroll = false
         hasCompletedInitialScroll = true
+        showJumpToLatest = !isNearBottom
       }
     }
   }
@@ -289,15 +329,21 @@ extension ChatView {
         pendingAttachments.removeAll { sentIDs.contains($0.id) }
       }
     )
+    scrollToBottom()
   }
 
   private func regenerate() {
+    guard let currentConversation = conversation,
+      configurationIssue(currentConversation) == nil,
+      chats.canSend(conversationID)
+    else { return }
     followsLatest = true
     showJumpToLatest = false
     if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
       showRegenerateConfirmation = true
     } else {
       chats.regenerate(conversationID: conversationID)
+      scrollToBottom()
     }
   }
 
@@ -341,7 +387,7 @@ extension ChatView {
     return parts.joined(separator: " · ")
   }
 
-  private func configurationIssue(_ conversation: ChatConversation) -> String? {
+  func configurationIssue(_ conversation: ChatConversation) -> String? {
     if let issue = chats.pendingConfigurationIssue(conversation.id) { return issue }
     guard providers.definitions.contains(where: { $0.id == conversation.providerID }) else {
       return "This conversation references a provider that is no longer configured."
@@ -371,7 +417,7 @@ extension ChatView {
     return nil
   }
 
-  private func dismissKeyboard() {
+  func dismissKeyboard() {
     UIApplication.shared.sendAction(
       #selector(UIResponder.resignFirstResponder),
       to: nil,
@@ -380,13 +426,21 @@ extension ChatView {
     )
   }
 
-  private func scrollToBottom(animated: Bool = true) {
+  func scrollToBottom(animated: Bool = true) {
+    programmaticScrollGeneration &+= 1
+    let generation = programmaticScrollGeneration
+    isProgrammaticScroll = true
     if animated {
       withAnimation(.easeOut(duration: 0.18)) {
         chatScrollPosition.scrollTo(edge: .bottom)
       }
     } else {
       chatScrollPosition.scrollTo(edge: .bottom)
+    }
+    Task { @MainActor in
+      try? await Task.sleep(for: animated ? .milliseconds(260) : .milliseconds(60))
+      guard programmaticScrollGeneration == generation else { return }
+      isProgrammaticScroll = false
     }
   }
 }
@@ -543,17 +597,29 @@ private struct ChatToolRoundView: View {
       VStack(alignment: .leading, spacing: 10) {
         VStack(alignment: .leading, spacing: 4) {
           Text("Arguments").font(.caption.weight(.semibold))
-          Text(call.arguments.prettyJSONString())
-            .font(.system(size: 11, design: .monospaced))
-            .textSelection(.enabled)
+          ScrollView([.vertical, .horizontal]) {
+            Text(call.arguments.prettyJSONString())
+              .font(.system(size: 11, design: .monospaced))
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(maxHeight: 220)
         }
         if let result {
           VStack(alignment: .leading, spacing: 4) {
             Text(result.isError ? "Error" : "Result").font(.caption.weight(.semibold))
-            Text(result.content.prettyJSONString())
-              .font(.system(size: 11, design: .monospaced))
-              .textSelection(.enabled)
+            ScrollView([.vertical, .horizontal]) {
+              Text(result.content.prettyJSONString())
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 220)
           }
+        } else {
+          Text("No result returned.")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -1167,20 +1233,6 @@ extension ChatView {
       break
     }
   }
-
-  func openCurrentTarget() {
-    switch readiness {
-    case .ready:
-      if isFresh { onReadyForConversation() } else { showTargetSettings = true }
-    case .noConnection, .missingCredential, .noModel:
-      if needsProjectDefaultRepair {
-        showProjectEditorSheet = true
-      } else {
-        showConnections = true
-      }
-    }
-  }
-
 
   func providerRequiresCredential(_ providerID: ProviderID) -> Bool {
     guard let provider = providers.provider(for: providerID) else { return true }

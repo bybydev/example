@@ -28,6 +28,55 @@ enum ChatReadiness: String {
   case noModel
 }
 
+enum ChatViewSupport {
+  static func markdownFilename(for title: String?) -> String {
+    let raw = title ?? "BYOKchat-conversation"
+    var result = ""
+    var previousWasDash = false
+    for character in raw {
+      if character.isLetter || character.isNumber || character == "_" {
+        result.append(character)
+        previousWasDash = false
+      } else if !previousWasDash {
+        result.append("-")
+        previousWasDash = true
+      }
+    }
+    let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return trimmed.isEmpty ? "BYOKchat-conversation" : trimmed
+  }
+
+  static func canSaveRename(draft: String, currentTitle: String?) -> Bool {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    if let current = currentTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+      trimmed == current
+    {
+      return false
+    }
+    return true
+  }
+
+  static func canSaveEditedMessage(draft: String, original: String) -> Bool {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    return trimmed != original.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct ChatAttachmentImagePreview: Identifiable {
+  let id = UUID()
+  let entry: LibraryEntry
+  let image: UIImage
+  let shareFileURL: URL?
+  let tempDirectory: URL?
+}
+
+struct ChatAttachmentQuickLookPreview: Identifiable {
+  let id = UUID()
+  let item: LibraryQuickLookItem
+}
+
 struct ChatView: View {
   /// Identity of the backing conversation. Only meaningful for `.existing`;
   /// fresh mode never touches the store under this ID.
@@ -73,9 +122,13 @@ struct ChatView: View {
   @State var editTarget: ChatMessage?
   @State var editText = ""
   @State var showRegenerateConfirmation = false
+  @State var showDeleteConfirmation = false
+  @State var isDeleting = false
   @State var isNearBottom = true
   @State var followsLatest = true
   @State var isUserDraggingTimeline = false
+  @State var isProgrammaticScroll = false
+  @State var programmaticScrollGeneration = 0
   @State var showJumpToLatest = false
   @State var hasCompletedInitialScroll = false
   @State var chatScrollPosition = ScrollPosition(idType: String.self)
@@ -87,6 +140,11 @@ struct ChatView: View {
   @State var showFileImporter = false
   @State var showLibraryPicker = false
   @State var libraryErrorMessage: String?
+  @State var attachmentImagePreview: ChatAttachmentImagePreview?
+  @State var attachmentImagePreviewTempDirectory: URL?
+  @State var attachmentQuickLookPreview: ChatAttachmentQuickLookPreview?
+  @State var isLoadingAttachmentPreview = false
+  @State var attachmentPreviewGeneration = 0
 
   init(
     subject: ChatSubject,
@@ -149,9 +207,7 @@ struct ChatView: View {
   }
 
   var markdownFilename: String {
-    let title = conversation?.title ?? "BYOKchat-conversation"
-    let safe = title.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }
-    return String(safe).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    ChatViewSupport.markdownFilename(for: conversation?.title)
   }
 
   var body: some View {
@@ -192,6 +248,23 @@ struct ChatView: View {
       }
       .presentationDragIndicator(.visible)
     }
+    .sheet(item: $attachmentImagePreview, onDismiss: {
+      cleanupAttachmentImagePreviewTempDirectory()
+    }) { preview in
+      LibraryImageViewerView(
+        entry: preview.entry,
+        image: preview.image,
+        shareFileURL: preview.shareFileURL,
+        onSaveToPhotos: {
+          try await LibraryPhotoWriter.save(preview.image)
+        }
+      )
+    }
+    .sheet(item: $attachmentQuickLookPreview) { preview in
+      LibraryQuickLookView(files: [preview.item]) {
+        attachmentQuickLookPreview = nil
+      }
+    }
     .alert("Library Error", isPresented: Binding(
       get: { libraryErrorMessage != nil },
       set: { if !$0 { libraryErrorMessage = nil } }
@@ -208,18 +281,108 @@ struct ChatView: View {
     libraryErrorMessage = error.localizedDescription
   }
 
+  func openAttachment(_ attachment: ChatAttachment) {
+    guard !isLoadingAttachmentPreview else { return }
+    let generation = attachmentPreviewGeneration
+    isLoadingAttachmentPreview = true
+    Task { @MainActor in
+      defer {
+        if attachmentPreviewGeneration == generation {
+          isLoadingAttachmentPreview = false
+        }
+      }
+      let data: Data?
+      if !attachment.data.isEmpty {
+        data = attachment.data
+      } else {
+        data = await chats.attachmentData(attachment.id)
+      }
+      guard attachmentPreviewGeneration == generation else { return }
+      guard let data, !data.isEmpty else {
+        chats.errorMessage = "The attachment '\(attachment.filename)' is unavailable."
+        return
+      }
+
+      if attachment.isImage {
+        let filename = attachment.filename
+        let prepared = await Task.detached(priority: .userInitiated) {
+          () -> (image: UIImage?, materialized: LibraryTempFileSupport.MaterializedFile?) in
+          guard let image = UIImage(data: data) else { return (nil, nil) }
+          let materialized = try? LibraryTempFileSupport.materializeTempFile(
+            directoryPrefix: "byok-chat-preview",
+            filename: filename,
+            data: data
+          )
+          return (image, materialized)
+        }.value
+        guard attachmentPreviewGeneration == generation else {
+          if let directory = prepared.materialized?.directory {
+            LibraryTempFileSupport.cleanupDirectory(directory)
+          }
+          return
+        }
+        if let image = prepared.image {
+          cleanupAttachmentImagePreviewTempDirectory()
+          attachmentImagePreviewTempDirectory = prepared.materialized?.directory
+          let entry = LibraryEntry(
+            id: LibraryEntryID(rawValue: attachment.id),
+            filename: attachment.filename,
+            kind: attachment.kind,
+            mimeType: attachment.mimeType,
+            byteCount: data.count,
+            source: .manual
+          )
+          attachmentImagePreview = ChatAttachmentImagePreview(
+            entry: entry,
+            image: image,
+            shareFileURL: prepared.materialized?.fileURL,
+            tempDirectory: prepared.materialized?.directory
+          )
+          return
+        }
+      }
+
+      attachmentQuickLookPreview = ChatAttachmentQuickLookPreview(
+        item: LibraryQuickLookItem(
+          id: attachment.id,
+          filename: attachment.filename,
+          data: data
+        )
+      )
+    }
+  }
+
+  private func cleanupAttachmentImagePreviewTempDirectory() {
+    if let directory = attachmentImagePreviewTempDirectory {
+      attachmentImagePreviewTempDirectory = nil
+      LibraryTempFileSupport.cleanupDirectory(directory)
+    }
+  }
+
   /// The persisted-conversation surface. Everything here assumes the store
   /// knows this conversation.
   private var existingContent: some View {
     Group {
       if let conversation {
         chatContent(conversation)
-      } else {
-        if chats.hasConversation(conversationID) && !chats.failedToLoad(conversationID) {
-          ProgressView("Loading chat…")
-        } else {
-          ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
+      } else if chats.hasConversation(conversationID) && chats.failedToLoad(conversationID) {
+        ContentUnavailableView {
+          Label("Could Not Load Chat", systemImage: "exclamationmark.bubble")
+        } description: {
+          Text("This conversation could not be loaded from storage.")
+        } actions: {
+          Button("Try Again") {
+            Task { @MainActor in
+              await chats.loadConversation(conversationID)
+            }
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(theme.accentColor)
         }
+      } else if chats.hasConversation(conversationID) {
+        ProgressView("Loading chat…")
+      } else {
+        ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
       }
     }
     .background(theme.backgroundColor)
@@ -269,6 +432,7 @@ struct ChatView: View {
           Button("Chat Settings", systemImage: "slider.horizontal.3") {
             showTargetSettings = true
           }
+          .disabled(conversation == nil)
           Button("Tools", systemImage: "wrench.and.screwdriver") {
             showToolSettings = true
           }
@@ -284,28 +448,18 @@ struct ChatView: View {
               showUsage = true
             }
             Button("Rename", systemImage: "pencil") {
-              renameText = conversation?.title ?? ""
+              renameText = conversation?.title ?? chats.summary(conversationID)?.title ?? ""
               showRename = true
             }
             Button("Export Markdown", systemImage: "square.and.arrow.up") {
               prepareMarkdownExport()
             }
+            .disabled(conversation == nil)
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {
-              let sourceProjectID = project?.id
-              Task { @MainActor in
-                await chats.deleteConversation(conversationID)
-                await projects.reloadFromStorage()
-                await mcp.reloadFromStorage()
-                if pushedFromStack {
-                  // Popping lands on the screen beneath; starting a "next" chat
-                  // here would push and immediately pop it.
-                  dismiss()
-                } else {
-                  onDeleted(sourceProjectID)
-                }
-              }
+              showDeleteConfirmation = true
             }
+            .disabled(isDeleting)
           }
         } label: {
           Image(systemName: "ellipsis")
@@ -323,6 +477,15 @@ struct ChatView: View {
           mode: .existingChat(conversation: conversation, chats: chats)
         )
         .presentationDragIndicator(.visible)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Chat Unavailable", systemImage: "exclamationmark.bubble")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showTargetSettings = false }
+              }
+            }
+        }
       }
     }
     .sheet(isPresented: $showToolSettings) {
@@ -336,6 +499,15 @@ struct ChatView: View {
       if let project {
         ProjectEditorView(project: project, projects: projects, providers: providers, mcp: mcp)
           .presentationDragIndicator(.visible)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Project Unavailable", systemImage: "folder")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showProjectEditorSheet = false }
+              }
+            }
+        }
       }
     }
     .sheet(isPresented: $showUsage) {
@@ -349,6 +521,13 @@ struct ChatView: View {
         original: message.content,
         text: $editText,
         save: {
+          guard let currentConversation = conversation,
+            configurationIssue(currentConversation) == nil,
+            chats.canSend(conversationID)
+          else {
+            chats.errorMessage = "Fix the chat configuration before editing and resending."
+            return
+          }
           followsLatest = true
           showJumpToLatest = false
           chats.editAndResend(
@@ -357,6 +536,7 @@ struct ChatView: View {
             text: editText
           )
           editTarget = nil
+          scrollToBottom()
         },
         cancel: { editTarget = nil }
       )
@@ -365,10 +545,26 @@ struct ChatView: View {
       TextField("Title", text: $renameText)
       Button("Cancel", role: .cancel) {}
       Button("Save") {
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         Task { @MainActor in
-          await chats.renameConversation(conversationID, title: renameText)
+          await chats.renameConversation(conversationID, title: trimmed)
         }
       }
+      .disabled(
+        !ChatViewSupport.canSaveRename(
+          draft: renameText,
+          currentTitle: conversation?.title ?? chats.summary(conversationID)?.title
+        )
+      )
+    }
+    .alert("Delete Chat?", isPresented: $showDeleteConfirmation) {
+      Button("Cancel", role: .cancel) {}
+      Button("Delete", role: .destructive) {
+        deleteCurrentConversation()
+      }
+    } message: {
+      Text("This permanently deletes this conversation and its messages.")
     }
     .alert("Regenerate response?", isPresented: $showRegenerateConfirmation) {
       Button("Cancel", role: .cancel) {}
@@ -379,6 +575,7 @@ struct ChatView: View {
           conversationID: conversationID,
           confirmingUncertainCompletion: true
         )
+        scrollToBottom()
       }
     } message: {
       Text(
@@ -406,6 +603,11 @@ struct ChatView: View {
       activeAttachmentImportCount = 0
       pendingAttachments = []
       photoPickerItems = []
+      attachmentPreviewGeneration &+= 1
+      isLoadingAttachmentPreview = false
+      attachmentImagePreview = nil
+      attachmentQuickLookPreview = nil
+      cleanupAttachmentImagePreviewTempDirectory()
 
       await chats.loadConversation(conversationID)
       guard !Task.isCancelled else { return }
@@ -426,6 +628,27 @@ struct ChatView: View {
     }
   }
 
+  private func deleteCurrentConversation() {
+    guard !isDeleting else { return }
+    isDeleting = true
+    let sourceProjectID = project?.id
+    let targetConversationID = conversationID
+    Task { @MainActor in
+      defer { isDeleting = false }
+      await chats.deleteConversation(targetConversationID)
+      await projects.reloadFromStorage()
+      await mcp.reloadFromStorage()
+      guard !chats.hasConversation(targetConversationID) else { return }
+      if pushedFromStack {
+        // Popping lands on the screen beneath; starting a "next" chat
+        // here would push and immediately pop it.
+        dismiss()
+      } else {
+        onDeleted(sourceProjectID)
+      }
+    }
+  }
+
   // MARK: Connection setup fallback (no configurable staged chat)
 
   private func freshContent(_ projectID: ProjectID?) -> some View {
@@ -442,12 +665,7 @@ struct ChatView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
     .onTapGesture {
-      UIApplication.shared.sendAction(
-        #selector(UIResponder.resignFirstResponder),
-        to: nil,
-        from: nil,
-        for: nil
-      )
+      dismissKeyboard()
     }
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
@@ -478,11 +696,6 @@ struct ChatView: View {
           .labelStyle(.iconOnly)
           .accessibilityLabel("Project settings")
         }
-      } else {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-          Button("New Chat", systemImage: "square.and.pencil", action: onReadyForConversation)
-            .labelStyle(.iconOnly)
-        }
       }
     }
     .sheet(isPresented: $showConnections) {
@@ -505,6 +718,15 @@ struct ChatView: View {
           mcp: mcp
         )
         .presentationDragIndicator(.visible)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Project Unavailable", systemImage: "folder")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showProjectEditorSheet = false }
+              }
+            }
+        }
       }
     }
     .onChange(of: readiness, initial: true) { _, value in

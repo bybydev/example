@@ -6,6 +6,16 @@ enum AnswerContentBlock: Equatable, Sendable {
   case math(String)
 }
 
+struct ParsedAnswerBlock: Equatable, Sendable {
+  let block: AnswerContentBlock
+  let isClosed: Bool
+}
+
+struct MarkdownMathSegment: Equatable, Sendable {
+  let text: String
+  let useLaTeX: Bool
+}
+
 struct AnswerSource: Identifiable, Hashable, Sendable {
   let url: URL
   let title: String?
@@ -23,9 +33,24 @@ struct AnswerSource: Identifiable, Hashable, Sendable {
 }
 
 enum AnswerContentParser {
+  private static let inlineMathRegex = try? NSRegularExpression(
+    pattern: #"(?<![\\$\d])\$(?![$\s])(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$(?![$\d])|\\\((?:\\.|[^\\\n])+\\\)"#
+  )
+  private static let markdownLinkRegex = try? NSRegularExpression(
+    pattern: #"(?<!!)\[([^\]]+)\]\((https?://(?:[^\s()]+|\([^\s()]*\))+)\)"#
+  )
+  private static let orderedListRegex = try? NSRegularExpression(pattern: #"^\d+[.)]\s"#)
+  private static let inlineMarkdownFormattingRegex = try? NSRegularExpression(
+    pattern: #"(?:`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|!?\[[^\]]+\]\([^)]+\))"#
+  )
+
   static func parse(_ text: String) -> [AnswerContentBlock] {
+    parseDetailed(text).map(\.block)
+  }
+
+  static func parseDetailed(_ text: String) -> [ParsedAnswerBlock] {
     let lines = text.components(separatedBy: .newlines)
-    var blocks: [AnswerContentBlock] = []
+    var blocks: [ParsedAnswerBlock] = []
     var markdownLines: [String] = []
     var index = 0
 
@@ -33,7 +58,7 @@ enum AnswerContentParser {
       let value = trimBlankLines(markdownLines.joined(separator: "\n"))
       markdownLines.removeAll(keepingCapacity: true)
       guard !value.isEmpty else { return }
-      blocks.append(.markdown(value))
+      blocks.append(ParsedAnswerBlock(block: .markdown(value), isClosed: true))
     }
 
     while index < lines.count {
@@ -44,19 +69,24 @@ enum AnswerContentParser {
         flushMarkdown()
         index += 1
         var codeLines: [String] = []
+        var isClosed = false
         while index < lines.count {
           let candidate = lines[index]
-          if candidate.trimmingCharacters(in: .whitespaces).hasPrefix(fence.marker) {
+          if isFenceClosing(candidate.trimmingCharacters(in: .whitespaces), for: fence) {
+            isClosed = true
             break
           }
           codeLines.append(candidate)
           index += 1
         }
-        if index < lines.count { index += 1 }
+        if isClosed, index < lines.count { index += 1 }
         blocks.append(
-          .code(
-            language: fence.language,
-            content: trimTrailingNewlines(codeLines.joined(separator: "\n"))
+          ParsedAnswerBlock(
+            block: .code(
+              language: fence.language,
+              content: trimTrailingNewlines(codeLines.joined(separator: "\n"))
+            ),
+            isClosed: isClosed
           )
         )
         continue
@@ -67,17 +97,21 @@ enum AnswerContentParser {
         let terminator = trimmed == "$$" ? "$$" : "\\]"
         index += 1
         var mathLines: [String] = []
+        var isClosed = false
         while index < lines.count {
           let candidate = lines[index]
           if candidate.trimmingCharacters(in: .whitespaces) == terminator {
+            isClosed = true
             break
           }
           mathLines.append(candidate)
           index += 1
         }
-        if index < lines.count { index += 1 }
+        if isClosed, index < lines.count { index += 1 }
         let math = trimBlankLines(mathLines.joined(separator: "\n"))
-        if !math.isEmpty { blocks.append(.math(math)) }
+        if !math.isEmpty {
+          blocks.append(ParsedAnswerBlock(block: .math(math), isClosed: isClosed))
+        }
         continue
       }
 
@@ -86,7 +120,9 @@ enum AnswerContentParser {
         let start = trimmed.index(trimmed.startIndex, offsetBy: 2)
         let end = trimmed.index(trimmed.endIndex, offsetBy: -2)
         let math = String(trimmed[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !math.isEmpty { blocks.append(.math(math)) }
+        if !math.isEmpty {
+          blocks.append(ParsedAnswerBlock(block: .math(math), isClosed: true))
+        }
         index += 1
         continue
       }
@@ -96,7 +132,9 @@ enum AnswerContentParser {
         let start = trimmed.index(trimmed.startIndex, offsetBy: 2)
         let end = trimmed.index(trimmed.endIndex, offsetBy: -2)
         let math = String(trimmed[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !math.isEmpty { blocks.append(.math(math)) }
+        if !math.isEmpty {
+          blocks.append(ParsedAnswerBlock(block: .math(math), isClosed: true))
+        }
         index += 1
         continue
       }
@@ -109,7 +147,7 @@ enum AnswerContentParser {
     return blocks
   }
 
-  static func sources(in blocks: [AnswerContentBlock], limit: Int = 8) -> [AnswerSource] {
+  static func sources(in blocks: [AnswerContentBlock], limit: Int = 50) -> [AnswerSource] {
     var values: [AnswerSource] = []
     var seen = Set<String>()
 
@@ -127,8 +165,61 @@ enum AnswerContentParser {
   }
 
   static func containsInlineMath(_ text: String) -> Bool {
-    let pattern = #"(?<!\\)\$(?!\s)(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$|\\\((?:\\.|[^\\\n])+\\\)"#
-    return text.range(of: pattern, options: .regularExpression) != nil
+    guard text.contains("$") || text.contains("\\(") else { return false }
+    guard let inlineMathRegex else { return false }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    return inlineMathRegex.firstMatch(in: text, range: range) != nil
+  }
+
+  /// Splits a markdown chunk by blank-line paragraphs so plain inline-math
+  /// paragraphs can render with LaTeXSwiftUI without disabling math elsewhere
+  /// when a heading/list exists, and without breaking bold/code/links inside
+  /// rich paragraphs.
+  static func splitMarkdownForInlineMath(_ markdown: String) -> [MarkdownMathSegment] {
+    guard containsInlineMath(markdown) else {
+      return [MarkdownMathSegment(text: markdown, useLaTeX: false)]
+    }
+
+    let lines = markdown.components(separatedBy: .newlines)
+    var chunks: [String] = []
+    var current: [String] = []
+
+    for line in lines {
+      if line.trimmingCharacters(in: .whitespaces).isEmpty {
+        if !current.isEmpty {
+          chunks.append(current.joined(separator: "\n"))
+          current.removeAll(keepingCapacity: true)
+        }
+      } else {
+        current.append(line)
+      }
+    }
+    if !current.isEmpty {
+      chunks.append(current.joined(separator: "\n"))
+    }
+
+    var segments: [MarkdownMathSegment] = []
+    var pendingMarkdown: [String] = []
+
+    func flushPendingMarkdown() {
+      guard !pendingMarkdown.isEmpty else { return }
+      segments.append(
+        MarkdownMathSegment(text: pendingMarkdown.joined(separator: "\n\n"), useLaTeX: false)
+      )
+      pendingMarkdown.removeAll(keepingCapacity: true)
+    }
+
+    for chunk in chunks {
+      if shouldRenderChunkAsInlineMath(chunk) {
+        flushPendingMarkdown()
+        segments.append(MarkdownMathSegment(text: chunk, useLaTeX: true))
+      } else {
+        pendingMarkdown.append(chunk)
+      }
+    }
+    flushPendingMarkdown()
+
+    return segments.isEmpty ? [MarkdownMathSegment(text: markdown, useLaTeX: false)] : segments
   }
 
   static func isMermaidLanguage(_ language: String?) -> Bool {
@@ -139,13 +230,51 @@ enum AnswerContentParser {
     }
   }
 
+  /// True only for HTTP/HTTPS URLs with a non-empty host, which is required by
+  /// `SFSafariViewController` to avoid throwing `NSInvalidArgumentException`.
+  static func isValidBrowsableURL(_ url: URL) -> Bool {
+    guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+      return false
+    }
+    guard let host = url.host, !host.isEmpty else { return false }
+    return true
+  }
+
+  private static func shouldRenderChunkAsInlineMath(_ chunk: String) -> Bool {
+    guard containsInlineMath(chunk) else { return false }
+    for line in chunk.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if trimmed.hasPrefix("#")
+        || trimmed.hasPrefix(">")
+        || trimmed.hasPrefix("- ")
+        || trimmed.hasPrefix("* ")
+        || trimmed.hasPrefix("+ ")
+        || trimmed.hasPrefix("|")
+      {
+        return false
+      }
+      if let orderedListRegex {
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        if orderedListRegex.firstMatch(in: trimmed, range: range) != nil {
+          return false
+        }
+      }
+    }
+    if let inlineMarkdownFormattingRegex {
+      let range = NSRange(chunk.startIndex..<chunk.endIndex, in: chunk)
+      if inlineMarkdownFormattingRegex.firstMatch(in: chunk, range: range) != nil {
+        return false
+      }
+    }
+    return true
+  }
+
   private static func markdownSources(_ markdown: String) -> [AnswerSource] {
     var sources: [AnswerSource] = []
     let fullRange = NSRange(markdown.startIndex..<markdown.endIndex, in: markdown)
-    let markdownLinkPattern = #"(?<!!)\[([^\]]+)\]\((https?://[^\s)]+)\)"#
 
-    if let expression = try? NSRegularExpression(pattern: markdownLinkPattern) {
-      for match in expression.matches(in: markdown, range: fullRange) {
+    if let markdownLinkRegex {
+      for match in markdownLinkRegex.matches(in: markdown, range: fullRange) {
         guard
           match.numberOfRanges >= 3,
           let titleRange = Range(match.range(at: 1), in: markdown),
@@ -156,12 +285,15 @@ enum AnswerContentParser {
       }
     }
 
-    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    guard markdown.contains("."),
+      let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     else { return sources }
 
     let linkedKeys = Set(sources.map { normalizedURLKey($0.url) })
     for match in detector.matches(in: markdown, range: fullRange) {
-      guard let url = match.url, isHTTPURL(url) else { continue }
+      guard let rawURL = match.url,
+        let url = sanitizedURL(rawURL.absoluteString) ?? (isValidBrowsableURL(rawURL) ? rawURL : nil)
+      else { continue }
       let key = normalizedURLKey(url)
       guard !linkedKeys.contains(key) else { continue }
       sources.append(AnswerSource(url: url, title: nil))
@@ -169,32 +301,58 @@ enum AnswerContentParser {
     return sources
   }
 
-  private static func fenceOpening(_ trimmedLine: String) -> (marker: String, language: String?)? {
-    let marker: String
-    if trimmedLine.hasPrefix("```") {
-      marker = "```"
-    } else if trimmedLine.hasPrefix("~~~") {
-      marker = "~~~"
-    } else {
-      return nil
-    }
+  private struct FenceOpening {
+    let character: Character
+    let length: Int
+    let language: String?
+  }
 
-    let rawLanguage = String(trimmedLine.dropFirst(marker.count))
+  private static func fenceOpening(_ trimmedLine: String) -> FenceOpening? {
+    guard let first = trimmedLine.first, first == "`" || first == "~" else { return nil }
+    let fenceLength = trimmedLine.prefix(while: { $0 == first }).count
+    guard fenceLength >= 3 else { return nil }
+
+    let remainder = String(trimmedLine.dropFirst(fenceLength))
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    let language = rawLanguage.split(whereSeparator: \.isWhitespace).first.map(String.init)
-    return (marker, language)
+    // Per CommonMark, backtick fence info strings cannot contain backticks.
+    if first == "`", remainder.contains("`") { return nil }
+
+    let language = remainder.split(whereSeparator: \.isWhitespace).first.map(String.init)
+    return FenceOpening(character: first, length: fenceLength, language: language)
+  }
+
+  private static func isFenceClosing(_ trimmedLine: String, for opening: FenceOpening) -> Bool {
+    guard trimmedLine.count >= opening.length else { return false }
+    return trimmedLine.allSatisfy { $0 == opening.character }
   }
 
   private static func sanitizedURL(_ value: String) -> URL? {
-    let punctuation = CharacterSet(charactersIn: ".,;:!?)]}")
-    let trimmed = value.trimmingCharacters(in: punctuation)
-    guard let url = URL(string: trimmed), isHTTPURL(url) else { return nil }
+    var trimmed = value
+    let trailingSimplePunctuation: Set<Character> = [".", ",", ";", ":", "!", "?"]
+    while let last = trimmed.last {
+      if trailingSimplePunctuation.contains(last) {
+        trimmed.removeLast()
+      } else if last == ")" {
+        let openCount = trimmed.filter { $0 == "(" }.count
+        let closeCount = trimmed.filter { $0 == ")" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else if last == "]" {
+        let openCount = trimmed.filter { $0 == "[" }.count
+        let closeCount = trimmed.filter { $0 == "]" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else if last == "}" {
+        let openCount = trimmed.filter { $0 == "{" }.count
+        let closeCount = trimmed.filter { $0 == "}" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else {
+        break
+      }
+    }
+    guard let url = URL(string: trimmed), isValidBrowsableURL(url) else { return nil }
     return url
-  }
-
-  private static func isHTTPURL(_ url: URL) -> Bool {
-    guard let scheme = url.scheme?.lowercased() else { return false }
-    return scheme == "http" || scheme == "https"
   }
 
   private static func normalizedURLKey(_ url: URL) -> String {

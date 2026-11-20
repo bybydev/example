@@ -11,21 +11,36 @@ struct MessageInfoView: View {
 
   private var billing: ChatBillingSnapshot { ChatBilling.snapshot(for: message) }
 
+  private var hasModelMetadata: Bool {
+    message.providerID != nil
+      || !(accountLabel?.isEmpty ?? true)
+      || message.modelID != nil
+  }
+
+  private var firstPricingSnapshot: ModelPricingSnapshot? {
+    billing.requests.compactMap(\.pricing).first
+  }
+
   var body: some View {
     NavigationStack {
       List {
-        Section("Model") {
-          if let providerID = message.providerID {
-            LabeledContent("Provider", value: usageDisplayName(providerID.rawValue))
+        if hasModelMetadata {
+          Section {
+            if let providerID = message.providerID {
+              LabeledContent("Provider", value: usageDisplayName(providerID.rawValue))
+            }
+            if let accountLabel, !accountLabel.isEmpty {
+              LabeledContent("Account", value: accountLabel)
+            }
+            if let modelID = message.modelID {
+              LabeledContent("Model", value: modelID.rawValue)
+            }
+          } header: {
+            Text("Model")
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
-          if let accountLabel, !accountLabel.isEmpty {
-            LabeledContent("Account", value: accountLabel)
-          }
-          if let modelID = message.modelID {
-            LabeledContent("Model", value: modelID.rawValue)
-          }
+          .listRowBackground(theme.surfaceColor)
         }
-        .listRowBackground(theme.surfaceColor)
 
         if message.role == .assistant {
           let usage = message.usage
@@ -54,12 +69,12 @@ struct MessageInfoView: View {
           .listRowBackground(theme.surfaceColor)
         }
 
-        if billing.requests.contains(where: { $0.pricing != nil }) || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
+        if firstPricingSnapshot != nil || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
           Section {
             if !billing.requests.isEmpty {
               LabeledContent("Saved request snapshots", value: billing.requests.count.formatted())
             }
-            if let snapshot = billing.requests.first?.pricing {
+            if let snapshot = firstPricingSnapshot {
               LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
               if let version = snapshot.version { LabeledContent("Version", value: version) }
               if let verified = snapshot.verifiedAt { LabeledContent("Verified", value: verified) }
@@ -83,7 +98,17 @@ struct MessageInfoView: View {
           .listRowBackground(theme.surfaceColor)
         }
 
-        Section("Request") {
+        Section {
+          if message.status == .failed {
+            LabeledContent("Status", value: "Failed")
+            if let errorCode = message.errorCode, !errorCode.isEmpty {
+              LabeledContent("Error code", value: errorCode)
+            }
+          } else if message.status == .cancelled {
+            LabeledContent("Status", value: "Stopped")
+          } else if message.status == .interrupted {
+            LabeledContent("Status", value: "Interrupted")
+          }
           if billing.modelRequestCount > 0 {
             LabeledContent("Model requests", value: String(billing.modelRequestCount))
           }
@@ -97,6 +122,9 @@ struct MessageInfoView: View {
             Text(message.updatedAt, format: .dateTime.year().month().day().hour().minute().second())
               .multilineTextAlignment(.trailing)
           }
+        } header: {
+          Text("Request")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
         .listRowBackground(theme.surfaceColor)
       }
