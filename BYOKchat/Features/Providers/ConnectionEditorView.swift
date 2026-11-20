@@ -8,7 +8,7 @@ import SwiftUI
 /// paths once at create. Nothing is persisted in create mode until Save.
 struct ConnectionEditorView: View {
   /// What a presenting surface wants fixed or focused.
-  enum FocusRequest: Equatable {
+  enum FocusRequest: Hashable {
     case apiKey
     case model
   }
@@ -24,10 +24,10 @@ struct ConnectionEditorView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
+  @FocusState private var focusedField: FocusRequest?
 
   // Create-mode state
   @State private var selectedKind: ProviderKind
-  @State private var customName = ""
   @State private var customAuth: AuthenticationChoice = .bearer
   @State private var customHeaderName = "X-API-Key"
   @State private var customChatPath = "/chat/completions"
@@ -36,6 +36,7 @@ struct ConnectionEditorView: View {
   // Shared field state
   @State private var label = ""
   @State private var credential = ""
+  @State private var isDraftCredentialVisible = false
   @State private var baseURL = ""
   @State private var headersText = ""
   @State private var appTitle = ""
@@ -61,6 +62,7 @@ struct ConnectionEditorView: View {
   /// False until the user edits the name field; while false, the name
   /// pre-fills/updates with the provider-named suggestion.
   @State private var didEditName = false
+  @State private var isApplyingSuggestedLabel = false
 
   init(
     model: ProviderManagementModel,
@@ -85,8 +87,9 @@ struct ConnectionEditorView: View {
       _httpReferer = State(initialValue: existing.metadata["httpReferer"] ?? "")
     } else {
       let initial = initialKind ?? .anthropic
-      _baseURL = State(
-        initialValue: initial.isLocalServer ? "" : (initial.defaultEndpoint?.absoluteString ?? ""))
+      // Built-in cloud providers inherit `kind.defaultEndpoint` when left empty
+      // so we don't persist a redundant `baseURLOverride`.
+      _baseURL = State(initialValue: "")
       _selectedModelID = State(initialValue: initial.seedModels.first?.id)
     }
   }
@@ -116,7 +119,7 @@ struct ConnectionEditorView: View {
     let modelsPath = customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines)
     return kind.definition(
       providerID: kind.defaultProviderID ?? "custom",
-      displayName: customName,
+      displayName: label.trimmingCharacters(in: .whitespacesAndNewlines),
       baseURLOverride: endpoint,
       chatPath: chatPath,
       modelsPath: modelsPath.isEmpty ? nil : modelsPath,
@@ -124,6 +127,10 @@ struct ConnectionEditorView: View {
       seedModelIDs: []
     )
     .withKind(kind)
+  }
+
+  private var trimmedCredential: String {
+    credential.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private var showsCredentialField: Bool {
@@ -141,9 +148,13 @@ struct ConnectionEditorView: View {
   private var resolvedDraftEndpoint: URL? {
     let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-      return isLocalServer && isCreate ? nil : kind.defaultEndpoint
+      return ((isLocalServer && isCreate) || isCustom) ? nil : kind.defaultEndpoint
     }
-    guard let parsed = URL(string: trimmed) else { return nil }
+    guard let parsed = URL(string: trimmed),
+      let scheme = parsed.scheme?.lowercased(),
+      scheme == "https" || scheme == "http",
+      let host = parsed.host, !host.isEmpty
+    else { return nil }
     return kind.normalizedBaseURL(parsed)
   }
 
@@ -159,10 +170,12 @@ struct ConnectionEditorView: View {
 
   private var canSave: Bool {
     if isCustom && isCreate {
-      guard !customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-        resolvedDraftEndpoint != nil
+      guard resolvedDraftEndpoint != nil,
+        !customChatPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       else { return false }
-      if customAuth == .header, customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if customAuth == .header,
+        customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
         return false
       }
     } else if isCustom {
@@ -171,11 +184,9 @@ struct ConnectionEditorView: View {
     if isLocalServer {
       guard resolvedDraftEndpoint != nil else { return false }
     }
-    if requiresCredential && isCreate, credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if requiresCredential && isCreate, trimmedCredential.isEmpty {
       return false
     }
-    // Name: the field is pre-filled, so it is normally non-empty. Custom
-    // providers must have a typed server name to suggest from.
     if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       suggestedName.isEmpty
     {
@@ -196,11 +207,10 @@ struct ConnectionEditorView: View {
         nameSection
         if isLocalServer {
           localServerSection
-        }
-        credentialSection
-        if isCustom {
+        } else if isCustom {
           customWireSection
         }
+        credentialSection
         modelSection
         advancedSection
       } else {
@@ -224,6 +234,7 @@ struct ConnectionEditorView: View {
     .background(AppThemeBackground(theme: theme))
     .navigationTitle(isCreate ? "Add Connection" : "Edit Connection")
     .navigationBarTitleDisplayMode(.inline)
+    .interactiveDismissDisabled(isSaving)
     .toolbar {
       if isCreate {
         ToolbarItem(placement: .cancellationAction) {
@@ -260,24 +271,13 @@ struct ConnectionEditorView: View {
       if !isDirty, baseURL.isEmpty, let existing {
         baseURL = existing.baseURLOverride?.absoluteString ?? ""
       }
-      // Pre-fill the name with the suggestion. The field holds the real
-      // value from here on; the onChange handlers re-track only if the user
-      // clears it back to empty.
+      // Pre-fill the name with the suggestion without marking the form dirty.
       if isCreate, !didEditName {
-        let suggestion = suggestedName
-        if !suggestion.isEmpty {
-          label = suggestion
-        }
+        applySuggestedLabel()
       }
-    }
-    .onChange(of: selectedKind) { _, _ in
-      // Provider changed while the name still tracks the suggestion.
-      guard isCreate, !didEditName else { return }
-      label = suggestedName
-    }
-    .onChange(of: customName) { _, _ in
-      guard isCreate, !didEditName, kind == .openAICompatible else { return }
-      label = suggestedName
+      if let focus {
+        focusedField = focus
+      }
     }
     .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
     .onDisappear { cancelDiscovery() }
@@ -302,7 +302,11 @@ struct ConnectionEditorView: View {
   }
 
   private var providerTitle: String {
-    if isCustom { return existing?.label ?? "OpenAI-compatible" }
+    if isCustom {
+      let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty { return trimmed }
+      return existing?.label ?? "OpenAI-compatible"
+    }
     return kind.displayName
   }
 
@@ -323,16 +327,22 @@ struct ConnectionEditorView: View {
       }
       .onChange(of: selectedKind) { _, newValue in
         invalidateDiscovery()
-        baseURL = newValue.isLocalServer ? "" : (newValue.defaultEndpoint?.absoluteString ?? "")
+        baseURL = ""
         credential = ""
+        isDraftCredentialVisible = false
         clearCredential = false
         headersText = ""
         appTitle = ""
         httpReferer = ""
+        customAuth = .bearer
+        customHeaderName = "X-API-Key"
+        customChatPath = "/chat/completions"
+        customModelsPath = "/models"
         manualModelID = ""
         manualModels = []
+        removedManualModelIDs = []
         selectedModelID = newValue.seedModels.first?.id
-        if !didEditName { label = suggestedName }
+        if !didEditName { applySuggestedLabel() }
         isDirty = true
       }
     } header: {
@@ -458,10 +468,6 @@ struct ConnectionEditorView: View {
 
   private var customWireSection: some View {
     Section {
-      TextField("Display name", text: $customName)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .onChange(of: customName) { _, _ in isDirty = true }
       TextField("https://example.com/v1", text: $baseURL)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
@@ -535,6 +541,7 @@ struct ConnectionEditorView: View {
               replaceCredential = true
               clearCredential = false
               revealedCredential = nil
+              isDraftCredentialVisible = false
             }
             .font(.system(size: 14, weight: .semibold))
 
@@ -586,30 +593,34 @@ struct ConnectionEditorView: View {
       !requiresCredential
       ? (hasStoredCredential && replaceCredential ? "New API key (optional)" : "Optional API key")
       : (hasStoredCredential ? "New API key" : "Paste your API key")
-    // Reveal-while-typing: eye toggles between SecureField and TextField for
-    // the credential being entered (create or replace).
-    if isCredentialVisible {
-      TextField(placeholder, text: $credential)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .onChange(of: credential) { _, newValue in
-          if !newValue.isEmpty { clearCredential = false }
-          isDirty = true
+    HStack(spacing: 8) {
+      Group {
+        if isDraftCredentialVisible {
+          TextField(placeholder, text: $credential)
+        } else {
+          SecureField(placeholder, text: $credential)
         }
-    } else {
-      SecureField(placeholder, text: $credential)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .onChange(of: credential) { _, newValue in
-          if !newValue.isEmpty { clearCredential = false }
-          isDirty = true
-        }
-    }
-  }
+      }
+      .focused($focusedField, equals: .apiKey)
+      .textInputAutocapitalization(.never)
+      .autocorrectionDisabled()
+      .onChange(of: credential) { _, newValue in
+        if !newValue.isEmpty { clearCredential = false }
+        isDirty = true
+      }
 
-  private var isCredentialVisible: Bool {
-    if isCreate || replaceCredential { return revealedCredential != nil }
-    return false
+      if !credential.isEmpty {
+        Button {
+          isDraftCredentialVisible.toggle()
+        } label: {
+          Image(systemName: isDraftCredentialVisible ? "eye.slash" : "eye")
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isDraftCredentialVisible ? "Hide API key" : "Show API key")
+      }
+    }
   }
 
   private var maskedSummary: String {
@@ -634,7 +645,7 @@ struct ConnectionEditorView: View {
     Section {
       if draftDefinition.modelsPath != nil {
         Button {
-          fetchModels()
+          fetchModels(recordConnectionTest: true)
         } label: {
           HStack {
             Label("Fetch Models", systemImage: "arrow.clockwise")
@@ -650,12 +661,18 @@ struct ConnectionEditorView: View {
             || resolvedDraftEndpoint == nil
             || (requiresCredential && !keyAvailableForDiscovery)
         )
+        if !showsServerSection, case .connected = connectionTestState {
+          connectionTestStatusRow
+        }
       }
 
       modelSelectionRow
       TextField("Or enter a model ID", text: $manualModelID)
+        .focused($focusedField, equals: .model)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .submitLabel(.done)
+        .onSubmit { selectManualModel() }
         .onChange(of: manualModelID) { _, _ in isDirty = true }
       if !manualModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         Button("Use Model ID") { selectManualModel() }
@@ -676,7 +693,7 @@ struct ConnectionEditorView: View {
   }
 
   private var keyAvailableForDiscovery: Bool {
-    !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasStoredCredential
+    !trimmedCredential.isEmpty || hasStoredCredential
   }
 
   private var modelSelection: Binding<ModelID?> {
@@ -831,12 +848,12 @@ struct ConnectionEditorView: View {
             .background(
               Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             .onChange(of: headersText) { _, _ in isDirty = true }
+          Text("Enter one header per line as Name: Value — for example, X-API-Version: 2024-01-01. Both name and value are required; blank lines are ignored.")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
         .padding(.vertical, 6)
       }
-    } footer: {
-      Text("Enter one header per line as Name: Value — for example, X-API-Version: 2024-01-01. Both name and value are required; blank lines are ignored.")
-        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -844,37 +861,49 @@ struct ConnectionEditorView: View {
   /// Connection name. The field is PRE-FILLED with the suggested name — the
   /// provider display name, numbered on collision ("Anthropic", "Anthropic 2")
   /// — so the user always sees the name that will be saved. Editing is free;
-  /// programmatic tracking continues until they do (flag set by the user's
-  /// own edits via the text-change binding below). What's in the field is
-  /// what's saved: no empty-means-resolve second path.
+  /// clearing the field back to empty re-enables provider-switch tracking.
   private var nameSection: some View {
     Section {
-      TextField(suggestedName, text: $label)
-        .textInputAutocapitalization(.never)
+      TextField(isCustom ? "Server name" : suggestedName, text: $label)
+        .textInputAutocapitalization(.words)
         .autocorrectionDisabled()
-        .onChange(of: label) { oldValue, newValue in
+        .onChange(of: label) { _, newValue in
+          if isApplyingSuggestedLabel {
+            isApplyingSuggestedLabel = false
+            return
+          }
           isDirty = true
-          // Only a human keystroke marks the name as user-owned; the
-          // tracking writes below go through the same onChange, so compare
-          // against the current suggestion to distinguish them.
-          if newValue != suggestedName || (oldValue == suggestedName && newValue.isEmpty) {
-            didEditName = true
+          if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            didEditName = false
+          } else {
+            didEditName = (newValue != suggestedName)
           }
         }
     } header: {
       Text("Name")
     } footer: {
-      Text("Shown in chats and pickers. Defaults to the provider name.")
-        .foregroundStyle(theme.secondaryForegroundColor)
+      Text(
+        isCustom
+          ? "Shown in chats and pickers."
+          : "Shown in chats and pickers. Defaults to the provider name."
+      )
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
-  /// The provider-named suggestion with collision handling. For custom
-  /// providers the typed server name is the base.
+  private func applySuggestedLabel() {
+    let target = suggestedName
+    guard label != target else { return }
+    isApplyingSuggestedLabel = true
+    label = target
+  }
+
+  /// The provider-named suggestion with collision handling. Custom servers
+  /// require the user to name the connection explicitly.
   private var suggestedName: String {
     if isCreate {
-      return model.autoName(for: kind, customBase: customName)
+      return model.autoName(for: kind)
     }
     return existing?.label ?? ""
   }
@@ -1008,7 +1037,7 @@ struct ConnectionEditorView: View {
     let resolved = ResolvedProviderAccount(
       kind: kind, id: existing?.id ?? "", providerID: existing?.providerID ?? definition.id,
       label: previewLabel,
-      apiKey: credential.isEmpty ? nil : credential,
+      apiKey: trimmedCredential.isEmpty ? nil : trimmedCredential,
       baseURLOverride: endpoint, additionalHeaders: headers, metadata: draftMetadata,
       chatCompletionsPath: existing?.chatCompletionsPath
         ?? (isCustom ? customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) : nil),
@@ -1057,13 +1086,7 @@ struct ConnectionEditorView: View {
   }
 
   private func cancel() {
-    if !isCreate && isDirty {
-      // Unsaved edits: dismiss without confirmation ceremony but keep state.
-      dismiss()
-      return
-    }
     dismiss()
-    onFinished?()
   }
 
   private func save() {
@@ -1080,6 +1103,16 @@ struct ConnectionEditorView: View {
     let resolvedModelID = typedModel.isEmpty ? selectedModelID : ModelID(rawValue: typedModel)
     let preview = discoveredModels
     let manualIDs = manualModels.map { $0.id.rawValue } + (typedModel.isEmpty ? [] : [typedModel])
+    let sanitizedCredential = trimmedCredential
+    let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let persistedBaseURL: String =
+      if !isCustom && !isLocalServer,
+        trimmedBaseURL == kind.defaultEndpoint?.absoluteString
+      {
+        ""
+      } else {
+        trimmedBaseURL
+      }
     // Capture values before suspension; invalidate the outstanding preview.
     discoveryTask?.cancel()
     discoveryID = nil
@@ -1089,7 +1122,7 @@ struct ConnectionEditorView: View {
     // whatever is here (or a fallback recompute if somehow cleared) saves.
     let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
     let finalLabel = trimmedLabel.isEmpty
-      ? model.autoName(for: kind, customBase: customName)
+      ? model.autoName(for: kind)
       : trimmedLabel
     guard !finalLabel.isEmpty else { return }
 
@@ -1101,9 +1134,9 @@ struct ConnectionEditorView: View {
         guard await model.updateAccount(
           accountID: existing.id,
           label: finalLabel,
-          newCredential: credential.isEmpty ? nil : credential,
-          clearCredential: clearCredential && credential.isEmpty,
-          baseURLString: baseURL,
+          newCredential: sanitizedCredential.isEmpty ? nil : sanitizedCredential,
+          clearCredential: clearCredential && sanitizedCredential.isEmpty,
+          baseURLString: persistedBaseURL,
           headers: parsedHeaders,
           metadata: metadata,
           defaultModelID: resolvedModelID,
@@ -1116,8 +1149,8 @@ struct ConnectionEditorView: View {
         let created = await model.createConnection(
           kind: kind,
           label: finalLabel,
-          credential: credential,
-          baseURL: baseURL,
+          credential: sanitizedCredential,
+          baseURL: persistedBaseURL,
           defaultModel: resolvedModelID?.rawValue ?? "",
           headers: parsedHeaders,
           metadata: metadata,

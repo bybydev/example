@@ -84,7 +84,7 @@ struct ProvidersView: View {
     .alert(
       "Connection Error",
       isPresented: Binding(
-        get: { model.errorMessage != nil },
+        get: { !showAddConnection && model.errorMessage != nil },
         set: { if !$0 { model.errorMessage = nil } }
       )
     ) {
@@ -140,8 +140,9 @@ struct ProvidersView: View {
   }
 
   private func finishConnectionSetup() {
-    guard onConnectionReady != nil else { return }
+    guard let onConnectionReady else { return }
     showAddConnection = false
+    onConnectionReady()
     Task { @MainActor in
       await Task.yield()
       dismiss()
