@@ -312,7 +312,12 @@ public enum ModelCapabilityResolver {
     }
     switch kind {
     case .openai:
-      if id.hasPrefix("gpt-6") { return efforts([.low, .medium, .high, .xhigh, .max]) }
+      if id.hasPrefix("gpt-6") {
+        if id.contains("terra") || id.contains("luna") {
+          return efforts([.low, .medium, .high, .xhigh, .max], off: "none")
+        }
+        return efforts([.low, .medium, .high, .xhigh, .max])
+      }
       if id.hasPrefix("gpt-5.6") { return efforts([.low, .medium, .high, .xhigh, .max], off: "none") }
       if id.hasPrefix("gpt-5.5") || id.hasPrefix("gpt-5.4") || id.hasPrefix("gpt-5.2") {
         if id.contains("pro") { return efforts([.medium, .high, .xhigh], defaultEffort: nil) }
@@ -328,7 +333,9 @@ public enum ModelCapabilityResolver {
       if id.hasPrefix("o1-mini") || id.hasPrefix("o1-preview") || id.hasPrefix("o1-pro") {
         return .init(kind: .fixed, source: .adapter)
       }
-      if id.hasPrefix("o1") || id.hasPrefix("o3") || id.hasPrefix("o4") { return efforts([.low, .medium, .high]) }
+      if id.hasPrefix("o1") || id.hasPrefix("o3") || id.hasPrefix("o4") || id.hasPrefix("codex-") {
+        return efforts([.low, .medium, .high])
+      }
       if id.hasPrefix("gpt-4") || id.hasPrefix("chatgpt-4") { return .init(kind: .unsupported, source: .adapter) }
     case .deepSeek:
       if id.hasPrefix("deepseek-v4") { return efforts([.high, .max], defaultEffort: .high, off: "disabled") }

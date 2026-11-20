@@ -190,6 +190,33 @@ struct ModelCapabilityPolicyTests {
     #expect(haikuOff?.enabled == false)
     #expect(haikuOff?.effort == nil)
     #expect(haiku55.normalize(.init(enabled: true, effort: .xhigh))?.effort == .xhigh)
+
+    let astra62 = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "gpt-6.2-astra")
+    #expect(
+      astra62.choices
+        == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh), .effort(.max)]
+    )
+    #expect(astra62.normalize(.init(enabled: false)) == nil)
+
+    let sol62 = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "gpt-6.2-sol")
+    #expect(!sol62.choices.contains(.off))
+    #expect(sol62.efforts == [.low, .medium, .high, .xhigh, .max])
+
+    let terra61 = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "gpt-6.1-terra")
+    #expect(
+      terra61.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh), .effort(.max)]
+    )
+    #expect(terra61.offWireValue == "none")
+    #expect(terra61.normalize(.init(enabled: false))?.enabled == false)
+
+    let luna6 = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "gpt-6-luna")
+    #expect(luna6.choices.contains(.off))
+    #expect(luna6.offWireValue == "none")
+
+    let codexMini = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: "codex-mini-latest")
+    #expect(codexMini.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(codexMini.normalize(.init(enabled: false)) == nil)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

@@ -24,13 +24,30 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
   }
 
   public func testConnection(account: ResolvedProviderAccount, model: ModelID) async throws {
+    let control = ModelCapabilityResolver.reasoningControl(kind: .openai, modelID: model)
+    let probeReasoning: ReasoningOptions?
+    let probeMaxTokens: Int
+    if control.allowsOff {
+      probeReasoning = .init(enabled: false)
+      probeMaxTokens = 256
+    } else if control.kind == .efforts, let lowest = control.efforts.first {
+      probeReasoning = .init(enabled: true, effort: lowest, excludeFromResponse: true)
+      probeMaxTokens = 1_024
+    } else if control.kind == .fixed {
+      probeReasoning = nil
+      probeMaxTokens = 1_024
+    } else {
+      probeReasoning = .init(enabled: false)
+      probeMaxTokens = 256
+    }
+
     _ = try await generate(
       request: ProviderRequest(
         model: model,
         messages: [.init(role: .user, content: "Return exactly OK.")],
         options: .init(
-          maxOutputTokens: 256,
-          reasoning: .init(enabled: false)
+          maxOutputTokens: probeMaxTokens,
+          reasoning: probeReasoning
         )
       ),
       account: account
@@ -167,7 +184,7 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
     let value = modelID.lowercased()
     let excludedFragments = [
       "realtime", "transcribe", "tts", "embedding", "moderation", "image", "audio",
-      "whisper", "dall-e", "sora",
+      "whisper", "dall-e", "sora", "instruct", "search-preview", "search-api",
     ]
     if excludedFragments.contains(where: { fragment in value.contains(fragment) }) { return false }
 
@@ -294,9 +311,11 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       "input": .array(input),
       "store": .bool(false),
       "stream": .bool(streaming),
-      // Required to replay reasoning items when BYOKchat manages history locally.
-      "include": .array([.string("reasoning.encrypted_content")]),
     ]
+    if modelSupportsReasoning(request.model.rawValue) {
+      // Required to replay reasoning items when BYOKchat manages history locally.
+      body["include"] = .array([.string("reasoning.encrypted_content")])
+    }
 
     if !request.tools.isEmpty {
       body["tools"] = .array(request.tools.map(toolValue))
@@ -337,16 +356,26 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
 
     var values: [JSONValue] = []
     var contentParts: [JSONValue] = []
+    let textPartType = message.role == .assistant ? "output_text" : "input_text"
     if !message.content.isEmpty {
       contentParts.append(
         .object([
-          "type": .string("input_text"),
+          "type": .string(textPartType),
           "text": .string(message.content),
         ])
       )
     }
 
     for attachment in message.attachments ?? [] {
+      if message.role == .assistant {
+        if let text = attachment.utf8Text {
+          contentParts.append(.object([
+            "type": .string("output_text"),
+            "text": .string("File: \(attachment.filename)\n\n\(text)"),
+          ]))
+        }
+        continue
+      }
       if attachment.isImage {
         contentParts.append(
           .object([
@@ -361,14 +390,15 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
           "text": .string("File: \(attachment.filename)\n\n\(text)"),
         ]))
       } else {
-        contentParts.append(
-          .object([
-            "type": .string("input_file"),
-            "filename": .string(attachment.filename),
-            "file_data": .string(attachment.dataURL),
-            "detail": .string("auto"),
-          ])
-        )
+        var fileObject: [String: JSONValue] = [
+          "type": .string("input_file"),
+          "filename": .string(attachment.filename),
+          "file_data": .string(attachment.dataURL),
+        ]
+        if attachment.mimeType.lowercased() == "application/pdf" {
+          fileObject["detail"] = .string("auto")
+        }
+        contentParts.append(.object(fileObject))
       }
     }
 
@@ -429,13 +459,13 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
   }
 
   private func supportsSamplingControls(model: String, reasoning: JSONValue?) -> Bool {
-    let value = model.lowercased()
-    // Astra does not accept temperature/top_p at any reasoning effort.
-    if value.hasPrefix("gpt-6") { return false }
     guard modelSupportsReasoning(model) else { return true }
 
-    // GPT-5-family sampling controls are valid only when reasoning is explicitly
-    // disabled with effort `none`. O-series models do not expose that mode.
+    // Reasoning models that support effort `none` (such as GPT-5.1/5.2/5.4/5.5/5.6,
+    // GPT-6.1 Terra, and GPT-6 Luna) accept sampling controls only when reasoning
+    // is explicitly disabled with effort `none`. Models that reject `none`
+    // (GPT-6 Astra/Sol, GPT-6.1/6.2 Sol, GPT-6.2 Astra, O-series, Codex) never
+    // reach `effort == "none"`.
     guard case .object(let object)? = reasoning,
       case .string(let effort)? = object["effort"]
     else {
@@ -480,11 +510,20 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
           }
         }
       case "reasoning":
+        var summaryParts: [String] = []
         for part in value["summary"]?.arrayValue ?? [] {
           guard case .object(let summary) = part else { continue }
-          if summary["type"]?.stringValue == "summary_text" {
-            reasoning += summary["text"]?.stringValue ?? ""
+          if summary["type"]?.stringValue == "summary_text",
+            let summaryText = summary["text"]?.stringValue,
+            !summaryText.isEmpty
+          {
+            summaryParts.append(summaryText)
           }
+        }
+        if !summaryParts.isEmpty {
+          let joined = summaryParts.joined(separator: "\n\n")
+          if !reasoning.isEmpty { reasoning += "\n\n" }
+          reasoning += joined
         }
       case "function_call":
         guard let name = value["name"]?.stringValue, !name.isEmpty,
@@ -507,16 +546,35 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.provider(status: 200, message: message)
     }
 
+    let incompleteReason = object["incomplete_details"]?.objectValue?["reason"]?.stringValue
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !toolCalls.isEmpty
     else {
+      if status == "incomplete", let incompleteReason {
+        switch incompleteReason {
+        case "content_filter":
+          throw ProviderError.provider(
+            status: 200,
+            message: "OpenAI blocked this response due to content filtering."
+          )
+        case "max_output_tokens":
+          throw ProviderError.provider(
+            status: 200,
+            message: "OpenAI reached the maximum output token limit before producing a visible response."
+          )
+        default:
+          throw ProviderError.provider(
+            status: 200,
+            message: "OpenAI response was incomplete (\(incompleteReason))."
+          )
+        }
+      }
       throw ProviderError.emptyOutput
     }
 
     let usage = usageValue(object["usage"])
-    let incompleteReason = object["incomplete_details"]?.objectValue?["reason"]?.stringValue
     let finishReason: String? = {
       if let incompleteReason { return incompleteReason }
       if !toolCalls.isEmpty { return "tool_calls" }
@@ -554,12 +612,15 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
 
   private func usageValue(_ value: JSONValue?) -> ProviderUsage? {
     guard case .object(let usage)? = value else { return nil }
+    let inputDetails = usage["input_tokens_details"]?.objectValue
+    let cacheWriteDetails = inputDetails?["cache_write_tokens_details"]?.objectValue
     return ProviderUsage(
       inputTokens: usage["input_tokens"]?.intValue,
       outputTokens: usage["output_tokens"]?.intValue,
-      cachedInputTokens: usage["input_tokens_details"]?.objectValue?["cached_tokens"]?.intValue,
+      cachedInputTokens: inputDetails?["cached_tokens"]?.intValue,
       reasoningTokens: usage["output_tokens_details"]?.objectValue?["reasoning_tokens"]?.intValue,
-      cacheWriteTokens: usage["input_tokens_details"]?.objectValue?["cache_write_tokens"]?.intValue
+      cacheWriteTokens: inputDetails?["cache_write_tokens"]?.intValue,
+      longCacheWriteTokens: cacheWriteDetails?["ttl_12h_tokens"]?.intValue
     )
   }
 
@@ -596,6 +657,11 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
         visibleText += delta
         continuation.yield(.textDelta(delta))
       }
+    case "response.reasoning_summary_part.added":
+      if !reasoningSummary.isEmpty {
+        reasoningSummary += "\n\n"
+        continuation.yield(.reasoningDelta("\n\n"))
+      }
     case "response.reasoning_summary_text.delta":
       if let delta = object["delta"]?.stringValue, !delta.isEmpty {
         reasoningSummary += delta
@@ -619,6 +685,13 @@ public struct OpenAIResponsesAdapter: ProviderAdapter, Sendable {
       throw ProviderError.midStreamProvider(
         code: error?["code"]?.stringValue,
         message: error?["message"]?.stringValue ?? "OpenAI response failed."
+      )
+    case "response.cancelled":
+      let response = object["response"]?.objectValue
+      let error = response?["error"]?.objectValue
+      throw ProviderError.midStreamProvider(
+        code: error?["code"]?.stringValue ?? "cancelled",
+        message: error?["message"]?.stringValue ?? "OpenAI response was cancelled."
       )
     case "error":
       let error = object["error"]?.objectValue ?? object

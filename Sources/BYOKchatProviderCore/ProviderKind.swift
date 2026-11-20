@@ -273,26 +273,6 @@ public extension ProviderKind {
     case .openai:
       [
         .init(
-          providerID: "openai", id: "gpt-6-astra", displayName: "GPT-6 Astra",
-          contextWindow: 1_050_000, maxOutputTokens: 128_000,
-          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
-          inputModalities: ["text", "image", "file"]),
-        .init(
-          providerID: "openai", id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol",
-          contextWindow: 1_050_000, maxOutputTokens: 128_000,
-          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
-          inputModalities: ["text", "image", "file"]),
-        .init(
-          providerID: "openai", id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol",
-          contextWindow: 1_050_000, maxOutputTokens: 128_000,
-          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
-          inputModalities: ["text", "image", "file"]),
-        .init(
-          providerID: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna",
-          contextWindow: 1_050_000, maxOutputTokens: 128_000,
-          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
-          inputModalities: ["text", "image", "file"]),
-        .init(
           providerID: "openai", id: "gpt-6.2-astra", displayName: "GPT-6.2 Astra",
           contextWindow: 1_050_000, maxOutputTokens: 128_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
@@ -304,6 +284,26 @@ public extension ProviderKind {
           inputModalities: ["text", "image", "file"]),
         .init(
           providerID: "openai", id: "gpt-6.1-terra", displayName: "GPT-6.1 Terra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-6-astra", displayName: "GPT-6 Astra",
+          contextWindow: 1_050_000, maxOutputTokens: 128_000,
+          supportedParameters: ["max_output_tokens", "reasoning", "tools"],
+          inputModalities: ["text", "image", "file"]),
+        .init(
+          providerID: "openai", id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol",
           contextWindow: 1_050_000, maxOutputTokens: 128_000,
           supportedParameters: ["max_output_tokens", "reasoning", "tools"],
           inputModalities: ["text", "image", "file"]),

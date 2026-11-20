@@ -92,6 +92,50 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
   #expect(reasoning["summary"] == nil)
 }
 
+@Test func openAIConnectionProbeUsesLowestEffortAndSafeBudgetForReasoningMandatoryModels()
+  async throws
+{
+  let astraResponse = Data(
+    """
+    {"id":"resp_astra_probe","model":"gpt-6.2-astra","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}
+    """.utf8
+  )
+  let terraResponse = Data(
+    """
+    {"id":"resp_terra_probe","model":"gpt-6.1-terra","status":"completed","output":[{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":1,"output_tokens":1}}
+    """.utf8
+  )
+  let transport = OpenAIDiscoveryMockTransport(dataResponses: [astraResponse, terraResponse])
+  let adapter = OpenAIResponsesAdapter(
+    definition: BuiltInProviders.openAI,
+    transport: transport
+  )
+  let account = discoveryOpenAIAccount()
+
+  try await adapter.testConnection(account: account, model: "gpt-6.2-astra")
+  try await adapter.testConnection(account: account, model: "gpt-6.1-terra")
+
+  let astraRequest = try #require(await transport.request(at: 0))
+  let astraRoot = try responseRoot(from: astraRequest)
+  #expect(astraRoot["max_output_tokens"] == .number(1_024))
+  if case .object(let astraReasoning)? = astraRoot["reasoning"] {
+    #expect(astraReasoning["effort"] == .string("low"))
+    #expect(astraReasoning["summary"] == nil)
+  } else {
+    Issue.record("Expected low reasoning effort for gpt-6.2-astra probe")
+  }
+
+  let terraRequest = try #require(await transport.request(at: 1))
+  let terraRoot = try responseRoot(from: terraRequest)
+  #expect(terraRoot["max_output_tokens"] == .number(256))
+  if case .object(let terraReasoning)? = terraRoot["reasoning"] {
+    #expect(terraReasoning["effort"] == .string("none"))
+    #expect(terraReasoning["summary"] == nil)
+  } else {
+    Issue.record("Expected disabled reasoning config for gpt-6.1-terra probe")
+  }
+}
+
 @Test func openAISamplingControlsRespectReasoningModelCompatibility() async throws {
   let astraResponse = Data(
     """
@@ -189,7 +233,10 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
       {"id":"gpt-4o-mini-transcribe"},
       {"id":"gpt-4o-realtime-preview"},
       {"id":"whisper-1"},
-      {"id":"omni-moderation-latest"}
+      {"id":"omni-moderation-latest"},
+      {"id":"gpt-3.5-turbo-instruct"},
+      {"id":"gpt-4o-search-preview"},
+      {"id":"gpt-5-search-api"}
     ]}
     """.utf8
   )
@@ -213,6 +260,9 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
   #expect(ids.contains("gpt-4o-realtime-preview") == false)
   #expect(ids.contains("whisper-1") == false)
   #expect(ids.contains("omni-moderation-latest") == false)
+  #expect(ids.contains("gpt-3.5-turbo-instruct") == false)
+  #expect(ids.contains("gpt-4o-search-preview") == false)
+  #expect(ids.contains("gpt-5-search-api") == false)
 
   // Curated chat models remain available even if the account's /models payload omits them.
   #expect(ids.contains("gpt-5.6-sol"))
@@ -237,4 +287,55 @@ private func responseRoot(from request: URLRequest) throws -> [String: JSONValue
   #expect(gpt41.supportedParameters.contains("temperature"))
   #expect(gpt41.supportedParameters.contains("top_p"))
   #expect(gpt41.supportedParameters.contains("tools"))
+
+  let codex = try #require(models.first { $0.id == "codex-mini-latest" })
+  #expect(codex.supportedParameters.contains("reasoning"))
+  #expect(codex.supportedParameters.contains("temperature") == false)
+  #expect(codex.supportedParameters.contains("top_p") == false)
+}
+
+@Test func openAIGPT6TerraAndLunaAllowSamplingWhenReasoningIsDisabled() async throws {
+  let terraResponse = Data(
+    """
+    {"id":"resp_terra","model":"gpt-6.1-terra","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Terra"}]}]}
+    """.utf8
+  )
+  let sol62Response = Data(
+    """
+    {"id":"resp_sol62","model":"gpt-6.2-sol","status":"completed","output":[{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"output_text","text":"Sol 6.2"}]}]}
+    """.utf8
+  )
+  let transport = OpenAIDiscoveryMockTransport(dataResponses: [terraResponse, sol62Response])
+  let adapter = OpenAIResponsesAdapter(
+    definition: BuiltInProviders.openAI,
+    transport: transport
+  )
+  let account = discoveryOpenAIAccount()
+
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "gpt-6.1-terra",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(temperature: 0.5, topP: 0.85, reasoning: .init(enabled: false))
+    ),
+    account: account
+  )
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "gpt-6.2-sol",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(temperature: 0.5, topP: 0.85, reasoning: .init(enabled: false))
+    ),
+    account: account
+  )
+
+  let terraRoot = try responseRoot(from: try #require(await transport.request(at: 0)))
+  #expect(terraRoot["temperature"] == .number(0.5))
+  #expect(terraRoot["top_p"] == .number(0.85))
+  #expect(terraRoot["reasoning"] == .object(["effort": .string("none")]))
+
+  let sol62Root = try responseRoot(from: try #require(await transport.request(at: 1)))
+  #expect(sol62Root["temperature"] == nil)
+  #expect(sol62Root["top_p"] == nil)
+  #expect(sol62Root["reasoning"] == nil)
 }

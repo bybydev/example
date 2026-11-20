@@ -354,3 +354,169 @@ private func openAIResponsesAccount() -> ResolvedProviderAccount {
   #expect(final.reasoning == "Plan ")
   #expect(final.toolContinuation?.apiFamily == .openAIResponses)
 }
+
+@Test func openAIResponsesEncodesFallbackAssistantHistoryWithOutputTextAndOmitsIncludeForNonReasoningModels()
+  async throws
+{
+  let response = Data(
+    """
+    {"id":"resp_41","model":"gpt-4.1-mini","status":"completed","output":[{"id":"msg_41","type":"message","role":"assistant","content":[{"type":"output_text","text":"Continued"}]}],"usage":{"input_tokens":12,"output_tokens":4}}
+    """.utf8
+  )
+  let transport = OpenAIResponsesMockTransport(dataResponses: [response])
+  let adapter = OpenAIResponsesAdapter(
+    definition: BuiltInProviders.openAI,
+    transport: transport
+  )
+  let spreadsheet = ChatAttachment(
+    kind: .file,
+    filename: "report.xlsx",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data: Data([0x50, 0x4B, 0x03, 0x04])
+  )
+
+  let result = try await adapter.generate(
+    request: ProviderRequest(
+      model: "gpt-4.1-mini",
+      messages: [
+        .init(role: .user, content: "First question", attachments: [spreadsheet]),
+        .init(role: .assistant, content: "Answer from another model"),
+        .init(role: .user, content: "Follow up"),
+      ],
+      options: .init(temperature: 0.3, topP: 0.9)
+    ),
+    account: openAIResponsesAccount()
+  )
+  #expect(result.text == "Continued")
+
+  let recorded = try #require(await transport.lastRequest())
+  let body = try #require(recorded.httpBody)
+  let decoded = try JSONDecoder.provider.decode(JSONValue.self, from: body)
+  guard case .object(let root) = decoded else {
+    Issue.record("Expected Responses request object")
+    return
+  }
+  #expect(root["include"] == nil)
+  #expect(root["reasoning"] == nil)
+  #expect(root["temperature"] == .number(0.3))
+  #expect(root["top_p"] == .number(0.9))
+
+  guard case .array(let input)? = root["input"], input.count == 3,
+    case .object(let firstUser) = input[0],
+    case .array(let userParts)? = firstUser["content"],
+    case .object(let assistantMsg) = input[1],
+    case .array(let assistantParts)? = assistantMsg["content"],
+    case .object(let assistantPart) = assistantParts.first
+  else {
+    Issue.record("Missing encoded input messages")
+    return
+  }
+
+  #expect(assistantMsg["role"] == .string("assistant"))
+  #expect(assistantPart["type"] == .string("output_text"))
+  #expect(assistantPart["text"] == .string("Answer from another model"))
+
+  let filePart = try #require(
+    userParts.first { part in
+      guard case .object(let value) = part else { return false }
+      return value["type"] == .string("input_file")
+    })
+  if case .object(let fileObject) = filePart {
+    #expect(fileObject["filename"] == .string("report.xlsx"))
+    #expect(fileObject["detail"] == nil)
+  }
+}
+
+@Test func openAIResponsesSeparatesMultiPartReasoningSummariesAndHandlesIncompleteAndCancelled()
+  async throws
+{
+  let multiPartResponse = Data(
+    """
+    {"id":"resp_multi","model":"gpt-6.2-astra","status":"completed","output":[{"id":"rs_1","type":"reasoning","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"First step."},{"type":"summary_text","text":"Second step."}]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Final"}]}],"usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":10,"cache_write_tokens":40,"cache_write_tokens_details":{"ttl_30m_tokens":30,"ttl_12h_tokens":10}},"output_tokens_details":{"reasoning_tokens":8}}}
+    """.utf8
+  )
+  let blockedResponse = Data(
+    """
+    {"id":"resp_blocked","model":"gpt-6.2-astra","status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[]}
+    """.utf8
+  )
+  let maxTokensResponse = Data(
+    """
+    {"id":"resp_max","model":"gpt-6.2-astra","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs_max","type":"reasoning","encrypted_content":"opaque","summary":[]}]}
+    """.utf8
+  )
+  let transport = OpenAIResponsesMockTransport(
+    dataResponses: [multiPartResponse, blockedResponse, maxTokensResponse]
+  )
+  let adapter = OpenAIResponsesAdapter(
+    definition: BuiltInProviders.openAI,
+    transport: transport
+  )
+  let account = openAIResponsesAccount()
+
+  let multi = try await adapter.generate(
+    request: ProviderRequest(model: "gpt-6.2-astra", messages: [.init(role: .user, content: "Hi")]),
+    account: account
+  )
+  #expect(multi.reasoning == "First step.\n\nSecond step.")
+  #expect(multi.usage?.cacheWriteTokens == 40)
+  #expect(multi.usage?.longCacheWriteTokens == 10)
+
+  do {
+    _ = try await adapter.generate(
+      request: ProviderRequest(model: "gpt-6.2-astra", messages: [.init(role: .user, content: "Hi")]),
+      account: account
+    )
+    Issue.record("Expected content_filter incomplete error")
+  } catch ProviderError.provider(_, let message) {
+    #expect(message.lowercased().contains("content filtering"))
+  }
+
+  do {
+    _ = try await adapter.generate(
+      request: ProviderRequest(model: "gpt-6.2-astra", messages: [.init(role: .user, content: "Hi")]),
+      account: account
+    )
+    Issue.record("Expected max_output_tokens incomplete error")
+  } catch ProviderError.provider(_, let message) {
+    #expect(message.lowercased().contains("maximum output token"))
+  }
+
+  let cancelledStream = """
+    event: response.reasoning_summary_part.added
+    data: {"type":"response.reasoning_summary_part.added"}
+
+    event: response.reasoning_summary_text.delta
+    data: {"type":"response.reasoning_summary_text.delta","delta":"Part 1"}
+
+    event: response.reasoning_summary_part.added
+    data: {"type":"response.reasoning_summary_part.added"}
+
+    event: response.reasoning_summary_text.delta
+    data: {"type":"response.reasoning_summary_text.delta","delta":"Part 2"}
+
+    event: response.cancelled
+    data: {"type":"response.cancelled","response":{"id":"resp_cancel","status":"cancelled"}}
+
+    """
+  let streamTransport = OpenAIResponsesMockTransport(streamChunks: [Data(cancelledStream.utf8)])
+  let streamAdapter = OpenAIResponsesAdapter(
+    definition: BuiltInProviders.openAI,
+    transport: streamTransport
+  )
+
+  var deltas: [String] = []
+  do {
+    for try await event in streamAdapter.stream(
+      request: ProviderRequest(model: "gpt-6.2-astra", messages: [.init(role: .user, content: "Hi")]),
+      account: account
+    ) {
+      if case .reasoningDelta(let delta) = event { deltas.append(delta) }
+    }
+    Issue.record("Expected mid-stream cancellation error")
+  } catch ProviderError.midStreamProvider(let code, let message) {
+    #expect(code == "cancelled")
+    #expect(message.lowercased().contains("cancelled"))
+  }
+  #expect(deltas == ["Part 1", "\n\n", "Part 2"])
+}

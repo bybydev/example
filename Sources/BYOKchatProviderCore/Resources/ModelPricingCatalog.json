@@ -7,6 +7,96 @@
     {
       "provider": "openai",
       "modelIDs": [
+        "gpt-6.2-astra"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "8",
+        "output": "40",
+        "cachedInput": "0.4",
+        "cacheWrite": "10",
+        "longCacheWrite": "20"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-6.2-sol"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.1",
+        "cacheWrite": "2.5",
+        "longCacheWrite": "5"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-6.1-sol"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "2",
+        "output": "10",
+        "cachedInput": "0.1",
+        "cacheWrite": "2.5",
+        "longCacheWrite": "5"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-6.1-terra"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "1",
+        "output": "5",
+        "cachedInput": "0.05",
+        "cacheWrite": "1.25",
+        "longCacheWrite": "2.5"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
+        "gpt-6-luna"
+      ],
+      "sourceURL": "https://developers.openai.com/api/docs/pricing",
+      "verifiedAt": "2026-11-20",
+      "rates": {
+        "input": "0.1",
+        "output": "0.5",
+        "cachedInput": "0.01",
+        "cacheWrite": "0.125",
+        "longCacheWrite": "0.25"
+      },
+      "longContextThreshold": 272000,
+      "longContextInputMultiplier": "2",
+      "longContextOutputMultiplier": "1.5"
+    },
+    {
+      "provider": "openai",
+      "modelIDs": [
         "gpt-6-astra"
       ],
       "sourceURL": "https://developers.openai.com/api/docs/pricing",
@@ -15,7 +105,8 @@
         "input": "10",
         "output": "50",
         "cachedInput": "1",
-        "cacheWrite": "12.5"
+        "cacheWrite": "12.5",
+        "longCacheWrite": "25"
       },
       "longContextThreshold": 272000,
       "longContextInputMultiplier": "2",
@@ -32,7 +123,8 @@
         "input": "4",
         "output": "20",
         "cachedInput": "0.4",
-        "cacheWrite": "5"
+        "cacheWrite": "5",
+        "longCacheWrite": "10"
       },
       "longContextThreshold": 272000,
       "longContextInputMultiplier": "2",

@@ -466,3 +466,51 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   )
   #expect(pro.aggregate.inputTokens == 1_000)
 }
+
+@Test func openAIGPT6PricingResolvesForAllSeedModels() throws {
+  let account = ProviderAccount(kind: .openai, id: "oai", providerID: "openai", label: "OpenAI")
+
+  let astra62 = try #require(
+    ModelPriceResolver.resolve(account: account, modelID: "gpt-6.2-astra", model: nil)
+  )
+  #expect(astra62.source == "bundledCatalog")
+  #expect(astra62.rates.input == "8")
+  #expect(astra62.rates.output == "40")
+  #expect(astra62.rates.cachedInput == "0.4")
+  #expect(astra62.rates.cacheWrite == "10")
+  #expect(astra62.rates.longCacheWrite == "20")
+  #expect(astra62.longContextThreshold == 272_000)
+  let astra62Long = astra62.rates(for: ProviderUsage(inputTokens: 300_000, outputTokens: 1_000))
+  #expect(astra62Long.input == "16")
+  #expect(astra62Long.output == "60")
+
+  let sol62 = try #require(
+    ModelPriceResolver.resolve(account: account, modelID: "gpt-6.2-sol", model: nil)
+  )
+  #expect(sol62.rates.input == "2")
+  #expect(sol62.rates.output == "10")
+  #expect(sol62.rates.cachedInput == "0.1")
+  #expect(sol62.rates.cacheWrite == "2.5")
+
+  let sol61 = try #require(
+    ModelPriceResolver.resolve(account: account, modelID: "gpt-6.1-sol", model: nil)
+  )
+  #expect(sol61.rates.input == "2")
+  #expect(sol61.rates.output == "10")
+
+  let terra61 = try #require(
+    ModelPriceResolver.resolve(account: account, modelID: "gpt-6.1-terra", model: nil)
+  )
+  #expect(terra61.rates.input == "1")
+  #expect(terra61.rates.output == "5")
+  #expect(terra61.rates.cachedInput == "0.05")
+  #expect(terra61.rates.cacheWrite == "1.25")
+
+  let luna6 = try #require(
+    ModelPriceResolver.resolve(account: account, modelID: "gpt-6-luna", model: nil)
+  )
+  #expect(luna6.rates.input == "0.1")
+  #expect(luna6.rates.output == "0.5")
+  #expect(luna6.rates.cachedInput == "0.01")
+  #expect(luna6.rates.cacheWrite == "0.125")
+}
