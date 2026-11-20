@@ -1,6 +1,7 @@
 import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
+import UIKit
 
 /// Explicit push destinations for the root navigation stack. Only flows that
 /// must layer *on top of* the current main screen live here; everything else
@@ -97,28 +98,34 @@ struct AppRootView: View {
 
       GeometryReader { geometry in
         let drawerWidth = min(geometry.size.width * 0.80, 390)
+        let scrimOpacity = theme.appearance.preferredColorScheme == .light ? 0.18 : 0.34
 
         ZStack(alignment: .leading) {
           mainContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .offset(x: isSidebarPresented ? drawerWidth : 0)
             .allowsHitTesting(!isSidebarPresented)
-            .overlay {
-              if isSidebarPresented {
-                Color.black.opacity(0.12)
-                  .ignoresSafeArea()
-                  .onTapGesture { closeSidebar() }
-              }
-            }
+            .accessibilityHidden(isSidebarPresented)
 
           if isSidebarPresented {
+            Color.black.opacity(scrimOpacity)
+              .ignoresSafeArea()
+              .contentShape(Rectangle())
+              .onTapGesture { closeSidebar() }
+              .accessibilityElement()
+              .accessibilityLabel("Close sidebar")
+              .accessibilityAddTraits(.isButton)
+              .accessibilityAction { closeSidebar() }
+              .transition(.opacity)
+              .zIndex(1)
+
             ChatSidebarView(
               chats: model.chats,
-              providers: model.providers,
               projects: model.projects,
               mcp: model.mcp,
               purchases: purchases,
               selectedConversationID: selectedConversationID,
+              activeDestination: activeScreen,
               newChat: startNewChat(in:),
               selectConversation: selectConversation,
               selectSearchResult: selectSearchResult,
@@ -128,17 +135,28 @@ struct AppRootView: View {
             )
             .frame(width: drawerWidth)
             .frame(maxHeight: .infinity)
+            .overlay(alignment: .trailing) {
+              Rectangle()
+                .fill(theme.borderColor)
+                .frame(width: 0.5)
+                .ignoresSafeArea()
+            }
+            .shadow(color: theme.appearance.shadow.color, radius: 14, x: 4, y: 0)
+            .accessibilitySortPriority(1)
             .transition(.move(edge: .leading))
             .zIndex(2)
           }
         }
-        .animation(.snappy(duration: 0.28), value: isSidebarPresented)
+        .simultaneousGesture(closeSidebarGesture, including: .all)
+        .animation(Self.sidebarAnimation, value: isSidebarPresented)
       }
     }
-    .onChange(of: model.chats.conversations.map(\.id)) { _, ids in
+    .onChange(of: model.chats.conversations.map(\.id), initial: true) { _, ids in
+      model.preferences.prunePinnedConversations(keeping: Set(ids))
       guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
       self.selectedConversationID = nil
       initialScrollMessageID = nil
+      openedChatFromProject = false
     }
     // A pushed project chat that never received a message is discarded when
     // it leaves the stack, so backing out of "New Chat" leaves no clutter.
@@ -352,7 +370,9 @@ struct AppRootView: View {
             projects: model.projects,
             mcp: model.mcp,
             library: model.library,
-            onReadyForConversation: { startNewChat(in: nil) },
+            onReadyForConversation: {
+              startNewChat(in: nil, closeDrawer: !isSidebarPresented)
+            },
             openSidebar: openSidebar
           )
         }
@@ -410,6 +430,8 @@ struct AppRootView: View {
     }
   }
 
+  private static let sidebarAnimation: Animation = .snappy(duration: 0.28)
+
   /// Swipes only open the sidebar when they begin this close to the leading
   /// edge. The gesture runs simultaneously with content gestures, so without a
   /// start-location gate a rightward drag anywhere — like scrolling a wide
@@ -425,12 +447,31 @@ struct AppRootView: View {
         guard value.startLocation.x < Self.sidebarSwipeEdgeZone else { return }
 
         guard !isSidebarPresented,
+          navigationPath.isEmpty,
+          activeProjectViewID == nil,
+          !openedChatFromProject,
           horizontalTravel > 90,
           value.translation.width > 0,
           abs(value.translation.width) > verticalTravel * 1.35
         else { return }
 
         openSidebar()
+      }
+  }
+
+  private var closeSidebarGesture: some Gesture {
+    DragGesture(minimumDistance: 20, coordinateSpace: .local)
+      .onEnded { value in
+        guard isSidebarPresented else { return }
+        let horizontalTravel = min(value.translation.width, value.predictedEndTranslation.width)
+        let verticalTravel = abs(value.translation.height)
+
+        guard horizontalTravel < -70,
+          value.translation.width < 0,
+          abs(value.translation.width) > verticalTravel * 1.35
+        else { return }
+
+        closeSidebar()
       }
   }
 
@@ -461,12 +502,22 @@ struct AppRootView: View {
     model.mcp.statusMessage = nil
   }
 
+  private func dismissKeyboard() {
+    UIApplication.shared.sendAction(
+      #selector(UIResponder.resignFirstResponder),
+      to: nil,
+      from: nil,
+      for: nil
+    )
+  }
+
   private func openSidebar() {
-    withAnimation { isSidebarPresented = true }
+    dismissKeyboard()
+    withAnimation(Self.sidebarAnimation) { isSidebarPresented = true }
   }
 
   private func closeSidebar() {
-    withAnimation { isSidebarPresented = false }
+    withAnimation(Self.sidebarAnimation) { isSidebarPresented = false }
   }
 
   private var visibleConversationID: ConversationID? {
@@ -484,7 +535,11 @@ struct AppRootView: View {
   }
 
   private func startNewChat(in projectID: ProjectID?) {
-    closeSidebar()
+    startNewChat(in: projectID, closeDrawer: true)
+  }
+
+  private func startNewChat(in projectID: ProjectID?, closeDrawer: Bool) {
+    if closeDrawer { closeSidebar() }
     if isCreatingNewChat && pendingNewChatProjectID == projectID { return }
     if let id = visibleConversationID,
       model.chats.hasConversation(id),
@@ -507,6 +562,7 @@ struct AppRootView: View {
       activeProjectViewID = nil
       openedChatFromProject = false
       activeScreen = nil
+      guard canCreateStandaloneChat else { return }
     }
     pendingNewChatProjectID = projectID
     newChatRequestPath = navigationPath
@@ -557,6 +613,26 @@ struct AppRootView: View {
     }
   }
 
+  /// Matches `ChatView.readiness == .ready` for standalone chats so tapping
+  /// "New Chat" without a usable provider lands on the setup screen directly
+  /// instead of triggering an error alert and false storage telemetry.
+  private var canCreateStandaloneChat: Bool {
+    let enabledAccounts = model.providers.accounts.filter(\.isEnabled)
+    let resolvedAccount: ProviderAccount?
+    if let defaultAccount = model.providers.resolvedDefaultAccount, defaultAccount.isEnabled {
+      resolvedAccount = defaultAccount
+    } else {
+      resolvedAccount = enabledAccounts.first
+    }
+    guard let account = resolvedAccount else { return false }
+    if model.providers.provider(for: account.providerID)?.requiresCredential == true,
+      !model.providers.credentialAccountIDs.contains(account.id)
+    {
+      return false
+    }
+    return model.providers.models(for: account.id).contains(where: \.isAvailable)
+  }
+
   /// Only push `.newChatSetup(projectID)` when the project still exists and
   /// genuinely lacks a usable provider account or available model; storage or
   /// not-found failures are already reported via `chats.errorMessage` and would
@@ -596,6 +672,14 @@ struct AppRootView: View {
   /// Sidebar menu sections replace the main screen; whatever was showing
   /// yields.
   private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
+    if activeScreen == screen,
+      selectedConversationID == nil,
+      activeProjectViewID == nil,
+      navigationPath.isEmpty
+    {
+      closeSidebar()
+      return
+    }
     invalidateNewChatRequest()
     navigationPath = []
     discardIfEmpty(selectedConversationID)

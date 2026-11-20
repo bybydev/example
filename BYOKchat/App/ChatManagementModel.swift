@@ -24,6 +24,7 @@ final class ChatManagementModel {
   private(set) var activeConversationIDs: Set<ConversationID> = []
   private(set) var activeToolCallsByConversation: [ConversationID: [ChatToolCall]] = [:]
   private(set) var searchResults: [ConversationSearchResult] = []
+  private(set) var isSearching = false
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   var isBusy = false
   var errorMessage: String?
@@ -421,10 +422,12 @@ final class ChatManagementModel {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       searchResults = []
+      isSearching = false
       searchTask = nil
       return
     }
 
+    isSearching = true
     searchTask = Task { @MainActor [weak self] in
       guard let self else { return }
       do {
@@ -435,8 +438,13 @@ final class ChatManagementModel {
         guard searchRevision == revision else { return }
         let visibleIDs = Set(historyConversations.map(\.id))
         searchResults = results.filter { visibleIDs.contains($0.conversationID) }
+        isSearching = false
         searchTask = nil
       } catch {
+        if searchRevision == revision {
+          isSearching = false
+          searchTask = nil
+        }
       }
     }
   }

@@ -2,7 +2,6 @@ import AppFoundation
 import BYOKchatProviderCore
 import Foundation
 import SwiftUI
-import UIKit
 
 struct ChatSidebarView: View {
   /// Menu destinations replace the app's main screen; usage shows the
@@ -18,12 +17,12 @@ struct ChatSidebarView: View {
   }
 
   @Bindable var chats: ChatManagementModel
-  @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
   let purchases: BYOKPurchaseStore
 
   let selectedConversationID: ConversationID?
+  let activeDestination: SidebarDestination?
   let newChat: (ProjectID?) -> Void
   let selectConversation: (ConversationID) -> Void
   let selectSearchResult: (ConversationSearchResult) -> Void
@@ -33,11 +32,12 @@ struct ChatSidebarView: View {
   let close: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
-  @AppStorage("byokchat.sidebar.pinnedConversationIDs") private var pinnedConversationIDs = ""
+  @AppStorage(SidebarPinStore.storageKey) private var pinnedConversationIDs = ""
   @State private var searchText = ""
   @State private var isSearching = false
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
+  @State private var pendingDelete: ChatConversation?
   @State private var showPaywall = false
   @State private var showCelebration = false
   @FocusState private var searchFocused: Bool
@@ -64,12 +64,10 @@ struct ChatSidebarView: View {
     .background(theme.backgroundColor.ignoresSafeArea())
     .projectErrorPresenter(projects)
     .contentShape(Rectangle())
-    .gesture(
-      DragGesture(minimumDistance: 20)
-        .onEnded { value in
-          if value.translation.width < -70 { close() }
-        }
-    )
+    .accessibilityAction(.escape) { close() }
+    .onDisappear {
+      chats.search("")
+    }
     .animation(.snappy(duration: 0.2), value: isSearching)
     .sheet(isPresented: $showPaywall) {
       ProPaywallView(
@@ -103,16 +101,51 @@ struct ChatSidebarView: View {
         set: { if !$0 { renameTarget = nil } }
       )
     ) {
+      let trimmedTitle = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
       TextField("Title", text: $renameText)
       Button("Cancel", role: .cancel) { renameTarget = nil }
       Button("Save") {
-        guard let id = renameTarget?.id else { return }
-        Task { @MainActor in
-          await chats.renameConversation(id, title: renameText)
-        }
+        guard let id = renameTarget?.id, !trimmedTitle.isEmpty else { return }
         renameTarget = nil
+        Task { @MainActor in
+          await chats.renameConversation(id, title: trimmedTitle)
+        }
       }
+      .disabled(trimmedTitle.isEmpty)
     }
+    .confirmationDialog(
+      "Delete chat?",
+      isPresented: Binding(
+        get: { pendingDelete != nil },
+        set: { if !$0 { pendingDelete = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Delete Chat", role: .destructive) {
+        guard let target = pendingDelete else { return }
+        pendingDelete = nil
+        Task { @MainActor in
+          await chats.deleteConversation(target.id)
+          await projects.reloadFromStorage()
+          await mcp.reloadFromStorage()
+          if !chats.hasConversation(target.id) {
+            removePinned(target.id)
+          }
+        }
+      }
+      Button("Cancel", role: .cancel) { pendingDelete = nil }
+    } message: {
+      Text(deleteConfirmationMessage)
+    }
+  }
+
+  private var deleteConfirmationMessage: String {
+    guard let title = pendingDelete?.title.trimmingCharacters(in: .whitespacesAndNewlines),
+      !title.isEmpty
+    else {
+      return "This chat and its messages will be permanently deleted."
+    }
+    return "\"\(title)\" and its messages will be permanently deleted."
   }
 
   private var header: some View {
@@ -121,17 +154,22 @@ struct ChatSidebarView: View {
 
       Spacer()
 
-      Button("Search Chats", systemImage: isSearching ? "xmark" : "magnifyingglass") {
+      Button(
+        isSearching ? "Close Search" : "Search Chats",
+        systemImage: isSearching ? "xmark" : "magnifyingglass"
+      ) {
         isSearching.toggle()
         if isSearching {
           searchFocused = true
         } else {
+          searchFocused = false
           searchText = ""
           chats.search("")
         }
       }
       .labelStyle(.iconOnly)
       .font(.system(size: 17, weight: .semibold))
+      .foregroundStyle(theme.primaryForegroundColor)
       .symbolRenderingMode(.hierarchical)
       .frame(width: 40, height: 40)
       .background(.thinMaterial, in: Circle())
@@ -162,6 +200,8 @@ struct ChatSidebarView: View {
         .foregroundStyle(theme.secondaryForegroundColor)
       TextField("Search chats", text: $searchText)
         .font(.system(size: 17))
+        .foregroundStyle(theme.primaryForegroundColor)
+        .submitLabel(.search)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .focused($searchFocused)
@@ -185,38 +225,44 @@ struct ChatSidebarView: View {
     )
     .padding(.horizontal, 20)
     .padding(.bottom, 8)
+    .onAppear { searchFocused = true }
     .onChange(of: searchText) { _, value in chats.search(value) }
   }
 
   private var primaryNavigation: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: 1) {
       SidebarRichMenuRow(
         systemImage: "sparkles",
         title: "AI Providers",
+        isSelected: activeDestination == .providers,
         action: { openDestination(.providers) }
       )
 
       SidebarRichMenuRow(
         systemImage: "books.vertical",
         title: "Library",
+        isSelected: activeDestination == .library,
         action: { openDestination(.library) }
       )
 
       SidebarRichMenuRow(
         systemImage: "folder",
         title: "Projects",
+        isSelected: activeDestination == .projects,
         action: { openDestination(.projects) }
       )
 
       SidebarRichMenuRow(
         systemImage: "puzzlepiece.extension",
         title: "MCP Servers",
+        isSelected: activeDestination == .plugins,
         action: { openDestination(.plugins) }
       )
 
       SidebarRichMenuRow(
         systemImage: "chart.bar.xaxis",
         title: "Analytics",
+        isSelected: activeDestination == .usage,
         action: { openDestination(.usage) }
       )
     }
@@ -225,11 +271,20 @@ struct ChatSidebarView: View {
   }
 
   private var scrollableSidebarContent: some View {
-    ScrollView {
+    let history = chats.historyConversations
+    let pinnedIDs = SidebarPinStore.parse(pinnedConversationIDs)
+    let pinned = history
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .sorted { $0.updatedAt > $1.updatedAt }
+    let recent = history
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .sorted { $0.updatedAt > $1.updatedAt }
+
+    return ScrollView {
       LazyVStack(alignment: .leading, spacing: 1) {
         primaryNavigation
 
-        if chats.historyConversations.isEmpty {
+        if history.isEmpty {
           ContentUnavailableView(
             "No Chats",
             systemImage: "bubble.left",
@@ -238,20 +293,20 @@ struct ChatSidebarView: View {
           .frame(maxWidth: .infinity)
           .padding(.top, 20)
         } else {
-          if !pinnedConversations.isEmpty {
+          if !pinned.isEmpty {
             sidebarSectionTitle("Pinned", topPadding: 2)
-            ForEach(pinnedConversations) { conversation in
-              conversationButton(conversation)
+            ForEach(pinned) { conversation in
+              conversationButton(conversation, isPinned: true)
             }
           }
 
-          if !recentConversations.isEmpty {
+          if !recent.isEmpty {
             sidebarSectionTitle(
               "Recent",
-              topPadding: pinnedConversations.isEmpty ? 2 : 12
+              topPadding: pinned.isEmpty ? 2 : 12
             )
-            ForEach(recentConversations) { conversation in
-              conversationButton(conversation)
+            ForEach(recent) { conversation in
+              conversationButton(conversation, isPinned: false)
             }
           }
         }
@@ -273,11 +328,20 @@ struct ChatSidebarView: View {
   private var searchResults: some View {
     ScrollView {
       LazyVStack(spacing: 2) {
-        if chats.searchResults.isEmpty {
+        if chats.isSearching && chats.searchResults.isEmpty {
+          ProgressView("Searching…")
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
+        } else if chats.searchResults.isEmpty {
           ContentUnavailableView.search(text: searchText)
             .padding(.top, 40)
         } else {
           ForEach(chats.searchResults) { result in
+            let subtitle = Self.searchSubtitle(
+              for: result,
+              summary: chats.summary(result.conversationID)
+            )
             Button {
               selectSearchResult(result)
             } label: {
@@ -288,12 +352,15 @@ struct ChatSidebarView: View {
                   }
                   Text(result.title)
                     .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(theme.primaryForegroundColor)
                     .lineLimit(1)
                 }
-                Text(result.snippet)
-                  .font(.system(size: 13))
-                  .foregroundStyle(theme.secondaryForegroundColor)
-                  .lineLimit(2)
+                if let subtitle {
+                  Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                    .lineLimit(2)
+                }
               }
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.horizontal, 12)
@@ -328,7 +395,10 @@ struct ChatSidebarView: View {
 
       Spacer(minLength: 8)
 
-      Button("Upgrade to Pro", systemImage: "crown.fill") {
+      Button(
+        purchases.hasPro ? "BYOK Pro" : "Upgrade to Pro",
+        systemImage: "crown.fill"
+      ) {
         if purchases.hasPro {
           showCelebration = true
         } else {
@@ -348,6 +418,7 @@ struct ChatSidebarView: View {
       Button("Settings", systemImage: "gearshape", action: openSettings)
         .labelStyle(.iconOnly)
         .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(theme.primaryForegroundColor)
         .symbolRenderingMode(.hierarchical)
         .frame(width: 44, height: 44)
         .background(.thinMaterial, in: Circle())
@@ -360,21 +431,32 @@ struct ChatSidebarView: View {
     .padding(.top, 8)
   }
 
-  private func conversationButton(_ conversation: ChatConversation) -> some View {
+  private func conversationButton(_ conversation: ChatConversation, isPinned: Bool) -> some View {
     let selected = selectedConversationID == conversation.id
-    let pinned = pinnedIDSet.contains(conversation.id.rawValue)
+    let project = projects.project(for: conversation.id)
+    let isGenerating = chats.isGenerating(conversation.id)
 
     return Button {
       selectConversation(conversation.id)
     } label: {
-      HStack(spacing: 0) {
+      HStack(spacing: 8) {
+        if let project {
+          ProjectIconView(project: project, size: 18)
+        }
+
         Text(conversation.title)
           .font(.system(size: 15.5, weight: selected ? .medium : .regular))
           .lineLimit(1)
 
-        Spacer(minLength: 12)
+        Spacer(minLength: 8)
+
+        if isGenerating {
+          ProgressView()
+            .controlSize(.mini)
+            .accessibilityLabel("Generating")
+        }
       }
-      .foregroundStyle(.primary)
+      .foregroundStyle(theme.primaryForegroundColor)
       .padding(.horizontal, 12)
       .frame(height: 38)
       .background(
@@ -384,9 +466,10 @@ struct ChatSidebarView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
     .padding(.horizontal, 8)
     .contextMenu {
-      Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+      Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin") {
         togglePinned(conversation.id)
       }
       Button("Rename", systemImage: "pencil") {
@@ -395,121 +478,66 @@ struct ChatSidebarView: View {
       }
       ConversationProjectMenu(conversationID: conversation.id, projects: projects)
       Button("Delete", systemImage: "trash", role: .destructive) {
-        removePinned(conversation.id)
-        Task { @MainActor in
-          await chats.deleteConversation(conversation.id)
-          await projects.reloadFromStorage()
-          await mcp.reloadFromStorage()
-          if selectedConversationID == conversation.id {
-            newChat(nil)
-          }
-        }
+        pendingDelete = conversation
       }
     }
   }
 
-  private var pinnedIDSet: Set<String> {
-    Set(
-      pinnedConversationIDs
-        .split(separator: "\n")
-        .map(String.init)
-    )
-  }
-
-  private var pinnedConversations: [ChatConversation] {
-    chats.historyConversations
-      .filter { pinnedIDSet.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
-  }
-
-  private var recentConversations: [ChatConversation] {
-    chats.historyConversations
-      .filter { !pinnedIDSet.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
-  }
-
   private func togglePinned(_ id: ConversationID) {
-    var values = pinnedIDSet
-    if values.contains(id.rawValue) {
-      values.remove(id.rawValue)
-    } else {
-      values.insert(id.rawValue)
-    }
-    pinnedConversationIDs = values.sorted().joined(separator: "\n")
+    pinnedConversationIDs = SidebarPinStore.toggled(id, in: pinnedConversationIDs)
   }
 
   private func removePinned(_ id: ConversationID) {
-    var values = pinnedIDSet
-    values.remove(id.rawValue)
-    pinnedConversationIDs = values.sorted().joined(separator: "\n")
+    pinnedConversationIDs = SidebarPinStore.removing(id, from: pinnedConversationIDs)
   }
 
-  private var usageResetText: String {
-    let calendar = Calendar.current
-    let currentMonth = calendar.date(
-      from: calendar.dateComponents([.year, .month], from: .now)
-    ) ?? .now
-    let nextMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) ?? .now
-    let date = nextMonth.formatted(.dateTime.month(.abbreviated).day(.twoDigits))
-    return "Usage resets on \(date)"
+  nonisolated static func searchSubtitle(
+    for result: ConversationSearchResult,
+    summary: ChatConversation?
+  ) -> String? {
+    let trimmedTitle = result.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedSnippet = result.snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+    if result.role == .title || trimmedSnippet == trimmedTitle {
+      let preview = summary?.lastMessagePreview?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      return preview.isEmpty ? nil : preview
+    }
+    return trimmedSnippet.isEmpty ? nil : trimmedSnippet
   }
 }
 
 private struct SidebarRichMenuRow: View {
   let systemImage: String
   let title: String
-  var detail: String? = nil
-  var iconColor: Color? = nil
+  let isSelected: Bool
   let action: () -> Void
-  var actionTitle: String? = nil
-  var actionColor: Color? = nil
-  var actionHandler: (() -> Void)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
-    HStack(alignment: detail == nil ? .center : .top, spacing: 8) {
-      Button(action: action) {
-        HStack(alignment: detail == nil ? .center : .top, spacing: 11) {
-          Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(iconColor ?? theme.secondaryForegroundColor)
-            .frame(width: 22, height: 22)
+    Button(action: action) {
+      HStack(alignment: .center, spacing: 11) {
+        Image(systemName: systemImage)
+          .font(.system(size: 16, weight: .medium))
+          .foregroundStyle(isSelected ? theme.accentColor : theme.secondaryForegroundColor)
+          .frame(width: 22, height: 22)
 
-          VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-              .font(.system(size: 16, weight: .medium))
-              .foregroundStyle(theme.primaryForegroundColor)
-              .lineLimit(1)
+        Text(title)
+          .font(.system(size: 16, weight: isSelected ? .semibold : .medium))
+          .foregroundStyle(theme.primaryForegroundColor)
+          .lineLimit(1)
 
-            if let detail {
-              Text(detail)
-                .font(.system(size: 11.5, weight: .regular))
-                .foregroundStyle(theme.secondaryForegroundColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-            }
-          }
-
-          Spacer(minLength: 4)
-        }
-        .contentShape(Rectangle())
+        Spacer(minLength: 4)
       }
-      .buttonStyle(.plain)
-
-      if let actionTitle, let actionHandler {
-        Button(actionTitle, action: actionHandler)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(actionColor ?? theme.accentColor)
-          .padding(.horizontal, 9)
-          .frame(height: 26)
-          .background((actionColor ?? theme.accentColor).opacity(0.13), in: Capsule())
-          .buttonStyle(.plain)
-          .padding(.top, detail == nil ? 0 : -2)
-      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .frame(minHeight: 42)
+      .background(
+        isSelected ? theme.elevatedSurfaceColor.opacity(0.62) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+      .contentShape(Rectangle())
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, detail == nil ? 7 : 8)
-    .frame(minHeight: detail == nil ? 42 : 52)
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }

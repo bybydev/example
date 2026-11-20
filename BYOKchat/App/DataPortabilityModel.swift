@@ -121,6 +121,7 @@ final class DataPortabilityModel {
       }
       await providersModel.reloadFromStorage()
       await chatsModel.reloadFromStorage()
+      preferences.prunePinnedConversations(keeping: Set(chatsModel.conversations.map(\.id)))
       await projectsModel.reloadFromStorage()
       await projectsModel.reconcile(conversations: chatsModel.conversations)
       await mcpModel.reloadFromStorage()
@@ -163,6 +164,7 @@ final class DataPortabilityModel {
     await perform("All conversations deleted") {
       await chatsModel.stopAllGenerations()
       try await conversations.deleteAllConversations()
+      preferences.clearPinnedConversations()
       await chatsModel.reloadFromStorage()
       await projectsModel.reconcile(conversations: chatsModel.conversations)
       await mcpModel.reloadFromStorage()

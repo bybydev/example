@@ -344,3 +344,84 @@ struct LocalAnalyticsFormattingTests {
     #expect(usageErrorTitle("unsupported_api_family") == "Unsupported API Family")
   }
 }
+
+@Suite("Sidebar helpers")
+struct SidebarHelperTests {
+  @Test("SidebarPinStore toggles, removes, prunes orphans, and clears cleanly")
+  func pinStoreLifecycle() throws {
+    let first = ConversationID(rawValue: "chat-1")
+    let second = ConversationID(rawValue: "chat-2")
+    let third = ConversationID(rawValue: "chat-3")
+
+    var raw = SidebarPinStore.toggled(second, in: "")
+    raw = SidebarPinStore.toggled(first, in: raw)
+    #expect(SidebarPinStore.parse(raw) == [first.rawValue, second.rawValue])
+
+    raw = SidebarPinStore.toggled(first, in: raw)
+    #expect(SidebarPinStore.parse(raw) == [second.rawValue])
+
+    raw = SidebarPinStore.toggled(third, in: raw)
+    let pruned = SidebarPinStore.pruned(raw, keeping: [second])
+    #expect(SidebarPinStore.parse(pruned) == [second.rawValue])
+
+    let suiteName = "byokchat.tests.sidebarPins.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    defaults.set(raw, forKey: SidebarPinStore.storageKey)
+    SidebarPinStore.prune(keeping: [third], in: defaults)
+    #expect(defaults.string(forKey: SidebarPinStore.storageKey) == third.rawValue)
+
+    SidebarPinStore.clear(in: defaults)
+    #expect(defaults.string(forKey: SidebarPinStore.storageKey) == nil)
+  }
+
+  @Test("Sidebar search subtitles avoid duplicating titles on title matches")
+  func searchSubtitleDeduplicatesTitleMatches() {
+    let conversationID = ConversationID(rawValue: "chat-pricing")
+    let titleMatch = ConversationSearchResult(
+      conversationID: conversationID,
+      messageID: nil,
+      role: .title,
+      title: "Pricing Comparison",
+      snippet: "Pricing Comparison",
+      updatedAt: .now
+    )
+    let summaryWithPreview = ChatConversation(
+      id: conversationID,
+      title: "Pricing Comparison",
+      providerID: "openai",
+      accountID: "acct-1",
+      modelID: "gpt-4o",
+      indexedMessageCount: 2,
+      indexedLastMessagePreview: "The new tier lowers input token cost by 30%."
+    )
+    let summaryWithoutPreview = ChatConversation(
+      id: conversationID,
+      title: "Pricing Comparison",
+      providerID: "openai",
+      accountID: "acct-1",
+      modelID: "gpt-4o"
+    )
+
+    #expect(
+      ChatSidebarView.searchSubtitle(for: titleMatch, summary: summaryWithPreview)
+        == "The new tier lowers input token cost by 30%."
+    )
+    #expect(ChatSidebarView.searchSubtitle(for: titleMatch, summary: summaryWithoutPreview) == nil)
+    #expect(ChatSidebarView.searchSubtitle(for: titleMatch, summary: nil) == nil)
+
+    let messageMatch = ConversationSearchResult(
+      conversationID: conversationID,
+      messageID: ChatMessageID(rawValue: "msg-1"),
+      role: .assistant,
+      title: "Pricing Comparison",
+      snippet: "…lowers input token cost by 30%…",
+      updatedAt: .now
+    )
+    #expect(
+      ChatSidebarView.searchSubtitle(for: messageMatch, summary: summaryWithPreview)
+        == "…lowers input token cost by 30%…"
+    )
+  }
+}

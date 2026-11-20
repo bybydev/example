@@ -241,7 +241,9 @@ enum AppStorageBootstrap {
 
     let recorder = telemetryRecorder ?? environment.makeTelemetryRecorder()
     await recorder.clearAllTelemetry()
-    environment.makeUserDefaults().set(false, forKey: "byokchat.onboarding.completed.v1")
+    let defaults = environment.makeUserDefaults()
+    defaults.set(false, forKey: "byokchat.onboarding.completed.v1")
+    SidebarPinStore.clear(in: defaults)
   }
 
   static func migrateDataForTesting(
