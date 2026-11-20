@@ -395,6 +395,75 @@ typealias ChatCompletionChunk = ChatCompletionResponse
 struct ProviderErrorEnvelope: Decodable {
   var error: ProviderErrorWire?
   var message: String?
+  var detail: ProviderErrorDetailWire?
+  var title: String?
+
+  var displayMessage: String? {
+    if let value = error?.displayMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+      !value.isEmpty
+    {
+      return value
+    }
+    if let value = message?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+      return value
+    }
+    if let value = detail?.displayMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !value.isEmpty
+    {
+      return value
+    }
+    if let value = title?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+      return value
+    }
+    return nil
+  }
+}
+
+enum ProviderErrorDetailWire: Decodable {
+  case string(String)
+  case validationErrors([ProviderValidationErrorWire])
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let text = try? container.decode(String.self) {
+      self = .string(text)
+    } else if let errors = try? container.decode([ProviderValidationErrorWire].self) {
+      self = .validationErrors(errors)
+    } else {
+      self = .string("")
+    }
+  }
+
+  var displayMessage: String? {
+    switch self {
+    case .string(let text):
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    case .validationErrors(let errors):
+      let parts = errors.compactMap(\.displayMessage)
+      return parts.isEmpty ? nil : parts.joined(separator: "; ")
+    }
+  }
+}
+
+struct ProviderValidationErrorWire: Decodable {
+  var loc: [JSONValue]?
+  var msg: String?
+
+  var displayMessage: String? {
+    guard let msg = msg?.trimmingCharacters(in: .whitespacesAndNewlines), !msg.isEmpty else {
+      return nil
+    }
+    let path = (loc ?? []).compactMap { segment -> String? in
+      switch segment {
+      case .string(let value): return value
+      case .number(let value): return String(Int(value))
+      default: return nil
+      }
+    }
+    guard !path.isEmpty else { return msg }
+    return "\(path.joined(separator: ".")): \(msg)"
+  }
 }
 struct ModelsResponse: Decodable { var data: [ModelWire] }
 struct ModelWire: Decodable {

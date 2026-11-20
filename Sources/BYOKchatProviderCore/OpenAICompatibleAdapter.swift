@@ -43,7 +43,10 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } else if control.kind == .fixed {
       probeReasoning = nil
       probeMaxTokens = 1_024
-    } else if definition.behavior == .deepSeek || definition.behavior == .openRouter {
+    } else if definition.behavior == .deepSeek
+      || definition.behavior == .openRouter
+      || definition.behavior == .nvidia
+    {
       probeReasoning = nil
       probeMaxTokens = 1_024
     } else {
@@ -84,6 +87,9 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       if definition.behavior == .mistral,
         wire.archived == true || wire.capabilities?.completionChat == false
       {
+        return nil
+      }
+      if definition.behavior == .nvidia, !Self.isLikelyNVIDIAChatModel(id: wire.id) {
         return nil
       }
       var evidence = ModelCapabilityEvidence()
@@ -535,6 +541,33 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return .object([:]) }
     return try JSONValue.parseJSONString(value)
+  }
+
+  /// NVIDIA's `GET /v1/models` mixes chat/VLM LLMs with embeddings, rerankers,
+  /// diffusion, OCR/parse, speech, guardrails, and domain-specific NIMs.
+  private static func isLikelyNVIDIAChatModel(id: String) -> Bool {
+    let lowered = id.lowercased()
+    let nonChatSubstrings = [
+      "embed", "rerank", "reward", "guard", "safety", "shield", "steerlm",
+      "moderation", "jailbreak", "topic-control", "parse", "deplot",
+      "stable-diffusion", "edify", "trellis", "cosmos", "consistory",
+      "grounding-dino", "dinov2", "retinanet", "yolov", "parakeet", "canary",
+      "magpie", "fastpitch", "whisper", "audio2face", "boltz", "alphafold",
+      "openfold", "esmfold", "diffdock", "molmim", "genmol", "corrdiff",
+      "fourcastnet", "proteinmpnn", "rfdiffusion", "bionemo", "nvclip",
+      "streampetr", "ocdrnet", "ocdnet", "paddleocr", "visual-changenet",
+      "mask-rcnn",
+    ]
+    if nonChatSubstrings.contains(where: { lowered.contains($0) }) {
+      return false
+    }
+    let tokens = Set(
+      lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
+    )
+    let nonChatTokens: Set<String> = [
+      "tts", "asr", "ocr", "bge", "e5", "clip", "sdxl", "flux", "sam2", "esm2", "evo2", "riva",
+    ]
+    return tokens.isDisjoint(with: nonChatTokens)
   }
 }
 

@@ -120,23 +120,9 @@ public enum BuiltInProviders {
     displayName: "NVIDIA",
     behavior: .nvidia,
     defaultBaseURL: URL(string: "https://integrate.api.nvidia.com/v1")!,
-    modelsPath: nil,
+    modelsPath: "/models",
     authentication: .bearer,
-    seedModels: [
-      .init(
-        providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-flash", displayName: "DeepSeek V4 Flash",
-        supportedParameters: ["temperature", "top_p", "max_tokens"]),
-      .init(
-        providerID: nvidiaID, id: "deepseek-ai/deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
-        supportedParameters: ["temperature", "top_p", "max_tokens"]),
-      .init(
-        providerID: nvidiaID, id: "nvidia/nemotron-3-ultra-550b-a55b",
-        displayName: "Nemotron 3 Ultra 550B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"]),
-      .init(
-        providerID: nvidiaID, id: "qwen/qwen3.5-122b-a10b", displayName: "Qwen 3.5 122B A10B",
-        supportedParameters: ["temperature", "top_p", "max_tokens"]),
-    ],
+    seedModels: ProviderKind.nvidia.seedModels,
     isBuiltIn: true,
     kind: .nvidia
   )

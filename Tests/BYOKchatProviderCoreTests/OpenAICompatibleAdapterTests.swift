@@ -1289,3 +1289,186 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
     Issue.record("Expected JSON object for probe request")
   }
 }
+
+@Test func nvidiaListModelsFiltersNonChatNIMsAndPreservesSeedCapabilities() async throws {
+  let payload = """
+    {
+      "object": "list",
+      "data": [
+        {"id": "deepseek-ai/deepseek-v4-flash", "object": "model", "owned_by": "deepseek-ai"},
+        {"id": "meta/llama-3.3-70b-instruct", "object": "model", "owned_by": "meta"},
+        {"id": "nvidia/nemotron-3.5-embed-1b", "object": "model", "owned_by": "nvidia"},
+        {"id": "nvidia/nemotron-3.5-rerank-8b", "object": "model", "owned_by": "nvidia"},
+        {"id": "nvidia/llama-3.1-nemotron-70b-reward", "object": "model", "owned_by": "nvidia"},
+        {"id": "meta/llama-guard-4-12b", "object": "model", "owned_by": "meta"},
+        {"id": "baai/bge-m3", "object": "model", "owned_by": "baai"},
+        {"id": "black-forest-labs/flux.1-dev", "object": "model", "owned_by": "black-forest-labs"},
+        {"id": "nvidia/parakeet-ctc-1.1b-asr", "object": "model", "owned_by": "nvidia"},
+        {"id": "nvidia/nemoretriever-parse", "object": "model", "owned_by": "nvidia"},
+        {"id": "mit/diffdock", "object": "model", "owned_by": "mit"}
+      ]
+    }
+    """
+  let transport = MockTransport(data: Data(payload.utf8))
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.nvidia, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "nvidia"))
+
+  let ids = Set(models.map(\.id))
+  #expect(ids.contains("deepseek-ai/deepseek-v4-flash"))
+  #expect(ids.contains("meta/llama-3.3-70b-instruct"))
+  #expect(!ids.contains("nvidia/nemotron-3.5-embed-1b"))
+  #expect(!ids.contains("nvidia/nemotron-3.5-rerank-8b"))
+  #expect(!ids.contains("nvidia/llama-3.1-nemotron-70b-reward"))
+  #expect(!ids.contains("meta/llama-guard-4-12b"))
+  #expect(!ids.contains("baai/bge-m3"))
+  #expect(!ids.contains("black-forest-labs/flux.1-dev"))
+  #expect(!ids.contains("nvidia/parakeet-ctc-1.1b-asr"))
+  #expect(!ids.contains("nvidia/nemoretriever-parse"))
+  #expect(!ids.contains("mit/diffdock"))
+
+  // Minimal /v1/models entry retains curated seed capabilities on merge.
+  let flash = try #require(models.first { $0.id == "deepseek-ai/deepseek-v4-flash" })
+  #expect(flash.contextWindow == 1_000_000)
+  #expect(flash.supportedParameters.contains("tools"))
+  #expect(flash.inputModalities.contains("image"))
+
+  let req = try #require(await transport.lastRequest())
+  #expect(req.url?.absoluteString == "https://integrate.api.nvidia.com/v1/models")
+}
+
+@Test func nvidiaDecodesRFC7807AndFastAPIValidationErrors() async throws {
+  // 404 Function not found for account -> .modelUnavailable (not .invalidEndpoint)
+  let notFoundPayload = """
+    {"status":404,"title":"Not Found","detail":"Function 'a0aee9e5-1234' : Not found for account 'acct'"}
+    """
+  let notFoundAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.nvidia,
+    transport: MockTransport(data: Data(notFoundPayload.utf8), statusCode: 404)
+  )
+  do {
+    _ = try await notFoundAdapter.generate(
+      request: ProviderRequest(
+        model: "deepseek-ai/deepseek-v4-flash",
+        messages: [.init(role: .user, content: "Hi")]
+      ),
+      account: account(providerID: "nvidia")
+    )
+    Issue.record("Expected modelUnavailable error")
+  } catch let error as ProviderError {
+    #expect(error == .modelUnavailable)
+  }
+
+  // 422 RFC 7807 string detail -> surfaced verbatim
+  let detailPayload = """
+    {"status":422,"title":"Unprocessable Entity","detail":"body -> stream_options: Extra inputs are not permitted"}
+    """
+  let detailAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.nvidia,
+    transport: MockTransport(data: Data(detailPayload.utf8), statusCode: 422)
+  )
+  do {
+    _ = try await detailAdapter.generate(
+      request: ProviderRequest(
+        model: "deepseek-ai/deepseek-v4-flash",
+        messages: [.init(role: .user, content: "Hi")]
+      ),
+      account: account(providerID: "nvidia")
+    )
+    Issue.record("Expected provider 422 error")
+  } catch let error as ProviderError {
+    #expect(
+      error
+        == .provider(
+          status: 422,
+          message: "body -> stream_options: Extra inputs are not permitted"
+        )
+    )
+  }
+
+  // 422 FastAPI validation array -> formatted path + message
+  let fastAPIPayload = """
+    {"detail":[{"loc":["body","max_tokens"],"msg":"Input should be greater than 0","type":"greater_than"}]}
+    """
+  let fastAPIAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.nvidia,
+    transport: MockTransport(data: Data(fastAPIPayload.utf8), statusCode: 422)
+  )
+  do {
+    _ = try await fastAPIAdapter.generate(
+      request: ProviderRequest(
+        model: "deepseek-ai/deepseek-v4-flash",
+        messages: [.init(role: .user, content: "Hi")]
+      ),
+      account: account(providerID: "nvidia")
+    )
+    Issue.record("Expected provider 422 FastAPI error")
+  } catch let error as ProviderError {
+    #expect(
+      error
+        == .provider(
+          status: 422,
+          message: "body.max_tokens: Input should be greater than 0"
+        )
+    )
+  }
+}
+
+@Test func nvidiaReplaysReasoningContentOnToolCallTurnsAndUses1024TokenProbe() async throws {
+  let transport = MockTransport(
+    data: Data(
+      #"{"id":"r","model":"nvidia/nemotron-3-ultra-550b-a55b","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+        .utf8
+    )
+  )
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.nvidia, transport: transport)
+
+  let tool = ChatToolDefinition(
+    name: "get_weather",
+    description: "Fetch weather",
+    inputSchema: .object(["type": .string("object")])
+  )
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
+      messages: [
+        .init(role: .user, content: "Weather in Tokyo?"),
+        .init(
+          role: .assistant,
+          content: "",
+          reasoning: "I should check the weather tool.",
+          toolCalls: [.init(id: "call_1", name: "get_weather", arguments: .object([:]))]
+        ),
+        .init(
+          role: .tool,
+          content: "",
+          toolResults: [.init(callID: "call_1", name: "get_weather", content: .string("Sunny"))]
+        ),
+      ],
+      tools: [tool]
+    ),
+    account: account(providerID: "nvidia")
+  )
+
+  let bodyData = try #require(await transport.lastRequest()?.httpBody)
+  if case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: bodyData),
+    case .array(let messages)? = root["messages"],
+    case .object(let assistantMsg) = messages[1]
+  {
+    #expect(assistantMsg["reasoning_content"] == .string("I should check the weather tool."))
+    #expect(root["stream_options"] == nil)
+  } else {
+    Issue.record("Expected serialized messages with assistant reasoning_content")
+  }
+
+  try await adapter.testConnection(
+    account: account(providerID: "nvidia"),
+    model: "nvidia/nemotron-3-ultra-550b-a55b"
+  )
+  let probeBody = try #require(await transport.lastRequest()?.httpBody)
+  if case .object(let probeRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: probeBody)
+  {
+    #expect(probeRoot["max_tokens"] == .number(1024))
+  } else {
+    Issue.record("Expected JSON object for NVIDIA probe request")
+  }
+}

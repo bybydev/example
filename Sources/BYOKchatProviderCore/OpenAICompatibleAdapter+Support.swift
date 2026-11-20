@@ -335,7 +335,8 @@ extension OpenAICompatibleAdapter {
     }
 
     if let calls = message.toolCalls, !calls.isEmpty {
-      if (definition.behavior == .moonshot || definition.behavior == .minimax),
+      if (definition.behavior == .moonshot || definition.behavior == .minimax
+        || definition.behavior == .nvidia),
         message.role == .assistant,
         let reasoning = message.reasoning,
         !reasoning.isEmpty
@@ -367,14 +368,16 @@ extension OpenAICompatibleAdapter {
   func mapHTTPError(status: Int, headers: [String: String], data: Data) -> ProviderError {
     let decoded = try? JSONDecoder.provider.decode(ProviderErrorEnvelope.self, from: data)
     let message =
-      decoded?.error?.displayMessage ?? decoded?.message
+      decoded?.displayMessage
       ?? HTTPURLResponse.localizedString(forStatusCode: status)
     let lowered = message.lowercased()
     switch status {
     case 401: return .authenticationFailed
     case 402: return .insufficientCredits
     case 403: return .permissionDenied
-    case 404 where lowered.contains("model"): return .modelUnavailable
+    case 404 where lowered.contains("model")
+      || (definition.behavior == .nvidia && lowered.contains("function")):
+      return .modelUnavailable
     case 404: return .invalidEndpoint
     case 429: return .rateLimited(retryAfter: header("Retry-After", headers))
     default:

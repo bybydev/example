@@ -203,7 +203,7 @@ public extension ProviderKind {
     case .minimax: .fixed(chat: "/chat/completions", models: "/models")
     case .mistral: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
-    case .nvidia: .fixed(chat: "/chat/completions", models: nil)
+    case .nvidia: .fixed(chat: "/chat/completions", models: "/models")
     case .ollama, .lmStudio: .fixed(chat: "/chat/completions", models: "/models")
     case .openAICompatible: .userEditable
     }
@@ -214,7 +214,7 @@ public extension ProviderKind {
   /// account's derived definition for the exact answer.
   var supportsDiscovery: Bool {
     switch self {
-    case .nvidia, .openAICompatible: false
+    case .openAICompatible: false
     default: true
     }
   }
@@ -475,17 +475,23 @@ public extension ProviderKind {
         .init(
           providerID: "nvidia", id: "deepseek-ai/deepseek-v4-flash",
           displayName: "DeepSeek V4 Flash",
-          supportedParameters: ["temperature", "top_p", "max_tokens"]),
+          contextWindow: 1_000_000,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"],
+          inputModalities: ["text", "image"]),
         .init(
           providerID: "nvidia", id: "deepseek-ai/deepseek-v4-pro", displayName: "DeepSeek V4 Pro",
-          supportedParameters: ["temperature", "top_p", "max_tokens"]),
+          contextWindow: 262_144,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"]),
         .init(
           providerID: "nvidia", id: "nvidia/nemotron-3-ultra-550b-a55b",
           displayName: "Nemotron 3 Ultra 550B",
-          supportedParameters: ["temperature", "top_p", "max_tokens"]),
+          contextWindow: 1_000_000,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"]),
         .init(
           providerID: "nvidia", id: "qwen/qwen3.5-122b-a10b", displayName: "Qwen 3.5 122B A10B",
-          supportedParameters: ["temperature", "top_p", "max_tokens"]),
+          contextWindow: 262_144,
+          supportedParameters: ["temperature", "top_p", "max_tokens", "tools"],
+          inputModalities: ["text", "image"]),
       ]
     case .anthropic:
       [
