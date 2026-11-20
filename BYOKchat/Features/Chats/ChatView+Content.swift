@@ -7,51 +7,85 @@ extension ChatView {
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
     let isUntouched = conversation.messages.isEmpty && !chats.isGenerating(conversation.id)
-    if isUntouched {
-      // An untouched chat has no scroll view: the empty state *is* the content
-      // area, centered between the nav bar and the composer.
-      VStack(spacing: 0) {
-        Spacer(minLength: 0)
-        existingEmptyState(conversation)
-          .padding(.horizontal, 24)
-        Spacer(minLength: 0)
+    Group {
+      if isUntouched {
+        // An untouched chat has no scroll view: the empty state *is* the content
+        // area, centered between the nav bar and the composer.
+        VStack(spacing: 0) {
+          Spacer(minLength: 0)
+          existingEmptyState(conversation)
+            .padding(.horizontal, 24)
+          Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          dismissKeyboard()
+        }
+      } else {
+        scrollViewContent(conversation)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .contentShape(Rectangle())
-      .onTapGesture {
-        dismissKeyboard()
-      }
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        ChatInputComposer(
-          draft: $draft,
-          attachments: pendingAttachments,
-          isGenerating: false,
-          canSend: configurationIssue(conversation) == nil && chats.canSend(conversation.id),
-          conversation: conversation,
-          chats: chats,
-          providers: providers,
-          openChatSettings: { showTargetSettings = true },
-          pickPhoto: { showPhotoPicker = true },
-          pickFile: { showFileImporter = true },
-          pickFromLibrary: { showLibraryPicker = true },
-          projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
-          attachProjectFile: { file in
-            Task { @MainActor in
-              await self.attachProjectFile(file)
-            }
-          },
-          removeAttachment: removePendingAttachment,
-          send: send,
-          stop: {
-            Task { @MainActor in
-              await chats.stop(conversationID)
-            }
-          }
-        )
-      }
-    } else {
-      scrollViewContent(conversation)
     }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      VStack(spacing: 4) {
+        if !isUntouched && showJumpToLatest {
+          jumpToLatestButton
+        }
+
+        chatComposer(for: conversation, isGenerating: !isUntouched && chats.isGenerating(conversationID))
+      }
+    }
+  }
+
+  private var jumpToLatestButton: some View {
+    Button {
+      followsLatest = true
+      isUserDraggingTimeline = false
+      showJumpToLatest = false
+      scrollToBottom()
+    } label: {
+      Image(systemName: "arrow.down")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .frame(width: 32, height: 32)
+        .glassEffect(.clear, in: Circle())
+        .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .zIndex(10)
+    .accessibilityLabel("Scroll to bottom of chat")
+  }
+
+  private func chatComposer(for conversation: ChatConversation, isGenerating: Bool) -> some View {
+    ChatInputComposer(
+      draft: $draft,
+      attachments: pendingAttachments,
+      isGenerating: isGenerating,
+      isImportingAttachments: isImportingAttachments,
+      canSend: configurationIssue(conversation) == nil && chats.canSend(conversation.id),
+      conversation: conversation,
+      providers: providers,
+      openChatSettings: { showTargetSettings = true },
+      pickPhoto: openPhotoPicker,
+      pickFile: openFileImporter,
+      pickFromLibrary: openLibraryPicker,
+      projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
+      attachProjectFile: { file in
+        Task { @MainActor in
+          await self.attachProjectFile(file)
+        }
+      },
+      removeAttachment: removePendingAttachment,
+      send: send,
+      stop: {
+        Task { @MainActor in
+          await chats.stop(conversationID)
+        }
+      }
+    )
   }
 
   private func scrollViewContent(_ conversation: ChatConversation) -> some View {
@@ -198,7 +232,7 @@ extension ChatView {
           chats.isGenerating(conversationID)
         else { return }
 
-        scrollToBottom(proxy, animated: false)
+        scrollToBottom(animated: false)
       }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
@@ -230,58 +264,6 @@ extension ChatView {
         guard !Task.isCancelled else { return }
         scrollToInitialTarget(proxy)
         hasCompletedInitialScroll = true
-      }
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        VStack(spacing: 4) {
-          if showJumpToLatest {
-            Button {
-              followsLatest = true
-              isUserDraggingTimeline = false
-              showJumpToLatest = false
-              scrollToBottom(proxy)
-            } label: {
-              Image(systemName: "arrow.down")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme.secondaryForegroundColor)
-                .frame(width: 32, height: 32)
-                .glassEffect(.clear, in: Circle())
-                .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .zIndex(10)
-            .accessibilityLabel("Scroll to bottom of chat")
-          }
-
-          ChatInputComposer(
-            draft: $draft,
-            attachments: pendingAttachments,
-            isGenerating: chats.isGenerating(conversationID),
-            canSend: configurationIssue(conversation) == nil && chats.canSend(conversation.id),
-            conversation: conversation,
-            chats: chats,
-            providers: providers,
-            openChatSettings: { showTargetSettings = true },
-            pickPhoto: { showPhotoPicker = true },
-            pickFile: { showFileImporter = true },
-            pickFromLibrary: { showLibraryPicker = true },
-            projectFiles: projects.project(for: conversationID)?.projectFiles ?? [],
-            attachProjectFile: { file in
-              Task { @MainActor in
-                await self.attachProjectFile(file)
-              }
-            },
-            removeAttachment: removePendingAttachment,
-            send: send,
-            stop: {
-              Task { @MainActor in
-                await chats.stop(conversationID)
-              }
-            }
-          )
-        }
       }
     }
   }
@@ -398,7 +380,7 @@ extension ChatView {
     )
   }
 
-  private func scrollToBottom(_: ScrollViewProxy, animated: Bool = true) {
+  private func scrollToBottom(animated: Bool = true) {
     if animated {
       withAnimation(.easeOut(duration: 0.18)) {
         chatScrollPosition.scrollTo(edge: .bottom)
@@ -971,12 +953,6 @@ extension ChatView {
     return models.first?.model.id
   }
 
-  var selectedModel: ProviderModel? {
-    guard let account = defaultAccount, let modelID = defaultModelID else { return nil }
-    return providers.models(for: account.id, includeHidden: true)
-      .first(where: { $0.model.id == modelID })?.model
-  }
-
   var readiness: ChatReadiness {
     guard defaultAccount != nil else { return .noConnection }
     if let account = defaultAccount,
@@ -987,92 +963,6 @@ extension ChatView {
     }
     guard defaultModelID != nil else { return .noModel }
     return .ready
-  }
-
-  var targetReasoning: ReasoningOptions? {
-    if let conversation { return conversation.options.reasoning }
-    return nil
-  }
-
-  /// Account feeding the target chip / picker sheet: the conversation's own
-  /// for existing chats, resolved defaults for fresh mode.
-  var targetPickerAccount: ProviderAccount? {
-    if let conversation {
-      return providers.accounts.first { $0.id == conversation.accountID }
-    }
-    return defaultAccount
-  }
-
-  var targetPickerInitialModelID: ModelID? {
-    conversation?.modelID ?? defaultModelID
-  }
-
-  var targetSummary: String {
-    if let conversation {
-      let account = targetPickerAccount
-      let providerName = account.flatMap { providers.provider(for: $0.providerID)?.displayName }
-        ?? account?.label
-        ?? conversation.providerID.rawValue
-      let model = providers.models(for: conversation.accountID, includeHidden: true)
-        .first(where: { $0.model.id == conversation.modelID })?.model
-      return ComposerTargetLabelFormatter.make(
-        providerID: conversation.providerID,
-        providerName: providerName,
-        modelName: model?.displayName ?? conversation.modelID.rawValue,
-        modelID: conversation.modelID.rawValue,
-        supportedParameters: model?.supportedParameters ?? [],
-        reasoning: conversation.options.reasoning,
-        capabilities: providers.capabilities(accountID: conversation.accountID, modelID: conversation.modelID)
-      )
-    }
-    if project?.accountID != nil && defaultAccount == nil {
-      return "Project connection unavailable"
-    }
-    if project?.modelID != nil && defaultAccount != nil && defaultModelID == nil {
-      return "Project model unavailable"
-    }
-    switch readiness {
-    case .noConnection:
-      return "Set up connection"
-    case .missingCredential:
-      return "Add API key"
-    case .noModel:
-      return "Choose model"
-    case .ready:
-      guard let account = defaultAccount, let modelID = defaultModelID else {
-        return "Choose model"
-      }
-      let providerName = providers.provider(for: account.providerID)?.displayName ?? account.label
-      let model = selectedModel
-      return ComposerTargetLabelFormatter.make(
-        providerID: account.providerID,
-        providerName: providerName,
-        modelName: model?.displayName ?? modelID.rawValue,
-        modelID: modelID.rawValue,
-        supportedParameters: model?.supportedParameters ?? [],
-        reasoning: targetReasoning,
-        capabilities: providers.capabilities(accountID: account.id, modelID: modelID)
-      )
-    }
-  }
-
-  var targetDetails: String {
-    guard let account = defaultAccount else { return "No connection configured" }
-    switch readiness {
-    case .missingCredential:
-      return "\(account.label) · API key required"
-    case .noModel:
-      return "\(account.label) · No available model"
-    case .noConnection:
-      return "No connection configured"
-    case .ready:
-      let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue ?? "No model"
-      guard let id = defaultModelID else { return "\(account.label) · \(modelName)" }
-      let control = providers.capabilities(accountID: account.id, modelID: id).reasoning
-      let reasoningDetail = control.label(for: targetReasoning)
-      return [account.label, modelName, reasoningDetail]
-        .filter { !$0.isEmpty }.joined(separator: " · ")
-    }
   }
 
   @ViewBuilder
@@ -1114,13 +1004,6 @@ extension ChatView {
       }
     }
     .frame(maxWidth: .infinity)
-  }
-
-  private var usingFreshModelLabel: String? {
-    guard let modelName = selectedModel?.displayName ?? defaultModelID?.rawValue else {
-      return nil
-    }
-    return "Using \(modelName)"
   }
 
   /// Configuration-problem variant of the hero for existing conversations —

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import BYOKchat
@@ -254,6 +255,19 @@ struct ComposerTargetLabelFormatterTests {
     )
     #expect(devstral == "Devstral 2")
   }
+
+  @Test("Hyphenated custom provider name still strips duplicate prefix from normalized model")
+  func hyphenatedCustomProviderPrefix() {
+    let label = ComposerTargetLabelFormatter.make(
+      providerID: "my-lab",
+      providerName: "My-Lab",
+      modelName: "My-Lab - Aster 2",
+      modelID: "aster-2",
+      supportedParameters: [],
+      reasoning: nil
+    )
+    #expect(label == "ML · Aster 2")
+  }
 }
 
 @Suite("Composer layout policy")
@@ -289,5 +303,154 @@ struct ChatComposerLayoutPolicyTests {
   func visibleTextLineCaps() {
     #expect(ChatComposerLayoutPolicy.visibleTextLineCap(hasAttachments: false) == 6)
     #expect(ChatComposerLayoutPolicy.visibleTextLineCap(hasAttachments: true) == 3)
+  }
+
+  @Test("Auto-scroll only triggers when appending at the end of a draft")
+  func scrollToBottomPolicy() {
+    #expect(
+      ChatComposerLayoutPolicy.shouldScrollToBottomOnDraftChange(
+        oldDraft: "hello",
+        newDraft: "hello world"
+      )
+    )
+    #expect(
+      ChatComposerLayoutPolicy.shouldScrollToBottomOnDraftChange(
+        oldDraft: "line 1",
+        newDraft: "line 1\n"
+      )
+    )
+    #expect(
+      !ChatComposerLayoutPolicy.shouldScrollToBottomOnDraftChange(
+        oldDraft: "line 1\nline 2",
+        newDraft: "line 1x\nline 2"
+      )
+    )
+    #expect(
+      !ChatComposerLayoutPolicy.shouldScrollToBottomOnDraftChange(
+        oldDraft: "hello world",
+        newDraft: "hello"
+      )
+    )
+  }
+
+  @Test("Attachment validation rejects empty files, duplicates, and count or size overflows")
+  func attachmentValidation() {
+    func item(_ id: String, bytes: Int) -> ChatAttachment {
+      ChatAttachment(
+        id: id,
+        kind: .file,
+        filename: "\(id).txt",
+        mimeType: "text/plain",
+        data: bytes == 0 ? Data() : Data([0x61]),
+        declaredByteCount: bytes
+      )
+    }
+
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: [item("a", bytes: 100)],
+        additions: [item("b", bytes: 200)]
+      ) == nil
+    )
+
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: [item("a", bytes: 100)],
+        additions: [item("a", bytes: 100)]
+      ) == "This attachment is already in the message."
+    )
+
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: [],
+        additions: [item("empty", bytes: 0)]
+      ) == "Empty files cannot be attached."
+    )
+
+    let eightItems = (1...8).map { item("f\($0)", bytes: 10) }
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: eightItems,
+        additions: [item("f9", bytes: 10)]
+      ) == "A message can include at most 8 attachments."
+    )
+
+    let overSingle = ChatAttachment(
+      id: "big",
+      kind: .file,
+      filename: "big.bin",
+      mimeType: "application/octet-stream",
+      data: Data(),
+      declaredByteCount: 21 * 1_024 * 1_024
+    )
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: [],
+        additions: [overSingle]
+      ) == "Each attachment must be no larger than 20 MB."
+    )
+
+    let fifteenMB1 = ChatAttachment(
+      id: "m1",
+      kind: .file,
+      filename: "m1.bin",
+      mimeType: "application/octet-stream",
+      data: Data(),
+      declaredByteCount: 15 * 1_024 * 1_024
+    )
+    let fifteenMB2 = ChatAttachment(
+      id: "m2",
+      kind: .file,
+      filename: "m2.bin",
+      mimeType: "application/octet-stream",
+      data: Data(),
+      declaredByteCount: 15 * 1_024 * 1_024
+    )
+    let fifteenMB3 = ChatAttachment(
+      id: "m3",
+      kind: .file,
+      filename: "m3.bin",
+      mimeType: "application/octet-stream",
+      data: Data(),
+      declaredByteCount: 15 * 1_024 * 1_024
+    )
+    #expect(
+      ChatComposerLayoutPolicy.attachmentValidationError(
+        existing: [fifteenMB1, fifteenMB2],
+        additions: [fifteenMB3]
+      ) == "Attachments in one message cannot exceed 40 MB total."
+    )
+  }
+
+  @Test("Imported file reader rejects empty files and folders cleanly")
+  func importedFileValidation() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("composer-import-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    do {
+      _ = try LibraryImportSupport.readImportedFile(
+        at: dir,
+        folderErrorMessage: "Folders cannot be attached.",
+        rejectEmptyFiles: true
+      )
+      Issue.record("Expected folder rejection")
+    } catch {
+      #expect(error.localizedDescription == "Folders cannot be attached.")
+    }
+
+    let emptyFile = dir.appendingPathComponent("empty.txt")
+    try Data().write(to: emptyFile)
+    do {
+      _ = try LibraryImportSupport.readImportedFile(
+        at: emptyFile,
+        folderErrorMessage: "Folders cannot be attached.",
+        rejectEmptyFiles: true
+      )
+      Issue.record("Expected empty file rejection")
+    } catch {
+      #expect(error.localizedDescription == "empty.txt is empty and cannot be attached.")
+    }
   }
 }

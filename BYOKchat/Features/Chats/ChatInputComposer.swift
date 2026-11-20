@@ -16,6 +16,9 @@ enum ChatComposerActivity: Equatable {
 enum ChatComposerLayoutPolicy {
   static let textOnlyVisibleLineCap = 6
   static let attachmentVisibleLineCap = 3
+  static let maxAttachmentCount = 8
+  static let maxAttachmentByteCount = 20 * 1_024 * 1_024
+  static let maxTotalAttachmentByteCount = 40 * 1_024 * 1_024
 
   static func visibleTextLineCap(hasAttachments: Bool) -> Int {
     hasAttachments ? attachmentVisibleLineCap : textOnlyVisibleLineCap
@@ -29,12 +32,43 @@ enum ChatComposerLayoutPolicy {
   ) -> Bool {
     !isFocused && draftIsEmpty && !hasAttachments && activity == .idle
   }
+
+  /// Auto-scroll to the bottom only when appending text at the end of the draft,
+  /// never when editing or deleting earlier lines in a multiline message.
+  static func shouldScrollToBottomOnDraftChange(oldDraft: String, newDraft: String) -> Bool {
+    guard newDraft.count > oldDraft.count else { return false }
+    return newDraft.hasPrefix(oldDraft)
+  }
+
+  static func attachmentValidationError(
+    existing: [ChatAttachment],
+    additions: [ChatAttachment]
+  ) -> String? {
+    let combined = existing + additions
+    guard Set(combined.map(\.id)).count == combined.count else {
+      return "This attachment is already in the message."
+    }
+    guard combined.count <= maxAttachmentCount else {
+      return "A message can include at most \(maxAttachmentCount) attachments."
+    }
+    guard combined.allSatisfy({ $0.byteCount > 0 }) else {
+      return "Empty files cannot be attached."
+    }
+    guard combined.allSatisfy({ $0.byteCount <= maxAttachmentByteCount }) else {
+      return "Each attachment must be no larger than 20 MB."
+    }
+    guard combined.reduce(0, { $0 + $1.byteCount }) <= maxTotalAttachmentByteCount else {
+      return "Attachments in one message cannot exceed 40 MB total."
+    }
+    return nil
+  }
 }
 
 struct ChatComposer: View {
   @Binding var draft: String
   let attachments: [ChatAttachment]
   let activity: ChatComposerActivity
+  let isImportingAttachments: Bool
   let canSend: Bool
   let targetSummary: String
   let targetDetails: String
@@ -52,16 +86,17 @@ struct ChatComposer: View {
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
   @State private var measuredContentHeight: CGFloat = 0
+  @ScaledMetric(relativeTo: .body) private var messageLineHeight: CGFloat = 22
+  @ScaledMetric(relativeTo: .body) private var compactContentHeight: CGFloat = 50
+  @ScaledMetric(relativeTo: .body) private var minimumExpandedContentHeight: CGFloat = 54
 
-  private static let messageLineHeight: CGFloat = 22
-  private static let compactContentHeight: CGFloat = 50
-  private static let minimumExpandedContentHeight: CGFloat = 54
   private static let textAnchor = "chat-composer-text"
 
   init(
     draft: Binding<String>,
     attachments: [ChatAttachment],
     activity: ChatComposerActivity,
+    isImportingAttachments: Bool = false,
     canSend: Bool,
     targetSummary: String,
     targetDetails: String,
@@ -78,6 +113,7 @@ struct ChatComposer: View {
     _draft = draft
     self.attachments = attachments
     self.activity = activity
+    self.isImportingAttachments = isImportingAttachments
     self.canSend = canSend
     self.targetSummary = targetSummary
     self.targetDetails = targetDetails
@@ -96,9 +132,9 @@ struct ChatComposer: View {
     draft: Binding<String>,
     attachments: [ChatAttachment],
     isGenerating: Bool,
+    isImportingAttachments: Bool = false,
     canSend: Bool,
     conversation: ChatConversation,
-    chats _: ChatManagementModel,
     providers: ProviderManagementModel,
     openChatSettings: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
@@ -113,6 +149,7 @@ struct ChatComposer: View {
     _draft = draft
     self.attachments = attachments
     activity = isGenerating ? .generating : .idle
+    self.isImportingAttachments = isImportingAttachments
     self.canSend = canSend
 
     let account = providers.accounts.first { $0.id == conversation.accountID }
@@ -151,46 +188,21 @@ struct ChatComposer: View {
     self.stop = stop
   }
 
-  init(
-    draft: Binding<String>,
-    attachments: [ChatAttachment],
-    isCreating: Bool,
-    canSend: Bool,
-    targetSummary: String,
-    targetDetails: String,
-    openTarget: @escaping () -> Void,
-    pickPhoto: @escaping () -> Void,
-    pickFile: @escaping () -> Void,
-    pickFromLibrary: (() -> Void)? = nil,
-    projectFiles: [ProjectFile] = [],
-    attachProjectFile: @escaping (ProjectFile) -> Void = { _ in },
-    removeAttachment: @escaping (String) -> Void,
-    send: @escaping () -> Void
-  ) {
-    self.init(
-      draft: draft,
-      attachments: attachments,
-      activity: isCreating ? .creating : .idle,
-      canSend: canSend,
-      targetSummary: targetSummary,
-      targetDetails: targetDetails,
-      openTarget: openTarget,
-      pickPhoto: pickPhoto,
-      pickFile: pickFile,
-      pickFromLibrary: pickFromLibrary,
-      projectFiles: projectFiles,
-      attachProjectFile: attachProjectFile,
-      removeAttachment: removeAttachment,
-      send: send
-    )
-  }
-
   private var normalizedDraft: String {
     draft.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private var canSubmit: Bool {
-    activity == .idle && canSend && (!normalizedDraft.isEmpty || !attachments.isEmpty)
+    activity == .idle
+      && !isImportingAttachments
+      && canSend
+      && (!normalizedDraft.isEmpty || !attachments.isEmpty)
+  }
+
+  private var canAddMoreAttachments: Bool {
+    activity != .creating
+      && !isImportingAttachments
+      && attachments.count < ChatComposerLayoutPolicy.maxAttachmentCount
   }
 
   private var isCompact: Bool {
@@ -202,32 +214,48 @@ struct ChatComposer: View {
     )
   }
 
-  private var contentHeightCap: CGFloat {
+  private var textHeightCap: CGFloat {
     let lineCount = ChatComposerLayoutPolicy.visibleTextLineCap(
       hasAttachments: !attachments.isEmpty
     )
-    let textHeight = CGFloat(lineCount) * Self.messageLineHeight
-
-    if attachments.isEmpty {
-      return 10 + textHeight + 4
-    }
-
-    return 9 + ChatAttachmentPresentation.composer.railHeight + 4 + textHeight + 4
+    let textHeight = CGFloat(lineCount) * messageLineHeight
+    let topPadding: CGFloat = attachments.isEmpty ? 10 : 4
+    return topPadding + textHeight + 4
   }
 
   private var contentViewportHeight: CGFloat {
     if isCompact {
-      return Self.compactContentHeight
+      return max(50, compactContentHeight)
     }
 
+    let minHeight = attachments.isEmpty
+      ? max(54, minimumExpandedContentHeight)
+      : max(48, minimumExpandedContentHeight - 6)
     return min(
-      max(measuredContentHeight, Self.minimumExpandedContentHeight),
-      contentHeightCap
+      max(measuredContentHeight, minHeight),
+      textHeightCap
     )
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      if !attachments.isEmpty {
+        ChatAttachmentStrip(
+          attachments: attachments,
+          presentation: .composer,
+          removeAttachment: removeAttachment,
+          pickPhoto: pickPhoto,
+          pickFile: pickFile,
+          pickFromLibrary: pickFromLibrary,
+          projectFiles: projectFiles,
+          attachProjectFile: attachProjectFile,
+          maxAttachments: ChatComposerLayoutPolicy.maxAttachmentCount,
+          isImportingAttachments: isImportingAttachments
+        )
+        .padding(.horizontal, 10)
+        .padding(.top, 9)
+      }
+
       contentViewport
 
       if !isCompact {
@@ -251,39 +279,25 @@ struct ChatComposer: View {
   private var contentViewport: some View {
     ScrollViewReader { proxy in
       ScrollView(.vertical) {
-        VStack(alignment: .leading, spacing: 0) {
-          if !attachments.isEmpty {
-            ChatAttachmentStrip(
-              attachments: attachments,
-              presentation: .composer,
-              removeAttachment: removeAttachment,
-              pickPhoto: pickPhoto,
-              pickFile: pickFile
-            )
-            .padding(.horizontal, 10)
-            .padding(.top, 9)
-          }
-
-          messageField
-            .padding(.leading, isCompact ? 54 : 14)
-            .padding(.trailing, isCompact ? 54 : 14)
-            .padding(.top, attachments.isEmpty ? (isCompact ? 5 : 10) : 4)
-            .padding(.bottom, isCompact ? 5 : 4)
-            .id(Self.textAnchor)
-        }
-        .background(
-          GeometryReader { geometry in
-            Color.clear.preference(
-              key: ChatComposerContentHeightKey.self,
-              value: geometry.size.height
-            )
-          }
-        )
+        messageField
+          .padding(.leading, isCompact ? 54 : 14)
+          .padding(.trailing, isCompact ? 54 : 14)
+          .padding(.top, attachments.isEmpty ? (isCompact ? 5 : 10) : 4)
+          .padding(.bottom, isCompact ? 5 : 4)
+          .id(Self.textAnchor)
+          .background(
+            GeometryReader { geometry in
+              Color.clear.preference(
+                key: ChatComposerContentHeightKey.self,
+                value: geometry.size.height
+              )
+            }
+          )
       }
       .scrollIndicators(.hidden)
       .scrollBounceBehavior(.basedOnSize)
       .frame(height: contentViewportHeight)
-      .overlay(alignment: .top) {
+      .overlay(alignment: .center) {
         if isCompact {
           compactControls
         }
@@ -291,23 +305,30 @@ struct ChatComposer: View {
       .onPreferenceChange(ChatComposerContentHeightKey.self) { height in
         measuredContentHeight = height
       }
-      .onChange(of: draft) { _, _ in
-        scrollToTextIfNeeded(proxy)
+      .onChange(of: draft) { oldValue, newValue in
+        if ChatComposerLayoutPolicy.shouldScrollToBottomOnDraftChange(
+          oldDraft: oldValue,
+          newDraft: newValue
+        ) {
+          scrollToTextIfNeeded(proxy)
+        }
       }
-      .onChange(of: attachments.count) { _, _ in
-        scrollToTextIfNeeded(proxy)
+      .onChange(of: attachments.count) { oldCount, newCount in
+        if newCount > oldCount {
+          scrollToTextIfNeeded(proxy)
+        }
       }
     }
   }
 
   private var messageField: some View {
     TextField("Message...", text: $draft, axis: .vertical)
-      .font(.system(size: 17))
+      .font(.body)
       .foregroundStyle(theme.primaryForegroundColor)
       .tint(theme.accentColor)
       .lineLimit(1...)
       .fixedSize(horizontal: false, vertical: true)
-      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+      .frame(maxWidth: .infinity, minHeight: max(40, compactContentHeight - 10), alignment: .leading)
       .contentShape(Rectangle())
       .focused($isEditorFocused)
       .accessibilityLabel("Message")
@@ -327,6 +348,7 @@ struct ChatComposer: View {
     HStack(spacing: 6) {
       optionsButton
       targetButton
+        .layoutPriority(-1)
       Spacer(minLength: 8)
       sendButton
     }
@@ -364,13 +386,28 @@ struct ChatComposer: View {
         }
       }
     } label: {
-      Image(systemName: "plus")
-        .font(.system(size: 21, weight: .regular))
-        .foregroundStyle(theme.primaryForegroundColor)
-        .frame(width: 38, height: 38)
-        .contentShape(Circle())
+      Group {
+        if isImportingAttachments {
+          ProgressView()
+            .controlSize(.small)
+            .tint(theme.primaryForegroundColor)
+        } else {
+          Image(systemName: "plus")
+            .font(.system(size: 21, weight: .regular))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .opacity(canAddMoreAttachments ? 1 : 0.45)
+        }
+      }
+      .frame(width: 38, height: 38)
+      .contentShape(Circle())
     }
-    .accessibilityLabel("Add attachment")
+    .disabled(!canAddMoreAttachments)
+    .accessibilityLabel(isImportingAttachments ? "Importing attachments" : "Add attachment")
+    .accessibilityHint(
+      attachments.count >= ChatComposerLayoutPolicy.maxAttachmentCount
+        ? "Maximum of \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments reached."
+        : ""
+    )
   }
 
   private var targetButton: some View {
@@ -388,14 +425,14 @@ struct ChatComposer: View {
       .font(.system(size: 12.5, weight: .medium))
       .foregroundStyle(theme.secondaryForegroundColor)
       .padding(.horizontal, 4)
-      .frame(height: 32)
+      .frame(height: 38)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .frame(maxWidth: 176, alignment: .leading)
     .disabled(activity.isBusy)
-    .accessibilityLabel("Change provider, model, and reasoning. Currently \(targetDetails)")
-    .accessibilityValue(targetSummary)
+    .accessibilityLabel("Model and reasoning")
+    .accessibilityValue(targetDetails)
+    .accessibilityHint("Double-tap to change provider, model, or reasoning.")
   }
 
   private var sendButton: some View {
@@ -422,6 +459,7 @@ struct ChatComposer: View {
         case .creating:
           ProgressView()
             .controlSize(.small)
+            .tint(sendButtonForeground)
         }
       }
       .frame(width: 40, height: 40)
@@ -429,7 +467,11 @@ struct ChatComposer: View {
       .foregroundStyle(sendButtonForeground)
     }
     .buttonStyle(.plain)
-    .disabled(activity == .creating || (activity == .idle && !canSubmit))
+    .disabled(
+      activity == .creating
+        || (activity == .idle && !canSubmit)
+        || (activity == .generating && stop == nil)
+    )
     .accessibilityLabel(sendButtonAccessibilityLabel)
   }
 
@@ -465,7 +507,6 @@ struct ChatComposer: View {
 }
 
 typealias ChatInputComposer = ChatComposer
-typealias NewChatInputComposer = ChatComposer
 
 private struct ChatComposerContentHeightKey: PreferenceKey {
   static let defaultValue: CGFloat = 0
@@ -588,8 +629,13 @@ enum ComposerTargetLabelFormatter {
     }
 
     // Custom endpoints may repeat the configured provider label in the model.
-    if !isRecognizable(providerName),
-       let stripped = removingPrefix(text, providerName) {
+    let normalizedProviderName = collapseWhitespace(
+      providerName
+        .replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+    )
+    if !isRecognizable(normalizedProviderName),
+       let stripped = removingPrefix(text, normalizedProviderName) {
       text = stripped
     }
 
@@ -634,8 +680,10 @@ enum ComposerTargetLabelFormatter {
   }
 
   private static func removingPrefix(_ value: String, _ prefix: String) -> String? {
-    guard !prefix.isEmpty, value.lowercased().hasPrefix(prefix.lowercased()) else { return nil }
-    let suffix = String(value.dropFirst(prefix.count))
+    guard !prefix.isEmpty,
+      let match = value.range(of: prefix, options: [.anchored, .caseInsensitive])
+    else { return nil }
+    let suffix = String(value[match.upperBound...])
     guard let first = suffix.first, first.isWhitespace || first == ":" else { return nil }
     let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
       .trimmingCharacters(in: CharacterSet(charactersIn: ": "))

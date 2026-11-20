@@ -60,7 +60,9 @@ struct ChatView: View {
   @Environment(\.appFoundationTheme) var theme
   @Environment(\.dismiss) var dismiss
   @State var draft = ""
-  @State var restoredDraft = false
+  @State var restoredDraftConversationID: ConversationID?
+  @State var activeAttachmentImportCount = 0
+  @State var attachmentImportGeneration = 0
   @State var showConnections = false
   @State var showProjectEditorSheet = false
   @State var showTargetSettings = false
@@ -126,6 +128,10 @@ struct ChatView: View {
     return false
   }
 
+  var isImportingAttachments: Bool {
+    activeAttachmentImportCount > 0
+  }
+
   var conversation: ChatConversation? {
     guard !isFresh else { return nil }
     return chats.conversation(conversationID)
@@ -160,7 +166,10 @@ struct ChatView: View {
     .photosPicker(
       isPresented: $showPhotoPicker,
       selection: $photoPickerItems,
-      maxSelectionCount: 8,
+      maxSelectionCount: max(
+        1,
+        ChatComposerLayoutPolicy.maxAttachmentCount - pendingAttachments.count
+      ),
       matching: .images
     )
     .onChange(of: photoPickerItems) { _, items in
@@ -387,15 +396,32 @@ struct ChatView: View {
       }
     }
     .task(id: conversationID) {
+      let isSwitchingConversation = restoredDraftConversationID != nil
+        && restoredDraftConversationID != conversationID
+      if isSwitchingConversation {
+        draft = ""
+      }
+      restoredDraftConversationID = nil
+      attachmentImportGeneration &+= 1
+      activeAttachmentImportCount = 0
       pendingAttachments = []
       photoPickerItems = []
+
       await chats.loadConversation(conversationID)
-      guard !restoredDraft else { return }
-      draft = chats.draft(for: conversationID)
-      restoredDraft = true
+      guard !Task.isCancelled else { return }
+
+      let savedDraft = chats.draft(for: conversationID)
+      restoredDraftConversationID = conversationID
+      if draft.isEmpty {
+        if !savedDraft.isEmpty {
+          draft = savedDraft
+        }
+      } else {
+        chats.saveDraft(draft, conversationID: conversationID)
+      }
     }
     .onChange(of: draft) { _, value in
-      guard restoredDraft else { return }
+      guard restoredDraftConversationID == conversationID else { return }
       chats.saveDraft(value, conversationID: conversationID)
     }
   }
@@ -512,25 +538,94 @@ struct ChatView: View {
     showMarkdownExporter = true
   }
 
+  func openPhotoPicker() {
+    guard pendingAttachments.count < ChatComposerLayoutPolicy.maxAttachmentCount else {
+      chats.errorMessage = "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
+      return
+    }
+    showPhotoPicker = true
+  }
+
+  func openFileImporter() {
+    guard pendingAttachments.count < ChatComposerLayoutPolicy.maxAttachmentCount else {
+      chats.errorMessage = "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
+      return
+    }
+    showFileImporter = true
+  }
+
+  func openLibraryPicker() {
+    guard pendingAttachments.count < ChatComposerLayoutPolicy.maxAttachmentCount else {
+      chats.errorMessage = "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
+      return
+    }
+    showLibraryPicker = true
+  }
+
   private func importPhotos(_ items: [PhotosPickerItem]) {
     guard !items.isEmpty else { return }
+    photoPickerItems = []
+
+    let generation = attachmentImportGeneration
     Task { @MainActor in
-      var imported: [ChatAttachment] = []
-      for item in items {
-        do {
-          guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-          let attachment = try normalizedImageAttachment(
-            data: data,
-            suggestedName: "image-\(pendingAttachments.count + imported.count + 1)"
-          )
-          imported.append(attachment)
-        } catch {
-          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
-          chats.errorMessage = error.localizedDescription
+      activeAttachmentImportCount += 1
+      defer {
+        if attachmentImportGeneration == generation {
+          activeAttachmentImportCount = max(0, activeAttachmentImportCount - 1)
         }
       }
-      appendAttachments(imported)
-      photoPickerItems = []
+
+      let stamp = LibraryImportSupport.importStamp()
+      var batchIndex = 0
+      var imported: [ChatAttachment] = []
+      var failures: [String] = []
+
+      for item in items {
+        guard attachmentImportGeneration == generation else { return }
+        do {
+          guard let rawData = try await item.loadTransferable(type: Data.self), !rawData.isEmpty else {
+            failures.append("One of the selected photos could not be read.")
+            continue
+          }
+          let prepared = await Task.detached(priority: .userInitiated) {
+            LibraryImportSupport.preparedPhotoPayload(from: rawData)
+          }.value
+          guard attachmentImportGeneration == generation else { return }
+          guard let prepared else {
+            failures.append("One of the selected photos could not be decoded.")
+            continue
+          }
+          guard prepared.data.count <= ChatComposerLayoutPolicy.maxAttachmentByteCount else {
+            failures.append("One of the selected photos is larger than 20 MB.")
+            continue
+          }
+          batchIndex += 1
+          let filename = LibraryImportSupport.importFilename(
+            stamp: stamp,
+            index: batchIndex,
+            fileExtension: prepared.fileExtension
+          )
+          imported.append(
+            ChatAttachment(
+              kind: .image,
+              filename: filename,
+              mimeType: prepared.mimeType,
+              data: prepared.data
+            )
+          )
+        } catch {
+          failures.append(error.localizedDescription)
+        }
+      }
+
+      guard attachmentImportGeneration == generation else { return }
+      if let validationError = appendAttachmentsReturningError(imported) {
+        failures.append(validationError)
+      }
+      if !failures.isEmpty {
+        BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
+        chats.errorMessage = LibraryImportSupport.formattedBatchErrors(failures)
+      }
     }
   }
 
@@ -540,73 +635,78 @@ struct ChatView: View {
       BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
       chats.errorMessage = error.localizedDescription
     case .success(let urls):
-      do {
-        let attachments = try urls.map(loadFileAttachment)
-        appendAttachments(attachments)
-      } catch {
+      guard !urls.isEmpty else { return }
+      if pendingAttachments.count + urls.count > ChatComposerLayoutPolicy.maxAttachmentCount {
         BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
-        chats.errorMessage = error.localizedDescription
+        chats.errorMessage =
+          "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
+        return
+      }
+
+      let generation = attachmentImportGeneration
+      Task { @MainActor in
+        activeAttachmentImportCount += 1
+        defer {
+          if attachmentImportGeneration == generation {
+            activeAttachmentImportCount = max(0, activeAttachmentImportCount - 1)
+          }
+        }
+
+        var imported: [ChatAttachment] = []
+        var failures: [String] = []
+
+        for url in urls {
+          guard attachmentImportGeneration == generation else { return }
+          do {
+            let prepared = try await Task.detached(priority: .userInitiated) {
+              try LibraryImportSupport.readImportedFile(
+                at: url,
+                folderErrorMessage: "Folders cannot be attached.",
+                rejectEmptyFiles: true
+              )
+            }.value
+            guard attachmentImportGeneration == generation else { return }
+            imported.append(
+              ChatAttachment(
+                kind: prepared.isImage ? .image : .file,
+                filename: prepared.filename,
+                mimeType: prepared.mimeType,
+                data: prepared.data
+              )
+            )
+          } catch {
+            failures.append(error.localizedDescription)
+          }
+        }
+
+        guard attachmentImportGeneration == generation else { return }
+        if let validationError = appendAttachmentsReturningError(imported) {
+          failures.append(validationError)
+        }
+        if !failures.isEmpty {
+          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
+          chats.errorMessage = LibraryImportSupport.formattedBatchErrors(failures)
+        }
       }
     }
   }
 
-  private func loadFileAttachment(_ url: URL) throws -> ChatAttachment {
-    let access = url.startAccessingSecurityScopedResource()
-    defer {
-      if access { url.stopAccessingSecurityScopedResource() }
-    }
-
-    let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
-    if let fileSize = values.fileSize, fileSize > 20 * 1_024 * 1_024 {
-      throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
-    }
-    let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-    let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
-
-    if type.conforms(to: .image) {
-      return try normalizedImageAttachment(data: data, suggestedName: url.deletingPathExtension().lastPathComponent)
-    }
-
-    return ChatAttachment(
-      kind: .file,
-      filename: url.lastPathComponent,
-      mimeType: type.preferredMIMEType ?? "application/octet-stream",
-      data: data
-    )
-  }
-
-  private func normalizedImageAttachment(data: Data, suggestedName: String) throws -> ChatAttachment {
-    guard let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) else {
-      throw ProviderError.invalidRequest("The selected image could not be read.")
-    }
-    return ChatAttachment(
-      kind: .image,
-      filename: suggestedName + ".jpg",
-      mimeType: "image/jpeg",
-      data: jpeg
-    )
-  }
-
   func appendAttachments(_ additions: [ChatAttachment]) {
-    guard !additions.isEmpty else { return }
-    let combined = pendingAttachments + additions
-    guard Set(combined.map(\.id)).count == combined.count else {
-      chats.errorMessage = "This attachment is already in the message."
-      return
+    if let error = appendAttachmentsReturningError(additions) {
+      chats.errorMessage = error
     }
-    guard combined.count <= 8 else {
-      chats.errorMessage = "A message can include at most 8 attachments."
-      return
+  }
+
+  private func appendAttachmentsReturningError(_ additions: [ChatAttachment]) -> String? {
+    guard !additions.isEmpty else { return nil }
+    if let error = ChatComposerLayoutPolicy.attachmentValidationError(
+      existing: pendingAttachments,
+      additions: additions
+    ) {
+      return error
     }
-    guard combined.allSatisfy({ $0.byteCount <= 20 * 1_024 * 1_024 }) else {
-      chats.errorMessage = "Each attachment must be no larger than 20 MB."
-      return
-    }
-    guard combined.reduce(0, { $0 + $1.byteCount }) <= 40 * 1_024 * 1_024 else {
-      chats.errorMessage = "Attachments in one message cannot exceed 40 MB total."
-      return
-    }
-    pendingAttachments = combined
+    pendingAttachments.append(contentsOf: additions)
+    return nil
   }
 
   /// Attaches a project reference file to the composer. Rows are
@@ -614,10 +714,25 @@ struct ChatView: View {
   /// blob surfaces an error instead of a silent empty attachment.
   func attachProjectFile(_ file: ProjectFile) async {
     guard !pendingAttachments.contains(where: { $0.id == file.id }) else { return }
+    guard pendingAttachments.count < ChatComposerLayoutPolicy.maxAttachmentCount else {
+      chats.errorMessage =
+        "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
+      return
+    }
+    let generation = attachmentImportGeneration
+    activeAttachmentImportCount += 1
+    defer {
+      if attachmentImportGeneration == generation {
+        activeAttachmentImportCount = max(0, activeAttachmentImportCount - 1)
+      }
+    }
     guard let data = await projects.fileData(file.id), !data.isEmpty else {
+      guard attachmentImportGeneration == generation else { return }
+      BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
       chats.errorMessage = "The file '\(file.filename)' could not be loaded."
       return
     }
+    guard attachmentImportGeneration == generation else { return }
     var attachment = file.attachment
     attachment.data = data
     appendAttachments([attachment])

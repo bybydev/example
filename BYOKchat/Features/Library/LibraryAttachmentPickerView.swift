@@ -24,6 +24,7 @@ struct LibraryAttachmentPickerView: View {
   @State private var tab: Tab = .saved
   @State private var selectedSavedIDs: Set<LibraryEntryID> = []
   @State private var selectedChatItemIDs: Set<String> = []
+  @State private var cachedChatItems: [ChatLibraryItem] = []
   @State private var isPreparing = false
   @State private var errorMessage: String?
 
@@ -41,6 +42,15 @@ struct LibraryAttachmentPickerView: View {
         .padding(.top, 10)
         .padding(.bottom, 6)
 
+        if let capacityNote {
+          Text(capacityNote)
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 6)
+        }
+
         content
       }
       .background(theme.backgroundColor.ignoresSafeArea())
@@ -56,18 +66,25 @@ struct LibraryAttachmentPickerView: View {
             ProgressView()
               .controlSize(.small)
           } else {
-            Button("Add \(selectionCount == 0 ? "" : "(\(selectionCount))")") {
+            Button(totalSelectionCount == 0 ? "Add" : "Add (\(totalSelectionCount))") {
               Task { await addSelection() }
             }
-            .disabled(selectionCount == 0)
+            .disabled(totalSelectionCount == 0)
           }
         }
       }
     }
     .interactiveDismissDisabled(isPreparing)
+    .onAppear {
+      refreshChatItems()
+    }
     .onChange(of: attachedIDs) { _, ids in
       selectedSavedIDs = selectedSavedIDs.filter { !ids.contains($0.rawValue) }
       selectedChatItemIDs.subtract(ids)
+      refreshChatItems()
+    }
+    .onChange(of: chatHistoryFingerprint) { _, _ in
+      refreshChatItems()
     }
     .alert("Attachment Error", isPresented: Binding(
       get: { errorMessage != nil },
@@ -97,7 +114,7 @@ struct LibraryAttachmentPickerView: View {
         }
       }
     case .fromChats:
-      if chatItems.isEmpty {
+      if cachedChatItems.isEmpty {
         ContentUnavailableView(
           "No Chat Attachments",
           systemImage: "paperclip",
@@ -105,7 +122,7 @@ struct LibraryAttachmentPickerView: View {
         )
       } else {
         list {
-          ForEach(chatItems) { item in
+          ForEach(cachedChatItems) { item in
             chatRow(item)
           }
         }
@@ -124,10 +141,11 @@ struct LibraryAttachmentPickerView: View {
   }
 
   private func savedRow(_ entry: LibraryEntry) -> some View {
-    selectableRow(
+    let isSelected = selectedUniqueIDs.contains(entry.id.rawValue)
+    return selectableRow(
       title: entry.filename,
       detail: entry.byteCountText,
-      isSelected: selectedSavedIDs.contains(entry.id)
+      isSelected: isSelected
     ) {
       toggleSaved(entry.id)
     } leading: {
@@ -136,10 +154,11 @@ struct LibraryAttachmentPickerView: View {
   }
 
   private func chatRow(_ item: ChatLibraryItem) -> some View {
-    selectableRow(
+    let isSelected = selectedUniqueIDs.contains(item.id)
+    return selectableRow(
       title: item.attachment.filename,
       detail: "\(item.conversationTitle) · \(item.byteCountText)",
-      isSelected: selectedChatItemIDs.contains(item.id)
+      isSelected: isSelected
     ) {
       toggleChat(item.id)
     } leading: {
@@ -176,7 +195,8 @@ struct LibraryAttachmentPickerView: View {
     action: @escaping () -> Void,
     @ViewBuilder leading: () -> some View
   ) -> some View {
-    Button(action: action) {
+    let atCapacity = !isSelected && remainingSlots == 0
+    return Button(action: action) {
       HStack(spacing: 12) {
         leading()
 
@@ -200,11 +220,12 @@ struct LibraryAttachmentPickerView: View {
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 6)
+      .opacity(atCapacity ? 0.45 : 1)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .disabled(isPreparing)
-    .accessibilityLabel(title)
+    .disabled(isPreparing || atCapacity)
+    .accessibilityLabel("\(title), \(detail)")
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 
@@ -218,10 +239,35 @@ struct LibraryAttachmentPickerView: View {
     library.entries.filter { !attachedIDs.contains($0.id.rawValue) }
   }
 
-  private var selectionCount: Int {
-    switch tab {
-    case .saved: selectedSavedIDs.count
-    case .fromChats: selectedChatItemIDs.count
+  private var selectedUniqueIDs: Set<String> {
+    Set(selectedSavedIDs.map(\.rawValue)).union(selectedChatItemIDs)
+  }
+
+  private var totalSelectionCount: Int {
+    selectedUniqueIDs.count
+  }
+
+  private var maxSelectableCount: Int {
+    max(0, ChatComposerLayoutPolicy.maxAttachmentCount - pendingAttachments.count)
+  }
+
+  private var remainingSlots: Int {
+    max(0, maxSelectableCount - totalSelectionCount)
+  }
+
+  private var capacityNote: String? {
+    if remainingSlots == 0 {
+      return "Maximum of \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments reached."
+    }
+    if pendingAttachments.count > 0 || totalSelectionCount > 0 {
+      return "You can select up to \(remainingSlots) more \(remainingSlots == 1 ? "attachment" : "attachments")."
+    }
+    return nil
+  }
+
+  private var chatHistoryFingerprint: [String] {
+    chats.conversations.map {
+      "\($0.id.rawValue):\($0.messages.count):\($0.updatedAt.timeIntervalSinceReferenceDate)"
     }
   }
 
@@ -236,7 +282,7 @@ struct LibraryAttachmentPickerView: View {
     }
   }
 
-  private var chatItems: [ChatLibraryItem] {
+  private func refreshChatItems() {
     var items: [ChatLibraryItem] = []
     var seenIDs = attachedIDs
     for conversation in chats.conversations {
@@ -254,18 +300,24 @@ struct LibraryAttachmentPickerView: View {
         }
       }
     }
-    return items.sorted { $0.date > $1.date }
+    cachedChatItems = items.sorted { $0.date > $1.date }
   }
 
   private func toggleSaved(_ id: LibraryEntryID) {
-    if !selectedSavedIDs.insert(id).inserted {
+    if selectedUniqueIDs.contains(id.rawValue) {
       selectedSavedIDs.remove(id)
+      selectedChatItemIDs.remove(id.rawValue)
+    } else if remainingSlots > 0 {
+      selectedSavedIDs.insert(id)
     }
   }
 
   private func toggleChat(_ id: String) {
-    if !selectedChatItemIDs.insert(id).inserted {
+    if selectedUniqueIDs.contains(id) {
       selectedChatItemIDs.remove(id)
+      selectedSavedIDs.remove(LibraryEntryID(rawValue: id))
+    } else if remainingSlots > 0 {
+      selectedChatItemIDs.insert(id)
     }
   }
 
@@ -274,54 +326,54 @@ struct LibraryAttachmentPickerView: View {
     isPreparing = true
     defer { isPreparing = false }
 
-    // Snapshot the complete selection using metadata. No original blob read
-    // occurs until the whole batch (including the composer) passes preflight.
-    let selectedEntries = savedEntries.filter { selectedSavedIDs.contains($0.id) }
-    let selectedItems = chatItems.filter { selectedChatItemIDs.contains($0.id) }
-    let selectedByteCounts: [Int]
-    switch tab {
-    case .saved: selectedByteCounts = selectedEntries.map(\.byteCount)
-    case .fromChats: selectedByteCounts = selectedItems.map { $0.attachment.byteCount }
-    }
-    guard !selectedByteCounts.isEmpty, selectedByteCounts.count == selectionCount else {
+    // Snapshot the complete selection across both tabs using metadata. No
+    // original blob read occurs until the combined batch passes preflight.
+    let selectedEntries = selectedSavedIDs.isEmpty
+      ? []
+      : savedEntries.filter { selectedSavedIDs.contains($0.id) }
+    let coveredSavedRawIDs = Set(selectedEntries.map(\.id.rawValue))
+    let selectedItems = selectedChatItemIDs.isEmpty
+      ? []
+      : cachedChatItems.filter {
+        selectedChatItemIDs.contains($0.id) && !coveredSavedRawIDs.contains($0.id)
+      }
+    let selectedByteCounts = selectedEntries.map(\.byteCount)
+      + selectedItems.map { $0.attachment.byteCount }
+    guard !selectedByteCounts.isEmpty, selectedByteCounts.count == totalSelectionCount else {
       errorMessage = "The selection changed or includes an item already attached. Please select again."
       return
     }
     guard preflight(selectedByteCounts) else { return }
 
     var result: [ChatAttachment] = []
-    switch tab {
-    case .fromChats:
-      for item in selectedItems {
-        // Rows hold metadata only; fetch the original now that it is
-        // actually being attached.
-        guard let data = await chats.attachmentData(item.id), !data.isEmpty else {
-          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
-          errorMessage = "The file '\(item.attachment.filename)' could not be loaded."
-          return
-        }
-        var attachment = item.attachment
-        attachment.data = data
-        result.append(attachment)
+    for entry in selectedEntries {
+      guard let data = await library.data(for: entry), !data.isEmpty else {
+        BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
+        errorMessage = "The file '\(entry.filename)' could not be loaded."
+        return
       }
-    case .saved:
-      for entry in selectedEntries {
-        guard let data = await library.data(for: entry), !data.isEmpty else {
-          BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
-          errorMessage = "The file '\(entry.filename)' could not be loaded."
-          return
-        }
-        // Same-ID reuse keeps blob storage deduplicated.
-        result.append(
-          ChatAttachment(
-            id: entry.id.rawValue,
-            kind: entry.kind,
-            filename: entry.filename,
-            mimeType: entry.mimeType,
-            data: data
-          )
+      // Same-ID reuse keeps blob storage deduplicated.
+      result.append(
+        ChatAttachment(
+          id: entry.id.rawValue,
+          kind: entry.kind,
+          filename: entry.filename,
+          mimeType: entry.mimeType,
+          data: data
         )
+      )
+    }
+    for item in selectedItems {
+      // Rows hold metadata only; fetch the original now that it is
+      // actually being attached.
+      guard let data = await chats.attachmentData(item.id), !data.isEmpty else {
+        BYOKAppAnalytics.reportError("attachment_import_failed", component: "attachments")
+        errorMessage = "The file '\(item.attachment.filename)' could not be loaded."
+        return
       }
+      var attachment = item.attachment
+      attachment.data = data
+      result.append(attachment)
     }
     guard !result.isEmpty else { return }
     onAdd(result)
@@ -329,17 +381,17 @@ struct LibraryAttachmentPickerView: View {
   }
 
   private func preflight(_ selectedByteCounts: [Int]) -> Bool {
-    guard pendingAttachments.count + selectedByteCounts.count <= 8 else {
-      errorMessage = "A message can include at most 8 attachments."
+    guard pendingAttachments.count + selectedByteCounts.count <= ChatComposerLayoutPolicy.maxAttachmentCount else {
+      errorMessage = "A message can include at most \(ChatComposerLayoutPolicy.maxAttachmentCount) attachments."
       return false
     }
     let byteCounts = pendingAttachments.map(\.byteCount) + selectedByteCounts
-    guard byteCounts.allSatisfy({ $0 > 0 && $0 <= 20 * 1_024 * 1_024 }) else {
+    guard byteCounts.allSatisfy({ $0 > 0 && $0 <= ChatComposerLayoutPolicy.maxAttachmentByteCount }) else {
       errorMessage = "Each attachment must contain bytes and be no larger than 20 MB."
       return false
     }
     // Per-item/count bounds above keep this sum bounded as well.
-    guard byteCounts.reduce(0, +) <= 40 * 1_024 * 1_024 else {
+    guard byteCounts.reduce(0, +) <= ChatComposerLayoutPolicy.maxTotalAttachmentByteCount else {
       errorMessage = "Attachments in one message cannot exceed 40 MB total."
       return false
     }

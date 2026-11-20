@@ -925,6 +925,7 @@ enum LibraryImportSupport {
     let filename: String
     let mimeType: String
     let data: Data
+    let isImage: Bool
   }
 
   /// Preserves PNG/JPEG bytes when already in a universally supported format
@@ -942,15 +943,19 @@ enum LibraryImportSupport {
     return PreparedPhoto(data: jpeg, mimeType: "image/jpeg", fileExtension: "jpg")
   }
 
-  /// Reads a security-scoped file off the main thread, rejecting directories
-  /// and oversized payloads before reading into memory.
-  static func readImportedFile(at url: URL) throws -> PreparedFile {
+  /// Reads a security-scoped file off the main thread, rejecting directories,
+  /// empty files (when requested), and oversized payloads.
+  static func readImportedFile(
+    at url: URL,
+    folderErrorMessage: String = "Folders cannot be added to the Library.",
+    rejectEmptyFiles: Bool = false
+  ) throws -> PreparedFile {
     let access = url.startAccessingSecurityScopedResource()
     defer { if access { url.stopAccessingSecurityScopedResource() } }
 
     let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey])
     if values.isDirectory == true {
-      throw ProviderError.invalidRequest("Folders cannot be added to the Library.")
+      throw ProviderError.invalidRequest(folderErrorMessage)
     }
     if let fileSize = values.fileSize, fileSize > LibraryStore.maxByteCount {
       throw ProviderError.invalidRequest(
@@ -959,6 +964,17 @@ enum LibraryImportSupport {
     }
 
     let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+    if rejectEmptyFiles, data.isEmpty {
+      throw ProviderError.invalidRequest(
+        "\(url.lastPathComponent) is empty and cannot be attached."
+      )
+    }
+    if data.count > LibraryStore.maxByteCount {
+      throw ProviderError.invalidRequest(
+        "\(url.lastPathComponent) is larger than 20 MB."
+      )
+    }
+
     let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
     if type.conforms(to: .image) {
       let preservesOriginal = (type == .png || type == .jpeg || type == .gif || type == .webP)
@@ -967,23 +983,34 @@ enum LibraryImportSupport {
         return PreparedFile(
           filename: url.lastPathComponent,
           mimeType: type.preferredMIMEType ?? "image/jpeg",
-          data: data
+          data: data,
+          isImage: true
         )
       }
-      if let jpeg = normalizedJPEG(from: data) {
-        let stem = url.deletingPathExtension().lastPathComponent
-        let base = stem.isEmpty ? "image" : stem
-        return PreparedFile(
-          filename: base + ".jpg",
-          mimeType: "image/jpeg",
-          data: jpeg
+      guard let jpeg = normalizedJPEG(from: data) else {
+        throw ProviderError.invalidRequest(
+          "The selected image '\(url.lastPathComponent)' could not be read."
         )
       }
+      if jpeg.count > LibraryStore.maxByteCount {
+        throw ProviderError.invalidRequest(
+          "\(url.lastPathComponent) is larger than 20 MB."
+        )
+      }
+      let stem = url.deletingPathExtension().lastPathComponent
+      let base = stem.isEmpty ? "image" : stem
+      return PreparedFile(
+        filename: base + ".jpg",
+        mimeType: "image/jpeg",
+        data: jpeg,
+        isImage: true
+      )
     }
     return PreparedFile(
       filename: url.lastPathComponent,
       mimeType: type.preferredMIMEType ?? "application/octet-stream",
-      data: data
+      data: data,
+      isImage: false
     )
   }
 

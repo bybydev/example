@@ -71,6 +71,11 @@ struct ChatAttachmentStrip: View {
   var removeAttachment: ((String) -> Void)?
   var pickPhoto: (() -> Void)?
   var pickFile: (() -> Void)?
+  var pickFromLibrary: (() -> Void)? = nil
+  var projectFiles: [ProjectFile] = []
+  var attachProjectFile: ((ProjectFile) -> Void)? = nil
+  var maxAttachments: Int = ChatComposerLayoutPolicy.maxAttachmentCount
+  var isImportingAttachments: Bool = false
   /// Message-surface hook adding a Library reference to an already-stored
   /// file (+1, no byte copy). Nil hides the tile menu.
   var saveToLibrary: ((ChatAttachment) -> Void)? = nil
@@ -116,6 +121,7 @@ struct ChatAttachmentStrip: View {
       }
 
       if presentation == .composer,
+        attachments.count < maxAttachments,
         let pickPhoto,
         let pickFile
       {
@@ -132,7 +138,7 @@ struct ChatAttachmentStrip: View {
           attachment: attachment,
           sideLength: presentation.imageWidth,
           height: presentation.imageHeight,
-          cornerRadius: 14,
+          cornerRadius: presentation.cornerRadius,
           loadThumbnail: loadThumbnail
         )
         .accessibilityLabel("Image attachment \(attachment.filename)")
@@ -150,9 +156,10 @@ struct ChatAttachmentStrip: View {
             .frame(width: 27, height: 27)
             .background(.black.opacity(0.62), in: Circle())
             .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 0.5))
+            .padding(6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(6)
         .accessibilityLabel("Remove \(attachment.filename)")
       }
     }
@@ -161,7 +168,13 @@ struct ChatAttachmentStrip: View {
 
   @ViewBuilder
   private func tileContextItems(for attachment: ChatAttachment) -> some View {
-    if presentation == .message || presentation == .bubble, let saveToLibrary {
+    if presentation == .composer, let removeAttachment {
+      Button(role: .destructive) {
+        removeAttachment(attachment.id)
+      } label: {
+        Label("Remove", systemImage: "trash")
+      }
+    } else if presentation == .message || presentation == .bubble, let saveToLibrary {
       Button {
         saveToLibrary(attachment)
       } label: {
@@ -205,11 +218,38 @@ struct ChatAttachmentStrip: View {
     Menu {
       Button("Photo", systemImage: "photo", action: pickPhoto)
       Button("File", systemImage: "doc", action: pickFile)
+      if let pickFromLibrary {
+        Button("From Library…", systemImage: "books.vertical", action: pickFromLibrary)
+      }
+      if !projectFiles.isEmpty, let attachProjectFile {
+        let attachedIDs = Set(attachments.map(\.id))
+        Menu("Project Files", systemImage: "folder.badge.plus") {
+          ForEach(projectFiles) { file in
+            let isAttached = attachedIDs.contains(file.id)
+            Button {
+              attachProjectFile(file)
+            } label: {
+              if isAttached {
+                Label(file.filename, systemImage: "checkmark")
+              } else {
+                Text(file.filename)
+              }
+            }
+            .disabled(isAttached)
+          }
+        }
+      }
     } label: {
       VStack(spacing: 7) {
-        Image(systemName: "photo.badge.plus")
-          .font(.system(size: 22, weight: .semibold))
-        Text("Add")
+        if isImportingAttachments {
+          ProgressView()
+            .controlSize(.small)
+            .tint(theme.secondaryForegroundColor)
+        } else {
+          Image(systemName: "plus")
+            .font(.system(size: 20, weight: .semibold))
+        }
+        Text(isImportingAttachments ? "Adding" : "Add")
           .font(.system(size: 11, weight: .semibold))
       }
       .foregroundStyle(theme.secondaryForegroundColor)
@@ -221,7 +261,8 @@ struct ChatAttachmentStrip: View {
       )
     }
     .buttonStyle(.plain)
-    .accessibilityLabel("Add another attachment")
+    .disabled(isImportingAttachments)
+    .accessibilityLabel(isImportingAttachments ? "Importing attachment" : "Add another attachment")
   }
 
   private var tileShape: RoundedRectangle {
@@ -324,36 +365,62 @@ struct AsyncAttachmentThumbnail: View {
   }
 
   private func load() async {
+    let targetPixelSize = max(sideLength, height) * displayScale
+    let attachmentID = attachment.id
+    let inlineData = attachment.data
+
     // Fresh in-memory bytes (composer, just-imported) decode directly.
-    if !attachment.data.isEmpty {
+    if !inlineData.isEmpty {
       isUnavailable = false
-      image = AttachmentThumbnailLoader.downsampledImage(
-        from: attachment.data,
-        cacheKey: "inline::\(attachment.id)",
-        maxPixelSize: sideLength * displayScale
-      )
-      if image != nil { return }
+      let inlineKey = "inline::\(attachmentID)"
+      if let cached = AttachmentThumbnailLoader.cachedImage(
+        cacheKey: inlineKey,
+        maxPixelSize: targetPixelSize
+      ) {
+        image = cached
+        return
+      }
+      let decoded = await Task.detached(priority: .userInitiated) {
+        AttachmentThumbnailLoader.downsampledImage(
+          from: inlineData,
+          cacheKey: inlineKey,
+          maxPixelSize: targetPixelSize
+        )
+      }.value
+      guard !Task.isCancelled else { return }
+      image = decoded
+      if decoded != nil { return }
     }
     guard let loadThumbnail else {
       // No fetcher wired (fresh mode): in-memory bytes were the only source.
-      isUnavailable = attachment.data.isEmpty
+      isUnavailable = inlineData.isEmpty
       return
     }
-    let bytes = await loadThumbnail(
-      attachment.id,
-      sideLength * displayScale
-    )
+    let blobKey = "blob::\(attachmentID)"
+    if let cached = AttachmentThumbnailLoader.cachedImage(
+      cacheKey: blobKey,
+      maxPixelSize: targetPixelSize
+    ) {
+      isUnavailable = false
+      image = cached
+      return
+    }
+    let bytes = await loadThumbnail(attachmentID, targetPixelSize)
+    guard !Task.isCancelled else { return }
     guard let bytes, !bytes.isEmpty else {
       isUnavailable = true
       return
     }
-    isUnavailable = false
-    image = AttachmentThumbnailLoader.downsampledImage(
-      from: bytes,
-      cacheKey: "blob::\(attachment.id)",
-      maxPixelSize: sideLength * displayScale
-    )
-    if image == nil { isUnavailable = true }
+    let decoded = await Task.detached(priority: .userInitiated) {
+      AttachmentThumbnailLoader.downsampledImage(
+        from: bytes,
+        cacheKey: blobKey,
+        maxPixelSize: targetPixelSize
+      )
+    }.value
+    guard !Task.isCancelled else { return }
+    image = decoded
+    isUnavailable = decoded == nil
   }
 }
 
