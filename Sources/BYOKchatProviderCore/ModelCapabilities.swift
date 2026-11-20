@@ -464,7 +464,11 @@ public enum ModelCapabilityResolver {
       if id == "grok-3" || id.hasPrefix("grok-3-") {
         return .init(kind: .unsupported, source: .adapter)
       }
-    case .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible:
+    case .openRouter:
+      if id == "openrouter/free" {
+        return efforts([.low, .medium, .high], defaultEffort: nil)
+      }
+    case .nvidia, .ollama, .lmStudio, .openAICompatible:
       // A parameter name does not establish the routed/custom model's valid values.
       break
     }

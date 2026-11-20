@@ -16,7 +16,9 @@ extension OpenAICompatibleAdapter {
       let attachments = message.attachments ?? []
       let toolCalls = message.toolCalls ?? []
       let toolResults = message.toolResults ?? []
-      guard !content.isEmpty || !attachments.isEmpty || !toolCalls.isEmpty || !toolResults.isEmpty
+      guard
+        !content.isEmpty || !attachments.isEmpty || !toolCalls.isEmpty || !toolResults.isEmpty
+          || message.toolContinuation != nil
       else { return nil }
       return .init(
         role: message.role,
@@ -24,7 +26,8 @@ extension OpenAICompatibleAdapter {
         reasoning: message.reasoning,
         attachments: attachments.isEmpty ? nil : attachments,
         toolCalls: toolCalls.isEmpty ? nil : toolCalls,
-        toolResults: toolResults.isEmpty ? nil : toolResults
+        toolResults: toolResults.isEmpty ? nil : toolResults,
+        toolContinuation: message.toolContinuation
       )
     }
     guard !messages.isEmpty else { throw ProviderError.invalidMessages }
@@ -92,6 +95,7 @@ extension OpenAICompatibleAdapter {
         headers["HTTP-Referer"] = value
       }
       if let value = account.metadata["appTitle"], !value.isEmpty {
+        headers["X-OpenRouter-Title"] = value
         headers["X-Title"] = value
       }
     }
@@ -194,12 +198,19 @@ extension OpenAICompatibleAdapter {
     case .openRouter:
       if let reasoning = request.options.reasoning {
         var object: [String: JSONValue] = [:]
-        if let value = reasoning.enabled { object["enabled"] = .bool(value) }
-        if let value = reasoning.effort { object["effort"] = .string(value.rawValue) }
-        if let value = reasoning.maxTokens {
-          object["max_tokens"] = .number(Double(value))
+        if reasoning.enabled == false {
+          object["enabled"] = .bool(false)
+        } else {
+          // OpenRouter treats reasoning.max_tokens and reasoning.effort as mutually exclusive.
+          if let value = reasoning.maxTokens {
+            object["max_tokens"] = .number(Double(value))
+          } else if let value = reasoning.effort {
+            object["effort"] = .string(value.rawValue)
+          } else if reasoning.enabled == true {
+            object["enabled"] = .bool(true)
+          }
+          if reasoning.excludeFromResponse { object["exclude"] = .bool(true) }
         }
-        if reasoning.excludeFromResponse { object["exclude"] = .bool(true) }
         if !object.isEmpty { body["reasoning"] = .object(object) }
       }
       if let routing = request.options.openRouterRouting {
@@ -304,6 +315,16 @@ extension OpenAICompatibleAdapter {
       object["content"] = .array(parts)
     }
 
+    if definition.behavior == .openRouter,
+      message.role == .assistant,
+      let continuation = message.toolContinuation,
+      continuation.apiFamily == .openAIChatCompletions,
+      case .array(let reasoningDetails) = continuation.payload,
+      !reasoningDetails.isEmpty
+    {
+      object["reasoning_details"] = .array(reasoningDetails)
+    }
+
     if definition.behavior == .deepSeek, message.role == .assistant {
       let hasToolCalls = !(message.toolCalls ?? []).isEmpty
       if let reasoning = message.reasoning, !reasoning.isEmpty, hasToolCalls || hasTools {
@@ -346,7 +367,7 @@ extension OpenAICompatibleAdapter {
   func mapHTTPError(status: Int, headers: [String: String], data: Data) -> ProviderError {
     let decoded = try? JSONDecoder.provider.decode(ProviderErrorEnvelope.self, from: data)
     let message =
-      decoded?.error?.message ?? decoded?.message
+      decoded?.error?.displayMessage ?? decoded?.message
       ?? HTTPURLResponse.localizedString(forStatusCode: status)
     let lowered = message.lowercased()
     switch status {

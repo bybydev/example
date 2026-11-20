@@ -110,11 +110,7 @@ public enum BuiltInProviders {
     defaultBaseURL: URL(string: "https://openrouter.ai/api/v1")!,
     modelsPath: "/models",
     authentication: .bearer,
-    seedModels: [
-      .init(
-        providerID: openRouterID, id: "openrouter/free", displayName: "OpenRouter Free",
-        supportedParameters: ["temperature", "top_p", "max_tokens", "reasoning"])
-    ],
+    seedModels: ProviderKind.openRouter.seedModels,
     isBuiltIn: true,
     kind: .openRouter
   )

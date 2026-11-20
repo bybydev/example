@@ -257,6 +257,17 @@ struct ModelCapabilityPolicyTests {
     )
     #expect(deepSeekPro.normalize(.init(enabled: true, effort: .low))?.effort == .low)
     #expect(deepSeekPro.normalize(.init(enabled: false))?.enabled == false)
+
+    let openRouterFree = ModelCapabilityResolver.reasoningControl(kind: .openRouter, modelID: "openrouter/free")
+    #expect(
+      openRouterFree.choices
+        == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)]
+    )
+    #expect(openRouterFree.normalize(.init(enabled: false)) == nil)
+    #expect(openRouterFree.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let openRouterUnknown = ModelCapabilityResolver.reasoningControl(kind: .openRouter, modelID: "vendor/custom")
+    #expect(openRouterUnknown.kind == .unknown)
   }
 
   @Test("Native names on custom endpoints do not invent reasoning controls")

@@ -102,17 +102,78 @@ struct ChatCompletionMessageWire: Decodable {
   }
   var textContent: String? { content?.text }
   var normalizedReasoning: String? {
-    let details = reasoningDetails?.compactMap { $0.text ?? $0.summary }.joined() ?? ""
-    let values =
-      ([reasoning, reasoningContent, details].compactMap { $0 } + (content?.reasoningFragments ?? []))
-      .filter { !$0.isEmpty }
-    return values.isEmpty ? nil : values.joined()
+    let detailFragments = reasoningDetails?.compactMap(\.visibleText) ?? []
+    if !detailFragments.isEmpty {
+      return detailFragments.joined()
+    }
+    if let reasoning, !reasoning.isEmpty {
+      return reasoning
+    }
+    if let reasoningContent, !reasoningContent.isEmpty {
+      return reasoningContent
+    }
+    let contentFragments = (content?.reasoningFragments ?? []).filter { !$0.isEmpty }
+    return contentFragments.isEmpty ? nil : contentFragments.joined()
   }
 }
 
 struct ReasoningDetailWire: Decodable {
-  var text: String?
-  var summary: String?
+  var rawObject: [String: JSONValue]
+
+  init(from decoder: Decoder) throws {
+    let value = try JSONValue(from: decoder)
+    if case .object(let dict) = value {
+      rawObject = dict
+    } else {
+      rawObject = [:]
+    }
+  }
+
+  var type: String? {
+    if case .string(let v)? = rawObject["type"] { return v }
+    return nil
+  }
+
+  var id: String? {
+    if case .string(let v)? = rawObject["id"] { return v }
+    return nil
+  }
+
+  var format: String? {
+    if case .string(let v)? = rawObject["format"] { return v }
+    return nil
+  }
+
+  var index: Int? {
+    if case .number(let n)? = rawObject["index"] { return Int(n) }
+    return nil
+  }
+
+  var text: String? {
+    if case .string(let v)? = rawObject["text"] { return v }
+    return nil
+  }
+
+  var summary: String? {
+    if case .string(let v)? = rawObject["summary"] { return v }
+    return nil
+  }
+
+  var data: String? {
+    if case .string(let v)? = rawObject["data"] { return v }
+    return nil
+  }
+
+  var signature: String? {
+    if case .string(let v)? = rawObject["signature"] { return v }
+    return nil
+  }
+
+  var visibleText: String? {
+    if let text, !text.isEmpty { return text }
+    if let summary, !summary.isEmpty { return summary }
+    return nil
+  }
 }
 
 struct ToolCallWire: Decodable {
@@ -167,9 +228,17 @@ struct ChatCompletionDeltaWire: Decodable {
   }
   var textDelta: String? { content?.text }
   var reasoningFragments: [String] {
-    [reasoning, reasoningContent].compactMap { $0 }
-      + (reasoningDetails?.compactMap { $0.text ?? $0.summary } ?? [])
-      + (content?.reasoningFragments ?? [])
+    let detailFragments = reasoningDetails?.compactMap(\.visibleText) ?? []
+    if !detailFragments.isEmpty {
+      return detailFragments
+    }
+    if let reasoning, !reasoning.isEmpty {
+      return [reasoning]
+    }
+    if let reasoningContent, !reasoningContent.isEmpty {
+      return [reasoningContent]
+    }
+    return (content?.reasoningFragments ?? []).filter { !$0.isEmpty }
   }
 }
 
@@ -226,9 +295,75 @@ struct CompletionTokensDetailsWire: Decodable {
     case imageTokens = "image_tokens"
   }
 }
+struct ProviderErrorMetadataWire: Decodable {
+  var providerName: String?
+  var raw: String?
+  enum CodingKeys: String, CodingKey {
+    case raw
+    case providerName = "provider_name"
+  }
+}
+
 struct ProviderErrorWire: Decodable {
   var code: String?
   var message: String
+  var metadata: ProviderErrorMetadataWire?
+
+  private enum CodingKeys: String, CodingKey {
+    case code, message, metadata
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    if let stringCode = try? container.decodeIfPresent(String.self, forKey: .code) {
+      code = stringCode
+    } else if let intCode = try? container.decodeIfPresent(Int.self, forKey: .code) {
+      code = String(intCode)
+    } else {
+      code = nil
+    }
+    message = try container.decode(String.self, forKey: .message)
+    metadata = try? container.decodeIfPresent(ProviderErrorMetadataWire.self, forKey: .metadata)
+  }
+
+  var displayMessage: String {
+    guard let metadata else { return message }
+    let provider = metadata.providerName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let rawDetail = Self.extractRawMessage(metadata.raw)
+    if let rawDetail, !rawDetail.isEmpty, rawDetail != message {
+      if let provider, !provider.isEmpty {
+        return "\(message) (\(provider): \(rawDetail))"
+      }
+      return "\(message) (\(rawDetail))"
+    }
+    if let provider, !provider.isEmpty {
+      return "\(message) (\(provider))"
+    }
+    return message
+  }
+
+  private static func extractRawMessage(_ raw: String?) -> String? {
+    guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+      return nil
+    }
+    if let data = raw.data(using: .utf8),
+      let json = try? JSONDecoder().decode(JSONValue.self, from: data),
+      case .object(let root) = json
+    {
+      if case .object(let nested)? = root["error"],
+        case .string(let nestedMsg)? = nested["message"],
+        !nestedMsg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
+        return nestedMsg.trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+      if case .string(let topMsg)? = root["message"],
+        !topMsg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
+        return topMsg.trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+    }
+    return raw.count <= 240 ? raw : String(raw.prefix(240)) + "…"
+  }
 }
 
 struct ChatCompletionResponse: Decodable {
@@ -272,6 +407,7 @@ struct ModelWire: Decodable {
   var inputModalities: [String]?
   var outputModalities: [String]?
   var effort: ModelEffortWire?
+  var reasoning: ModelReasoningWire?
   var supportedParameters: [String]?
   var architecture: ArchitectureWire?
   var topProvider: TopProviderWire?
@@ -279,7 +415,7 @@ struct ModelWire: Decodable {
   var capabilities: ModelCapabilitiesWire?
   var archived: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, name, architecture, pricing, capabilities, archived, effort
+    case id, name, architecture, pricing, capabilities, archived, effort, reasoning
     case contextLength = "context_length"
     case maxContextLength = "max_context_length"
     case contextWindow = "context_window"
@@ -296,6 +432,20 @@ struct ModelEffortWire: Decodable {
   enum CodingKeys: String, CodingKey {
     case supportedLevels = "supported_levels"
     case defaultLevel = "default_level"
+  }
+}
+struct ModelReasoningWire: Decodable {
+  var mandatory: Bool?
+  var defaultEnabled: Bool?
+  var defaultEffort: String?
+  var supportedEfforts: [String]?
+  var supportsMaxTokens: Bool?
+  enum CodingKeys: String, CodingKey {
+    case mandatory
+    case defaultEnabled = "default_enabled"
+    case defaultEffort = "default_effort"
+    case supportedEfforts = "supported_efforts"
+    case supportsMaxTokens = "supports_max_tokens"
   }
 }
 struct ModelCapabilitiesWire: Decodable {
@@ -331,15 +481,17 @@ struct PricingWire: Decodable {
   var cacheWrite: String?
   var request: String?
   var image: String?
+  var imageOutput: String?
   var audio: String?
   var webSearch: String?
   var internalReasoning: String?
   var hasAdditionalPricingDimensions: Bool? {
-    let extra = [request, image, audio, webSearch, internalReasoning].compactMap { $0 }
+    let extra = [request, image, imageOutput, audio, webSearch, internalReasoning].compactMap { $0 }
     return extra.contains { (ChatBilling.decimal($0) ?? -1) != 0 } ? true : nil
   }
   enum CodingKeys: String, CodingKey {
     case prompt, completion, request, image, audio
+    case imageOutput = "image_output"
     case webSearch = "web_search"
     case internalReasoning = "internal_reasoning"
     case cachedInput = "input_cache_read"

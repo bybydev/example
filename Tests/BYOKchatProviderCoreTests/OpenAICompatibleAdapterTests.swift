@@ -122,6 +122,8 @@ private func account(providerID: ProviderID) -> ResolvedProviderAccount {
   let request = await transport.lastRequest()
   #expect(request?.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled")
   #expect(request?.value(forHTTPHeaderField: "HTTP-Referer") == "https://example.com")
+  #expect(request?.value(forHTTPHeaderField: "X-OpenRouter-Title") == "BYOKchat")
+  #expect(request?.value(forHTTPHeaderField: "X-Title") == "BYOKchat")
   let body = try #require(request?.httpBody)
   let object = try JSONDecoder.provider.decode(JSONValue.self, from: body)
   guard case .object(let root) = object,
@@ -132,6 +134,7 @@ private func account(providerID: ProviderID) -> ResolvedProviderAccount {
   }
   #expect(routing["zdr"] == .bool(true))
   #expect(routing["allow_fallbacks"] == .bool(false))
+  #expect(root["reasoning"] == .object(["effort": .string("high")]))
 }
 
 @Test func midStreamProviderErrorIsSurfaced() async throws {
@@ -1010,5 +1013,279 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
     } else {
       Issue.record("Expected .provider error for length, got \(error)")
     }
+  }
+}
+
+@Test func openRouterIntegerErrorCodesAndMetadataAreDecodedInHTTPAndStreams() async throws {
+  let httpErrorJSON = Data(
+    #"""
+    {"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"{\"error\":{\"message\":\"Invalid reasoning config\"}}","provider_name":"Anthropic"}}}
+    """#.utf8
+  )
+  let httpAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter,
+    transport: MockTransport(data: httpErrorJSON, statusCode: 400)
+  )
+  do {
+    _ = try await httpAdapter.generate(
+      request: ProviderRequest(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+      account: account(providerID: "openrouter")
+    )
+    Issue.record("Expected HTTP 400 error")
+  } catch let error as ProviderError {
+    if case .provider(let status, let message) = error {
+      #expect(status == 400)
+      #expect(message.contains("Provider returned error"))
+      #expect(message.contains("Anthropic"))
+      #expect(message.contains("Invalid reasoning config"))
+    } else {
+      Issue.record("Expected .provider error, got \(error)")
+    }
+  }
+
+  let streamError = """
+    data: {"id":"or-err","model":"openrouter/free","error":{"code":502,"message":"Upstream provider crashed","metadata":{"provider_name":"Google"}},"choices":[{"delta":{"content":""},"finish_reason":"error"}]}
+
+    """
+  let streamAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter,
+    transport: MockTransport(streamChunks: [Data(streamError.utf8)])
+  )
+  do {
+    for try await _ in streamAdapter.stream(
+      request: ProviderRequest(model: "openrouter/free", messages: [.init(role: .user, content: "Hi")]),
+      account: account(providerID: "openrouter")
+    ) {}
+    Issue.record("Expected mid-stream error")
+  } catch let error as ProviderError {
+    if case .midStreamProvider(let code, let message) = error {
+      #expect(code == "502")
+      #expect(message.contains("Upstream provider crashed"))
+      #expect(message.contains("Google"))
+    } else {
+      Issue.record("Expected .midStreamProvider error, got \(error)")
+    }
+  }
+}
+
+@Test func openRouterDeduplicatesReasoningAndPreservesReasoningDetailsAcrossToolTurns() async throws {
+  let stream = """
+    data: {"id":"or-1","model":"anthropic/claude-sonnet-4.6","choices":[{"delta":{"reasoning":"Step 1. ","reasoning_details":[{"type":"reasoning.text","text":"Step 1. ","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+    data: {"id":"or-1","model":"anthropic/claude-sonnet-4.6","choices":[{"delta":{"reasoning":"Step 2.","reasoning_details":[{"type":"reasoning.text","text":"Step 2.","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+    data: {"id":"or-1","model":"anthropic/claude-sonnet-4.6","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","signature":"sig_xyz","format":"anthropic-claude-v1","index":0},{"type":"reasoning.encrypted","data":"enc_blob","id":"rs_1","format":"openai-responses-v1","index":1}]},"finish_reason":null}]}
+
+    data: {"id":"or-1","model":"anthropic/claude-sonnet-4.6","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_or1","type":"function","function":{"name":"lookup","arguments":"{\\"q\\":\\"test\\"}"}}]},"finish_reason":"tool_calls"}]}
+
+    data: [DONE]
+
+    """
+  let streamTransport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let streamAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter, transport: streamTransport)
+  var reasoningDeltas: [String] = []
+  var finalResponse: ProviderResponse?
+  for try await event in streamAdapter.stream(
+    request: ProviderRequest(
+      model: "anthropic/claude-sonnet-4.6",
+      messages: [.init(role: .user, content: "Check")]
+    ),
+    account: account(providerID: "openrouter")
+  ) {
+    switch event {
+    case .reasoningDelta(let delta): reasoningDeltas.append(delta)
+    case .completed(let response): finalResponse = response
+    default: break
+    }
+  }
+
+  // Reasoning must NOT be duplicated when both `reasoning` and `reasoning_details` appear.
+  #expect(reasoningDeltas == ["Step 1. ", "Step 2."])
+  let completed = try #require(finalResponse)
+  #expect(completed.reasoning == "Step 1. Step 2.")
+  let continuation = try #require(completed.toolContinuation)
+  #expect(continuation.apiFamily == .openAIChatCompletions)
+  guard case .array(let blocks) = continuation.payload else {
+    Issue.record("Expected array payload for OpenRouter reasoning_details")
+    return
+  }
+  #expect(blocks.count == 2)
+  if case .object(let textBlock) = blocks[0], case .object(let encryptedBlock) = blocks[1] {
+    #expect(textBlock["type"] == .string("reasoning.text"))
+    #expect(textBlock["text"] == .string("Step 1. Step 2."))
+    #expect(textBlock["signature"] == .string("sig_xyz"))
+    #expect(encryptedBlock["type"] == .string("reasoning.encrypted"))
+    #expect(encryptedBlock["data"] == .string("enc_blob"))
+  } else {
+    Issue.record("Unexpected reasoning_details block structure")
+  }
+
+  // Replay the continuation on the next tool turn and verify reasoning_details is sent verbatim.
+  let followUpTransport = MockTransport(
+    data: Data(
+      #"{"id":"or-2","model":"anthropic/claude-sonnet-4.6","choices":[{"message":{"content":"All set","reasoning":"Done","reasoning_details":[{"type":"reasoning.text","text":"Done","signature":"sig_2"}]},"finish_reason":"stop"}]}"#
+        .utf8
+    )
+  )
+  let followUpAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter, transport: followUpTransport)
+  let call = try #require(completed.toolCalls.first)
+  let followUp = try await followUpAdapter.generate(
+    request: ProviderRequest(
+      model: "anthropic/claude-sonnet-4.6",
+      messages: [
+        .init(role: .user, content: "Check"),
+        .init(
+          role: .assistant, content: "", reasoning: completed.reasoning,
+          toolCalls: [call], toolContinuation: continuation),
+        .init(
+          role: .tool, content: "",
+          toolResults: [.init(callID: call.id, name: call.name, content: .string("ok"))]),
+      ]
+    ),
+    account: account(providerID: "openrouter")
+  )
+  #expect(followUp.reasoning == "Done")
+  #expect(followUp.toolContinuation?.apiFamily == .openAIChatCompletions)
+
+  let sentBody = try #require(await followUpTransport.lastRequest()?.httpBody)
+  guard case .object(let sentRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: sentBody),
+    case .array(let sentMessages)? = sentRoot["messages"],
+    case .object(let assistantMsg) = sentMessages[1]
+  else {
+    Issue.record("Missing assistant message in follow-up request")
+    return
+  }
+  #expect(assistantMsg["reasoning_details"] == .array(blocks))
+}
+
+@Test func openRouterDiscoveryDecodesReasoningMetadataAndSerializesValidWireOptions() async throws {
+  let modelsJSON = Data(
+    #"""
+    {
+      "data": [
+        {
+          "id": "anthropic/claude-opus-5.5",
+          "name": "Claude Opus 5.5",
+          "context_length": 1000000,
+          "supported_parameters": ["max_tokens", "reasoning", "tools"],
+          "architecture": {"input_modalities": ["text", "image", "file"], "output_modalities": ["text"]},
+          "top_provider": {"max_completion_tokens": 128000},
+          "reasoning": {
+            "mandatory": true,
+            "default_enabled": true,
+            "default_effort": "medium",
+            "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+            "supports_max_tokens": false
+          }
+        },
+        {
+          "id": "anthropic/claude-sonnet-4.6",
+          "name": "Claude Sonnet 4.6",
+          "context_length": 1000000,
+          "supported_parameters": ["max_tokens", "reasoning", "tools"],
+          "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+          "top_provider": {"max_completion_tokens": 64000},
+          "reasoning": {
+            "mandatory": false,
+            "default_enabled": false,
+            "supported_efforts": ["low", "medium", "high"],
+            "supports_max_tokens": true
+          }
+        },
+        {
+          "id": "vendor/legacy-reasoner",
+          "name": "Legacy Reasoner",
+          "context_length": 128000,
+          "supported_parameters": ["max_tokens", "reasoning"],
+          "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}
+        }
+      ]
+    }
+    """#.utf8
+  )
+  let discoveryAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter,
+    transport: MockTransport(data: modelsJSON)
+  )
+  let discovered = try await discoveryAdapter.listModels(account: account(providerID: "openrouter"))
+
+  let opus = try #require(discovered.first { $0.id == "anthropic/claude-opus-5.5" })
+  let opusCaps = ModelCapabilityResolver.resolve(kind: .openRouter, modelID: opus.id, model: opus)
+  #expect(opusCaps.reasoning.efforts == [.low, .medium, .high, .xhigh, .max])
+  #expect(opusCaps.reasoning.defaultEffort == .medium)
+  #expect(!opusCaps.reasoning.allowsOff)
+  #expect(opusCaps.reasoning.normalize(.init(enabled: false)) == nil)
+
+  let sonnet = try #require(discovered.first { $0.id == "anthropic/claude-sonnet-4.6" })
+  let sonnetCaps = ModelCapabilityResolver.resolve(
+    kind: .openRouter, modelID: sonnet.id, model: sonnet)
+  #expect(sonnetCaps.reasoning.allowsOff)
+  #expect(sonnetCaps.reasoning.efforts == [.low, .medium, .high])
+  #expect(sonnetCaps.reasoning.budget?.minimum == 1_024)
+  #expect(sonnetCaps.reasoning.combinesEffortAndBudget == false)
+
+  let legacy = try #require(discovered.first { $0.id == "vendor/legacy-reasoner" })
+  let legacyCaps = ModelCapabilityResolver.resolve(
+    kind: .openRouter, modelID: legacy.id, model: legacy)
+  #expect(legacyCaps.reasoning.efforts == [.low, .medium, .high])
+  #expect(!legacyCaps.reasoning.allowsOff)
+
+  // Verify wire serialization: off sends {"enabled": false} only; budget never combines with effort.
+  let okTransport = MockTransport(
+    data: Data(
+      #"{"id":"r","model":"anthropic/claude-sonnet-4.6","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+        .utf8
+    )
+  )
+  let requestAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.openRouter, transport: okTransport)
+
+  _ = try await requestAdapter.generate(
+    request: ProviderRequest(
+      model: sonnet.id,
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false)),
+      capabilities: sonnetCaps
+    ),
+    account: account(providerID: "openrouter")
+  )
+  let offBody = try #require(await okTransport.lastRequest()?.httpBody)
+  if case .object(let offRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: offBody) {
+    #expect(offRoot["reasoning"] == .object(["enabled": .bool(false)]))
+  } else {
+    Issue.record("Expected JSON object for off request")
+  }
+
+  _ = try await requestAdapter.generate(
+    request: ProviderRequest(
+      model: sonnet.id,
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true, effort: .high, maxTokens: 4_096)),
+      capabilities: sonnetCaps
+    ),
+    account: account(providerID: "openrouter")
+  )
+  let budgetBody = try #require(await okTransport.lastRequest()?.httpBody)
+  if case .object(let budgetRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: budgetBody)
+  {
+    #expect(budgetRoot["reasoning"] == .object(["max_tokens": .number(4096)]))
+  } else {
+    Issue.record("Expected JSON object for budget request")
+  }
+
+  // testConnection on an arbitrary routed OpenRouter model uses 1024 tokens and never sends enabled: false.
+  try await requestAdapter.testConnection(
+    account: account(providerID: "openrouter"),
+    model: "anthropic/claude-opus-5.5"
+  )
+  let probeBody = try #require(await okTransport.lastRequest()?.httpBody)
+  if case .object(let probeRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: probeBody)
+  {
+    #expect(probeRoot["max_tokens"] == .number(1024))
+    #expect(probeRoot["reasoning"] == nil)
+  } else {
+    Issue.record("Expected JSON object for probe request")
   }
 }

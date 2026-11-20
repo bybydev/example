@@ -43,7 +43,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } else if control.kind == .fixed {
       probeReasoning = nil
       probeMaxTokens = 1_024
-    } else if definition.behavior == .deepSeek {
+    } else if definition.behavior == .deepSeek || definition.behavior == .openRouter {
       probeReasoning = nil
       probeMaxTokens = 1_024
     } else {
@@ -140,6 +140,74 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         ?? wire.topProvider?.contextLength.flatMap { $0 > 0 ? $0 : nil }
       let outputLimit = wire.maxOutputTokens.flatMap { $0 > 0 ? $0 : nil }
         ?? wire.topProvider?.maxCompletionTokens.flatMap { $0 > 0 ? $0 : nil }
+      if definition.behavior == .openRouter {
+        if let reasoningWire = wire.reasoning {
+          let rawLevels = reasoningWire.supportedEfforts ?? []
+          let hasNone = rawLevels.contains { $0.lowercased() == "none" }
+          var parsedEfforts: [ReasoningEffort] = []
+          for rawLevel in rawLevels {
+            if let level = ReasoningEffort(rawValue: rawLevel.lowercased()),
+              !parsedEfforts.contains(level)
+            {
+              parsedEfforts.append(level)
+            }
+          }
+          let allowsOff = reasoningWire.mandatory == true
+            ? false
+            : (reasoningWire.mandatory == false || hasNone)
+          let offWireValue: String? = allowsOff ? (hasNone ? "none" : "disabled") : nil
+          let defaultEffort = reasoningWire.defaultEffort
+            .flatMap { ReasoningEffort(rawValue: $0.lowercased()) }
+            .flatMap { parsedEfforts.contains($0) ? $0 : nil }
+          let budget: ReasoningBudgetControl? =
+            (reasoningWire.supportsMaxTokens == true && (outputLimit == nil || (outputLimit ?? 0) >= 1_024))
+            ? .init(
+              minimum: 1_024,
+              maximum: outputLimit,
+              defaultTokens: max(1_024, min(2_048, outputLimit ?? 2_048))
+            )
+            : nil
+          let control: ModelReasoningControl
+          if !parsedEfforts.isEmpty {
+            control = ModelReasoningControl(
+              kind: .efforts,
+              efforts: parsedEfforts,
+              defaultEffort: defaultEffort,
+              allowsOff: allowsOff,
+              offWireValue: offWireValue,
+              budget: budget,
+              combinesEffortAndBudget: false,
+              source: .discovery
+            )
+          } else if let budget {
+            control = ModelReasoningControl(
+              kind: .budget,
+              allowsOff: allowsOff,
+              offWireValue: offWireValue,
+              budget: budget,
+              source: .discovery
+            )
+          } else {
+            control = ModelReasoningControl(
+              kind: .fixed,
+              allowsOff: allowsOff,
+              offWireValue: offWireValue,
+              source: .discovery
+            )
+          }
+          evidence.set(.reasoning, supported: true, source: .discovery)
+          evidence.reasoningControl = control
+          supportedParameters.insert("reasoning")
+        } else if supportedParameters.contains("reasoning") {
+          evidence.reasoningControl = ModelReasoningControl(
+            kind: .efforts,
+            efforts: [.low, .medium, .high],
+            defaultEffort: nil,
+            allowsOff: false,
+            source: .discovery
+          )
+        }
+      }
       if contextWindow != nil { evidence.contextWindowSource = .discovery }
       if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
       return ProviderModel(
@@ -186,13 +254,23 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       throw ProviderError.invalidResponse
     }
     if let error = decoded.error {
-      throw ProviderError.provider(status: response.statusCode, message: error.message)
+      throw ProviderError.provider(status: response.statusCode, message: error.displayMessage)
     }
     let message = decoded.choices.first?.message
     let text = message?.textContent ?? ""
     let reasoning = message?.normalizedReasoning ?? ""
     let toolCalls = try normalizedToolCalls(message?.toolCalls ?? [])
     let finishReason = decoded.choices.first?.finishReason
+    let reasoningDetailValues = (message?.reasoningDetails ?? [])
+      .filter { !$0.rawObject.isEmpty }
+      .map { JSONValue.object($0.rawObject) }
+    let toolContinuation: ProviderToolContinuation? =
+      definition.behavior == .openRouter && !reasoningDetailValues.isEmpty
+      ? ProviderToolContinuation(
+        apiFamily: .openAIChatCompletions,
+        payload: .array(reasoningDetailValues)
+      )
+      : nil
     guard
       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         || !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -210,7 +288,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       finishReason: finishReason,
       usage: decoded.usage?.normalized,
       metadata: responseMetadata(response.headers, decoded),
-      toolCalls: toolCalls
+      toolCalls: toolCalls,
+      toolContinuation: toolContinuation
     )
   }
 
@@ -249,6 +328,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           var completed = false
           var metadata = responseMetadata(stream.headers, nil)
           var toolFragments: [Int: OpenAIToolCallAccumulator] = [:]
+          var reasoningDetailsAccumulator = OpenRouterReasoningDetailsAccumulator()
 
           for try await chunk in stream.chunks {
             try Task.checkCancellation()
@@ -264,7 +344,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 modelID: &modelID,
                 completed: &completed,
                 metadata: &metadata,
-                toolFragments: &toolFragments
+                toolFragments: &toolFragments,
+                reasoningDetailsAccumulator: &reasoningDetailsAccumulator
               )
             }
           }
@@ -280,7 +361,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
               modelID: &modelID,
               completed: &completed,
               metadata: &metadata,
-              toolFragments: &toolFragments
+              toolFragments: &toolFragments,
+              reasoningDetailsAccumulator: &reasoningDetailsAccumulator
             )
           }
           guard completed || finishReason != nil else {
@@ -294,6 +376,14 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
           else {
             throw emptyOutputError(finishReason: finishReason)
           }
+          let accumulatedDetails = reasoningDetailsAccumulator.values
+          let toolContinuation: ProviderToolContinuation? =
+            definition.behavior == .openRouter && !accumulatedDetails.isEmpty
+            ? ProviderToolContinuation(
+              apiFamily: .openAIChatCompletions,
+              payload: .array(accumulatedDetails)
+            )
+            : nil
           continuation.yield(
             .completed(
               .init(
@@ -306,7 +396,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
                 finishReason: finishReason,
                 usage: usage,
                 metadata: metadata,
-                toolCalls: toolCalls
+                toolCalls: toolCalls,
+                toolContinuation: toolContinuation
               )
             )
           )
@@ -330,7 +421,8 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     modelID: inout ModelID,
     completed: inout Bool,
     metadata: inout [String: String],
-    toolFragments: inout [Int: OpenAIToolCallAccumulator]
+    toolFragments: inout [Int: OpenAIToolCallAccumulator],
+    reasoningDetailsAccumulator: inout OpenRouterReasoningDetailsAccumulator
   ) throws {
     if event.data == "[DONE]" {
       completed = true
@@ -346,7 +438,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       throw ProviderError.invalidResponse
     }
     if let error = decoded.error {
-      throw ProviderError.midStreamProvider(code: error.code, message: error.message)
+      throw ProviderError.midStreamProvider(code: error.code, message: error.displayMessage)
     }
     if let value = decoded.id { responseID = value }
     if let value = decoded.model { modelID = ModelID(rawValue: value) }
@@ -371,6 +463,11 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       if let delta = choice.delta.textDelta, !delta.isEmpty {
         text += delta
         continuation.yield(.textDelta(delta))
+      }
+      if definition.behavior == .openRouter, let details = choice.delta.reasoningDetails {
+        for detail in details {
+          reasoningDetailsAccumulator.append(detail)
+        }
       }
       for delta in choice.delta.reasoningFragments where !delta.isEmpty {
         reasoning += delta
@@ -445,4 +542,106 @@ private struct OpenAIToolCallAccumulator: Sendable {
   var id: String?
   var name: String?
   var arguments = ""
+}
+
+private struct OpenRouterReasoningDetailsAccumulator: Sendable {
+  private var blocks: [[String: JSONValue]] = []
+
+  var values: [JSONValue] {
+    blocks.map(JSONValue.object)
+  }
+
+  mutating func append(_ detail: ReasoningDetailWire) {
+    let incoming = detail.rawObject
+    guard !incoming.isEmpty else { return }
+
+    let incomingType = detail.type
+    let incomingIndex = detail.index
+    let incomingID = detail.id
+
+    if incomingType == "reasoning.encrypted" {
+      if let matchIndex = blocks.lastIndex(where: { block in
+        guard case .string("reasoning.encrypted")? = block["type"] else { return false }
+        if let incomingID, case .string(let existingID)? = block["id"] {
+          return existingID == incomingID
+        }
+        if let incomingIndex, case .number(let existingIndex)? = block["index"] {
+          return Int(existingIndex) == incomingIndex && incomingID == nil
+        }
+        return false
+      }) {
+        mergeEncrypted(incoming, into: &blocks[matchIndex])
+      } else {
+        blocks.append(incoming)
+      }
+      return
+    }
+
+    if let matchIndex = blocks.lastIndex(where: { block in
+      let existingType = stringField("type", in: block)
+      guard existingType == incomingType else { return false }
+      if let incomingIndex {
+        if case .number(let existingIndex)? = block["index"] {
+          return Int(existingIndex) == incomingIndex
+        }
+        return false
+      }
+      if let incomingID {
+        return stringField("id", in: block) == incomingID
+      }
+      return incomingType == "reasoning.text" || incomingType == "reasoning.summary"
+    }) {
+      mergeTextual(incoming, into: &blocks[matchIndex])
+    } else {
+      blocks.append(incoming)
+    }
+  }
+
+  private func stringField(_ key: String, in object: [String: JSONValue]) -> String? {
+    if case .string(let value)? = object[key] { return value }
+    return nil
+  }
+
+  private func mergeTextual(
+    _ incoming: [String: JSONValue],
+    into existing: inout [String: JSONValue]
+  ) {
+    for (key, value) in incoming {
+      switch key {
+      case "text", "summary", "signature":
+        if case .string(let addition) = value, !addition.isEmpty {
+          if case .string(let current)? = existing[key] {
+            existing[key] = .string(current + addition)
+          } else {
+            existing[key] = .string(addition)
+          }
+        }
+      default:
+        if existing[key] == nil || existing[key] == .null {
+          existing[key] = value
+        }
+      }
+    }
+  }
+
+  private func mergeEncrypted(
+    _ incoming: [String: JSONValue],
+    into existing: inout [String: JSONValue]
+  ) {
+    for (key, value) in incoming {
+      if key == "data" {
+        if case .string(let addition) = value, !addition.isEmpty {
+          if case .string(let current)? = existing[key], !current.isEmpty {
+            if current != addition {
+              existing[key] = .string(current + addition)
+            }
+          } else {
+            existing[key] = .string(addition)
+          }
+        }
+      } else if existing[key] == nil || existing[key] == .null {
+        existing[key] = value
+      }
+    }
+  }
 }
