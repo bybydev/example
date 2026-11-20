@@ -37,8 +37,37 @@ import Testing
   #expect(methods.contains("tools/list"))
 }
 
+@Test func urlErrorTimedOutOnDiscoverFallsBackToLegacyInitialize() async throws {
+  let base = SlowModernLegacyTransport(throwURLErrorTimeoutOnDiscover: true)
+  let transport = MCPHTTPTransport(base: base, discoverProbeTimeout: 5)
+  let workspace = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
+  let runtime = MCPRemoteRuntime(
+    workspace: workspace,
+    vault: InMemoryMCPCredentialVault(),
+    transport: transport
+  )
+  try await runtime.load()
+
+  let server = MCPRemoteServer(
+    id: "timeout-legacy",
+    name: "Timeout Legacy",
+    endpoint: URL(string: "https://timeout-legacy.example.com/mcp")!
+  )
+  try await runtime.saveServer(server, credential: nil)
+
+  let snapshot = try await runtime.refreshServer(server.id, force: true)
+  #expect(snapshot.era == .legacy)
+  #expect(snapshot.protocolVersion == "2025-11-25")
+  #expect(snapshot.tools.map(\.remoteName) == ["legacy_tool"])
+}
+
 private actor SlowModernLegacyTransport: ProviderHTTPTransport {
   private(set) var methods: [String] = []
+  private let throwURLErrorTimeoutOnDiscover: Bool
+
+  init(throwURLErrorTimeoutOnDiscover: Bool = false) {
+    self.throwURLErrorTimeoutOnDiscover = throwURLErrorTimeoutOnDiscover
+  }
 
   func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
     let stream = try await stream(for: request)
@@ -57,6 +86,9 @@ private actor SlowModernLegacyTransport: ProviderHTTPTransport {
 
     switch method {
     case "server/discover":
+      if throwURLErrorTimeoutOnDiscover {
+        throw URLError(.timedOut)
+      }
       try await Task.sleep(for: .seconds(1))
       return streamResponse(
         """

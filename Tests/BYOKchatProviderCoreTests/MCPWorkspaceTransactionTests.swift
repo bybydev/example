@@ -107,6 +107,90 @@ struct MCPWorkspaceTransactionTests {
     let decoded = try JSONDecoder.provider.decode(MCPWorkspaceState.self, from: persisted)
     #expect(Set(decoded.servers.map(\.id)) == [first.id, second.id])
   }
+
+  @Test("Disabling inherited server preserves explicit empty override atomically")
+  func preserveEmptyKeepsExplicitOverrideForProjectChat() async throws {
+    let persistence = FailingMCPWorkspacePersistence()
+    let store = MCPWorkspaceStore(persistence: persistence)
+    try await store.load()
+
+    let server = testMCPServer(id: "inherited-server")
+    try await store.upsertServer(server)
+
+    let conversationID: ConversationID = "project-chat"
+    let inherited = MCPChatToolConfiguration(enabledServerIDs: [server.id])
+
+    // Turning off the only inherited server stores an explicit empty override
+    // so the chat stops inheriting rather than snapping back to enabled.
+    try await store.setChatServerEnabled(
+      false,
+      serverID: server.id,
+      conversationID: conversationID,
+      inheritedBase: inherited,
+      preserveEmpty: true
+    )
+    let explicit = try #require(await store.explicitChatConfiguration(for: conversationID))
+    #expect(explicit.enabledServerIDs.isEmpty)
+    #expect(explicit.toolPolicies.isEmpty)
+
+    // Explicit Reset deletes the override back to nil.
+    try await store.removeChatConfiguration(conversationID: conversationID)
+    #expect(await store.explicitChatConfiguration(for: conversationID) == nil)
+  }
+
+  @Test("Failed load blocks subsequent writes from overwriting existing data")
+  func failedLoadBlocksSubsequentWrites() async throws {
+    let newerVersion = Data(#"{"schemaVersion":99,"servers":[],"snapshots":[]}"#.utf8)
+    let persistence = FailingMCPWorkspacePersistence(data: newerVersion)
+    let store = MCPWorkspaceStore(persistence: persistence)
+
+    await #expect(throws: ProviderError.workspaceVersionUnsupported(99)) {
+      try await store.load()
+    }
+
+    await #expect(throws: MCPError.self) {
+      try await store.upsertServer(testMCPServer(id: "new-server"))
+    }
+    #expect(await persistence.loadData() == newerVersion)
+  }
+
+  @Test("Server validation rejects case-insensitive duplicate headers and auth collisions")
+  func validateServerRejectsHeaderDuplicatesAndAuthCollisions() {
+    let duplicateCase = MCPRemoteServer(
+      id: "dup-headers",
+      name: "Dup",
+      endpoint: URL(string: "https://dup.example.com/mcp")!,
+      additionalHeaders: ["X-Tenant": "a", "x-tenant": "b"]
+    )
+    #expect(throws: MCPError.self) {
+      try MCPWorkspaceStore.validateServer(duplicateCase)
+    }
+
+    let authCollision = MCPRemoteServer(
+      id: "auth-collision",
+      name: "Collision",
+      endpoint: URL(string: "https://collision.example.com/mcp")!,
+      authentication: MCPAuthentication(kind: .customHeader, headerName: "X-API-Key"),
+      additionalHeaders: ["x-api-key": "override"]
+    )
+    #expect(throws: MCPError.self) {
+      try MCPWorkspaceStore.validateServer(authCollision)
+    }
+  }
+
+  @Test("Re-adding or importing a deleted server clears its tombstone")
+  func reAddingDeletedServerClearsTombstone() async throws {
+    let store = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
+    try await store.load()
+
+    let server = testMCPServer(id: "reborn-server")
+    try await store.upsertServer(server)
+    try await store.deleteServer(server.id)
+    #expect(await store.snapshot().tombstones[server.id.rawValue] != nil)
+
+    try await store.upsertServer(server)
+    #expect(await store.snapshot().tombstones[server.id.rawValue] == nil)
+  }
 }
 
 private func testMCPServer(id: MCPServerID) -> MCPRemoteServer {

@@ -7,6 +7,7 @@ import Foundation
 public actor MCPRemoteRuntime {
   public static let modernProtocolVersion = "2026-07-28"
   public static let supportedLegacyProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
+  private static let maximumResponseBytes = 16 * 1_024 * 1_024
 
   private struct ConnectionState: Sendable {
     var era: MCPProtocolEra
@@ -64,9 +65,24 @@ public actor MCPRemoteRuntime {
 
   public func saveServer(_ server: MCPRemoteServer, credential: String?) async throws {
     try MCPWorkspaceStore.validateServer(server)
+    let normalizedCredential: String??
+    if let credential {
+      let trimmed = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed.isEmpty {
+        normalizedCredential = .some(nil)
+      } else {
+        guard !trimmed.contains("\r"), !trimmed.contains("\n") else {
+          throw MCPError.invalidServer("Credentials cannot contain line breaks.")
+        }
+        normalizedCredential = .some(trimmed)
+      }
+    } else {
+      normalizedCredential = nil
+    }
+
     let previous = try? await workspace.server(id: server.id)
     let previousCredential: String?
-    if credential != nil {
+    if normalizedCredential != nil {
       previousCredential = try await vault.credential(serverID: server.id)
     } else {
       previousCredential = nil
@@ -75,25 +91,22 @@ public actor MCPRemoteRuntime {
     let invalidatesConnection = previous?.endpoint != server.endpoint
       || previous?.authentication != server.authentication
       || previous?.additionalHeaders != server.additionalHeaders
-      || credential != nil
+      || normalizedCredential != nil
     if invalidatesConnection {
       connections.removeValue(forKey: server.id)
     }
 
     // Update Keychain first so a credential failure cannot leave a newly saved
     // configuration behind. Restore it if the single workspace commit fails.
-    if let credential {
-      try await vault.setCredential(
-        credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : credential,
-        serverID: server.id
-      )
+    if let credentialUpdate = normalizedCredential {
+      try await vault.setCredential(credentialUpdate, serverID: server.id)
     }
 
     do {
-      try await workspace.upsertServer(server, invalidateSnapshot: credential != nil)
+      try await workspace.upsertServer(server, invalidateSnapshot: normalizedCredential != nil)
     } catch {
       let configurationError = error
-      if credential != nil {
+      if normalizedCredential != nil {
         do {
           try await vault.setCredential(previousCredential, serverID: server.id)
         } catch {
@@ -108,6 +121,9 @@ public actor MCPRemoteRuntime {
 
   public func setEnabled(_ enabled: Bool, serverID: MCPServerID) async throws {
     try await workspace.setEnabled(enabled, serverID: serverID)
+    if !enabled {
+      connections.removeValue(forKey: serverID)
+    }
   }
 
   public func deleteServer(_ id: MCPServerID) async throws {
@@ -341,7 +357,7 @@ public actor MCPRemoteRuntime {
           return .failure(.protocolError(code: error.code, message: error.message))
         }
       }
-      if [400, 404, 405].contains(reply.statusCode) {
+      if [400, 404, 405, 501].contains(reply.statusCode) {
         return .failure(.transport("Legacy MCP probe required."))
       }
       return .failure(httpError(status: reply.statusCode, payload: reply.payload))
@@ -357,7 +373,10 @@ public actor MCPRemoteRuntime {
     case .transport(let message):
       return message == "Legacy MCP probe required."
     case .protocolError(let code, _):
-      return code == -32_601
+      // Pre-2026 MCP SDK servers often reply to server/discover before
+      // initialize with Method Not Found (-32601), Invalid Request (-32600),
+      // or Server Not Initialized (-32000).
+      return code == -32_601 || code == -32_600 || code == -32_000
     default:
       return false
     }
@@ -389,10 +408,12 @@ public actor MCPRemoteRuntime {
       throw MCPError.protocolError(code: error.code, message: error.message)
     }
     guard let result = rpcResult(payload), case .object(let object) = result,
-      let version = stringValue(object["protocolVersion"]),
-      Self.supportedLegacyProtocolVersions.contains(version)
+      let version = stringValue(object["protocolVersion"])
     else {
       throw MCPError.invalidResponse
+    }
+    guard Self.supportedLegacyProtocolVersions.contains(version) else {
+      throw MCPError.unsupportedProtocol([version])
     }
 
     let sessionID = header("Mcp-Session-Id", in: reply.headers)
@@ -736,21 +757,31 @@ public actor MCPRemoteRuntime {
       if contentType.contains("text/event-stream") {
         var decoder = SSEDecoder()
         var finalPayload: JSONValue?
+        var receivedBytes = 0
         for try await chunk in response.chunks {
           try Task.checkCancellation()
+          receivedBytes += chunk.count
+          guard receivedBytes <= Self.maximumResponseBytes else {
+            throw MCPError.invalidResponse
+          }
           for event in try decoder.append(chunk) {
             if let value = try? decodeJSON(event.data),
               matchesExpectedResponse(value, expectedID: expectedID)
             {
               finalPayload = value
+              break
             }
           }
+          if finalPayload != nil { break }
         }
-        for event in try decoder.finish() {
-          if let value = try? decodeJSON(event.data),
-            matchesExpectedResponse(value, expectedID: expectedID)
-          {
-            finalPayload = value
+        if finalPayload == nil {
+          for event in try decoder.finish() {
+            if let value = try? decodeJSON(event.data),
+              matchesExpectedResponse(value, expectedID: expectedID)
+            {
+              finalPayload = value
+              break
+            }
           }
         }
         return HTTPReply(
@@ -763,6 +794,9 @@ public actor MCPRemoteRuntime {
       var data = Data()
       for try await chunk in response.chunks {
         try Task.checkCancellation()
+        guard data.count + chunk.count <= Self.maximumResponseBytes else {
+          throw MCPError.invalidResponse
+        }
         data.append(chunk)
       }
       let payload: JSONValue?
@@ -899,14 +933,11 @@ public actor MCPRemoteRuntime {
     guard case .object(let object) = value,
       object["result"] != nil || object["error"] != nil,
       case .number(let rawID)? = object["id"],
-      rawID.isFinite,
-      rawID >= 0,
-      rawID.rounded(.towardZero) == rawID,
-      rawID <= Double(UInt64.max)
+      let parsedID = UInt64(exactly: rawID)
     else {
       return false
     }
-    return UInt64(rawID) == expectedID
+    return parsedID == expectedID
   }
 
   private func decodeJSON(_ string: String) throws -> JSONValue {
@@ -963,11 +994,8 @@ public actor MCPRemoteRuntime {
   }
 
   private func integerValue(_ value: JSONValue?) -> Int? {
-    guard case .number(let value)? = value, value.isFinite,
-      value.rounded(.towardZero) == value,
-      value >= Double(Int.min), value <= Double(Int.max)
-    else { return nil }
-    return Int(value)
+    guard case .number(let value)? = value else { return nil }
+    return Int(exactly: value)
   }
 
   private func stringArray(_ value: JSONValue?) -> [String] {

@@ -81,6 +81,30 @@ import Testing
   #expect(await fixture.transport.toolCallCount == 0)
 }
 
+@Test func cancellingDuringApprovalReportsCancelledInsteadOfDenied() async throws {
+  let fixture = try await MCPChatFixture.make()
+  let conversationID: ConversationID = "chat-cancel-approval"
+  try await fixture.workspace.setChatServerEnabled(
+    true,
+    serverID: fixture.server.id,
+    conversationID: conversationID
+  )
+
+  let execution = Task {
+    await fixture.coordinator.execute(
+      fixture.call(id: "call-cancel"),
+      conversationID: conversationID
+    )
+  }
+  _ = try await waitForApproval(fixture.approvals)
+  execution.cancel()
+  let result = await execution.value
+
+  #expect(result.isError)
+  #expect(result.content == .string("Tool execution was cancelled."))
+  #expect(await fixture.transport.toolCallCount == 0)
+}
+
 @Test func alwaysAllowPersistsOnlyForThatChatAndSkipsNextPrompt() async throws {
   let fixture = try await MCPChatFixture.make()
   let conversationID: ConversationID = "chat-always"

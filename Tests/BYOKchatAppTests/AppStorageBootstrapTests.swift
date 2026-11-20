@@ -218,3 +218,82 @@ struct ProjectViewSupportTests {
     #expect(imported[0].data == content)
   }
 }
+
+@Suite("MCP UI support")
+struct MCPUISupportTests {
+  @Test("Tool count label uses singular and plural grammar")
+  func toolCountLabelFormatting() {
+    #expect(mcpToolCountLabel(0) == "0 tools")
+    #expect(mcpToolCountLabel(1) == "1 tool")
+    #expect(mcpToolCountLabel(3) == "3 tools")
+  }
+
+  @Test("Additional header parser rejects case-insensitive duplicates")
+  func parseHeadersRejectsCaseInsensitiveDuplicates() throws {
+    let parsed = try MCPServerFormSupport.parseHeaders("X-Tenant: alpha\nX-Region: eu-west\n")
+    #expect(parsed == ["X-Tenant": "alpha", "X-Region": "eu-west"])
+
+    #expect(throws: MCPError.self) {
+      _ = try MCPServerFormSupport.parseHeaders("X-Tenant: alpha\nx-tenant: beta")
+    }
+  }
+
+  @Test("Elicitation form handles integer defaults, trimmed numbers, optional enums, and array enums")
+  func elicitationFormValidationAndPayload() {
+    let fields: [MCPElicitationField] = [
+      MCPElicitationField(
+        name: "count",
+        kind: .integer,
+        isRequired: true,
+        defaultValue: .number(5.0)
+      ),
+      MCPElicitationField(
+        name: "ratio",
+        kind: .number,
+        isRequired: true
+      ),
+      MCPElicitationField(
+        name: "mode",
+        kind: .string,
+        isRequired: false,
+        allowedValues: ["fast", "safe"]
+      ),
+      MCPElicitationField(
+        name: "tags",
+        kind: .stringArray,
+        isRequired: true,
+        allowedValues: ["ios", "mcp", "core"]
+      ),
+    ]
+
+    let initial = MCPElicitationFormSupport.initialValues(for: fields)
+    // Integer default 5.0 formats cleanly as "5" (not "5.0")
+    #expect(initial.text["count"] == "5")
+    // Optional enum starts unset ("") rather than forcing the first value
+    #expect(initial.text["mode"] == "")
+
+    var text = initial.text
+    text["count"] = " -12 "
+    text["ratio"] = " 3.5\n"
+    text["tags"] = ", , "
+    // Comma-only input for a required stringArray must not be submittable
+    #expect(!MCPElicitationFormSupport.canSubmit(mode: .form, url: nil, fields: fields, textValues: text))
+
+    // Disallowed value in stringArray must not be submittable
+    text["tags"] = "ios, invalid"
+    #expect(!MCPElicitationFormSupport.canSubmit(mode: .form, url: nil, fields: fields, textValues: text))
+
+    text["tags"] = "ios, mcp"
+    #expect(MCPElicitationFormSupport.canSubmit(mode: .form, url: nil, fields: fields, textValues: text))
+
+    let payload = MCPElicitationFormSupport.responseContent(
+      fields: fields,
+      textValues: text,
+      boolValues: initial.bools
+    )
+    #expect(payload["count"] == .number(-12))
+    #expect(payload["ratio"] == .number(3.5))
+    #expect(payload["mode"] == nil)
+    #expect(payload["tags"] == .array([.string("ios"), .string("mcp")]))
+  }
+}

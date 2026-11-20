@@ -179,6 +179,7 @@ final class MCPManagementModel {
   private(set) var inheritedChatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
   private(set) var pendingApprovals: [MCPToolApprovalRequest] = []
   private(set) var pendingElicitations: [MCPElicitationRequest] = []
+  private var toolDisplayNamesByExposedName: [String: String] = [:]
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
@@ -305,13 +306,7 @@ final class MCPManagementModel {
   }
 
   func toolDisplayName(_ exposedToolName: String) -> String {
-    for server in servers {
-      if let binding = tools(for: server.id).first(where: { $0.exposedName == exposedToolName }) {
-        let toolName = binding.remoteTool.title ?? binding.remoteTool.remoteName
-        return "\(server.name) · \(toolName)"
-      }
-    }
-    return exposedToolName
+    toolDisplayNamesByExposedName[exposedToolName] ?? exposedToolName
   }
 
   func pendingApprovals(for conversationID: ConversationID) -> [MCPToolApprovalRequest] {
@@ -332,12 +327,18 @@ final class MCPManagementModel {
     additionalHeaders: [String: String],
     isEnabled: Bool
   ) async -> MCPRemoteServer? {
-    guard !isBusy else { return nil }
+    operationCount += 1
     isBusy = true
+    await acquireOperation()
     errorMessage = nil
     statusMessage = nil
     warningMessage = nil
-    defer { isBusy = false }
+    isBusy = true
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
 
     do {
       let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -391,8 +392,16 @@ final class MCPManagementModel {
   /// server list rather than attempting an alert during the sheet transition.
   func discoverSavedServer(_ server: MCPRemoteServer) async {
     guard server.isEnabled else { return }
+    operationCount += 1
     isBusy = true
-    defer { isBusy = false }
+    await acquireOperation()
+    isBusy = true
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
+    guard servers.first(where: { $0.id == server.id })?.isEnabled == true else { return }
     do {
       _ = try await runtime.refreshServer(server.id, force: true)
       statusMessage = "MCP server saved and tools discovered"
@@ -436,10 +445,15 @@ final class MCPManagementModel {
   }
 
   func setEnabled(_ enabled: Bool, serverID: MCPServerID) async {
-    await perform(nil) {
+    await perform(enabled ? "MCP server enabled" : "MCP server disabled") {
       try await runtime.setEnabled(enabled, serverID: serverID)
       if enabled {
-        _ = try await runtime.refreshServer(serverID, force: true)
+        do {
+          _ = try await runtime.refreshServer(serverID, force: true)
+        } catch {
+          try? await reloadSnapshot()
+          throw error
+        }
       }
       try await reloadSnapshot()
     }
@@ -453,15 +467,17 @@ final class MCPManagementModel {
     await perform(nil, conversationID: conversationID, configurationKey: "mcp.server.\(serverID.rawValue)") {
       if enabled {
         guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
-          throw MCPError.invalidServer("Enable this MCP server in Settings first.")
+          throw MCPError.invalidServer("Enable this MCP server in MCP Servers first.")
         }
         _ = try await runtime.refreshServer(serverID)
       }
-      try await materializeInheritedConfigurationIfNeeded(conversationID)
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
       try await workspace.setChatServerEnabled(
         enabled,
         serverID: serverID,
-        conversationID: conversationID
+        conversationID: conversationID,
+        inheritedBase: inherited,
+        preserveEmpty: inherited != nil
       )
       try await reloadSnapshot()
     }
@@ -473,11 +489,13 @@ final class MCPManagementModel {
     conversationID: ConversationID
   ) async {
     await perform(nil, conversationID: conversationID, configurationKey: "mcp.policy.\(exposedToolName)") {
-      try await materializeInheritedConfigurationIfNeeded(conversationID)
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
       try await workspace.setChatToolPolicy(
         policy,
         exposedToolName: exposedToolName,
-        conversationID: conversationID
+        conversationID: conversationID,
+        inheritedBase: inherited,
+        preserveEmpty: inherited != nil
       )
       try await reloadSnapshot()
     }
@@ -488,7 +506,12 @@ final class MCPManagementModel {
     conversationID: ConversationID
   ) async {
     await perform("Tool preset applied", conversationID: conversationID, configurationKey: "mcp.replace") {
-      try await workspace.replaceChatConfiguration(configuration, conversationID: conversationID)
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
+      try await workspace.replaceChatConfiguration(
+        configuration,
+        conversationID: conversationID,
+        preserveEmpty: inherited != nil
+      )
       try await reloadSnapshot()
     }
   }
@@ -513,15 +536,21 @@ final class MCPManagementModel {
     {
       var persisted = false
       await perform(nil, conversationID: request.conversationID, configurationKey: "mcp.policy.\(request.exposedToolName)") {
-        try await materializeInheritedConfigurationIfNeeded(request.conversationID)
+        let inherited = await projectWorkspace.mcpConfiguration(for: request.conversationID)
         try await workspace.setChatToolPolicy(
           .alwaysAllow,
           exposedToolName: request.exposedToolName,
-          conversationID: request.conversationID
+          conversationID: request.conversationID,
+          inheritedBase: inherited,
+          preserveEmpty: inherited != nil
         )
-        try await reloadSnapshot()
         persisted = true
         await approvals.resolve(requestID, decision: .allowOnce)
+        do {
+          try await reloadSnapshot()
+        } catch {
+          await reloadChatConfigurationsOnly()
+        }
       }
       if !persisted {
         // Persistence failed or the chat was retired before the write began.
@@ -537,6 +566,15 @@ final class MCPManagementModel {
   }
 
   func deleteAllCredentials() async throws {
+    operationCount += 1
+    isBusy = true
+    await acquireOperation()
+    isBusy = true
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
     let values = await runtime.servers()
     for server in values {
       try await runtime.saveServer(server, credential: "")
@@ -544,17 +582,35 @@ final class MCPManagementModel {
     try await reloadSnapshot()
   }
 
-  private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
-    guard await workspace.explicitChatConfiguration(for: conversationID) == nil,
-      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
-    else { return }
-    try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
+  private func reloadChatConfigurationsOnly() async {
+    let workspaceSnapshot = await workspace.snapshot()
+    chatConfigurations = Dictionary(
+      uniqueKeysWithValues: (workspaceSnapshot.chatConfigurations ?? [:]).map {
+        (ConversationID(rawValue: $0.key), $0.value)
+      }
+    )
+    await reloadProjectInheritance()
   }
 
   private func reloadSnapshot() async throws {
     servers = await runtime.servers()
     let snapshots = await runtime.snapshots()
     snapshotsByServer = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.serverID, $0) })
+
+    var displayNames: [String: String] = [:]
+    for server in servers {
+      guard let snapshot = snapshotsByServer[server.id] else { continue }
+      for tool in snapshot.tools {
+        let exposed = MCPToolNamespace.exposedName(
+          serverID: server.id,
+          remoteName: tool.remoteName
+        )
+        let title = tool.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let toolName = (title?.isEmpty == false ? title : nil) ?? tool.remoteName
+        displayNames[exposed] = "\(server.name) · \(toolName)"
+      }
+    }
+    toolDisplayNamesByExposedName = displayNames
 
     let workspaceSnapshot = await workspace.snapshot()
     chatConfigurations = Dictionary(

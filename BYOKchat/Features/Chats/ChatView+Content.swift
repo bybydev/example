@@ -413,6 +413,7 @@ private struct MCPToolApprovalCard: View {
   let request: MCPToolApprovalRequest
   let resolve: (MCPToolApprovalDecision) -> Void
 
+  @State private var isResolving = false
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
@@ -435,17 +436,19 @@ private struct MCPToolApprovalCard: View {
         }
       }
 
-      HStack(spacing: 7) {
-        if request.readOnlyHint == true {
-          Label("Read-only", systemImage: "eye")
+      if request.readOnlyHint == true || request.destructiveHint == true {
+        HStack(spacing: 7) {
+          if request.readOnlyHint == true {
+            Label("Read-only", systemImage: "eye")
+          }
+          if request.destructiveHint == true {
+            Label("Destructive", systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.orange)
+          }
         }
-        if request.destructiveHint == true {
-          Label("Destructive", systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.orange)
-        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
-      .font(.system(size: 11, weight: .medium))
-      .foregroundStyle(theme.secondaryForegroundColor)
 
       DisclosureGroup("Arguments") {
         Text(request.arguments.prettyJSONString())
@@ -473,6 +476,7 @@ private struct MCPToolApprovalCard: View {
         }
       }
       .font(.system(size: 13, weight: .semibold))
+      .disabled(isResolving)
     }
     .padding(14)
     .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -485,16 +489,22 @@ private struct MCPToolApprovalCard: View {
     )
   }
 
+  private func submit(_ decision: MCPToolApprovalDecision) {
+    guard !isResolving else { return }
+    isResolving = true
+    resolve(decision)
+  }
+
   private var denyButton: some View {
-    Button("Deny", role: .destructive) { resolve(.deny) }.buttonStyle(.bordered)
+    Button("Deny", role: .destructive) { submit(.deny) }.buttonStyle(.bordered)
   }
 
   private var allowOnceButton: some View {
-    Button("Allow Once") { resolve(.allowOnce) }.buttonStyle(.bordered)
+    Button("Allow Once") { submit(.allowOnce) }.buttonStyle(.bordered)
   }
 
   private var alwaysAllowButton: some View {
-    Button("Always Allow") { resolve(.alwaysAllow) }.buttonStyle(.borderedProminent)
+    Button("Always Allow") { submit(.alwaysAllow) }.buttonStyle(.borderedProminent)
   }
 }
 
@@ -593,34 +603,40 @@ private struct ChatToolRoundView: View {
   }
 }
 
-private struct MCPElicitationCard: View {
-  let request: MCPElicitationRequest
-  let resolve: (MCPElicitationDecision) -> Void
-
-  @State private var textValues: [String: String]
-  @State private var boolValues: [String: Bool]
-
-  @Environment(\.appFoundationTheme) private var theme
-
-  init(request: MCPElicitationRequest, resolve: @escaping (MCPElicitationDecision) -> Void) {
-    self.request = request
-    self.resolve = resolve
+nonisolated enum MCPElicitationFormSupport {
+  static func initialValues(
+    for fields: [MCPElicitationField]
+  ) -> (text: [String: String], bools: [String: Bool]) {
     var text: [String: String] = [:]
     var bools: [String: Bool] = [:]
-    for field in request.fields {
+    for field in fields {
       if field.kind == .string, !field.allowedValues.isEmpty {
         if case .string(let value)? = field.defaultValue, field.allowedValues.contains(value) {
           text[field.name] = value
-        } else {
+        } else if field.isRequired {
           text[field.name] = field.allowedValues.first
+        } else {
+          text[field.name] = ""
         }
         continue
       }
       switch (field.kind, field.defaultValue) {
-      case (.boolean, .bool(let value)): bools[field.name] = value
-      case (.string, .string(let value)): text[field.name] = value
-      case (.integer, .number(let value)), (.number, .number(let value)):
-        text[field.name] = String(value)
+      case (.boolean, .bool(let value)):
+        bools[field.name] = value
+      case (.string, .string(let value)):
+        text[field.name] = value
+      case (.integer, .number(let value)):
+        if let exact = Int(exactly: value) {
+          text[field.name] = String(exact)
+        } else if value.isFinite {
+          text[field.name] = String(value)
+        }
+      case (.number, .number(let value)):
+        if let exact = Int(exactly: value) {
+          text[field.name] = String(exact)
+        } else if value.isFinite {
+          text[field.name] = String(value)
+        }
       case (.stringArray, .array(let values)):
         text[field.name] = values.compactMap {
           if case .string(let value) = $0 { return value }
@@ -630,8 +646,117 @@ private struct MCPElicitationCard: View {
         if field.kind == .boolean { bools[field.name] = false }
       }
     }
-    _textValues = State(initialValue: text)
-    _boolValues = State(initialValue: bools)
+    return (text, bools)
+  }
+
+  static func canSubmit(
+    mode: MCPElicitationMode,
+    url: URL?,
+    fields: [MCPElicitationField],
+    textValues: [String: String]
+  ) -> Bool {
+    guard mode == .form else { return url != nil }
+    for field in fields {
+      let storedValue = textValues[field.name] ?? ""
+      if field.kind == .string, !field.allowedValues.isEmpty {
+        if storedValue.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard field.allowedValues.contains(storedValue) else { return false }
+        continue
+      }
+      let raw = storedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      switch field.kind {
+      case .boolean:
+        continue
+      case .string:
+        if field.isRequired, raw.isEmpty { return false }
+      case .integer:
+        if raw.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard Int(raw) != nil else { return false }
+      case .number:
+        if raw.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard let value = Double(raw), value.isFinite else { return false }
+      case .stringArray:
+        let items = parseStringArray(raw)
+        if items.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        if !field.allowedValues.isEmpty,
+          !items.allSatisfy(field.allowedValues.contains)
+        {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  static func responseContent(
+    fields: [MCPElicitationField],
+    textValues: [String: String],
+    boolValues: [String: Bool]
+  ) -> [String: JSONValue] {
+    var values: [String: JSONValue] = [:]
+    for field in fields {
+      switch field.kind {
+      case .boolean:
+        values[field.name] = .bool(boolValues[field.name] ?? false)
+      case .integer:
+        let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Int(raw) { values[field.name] = .number(Double(value)) }
+      case .number:
+        let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Double(raw), value.isFinite { values[field.name] = .number(value) }
+      case .string:
+        let value = textValues[field.name] ?? ""
+        if !field.allowedValues.isEmpty {
+          if !value.isEmpty { values[field.name] = .string(value) }
+        } else if !value.isEmpty || field.isRequired {
+          values[field.name] = .string(value)
+        }
+      case .stringArray:
+        let items = parseStringArray(textValues[field.name] ?? "")
+        if !items.isEmpty || field.isRequired {
+          values[field.name] = .array(items.map(JSONValue.string))
+        }
+      }
+    }
+    return values
+  }
+
+  static func parseStringArray(_ raw: String) -> [String] {
+    raw
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
+}
+
+private struct MCPElicitationCard: View {
+  let request: MCPElicitationRequest
+  let resolve: (MCPElicitationDecision) -> Void
+
+  @State private var textValues: [String: String]
+  @State private var boolValues: [String: Bool]
+  @State private var isResolving = false
+
+  @Environment(\.appFoundationTheme) private var theme
+
+  init(request: MCPElicitationRequest, resolve: @escaping (MCPElicitationDecision) -> Void) {
+    self.request = request
+    self.resolve = resolve
+    let initial = MCPElicitationFormSupport.initialValues(for: request.fields)
+    _textValues = State(initialValue: initial.text)
+    _boolValues = State(initialValue: initial.bools)
   }
 
   var body: some View {
@@ -669,21 +794,22 @@ private struct MCPElicitationCard: View {
 
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 8) {
-          Button("Cancel") { resolve(.cancel) }.buttonStyle(.bordered)
-          Button("Decline", role: .destructive) { resolve(.decline) }.buttonStyle(.bordered)
+          cancelButton
+          declineButton
           Spacer()
           submitButton
         }
         VStack(alignment: .trailing, spacing: 8) {
           HStack(spacing: 8) {
-            Button("Cancel") { resolve(.cancel) }.buttonStyle(.bordered)
-            Button("Decline", role: .destructive) { resolve(.decline) }.buttonStyle(.bordered)
+            cancelButton
+            declineButton
           }
           submitButton
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
       }
       .font(.system(size: 13, weight: .semibold))
+      .disabled(isResolving)
     }
     .padding(14)
     .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -693,12 +819,26 @@ private struct MCPElicitationCard: View {
     )
   }
 
+  private func submitDecision(_ decision: MCPElicitationDecision) {
+    guard !isResolving else { return }
+    isResolving = true
+    resolve(decision)
+  }
+
+  private var cancelButton: some View {
+    Button("Cancel") { submitDecision(.cancel) }.buttonStyle(.bordered)
+  }
+
+  private var declineButton: some View {
+    Button("Decline", role: .destructive) { submitDecision(.decline) }.buttonStyle(.bordered)
+  }
+
   private var submitButton: some View {
     Button(request.mode == .url ? "Continue" : "Submit") {
-      resolve(.accept(responseContent()))
+      submitDecision(.accept(responseContent()))
     }
     .buttonStyle(.borderedProminent)
-    .disabled(!canSubmit)
+    .disabled(!canSubmit || isResolving)
   }
 
   @ViewBuilder
@@ -722,6 +862,9 @@ private struct MCPElicitationCard: View {
               set: { textValues[field.name] = $0 }
             )
           ) {
+            if !field.isRequired {
+              Text("None").tag("")
+            }
             ForEach(field.allowedValues, id: \.self) { value in Text(value).tag(value) }
           }
         default:
@@ -733,64 +876,40 @@ private struct MCPElicitationCard: View {
             )
           )
           .textFieldStyle(.roundedBorder)
-          .keyboardType(field.kind == .integer || field.kind == .number ? .decimalPad : .default)
+          .keyboardType(
+            field.kind == .integer || field.kind == .number
+              ? .numbersAndPunctuation
+              : .default
+          )
+          if field.kind == .stringArray, !field.allowedValues.isEmpty {
+            Text("Allowed: \(field.allowedValues.joined(separator: ", "))")
+              .font(.caption2)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
         }
         if let description = field.description, !description.isEmpty {
           Text(description).font(.caption2).foregroundStyle(theme.secondaryForegroundColor)
         }
       }
     }
+    .disabled(isResolving)
   }
 
   private var canSubmit: Bool {
-    guard request.mode == .form else { return request.url != nil }
-    for field in request.fields {
-      let storedValue = textValues[field.name] ?? ""
-      if field.kind == .string, !field.allowedValues.isEmpty,
-        !field.allowedValues.contains(storedValue)
-      {
-        return false
-      }
-      let raw = storedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-      if field.isRequired, field.kind != .boolean, raw.isEmpty { return false }
-      if raw.isEmpty { continue }
-      switch field.kind {
-      case .integer:
-        guard Int(raw) != nil else { return false }
-      case .number:
-        guard let value = Double(raw), value.isFinite else { return false }
-      case .string, .boolean, .stringArray:
-        break
-      }
-    }
-    return true
+    MCPElicitationFormSupport.canSubmit(
+      mode: request.mode,
+      url: request.url,
+      fields: request.fields,
+      textValues: textValues
+    )
   }
 
   private func responseContent() -> [String: JSONValue] {
-    var values: [String: JSONValue] = [:]
-    for field in request.fields {
-      switch field.kind {
-      case .boolean:
-        values[field.name] = .bool(boolValues[field.name] ?? false)
-      case .integer:
-        if let value = Int(textValues[field.name] ?? "") { values[field.name] = .number(Double(value)) }
-      case .number:
-        if let value = Double(textValues[field.name] ?? ""), value.isFinite { values[field.name] = .number(value) }
-      case .string:
-        let value = textValues[field.name] ?? ""
-        if !value.isEmpty || field.isRequired || !field.allowedValues.isEmpty {
-          values[field.name] = .string(value)
-        }
-      case .stringArray:
-        let value = (textValues[field.name] ?? "")
-          .split(separator: ",")
-          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-          .filter { !$0.isEmpty }
-          .map(JSONValue.string)
-        if !value.isEmpty || field.isRequired { values[field.name] = .array(value) }
-      }
-    }
-    return values
+    MCPElicitationFormSupport.responseContent(
+      fields: request.fields,
+      textValues: textValues,
+      boolValues: boolValues
+    )
   }
 }
 

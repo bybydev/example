@@ -155,7 +155,7 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
         errorCode: "server_disabled",
         classification: "configuration"
       )
-      return failure(call, "This MCP server is disabled in Settings.")
+      return failure(call, "This MCP server is disabled in MCP Servers.")
     }
 
     guard policy != .disabled else {
@@ -188,17 +188,32 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
         readOnlyHint: annotationBool("readOnlyHint", tool: binding.remoteTool),
         destructiveHint: annotationBool("destructiveHint", tool: binding.remoteTool)
       )
-      switch await approvals.requestApproval(request) {
+      let decision = await approvals.requestApproval(request)
+      if Task.isCancelled {
+        telemetry.cancelled(
+          call: call,
+          conversationID: conversationID,
+          source: "mcp",
+          serverID: binding.serverID,
+          remoteToolName: binding.remoteTool.remoteName,
+          policy: policy,
+          durationMilliseconds: durationMilliseconds(startedAt, clock: clock)
+        )
+        return failure(call, "Tool execution was cancelled.")
+      }
+      switch decision {
       case .allowOnce:
         approvalDecision = MCPToolApprovalDecision.allowOnce.rawValue
       case .alwaysAllow:
         approvalDecision = MCPToolApprovalDecision.alwaysAllow.rawValue
         do {
-          try await materializeInheritedConfigurationIfNeeded(conversationID)
+          let inherited = await projectWorkspace?.mcpConfiguration(for: conversationID)
           try await workspace.setChatToolPolicy(
             .alwaysAllow,
             exposedToolName: binding.exposedName,
-            conversationID: conversationID
+            conversationID: conversationID,
+            inheritedBase: inherited,
+            preserveEmpty: inherited != nil
           )
         } catch {
           telemetry.failed(
@@ -311,13 +326,6 @@ public actor MCPConversationToolRuntime: ChatConversationToolExecuting {
       return inherited
     }
     return MCPChatToolConfiguration()
-  }
-
-  private func materializeInheritedConfigurationIfNeeded(_ conversationID: ConversationID) async throws {
-    guard await workspace.explicitChatConfiguration(for: conversationID) == nil,
-      let inherited = await projectWorkspace?.mcpConfiguration(for: conversationID)
-    else { return }
-    try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
   }
 
   private func executeRemoteTool(

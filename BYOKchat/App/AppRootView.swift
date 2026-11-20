@@ -158,6 +158,9 @@ struct AppRootView: View {
     .onChange(of: model.projects.statusMessage) { _, message in
       handleProjectStatusMessage(message)
     }
+    .onChange(of: model.mcp.statusMessage) { _, message in
+      handleMCPStatusMessage(message)
+    }
     .onChange(of: scenePhase) { _, phase in
       if phase != .active {
         Task { await model.chats.persistActiveMessages() }
@@ -450,6 +453,12 @@ struct AppRootView: View {
     guard let message else { return }
     toastCenter.success(message)
     model.projects.statusMessage = nil
+  }
+
+  private func handleMCPStatusMessage(_ message: String?) {
+    guard let message else { return }
+    toastCenter.success(message)
+    model.mcp.statusMessage = nil
   }
 
   private func openSidebar() {

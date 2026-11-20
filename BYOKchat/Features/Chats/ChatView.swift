@@ -667,8 +667,10 @@ private struct ConversationToolsView: View {
         .listRowBackground(theme.surfaceColor)
 
         if let project, !project.projectToolPresets.isEmpty {
+          let activeConfig = normalizedToolConfiguration(mcp.chatConfiguration(for: conversationID))
           Section("Project Tool Presets") {
             ForEach(project.projectToolPresets) { preset in
+              let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
               Button {
                 Task { @MainActor in
                   await mcp.applyChatConfiguration(
@@ -677,7 +679,15 @@ private struct ConversationToolsView: View {
                   )
                 }
               } label: {
-                Label(preset.name, systemImage: "wrench.adjustable")
+                HStack {
+                  Label(preset.name, systemImage: "wrench.adjustable")
+                  Spacer()
+                  if isApplied {
+                    Image(systemName: "checkmark")
+                      .font(.footnote.weight(.semibold))
+                      .foregroundStyle(.tint)
+                  }
+                }
               }
             }
           }
@@ -779,7 +789,7 @@ private struct ConversationToolsView: View {
         Text(server.name)
         Spacer()
         if let snapshot = mcp.snapshot(for: server.id) {
-          Text("\(snapshot.tools.count) tools")
+          Text(mcpToolCountLabel(snapshot.tools.count))
         }
       }
     } footer: {
@@ -791,6 +801,8 @@ private struct ConversationToolsView: View {
 
   private func toolRow(_ binding: MCPToolBinding) -> some View {
     let tool = binding.remoteTool
+    let isReadOnly = annotationBool("readOnlyHint", tool: tool) == true
+    let isDestructive = annotationBool("destructiveHint", tool: tool) == true
     return VStack(alignment: .leading, spacing: 7) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         VStack(alignment: .leading, spacing: 3) {
@@ -827,19 +839,30 @@ private struct ConversationToolsView: View {
         .pickerStyle(.menu)
       }
 
-      HStack(spacing: 8) {
-        if annotationBool("readOnlyHint", tool: tool) == true {
-          Label("Read-only", systemImage: "eye")
+      if isReadOnly || isDestructive {
+        HStack(spacing: 8) {
+          if isReadOnly {
+            Label("Read-only", systemImage: "eye")
+          }
+          if isDestructive {
+            Label("Destructive", systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.orange)
+          }
         }
-        if annotationBool("destructiveHint", tool: tool) == true {
-          Label("Destructive", systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.orange)
-        }
+        .font(.caption2)
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
       }
-      .font(.caption2)
-      .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
     }
     .padding(.vertical, 3)
+  }
+
+  private func normalizedToolConfiguration(
+    _ configuration: MCPChatToolConfiguration
+  ) -> MCPChatToolConfiguration {
+    MCPChatToolConfiguration(
+      enabledServerIDs: Array(Set(configuration.enabledServerIDs)).sorted { $0.rawValue < $1.rawValue },
+      toolPolicies: configuration.toolPolicies.filter { $0.value != .ask }
+    )
   }
 
   private func annotationBool(_ key: String, tool: MCPRemoteTool) -> Bool? {

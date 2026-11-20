@@ -476,3 +476,204 @@ private func requestMethod(_ request: URLRequest) -> String? {
   else { return nil }
   return method
 }
+
+@Test func saveServerTrimsCredentialsAndRejectsLineBreaks() async throws {
+  let workspace = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
+  let vault = InMemoryMCPCredentialVault()
+  let runtime = MCPRemoteRuntime(workspace: workspace, vault: vault)
+  try await runtime.load()
+
+  let server = MCPRemoteServer(
+    id: "trimmed-cred",
+    name: "Trimmed",
+    endpoint: URL(string: "https://trim.example.com/mcp")!,
+    authentication: MCPAuthentication(kind: .bearer)
+  )
+  try await runtime.saveServer(server, credential: "  secret-token\n")
+  #expect(try await vault.credential(serverID: server.id) == "secret-token")
+
+  await #expect(throws: MCPError.self) {
+    try await runtime.saveServer(server, credential: "line1\nline2")
+  }
+}
+
+@Test func modernDiscoveryFallsBackOnInvalidRequestAndReportsUnsupportedLegacyVersion() async throws {
+  let fallbackTransport = LegacyInvalidRequestFallbackTransport(legacyProtocolVersion: "2025-11-25")
+  let workspace = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
+  let runtime = MCPRemoteRuntime(
+    workspace: workspace,
+    vault: InMemoryMCPCredentialVault(),
+    transport: fallbackTransport
+  )
+  try await runtime.load()
+
+  let server = MCPRemoteServer(
+    id: "sdk-legacy",
+    name: "SDK Legacy",
+    endpoint: URL(string: "https://sdk.example.com/mcp")!
+  )
+  try await runtime.saveServer(server, credential: nil)
+
+  let snapshot = try await runtime.refreshServer(server.id, force: true)
+  #expect(snapshot.era == .legacy)
+  #expect(snapshot.protocolVersion == "2025-11-25")
+
+  let unsupportedTransport = LegacyInvalidRequestFallbackTransport(legacyProtocolVersion: "2024-11-05")
+  let unsupportedRuntime = MCPRemoteRuntime(
+    workspace: MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence()),
+    vault: InMemoryMCPCredentialVault(),
+    transport: unsupportedTransport
+  )
+  try await unsupportedRuntime.load()
+  try await unsupportedRuntime.saveServer(server, credential: nil)
+  await #expect(throws: MCPError.unsupportedProtocol(["2024-11-05"])) {
+    _ = try await unsupportedRuntime.refreshServer(server.id, force: true)
+  }
+}
+
+@Test func sseResponseBreaksImmediatelyAndHandlesOutOfRangeNumbersSafely() async throws {
+  let transport = OpenEndedSSEMCPTransport()
+  let workspace = MCPWorkspaceStore(persistence: InMemoryMCPWorkspacePersistence())
+  let runtime = MCPRemoteRuntime(
+    workspace: workspace,
+    vault: InMemoryMCPCredentialVault(),
+    transport: transport
+  )
+  try await runtime.load()
+
+  let server = MCPRemoteServer(
+    id: "open-sse",
+    name: "Open SSE",
+    endpoint: URL(string: "https://open-sse.example.com/mcp")!
+  )
+  try await runtime.saveServer(server, credential: nil)
+  _ = try await runtime.refreshServer(server.id, force: true)
+
+  let output = try await runtime.callTool(
+    serverID: server.id,
+    remoteName: "ping",
+    arguments: .object([:])
+  )
+  #expect(output == MCPToolCallOutput(content: .string("pong"), isError: false))
+}
+
+private actor LegacyInvalidRequestFallbackTransport: ProviderHTTPTransport {
+  let legacyProtocolVersion: String
+
+  init(legacyProtocolVersion: String) {
+    self.legacyProtocolVersion = legacyProtocolVersion
+  }
+
+  func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
+    let method = requestMethod(request)
+    let id = requestID(request) ?? 1
+    switch method {
+    case "server/discover":
+      // Official 2025 MCP SDKs often return HTTP 200 + JSON-RPC -32600 when
+      // a non-initialize request arrives before initialize.
+      return jsonResponse(
+        """
+        {"jsonrpc":"2.0","id":\(id),"error":{"code":-32600,"message":"Invalid Request: Server not initialized"}}
+        """
+      )
+    case "initialize":
+      return ProviderHTTPResponse(
+        statusCode: 200,
+        headers: ["Content-Type": "application/json", "Mcp-Session-Id": "sdk-session"],
+        data: Data(
+          """
+          {"jsonrpc":"2.0","id":\(id),"result":{"protocolVersion":"\(legacyProtocolVersion)","capabilities":{"tools":{}},"serverInfo":{"name":"SDK","version":"1.0"}}}
+          """.utf8
+        )
+      )
+    case "notifications/initialized":
+      return ProviderHTTPResponse(statusCode: 202, headers: [:], data: Data())
+    case "tools/list":
+      return jsonResponse(
+        """
+        {"jsonrpc":"2.0","id":\(id),"result":{"tools":[]}}
+        """
+      )
+    default:
+      return jsonResponse(
+        """
+        {"jsonrpc":"2.0","id":\(id),"error":{"code":-32601,"message":"Method not found"}}
+        """,
+        status: 404
+      )
+    }
+  }
+
+  func stream(for request: URLRequest) async throws -> ProviderHTTPByteStream {
+    let response = try await data(for: request)
+    return ProviderHTTPByteStream(
+      statusCode: response.statusCode,
+      headers: response.headers,
+      chunks: AsyncThrowingStream { continuation in
+        if !response.data.isEmpty { continuation.yield(response.data) }
+        continuation.finish()
+      }
+    )
+  }
+
+  private func requestID(_ request: URLRequest) -> Int? {
+    guard let body = request.httpBody,
+      let value = try? JSONDecoder.provider.decode(JSONValue.self, from: body),
+      case .object(let root) = value,
+      case .number(let id)? = root["id"]
+    else { return nil }
+    return Int(exactly: id)
+  }
+}
+
+private actor OpenEndedSSEMCPTransport: ProviderHTTPTransport {
+  func data(for request: URLRequest) async throws -> ProviderHTTPResponse {
+    let stream = try await stream(for: request)
+    var buffer = Data()
+    for try await chunk in stream.chunks { buffer.append(chunk) }
+    return ProviderHTTPResponse(statusCode: stream.statusCode, headers: stream.headers, data: buffer)
+  }
+
+  func stream(for request: URLRequest) async throws -> ProviderHTTPByteStream {
+    let method = requestMethod(request)
+    let id = requestID(request) ?? 1
+    switch method {
+    case "server/discover":
+      return byteStream(
+        json: """
+          {"jsonrpc":"2.0","id":\(id),"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"SSE","version":"1.0"}}}}
+          """
+      )
+    case "tools/list":
+      return byteStream(
+        json: """
+          {"jsonrpc":"2.0","id":\(id),"result":{"resultType":"complete","tools":[{"name":"ping","description":"Ping","inputSchema":{"type":"object"}}],"ttlMs":9223372036854775808,"cacheScope":"private"}}
+          """
+      )
+    case "tools/call":
+      return ProviderHTTPByteStream(
+        statusCode: 200,
+        headers: ["Content-Type": "text/event-stream"],
+        chunks: AsyncThrowingStream { continuation in
+          // Include a huge out-of-range id event (2^64) before the real response,
+          // then intentionally NEVER finish the stream to verify early break.
+          let hugeIDEvent = "data: {\"jsonrpc\":\"2.0\",\"id\":18446744073709551616,\"result\":{}}\n\n"
+          let matchingEvent = "data: {\"jsonrpc\":\"2.0\",\"id\":\(id),\"result\":{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"pong\"}],\"isError\":false}}\n\n"
+          continuation.yield(Data(hugeIDEvent.utf8))
+          continuation.yield(Data(matchingEvent.utf8))
+        }
+      )
+    default:
+      return byteStream(json: "{}", status: 404)
+    }
+  }
+
+  private func requestID(_ request: URLRequest) -> Int? {
+    guard let body = request.httpBody,
+      let value = try? JSONDecoder.provider.decode(JSONValue.self, from: body),
+      case .object(let root) = value,
+      case .number(let id)? = root["id"]
+    else { return nil }
+    return Int(exactly: id)
+  }
+}

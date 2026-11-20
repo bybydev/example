@@ -130,7 +130,9 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
   private func boundedDiscoverResponse(for request: URLRequest) async throws -> ProviderHTTPByteStream {
     let boundedRequest: URLRequest = {
       var copy = request
-      copy.timeoutInterval = discoverProbeTimeout
+      // Give the explicit probe timer a slight lead over URLSession's request
+      // timeout so silent legacy servers reliably fall back instead of racing.
+      copy.timeoutInterval = discoverProbeTimeout + 1
       return copy
     }()
     let baseTransport = self.base
@@ -138,24 +140,28 @@ public struct MCPHTTPTransport: ProviderHTTPTransport, Sendable {
 
     return try await withThrowingTaskGroup(of: ProviderHTTPByteStream.self) { group in
       group.addTask { @Sendable [baseTransport, boundedRequest] in
-        let upstream = try await baseTransport.stream(for: boundedRequest)
-        var data = Data()
-        for try await chunk in upstream.chunks {
-          try Task.checkCancellation()
-          guard data.count + chunk.count <= Self.maximumDiscoverResponseBytes else {
-            throw MCPError.invalidResponse
+        do {
+          let upstream = try await baseTransport.stream(for: boundedRequest)
+          var data = Data()
+          for try await chunk in upstream.chunks {
+            try Task.checkCancellation()
+            guard data.count + chunk.count <= Self.maximumDiscoverResponseBytes else {
+              throw MCPError.invalidResponse
+            }
+            data.append(chunk)
           }
-          data.append(chunk)
+          let bufferedData = data
+          return ProviderHTTPByteStream(
+            statusCode: upstream.statusCode,
+            headers: upstream.headers,
+            chunks: AsyncThrowingStream { continuation in
+              if !bufferedData.isEmpty { continuation.yield(bufferedData) }
+              continuation.finish()
+            }
+          )
+        } catch let error as URLError where error.code == .timedOut {
+          throw MCPError.transport("Legacy MCP probe required.")
         }
-        let bufferedData = data
-        return ProviderHTTPByteStream(
-          statusCode: upstream.statusCode,
-          headers: upstream.headers,
-          chunks: AsyncThrowingStream { continuation in
-            if !bufferedData.isEmpty { continuation.yield(bufferedData) }
-            continuation.finish()
-          }
-        )
       }
 
       group.addTask { @Sendable [timeout] in
