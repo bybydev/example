@@ -118,10 +118,10 @@ struct SettingsView: View {
 
       Section("New Chats") {
         NavigationLink {
-          DefaultSystemPromptView(preferences: model.preferences)
+          DefaultSystemPromptView(preferences: model.preferences, chats: model.chats)
         } label: {
           LabeledContent("Default System Prompt") {
-            Text(model.preferences.defaultSystemPrompt.isEmpty ? "None" : "Configured")
+            Text(model.preferences.hasDefaultSystemPrompt ? "Configured" : "None")
               .foregroundStyle(theme.secondaryForegroundColor)
           }
         }
@@ -208,27 +208,61 @@ struct SettingsView: View {
 
 private struct DefaultSystemPromptView: View {
   @Bindable var preferences: AppPreferencesModel
-  @Environment(\.appFoundationTheme) private var theme
-  @State private var text: String
+  let chats: ChatManagementModel
 
-  init(preferences: AppPreferencesModel) {
+  @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var text: String
+  @State private var lastSyncedPreference: String
+  @State private var confirmClear = false
+  @FocusState private var isEditorFocused: Bool
+
+  init(preferences: AppPreferencesModel, chats: ChatManagementModel) {
     self.preferences = preferences
-    _text = State(initialValue: preferences.defaultSystemPrompt)
+    self.chats = chats
+    let initial = AppPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
+    _text = State(initialValue: initial)
+    _lastSyncedPreference = State(initialValue: initial)
+  }
+
+  private var trimmedText: String {
+    AppPreferencesModel.normalizedSystemPrompt(text)
   }
 
   var body: some View {
     Form {
       Section {
-        TextEditor(text: $text)
-          .frame(minHeight: 220)
+        ZStack(alignment: .topLeading) {
+          TextEditor(text: $text)
+            .font(.body)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 220)
+            .focused($isEditorFocused)
+            .accessibilityLabel("Default System Prompt")
+
+          if text.isEmpty {
+            Text("e.g. Be concise, direct, and explain trade-offs clearly.")
+              .font(.body)
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.65))
+              .padding(.top, 8)
+              .padding(.leading, 5)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
       } footer: {
-        Text("This prompt is copied into new conversations. Existing conversations are unchanged.")
-          .foregroundStyle(theme.secondaryForegroundColor)
+        Text(
+          "Copied into new conversations unless a project defines its own instructions. Existing conversations with messages are unchanged."
+        )
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
       .listRowBackground(theme.surfaceColor)
 
       Section {
-        Button("Clear", role: .destructive) { text = "" }
+        Button("Clear Prompt", role: .destructive) {
+          confirmClear = true
+        }
+        .disabled(trimmedText.isEmpty)
       }
       .listRowBackground(theme.surfaceColor)
     }
@@ -236,8 +270,62 @@ private struct DefaultSystemPromptView: View {
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
-    .navigationTitle("Default Prompt")
+    .navigationTitle("Default System Prompt")
     .navigationBarTitleDisplayMode(.inline)
-    .onChange(of: text) { _, value in preferences.defaultSystemPrompt = value }
+    .toolbar {
+      if isEditorFocused {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done") {
+            isEditorFocused = false
+            text = trimmedText
+            commitIfNeeded()
+          }
+          .fontWeight(.semibold)
+        }
+      }
+    }
+    .alert("Clear default system prompt?", isPresented: $confirmClear) {
+      Button("Cancel", role: .cancel) {}
+      Button("Clear", role: .destructive) {
+        isEditorFocused = false
+        text = ""
+        commitIfNeeded()
+      }
+    } message: {
+      Text("New conversations will start without a default system prompt.")
+    }
+    .task(id: text) {
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      commitIfNeeded()
+    }
+    .onChange(of: preferences.defaultSystemPrompt) { _, updated in
+      let normalized = AppPreferencesModel.normalizedSystemPrompt(updated)
+      guard normalized != lastSyncedPreference else { return }
+      lastSyncedPreference = normalized
+      text = normalized
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase != .active {
+        commitIfNeeded()
+      }
+    }
+    .onDisappear {
+      commitIfNeeded()
+    }
+  }
+
+  private func commitIfNeeded() {
+    let normalized = trimmedText
+    let previous = AppPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
+    lastSyncedPreference = normalized
+    if preferences.defaultSystemPrompt != normalized {
+      preferences.defaultSystemPrompt = normalized
+    }
+    if previous != normalized {
+      Task {
+        await chats.syncDefaultSystemPrompt(from: previous, to: normalized)
+      }
+    }
   }
 }

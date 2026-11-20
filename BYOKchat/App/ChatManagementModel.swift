@@ -508,7 +508,7 @@ final class ChatManagementModel {
 
       let projectInstructions = project?.instructions.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       let systemPrompt = projectInstructions.isEmpty
-        ? preferences.defaultSystemPrompt
+        ? AppPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
         : projectInstructions
 
       let id = ConversationID()
@@ -639,9 +639,71 @@ final class ChatManagementModel {
       conversationID: conversationID,
       account: account,
       modelID: conversation.modelID,
-      systemPrompt: preferences.defaultSystemPrompt,
+      systemPrompt: AppPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt),
       options: conversation.options
     )
+  }
+
+  /// Propagates a changed default system prompt into staged, unsent iOS new
+  /// chats that have no overriding project instructions and still carry the
+  /// previous default. Conversations with messages are never modified.
+  func syncDefaultSystemPrompt(from previousDefault: String, to updatedDefault: String) async {
+    let previous = AppPreferencesModel.normalizedSystemPrompt(previousDefault)
+    let updated = AppPreferencesModel.normalizedSystemPrompt(updatedDefault)
+    guard previous != updated else { return }
+
+    let candidateIDs = conversations.compactMap { summary -> ConversationID? in
+      guard summary.isIOSNewChat == true,
+        summary.messageCount == 0,
+        !activeConversationIDs.contains(summary.id),
+        !abandonedNewChatIDs.contains(summary.id)
+      else { return nil }
+      return summary.id
+    }
+    guard !candidateIDs.isEmpty else { return }
+
+    var didUpdateAny = false
+    for id in candidateIDs {
+      if let project = await projectWorkspace?.project(for: id),
+        !project.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
+        continue
+      }
+      let full: ChatConversation
+      if let cached = hydratedConversations[id] {
+        full = cached
+      } else if let loaded = try? await conversationStore.conversation(id: id) {
+        full = loaded
+      } else {
+        continue
+      }
+      guard full.isIOSNewChat == true,
+        full.messages.isEmpty,
+        AppPreferencesModel.normalizedSystemPrompt(full.systemPrompt) == previous
+      else { continue }
+
+      guard beginConfiguration(id, key: "defaultSystemPrompt") else { continue }
+      var succeeded = false
+      defer { endConfiguration(id, key: "defaultSystemPrompt", succeeded: succeeded) }
+      do {
+        try await conversationStore.updateTarget(
+          id,
+          providerID: full.providerID,
+          accountID: full.accountID,
+          modelID: full.modelID,
+          systemPrompt: updated,
+          options: full.options
+        )
+        succeeded = true
+        didUpdateAny = true
+      } catch {
+        continue
+      }
+    }
+
+    if didUpdateAny {
+      try? await reloadSnapshot()
+    }
   }
 
   func referencedAttachmentIDs() async -> Set<String> {

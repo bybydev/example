@@ -54,13 +54,26 @@ final class AppPreferencesModel {
 
   private let defaults: UserDefaults
 
+  static func normalizedSystemPrompt(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   var defaultSystemPrompt: String {
-    didSet { defaults.set(defaultSystemPrompt, forKey: Key.defaultSystemPrompt) }
+    didSet {
+      guard oldValue != defaultSystemPrompt else { return }
+      defaults.set(defaultSystemPrompt, forKey: Key.defaultSystemPrompt)
+    }
+  }
+
+  var hasDefaultSystemPrompt: Bool {
+    !Self.normalizedSystemPrompt(defaultSystemPrompt).isEmpty
   }
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
-    defaultSystemPrompt = defaults.string(forKey: Key.defaultSystemPrompt) ?? ""
+    defaultSystemPrompt = Self.normalizedSystemPrompt(
+      defaults.string(forKey: Key.defaultSystemPrompt) ?? ""
+    )
   }
 
   func prunePinnedConversations(keeping validIDs: Set<ConversationID>) {

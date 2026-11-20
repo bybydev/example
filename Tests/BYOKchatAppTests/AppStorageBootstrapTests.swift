@@ -740,4 +740,98 @@ struct DataManagementModelTests {
     #expect(!harness.mcpModel.hasCredential(server.id))
     #expect(await harness.mcpVault.credential(serverID: server.id) == nil)
   }
+
+  @Test("Default system prompt normalization treats whitespace-only as empty while preserving internal newlines")
+  func defaultSystemPromptNormalization() throws {
+    let suiteName = "byokchat.tests.defaultPrompt.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    defaults.set("   \n\t  ", forKey: "defaultSystemPrompt")
+    let preferences = AppPreferencesModel(defaults: defaults)
+    #expect(preferences.defaultSystemPrompt.isEmpty)
+    #expect(!preferences.hasDefaultSystemPrompt)
+
+    #expect(AppPreferencesModel.normalizedSystemPrompt("  Line 1\n\nLine 2  \n") == "Line 1\n\nLine 2")
+
+    preferences.defaultSystemPrompt = "   "
+    #expect(!preferences.hasDefaultSystemPrompt)
+
+    preferences.defaultSystemPrompt = "Be direct."
+    #expect(preferences.hasDefaultSystemPrompt)
+  }
+
+  @Test("Syncing default system prompt updates staged unsent chats without overwriting project instructions or active history")
+  func syncDefaultSystemPromptUpdatesOnlyEligibleStagedChats() async throws {
+    let harness = try await makeHarness()
+    defer { harness.defaults.removePersistentDomain(forName: harness.defaultsSuiteName) }
+
+    await harness.providersModel.load()
+    await harness.projectsModel.load()
+    await harness.mcpModel.load()
+    await harness.chatsModel.load()
+
+    let account = try await harness.accountManager.createAccount(
+      kind: .openai,
+      label: "OpenAI",
+      credential: "sk-test",
+      defaultModelID: "gpt-4o"
+    )
+    let model = ProviderModel(
+      providerID: BuiltInProviders.openAIID,
+      id: "gpt-4o",
+      displayName: "GPT-4o"
+    )
+    try await harness.providerWorkspace.mergeModels([model], for: account.id)
+    await harness.providersModel.reloadFromStorage()
+
+    let projectWithInstructions = try await harness.projectWorkspace.createProject(
+      name: "Docs",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: account.id,
+      modelID: "gpt-4o",
+      instructions: "Always reply in JSON."
+    )
+    let projectWithoutInstructions = try await harness.projectWorkspace.createProject(
+      name: "Scratch",
+      symbolName: "folder.fill",
+      accentID: "green",
+      accountID: account.id,
+      modelID: "gpt-4o",
+      instructions: "   "
+    )
+
+    harness.preferences.defaultSystemPrompt = "Old default"
+
+    let stagedStandalone = try #require(await harness.chatsModel.newChat(projectID: nil))
+    let stagedBlankProject = try #require(
+      await harness.chatsModel.newChat(projectID: projectWithoutInstructions.id)
+    )
+    let stagedInstructedProject = try #require(
+      await harness.chatsModel.newChat(projectID: projectWithInstructions.id)
+    )
+    let sentChat = try #require(await harness.chatsModel.newChat(projectID: nil))
+    _ = try await harness.conversationStore.beginTurn(
+      conversationID: sentChat,
+      userText: "Hello"
+    )
+    await harness.chatsModel.reloadFromStorage()
+
+    harness.preferences.defaultSystemPrompt = "New default"
+    await harness.chatsModel.syncDefaultSystemPrompt(from: "Old default", to: "New default")
+
+    let refreshedStandalone = try await harness.conversationStore.conversation(id: stagedStandalone)
+    let refreshedBlankProject = try await harness.conversationStore.conversation(id: stagedBlankProject)
+    let refreshedInstructedProject = try await harness.conversationStore.conversation(
+      id: stagedInstructedProject
+    )
+    let refreshedSentChat = try await harness.conversationStore.conversation(id: sentChat)
+
+    #expect(refreshedStandalone.systemPrompt == "New default")
+    #expect(refreshedBlankProject.systemPrompt == "New default")
+    #expect(refreshedInstructedProject.systemPrompt == "Always reply in JSON.")
+    #expect(refreshedSentChat.systemPrompt == "Old default")
+  }
 }
