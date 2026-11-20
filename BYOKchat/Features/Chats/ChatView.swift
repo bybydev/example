@@ -77,6 +77,11 @@ struct ChatAttachmentQuickLookPreview: Identifiable {
   let item: LibraryQuickLookItem
 }
 
+struct ChatScrollToBottomRequest: Equatable {
+  var id = 0
+  var animated = false
+}
+
 struct ChatView: View {
   /// Identity of the backing conversation. Only meaningful for `.existing`;
   /// fresh mode never touches the store under this ID.
@@ -128,10 +133,11 @@ struct ChatView: View {
   @State var followsLatest = true
   @State var isUserDraggingTimeline = false
   @State var isProgrammaticScroll = false
+  @State var isAnimatedProgrammaticScroll = false
   @State var programmaticScrollGeneration = 0
   @State var showJumpToLatest = false
   @State var hasCompletedInitialScroll = false
-  @State var chatScrollPosition = ScrollPosition(idType: String.self)
+  @State var scrollToBottomRequest = ChatScrollToBottomRequest()
   @State var markdownDocument: MarkdownExportDocument?
   @State var showMarkdownExporter = false
   @State var pendingAttachments: [ChatAttachment] = []
@@ -536,7 +542,7 @@ struct ChatView: View {
             text: editText
           )
           editTarget = nil
-          scrollToBottom()
+          scrollToBottom(animated: !isNearBottom)
         },
         cancel: { editTarget = nil }
       )
@@ -575,7 +581,7 @@ struct ChatView: View {
           conversationID: conversationID,
           confirmingUncertainCompletion: true
         )
-        scrollToBottom()
+        scrollToBottom(animated: !isNearBottom)
       }
     } message: {
       Text(

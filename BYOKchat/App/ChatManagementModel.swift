@@ -12,7 +12,7 @@ final class ChatManagementModel {
   }
 
   private enum GenerationAction {
-    case send(String, [ChatAttachment])
+    case send(String, [ChatAttachment], ChatMessageID)
     case edit(ChatMessageID, String)
     case regenerate(confirmingUncertainCompletion: Bool)
   }
@@ -729,6 +729,7 @@ final class ChatManagementModel {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     else { return false }
     preparingConversationIDs.insert(conversationID)
+    let userMessageID = ChatMessageID()
 
     if var conversation = hydratedConversations[conversationID],
       conversation.isIOSNewChat != true || historyConversations.contains(where: { $0.id == conversationID })
@@ -737,6 +738,7 @@ final class ChatManagementModel {
       if !trimmed.isEmpty || !attachments.isEmpty {
         let now = Date.now
         let optimistic = ChatMessage(
+          id: userMessageID,
           role: .user,
           content: trimmed,
           attachments: attachments.isEmpty ? nil : attachments,
@@ -755,7 +757,7 @@ final class ChatManagementModel {
 
     startGeneration(
       conversationID: conversationID,
-      action: .send(text, attachments),
+      action: .send(text, attachments, userMessageID),
       onMessagePersisted: onMessagePersisted
     )
     return true
@@ -848,7 +850,7 @@ final class ChatManagementModel {
       do {
         let stream: AsyncThrowingStream<ChatRuntimeEvent, Error>
         switch action {
-        case .send(let text, let attachments):
+        case .send(let text, let attachments, let userMessageID):
           if let draftTask = draftTasks.removeValue(forKey: conversationID) {
             draftTask.cancel()
             await draftTask.value
@@ -857,7 +859,8 @@ final class ChatManagementModel {
           stream = await runtime.send(
             conversationID: conversationID,
             userText: text,
-            attachments: attachments
+            attachments: attachments,
+            userMessageID: userMessageID
           )
         case .edit(let messageID, let text):
           stream = await runtime.editAndResend(
@@ -877,7 +880,7 @@ final class ChatManagementModel {
             finishSendPreparation(conversationID, committed: true, action: action)
             onMessagePersisted?(true)
             switch action {
-            case .send(_, let attachments):
+            case .send(_, let attachments, _):
               if !attachments.isEmpty {
                 let dimension: BYOKAppAnalytics.Dimension = attachments.allSatisfy({ $0.isImage })
                   ? .image : (attachments.contains(where: { $0.isImage }) ? .mixed : .file)
@@ -996,7 +999,7 @@ final class ChatManagementModel {
     let latestDraft = draftsDuringPreparation.removeValue(forKey: id)
     if let latestDraft {
       saveDraft(latestDraft, conversationID: id)
-    } else if !committed, case .send(let text, _) = action {
+    } else if !committed, case .send(let text, _, _) = action {
       saveDraft(text, conversationID: id)
     }
   }

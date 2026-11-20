@@ -6,9 +6,11 @@ import UIKit
 private struct ChatTimelineGeometry: Equatable {
   let contentHeight: CGFloat
   let containerHeight: CGFloat
+  let needsBottomPin: Bool
 }
 
 extension ChatView {
+  private static let bottomAnchorID = "chat.timeline.bottom"
   @ViewBuilder
   func chatContent(_ conversation: ChatConversation) -> some View {
     let isUntouched = conversation.messages.isEmpty && !chats.isGenerating(conversation.id)
@@ -188,6 +190,7 @@ extension ChatView {
 
           Color.clear
             .frame(height: 1)
+            .id(Self.bottomAnchorID)
             .onScrollVisibilityChange(threshold: 0.01) { isVisible in
               isNearBottom = isVisible
               if isVisible {
@@ -208,12 +211,12 @@ extension ChatView {
         initialScrollMessageID == nil ? UnitPoint.bottom : nil,
         for: .initialOffset
       )
-      .scrollPosition($chatScrollPosition)
       .scrollDismissesKeyboard(.interactively)
       .onScrollPhaseChange { _, newPhase in
         switch newPhase {
         case .tracking, .interacting, .decelerating:
           isProgrammaticScroll = false
+          isAnimatedProgrammaticScroll = false
           isUserDraggingTimeline = true
           if !isNearBottom {
             followsLatest = false
@@ -223,6 +226,7 @@ extension ChatView {
           let wasUserDriven = isUserDraggingTimeline
           isUserDraggingTimeline = false
           isProgrammaticScroll = false
+          isAnimatedProgrammaticScroll = false
           if isNearBottom {
             followsLatest = true
             showJumpToLatest = false
@@ -247,23 +251,33 @@ extension ChatView {
         }
       }
       .onScrollGeometryChange(for: ChatTimelineGeometry.self) { geometry in
-        ChatTimelineGeometry(
+        let distanceFromBottom = max(0, geometry.contentSize.height - geometry.visibleRect.maxY)
+        return ChatTimelineGeometry(
           contentHeight: geometry.contentSize.height,
-          containerHeight: geometry.containerSize.height
+          containerHeight: geometry.containerSize.height,
+          needsBottomPin: distanceFromBottom > 2
         )
       } action: { oldGeometry, newGeometry in
         guard hasCompletedInitialScroll,
           followsLatest,
-          !isUserDraggingTimeline
+          !isUserDraggingTimeline,
+          !isAnimatedProgrammaticScroll,
+          newGeometry.needsBottomPin
         else { return }
 
-        if oldGeometry.contentHeight != newGeometry.contentHeight,
+        if newGeometry.contentHeight > oldGeometry.contentHeight + 0.5,
           chats.isGenerating(conversationID)
         {
-          scrollToBottom(animated: false)
-        } else if newGeometry.containerHeight < oldGeometry.containerHeight {
-          scrollToBottom(animated: false)
+          performScrollToBottom(using: proxy, animated: false)
+        } else if newGeometry.containerHeight < oldGeometry.containerHeight - 0.5 {
+          performScrollToBottom(using: proxy, animated: false)
         }
+      }
+      .task(id: scrollToBottomRequest) {
+        guard scrollToBottomRequest.id > 0 else { return }
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        performScrollToBottom(using: proxy, animated: scrollToBottomRequest.animated)
       }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
@@ -276,6 +290,7 @@ extension ChatView {
       .task(id: conversationID) {
         hasCompletedInitialScroll = false
         isProgrammaticScroll = false
+        isAnimatedProgrammaticScroll = false
         followsLatest = initialScrollMessageID == nil
         showJumpToLatest = false
 
@@ -329,7 +344,7 @@ extension ChatView {
         pendingAttachments.removeAll { sentIDs.contains($0.id) }
       }
     )
-    scrollToBottom()
+    scrollToBottom(animated: !isNearBottom)
   }
 
   private func regenerate() {
@@ -343,7 +358,7 @@ extension ChatView {
       showRegenerateConfirmation = true
     } else {
       chats.regenerate(conversationID: conversationID)
-      scrollToBottom()
+      scrollToBottom(animated: !isNearBottom)
     }
   }
 
@@ -427,20 +442,29 @@ extension ChatView {
   }
 
   func scrollToBottom(animated: Bool = true) {
+    scrollToBottomRequest = ChatScrollToBottomRequest(
+      id: scrollToBottomRequest.id &+ 1,
+      animated: animated
+    )
+  }
+
+  private func performScrollToBottom(using proxy: ScrollViewProxy, animated: Bool) {
     programmaticScrollGeneration &+= 1
     let generation = programmaticScrollGeneration
     isProgrammaticScroll = true
+    isAnimatedProgrammaticScroll = animated
     if animated {
       withAnimation(.easeOut(duration: 0.18)) {
-        chatScrollPosition.scrollTo(edge: .bottom)
+        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
       }
     } else {
-      chatScrollPosition.scrollTo(edge: .bottom)
+      proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
     }
     Task { @MainActor in
       try? await Task.sleep(for: animated ? .milliseconds(260) : .milliseconds(60))
       guard programmaticScrollGeneration == generation else { return }
       isProgrammaticScroll = false
+      isAnimatedProgrammaticScroll = false
     }
   }
 }

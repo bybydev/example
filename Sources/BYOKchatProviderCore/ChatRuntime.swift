@@ -54,7 +54,7 @@ func hydrateChatRuntimeAttachments(
 
 public actor ChatRuntime {
   private enum GenerationOperation: Sendable {
-    case send(text: String, attachments: [ChatAttachment])
+    case send(text: String, attachments: [ChatAttachment], userMessageID: ChatMessageID)
     case edit(messageID: ChatMessageID, text: String)
     case regenerate(confirmingUncertainCompletion: Bool)
 
@@ -113,11 +113,16 @@ public actor ChatRuntime {
   public func send(
     conversationID: ConversationID,
     userText: String,
-    attachments: [ChatAttachment] = []
+    attachments: [ChatAttachment] = [],
+    userMessageID: ChatMessageID = .init()
   ) -> AsyncThrowingStream<ChatRuntimeEvent, Error> {
     start(
       conversationID: conversationID,
-      operation: .send(text: userText, attachments: attachments)
+      operation: .send(
+        text: userText,
+        attachments: attachments,
+        userMessageID: userMessageID
+      )
     )
   }
 
@@ -662,11 +667,12 @@ public actor ChatRuntime {
     operation: GenerationOperation
   ) async throws -> ChatTurnStart {
     switch operation {
-    case .send(let text, let attachments):
+    case .send(let text, let attachments, let userMessageID):
       return try await conversations.beginTurn(
         conversationID: conversationID,
         userText: text,
-        attachments: attachments
+        attachments: attachments,
+        userMessageID: userMessageID
       )
     case .edit(let messageID, let text):
       return try await conversations.editUserMessageAndBeginTurn(

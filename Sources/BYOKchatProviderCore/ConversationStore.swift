@@ -419,6 +419,7 @@ public actor ConversationStore {
     conversationID: ConversationID,
     userText: String,
     attachments: [ChatAttachment] = [],
+    userMessageID: ChatMessageID = .init(),
     at date: Date = .now
   ) async throws -> ChatTurnStart {
     let trimmed = userText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -429,6 +430,7 @@ public actor ConversationStore {
     var result: ChatTurnStart?
     try mutateConversation(conversationID) { conversation in
       let user = ChatMessage(
+        id: userMessageID,
         role: .user,
         content: trimmed,
         attachments: attachments.isEmpty ? nil : attachments,

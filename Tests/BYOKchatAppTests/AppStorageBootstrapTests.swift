@@ -834,4 +834,25 @@ struct DataManagementModelTests {
     #expect(refreshedInstructedProject.systemPrompt == "Always reply in JSON.")
     #expect(refreshedSentChat.systemPrompt == "Old default")
   }
+
+  @Test("BeginTurn preserves a caller-supplied userMessageID to prevent optimistic row churn")
+  func beginTurnPreservesSuppliedUserMessageID() async throws {
+    let store = ConversationStore(persistence: InMemoryConversationWorkspacePersistence())
+    try await store.load()
+    let conversation = try await store.createConversation(
+      providerID: BuiltInProviders.openAIID,
+      accountID: ProviderAccountID(rawValue: "acct-1"),
+      modelID: ModelID(rawValue: "gpt-4o")
+    )
+    let suppliedID = ChatMessageID(rawValue: "optimistic-user-msg")
+    let turn = try await store.beginTurn(
+      conversationID: conversation.id,
+      userText: "Hello long chat",
+      userMessageID: suppliedID
+    )
+    let persisted = try await store.conversation(id: conversation.id)
+
+    #expect(turn.userMessage.id == suppliedID)
+    #expect(persisted.messages.first?.id == suppliedID)
+  }
 }
