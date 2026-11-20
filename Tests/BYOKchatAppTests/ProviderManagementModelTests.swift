@@ -464,6 +464,77 @@ struct ProviderManagementModelTests {
     #expect(record?.isHidden == true)
   }
 
+  @Test("Accounts pin default first and interleave custom servers alphabetically by display name")
+  func accountsPinDefaultAndSortCustomAlphabetically() async throws {
+    let environment = try await makeEnvironment()
+    let openaiID = try #require(
+      await environment.model.createConnection(
+        kind: .openai,
+        label: "OpenAI",
+        credential: "key",
+        baseURL: "",
+        defaultModel: "gpt-4o",
+        headers: [:],
+        metadata: [:]
+      )
+    )
+    _ = try #require(
+      await environment.model.createConnection(
+        kind: .anthropic,
+        label: "Anthropic",
+        credential: "key",
+        baseURL: "",
+        defaultModel: "claude-sonnet-4",
+        headers: [:],
+        metadata: [:]
+      )
+    )
+    let bedrockID = try #require(
+      await environment.model.createConnection(
+        kind: .openAICompatible,
+        label: "Bedrock Proxy",
+        credential: "",
+        baseURL: "https://bedrock-proxy.example/v1",
+        defaultModel: "claude",
+        headers: [:],
+        metadata: [:],
+        chatCompletionsPath: "/chat/completions",
+        modelsPath: nil,
+        authChoice: ProviderAuthentication.none
+      )
+    )
+    _ = try #require(
+      await environment.model.createConnection(
+        kind: .openAICompatible,
+        label: "vLLM Homelab",
+        credential: "",
+        baseURL: "http://192.168.1.20:8000/v1",
+        defaultModel: "llama-3",
+        headers: [:],
+        metadata: [:],
+        chatCompletionsPath: "/chat/completions",
+        modelsPath: nil,
+        authChoice: ProviderAuthentication.none
+      )
+    )
+
+    // Default (OpenAI) is pinned first; remaining accounts sort alphabetically
+    // by visible provider/server name rather than custom UUID providerIDs.
+    #expect(environment.model.defaultAccountID == openaiID)
+    #expect(
+      environment.model.accounts.map(\.label)
+        == ["OpenAI", "Anthropic", "Bedrock Proxy", "vLLM Homelab"]
+    )
+
+    let switched = await environment.model.setDefaultAccount(bedrockID)
+    #expect(switched)
+    #expect(environment.model.defaultAccountID == bedrockID)
+    #expect(
+      environment.model.accounts.map(\.label)
+        == ["Bedrock Proxy", "Anthropic", "OpenAI", "vLLM Homelab"]
+    )
+  }
+
   private func makeEnvironment(
     transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
   ) async throws -> (

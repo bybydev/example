@@ -597,13 +597,24 @@ final class ProviderManagementModel {
       credentialAccountIDs: credentialValues
     )
 
+    let sortGroup: (ProviderAccount) -> String = { account in
+      if account.kind == .openAICompatible {
+        return account.label
+      }
+      return definitionsByID[account.providerID]?.displayName ?? account.label
+    }
     accounts = loadedAccounts.sorted { lhs, rhs in
       if lhs.id == defaultAccountID { return true }
       if rhs.id == defaultAccountID { return false }
-      if lhs.providerID == rhs.providerID {
-        return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+      let groupComparison = sortGroup(lhs).localizedCaseInsensitiveCompare(sortGroup(rhs))
+      if groupComparison != .orderedSame {
+        return groupComparison == .orderedAscending
       }
-      return lhs.providerID.rawValue < rhs.providerID.rawValue
+      let labelComparison = lhs.label.localizedCaseInsensitiveCompare(rhs.label)
+      if labelComparison != .orderedSame {
+        return labelComparison == .orderedAscending
+      }
+      return lhs.id.rawValue < rhs.id.rawValue
     }
   }
 
