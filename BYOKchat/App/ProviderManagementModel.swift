@@ -482,25 +482,30 @@ final class ProviderManagementModel {
   /// Model selection may stage an exact ID not yet reported by discovery.
   /// Persist only on Done; never change the connection's default model.
   func ensureSelectableModel(_ modelID: ModelID, for accountID: ProviderAccountID) async throws {
-    guard !modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    let trimmed = modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
       throw ProviderError.invalidModel
     }
-    let existing = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
+    let normalizedID = ModelID(rawValue: trimmed)
+    let existing = models(for: accountID, includeHidden: true).first { $0.model.id == normalizedID }
     if existing?.isAvailable == true && existing?.isHidden == false { return }
     let account = try await workspace.account(id: accountID)
-    try await workspace.addManualModel(
-      existing?.model ?? ProviderModel(
-        providerID: account.providerID, id: modelID, displayName: modelID.rawValue),
-      for: accountID
-    )
+    if existing?.isAvailable != true {
+      try await workspace.addManualModel(
+        existing?.model ?? ProviderModel(
+          providerID: account.providerID, id: normalizedID, displayName: normalizedID.rawValue),
+        for: accountID
+      )
+    }
     if existing?.isHidden == true {
-      try await workspace.setHidden(false, modelID: modelID, accountID: accountID)
+      try await workspace.setHidden(false, modelID: normalizedID, accountID: accountID)
     }
     try await reloadSnapshot()
   }
 
   /// Picker deletion never touches existing chats or their history.
   func removeManualModels(_ ids: Set<ModelID>, for accountID: ProviderAccountID) async throws {
+    guard !ids.isEmpty else { return }
     try await workspace.removeManualModels(ids, for: accountID)
     try await reloadSnapshot()
   }

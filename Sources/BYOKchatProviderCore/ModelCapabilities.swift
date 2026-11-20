@@ -197,7 +197,7 @@ public struct ModelReasoningControl: Codable, Hashable, Sendable {
       return normalize(.init(enabled: true, effort: effort,
         maxTokens: combinesEffortAndBudget == true ? previous?.maxTokens : nil, excludeFromResponse: exclude))
     case .budget:
-      return normalize(.init(enabled: true, effort: combinesEffortAndBudget == true ? previous?.effort : nil,
+      return normalize(.init(enabled: true, effort: nil,
         maxTokens: previous?.maxTokens ?? budget?.defaultTokens,
         excludeFromResponse: exclude))
     }

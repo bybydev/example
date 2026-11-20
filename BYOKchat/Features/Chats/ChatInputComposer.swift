@@ -49,14 +49,9 @@ struct ChatComposer: View {
   let send: () -> Void
   let stop: (() -> Void)?
 
-  private let targetPickerConversation: ChatConversation?
-  private let targetPickerChats: ChatManagementModel?
-  private let targetPickerProviders: ProviderManagementModel?
-
   @Environment(\.appFoundationTheme) private var theme
   @FocusState private var isEditorFocused: Bool
   @State private var measuredContentHeight: CGFloat = 0
-  @State private var showTargetPicker = false
 
   private static let messageLineHeight: CGFloat = 22
   private static let compactContentHeight: CGFloat = 50
@@ -95,9 +90,6 @@ struct ChatComposer: View {
     self.removeAttachment = removeAttachment
     self.send = send
     self.stop = stop
-    targetPickerConversation = nil
-    targetPickerChats = nil
-    targetPickerProviders = nil
   }
 
   init(
@@ -106,7 +98,7 @@ struct ChatComposer: View {
     isGenerating: Bool,
     canSend: Bool,
     conversation: ChatConversation,
-    chats: ChatManagementModel,
+    chats _: ChatManagementModel,
     providers: ProviderManagementModel,
     openChatSettings: @escaping () -> Void,
     pickPhoto: @escaping () -> Void,
@@ -157,9 +149,6 @@ struct ChatComposer: View {
     self.removeAttachment = removeAttachment
     self.send = send
     self.stop = stop
-    targetPickerConversation = conversation
-    targetPickerChats = chats
-    targetPickerProviders = providers
   }
 
   init(
@@ -254,23 +243,6 @@ struct ChatComposer: View {
     .padding(.top, 6)
     .padding(.bottom, 8)
     .animation(.snappy(duration: 0.2), value: isCompact)
-    .sheet(isPresented: $showTargetPicker) {
-      if let conversation = targetPickerConversation,
-        let chats = targetPickerChats,
-        let providers = targetPickerProviders
-      {
-        TargetPickerView(
-          providers: providers,
-          initialAccountID: conversation.accountID,
-          initialModelID: conversation.modelID,
-          initialReasoning: conversation.options.reasoning,
-          mode: .existingChat(
-            conversation: chats.conversation(conversation.id) ?? conversation,
-            chats: chats
-          )
-        )
-      }
-    }
     .onDisappear {
       isEditorFocused = false
     }
@@ -393,11 +365,7 @@ struct ChatComposer: View {
   private var targetButton: some View {
     Button {
       isEditorFocused = false
-      if targetPickerConversation != nil {
-        showTargetPicker = true
-      } else {
-        openTarget()
-      }
+      openTarget()
     } label: {
       HStack(spacing: 3) {
         Text(targetSummary)

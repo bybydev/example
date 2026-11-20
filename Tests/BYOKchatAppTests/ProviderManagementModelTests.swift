@@ -535,6 +535,44 @@ struct ProviderManagementModelTests {
     )
   }
 
+  @Test("Selecting a hidden discovered model unhides it without marking it manual")
+  func ensureSelectableModelPreservesDiscoveredSource() async throws {
+    let environment = try await makeEnvironment()
+    let id = try #require(
+      await environment.model.createConnection(
+        kind: .deepSeek,
+        label: "DeepSeek",
+        credential: "key",
+        baseURL: "",
+        defaultModel: "deepseek-chat",
+        headers: [:],
+        metadata: [:],
+        discoveredModels: [
+          ProviderModel(
+            providerID: BuiltInProviders.deepSeekID,
+            id: "deepseek-chat",
+            displayName: "DeepSeek Chat"
+          ),
+          ProviderModel(
+            providerID: BuiltInProviders.deepSeekID,
+            id: "deepseek-reasoner",
+            displayName: "DeepSeek Reasoner"
+          ),
+        ]
+      )
+    )
+
+    await environment.model.setHidden(true, modelID: "deepseek-reasoner", accountID: id)
+    #expect(!environment.model.models(for: id).contains { $0.model.id == "deepseek-reasoner" })
+
+    try await environment.model.ensureSelectableModel("deepseek-reasoner", for: id)
+    let visible = environment.model.models(for: id)
+    let record = try #require(visible.first { $0.model.id == "deepseek-reasoner" })
+    #expect(record.isAvailable)
+    #expect(!record.isHidden)
+    #expect(!record.isManual)
+  }
+
   private func makeEnvironment(
     transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
   ) async throws -> (

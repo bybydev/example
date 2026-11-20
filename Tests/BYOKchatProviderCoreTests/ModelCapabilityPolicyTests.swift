@@ -316,6 +316,12 @@ struct ModelCapabilityPolicyTests {
     #expect(selection?.maxTokens == 1_500)
     #expect(control.choice(for: selection) == .effort(.medium))
     #expect(control.label(for: selection) == "Medium · 1500 tokens")
+
+    let budgetOnly = control.options(for: .budget, preserving: selection)
+    #expect(budgetOnly?.effort == nil)
+    #expect(budgetOnly?.maxTokens == 1_500)
+    #expect(control.choice(for: budgetOnly) == .budget)
+    #expect(control.label(for: budgetOnly) == "1500 tokens")
   }
 
   @Test("Unsupported historical tools project into text without modifying their stored payloads")

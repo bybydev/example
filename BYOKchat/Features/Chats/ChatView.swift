@@ -307,6 +307,7 @@ struct ChatView: View {
           initialReasoning: conversation.options.reasoning,
           mode: .existingChat(conversation: conversation, chats: chats)
         )
+        .presentationDragIndicator(.visible)
       }
     }
     .sheet(isPresented: $showToolSettings) {
