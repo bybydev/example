@@ -38,11 +38,19 @@ struct MarkdownExportDocument: FileDocument, Sendable {
   }
 }
 
+private enum DataManagementError: LocalizedError {
+  case combined(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .combined(let message): message
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class DataPortabilityModel {
-  private let service: ProjectAwareDataPortabilityService
-  private let providerWorkspace: ProviderWorkspaceStore
   private let conversations: ConversationStore
   private let accountManager: ProviderAccountManager
   private let preferences: AppPreferencesModel
@@ -51,13 +59,12 @@ final class DataPortabilityModel {
   private let projectsModel: ProjectManagementModel
   private let mcpModel: MCPManagementModel
 
+  var onConversationsDeleted: (@MainActor () async -> Void)?
   var isBusy = false
   var statusMessage: String?
   var errorMessage: String?
 
   init(
-    service: ProjectAwareDataPortabilityService,
-    providerWorkspace: ProviderWorkspaceStore,
     conversations: ConversationStore,
     accountManager: ProviderAccountManager,
     preferences: AppPreferencesModel,
@@ -66,8 +73,6 @@ final class DataPortabilityModel {
     projectsModel: ProjectManagementModel,
     mcpModel: MCPManagementModel
   ) {
-    self.service = service
-    self.providerWorkspace = providerWorkspace
     self.conversations = conversations
     self.accountManager = accountManager
     self.preferences = preferences
@@ -77,140 +82,65 @@ final class DataPortabilityModel {
     self.mcpModel = mcpModel
   }
 
-  func makeBackupDocument() async -> JSONExportDocument? {
-    await performResult {
-      JSONExportDocument(
-        data: try await service.exportBackup(
-          defaultSystemPrompt: preferences.defaultSystemPrompt))
-    }
-  }
-
-  func makeProviderConfigurationDocument() async -> JSONExportDocument? {
-    await performResult {
-      JSONExportDocument(data: try await providerWorkspace.exportConfiguration())
-    }
-  }
-
-  func makeConversationDocument(
-    conversationID: ConversationID,
-    accountLabel: String?
-  ) async -> MarkdownExportDocument? {
-    await performResult {
-      MarkdownExportDocument(
-        data: try await service.exportConversationMarkdown(
-          conversationID: conversationID,
-          accountLabel: accountLabel
-        )
-      )
-    }
-  }
-
-  func importBackup(from url: URL, strategy: ProviderImportStrategy) async {
-    await perform("Backup imported. Re-enter credentials for imported accounts and MCP servers.") {
-      let data = try await Self.readSecurityScopedData(from: url)
-      let existingDefaultPrompt = preferences.defaultSystemPrompt
-      await chatsModel.stopAllGenerations()
-      let summary = try await service.importBackup(data, strategy: strategy)
-      let replacesExisting: Bool
-      switch strategy {
-      case .replaceExisting: replacesExisting = true
-      case .keepExisting: replacesExisting = false
-      }
-      if replacesExisting || existingDefaultPrompt.isEmpty {
-        preferences.defaultSystemPrompt = summary.defaultSystemPrompt
-      }
-      await providersModel.reloadFromStorage()
-      await chatsModel.reloadFromStorage()
-      preferences.prunePinnedConversations(keeping: Set(chatsModel.conversations.map(\.id)))
-      await projectsModel.reloadFromStorage()
-      await projectsModel.reconcile(conversations: chatsModel.conversations)
-      await mcpModel.reloadFromStorage()
-
-      var cleanupMessages: [String] = []
-      if !summary.credentialCleanupFailures.isEmpty {
-        cleanupMessages.append(
-          ProviderError.credentialCleanupFailed(summary.credentialCleanupFailures).localizedDescription
-        )
-      }
-      if !summary.mcpCredentialCleanupFailures.isEmpty {
-        cleanupMessages.append(
-          "The backup was restored, but Keychain cleanup failed for MCP servers: "
-            + summary.mcpCredentialCleanupFailures.map(\.rawValue).joined(separator: ", ")
-        )
-      }
-      if !cleanupMessages.isEmpty {
-        BYOKAppAnalytics.reportError("credential_cleanup_failed", component: "data")
-        errorMessage = cleanupMessages.joined(separator: "\n\n")
-      }
-    }
-  }
-
-  func importProviderConfiguration(from url: URL, strategy: ProviderImportStrategy) async {
-    await perform("Provider configuration imported. Credentials were not included.") {
-      let data = try await Self.readSecurityScopedData(from: url)
-      await chatsModel.stopAllGenerations()
-      let cleanupFailures = try await service.importProviderConfiguration(
-        data,
-        strategy: strategy
-      )
-      await providersModel.reloadFromStorage()
-      if !cleanupFailures.isEmpty {
-        errorMessage = ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
-      }
-    }
-  }
-
   func deleteAllConversations() async {
-    await perform("All conversations deleted") {
+    await perform("All conversations deleted.") {
       await chatsModel.stopAllGenerations()
       try await conversations.deleteAllConversations()
       preferences.clearPinnedConversations()
       await chatsModel.reloadFromStorage()
       await projectsModel.reconcile(conversations: chatsModel.conversations)
-      await mcpModel.reloadFromStorage()
+
+      var cleanupError: (any Error)?
+      do {
+        try await mcpModel.removeAllChatConfigurations()
+      } catch {
+        cleanupError = error
+        await mcpModel.reloadFromStorage()
+      }
+      await onConversationsDeleted?()
+      if let cleanupError {
+        throw cleanupError
+      }
     }
   }
 
   func deleteAllCredentials() async {
-    await perform("All credentials removed") {
-      try await accountManager.removeAllCredentials()
-      try await mcpModel.deleteAllCredentials()
-      await providersModel.reloadFromStorage()
-    }
-  }
+    await perform("All credentials removed.") {
+      await chatsModel.stopAllGenerations()
 
-  private nonisolated static func readSecurityScopedData(from url: URL) async throws -> Data {
-    try await Task.detached(priority: .userInitiated) {
-      let accessed = url.startAccessingSecurityScopedResource()
-      defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-      return try Data(contentsOf: url, options: .mappedIfSafe)
-    }.value
+      var failureMessages: [String] = []
+      do {
+        try await accountManager.removeAllCredentials()
+      } catch {
+        failureMessages.append(error.localizedDescription)
+      }
+
+      do {
+        try await mcpModel.deleteAllCredentials()
+      } catch {
+        failureMessages.append(error.localizedDescription)
+      }
+
+      await providersModel.reloadFromStorage()
+      if !failureMessages.isEmpty {
+        throw DataManagementError.combined(failureMessages.joined(separator: "\n\n"))
+      }
+    }
   }
 
   private func perform(
     _ success: String,
     operation: @MainActor () async throws -> Void
   ) async {
+    guard !isBusy else { return }
     isBusy = true
+    errorMessage = nil
     defer { isBusy = false }
     do {
       try await operation()
       statusMessage = success
     } catch {
       errorMessage = error.localizedDescription
-    }
-  }
-
-  private func performResult<Value: Sendable>(
-    _ operation: @MainActor () async throws -> Value
-  ) async -> Value? {
-    isBusy = true
-    defer { isBusy = false }
-    do {
-      return try await operation()
-    } catch {
-      errorMessage = error.localizedDescription
-      return nil
     }
   }
 }

@@ -1,7 +1,6 @@
 import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SettingsView: View {
   @Bindable var model: AppModel
@@ -9,25 +8,12 @@ struct SettingsView: View {
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
-  @State private var backupDocument: JSONExportDocument?
-  @State private var providerDocument: JSONExportDocument?
-  @State private var showBackupExporter = false
-  @State private var showProviderExporter = false
-  @State private var showImporter = false
-  @State private var showImportStrategy = false
-  @State private var importKind: ImportKind = .backup
-  @State private var importStrategy: ProviderImportStrategy = .keepExisting
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
   @State private var showThemeUpsell = false
   @State private var showPaywall = false
   @State private var toastCenter = BYOKToastCenter()
   @AppStorage(BYOKAppAnalytics.preferenceKey) private var shareUsageData = true
-
-  private enum ImportKind {
-    case backup
-    case providers
-  }
 
   var body: some View {
     failureAlertView
@@ -74,61 +60,17 @@ struct SettingsView: View {
     }
   }
 
-  private var importConfiguredView: some View {
-    navigationContent
-      .confirmationDialog(
-        "How should imported data be applied?",
-        isPresented: $showImportStrategy
-      ) {
-        Button("Merge, Keep Existing") {
-          importStrategy = .keepExisting
-          showImporter = true
-        }
-        Button("Replace Existing", role: .destructive) {
-          importStrategy = .replaceExisting
-          showImporter = true
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(
-          "Replace removes matching local configuration. Imported credentials must be entered again."
-        )
-      }
-      .fileImporter(
-        isPresented: $showImporter,
-        allowedContentTypes: [.json],
-        allowsMultipleSelection: false,
-        onCompletion: handleImportResult
-      )
-  }
-
-  private var exportConfiguredView: some View {
-    importConfiguredView
-      .fileExporter(
-        isPresented: $showBackupExporter,
-        document: backupDocument,
-        contentType: .json,
-        defaultFilename: "BYOKchat-backup",
-        onCompletion: handleExportResult
-      )
-      .fileExporter(
-        isPresented: $showProviderExporter,
-        document: providerDocument,
-        contentType: .json,
-        defaultFilename: "BYOKchat-providers",
-        onCompletion: handleExportResult
-      )
-  }
-
   private var deletionConfiguredView: some View {
-    exportConfiguredView
+    navigationContent
       .alert("Delete all conversations?", isPresented: $confirmDeleteConversations) {
         Button("Cancel", role: .cancel) {}
         Button("Delete", role: .destructive) {
           Task { await model.dataPortability.deleteAllConversations() }
         }
       } message: {
-        Text("This removes every locally stored conversation and cannot be undone without a backup.")
+        Text(
+          "This removes every locally stored conversation on this device and cannot be undone. Your connections, projects, and Library files are kept."
+        )
       }
       .alert("Delete all credentials?", isPresented: $confirmDeleteCredentials) {
         Button("Cancel", role: .cancel) {}
@@ -136,7 +78,9 @@ struct SettingsView: View {
           Task { await model.dataPortability.deleteAllCredentials() }
         }
       } message: {
-        Text("Connections remain configured, but every API key and MCP credential must be entered again.")
+        Text(
+          "Connections and MCP servers remain configured, but every API key and MCP credential must be entered again."
+        )
       }
   }
 
@@ -184,26 +128,7 @@ struct SettingsView: View {
       }
       .listRowBackground(theme.surfaceColor)
 
-      #if DEBUG
       Section {
-        Button("Export Full Backup", systemImage: "archivebox") {
-          exportBackup()
-        }
-
-        Button("Import Full Backup", systemImage: "square.and.arrow.down") {
-          importKind = .backup
-          showImportStrategy = true
-        }
-
-        Button("Export Connection Configuration", systemImage: "key.viewfinder") {
-          exportProviderConfiguration()
-        }
-
-        Button("Import Connection Configuration", systemImage: "key.radiowaves.forward") {
-          importKind = .providers
-          showImportStrategy = true
-        }
-
         Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
           confirmDeleteConversations = true
         }
@@ -220,14 +145,14 @@ struct SettingsView: View {
         }
       } header: {
         Text("Data Management")
-          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
-        Text("Backups and connection configuration never include API keys or secret headers.")
-          .foregroundStyle(theme.secondaryForegroundColor)
+        Text(
+          "Deleting conversations keeps your connections, projects, and Library files. Deleting credentials removes stored API keys and MCP tokens from Keychain."
+        )
+        .foregroundStyle(theme.secondaryForegroundColor)
       }
       .disabled(model.dataPortability.isBusy)
       .listRowBackground(theme.surfaceColor)
-      #endif
 
       Section {
         Toggle("Share Anonymous Usage Data", isOn: $shareUsageData)
@@ -278,58 +203,6 @@ struct SettingsView: View {
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
-  }
-
-  private func exportBackup() {
-    Task { @MainActor in
-      guard let document = await model.dataPortability.makeBackupDocument() else { return }
-      backupDocument = document
-      showBackupExporter = true
-    }
-  }
-
-  private func exportProviderConfiguration() {
-    Task { @MainActor in
-      guard let document = await model.dataPortability.makeProviderConfigurationDocument() else {
-        return
-      }
-      providerDocument = document
-      showProviderExporter = true
-    }
-  }
-
-  private func handleImportResult(_ result: Result<[URL], any Error>) {
-    guard case .success(let urls) = result, let url = urls.first else {
-      if case .failure(let error) = result {
-        if case .providers = importKind {
-          BYOKAppAnalytics.reportError("provider_config_import_failed", component: "data")
-        }
-        model.dataPortability.errorMessage = error.localizedDescription
-      }
-      return
-    }
-
-    Task { @MainActor in
-      switch importKind {
-      case .backup:
-        await model.dataPortability.importBackup(from: url, strategy: importStrategy)
-      case .providers:
-        await model.dataPortability.importProviderConfiguration(
-          from: url,
-          strategy: importStrategy
-        )
-      }
-    }
-  }
-
-  private func handleExportResult(_ result: Result<URL, any Error>) {
-    switch result {
-    case .success:
-      toastCenter.success("Export completed.")
-    case .failure(let error):
-      BYOKAppAnalytics.reportError("data_export_failed", component: "data")
-      model.dataPortability.errorMessage = error.localizedDescription
-    }
   }
 }
 

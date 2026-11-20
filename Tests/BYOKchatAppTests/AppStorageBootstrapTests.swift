@@ -425,3 +425,319 @@ struct SidebarHelperTests {
     )
   }
 }
+
+private actor PartiallyFailingCredentialVault: CredentialVault {
+  private var values: [String: String] = [:]
+  private var failingAccountIDs: Set<ProviderAccountID> = []
+
+  func failRemoval(for accountID: ProviderAccountID) {
+    failingAccountIDs.insert(accountID)
+  }
+
+  func secret(accountID: ProviderAccountID, field: String) -> String? {
+    values["\(accountID.rawValue):\(field)"]
+  }
+
+  func setSecret(_ value: String?, accountID: ProviderAccountID, field: String) {
+    let key = "\(accountID.rawValue):\(field)"
+    if let value, !value.isEmpty { values[key] = value } else { values.removeValue(forKey: key) }
+  }
+
+  func removeAll(accountID: ProviderAccountID) throws {
+    if failingAccountIDs.contains(accountID) {
+      throw ProviderError.invalidRequest("Simulated Keychain delete failure for \(accountID.rawValue).")
+    }
+    let prefix = "\(accountID.rawValue):"
+    for key in values.keys where key.hasPrefix(prefix) {
+      values.removeValue(forKey: key)
+    }
+  }
+}
+
+@MainActor
+private final class CallbackFlag {
+  var called = false
+}
+
+@MainActor
+@Suite("Data management")
+struct DataManagementModelTests {
+  private struct TestHarness {
+    let model: DataPortabilityModel
+    let providerWorkspace: ProviderWorkspaceStore
+    let accountManager: ProviderAccountManager
+    let providersModel: ProviderManagementModel
+    let conversationStore: ConversationStore
+    let chatsModel: ChatManagementModel
+    let projectWorkspace: ProjectWorkspaceStore
+    let projectsModel: ProjectManagementModel
+    let mcpWorkspace: MCPWorkspaceStore
+    let mcpVault: InMemoryMCPCredentialVault
+    let mcpRuntime: MCPRemoteRuntime
+    let mcpModel: MCPManagementModel
+    let preferences: AppPreferencesModel
+    let defaults: UserDefaults
+    let defaultsSuiteName: String
+  }
+
+  private func makeHarness(
+    providerVault: any CredentialVault = InMemoryCredentialVault()
+  ) async throws -> TestHarness {
+    let registry = try ProviderRegistry.builtIn()
+    let providerWorkspace = ProviderWorkspaceStore(
+      persistence: InMemoryProviderWorkspacePersistence()
+    )
+    let accountManager = ProviderAccountManager(
+      registry: registry,
+      workspace: providerWorkspace,
+      vault: providerVault
+    )
+    let providerRuntime = ProviderRuntime(
+      registry: registry,
+      workspace: providerWorkspace,
+      accounts: accountManager
+    )
+    let conversationStore = ConversationStore(
+      persistence: InMemoryConversationWorkspacePersistence()
+    )
+    let projectWorkspace = ProjectWorkspaceStore(
+      persistence: InMemoryProjectWorkspacePersistence()
+    )
+    let mcpWorkspace = MCPWorkspaceStore(
+      persistence: InMemoryMCPWorkspacePersistence()
+    )
+    let mcpVault = InMemoryMCPCredentialVault()
+    let mcpRuntime = MCPRemoteRuntime(workspace: mcpWorkspace, vault: mcpVault)
+    let approvals = MCPToolApprovalCenter()
+    let elicitations = MCPElicitationCenter()
+    let toolRuntime = MCPConversationToolRuntime(
+      localRuntime: ToolRuntime(),
+      mcpRuntime: mcpRuntime,
+      workspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace,
+      approvals: approvals,
+      elicitations: elicitations
+    )
+    let chatRuntime = ChatRuntime(
+      providerRuntime: providerRuntime,
+      providerWorkspace: providerWorkspace,
+      conversations: conversationStore,
+      toolRuntime: toolRuntime
+    )
+
+    let suiteName = "byokchat.tests.dataManagement.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    let preferences = AppPreferencesModel(defaults: defaults)
+
+    let providersModel = ProviderManagementModel(
+      registry: registry,
+      workspace: providerWorkspace,
+      accountManager: accountManager,
+      runtime: providerRuntime
+    )
+    let projectsModel = ProjectManagementModel(workspace: projectWorkspace)
+    let chatsModel = ChatManagementModel(
+      providerWorkspace: providerWorkspace,
+      conversations: conversationStore,
+      runtime: chatRuntime,
+      preferences: preferences,
+      mcpWorkspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace
+    )
+    let mcpModel = MCPManagementModel(
+      runtime: mcpRuntime,
+      workspace: mcpWorkspace,
+      projectWorkspace: projectWorkspace,
+      approvals: approvals,
+      elicitations: elicitations
+    )
+    let model = DataPortabilityModel(
+      conversations: conversationStore,
+      accountManager: accountManager,
+      preferences: preferences,
+      providersModel: providersModel,
+      chatsModel: chatsModel,
+      projectsModel: projectsModel,
+      mcpModel: mcpModel
+    )
+
+    return TestHarness(
+      model: model,
+      providerWorkspace: providerWorkspace,
+      accountManager: accountManager,
+      providersModel: providersModel,
+      conversationStore: conversationStore,
+      chatsModel: chatsModel,
+      projectWorkspace: projectWorkspace,
+      projectsModel: projectsModel,
+      mcpWorkspace: mcpWorkspace,
+      mcpVault: mcpVault,
+      mcpRuntime: mcpRuntime,
+      mcpModel: mcpModel,
+      preferences: preferences,
+      defaults: defaults,
+      defaultsSuiteName: suiteName
+    )
+  }
+
+  @Test("Delete all conversations clears chats, pins, memberships, and MCP chat overrides while keeping configuration")
+  func deleteAllConversationsCleansAllChatState() async throws {
+    let harness = try await makeHarness()
+    defer { harness.defaults.removePersistentDomain(forName: harness.defaultsSuiteName) }
+
+    await harness.providersModel.load()
+    await harness.projectsModel.load()
+    await harness.mcpModel.load()
+    await harness.chatsModel.load()
+
+    let account = try await harness.accountManager.createAccount(
+      kind: .openai,
+      label: "OpenAI",
+      credential: "sk-test",
+      defaultModelID: "gpt-4o"
+    )
+    let project = try await harness.projectWorkspace.createProject(
+      name: "Research",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: account.id,
+      modelID: "gpt-4o",
+      instructions: "Stay brief."
+    )
+    let server = MCPRemoteServer(
+      id: "mcp-1",
+      name: "Docs",
+      endpoint: try #require(URL(string: "https://mcp.example.com/mcp")),
+      authentication: MCPAuthentication(kind: .bearer)
+    )
+    try await harness.mcpRuntime.saveServer(server, credential: "mcp-secret")
+
+    let conversation = try await harness.conversationStore.createConversation(
+      providerID: account.providerID,
+      accountID: account.id,
+      modelID: "gpt-4o"
+    )
+    try await harness.projectWorkspace.assignConversation(conversation.id, to: project.id)
+    try await harness.mcpWorkspace.setChatServerEnabled(
+      true,
+      serverID: server.id,
+      conversationID: conversation.id
+    )
+    harness.defaults.set(conversation.id.rawValue, forKey: SidebarPinStore.storageKey)
+
+    await harness.providersModel.reloadFromStorage()
+    await harness.projectsModel.reloadFromStorage()
+    await harness.mcpModel.reloadFromStorage()
+    await harness.chatsModel.reloadFromStorage()
+
+    let orphanSweepFlag = CallbackFlag()
+    harness.model.onConversationsDeleted = {
+      orphanSweepFlag.called = true
+    }
+
+    await harness.model.deleteAllConversations()
+
+    #expect(harness.model.errorMessage == nil)
+    #expect(harness.model.statusMessage == "All conversations deleted.")
+    #expect(harness.chatsModel.conversations.isEmpty)
+    #expect(harness.defaults.string(forKey: SidebarPinStore.storageKey) == nil)
+    #expect(harness.projectsModel.projects.count == 1)
+    #expect(harness.projectsModel.projectID(for: conversation.id) == nil)
+    #expect(await harness.mcpWorkspace.snapshot().chatConfigurations == nil)
+    #expect(harness.mcpModel.chatConfigurations.isEmpty)
+    #expect(harness.providersModel.accounts.count == 1)
+    #expect(harness.mcpModel.servers.count == 1)
+    #expect(orphanSweepFlag.called)
+  }
+
+  @Test("Delete all credentials removes provider and MCP secrets while keeping configurations")
+  func deleteAllCredentialsRemovesBothVaults() async throws {
+    let harness = try await makeHarness()
+    defer { harness.defaults.removePersistentDomain(forName: harness.defaultsSuiteName) }
+
+    await harness.providersModel.load()
+    await harness.projectsModel.load()
+    await harness.mcpModel.load()
+    await harness.chatsModel.load()
+
+    let account = try await harness.accountManager.createAccount(
+      kind: .openai,
+      label: "OpenAI",
+      credential: "sk-secret",
+      defaultModelID: "gpt-4o"
+    )
+    let server = MCPRemoteServer(
+      id: "mcp-1",
+      name: "Docs",
+      endpoint: try #require(URL(string: "https://mcp.example.com/mcp")),
+      authentication: MCPAuthentication(kind: .bearer)
+    )
+    try await harness.mcpRuntime.saveServer(server, credential: "mcp-secret")
+
+    await harness.providersModel.reloadFromStorage()
+    await harness.mcpModel.reloadFromStorage()
+    #expect(harness.providersModel.credentialAccountIDs.contains(account.id))
+    #expect(harness.mcpModel.hasCredential(server.id))
+
+    await harness.model.deleteAllCredentials()
+
+    #expect(harness.model.errorMessage == nil)
+    #expect(harness.model.statusMessage == "All credentials removed.")
+    #expect(harness.providersModel.accounts.count == 1)
+    #expect(harness.mcpModel.servers.count == 1)
+    #expect(!harness.providersModel.credentialAccountIDs.contains(account.id))
+    #expect(!harness.mcpModel.hasCredential(server.id))
+    #expect(await harness.mcpVault.credential(serverID: server.id) == nil)
+  }
+
+  @Test("Partial credential deletion failure still wipes remaining credentials and reloads models")
+  func deleteAllCredentialsPartialFailureStillCleansAndReloads() async throws {
+    let vault = PartiallyFailingCredentialVault()
+    let harness = try await makeHarness(providerVault: vault)
+    defer { harness.defaults.removePersistentDomain(forName: harness.defaultsSuiteName) }
+
+    await harness.providersModel.load()
+    await harness.projectsModel.load()
+    await harness.mcpModel.load()
+    await harness.chatsModel.load()
+
+    let healthyAccount = try await harness.accountManager.createAccount(
+      kind: .openai,
+      label: "Healthy",
+      credential: "sk-healthy",
+      defaultModelID: "gpt-4o"
+    )
+    let failingAccount = try await harness.accountManager.createAccount(
+      kind: .anthropic,
+      label: "Failing",
+      credential: "sk-failing",
+      defaultModelID: "claude-sonnet-4-5"
+    )
+    await vault.failRemoval(for: failingAccount.id)
+
+    let server = MCPRemoteServer(
+      id: "mcp-1",
+      name: "Docs",
+      endpoint: try #require(URL(string: "https://mcp.example.com/mcp")),
+      authentication: MCPAuthentication(kind: .bearer)
+    )
+    try await harness.mcpRuntime.saveServer(server, credential: "mcp-secret")
+
+    await harness.providersModel.reloadFromStorage()
+    await harness.mcpModel.reloadFromStorage()
+    #expect(harness.providersModel.credentialAccountIDs.contains(healthyAccount.id))
+    #expect(harness.providersModel.credentialAccountIDs.contains(failingAccount.id))
+    #expect(harness.mcpModel.hasCredential(server.id))
+
+    await harness.model.deleteAllCredentials()
+
+    // Error is surfaced and success toast is suppressed, yet all other keys were wiped and UI reloaded.
+    #expect(harness.model.errorMessage != nil)
+    #expect(harness.model.statusMessage == nil)
+    #expect(!harness.providersModel.credentialAccountIDs.contains(healthyAccount.id))
+    #expect(harness.providersModel.credentialAccountIDs.contains(failingAccount.id))
+    #expect(!harness.mcpModel.hasCredential(server.id))
+    #expect(await harness.mcpVault.credential(serverID: server.id) == nil)
+  }
+}

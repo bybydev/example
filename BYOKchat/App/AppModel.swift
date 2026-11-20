@@ -116,8 +116,6 @@ final class AppModel {
       await mcpModel?.reloadFromStorage()
     }
     dataPortability = DataPortabilityModel(
-      service: coreServices.dataPortability,
-      providerWorkspace: coreServices.providerWorkspace,
       conversations: coreServices.conversationStore,
       accountManager: coreServices.accountManager,
       preferences: preferences,
@@ -126,6 +124,16 @@ final class AppModel {
       projectsModel: projectModel,
       mcpModel: mcpModel
     )
+    dataPortability.onConversationsDeleted = { [weak self] in
+      await self?.sweepOrphanFilesIfIdle()
+    }
+  }
+
+  /// Reclaims unreferenced attachment blobs after bulk deletion when no
+  /// reference-owning store has a live write in flight.
+  func sweepOrphanFilesIfIdle() async {
+    guard !chats.isBusy, !projects.isBusy, !library.isBusy else { return }
+    await sweepOrphanFilesAtStartup()
   }
 
   /// Startup-only cleanup, after every reference-owning store has loaded and
@@ -569,6 +577,20 @@ final class MCPManagementModel {
     await elicitations.resolve(requestID, decision: decision)
   }
 
+  func removeAllChatConfigurations() async throws {
+    operationCount += 1
+    isBusy = true
+    await acquireOperation()
+    isBusy = true
+    defer {
+      releaseOperation()
+      operationCount -= 1
+      isBusy = operationCount > 0
+    }
+    try await workspace.removeAllChatConfigurations()
+    try await reloadSnapshot()
+  }
+
   func deleteAllCredentials() async throws {
     operationCount += 1
     isBusy = true
@@ -580,10 +602,25 @@ final class MCPManagementModel {
       isBusy = operationCount > 0
     }
     let values = await runtime.servers()
+    var failedServerNames: [String] = []
     for server in values {
-      try await runtime.saveServer(server, credential: "")
+      do {
+        try await runtime.saveServer(server, credential: "")
+      } catch {
+        failedServerNames.append(server.name)
+      }
     }
-    try await reloadSnapshot()
+    do {
+      try await reloadSnapshot()
+    } catch {
+      if failedServerNames.isEmpty {
+        throw error
+      }
+    }
+    if !failedServerNames.isEmpty {
+      let summary = failedServerNames.sorted().joined(separator: ", ")
+      throw MCPError.transport("Failed to remove Keychain credentials for MCP servers: \(summary).")
+    }
   }
 
   private func reloadChatConfigurationsOnly() async {

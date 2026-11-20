@@ -152,8 +152,18 @@ struct AppRootView: View {
       }
     }
     .onChange(of: model.chats.conversations.map(\.id), initial: true) { _, ids in
-      model.preferences.prunePinnedConversations(keeping: Set(ids))
-      guard let selectedConversationID, !ids.contains(selectedConversationID) else { return }
+      let validIDs = Set(ids)
+      model.preferences.prunePinnedConversations(keeping: validIDs)
+      if navigationPath.contains(where: { destination in
+        guard let chatID = destination.chatID else { return false }
+        return !validIDs.contains(chatID)
+      }) {
+        navigationPath.removeAll { destination in
+          guard let chatID = destination.chatID else { return false }
+          return !validIDs.contains(chatID)
+        }
+      }
+      guard let selectedConversationID, !validIDs.contains(selectedConversationID) else { return }
       self.selectedConversationID = nil
       initialScrollMessageID = nil
       openedChatFromProject = false

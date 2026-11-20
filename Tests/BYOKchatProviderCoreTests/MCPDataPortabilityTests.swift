@@ -50,3 +50,31 @@ import Testing
   let credentialAfterReplace = try await mcpVault.credential(serverID: server.id)
   #expect(credentialAfterReplace == nil)
 }
+
+@Test func removeAllChatConfigurationsClearsOverridesWhileKeepingServers() async throws {
+  let persistence = InMemoryMCPWorkspacePersistence()
+  let mcp = MCPWorkspaceStore(persistence: persistence)
+  try await mcp.load()
+
+  let server = MCPRemoteServer(
+    id: "server-1",
+    name: "Docs",
+    endpoint: try #require(URL(string: "https://mcp.example.com/mcp")),
+    authentication: MCPAuthentication(kind: .none)
+  )
+  try await mcp.upsertServer(server)
+
+  let firstChat = ConversationID(rawValue: "chat-1")
+  let secondChat = ConversationID(rawValue: "chat-2")
+  try await mcp.setChatServerEnabled(true, serverID: server.id, conversationID: firstChat)
+  try await mcp.setChatServerEnabled(true, serverID: server.id, conversationID: secondChat)
+  #expect(await mcp.snapshot().chatConfigurations?.count == 2)
+
+  try await mcp.removeAllChatConfigurations()
+  #expect(await mcp.snapshot().chatConfigurations == nil)
+  #expect(await mcp.allServers().map(\.id) == [server.id])
+
+  // Calling again when already empty is a clean no-op.
+  try await mcp.removeAllChatConfigurations()
+  #expect(await mcp.snapshot().chatConfigurations == nil)
+}

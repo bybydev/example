@@ -286,6 +286,16 @@ public actor MCPWorkspaceStore {
     try await commit(candidate)
   }
 
+  public func removeAllChatConfigurations() async throws {
+    await beginMutation()
+    defer { endMutation() }
+
+    guard state.chatConfigurations?.isEmpty == false else { return }
+    var candidate = state
+    candidate.chatConfigurations = nil
+    try await commit(candidate)
+  }
+
   public func deleteServer(_ id: MCPServerID) async throws {
     await beginMutation()
     defer { endMutation() }
