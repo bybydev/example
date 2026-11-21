@@ -316,10 +316,21 @@ struct AsyncAttachmentThumbnail: View {
   /// completed without bytes.
   @State private var isUnavailable = false
 
+  nonisolated static func cacheKey(for attachmentID: String) -> String {
+    "attachment::\(attachmentID)"
+  }
+
   var body: some View {
+    let targetPixelSize = max(sideLength, height) * displayScale
+    let key = Self.cacheKey(for: attachment.id)
+    let resolvedImage = image ?? AttachmentThumbnailLoader.cachedImage(
+      cacheKey: key,
+      maxPixelSize: targetPixelSize
+    )
+
     ZStack {
-      if let image {
-        Image(uiImage: image)
+      if let resolvedImage {
+        Image(uiImage: resolvedImage)
           .resizable()
           .scaledToFill()
           .frame(width: sideLength, height: height)
@@ -344,11 +355,15 @@ struct AsyncAttachmentThumbnail: View {
     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
   }
 
+  /// Lightweight static placeholder (no animating ProgressView per tile) so
+  /// chats with many images do not spin dozens of UIActivityIndicatorViews
+  /// during the sidebar close transition.
   private var loadingTile: some View {
     ZStack {
       theme.surfaceColor
-      ProgressView()
-        .tint(theme.secondaryForegroundColor)
+      Image(systemName: "photo")
+        .font(.system(size: sideLength * 0.28, weight: .medium))
+        .foregroundStyle(theme.secondaryForegroundColor.opacity(0.32))
     }
     .clipShape(shape)
     .overlay(shape.stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75))
@@ -384,26 +399,26 @@ struct AsyncAttachmentThumbnail: View {
   private func load() async {
     let targetPixelSize = max(sideLength, height) * displayScale
     let attachmentID = attachment.id
+    let key = Self.cacheKey(for: attachmentID)
     let inlineData = attachment.data
+
+    if AttachmentThumbnailLoader.cachedImage(
+      cacheKey: key,
+      maxPixelSize: targetPixelSize
+    ) != nil {
+      if isUnavailable { isUnavailable = false }
+      return
+    }
 
     // Fresh in-memory bytes (composer, just-imported) decode directly.
     if !inlineData.isEmpty {
-      isUnavailable = false
-      let inlineKey = "inline::\(attachmentID)"
-      if let cached = AttachmentThumbnailLoader.cachedImage(
-        cacheKey: inlineKey,
-        maxPixelSize: targetPixelSize
-      ) {
-        image = cached
-        return
-      }
-      let decoded = await Task.detached(priority: .userInitiated) {
-        AttachmentThumbnailLoader.downsampledImage(
-          from: inlineData,
-          cacheKey: inlineKey,
-          maxPixelSize: targetPixelSize
-        )
-      }.value
+      if isUnavailable { isUnavailable = false }
+      let decoded = await AttachmentThumbnailLoader.decodeImage(
+        from: inlineData,
+        cacheKey: key,
+        maxPixelSize: targetPixelSize,
+        alreadyDownsampled: false
+      )
       guard !Task.isCancelled else { return }
       image = decoded
       if decoded != nil { return }
@@ -413,28 +428,18 @@ struct AsyncAttachmentThumbnail: View {
       isUnavailable = inlineData.isEmpty
       return
     }
-    let blobKey = "blob::\(attachmentID)"
-    if let cached = AttachmentThumbnailLoader.cachedImage(
-      cacheKey: blobKey,
-      maxPixelSize: targetPixelSize
-    ) {
-      isUnavailable = false
-      image = cached
-      return
-    }
     let bytes = await loadThumbnail(attachmentID, targetPixelSize)
     guard !Task.isCancelled else { return }
     guard let bytes, !bytes.isEmpty else {
       isUnavailable = true
       return
     }
-    let decoded = await Task.detached(priority: .userInitiated) {
-      AttachmentThumbnailLoader.downsampledImage(
-        from: bytes,
-        cacheKey: blobKey,
-        maxPixelSize: targetPixelSize
-      )
-    }.value
+    let decoded = await AttachmentThumbnailLoader.decodeImage(
+      from: bytes,
+      cacheKey: key,
+      maxPixelSize: targetPixelSize,
+      alreadyDownsampled: true
+    )
     guard !Task.isCancelled else { return }
     image = decoded
     isUnavailable = decoded == nil
@@ -478,7 +483,8 @@ struct ChatMessageView: View {
   @State private var showImageSaveSheet = false
   @State private var pendingSavedImageCount = 0
   @State private var cachedSources: [AnswerSource] = []
-  @State private var cachedImageCandidates: [ResponseImageCandidate] = []
+  @State private var hasImageCandidates = false
+  @State private var imageSaveCandidates: [ResponseImageCandidate] = []
 
   private var isMessageStreaming: Bool {
     message.status == .pending || message.status == .streaming
@@ -610,8 +616,8 @@ struct ChatMessageView: View {
     .task(id: analysisKey) {
       let key = analysisKey
       guard key.role == .assistant, !key.isStreaming, !key.content.isEmpty else {
-        cachedSources = []
-        cachedImageCandidates = []
+        if !cachedSources.isEmpty { cachedSources = [] }
+        if hasImageCandidates { hasImageCandidates = false }
         return
       }
       let content = key.content
@@ -619,17 +625,17 @@ struct ChatMessageView: View {
       let analyzed = await Task.detached(priority: .utility) {
         let blocks = AnswerContentParser.parse(content)
         let sources = AnswerContentParser.sources(in: blocks)
-        let images = hasLibraryContext
-          ? ResponseImageScanner.imageCandidates(in: content)
-          : []
-        return (sources, images)
+        let hasImages = hasLibraryContext
+          ? ResponseImageScanner.hasImageCandidates(in: content)
+          : false
+        return (sources, hasImages)
       }.value
       guard !Task.isCancelled else { return }
       if cachedSources != analyzed.0 {
         cachedSources = analyzed.0
       }
-      if cachedImageCandidates != analyzed.1 {
-        cachedImageCandidates = analyzed.1
+      if hasImageCandidates != analyzed.1 {
+        hasImageCandidates = analyzed.1
       }
     }
     .sheet(isPresented: $showMessageInfo) {
@@ -642,6 +648,7 @@ struct ChatMessageView: View {
       AnswerSourcesSheet(sources: cachedSources)
     }
     .sheet(isPresented: $showImageSaveSheet, onDismiss: {
+      imageSaveCandidates = []
       guard pendingSavedImageCount > 0 else { return }
       let count = pendingSavedImageCount
       pendingSavedImageCount = 0
@@ -649,7 +656,7 @@ struct ChatMessageView: View {
     }) {
       if let conversationID, let library {
         ResponseImageSaveSheet(
-          candidates: cachedImageCandidates,
+          candidates: imageSaveCandidates,
           conversationID: conversationID,
           messageID: message.id,
           library: library,
@@ -750,9 +757,20 @@ struct ChatMessageView: View {
       }
       .disabled(message.content.isEmpty)
 
-      if !cachedImageCandidates.isEmpty {
+      if hasImageCandidates {
         Button("Save Images…", systemImage: "photo.on.rectangle") {
-          showImageSaveSheet = true
+          let content = message.content
+          Task { @MainActor in
+            let candidates = await Task.detached(priority: .userInitiated) {
+              ResponseImageScanner.imageCandidates(in: content)
+            }.value
+            guard !candidates.isEmpty else {
+              hasImageCandidates = false
+              return
+            }
+            imageSaveCandidates = candidates
+            showImageSaveSheet = true
+          }
         }
       }
     }

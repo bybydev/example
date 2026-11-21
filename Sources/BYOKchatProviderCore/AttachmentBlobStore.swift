@@ -164,9 +164,12 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
       return cached
     }
     guard let original = try await loadData(id), !original.isEmpty else { return nil }
-    guard let thumbnail = Self.downsampledThumbnail(from: original, maxPixelSize: CGFloat(clamped)) else {
-      return nil
-    }
+    // Run CPU-heavy ImageIO downsampling and encoding off the actor so multiple
+    // thumbnails can generate concurrently without serializing behind one slow photo.
+    let thumbnail = await Task.detached(priority: .utility) {
+      Self.downsampledThumbnail(from: original, maxPixelSize: CGFloat(clamped))
+    }.value
+    guard let thumbnail else { return nil }
     try? fileManager.createDirectory(at: derivedDirectory, withIntermediateDirectories: true)
     try? thumbnail.write(to: derivedURL, options: .atomic)
     return thumbnail
@@ -280,8 +283,8 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
   // MARK: - Derived thumbnails
 
   /// ImageIO downsample so a 20 MB JPEG never materializes as a full-size
-  /// bitmap just to fill a small tile. Output re-encodes as PNG to keep the
-  /// derived file self-describing regardless of the source format.
+  /// bitmap just to fill a small tile. Opaque images re-encode as JPEG (much
+  /// faster and smaller on disk); images with an alpha channel keep PNG.
   static func downsampledThumbnail(from data: Data, maxPixelSize: CGFloat) -> Data? {
     let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
     guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
@@ -296,17 +299,29 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
       return nil
     }
+    let preserveAlpha = hasAlphaChannel(cgImage)
+    let outputType = (preserveAlpha ? UTType.png : UTType.jpeg).identifier as CFString
     let outputData = NSMutableData()
-    let output = CGImageDestinationCreateWithData(
-      outputData,
-      UTType.png.identifier as CFString,
-      1,
-      nil
-    )
-    guard let output else { return nil }
-    CGImageDestinationAddImage(output, cgImage, nil)
+    guard let output = CGImageDestinationCreateWithData(outputData, outputType, 1, nil) else {
+      return nil
+    }
+    let destinationOptions: CFDictionary? = preserveAlpha
+      ? nil
+      : ([kCGImageDestinationLossyCompressionQuality: 0.82] as CFDictionary)
+    CGImageDestinationAddImage(output, cgImage, destinationOptions)
     guard CGImageDestinationFinalize(output) else { return nil }
     return outputData as Data
+  }
+
+  private static func hasAlphaChannel(_ cgImage: CGImage) -> Bool {
+    switch cgImage.alphaInfo {
+    case .none, .noneSkipFirst, .noneSkipLast:
+      return false
+    case .premultipliedFirst, .premultipliedLast, .first, .last, .alphaOnly:
+      return true
+    @unknown default:
+      return true
+    }
   }
 
   private static func derivedBlobID(from fileName: String) -> String? {

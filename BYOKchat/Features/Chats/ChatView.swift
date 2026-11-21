@@ -144,6 +144,7 @@ struct ChatView: View {
   // Non-private: the chat content extension in ChatView+Content.swift uses it.
   @Environment(\.appFoundationTheme) var theme
   @Environment(\.dismiss) var dismiss
+  @Environment(\.displayScale) var displayScale
   @State var draft = ""
   @State var restoredDraftConversationID: ConversationID?
   @State var activeAttachmentImportCount = 0
@@ -408,7 +409,7 @@ struct ChatView: View {
         } actions: {
           Button("Try Again") {
             Task { @MainActor in
-              await chats.loadConversation(conversationID)
+              await chats.loadConversation(conversationID, displayScale: displayScale)
             }
           }
           .buttonStyle(.borderedProminent)
@@ -644,7 +645,7 @@ struct ChatView: View {
       attachmentQuickLookPreview = nil
       cleanupAttachmentImagePreviewTempDirectory()
 
-      await chats.loadConversation(conversationID)
+      await chats.loadConversation(conversationID, displayScale: displayScale)
       guard !Task.isCancelled else { return }
 
       let savedDraft = chats.draft(for: conversationID)

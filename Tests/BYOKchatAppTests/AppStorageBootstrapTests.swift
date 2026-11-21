@@ -648,6 +648,20 @@ struct SidebarHelperTests {
     #expect(cache.cached(for: "Second message") != nil)
     #expect(cache.cached(for: "Third message") != nil)
   }
+
+  @Test("Response image presence check detects URLs and data URIs without decoding payloads")
+  func responseImagePresenceCheck() {
+    #expect(!ResponseImageScanner.hasImageCandidates(in: "Plain markdown with [link](https://example.com)"))
+    #expect(!ResponseImageScanner.hasImageCandidates(in: "```\n![ignored](https://example.com/a.png)\n```"))
+    #expect(ResponseImageScanner.hasImageCandidates(in: "Here is ![chart](https://example.com/chart.png)"))
+    #expect(ResponseImageScanner.hasImageCandidates(in: "Inline ![img](data:image/png;base64,AAAA)"))
+    #expect(!ResponseImageScanner.hasImageCandidates(in: "Broken ![img](data:image/png;base64,)"))
+  }
+
+  @Test("Attachment thumbnail cache shares one key across inline and persisted states")
+  func attachmentThumbnailCacheKeyIsUnified() {
+    #expect(AsyncAttachmentThumbnail.cacheKey(for: "att-123") == "attachment::att-123")
+  }
 }
 
 private actor PartiallyFailingCredentialVault: CredentialVault {

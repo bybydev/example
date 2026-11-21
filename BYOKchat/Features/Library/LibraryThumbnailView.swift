@@ -4,21 +4,124 @@ import ImageIO
 import SwiftUI
 import UIKit
 
-enum AttachmentThumbnailLoader {
+private actor ThumbnailDecodeLimiter {
+  private let limit: Int
+  private var active = 0
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  init(limit: Int) {
+    self.limit = max(1, limit)
+  }
+
+  func acquire() async {
+    if active < limit {
+      active += 1
+      return
+    }
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func release() {
+    if !waiters.isEmpty {
+      let next = waiters.removeFirst()
+      next.resume()
+    } else {
+      active = max(0, active - 1)
+    }
+  }
+}
+
+nonisolated enum AttachmentThumbnailLoader {
   /// NSCache is thread-safe at runtime but not annotated Sendable; this box
   /// satisfies strict concurrency for the shared static instance.
   private struct ThumbnailCache: @unchecked Sendable {
-    let storage = NSCache<NSString, UIImage>()
+    let storage: NSCache<NSString, UIImage> = {
+      let cache = NSCache<NSString, UIImage>()
+      cache.countLimit = 256
+      cache.totalCostLimit = 32 * 1_024 * 1_024
+      return cache
+    }()
   }
 
   private static let cache = ThumbnailCache()
+  private static let decodeLimiter = ThumbnailDecodeLimiter(limit: 4)
 
   private static func storageKey(cacheKey: String, maxPixelSize: CGFloat) -> NSString {
-    "\(cacheKey)::\(Int(maxPixelSize))" as NSString
+    "\(cacheKey)::\(Int(maxPixelSize.rounded(.up)))" as NSString
+  }
+
+  private static func imageCost(_ image: UIImage) -> Int {
+    if let cgImage = image.cgImage {
+      return cgImage.bytesPerRow * cgImage.height
+    }
+    let scale = max(image.scale, 1)
+    return Int(image.size.width * scale * image.size.height * scale * 4)
   }
 
   static func cachedImage(cacheKey: String, maxPixelSize: CGFloat) -> UIImage? {
     cache.storage.object(forKey: storageKey(cacheKey: cacheKey, maxPixelSize: maxPixelSize))
+  }
+
+  /// Bounded-concurrency async decode at `.utility` priority so a burst of
+  /// image tiles never starves main-thread animations (e.g., sidebar close).
+  /// When `alreadyDownsampled` is true (derived thumbnail bytes from the blob
+  /// store), decodes directly with `preparingForDisplay()` without running a
+  /// second ImageIO thumbnail pass.
+  static func decodeImage(
+    from data: Data,
+    cacheKey: String,
+    maxPixelSize: CGFloat,
+    alreadyDownsampled: Bool = false
+  ) async -> UIImage? {
+    if let cached = cachedImage(cacheKey: cacheKey, maxPixelSize: maxPixelSize) {
+      return cached
+    }
+    guard !Task.isCancelled else { return nil }
+    await decodeLimiter.acquire()
+    if Task.isCancelled {
+      await decodeLimiter.release()
+      return nil
+    }
+    let decoded = await Task.detached(priority: .utility) {
+      if alreadyDownsampled {
+        return Self.decodedDerivedImage(
+          from: data,
+          cacheKey: cacheKey,
+          maxPixelSize: maxPixelSize
+        )
+      }
+      return Self.downsampledImage(
+        from: data,
+        cacheKey: cacheKey,
+        maxPixelSize: maxPixelSize
+      )
+    }.value
+    await decodeLimiter.release()
+    return decoded
+  }
+
+  /// Fast path for already-downsampled derived thumbnails: decodes once and
+  /// prepares a GPU-ready display bitmap off the main thread. Falls back to
+  /// ImageIO downsampling if the payload is larger than `maxPixelSize`.
+  static func decodedDerivedImage(
+    from data: Data,
+    cacheKey: String,
+    maxPixelSize: CGFloat
+  ) -> UIImage? {
+    let key = storageKey(cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+    if let cached = cache.storage.object(forKey: key) { return cached }
+
+    if let raw = UIImage(data: data) {
+      let maxSide = max(raw.size.width * raw.scale, raw.size.height * raw.scale)
+      if maxSide > 0, maxSide <= maxPixelSize * 1.25 {
+        let displayReady = raw.preparingForDisplay() ?? raw
+        cache.storage.setObject(displayReady, forKey: key, cost: imageCost(displayReady))
+        return displayReady
+      }
+    }
+    return downsampledImage(from: data, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
   }
 
   /// Downsampled decode via ImageIO so a 20 MB JPEG never materializes as a
@@ -45,9 +148,10 @@ enum AttachmentThumbnailLoader {
     guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
       return nil
     }
-    let image = UIImage(cgImage: cgImage)
-    cache.storage.setObject(image, forKey: key)
-    return image
+    let raw = UIImage(cgImage: cgImage)
+    let displayReady = raw.preparingForDisplay() ?? raw
+    cache.storage.setObject(displayReady, forKey: key, cost: imageCost(displayReady))
+    return displayReady
   }
 }
 
@@ -64,9 +168,15 @@ struct LibraryEntryThumbnailView: View {
   @State private var loadFailed = false
 
   var body: some View {
+    let maxPixelSize = sideLength * displayScale
+    let cacheKey = "entry::\(entry.id.rawValue)"
+    let resolvedImage = entry.isImage
+      ? (image ?? AttachmentThumbnailLoader.cachedImage(cacheKey: cacheKey, maxPixelSize: maxPixelSize))
+      : nil
+
     ZStack {
-      if let image {
-        Image(uiImage: image)
+      if let resolvedImage {
+        Image(uiImage: resolvedImage)
           .resizable()
           .scaledToFill()
           .frame(width: sideLength, height: sideLength)
@@ -84,8 +194,9 @@ struct LibraryEntryThumbnailView: View {
               .stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75)
           )
           .overlay {
-            ProgressView()
-              .controlSize(.small)
+            Image(systemName: "photo")
+              .font(.system(size: sideLength * 0.34, weight: .medium))
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.32))
           }
       } else {
         Image(systemName: entry.isImage ? "photo" : Self.fileSymbolName(for: entry))
@@ -109,14 +220,10 @@ struct LibraryEntryThumbnailView: View {
         loadFailed = false
         return
       }
-      let maxPixelSize = sideLength * displayScale
-      let cacheKey = "entry::\(entry.id.rawValue)"
-      if let cached = AttachmentThumbnailLoader.cachedImage(
+      if AttachmentThumbnailLoader.cachedImage(
         cacheKey: cacheKey,
         maxPixelSize: maxPixelSize
-      ) {
-        image = cached
-        loadFailed = false
+      ) != nil {
         return
       }
       image = nil
@@ -127,13 +234,12 @@ struct LibraryEntryThumbnailView: View {
         if !Task.isCancelled { loadFailed = true }
         return
       }
-      let decoded = await Task.detached(priority: .userInitiated) {
-        AttachmentThumbnailLoader.downsampledImage(
-          from: bytes,
-          cacheKey: cacheKey,
-          maxPixelSize: maxPixelSize
-        )
-      }.value
+      let decoded = await AttachmentThumbnailLoader.decodeImage(
+        from: bytes,
+        cacheKey: cacheKey,
+        maxPixelSize: maxPixelSize,
+        alreadyDownsampled: true
+      )
       guard !Task.isCancelled else { return }
       if let decoded {
         image = decoded

@@ -18,6 +18,31 @@ enum ResponseImageScanner {
     pattern: #"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#
   )
 
+  /// Fast presence check used to decide whether to show "Save Images…" in a
+  /// message menu without base64-decoding or hashing inline image payloads.
+  static func hasImageCandidates(in content: String) -> Bool {
+    guard !content.isEmpty, content.contains("!["), let regex = markdownImageRegex else {
+      return false
+    }
+    for block in AnswerContentParser.parse(content) {
+      guard case .markdown(let markdown) = block, markdown.contains("![") else { continue }
+      let range = NSRange(markdown.startIndex..., in: markdown)
+      for match in regex.matches(in: markdown, range: range) {
+        guard match.numberOfRanges >= 3,
+          let urlRange = Range(match.range(at: 2), in: markdown)
+        else { continue }
+        let rawURL = String(markdown[urlRange])
+        if let url = URL(string: rawURL), AnswerContentParser.isValidBrowsableURL(url) {
+          return true
+        }
+        if hasValidDataURIHeader(rawURL) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   /// Finds markdown image references and inline data-URI images outside fenced
   /// code blocks. Results are de-duplicated by location so the same image
   /// linked twice offers once.
@@ -110,6 +135,16 @@ enum ResponseImageScanner {
     let cleaned = name.components(separatedBy: allowed.inverted).joined()
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return String(cleaned.prefix(80))
+  }
+
+  private static func hasValidDataURIHeader(_ value: String) -> Bool {
+    guard value.lowercased().hasPrefix("data:image/"),
+      let semicolon = value.firstIndex(of: ";")
+    else { return false }
+    let payload = value[value.index(after: semicolon)...]
+    guard payload.lowercased().hasPrefix("base64,") else { return false }
+    let encoded = payload.dropFirst("base64,".count)
+    return !encoded.isEmpty
   }
 
   private static func decodeDataURI(_ value: String) -> (data: Data, extension: String)? {
