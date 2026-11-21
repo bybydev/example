@@ -332,58 +332,14 @@ final class ChatManagementModel {
       await task.value
       return
     }
-    guard hydratedConversations[id] == nil else { return }
-    let targetPixelSize = ChatAttachmentPresentation.bubble.imageWidth * max(displayScale, 1)
+    if let existing = hydratedConversations[id] {
+      await prewarmConversationContent(existing, displayScale: displayScale)
+      return
+    }
     let task = Task { @MainActor in
       do {
         let loaded = try await self.conversationStore.conversation(id: id)
-        // Pre-parse the initially visible tail messages and warm the last few
-        // visible image thumbnails off the main actor so frame 1 hits caches
-        // directly instead of stalling the sidebar close transition.
-        let tailMessages = Array(
-          loaded.messages.suffix(ChatMessageWindowPolicy.initialVisibleCount)
-        )
-        let recentImageAttachments = Array(
-          tailMessages.reversed()
-            .flatMap { ($0.attachments ?? []).reversed() }
-            .filter(\.isImage)
-            .prefix(6)
-        )
-        let store = self.conversationStore
-        await Task.detached(priority: .userInitiated) {
-          MarkdownParseCache.shared.prewarm(messages: tailMessages)
-          await withTaskGroup(of: Void.self) { group in
-            for attachment in recentImageAttachments {
-              let key = AsyncAttachmentThumbnail.cacheKey(for: attachment.id)
-              if AttachmentThumbnailLoader.cachedImage(
-                cacheKey: key,
-                maxPixelSize: targetPixelSize
-              ) != nil {
-                continue
-              }
-              group.addTask {
-                if !attachment.data.isEmpty {
-                  _ = await AttachmentThumbnailLoader.decodeImage(
-                    from: attachment.data,
-                    cacheKey: key,
-                    maxPixelSize: targetPixelSize,
-                    alreadyDownsampled: false
-                  )
-                } else if let bytes = await store.attachmentThumbnail(
-                  attachment.id,
-                  maxPixelSize: targetPixelSize
-                ), !bytes.isEmpty {
-                  _ = await AttachmentThumbnailLoader.decodeImage(
-                    from: bytes,
-                    cacheKey: key,
-                    maxPixelSize: targetPixelSize,
-                    alreadyDownsampled: true
-                  )
-                }
-              }
-            }
-          }
-        }.value
+        await self.prewarmConversationContent(loaded, displayScale: displayScale)
         self.hydratedConversations[id] = loaded
         self.conversationLoadFailures.remove(id)
         let refreshedSummaries = await self.conversationStore.conversationSummaries()
@@ -399,6 +355,60 @@ final class ChatManagementModel {
     loadingConversationTasks[id] = task
     await task.value
     loadingConversationTasks.removeValue(forKey: id)
+  }
+
+  /// Pre-parses the initially visible tail messages and warms the last few
+  /// visible image thumbnails off the main actor so frame 1 hits caches
+  /// directly instead of stalling the sidebar close transition.
+  private func prewarmConversationContent(
+    _ conversation: ChatConversation,
+    displayScale: CGFloat
+  ) async {
+    let targetPixelSize = ChatAttachmentPresentation.bubble.imageWidth * max(displayScale, 1)
+    let tailMessages = Array(
+      conversation.messages.suffix(ChatMessageWindowPolicy.initialVisibleCount)
+    )
+    let recentImageAttachments = Array(
+      tailMessages.reversed()
+        .flatMap { ($0.attachments ?? []).reversed() }
+        .filter(\.isImage)
+        .prefix(6)
+    )
+    let store = conversationStore
+    await Task.detached(priority: .userInitiated) {
+      MarkdownParseCache.shared.prewarm(messages: tailMessages)
+      await withTaskGroup(of: Void.self) { group in
+        for attachment in recentImageAttachments {
+          let key = AsyncAttachmentThumbnail.cacheKey(for: attachment.id)
+          if AttachmentThumbnailLoader.cachedImage(
+            cacheKey: key,
+            maxPixelSize: targetPixelSize
+          ) != nil {
+            continue
+          }
+          group.addTask {
+            if !attachment.data.isEmpty {
+              _ = await AttachmentThumbnailLoader.decodeImage(
+                from: attachment.data,
+                cacheKey: key,
+                maxPixelSize: targetPixelSize,
+                alreadyDownsampled: false
+              )
+            } else if let bytes = await store.attachmentThumbnail(
+              attachment.id,
+              maxPixelSize: targetPixelSize
+            ), !bytes.isEmpty {
+              _ = await AttachmentThumbnailLoader.decodeImage(
+                from: bytes,
+                cacheKey: key,
+                maxPixelSize: targetPixelSize,
+                alreadyDownsampled: true
+              )
+            }
+          }
+        }
+      }
+    }.value
   }
 
   func failedToLoad(_ id: ConversationID) -> Bool {

@@ -35,12 +35,19 @@ struct AppRootView: View {
     let messageID: ChatMessageID?
   }
 
+  private struct PendingSidebarChatSelection: Equatable {
+    let conversationID: ConversationID
+    let initialScrollMessageID: ChatMessageID?
+    let revision: UInt
+  }
+
   @Bindable var model: AppModel
   let purchases: BYOKPurchaseStore
   let restartApp: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.displayScale) private var displayScale
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
   @State private var bootstrap = AppBootstrapController()
   @State private var toastCenter = BYOKToastCenter()
@@ -53,6 +60,8 @@ struct AppRootView: View {
   @State private var newChatRequestPath: [AppRoute] = []
   @State private var selectedConversationID: ConversationID?
   @State private var initialScrollMessageID: ChatMessageID?
+  @State private var pendingSidebarChat: PendingSidebarChatSelection?
+  @State private var sidebarChatSelectionRevision: UInt = 0
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
   /// The visible chat was opened from a project's chat list, so it shows a
@@ -124,7 +133,7 @@ struct AppRootView: View {
               projects: model.projects,
               mcp: model.mcp,
               purchases: purchases,
-              selectedConversationID: selectedConversationID,
+              selectedConversationID: pendingSidebarChat?.conversationID ?? selectedConversationID,
               activeDestination: activeScreen,
               newChat: startNewChat(in:),
               selectConversation: selectConversation,
@@ -162,6 +171,9 @@ struct AppRootView: View {
           guard let chatID = destination.chatID else { return false }
           return !validIDs.contains(chatID)
         }
+      }
+      if let pendingSidebarChat, !validIDs.contains(pendingSidebarChat.conversationID) {
+        cancelPendingSidebarChat()
       }
       guard let selectedConversationID, !validIDs.contains(selectedConversationID) else { return }
       self.selectedConversationID = nil
@@ -328,6 +340,8 @@ struct AppRootView: View {
             theme.backgroundColor
               .ignoresSafeArea()
           }
+        } else if let pendingSidebarChat {
+          sidebarChatTransitionShell(for: pendingSidebarChat.conversationID)
         } else if let activeProjectViewID {
           ProjectDetailView(
             projectID: activeProjectViewID,
@@ -545,9 +559,60 @@ struct AppRootView: View {
     return selectedConversationID
   }
 
+  /// Lightweight themed shell rendered while the sidebar slides closed for a
+  /// chat switch so the main thread stays free at 120fps while hydration and
+  /// Markdown/thumbnail prewarming run off the main actor.
+  private func sidebarChatTransitionShell(for conversationID: ConversationID) -> some View {
+    let project = model.projects.project(for: conversationID)
+    return theme.backgroundColor
+      .ignoresSafeArea()
+      .toolbarBackground(.hidden, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Open sidebar")
+        }
+
+        if let project {
+          ToolbarItem(placement: .principal) {
+            HStack(spacing: 6) {
+              ProjectIconView(project: project, size: 20)
+              Text(project.name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Project \(project.name)")
+          }
+        }
+
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button("New Chat", systemImage: "square.and.pencil") {
+            startNewChat(in: project?.id)
+          }
+          .labelStyle(.iconOnly)
+        }
+      }
+  }
+
   private func invalidateNewChatRequest() {
     newChatRequestRevision &+= 1
     isCreatingNewChat = false
+  }
+
+  private func cancelPendingSidebarChat() {
+    sidebarChatSelectionRevision &+= 1
+    pendingSidebarChat = nil
+  }
+
+  private func completePendingSidebarChat(revision: UInt) {
+    guard let pending = pendingSidebarChat, pending.revision == revision else { return }
+    pendingSidebarChat = nil
+    guard model.chats.hasConversation(pending.conversationID) else { return }
+    selectedConversationID = pending.conversationID
+    initialScrollMessageID = pending.initialScrollMessageID
+    openedChatFromProject = false
   }
 
   private func discardIfEmpty(_ id: ConversationID?) {
@@ -559,6 +624,7 @@ struct AppRootView: View {
   }
 
   private func startNewChat(in projectID: ProjectID?, closeDrawer: Bool) {
+    cancelPendingSidebarChat()
     if closeDrawer { closeSidebar() }
     if isCreatingNewChat && pendingNewChatProjectID == projectID { return }
     if let id = visibleConversationID,
@@ -677,6 +743,7 @@ struct AppRootView: View {
   }
 
   private func handleRootConversationDeleted(in projectID: ProjectID?) {
+    cancelPendingSidebarChat()
     let validProjectID = projectID.flatMap { model.projects.project($0)?.id }
     if openedChatFromProject, let validProjectID {
       invalidateNewChatRequest()
@@ -692,6 +759,7 @@ struct AppRootView: View {
   /// Sidebar menu sections replace the main screen; whatever was showing
   /// yields.
   private func openMainScreen(_ screen: ChatSidebarView.SidebarDestination) {
+    cancelPendingSidebarChat()
     if activeScreen == screen,
       selectedConversationID == nil,
       activeProjectViewID == nil,
@@ -720,6 +788,7 @@ struct AppRootView: View {
 
   /// Back chevron on a project chat: swap the chat for its project's screen.
   private func exitToProjectView() {
+    cancelPendingSidebarChat()
     invalidateNewChatRequest()
     guard let conversationID = selectedConversationID else { return }
     activeProjectViewID = model.projects.projectID(for: conversationID)
@@ -737,27 +806,70 @@ struct AppRootView: View {
   }
 
   private func selectConversation(_ id: ConversationID) {
-    invalidateNewChatRequest()
-    navigationPath = []
-    discardIfEmpty(selectedConversationID == id ? nil : selectedConversationID)
-    selectedConversationID = id
-    initialScrollMessageID = nil
-    activeProjectViewID = nil
-    openedChatFromProject = false
-    activeScreen = nil
-    closeSidebar()
+    openConversation(id, initialScrollMessageID: nil)
   }
 
   private func selectSearchResult(_ result: ConversationSearchResult) {
+    openConversation(result.conversationID, initialScrollMessageID: result.messageID)
+  }
+
+  private func openConversation(
+    _ id: ConversationID,
+    initialScrollMessageID targetMessageID: ChatMessageID?
+  ) {
     invalidateNewChatRequest()
+
+    // Already displaying this exact conversation on the root screen: simply
+    // close the drawer without tearing down or flashing the timeline.
+    if selectedConversationID == id,
+      initialScrollMessageID == targetMessageID,
+      activeProjectViewID == nil,
+      activeScreen == nil,
+      navigationPath.isEmpty,
+      !openedChatFromProject
+    {
+      cancelPendingSidebarChat()
+      if isSidebarPresented { closeSidebar() }
+      return
+    }
+
     navigationPath = []
-    discardIfEmpty(selectedConversationID == result.conversationID ? nil : selectedConversationID)
-    selectedConversationID = result.conversationID
-    initialScrollMessageID = result.messageID
+    discardIfEmpty(selectedConversationID == id ? nil : selectedConversationID)
     activeProjectViewID = nil
     openedChatFromProject = false
     activeScreen = nil
-    closeSidebar()
+
+    guard isSidebarPresented else {
+      cancelPendingSidebarChat()
+      selectedConversationID = id
+      initialScrollMessageID = targetMessageID
+      return
+    }
+
+    // Two-phase sidebar handoff:
+    // 1. Immediately clear the outgoing surface to a lightweight shell and kick
+    //    off background hydration + Markdown/thumbnail prewarming in parallel.
+    // 2. Mount the incoming ChatView once the drawer close animation finishes.
+    cancelPendingSidebarChat()
+    let revision = sidebarChatSelectionRevision
+    selectedConversationID = nil
+    initialScrollMessageID = nil
+    pendingSidebarChat = PendingSidebarChatSelection(
+      conversationID: id,
+      initialScrollMessageID: targetMessageID,
+      revision: revision
+    )
+
+    let scale = displayScale
+    Task { @MainActor in
+      await model.chats.loadConversation(id, displayScale: scale)
+    }
+
+    withAnimation(Self.sidebarAnimation, completionCriteria: .logicallyComplete) {
+      isSidebarPresented = false
+    } completion: {
+      completePendingSidebarChat(revision: revision)
+    }
   }
 
   /// A library entry saved from a chat jumps back to its source message.
