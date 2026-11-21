@@ -476,6 +476,7 @@ struct ChatMessageView: View {
   let copy: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(BYOKToastCenter.self) private var toastCenter
   @State private var showReasoningSheet = false
   @State private var showMessageInfo = false
@@ -549,7 +550,7 @@ struct ChatMessageView: View {
     let hasMedia = !attachments.isEmpty
     let hasText = !message.content.isEmpty
 
-    VStack(alignment: .leading, spacing: hasMedia && hasText ? 9 : 0) {
+    VStack(alignment: .leading, spacing: hasMedia && hasText ? 8 : 0) {
       if hasMedia {
         ChatAttachmentStrip(
           attachments: attachments,
@@ -558,16 +559,25 @@ struct ChatMessageView: View {
           loadThumbnail: loadThumbnail,
           onOpenAttachment: onOpenAttachment
         )
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, hasText ? 0 : 10)
       }
 
       if hasText {
-        MarkdownMessageContent(text: message.content, fillsWidth: false)
+        UserMessageTextView(text: message.content)
+          .padding(.horizontal, 15)
+          .padding(.top, hasMedia ? 0 : 10)
+          .padding(.bottom, 10)
       }
     }
-    .padding(.horizontal, 15)
-    .padding(.vertical, hasMedia ? 8 : 11)
     .background(theme.elevatedSurfaceColor, in: userBubbleShape)
     .overlay(userBubbleShape.stroke(theme.borderColor, lineWidth: 0.5))
+    .shadow(
+      color: colorScheme == .light ? theme.appearance.shadow.color.opacity(0.45) : .clear,
+      radius: 5,
+      y: 1
+    )
   }
 
   private var userBubbleShape: RoundedRectangle {
@@ -943,6 +953,9 @@ struct MessageEditorSheet: View {
         Section {
           TextEditor(text: $text)
             .font(.body)
+            .foregroundStyle(theme.primaryForegroundColor)
+            .tint(theme.accentColor)
+            .scrollContentBackground(.hidden)
             .frame(minHeight: 220)
             .focused($isEditorFocused)
         } footer: {
@@ -969,5 +982,157 @@ struct MessageEditorSheet: View {
         isEditorFocused = true
       }
     }
+  }
+}
+
+enum UserMessageTextSupport {
+  static let collapsedLineLimit = 12
+  static let collapsedCharacterLimit = 900
+
+  struct Preview: Equatable, Sendable {
+    let displayedText: String
+    let isLong: Bool
+    let toggleLabel: String
+  }
+
+  struct LinkMatch: Equatable, Sendable {
+    let startOffset: Int
+    let endOffset: Int
+    let url: URL
+  }
+
+  static func preview(for text: String, isExpanded: Bool) -> Preview {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    let exceedsLines = lines.count > collapsedLineLimit
+    let exceedsCharacters = text.count > collapsedCharacterLimit
+    let isLong = exceedsLines || exceedsCharacters
+
+    let displayedText: String
+    if isLong, !isExpanded {
+      let lineCapped = exceedsLines
+        ? lines.prefix(collapsedLineLimit).joined(separator: "\n")
+        : text
+      let charCapped = lineCapped.count > collapsedCharacterLimit
+        ? String(lineCapped.prefix(collapsedCharacterLimit))
+        : lineCapped
+      let trimmedTail = charCapped.replacingOccurrences(
+        of: #"[ \t\r\n]+$"#,
+        with: "",
+        options: .regularExpression
+      )
+      displayedText = trimmedTail + "…"
+    } else {
+      displayedText = text
+    }
+
+    return Preview(
+      displayedText: displayedText,
+      isLong: isLong,
+      toggleLabel: isExpanded ? "Show less" : "Show more"
+    )
+  }
+
+  static func linkMatches(in text: String) -> [LinkMatch] {
+    guard text.contains("http://")
+      || text.contains("https://")
+      || text.localizedCaseInsensitiveContains("www.")
+    else { return [] }
+    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    else { return [] }
+
+    let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    var matches: [LinkMatch] = []
+    for match in detector.matches(in: text, range: fullRange) {
+      guard let url = match.url,
+        AnswerContentParser.isValidBrowsableURL(url),
+        let range = Range(match.range, in: text)
+      else { continue }
+      let startOffset = text.distance(from: text.startIndex, to: range.lowerBound)
+      let endOffset = text.distance(from: text.startIndex, to: range.upperBound)
+      guard endOffset > startOffset else { continue }
+      matches.append(LinkMatch(startOffset: startOffset, endOffset: endOffset, url: url))
+    }
+    return matches
+  }
+}
+
+/// Renders sent user messages verbatim — preserving single newlines, code,
+/// `#` comments, and punctuation exactly as typed — while keeping URLs tappable
+/// and collapsing very long pasted prompts cleanly.
+private struct UserMessageTextView: View {
+  let text: String
+
+  @Environment(\.appFoundationTheme) private var theme
+  @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = 17
+  @State private var isExpanded = false
+  @State private var browserDestination: BrowserDestination?
+
+  var body: some View {
+    let preview = UserMessageTextSupport.preview(for: text, isExpanded: isExpanded)
+    let matches = UserMessageTextSupport.linkMatches(in: preview.displayedText)
+
+    VStack(alignment: .leading, spacing: 6) {
+      if matches.isEmpty {
+        Text(preview.displayedText)
+          .font(.system(size: bodyFontSize))
+          .foregroundStyle(theme.primaryForegroundColor)
+          .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
+      } else {
+        Text(attributedText(preview.displayedText, matches: matches))
+          .font(.system(size: bodyFontSize))
+          .foregroundStyle(theme.primaryForegroundColor)
+          .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
+          .tint(theme.accentColor)
+      }
+
+      if preview.isLong {
+        Button {
+          withAnimation(.snappy(duration: 0.2)) {
+            isExpanded.toggle()
+          }
+        } label: {
+          Label(
+            preview.toggleLabel,
+            systemImage: isExpanded ? "chevron.up" : "chevron.down"
+          )
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(theme.accentColor)
+          .padding(.top, 2)
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .environment(
+      \.openURL,
+      OpenURLAction { url in
+        guard AnswerContentParser.isValidBrowsableURL(url) else {
+          return .systemAction
+        }
+        browserDestination = BrowserDestination(url: url)
+        return .handled
+      }
+    )
+    .sheet(item: $browserDestination) { destination in
+      InAppBrowserView(url: destination.url)
+        .ignoresSafeArea()
+    }
+  }
+
+  private func attributedText(
+    _ value: String,
+    matches: [UserMessageTextSupport.LinkMatch]
+  ) -> AttributedString {
+    var attributed = AttributedString(value)
+    for match in matches {
+      let lower = attributed.characters.index(attributed.startIndex, offsetBy: match.startOffset)
+      let upper = attributed.characters.index(attributed.startIndex, offsetBy: match.endOffset)
+      let range = lower..<upper
+      attributed[range].link = match.url
+      attributed[range].swiftUI.foregroundColor = theme.accentColor
+      attributed[range].swiftUI.underlineStyle = .single
+    }
+    return attributed
   }
 }

@@ -379,4 +379,36 @@ struct AnswerContentParserTests {
     )
     #expect(largeTypeMetrics.totalWidth > wideMetrics.totalWidth)
   }
+
+  @Test("User message text support preserves verbatim text, collapses long prompts, and detects links")
+  func userMessageTextSupport() {
+    let short = "# Not a heading\nLine 2\nPrice $10"
+    let shortPreview = UserMessageTextSupport.preview(for: short, isExpanded: false)
+    #expect(!shortPreview.isLong)
+    #expect(shortPreview.displayedText == short)
+
+    let manyLines = (1...16).map { "Line \($0)" }.joined(separator: "\n")
+    let collapsed = UserMessageTextSupport.preview(for: manyLines, isExpanded: false)
+    #expect(collapsed.isLong)
+    #expect(collapsed.toggleLabel == "Show more")
+    #expect(collapsed.displayedText.hasSuffix("…"))
+    #expect(collapsed.displayedText.contains("Line 12"))
+    #expect(!collapsed.displayedText.contains("Line 13"))
+
+    let expanded = UserMessageTextSupport.preview(for: manyLines, isExpanded: true)
+    #expect(expanded.displayedText == manyLines)
+    #expect(expanded.toggleLabel == "Show less")
+
+    let longSingleLine = String(repeating: "a", count: 1_100)
+    let collapsedChars = UserMessageTextSupport.preview(for: longSingleLine, isExpanded: false)
+    #expect(collapsedChars.isLong)
+    #expect(collapsedChars.displayedText.count <= UserMessageTextSupport.collapsedCharacterLimit + 1)
+
+    let linkText = "Check https://apple.com/swift and www.example.com, ignore ChatView.swift."
+    let matches = UserMessageTextSupport.linkMatches(in: linkText)
+    #expect(matches.count == 2)
+    #expect(matches[0].url.absoluteString == "https://apple.com/swift")
+    #expect(matches[1].url.host == "www.example.com")
+    #expect(UserMessageTextSupport.linkMatches(in: "Just ChatView.swift v1.2").isEmpty)
+  }
 }

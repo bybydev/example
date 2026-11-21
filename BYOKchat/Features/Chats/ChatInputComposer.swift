@@ -84,6 +84,7 @@ struct ChatComposer: View {
   let stop: (() -> Void)?
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.colorScheme) private var colorScheme
   @FocusState private var isEditorFocused: Bool
   @State private var measuredContentHeight: CGFloat = 0
   @ScaledMetric(relativeTo: .body) private var messageLineHeight: CGFloat = 22
@@ -294,7 +295,7 @@ struct ChatComposer: View {
             }
           )
       }
-      .scrollIndicators(.hidden)
+      .scrollIndicators(measuredContentHeight > textHeightCap + 1 ? .visible : .hidden)
       .scrollBounceBehavior(.basedOnSize)
       .frame(height: contentViewportHeight)
       .overlay(alignment: .center) {
@@ -322,7 +323,12 @@ struct ChatComposer: View {
   }
 
   private var messageField: some View {
-    TextField("Message...", text: $draft, axis: .vertical)
+    TextField(
+      "",
+      text: $draft,
+      prompt: Text("Message…").foregroundStyle(theme.secondaryForegroundColor.opacity(0.75)),
+      axis: .vertical
+    )
       .font(.body)
       .foregroundStyle(theme.primaryForegroundColor)
       .tint(theme.accentColor)
@@ -479,12 +485,12 @@ struct ChatComposer: View {
     if activity == .generating || canSubmit {
       return theme.accentColor
     }
-    return theme.surfaceColor
+    return colorScheme == .light ? theme.backgroundColor : theme.surfaceColor
   }
 
   private var sendButtonForeground: Color {
     if activity == .generating || canSubmit {
-      return theme.backgroundColor
+      return colorScheme == .light ? Color.white : theme.backgroundColor
     }
     return theme.secondaryForegroundColor
   }

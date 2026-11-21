@@ -519,9 +519,29 @@ struct ProjectEditorView: View {
     }
   }
 
+  private var selectedColor: Color {
+    ProjectAccentOption(rawValue: accentID)?.color ?? .blue
+  }
+
+  private var selectedColorTitle: String {
+    ProjectAccentOption(rawValue: accentID)?.title ?? accentID.capitalized
+  }
+
   private var projectIdentitySection: some View {
     Section {
-      TextField("Name", text: $name)
+      HStack(spacing: 12) {
+        Image(systemName: symbolName)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(selectedColor)
+          .frame(width: 36, height: 36)
+          .background(
+            selectedColor.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+          )
+          .accessibilityHidden(true)
+
+        TextField("Name", text: $name)
+      }
 
       Picker("Icon", selection: $symbolName) {
         if !symbols.contains(symbolName) {
@@ -534,21 +554,45 @@ struct ProjectEditorView: View {
         }
       }
 
-      Picker("Color", selection: $accentID) {
-        if ProjectAccentOption(rawValue: accentID) == nil {
-          Text(accentID.capitalized)
-            .tag(accentID)
+      VStack(alignment: .leading, spacing: 10) {
+        HStack {
+          Text("Color")
+          Spacer()
+          Text(selectedColorTitle)
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
-        ForEach(ProjectAccentOption.allCases) { option in
-          Label {
-            Text(option.title)
-          } icon: {
-            Image(systemName: "circle.fill")
-              .foregroundStyle(option.color)
+
+        HStack(spacing: 0) {
+          ForEach(ProjectAccentOption.allCases) { option in
+            let isSelected = accentID == option.rawValue
+            Button {
+              accentID = option.rawValue
+            } label: {
+              ZStack {
+                if isSelected {
+                  Circle()
+                    .strokeBorder(option.color, lineWidth: 2)
+                    .frame(width: 34, height: 34)
+                }
+                Circle()
+                  .fill(option.color)
+                  .frame(width: 26, height: 26)
+                if isSelected {
+                  Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.white)
+                }
+              }
+              .frame(maxWidth: .infinity, minHeight: 38)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(option.title)
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
           }
-          .tag(option.rawValue)
         }
       }
+      .padding(.vertical, 2)
     } header: {
       Text("Project")
         .foregroundStyle(theme.secondaryForegroundColor)
