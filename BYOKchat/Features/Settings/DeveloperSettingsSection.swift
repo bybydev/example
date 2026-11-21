@@ -53,6 +53,7 @@ struct BYOKDeveloperToolsView: View {
           BYOKOnboardingView {
             close()
           }
+          .appFoundationTheme(model.themeManager)
         },
       ],
       resetOnboarding: FoundationDeveloperAction(

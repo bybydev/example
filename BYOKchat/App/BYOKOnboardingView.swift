@@ -66,28 +66,32 @@ struct BYOKOnboardingView: View {
     GeometryReader { geometry in
       let compact = geometry.size.height < 470
 
-      VStack(spacing: compact ? 11 : 17) {
-        Spacer(minLength: compact ? 0 : 8)
+      ScrollView(.vertical, showsIndicators: false) {
+        VStack(spacing: compact ? 12 : 18) {
+          Spacer(minLength: compact ? 0 : 8)
 
-        demo(for: page, isSelected: context.isSelected)
-          .padding(11)
-          .frame(maxWidth: .infinity)
-          .background(
-            theme.surfaceColor.opacity(0.92),
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-          )
-          .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-              .strokeBorder(theme.borderColor)
-          }
-          .shadow(color: theme.appearance.shadow.color.opacity(0.42), radius: 16, y: 8)
-          .padding(.bottom, compact ? 10 : 16)
+          demo(for: page, isSelected: context.isSelected)
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: compact ? 236 : 268, alignment: .center)
+            .background(
+              theme.surfaceColor.opacity(0.92),
+              in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+            .overlay {
+              RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(theme.borderColor)
+            }
+            .shadow(color: theme.appearance.shadow.color.opacity(0.42), radius: 16, y: 8)
+            .padding(.bottom, compact ? 8 : 14)
 
-        copy(for: page, context: context, compact: compact)
+          copy(for: page, context: context, compact: compact)
 
-        Spacer(minLength: compact ? 0 : 6)
+          Spacer(minLength: compact ? 0 : 6)
+        }
+        .frame(width: geometry.size.width)
+        .frame(minHeight: geometry.size.height)
       }
-      .frame(width: geometry.size.width, height: geometry.size.height)
+      .scrollBounceBehavior(.basedOnSize)
     }
   }
 
@@ -113,7 +117,7 @@ struct BYOKOnboardingView: View {
     case .chat:
       onboardingCopy(
         title: "Chat with any model",
-        message: "Streaming answers, reasoning, files, and tools in one native workspace.",
+        message: "Streaming answers, reasoning, files, and per-chat controls in one native workspace.",
         context: context,
         compact: compact
       )
@@ -121,7 +125,7 @@ struct BYOKOnboardingView: View {
     case .providers:
       onboardingCopy(
         title: "Your providers. Your API keys.",
-        message: "Connect cloud models, private endpoints, and local servers directly.",
+        message: "Keys stay on-device in Keychain. Requests go straight to cloud and local models with no proxy.",
         context: context,
         compact: compact
       )
@@ -129,7 +133,7 @@ struct BYOKOnboardingView: View {
     case .workspace:
       onboardingCopy(
         title: "More than chat",
-        message: "Projects, tools, and usage insights in one focused workspace.",
+        message: "Projects, MCP tools with approval, and on-device usage insights in one focused app.",
         context: context,
         compact: compact
       )
@@ -144,21 +148,21 @@ struct BYOKOnboardingView: View {
   ) -> some View {
     VStack(spacing: compact ? 7 : 9) {
       Text(title)
-        .font(.system(size: compact ? 26 : 30, weight: .bold, design: .rounded))
+        .font(.system(size: compact ? 25 : 29, weight: .bold, design: .rounded))
         .foregroundStyle(context.primaryForeground)
         .multilineTextAlignment(.center)
-        .lineLimit(2)
-        .minimumScaleFactor(0.88)
+        .lineLimit(3)
+        .minimumScaleFactor(0.85)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
 
       Text(message)
-        .font(compact ? .caption : .subheadline)
+        .font(compact ? .footnote : .subheadline)
         .foregroundStyle(context.secondaryForeground)
         .multilineTextAlignment(.center)
-        .lineSpacing(compact ? 1 : 3)
-        .lineLimit(2)
+        .lineSpacing(compact ? 1.5 : 3)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: 330)
+        .frame(maxWidth: 340)
     }
     .frame(maxWidth: .infinity)
   }
