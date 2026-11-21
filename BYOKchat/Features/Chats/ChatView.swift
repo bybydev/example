@@ -82,6 +82,37 @@ struct ChatScrollToBottomRequest: Equatable {
   var animated = false
 }
 
+/// Full-frame loading placeholder that waits briefly before showing a spinner
+/// so fast local shard reads (<150ms) never flash a spinner, while slow cold
+/// opens still present clear centered feedback.
+private struct DelayedChatLoadingView: View {
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var showSpinner = false
+
+  var body: some View {
+    ZStack {
+      theme.backgroundColor.ignoresSafeArea()
+      if showSpinner {
+        ProgressView("Loading chat…")
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .transition(.opacity)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task {
+      do {
+        try await Task.sleep(for: .milliseconds(150))
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      withAnimation(.easeOut(duration: 0.15)) {
+        showSpinner = true
+      }
+    }
+  }
+}
+
 struct ChatView: View {
   /// Identity of the backing conversation. Only meaningful for `.existing`;
   /// fresh mode never touches the store under this ID.
@@ -137,6 +168,7 @@ struct ChatView: View {
   @State var programmaticScrollGeneration = 0
   @State var showJumpToLatest = false
   @State var hasCompletedInitialScroll = false
+  @State var latestTimelineGeometry: ChatTimelineGeometry?
   @State var scrollToBottomRequest = ChatScrollToBottomRequest()
   @State var markdownDocument: MarkdownExportDocument?
   @State var showMarkdownExporter = false
@@ -386,7 +418,7 @@ struct ChatView: View {
           .tint(theme.accentColor)
         }
       } else if chats.hasConversation(conversationID) {
-        ProgressView("Loading chat…")
+        DelayedChatLoadingView()
       } else {
         ContentUnavailableView("Conversation Missing", systemImage: "exclamationmark.bubble")
       }

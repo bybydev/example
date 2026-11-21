@@ -3,10 +3,20 @@ import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
-private struct ChatTimelineGeometry: Equatable {
+nonisolated struct ChatTimelineGeometry: Equatable, Sendable {
   let contentHeight: CGFloat
   let containerHeight: CGFloat
   let needsBottomPin: Bool
+
+  static func shouldContinueBottomSettle(
+    geometry: ChatTimelineGeometry?,
+    previousContentHeight: CGFloat,
+    isNearBottom: Bool
+  ) -> Bool {
+    guard let geometry else { return true }
+    if geometry.needsBottomPin || !isNearBottom { return true }
+    return geometry.contentHeight > previousContentHeight + 1
+  }
 }
 
 extension ChatView {
@@ -99,94 +109,89 @@ extension ChatView {
     let canMutateConversation = configurationIssue(conversation) == nil && chats.canSend(conversation.id)
     return ScrollViewReader { proxy in
       ScrollView {
-        VStack(spacing: 0) {
-          LazyVStack(spacing: 24) {
-            if let issue = configurationIssue(conversation) {
-              RepairBanner(message: issue) { showTargetSettings = true }
-            }
+        LazyVStack(spacing: 24) {
+          if let issue = configurationIssue(conversation) {
+            RepairBanner(message: issue) { showTargetSettings = true }
+          }
 
-            if conversation.lastContextOmittedMessageCount > 0 {
-              Label(
-                "\(conversation.lastContextOmittedMessageCount) earlier messages were omitted from the latest request.",
-                systemImage: "text.badge.minus"
+          if conversation.lastContextOmittedMessageCount > 0 {
+            Label(
+              "\(conversation.lastContextOmittedMessageCount) earlier messages were omitted from the latest request.",
+              systemImage: "text.badge.minus"
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+
+          ForEach(conversation.messages) { stored in
+            let displayed = chats.displayMessage(stored)
+            let isLatest = stored.id == latestAssistantID
+            VStack(alignment: .leading, spacing: 10) {
+              ChatMessageView(
+                message: displayed,
+                accountLabel: accountLabel(for: stored),
+                failureContext: failureContextLabel(for: stored),
+                canEdit: stored.role == .user
+                  && !chats.isGenerating(conversationID)
+                  && canMutateConversation,
+                isLatestAssistant: isLatest,
+                canRegenerate: isLatest
+                  && !chats.isGenerating(conversationID)
+                  && canMutateConversation,
+                conversationID: conversationID,
+                library: library,
+                onLibraryError: handleLibraryError,
+                loadThumbnail: chats.attachmentThumbnail,
+                onOpenAttachment: openAttachment,
+                edit: {
+                  editText = stored.content
+                  editTarget = stored
+                },
+                regenerate: regenerate,
+                copy: { UIPasteboard.general.string = displayed.content }
               )
-              .font(.system(size: 12))
-              .foregroundStyle(theme.secondaryForegroundColor)
-              .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            ForEach(conversation.messages) { stored in
-                let displayed = chats.displayMessage(stored)
-                let isLatest = stored.id == latestAssistantID
-                VStack(alignment: .leading, spacing: 10) {
-                  ChatMessageView(
-                    message: displayed,
-                    accountLabel: accountLabel(for: stored),
-                    failureContext: failureContextLabel(for: stored),
-                    canEdit: stored.role == .user
-                      && !chats.isGenerating(conversationID)
-                      && canMutateConversation,
-                    isLatestAssistant: isLatest,
-                    canRegenerate: isLatest
-                      && !chats.isGenerating(conversationID)
-                      && canMutateConversation,
-                    conversationID: conversationID,
-                    library: library,
-                    onLibraryError: handleLibraryError,
-                    loadThumbnail: chats.attachmentThumbnail,
-                    onOpenAttachment: openAttachment,
-                    edit: {
-                      editText = stored.content
-                      editTarget = stored
-                    },
-                    regenerate: regenerate,
-                    copy: { UIPasteboard.general.string = displayed.content }
+              if stored.role == .assistant,
+                let rounds = displayed.toolRounds,
+                !rounds.isEmpty
+              {
+                ForEach(rounds) { round in
+                  ChatToolRoundView(
+                    round: round,
+                    displayName: { mcp.toolDisplayName($0) }
                   )
-
-                  if stored.role == .assistant,
-                    let rounds = displayed.toolRounds,
-                    !rounds.isEmpty
-                  {
-                    ForEach(rounds) { round in
-                      ChatToolRoundView(
-                        round: round,
-                        displayName: { mcp.toolDisplayName($0) }
-                      )
-                    }
-                  }
-                }
-                .id(stored.id)
-              }
-
-            let approvals = mcp.pendingApprovals(for: conversationID)
-            let approvalCallIDs = Set(approvals.map(\.callID))
-            ForEach(approvals) { request in
-              MCPToolApprovalCard(request: request) { decision in
-                Task { @MainActor in
-                  await mcp.resolveApproval(request.id, decision: decision)
                 }
               }
             }
+            .id(stored.id)
+          }
 
-            ForEach(mcp.pendingElicitations(for: conversationID)) { request in
-              MCPElicitationCard(request: request) { decision in
-                Task { @MainActor in
-                  await mcp.resolveElicitation(request.id, decision: decision)
-                }
+          let approvals = mcp.pendingApprovals(for: conversationID)
+          let approvalCallIDs = Set(approvals.map(\.callID))
+          ForEach(approvals) { request in
+            MCPToolApprovalCard(request: request) { decision in
+              Task { @MainActor in
+                await mcp.resolveApproval(request.id, decision: decision)
               }
-            }
-
-            ForEach(chats.activeToolCalls(for: conversationID)) { call in
-              MCPToolRunningCard(
-                call: call,
-                displayName: mcp.toolDisplayName(call.name),
-                isWaitingForApproval: approvalCallIDs.contains(call.id)
-              )
             }
           }
-          .padding(.horizontal, 20)
-          .padding(.top, 14)
-          .padding(.bottom, 18)
+
+          ForEach(mcp.pendingElicitations(for: conversationID)) { request in
+            MCPElicitationCard(request: request) { decision in
+              Task { @MainActor in
+                await mcp.resolveElicitation(request.id, decision: decision)
+              }
+            }
+          }
+
+          ForEach(chats.activeToolCalls(for: conversationID)) { call in
+            MCPToolRunningCard(
+              call: call,
+              displayName: mcp.toolDisplayName(call.name),
+              isWaitingForApproval: approvalCallIDs.contains(call.id)
+            )
+          }
 
           Color.clear
             .frame(height: 1)
@@ -202,11 +207,14 @@ extension ChatView {
               }
             }
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
         .contentShape(Rectangle())
         .onTapGesture {
           dismissKeyboard()
         }
       }
+      .opacity(hasCompletedInitialScroll ? 1 : 0)
       .defaultScrollAnchor(
         initialScrollMessageID == nil ? UnitPoint.bottom : nil,
         for: .initialOffset
@@ -215,6 +223,9 @@ extension ChatView {
       .onScrollPhaseChange { _, newPhase in
         switch newPhase {
         case .tracking, .interacting, .decelerating:
+          if !hasCompletedInitialScroll {
+            hasCompletedInitialScroll = true
+          }
           isProgrammaticScroll = false
           isAnimatedProgrammaticScroll = false
           isUserDraggingTimeline = true
@@ -258,6 +269,7 @@ extension ChatView {
           needsBottomPin: distanceFromBottom > 2
         )
       } action: { oldGeometry, newGeometry in
+        latestTimelineGeometry = newGeometry
         guard hasCompletedInitialScroll,
           followsLatest,
           !isUserDraggingTimeline,
@@ -294,15 +306,56 @@ extension ChatView {
         followsLatest = initialScrollMessageID == nil
         showJumpToLatest = false
 
-        guard initialScrollMessageID != nil else {
-          await Task.yield()
-          hasCompletedInitialScroll = true
+        isProgrammaticScroll = true
+        await Task.yield()
+        guard !Task.isCancelled else {
+          isProgrammaticScroll = false
           return
         }
 
-        isProgrammaticScroll = true
-        await Task.yield()
-        scrollToInitialTarget(proxy)
+        if initialScrollMessageID == nil {
+          if !isUserDraggingTimeline {
+            proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+          }
+          var previousContentHeight = latestTimelineGeometry?.contentHeight ?? 0
+          // Give LazyVStack + MarkdownUI up to a few brief layout frames to
+          // realize and measure tall bottom rows, stopping early once pinned.
+          for _ in 0..<3 {
+            do {
+              try await Task.sleep(for: .milliseconds(32))
+            } catch {
+              isProgrammaticScroll = false
+              return
+            }
+            guard !Task.isCancelled else {
+              isProgrammaticScroll = false
+              return
+            }
+            if isUserDraggingTimeline { break }
+            let geometry = latestTimelineGeometry
+            let shouldContinue = ChatTimelineGeometry.shouldContinueBottomSettle(
+              geometry: geometry,
+              previousContentHeight: previousContentHeight,
+              isNearBottom: isNearBottom
+            )
+            previousContentHeight = geometry?.contentHeight ?? previousContentHeight
+            if shouldContinue {
+              proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+            } else {
+              break
+            }
+          }
+          await Task.yield()
+          isProgrammaticScroll = false
+          withAnimation(.easeOut(duration: 0.14)) {
+            hasCompletedInitialScroll = true
+          }
+          return
+        }
+
+        if !isUserDraggingTimeline {
+          scrollToInitialTarget(proxy)
+        }
 
         do {
           try await Task.sleep(for: .milliseconds(32))
@@ -314,10 +367,14 @@ extension ChatView {
           isProgrammaticScroll = false
           return
         }
-        scrollToInitialTarget(proxy)
+        if !isUserDraggingTimeline {
+          scrollToInitialTarget(proxy)
+        }
         await Task.yield()
         isProgrammaticScroll = false
-        hasCompletedInitialScroll = true
+        withAnimation(.easeOut(duration: 0.14)) {
+          hasCompletedInitialScroll = true
+        }
         showJumpToLatest = !isNearBottom
       }
     }

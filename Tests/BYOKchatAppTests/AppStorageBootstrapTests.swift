@@ -565,6 +565,45 @@ struct SidebarHelperTests {
     #expect(sections[5].conversations.map(\.id.rawValue) == ["october"])
     #expect(sections[6].conversations.map(\.id.rawValue) == ["september"])
   }
+
+  @Test("Initial bottom settle keeps adjusting until geometry is pinned and height stabilizes")
+  func initialBottomSettlePredicate() {
+    #expect(
+      ChatTimelineGeometry.shouldContinueBottomSettle(
+        geometry: nil,
+        previousContentHeight: 0,
+        isNearBottom: true
+      )
+    )
+    #expect(
+      ChatTimelineGeometry.shouldContinueBottomSettle(
+        geometry: ChatTimelineGeometry(contentHeight: 2_400, containerHeight: 700, needsBottomPin: true),
+        previousContentHeight: 2_400,
+        isNearBottom: true
+      )
+    )
+    #expect(
+      ChatTimelineGeometry.shouldContinueBottomSettle(
+        geometry: ChatTimelineGeometry(contentHeight: 2_400, containerHeight: 700, needsBottomPin: false),
+        previousContentHeight: 2_400,
+        isNearBottom: false
+      )
+    )
+    #expect(
+      ChatTimelineGeometry.shouldContinueBottomSettle(
+        geometry: ChatTimelineGeometry(contentHeight: 4_200, containerHeight: 700, needsBottomPin: false),
+        previousContentHeight: 2_400,
+        isNearBottom: true
+      )
+    )
+    #expect(
+      !ChatTimelineGeometry.shouldContinueBottomSettle(
+        geometry: ChatTimelineGeometry(contentHeight: 4_200, containerHeight: 700, needsBottomPin: false),
+        previousContentHeight: 4_200,
+        isNearBottom: true
+      )
+    )
+  }
 }
 
 private actor PartiallyFailingCredentialVault: CredentialVault {

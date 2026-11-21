@@ -337,7 +337,10 @@ final class ChatManagementModel {
       do {
         self.hydratedConversations[id] = try await self.conversationStore.conversation(id: id)
         self.conversationLoadFailures.remove(id)
-        try await self.reloadSnapshot()
+        let refreshedSummaries = await self.conversationStore.conversationSummaries()
+        if self.conversations != refreshedSummaries {
+          try await self.reloadSnapshot()
+        }
       } catch {
         BYOKAppAnalytics.reportError("conversation_store_failed", component: "chat_storage")
         self.conversationLoadFailures.insert(id)
