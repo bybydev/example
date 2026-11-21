@@ -2,135 +2,7 @@ import AppFoundation
 
 @MainActor
 enum BYOKchatThemes {
-  // MARK: - Light
-
-  /// Warm editorial paper: soft cream canvas, sepia ink, restrained terracotta accent.
-  static let paper = AppTheme(
-    id: "paper",
-    title: "Paper",
-    symbolName: "doc.text",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0xF7F3EA),
-      gradientStart: ThemeColor(hex: 0xFFFDF8),
-      gradientEnd: ThemeColor(hex: 0xE9DFC9),
-      accent: ThemeColor(hex: 0x95552F),
-      primaryForeground: ThemeColor(hex: 0x27231F),
-      secondaryForeground: ThemeColor(hex: 0x6B6259),
-      surface: ThemeColor(hex: 0xEFE7D8),
-      elevatedSurface: ThemeColor(hex: 0xFFFDF8),
-      border: ThemeColor(hex: 0xCFC1AE),
-      shadow: ThemeColor(hex: 0x5E4D3B, alpha: 0.16),
-      preferredColorScheme: .light
-    )
-  )
-
-  /// GitHub's familiar clean light hierarchy: white canvas, cool gray surfaces, blue actions.
-  static let githubLight = AppTheme(
-    id: "github-light",
-    title: "GitHub Light",
-    symbolName: "chevron.left.forwardslash.chevron.right",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0xFFFFFF),
-      gradientStart: ThemeColor(hex: 0xFFFFFF),
-      gradientEnd: ThemeColor(hex: 0xF0F3F6),
-      accent: ThemeColor(hex: 0x0969DA),
-      primaryForeground: ThemeColor(hex: 0x1F2328),
-      secondaryForeground: ThemeColor(hex: 0x59636E),
-      surface: ThemeColor(hex: 0xF6F8FA),
-      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
-      border: ThemeColor(hex: 0xD0D7DE),
-      shadow: ThemeColor(hex: 0x1F2328, alpha: 0.12),
-      preferredColorScheme: .light
-    )
-  )
-
-  /// Soft blush without sacrificing text contrast; rose is reserved for emphasis and actions.
-  static let sakura = AppTheme(
-    id: "sakura",
-    title: "Sakura",
-    symbolName: "camera.macro",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0xFFF7F9),
-      gradientStart: ThemeColor(hex: 0xFFFDFE),
-      gradientEnd: ThemeColor(hex: 0xF7E3E9),
-      accent: ThemeColor(hex: 0xB4235A),
-      primaryForeground: ThemeColor(hex: 0x33242A),
-      secondaryForeground: ThemeColor(hex: 0x746068),
-      surface: ThemeColor(hex: 0xFCEBF0),
-      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
-      border: ThemeColor(hex: 0xE8C8D3),
-      shadow: ThemeColor(hex: 0x6A3346, alpha: 0.14),
-      preferredColorScheme: .light
-    )
-  )
-
-  /// Calm botanical palette with a clearly green surface hierarchy rather than a neutral recolor.
-  static let sage = AppTheme(
-    id: "sage",
-    title: "Sage",
-    symbolName: "leaf.fill",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0xF3F7F2),
-      gradientStart: ThemeColor(hex: 0xFBFDFB),
-      gradientEnd: ThemeColor(hex: 0xDFEADF),
-      accent: ThemeColor(hex: 0x2F6F4E),
-      primaryForeground: ThemeColor(hex: 0x1F2B22),
-      secondaryForeground: ThemeColor(hex: 0x5F6F64),
-      surface: ThemeColor(hex: 0xE7F0E8),
-      elevatedSurface: ThemeColor(hex: 0xFBFDFB),
-      border: ThemeColor(hex: 0xC7D7CA),
-      shadow: ThemeColor(hex: 0x294232, alpha: 0.14),
-      preferredColorScheme: .light
-    )
-  )
-
-  /// Solarized-inspired parchment and blue, adjusted darker where needed for accessible small text.
-  static let solarizedLight = AppTheme(
-    id: "solarized-light",
-    title: "Solarized Light",
-    symbolName: "sun.max.fill",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0xFDF6E3),
-      gradientStart: ThemeColor(hex: 0xFFFDF1),
-      gradientEnd: ThemeColor(hex: 0xE9E2C8),
-      accent: ThemeColor(hex: 0x005F87),
-      primaryForeground: ThemeColor(hex: 0x3C4F55),
-      secondaryForeground: ThemeColor(hex: 0x52666D),
-      surface: ThemeColor(hex: 0xEEE8D5),
-      elevatedSurface: ThemeColor(hex: 0xFFFDF4),
-      border: ThemeColor(hex: 0xD6CEB8),
-      shadow: ThemeColor(hex: 0x586E75, alpha: 0.15),
-      preferredColorScheme: .light
-    )
-  )
-
   // MARK: - Dark
-
-  /// GitHub Dark Dimmed: lower glare than true black while preserving GitHub's blue/gray hierarchy.
-  static let githubDarkDimmed = AppTheme(
-    id: "github-dark-dimmed",
-    title: "GitHub Dark Dimmed",
-    symbolName: "chevron.left.forwardslash.chevron.right",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0x22272E),
-      gradientStart: ThemeColor(hex: 0x2D333B),
-      gradientEnd: ThemeColor(hex: 0x1C2128),
-      accent: ThemeColor(hex: 0x539BF5),
-      primaryForeground: ThemeColor(hex: 0xADBAC7),
-      secondaryForeground: ThemeColor(hex: 0x909DA8),
-      surface: ThemeColor(hex: 0x2D333B),
-      elevatedSurface: ThemeColor(hex: 0x373E47),
-      border: ThemeColor(hex: 0x444C56),
-      shadow: ThemeColor.black.withAlpha(0.34),
-      preferredColorScheme: .dark
-    )
-  )
 
   /// Deep navy workspace with luminous blue actions and cool, high-contrast typography.
   static let midnight = AppTheme(
@@ -149,27 +21,6 @@ enum BYOKchatThemes {
       elevatedSurface: ThemeColor(hex: 0x16243A),
       border: ThemeColor(hex: 0x263753),
       shadow: ThemeColor.black.withAlpha(0.46),
-      preferredColorScheme: .dark
-    )
-  )
-
-  /// Nordic slate with icy cyan accents; noticeably softer and cooler than GitHub Dimmed.
-  static let nordic = AppTheme(
-    id: "nordic",
-    title: "Nordic",
-    symbolName: "snowflake",
-    access: .pro,
-    appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0x2E3440),
-      gradientStart: ThemeColor(hex: 0x3B4252),
-      gradientEnd: ThemeColor(hex: 0x2E3440),
-      accent: ThemeColor(hex: 0x88C0D0),
-      primaryForeground: ThemeColor(hex: 0xECEFF4),
-      secondaryForeground: ThemeColor(hex: 0xD8DEE9),
-      surface: ThemeColor(hex: 0x3B4252),
-      elevatedSurface: ThemeColor(hex: 0x434C5E),
-      border: ThemeColor(hex: 0x4C566A),
-      shadow: ThemeColor.black.withAlpha(0.32),
       preferredColorScheme: .dark
     )
   )
@@ -195,39 +46,188 @@ enum BYOKchatThemes {
     )
   )
 
-  /// Warm charcoal and copper for a dark theme that does not read blue, gray, or purple.
-  static let ember = AppTheme(
-    id: "ember",
-    title: "Ember",
-    symbolName: "flame.fill",
+  /// Sleek OLED graphite-black with a subtle slate sheen and electric indigo accent.
+  static let obsidian = AppTheme(
+    id: "obsidian",
+    title: "Obsidian",
+    symbolName: "diamond.fill",
     access: .pro,
     appearance: ThemeAppearance(
-      background: ThemeColor(hex: 0x1B1513),
-      gradientStart: ThemeColor(hex: 0x352A26),
-      gradientEnd: ThemeColor(hex: 0x1B1513),
-      accent: ThemeColor(hex: 0xE07A45),
-      primaryForeground: ThemeColor(hex: 0xF5EDE8),
-      secondaryForeground: ThemeColor(hex: 0xBDA9A0),
-      surface: ThemeColor(hex: 0x2A211E),
-      elevatedSurface: ThemeColor(hex: 0x352A26),
-      border: ThemeColor(hex: 0x503C34),
+      background: ThemeColor(hex: 0x0A0C10),
+      gradientStart: ThemeColor(hex: 0x191E29),
+      gradientEnd: ThemeColor(hex: 0x0A0C10),
+      accent: ThemeColor(hex: 0x7C8CFF),
+      primaryForeground: ThemeColor(hex: 0xF1F4F9),
+      secondaryForeground: ThemeColor(hex: 0x96A0B2),
+      surface: ThemeColor(hex: 0x12151D),
+      elevatedSurface: ThemeColor(hex: 0x1A1F2B),
+      border: ThemeColor(hex: 0x2A3242),
+      shadow: ThemeColor.black.withAlpha(0.48),
+      preferredColorScheme: .dark
+    )
+  )
+
+  /// Deep pine-black canvas with crisp emerald surfaces and luminous mint-emerald actions.
+  static let evergreen = AppTheme(
+    id: "evergreen",
+    title: "Evergreen",
+    symbolName: "leaf.fill",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0x081412),
+      gradientStart: ThemeColor(hex: 0x122D27),
+      gradientEnd: ThemeColor(hex: 0x081412),
+      accent: ThemeColor(hex: 0x34D399),
+      primaryForeground: ThemeColor(hex: 0xE8F5F0),
+      secondaryForeground: ThemeColor(hex: 0x8FB2A6),
+      surface: ThemeColor(hex: 0x0F1F1C),
+      elevatedSurface: ThemeColor(hex: 0x162C27),
+      border: ThemeColor(hex: 0x24443D),
+      shadow: ThemeColor.black.withAlpha(0.46),
+      preferredColorScheme: .dark
+    )
+  )
+
+  /// Deep wine-charcoal dusk palette with crisp warm ivory ink and luminous rose-coral actions.
+  static let velvet = AppTheme(
+    id: "velvet",
+    title: "Velvet",
+    symbolName: "sun.horizon.fill",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0x170E14),
+      gradientStart: ThemeColor(hex: 0x331B29),
+      gradientEnd: ThemeColor(hex: 0x170E14),
+      accent: ThemeColor(hex: 0xFB7185),
+      primaryForeground: ThemeColor(hex: 0xFBF0F4),
+      secondaryForeground: ThemeColor(hex: 0xC49EAE),
+      surface: ThemeColor(hex: 0x23151E),
+      elevatedSurface: ThemeColor(hex: 0x2F1C28),
+      border: ThemeColor(hex: 0x4D2F41),
       shadow: ThemeColor.black.withAlpha(0.44),
       preferredColorScheme: .dark
+    )
+  )
+
+  // MARK: - Light
+
+  /// Crisp Apple-native cool light workspace: airy mist canvas, bright white cards, cobalt actions.
+  static let daylight = AppTheme(
+    id: "daylight",
+    title: "Daylight",
+    symbolName: "sun.max.fill",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0xECF1F8),
+      gradientStart: ThemeColor(hex: 0xF3F6FB),
+      gradientEnd: ThemeColor(hex: 0xE3EBF5),
+      accent: ThemeColor(hex: 0x2563EB),
+      primaryForeground: ThemeColor(hex: 0x141B29),
+      secondaryForeground: ThemeColor(hex: 0x57657A),
+      surface: ThemeColor(hex: 0xFAFCFF),
+      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
+      border: ThemeColor(hex: 0xD2DCEB),
+      shadow: ThemeColor(hex: 0x14213D, alpha: 0.10),
+      preferredColorScheme: .light
+    )
+  )
+
+  /// Warm editorial linen canvas with crisp ivory cards, deep espresso ink, and warm terracotta accents.
+  static let paper = AppTheme(
+    id: "paper",
+    title: "Paper",
+    symbolName: "doc.text",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0xF0EADF),
+      gradientStart: ThemeColor(hex: 0xF6F2EA),
+      gradientEnd: ThemeColor(hex: 0xE7DEC9),
+      accent: ThemeColor(hex: 0xC2592A),
+      primaryForeground: ThemeColor(hex: 0x221D18),
+      secondaryForeground: ThemeColor(hex: 0x6A5F54),
+      surface: ThemeColor(hex: 0xFCF9F3),
+      elevatedSurface: ThemeColor(hex: 0xFFFDF9),
+      border: ThemeColor(hex: 0xD8CCBA),
+      shadow: ThemeColor(hex: 0x4A3B2B, alpha: 0.11),
+      preferredColorScheme: .light
+    )
+  )
+
+  /// Light counterpart to Aubergine: airy lilac-mist canvas, crisp pearl cards, vivid violet accents.
+  static let iris = AppTheme(
+    id: "iris",
+    title: "Iris",
+    symbolName: "wand.and.stars",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0xEFEAF7),
+      gradientStart: ThemeColor(hex: 0xF5F1FB),
+      gradientEnd: ThemeColor(hex: 0xE6DCF4),
+      accent: ThemeColor(hex: 0x7C3AED),
+      primaryForeground: ThemeColor(hex: 0x1F182B),
+      secondaryForeground: ThemeColor(hex: 0x665B7A),
+      surface: ThemeColor(hex: 0xFBF9FF),
+      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
+      border: ThemeColor(hex: 0xD9CEE9),
+      shadow: ThemeColor(hex: 0x3B2667, alpha: 0.11),
+      preferredColorScheme: .light
+    )
+  )
+
+  /// Fresh botanical mist canvas with crisp white cards, forest ink, and clean emerald accents.
+  static let sage = AppTheme(
+    id: "sage",
+    title: "Sage",
+    symbolName: "leaf.fill",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0xEAF2EC),
+      gradientStart: ThemeColor(hex: 0xF2F7F3),
+      gradientEnd: ThemeColor(hex: 0xDFEBE3),
+      accent: ThemeColor(hex: 0x0F8A5F),
+      primaryForeground: ThemeColor(hex: 0x16251D),
+      secondaryForeground: ThemeColor(hex: 0x526A5C),
+      surface: ThemeColor(hex: 0xF9FCFA),
+      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
+      border: ThemeColor(hex: 0xC9DDD0),
+      shadow: ThemeColor(hex: 0x1A3A2A, alpha: 0.10),
+      preferredColorScheme: .light
+    )
+  )
+
+  /// Refined blush-porcelain canvas with crisp white cards and vivid editorial rose accents.
+  static let sakura = AppTheme(
+    id: "sakura",
+    title: "Sakura",
+    symbolName: "camera.macro",
+    access: .pro,
+    appearance: ThemeAppearance(
+      background: ThemeColor(hex: 0xF6ECF0),
+      gradientStart: ThemeColor(hex: 0xFAF3F6),
+      gradientEnd: ThemeColor(hex: 0xEFE0E6),
+      accent: ThemeColor(hex: 0xD6336C),
+      primaryForeground: ThemeColor(hex: 0x291A21),
+      secondaryForeground: ThemeColor(hex: 0x745B66),
+      surface: ThemeColor(hex: 0xFFF9FB),
+      elevatedSurface: ThemeColor(hex: 0xFFFFFF),
+      border: ThemeColor(hex: 0xE6CED7),
+      shadow: ThemeColor(hex: 0x5C253A, alpha: 0.10),
+      preferredColorScheme: .light
     )
   )
 
   static let catalog = ThemeCatalog(
     themes: [
       midnight,
-      paper,
-      githubLight,
-      sakura,
-      sage,
-      solarizedLight,
-      githubDarkDimmed,
-      nordic,
       aubergine,
-      ember,
+      obsidian,
+      evergreen,
+      velvet,
+      daylight,
+      paper,
+      iris,
+      sage,
+      sakura,
     ],
     fallbackThemeID: midnight.id
   )
