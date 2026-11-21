@@ -28,6 +28,15 @@ struct AppRootView: View {
     }
     let source: Source
     let message: String
+
+    var title: String {
+      switch source {
+      case .chat: "Chat Error"
+      case .provider: "Connection Error"
+      case .mcp: "MCP Error"
+      case .project: "Project Error"
+      }
+    }
   }
 
   private struct ChatPresentationID: Hashable {
@@ -243,7 +252,7 @@ struct AppRootView: View {
     .onChange(of: model.projects.errorForPresenter()) { _, _ in synchronizeRootErrorPresentation() }
     .onChange(of: model.mcp.shouldPresentError()) { _, _ in synchronizeRootErrorPresentation() }
     .alert(
-      "BYOKchat",
+      presentedRootError?.title ?? "Error",
       isPresented: Binding(
         get: { presentedRootError != nil },
         set: { presented in

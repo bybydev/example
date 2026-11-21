@@ -597,14 +597,29 @@ struct ChatView: View {
       }
     }
     .sheet(item: $editTarget) { message in
+      let blockedReason: String? = {
+        guard let currentConversation = conversation else {
+          return "This chat is unavailable right now."
+        }
+        if let issue = configurationIssue(currentConversation) {
+          return issue
+        }
+        if !chats.canSend(conversationID) {
+          return "Wait for the current response to finish before editing and resending."
+        }
+        return nil
+      }()
+
       MessageEditorSheet(
         original: message.content,
         text: $editText,
+        blockedReason: blockedReason,
         save: {
           guard let currentConversation = conversation,
             configurationIssue(currentConversation) == nil,
             chats.canSend(conversationID)
           else {
+            editTarget = nil
             chats.errorMessage = "Fix the chat configuration before editing and resending."
             return
           }
@@ -1103,21 +1118,27 @@ private struct ConversationToolsView: View {
           .foregroundStyle(theme.secondaryForegroundColor)
 
           if isGenerating {
-            Label(
-              "Wait for the current response to finish before changing tools.",
-              systemImage: "hourglass"
-            )
-            .font(.footnote)
-            .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "hourglass")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .padding(.top, 1)
+              Text("Wait for the current response to finish before changing tools.")
+                .font(.footnote)
+                .foregroundStyle(theme.primaryForegroundColor)
+            }
           }
 
           if modelDoesNotSupportTools {
-            Label(
-              "The current model does not support tools. Enabled tools will not be sent until you switch models.",
-              systemImage: "exclamationmark.triangle"
-            )
-            .font(.footnote)
-            .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .padding(.top, 1)
+              Text("The current model does not support tools. Enabled tools will not be sent until you switch models.")
+                .font(.footnote)
+                .foregroundStyle(theme.primaryForegroundColor)
+            }
           }
 
           if mcp.inheritsProjectTools(conversationID), let project {

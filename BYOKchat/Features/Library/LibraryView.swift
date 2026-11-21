@@ -1,5 +1,6 @@
 import AppFoundation
 import BYOKchatProviderCore
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -1129,6 +1130,17 @@ enum LibraryDateGrouper {
   }
 }
 
+enum LibraryPhotoWriteError: LocalizedError, Equatable, Sendable {
+  case permissionDenied
+
+  var errorDescription: String? {
+    switch self {
+    case .permissionDenied:
+      return "Photos access is denied. Allow BYOK Chat to add photos in Settings."
+    }
+  }
+}
+
 /// Retained across the UIKit completion callback so success is shown only
 /// after Photos finishes writing, and denied access/storage failures surface.
 @MainActor
@@ -1136,6 +1148,10 @@ final class LibraryPhotoWriter: NSObject {
   private var continuation: CheckedContinuation<Void, any Error>?
 
   static func save(_ image: UIImage) async throws {
+    let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    if status == .denied || status == .restricted {
+      throw LibraryPhotoWriteError.permissionDenied
+    }
     let writer = LibraryPhotoWriter()
     defer { withExtendedLifetime(writer) {} }
     try await writer.write(image)
@@ -1161,7 +1177,16 @@ final class LibraryPhotoWriter: NSObject {
     guard let continuation else { return }
     self.continuation = nil
     if let error {
-      continuation.resume(throwing: error)
+      let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+      if status == .denied
+        || status == .restricted
+        || (error.domain == PHPhotosErrorDomain
+          && error.code == PHPhotosError.accessUserDenied.rawValue)
+      {
+        continuation.resume(throwing: LibraryPhotoWriteError.permissionDenied)
+      } else {
+        continuation.resume(throwing: error)
+      }
     } else {
       continuation.resume()
     }

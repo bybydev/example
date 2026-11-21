@@ -427,14 +427,22 @@ struct MermaidAnswerView: View {
         .padding(14)
       } else if let parseError {
         VStack(alignment: .leading, spacing: 8) {
-          Label("Could not render this diagram", systemImage: "exclamationmark.triangle")
-            .font(.subheadline.weight(.semibold))
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .font(.subheadline)
+              .foregroundStyle(Color.red)
+            Text("Could not render this diagram")
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(theme.primaryForegroundColor)
+          }
           Text(parseError.localizedDescription)
             .font(.caption)
             .foregroundStyle(theme.secondaryForegroundColor)
+            .textSelection(.enabled)
           ScrollView(.horizontal) {
             Text(source)
               .font(.system(size: 13, design: .monospaced))
+              .foregroundStyle(theme.primaryForegroundColor)
               .textSelection(.enabled)
               .fixedSize(horizontal: true, vertical: true)
           }

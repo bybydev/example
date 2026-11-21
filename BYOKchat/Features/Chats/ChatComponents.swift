@@ -8,17 +8,50 @@ struct RepairBanner: View {
   let message: String
   let repair: () -> Void
 
+  @Environment(\.appFoundationTheme) private var theme
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Label(message, systemImage: "wrench.and.screwdriver")
-        .font(.callout)
-      Button("Repair Chat Configuration", action: repair)
-        .buttonStyle(.bordered)
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: "wrench.and.screwdriver.fill")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(Color.orange)
+          .frame(width: 32, height: 32)
+          .background(
+            Color.orange.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+          )
+          .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Chat configuration needs attention")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
+
+          Text(message)
+            .font(.footnote)
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      Button(action: repair) {
+        Label("Repair Chat Configuration", systemImage: "wrench.and.screwdriver")
+          .font(.subheadline.weight(.semibold))
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 3)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(theme.accentColor)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(14)
-    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
-    .accessibilityElement(children: .combine)
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(Color.orange.opacity(0.38), lineWidth: 0.85)
+    )
+    .accessibilityElement(children: .contain)
   }
 }
 
@@ -882,13 +915,31 @@ struct ChatMessageView: View {
     case .failed:
       failureFooter
     case .cancelled:
-      Label("Stopped", systemImage: "stop.circle")
-        .font(.system(size: 11))
-        .foregroundStyle(theme.secondaryForegroundColor)
+      HStack(spacing: 5) {
+        Image(systemName: "stop.circle.fill")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(theme.secondaryForegroundColor)
+        Text("Stopped")
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .padding(.horizontal, 9)
+      .padding(.vertical, 4)
+      .background(theme.surfaceColor, in: Capsule())
+      .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.6))
     case .interrupted:
-      Label("Interrupted", systemImage: "bolt.slash")
-        .font(.system(size: 11))
-        .foregroundStyle(.orange)
+      HStack(spacing: 5) {
+        Image(systemName: "bolt.slash.fill")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(Color.orange)
+        Text("Response interrupted")
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(theme.primaryForegroundColor)
+      }
+      .padding(.horizontal, 9)
+      .padding(.vertical, 4)
+      .background(theme.surfaceColor, in: Capsule())
+      .overlay(Capsule().stroke(Color.orange.opacity(0.38), lineWidth: 0.7))
     case .complete, .pending, .streaming:
       EmptyView()
     }
@@ -898,23 +949,26 @@ struct ChatMessageView: View {
   private var failureFooter: some View {
     let description = message.errorDescription ?? "Something went wrong. Try again."
 
-    HStack(alignment: .top, spacing: 8) {
-      Image(systemName: "exclamationmark.circle.fill")
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "xmark.octagon.fill")
         .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.orange)
-        .padding(.top, 1)
+        .foregroundStyle(Color.red)
+        .frame(width: 26, height: 26)
+        .background(Color.red.opacity(0.12), in: Circle())
+        .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 8) {
         if let failureContext, !failureContext.isEmpty {
           Text(failureContext)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.82))
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
 
         Text(description)
-          .font(.system(size: 13))
-          .foregroundStyle(theme.secondaryForegroundColor)
+          .font(.system(size: 13.5))
+          .foregroundStyle(theme.primaryForegroundColor)
           .fixedSize(horizontal: false, vertical: true)
+          .textSelection(.enabled)
 
         if isLatestAssistant || canRegenerate {
           Button(action: regenerate) {
@@ -923,7 +977,7 @@ struct ChatMessageView: View {
               .foregroundStyle(canRegenerate ? theme.accentColor : theme.secondaryForegroundColor)
               .padding(.horizontal, 12)
               .padding(.vertical, 7)
-              .background(theme.surfaceColor, in: Capsule())
+              .background(theme.elevatedSurfaceColor, in: Capsule())
               .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.75))
               .opacity(canRegenerate ? 1 : 0.45)
           }
@@ -934,13 +988,19 @@ struct ChatMessageView: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.vertical, 2)
+    .padding(12)
+    .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(Color.red.opacity(0.32), lineWidth: 0.75)
+    )
   }
 }
 
 struct MessageEditorSheet: View {
   let original: String
   @Binding var text: String
+  var blockedReason: String? = nil
   let save: () -> Void
   let cancel: () -> Void
 
@@ -950,6 +1010,22 @@ struct MessageEditorSheet: View {
   var body: some View {
     NavigationStack {
       Form {
+        if let blockedReason {
+          Section {
+            HStack(alignment: .top, spacing: 10) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline)
+                .foregroundStyle(Color.orange)
+                .padding(.top, 1)
+              Text(blockedReason)
+                .font(.footnote)
+                .foregroundStyle(theme.primaryForegroundColor)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
+
         Section {
           TextEditor(text: $text)
             .font(.body)
@@ -975,7 +1051,10 @@ struct MessageEditorSheet: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Save & Resend", action: save)
-            .disabled(!ChatViewSupport.canSaveEditedMessage(draft: text, original: original))
+            .disabled(
+              blockedReason != nil
+                || !ChatViewSupport.canSaveEditedMessage(draft: text, original: original)
+            )
         }
       }
       .onAppear {

@@ -92,9 +92,11 @@ struct LibraryImageViewerView: View {
   var onSaveToPhotos: (() async throws -> Void)? = nil
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.openURL) private var openURL
   @State private var isSavingToPhotos = false
   @State private var didSaveToPhotos = false
   @State private var saveErrorMessage: String?
+  @State private var isPhotoPermissionDenied = false
 
   var body: some View {
     NavigationStack {
@@ -160,10 +162,27 @@ struct LibraryImageViewerView: View {
         "Could Not Save Image",
         isPresented: Binding(
           get: { saveErrorMessage != nil },
-          set: { if !$0 { saveErrorMessage = nil } }
+          set: {
+            if !$0 {
+              saveErrorMessage = nil
+              isPhotoPermissionDenied = false
+            }
+          }
         )
       ) {
-        Button("OK") { saveErrorMessage = nil }
+        if isPhotoPermissionDenied,
+          let settingsURL = URL(string: UIApplication.openSettingsURLString)
+        {
+          Button("Open Settings") {
+            saveErrorMessage = nil
+            isPhotoPermissionDenied = false
+            openURL(settingsURL)
+          }
+        }
+        Button("OK", role: .cancel) {
+          saveErrorMessage = nil
+          isPhotoPermissionDenied = false
+        }
       } message: {
         Text(saveErrorMessage ?? "Unknown error")
       }
@@ -184,6 +203,7 @@ struct LibraryImageViewerView: View {
       }
     } catch {
       isSavingToPhotos = false
+      isPhotoPermissionDenied = (error as? LibraryPhotoWriteError) == .permissionDenied
       saveErrorMessage = error.localizedDescription
     }
   }

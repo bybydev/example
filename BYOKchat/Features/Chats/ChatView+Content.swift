@@ -194,13 +194,28 @@ extension ChatView {
         }
 
         if conversation.lastContextOmittedMessageCount > 0 {
-          Label(
-            "\(conversation.lastContextOmittedMessageCount) earlier messages were omitted from the latest request.",
-            systemImage: "text.badge.minus"
-          )
-          .font(.system(size: 12))
-          .foregroundStyle(theme.secondaryForegroundColor)
+          let omitted = conversation.lastContextOmittedMessageCount
+          HStack(spacing: 8) {
+            Image(systemName: "text.badge.minus")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(Color.orange)
+              .accessibilityHidden(true)
+
+            Text(
+              "\(omitted) earlier \(omitted == 1 ? "message was" : "messages were") omitted from the latest request."
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .fixedSize(horizontal: false, vertical: true)
+          }
           .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 9)
+          .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .stroke(theme.borderColor, lineWidth: 0.7)
+          )
           .chatTimelineRow()
         }
 
@@ -701,19 +716,30 @@ private struct MCPToolApprovalCard: View {
   @State private var isResolving = false
   @Environment(\.appFoundationTheme) private var theme
 
+  private var isDestructive: Bool {
+    request.destructiveHint == true
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .top, spacing: 10) {
-        Image(systemName: request.destructiveHint == true ? "exclamationmark.shield" : "hand.raised")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(request.destructiveHint == true ? Color.orange : Color.primary)
-          .frame(width: 28, height: 28)
+        Image(systemName: isDestructive ? "exclamationmark.shield.fill" : "hand.raised.fill")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(isDestructive ? Color.orange : theme.accentColor)
+          .frame(width: 34, height: 34)
+          .background(
+            (isDestructive ? Color.orange : theme.accentColor).opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+          )
+          .accessibilityHidden(true)
 
         VStack(alignment: .leading, spacing: 3) {
           Text("Allow tool call?")
             .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
           Text("\(request.serverName) · \(request.displayName)")
             .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(theme.primaryForegroundColor)
           Text(request.toolDescription)
             .font(.system(size: 12))
             .foregroundStyle(theme.secondaryForegroundColor)
@@ -721,55 +747,92 @@ private struct MCPToolApprovalCard: View {
         }
       }
 
-      if request.readOnlyHint == true || request.destructiveHint == true {
+      if request.readOnlyHint == true || isDestructive {
         HStack(spacing: 7) {
           if request.readOnlyHint == true {
             Label("Read-only", systemImage: "eye")
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(theme.elevatedSurfaceColor, in: Capsule())
+              .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.6))
           }
-          if request.destructiveHint == true {
-            Label("Destructive", systemImage: "exclamationmark.triangle")
-              .foregroundStyle(.orange)
+          if isDestructive {
+            HStack(spacing: 4) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.orange)
+              Text("Destructive")
+                .foregroundStyle(theme.primaryForegroundColor)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.orange.opacity(0.14), in: Capsule())
+            .overlay(Capsule().stroke(Color.orange.opacity(0.38), lineWidth: 0.6))
           }
         }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(theme.secondaryForegroundColor)
       }
 
       DisclosureGroup("Arguments") {
-        Text(request.arguments.prettyJSONString())
-          .font(.system(size: 11, design: .monospaced))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.top, 6)
+        ScrollView([.vertical, .horizontal]) {
+          Text(request.arguments.prettyJSONString())
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+        }
+        .frame(maxHeight: 180)
+        .background(
+          theme.elevatedSurfaceColor,
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(theme.borderColor.opacity(0.7), lineWidth: 0.6)
+        )
+        .padding(.top, 6)
       }
       .font(.system(size: 12, weight: .semibold))
+      .foregroundStyle(theme.primaryForegroundColor)
+      .tint(theme.accentColor)
 
-      ViewThatFits(in: .horizontal) {
+      if isResolving {
         HStack(spacing: 8) {
-          denyButton
-          Spacer(minLength: 4)
-          allowOnceButton
-          alwaysAllowButton
+          ProgressView().controlSize(.small)
+          Text("Applying decision…")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
-        VStack(spacing: 8) {
+        .padding(.top, 2)
+      } else {
+        ViewThatFits(in: .horizontal) {
           HStack(spacing: 8) {
             denyButton
+            Spacer(minLength: 4)
             allowOnceButton
+            alwaysAllowButton
           }
-          .frame(maxWidth: .infinity, alignment: .trailing)
-          alwaysAllowButton.frame(maxWidth: .infinity, alignment: .trailing)
+          VStack(spacing: 8) {
+            HStack(spacing: 8) {
+              denyButton
+              allowOnceButton
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            alwaysAllowButton.frame(maxWidth: .infinity, alignment: .trailing)
+          }
         }
+        .font(.system(size: 13, weight: .semibold))
       }
-      .font(.system(size: 13, weight: .semibold))
-      .disabled(isResolving)
     }
     .padding(14)
     .background(theme.surfaceColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .stroke(
-          request.destructiveHint == true ? Color.orange.opacity(0.35) : theme.borderColor,
-          lineWidth: 0.8
+          isDestructive ? Color.orange.opacity(0.45) : theme.borderColor,
+          lineWidth: 0.85
         )
     )
   }
@@ -781,15 +844,34 @@ private struct MCPToolApprovalCard: View {
   }
 
   private var denyButton: some View {
-    Button("Deny", role: .destructive) { submit(.deny) }.buttonStyle(.bordered)
+    Button("Deny", role: .destructive) { submit(.deny) }
+      .buttonStyle(.bordered)
   }
 
+  @ViewBuilder
   private var allowOnceButton: some View {
-    Button("Allow Once") { submit(.allowOnce) }.buttonStyle(.bordered)
+    if isDestructive {
+      Button("Allow Once") { submit(.allowOnce) }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.orange)
+    } else {
+      Button("Allow Once") { submit(.allowOnce) }
+        .buttonStyle(.bordered)
+        .tint(theme.accentColor)
+    }
   }
 
+  @ViewBuilder
   private var alwaysAllowButton: some View {
-    Button("Always Allow") { submit(.alwaysAllow) }.buttonStyle(.borderedProminent)
+    if isDestructive {
+      Button("Always Allow") { submit(.alwaysAllow) }
+        .buttonStyle(.bordered)
+        .tint(theme.secondaryForegroundColor)
+    } else {
+      Button("Always Allow") { submit(.alwaysAllow) }
+        .buttonStyle(.borderedProminent)
+        .tint(theme.accentColor)
+    }
   }
 }
 
@@ -845,10 +927,13 @@ private struct ChatToolRoundView: View {
     return DisclosureGroup {
       VStack(alignment: .leading, spacing: 10) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Arguments").font(.caption.weight(.semibold))
+          Text("Arguments")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(theme.secondaryForegroundColor)
           ScrollView([.vertical, .horizontal]) {
             Text(call.arguments.prettyJSONString())
               .font(.system(size: 11, design: .monospaced))
+              .foregroundStyle(theme.primaryForegroundColor)
               .textSelection(.enabled)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
@@ -856,10 +941,13 @@ private struct ChatToolRoundView: View {
         }
         if let result {
           VStack(alignment: .leading, spacing: 4) {
-            Text(result.isError ? "Error" : "Result").font(.caption.weight(.semibold))
+            Text(result.isError ? "Error" : "Result")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(result.isError ? Color.red : theme.secondaryForegroundColor)
             ScrollView([.vertical, .horizontal]) {
               Text(result.content.prettyJSONString())
                 .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(theme.primaryForegroundColor)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -876,14 +964,15 @@ private struct ChatToolRoundView: View {
     } label: {
       HStack(spacing: 8) {
         Image(systemName: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-          .foregroundStyle(failed ? Color.orange : theme.secondaryForegroundColor)
+          .foregroundStyle(failed ? Color.red : theme.secondaryForegroundColor)
         Text(displayName(call.name))
           .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(theme.primaryForegroundColor)
           .lineLimit(2)
         Spacer()
         Text(failed ? "Failed" : "Done")
-          .font(.system(size: 11))
-          .foregroundStyle(theme.secondaryForegroundColor)
+          .font(.system(size: 11, weight: failed ? .semibold : .regular))
+          .foregroundStyle(failed ? Color.red : theme.secondaryForegroundColor)
       }
     }
     .tint(theme.secondaryForegroundColor)
@@ -895,7 +984,7 @@ private struct ChatToolRoundView: View {
     )
     .overlay(
       RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .stroke(theme.borderColor, lineWidth: 0.75)
+        .stroke(failed ? Color.red.opacity(0.35) : theme.borderColor, lineWidth: 0.75)
     )
   }
 }
@@ -1058,15 +1147,36 @@ private struct MCPElicitationCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Label("\(request.serverName) needs input", systemImage: "text.bubble")
-        .font(.system(size: 14, weight: .semibold))
-      Text(request.message)
-        .font(.system(size: 13))
-        .fixedSize(horizontal: false, vertical: true)
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: "text.bubble.fill")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(theme.accentColor)
+          .frame(width: 34, height: 34)
+          .background(
+            theme.accentColor.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+          )
+          .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text("\(request.serverName) needs input")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
+          Text(request.message)
+            .font(.system(size: 13))
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
 
       switch request.mode {
       case .form:
         formFields
+        if !canSubmit && !isResolving {
+          Text("Complete all required fields with valid values to continue.")
+            .font(.caption2)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
       case .url:
         if let url = request.url {
           VStack(alignment: .leading, spacing: 8) {
@@ -1075,6 +1185,7 @@ private struct MCPElicitationCard: View {
               .foregroundStyle(theme.secondaryForegroundColor)
             Text(url.host ?? url.absoluteString)
               .font(.subheadline.weight(.semibold))
+              .foregroundStyle(theme.primaryForegroundColor)
             Text(url.absoluteString)
               .font(.caption)
               .foregroundStyle(theme.secondaryForegroundColor)
@@ -1085,6 +1196,7 @@ private struct MCPElicitationCard: View {
               Label("Open \(url.host ?? url.absoluteString)", systemImage: "arrow.up.right.square")
             }
             .buttonStyle(.borderedProminent)
+            .tint(theme.accentColor)
           }
         }
       }
@@ -1123,11 +1235,14 @@ private struct MCPElicitationCard: View {
   }
 
   private var cancelButton: some View {
-    Button("Cancel") { submitDecision(.cancel) }.buttonStyle(.bordered)
+    Button("Cancel") { submitDecision(.cancel) }
+      .buttonStyle(.bordered)
+      .tint(theme.secondaryForegroundColor)
   }
 
   private var declineButton: some View {
-    Button("Decline", role: .destructive) { submitDecision(.decline) }.buttonStyle(.bordered)
+    Button("Decline", role: .destructive) { submitDecision(.decline) }
+      .buttonStyle(.bordered)
   }
 
   private var submitButton: some View {
@@ -1135,6 +1250,7 @@ private struct MCPElicitationCard: View {
       submitDecision(.accept(responseContent()))
     }
     .buttonStyle(.borderedProminent)
+    .tint(theme.accentColor)
     .disabled(!canSubmit || isResolving)
   }
 
@@ -1151,6 +1267,7 @@ private struct MCPElicitationCard: View {
               set: { boolValues[field.name] = $0 }
             )
           )
+          .tint(theme.accentColor)
         case .string where !field.allowedValues.isEmpty:
           Picker(
             field.displayName,
@@ -1164,15 +1281,30 @@ private struct MCPElicitationCard: View {
             }
             ForEach(field.allowedValues, id: \.self) { value in Text(value).tag(value) }
           }
+          .tint(theme.accentColor)
         default:
           TextField(
-            field.isRequired ? field.displayName : "\(field.displayName) (optional)",
+            "",
             text: Binding(
               get: { textValues[field.name] ?? "" },
               set: { textValues[field.name] = $0 }
-            )
+            ),
+            prompt: Text(field.isRequired ? field.displayName : "\(field.displayName) (optional)")
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.75))
           )
-          .textFieldStyle(.roundedBorder)
+          .font(.subheadline)
+          .foregroundStyle(theme.primaryForegroundColor)
+          .tint(theme.accentColor)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 8)
+          .background(
+            theme.elevatedSurfaceColor,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+              .stroke(theme.borderColor, lineWidth: 0.75)
+          )
           .keyboardType(
             field.kind == .integer || field.kind == .number
               ? .numbersAndPunctuation
