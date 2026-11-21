@@ -1,9 +1,12 @@
 import AppFoundation
 import BYOKchatProviderCore
+import CryptoKit
 import Foundation
 import LaTeXSwiftUI
 import MarkdownUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// Immutable pre-parsed representation of a message's Markdown/code/math blocks.
 /// MarkdownUI's `MarkdownContent` wraps immutable block nodes but predates
@@ -253,6 +256,7 @@ struct MarkdownMessageContent: View {
         .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     } else {
       Markdown(segment.markdownContent ?? MarkdownContent(segment.text))
+        .markdownImageProvider(MarkdownResponseImageProvider())
         .markdownTheme(
           chatTheme(columnAlignments: segment.columnAlignments)
         )
@@ -445,5 +449,292 @@ struct MarkdownMessageContent: View {
         .frame(height: 1)
         .markdownMargin(top: .em(1.1), bottom: .em(1.1))
       }
+  }
+}
+
+nonisolated enum MarkdownImageSupport {
+  static let maxByteCount = 20 * 1_024 * 1_024
+
+  private struct RawByteCache: @unchecked Sendable {
+    let storage: NSCache<NSString, NSData> = {
+      let cache = NSCache<NSString, NSData>()
+      cache.countLimit = 48
+      cache.totalCostLimit = 24 * 1_024 * 1_024
+      return cache
+    }()
+  }
+
+  private static let rawByteCache = RawByteCache()
+
+  static func isSupportedURL(_ url: URL) -> Bool {
+    if AnswerContentParser.isValidBrowsableURL(url) { return true }
+    return url.absoluteString.lowercased().hasPrefix("data:image/")
+  }
+
+  static func cacheKey(for url: URL) -> String {
+    let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+      .prefix(16)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    return "mdimg::\(digest)"
+  }
+
+  static func cachedRawBytes(for key: String) -> Data? {
+    rawByteCache.storage.object(forKey: key as NSString) as Data?
+  }
+
+  static func dataURIMetadata(for url: URL) -> (filename: String, mimeType: String)? {
+    let raw = url.absoluteString
+    guard raw.lowercased().hasPrefix("data:image/"),
+      let semicolon = raw.firstIndex(of: ";")
+    else { return nil }
+    let mimeType = String(raw[raw.index(raw.startIndex, offsetBy: 5)..<semicolon]).lowercased()
+    let subtype = mimeType.split(separator: "/").last.map(String.init) ?? "png"
+    let fileExtension = subtype == "jpeg" ? "jpg" : subtype
+    return ("image.\(fileExtension)", mimeType)
+  }
+
+  static func decodeDataURI(_ url: URL) -> (data: Data, filename: String, mimeType: String)? {
+    let raw = url.absoluteString
+    guard let meta = dataURIMetadata(for: url),
+      let semicolon = raw.firstIndex(of: ";")
+    else { return nil }
+    let payload = raw[raw.index(after: semicolon)...]
+    guard payload.lowercased().hasPrefix("base64,") else { return nil }
+    let encoded = String(payload.dropFirst("base64,".count))
+    guard !encoded.isEmpty, encoded.count <= (maxByteCount * 4) / 3 + 4 else { return nil }
+    guard let data = Data(base64Encoded: encoded), !data.isEmpty, data.count <= maxByteCount else {
+      return nil
+    }
+    return (data, meta.filename, meta.mimeType)
+  }
+
+  static func metadata(for url: URL) -> (filename: String, mimeType: String) {
+    if let dataMeta = dataURIMetadata(for: url) {
+      return dataMeta
+    }
+    let filename = ResponseImageScanner.suggestedFilename(for: .url(url), fallbackIndex: 1)
+    let ext = (filename as NSString).pathExtension
+    let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "image/jpeg"
+    return (filename, mimeType)
+  }
+
+  static func loadBytes(for url: URL) async -> (data: Data, filename: String, mimeType: String)? {
+    guard isSupportedURL(url) else { return nil }
+    let key = cacheKey(for: url)
+    if let cached = cachedRawBytes(for: key) {
+      let meta = metadata(for: url)
+      return (cached, meta.filename, meta.mimeType)
+    }
+
+    if url.absoluteString.lowercased().hasPrefix("data:image/") {
+      let decoded = await Task.detached(priority: .utility) {
+        decodeDataURI(url)
+      }.value
+      guard let decoded else { return nil }
+      rawByteCache.storage.setObject(
+        decoded.data as NSData,
+        forKey: key as NSString,
+        cost: decoded.data.count
+      )
+      return decoded
+    }
+
+    guard AnswerContentParser.isValidBrowsableURL(url) else { return nil }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 15
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
+      let http = response as? HTTPURLResponse,
+      (200..<300).contains(http.statusCode),
+      !data.isEmpty,
+      data.count <= maxByteCount
+    else { return nil }
+
+    rawByteCache.storage.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+    let meta = metadata(for: url)
+    return (data, meta.filename, meta.mimeType)
+  }
+}
+
+private nonisolated struct MarkdownResponseImageProvider: ImageProvider {
+  func makeImage(url: URL?) -> some View {
+    MarkdownResponseImageView(url: url)
+  }
+}
+
+private struct MarkdownResponseImageView: View {
+  let url: URL?
+
+  @Environment(\.appFoundationTheme) private var theme
+  @Environment(\.displayScale) private var displayScale
+  @State private var image: UIImage?
+  @State private var isFailed = false
+  @State private var isOpeningPreview = false
+  @State private var preview: ChatAttachmentImagePreview?
+  @State private var previewTempDirectory: URL?
+
+  nonisolated init(url: URL?) {
+    self.url = url
+  }
+
+  private var displayPixelSize: CGFloat {
+    min(1_200, max(360, 360 * displayScale))
+  }
+
+  var body: some View {
+    let cacheKey = url.map(MarkdownImageSupport.cacheKey(for:))
+    let resolvedImage = image ?? cacheKey.flatMap {
+      AttachmentThumbnailLoader.cachedImage(cacheKey: $0, maxPixelSize: displayPixelSize)
+    }
+
+    Group {
+      if let resolvedImage {
+        Button {
+          openFullScreen(fallbackImage: resolvedImage)
+        } label: {
+          Image(uiImage: resolvedImage)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: 360, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+              RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Image")
+        .accessibilityHint("Double tap to view full screen")
+      } else if isFailed || url == nil {
+        HStack(spacing: 8) {
+          Image(systemName: "photo.badge.exclamationmark")
+          Text("Image unavailable")
+            .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+          theme.surfaceColor,
+          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75)
+        )
+      } else {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(theme.surfaceColor)
+          .frame(maxWidth: .infinity)
+          .frame(height: 180)
+          .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+              .stroke(theme.borderColor.opacity(0.8), lineWidth: 0.75)
+          )
+          .overlay {
+            Image(systemName: "photo")
+              .font(.system(size: 24, weight: .medium))
+              .foregroundStyle(theme.secondaryForegroundColor.opacity(0.32))
+          }
+      }
+    }
+    .task(id: url) {
+      await loadImage()
+    }
+    .sheet(item: $preview, onDismiss: {
+      cleanupTempDirectory()
+    }) { item in
+      LibraryImageViewerView(
+        entry: item.entry,
+        image: item.image,
+        shareFileURL: item.shareFileURL,
+        onSaveToPhotos: {
+          try await LibraryPhotoWriter.save(item.image)
+        }
+      )
+    }
+  }
+
+  private func loadImage() async {
+    guard let url, MarkdownImageSupport.isSupportedURL(url) else {
+      isFailed = true
+      return
+    }
+    let key = MarkdownImageSupport.cacheKey(for: url)
+    let pixelSize = displayPixelSize
+    if AttachmentThumbnailLoader.cachedImage(cacheKey: key, maxPixelSize: pixelSize) != nil {
+      if isFailed { isFailed = false }
+      return
+    }
+    image = nil
+    isFailed = false
+    guard let loaded = await MarkdownImageSupport.loadBytes(for: url) else {
+      if !Task.isCancelled { isFailed = true }
+      return
+    }
+    guard !Task.isCancelled else { return }
+    let decoded = await AttachmentThumbnailLoader.decodeImage(
+      from: loaded.data,
+      cacheKey: key,
+      maxPixelSize: pixelSize,
+      alreadyDownsampled: false
+    )
+    guard !Task.isCancelled else { return }
+    if let decoded {
+      image = decoded
+    } else {
+      isFailed = true
+    }
+  }
+
+  private func openFullScreen(fallbackImage: UIImage) {
+    guard !isOpeningPreview, let url else { return }
+    isOpeningPreview = true
+    let key = MarkdownImageSupport.cacheKey(for: url)
+    Task { @MainActor in
+      defer { isOpeningPreview = false }
+      let loaded = await MarkdownImageSupport.loadBytes(for: url)
+      let fallbackMeta = MarkdownImageSupport.metadata(for: url)
+      let filename = loaded?.filename ?? fallbackMeta.filename
+      let mimeType = loaded?.mimeType ?? fallbackMeta.mimeType
+      let rawData = loaded?.data
+      let prepared = await Task.detached(priority: .userInitiated) {
+        () -> (image: UIImage, shareData: Data?, materialized: LibraryTempFileSupport.MaterializedFile?) in
+        let fullImage = rawData.flatMap(UIImage.init(data:)) ?? fallbackImage
+        let shareData = rawData ?? fullImage.pngData()
+        let materialized = shareData.flatMap { data in
+          try? LibraryTempFileSupport.materializeTempFile(
+            directoryPrefix: "byok-md-preview",
+            filename: filename,
+            data: data
+          )
+        }
+        return (fullImage, shareData, materialized)
+      }.value
+
+      cleanupTempDirectory()
+      previewTempDirectory = prepared.materialized?.directory
+      let entry = LibraryEntry(
+        id: LibraryEntryID(rawValue: key),
+        filename: filename,
+        kind: .image,
+        mimeType: mimeType,
+        byteCount: prepared.shareData?.count ?? 0,
+        source: .manual
+      )
+      preview = ChatAttachmentImagePreview(
+        entry: entry,
+        image: prepared.image,
+        shareFileURL: prepared.materialized?.fileURL,
+        tempDirectory: prepared.materialized?.directory
+      )
+    }
+  }
+
+  private func cleanupTempDirectory() {
+    if let directory = previewTempDirectory {
+      previewTempDirectory = nil
+      LibraryTempFileSupport.cleanupDirectory(directory)
+    }
   }
 }

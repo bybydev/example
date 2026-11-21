@@ -662,6 +662,28 @@ struct SidebarHelperTests {
   func attachmentThumbnailCacheKeyIsUnified() {
     #expect(AsyncAttachmentThumbnail.cacheKey(for: "att-123") == "attachment::att-123")
   }
+
+  @Test("Markdown image support validates URLs, decodes data URIs, and hashes cache keys")
+  func markdownImageSupportValidationAndDecoding() throws {
+    let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2dIAAAAASUVORK5CYII="
+    let dataURL = try #require(URL(string: "data:image/png;base64,\(pngBase64)"))
+    let decoded = try #require(MarkdownImageSupport.decodeDataURI(dataURL))
+    #expect(!decoded.data.isEmpty)
+    #expect(decoded.filename == "image.png")
+    #expect(decoded.mimeType == "image/png")
+
+    let httpURL = try #require(URL(string: "https://example.com/assets/diagram.webp"))
+    #expect(MarkdownImageSupport.isSupportedURL(httpURL))
+    #expect(MarkdownImageSupport.metadata(for: httpURL).filename == "diagram.webp")
+    #expect(MarkdownImageSupport.metadata(for: httpURL).mimeType == "image/webp")
+
+    let fileURL = URL(fileURLWithPath: "/etc/passwd")
+    #expect(!MarkdownImageSupport.isSupportedURL(fileURL))
+
+    let key = MarkdownImageSupport.cacheKey(for: dataURL)
+    #expect(key.hasPrefix("mdimg::"))
+    #expect(key.count < 40)
+  }
 }
 
 private actor PartiallyFailingCredentialVault: CredentialVault {
