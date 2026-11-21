@@ -55,7 +55,7 @@ struct BYOKOnboardingChatDemo: View {
     .animation(.snappy(duration: 0.32), value: phase)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
-      "Preview of a chat showing a question, file comparison, reasoning, and a streaming response from Claude Sonnet 4.5."
+      "Preview of a chat showing a question, file comparison, reasoning, and a streaming response from Claude Sonnet 5.5."
     )
     .task(id: loopID) {
       await runLoop()
@@ -140,7 +140,7 @@ struct BYOKOnboardingChatDemo: View {
         .background(theme.accentColor.opacity(0.11), in: Circle())
 
       VStack(alignment: .leading, spacing: 1) {
-        Text("Claude Sonnet 4.5")
+        Text("Claude Sonnet 5.5")
           .font(.caption.bold())
           .foregroundStyle(theme.primaryForegroundColor)
           .lineLimit(1)
@@ -243,9 +243,9 @@ struct BYOKOnboardingProvidersDemo: View {
   @State private var loopOpacity = 1.0
 
   private let providers = [
-    DemoProvider(name: "Anthropic", detail: "Claude Sonnet 4.5", symbol: "sparkles"),
-    DemoProvider(name: "OpenRouter", detail: "Multi-provider catalog", symbol: "bolt.horizontal.fill"),
-    DemoProvider(name: "Ollama & LM Studio", detail: "Local network servers", symbol: "desktopcomputer"),
+    DemoProvider(name: "Anthropic", detail: "Claude Sonnet 5.5 · Opus 5.5", symbol: "sparkles"),
+    DemoProvider(name: "OpenAI", detail: "GPT-6.2 Astra · GPT-6.2 Sol", symbol: "bolt.fill"),
+    DemoProvider(name: "Gemini, OpenRouter & Local", detail: "Gemini 4 · Ollama · LM Studio", symbol: "desktopcomputer"),
   ]
 
   private var loopID: OnboardingDemoLoopID {
@@ -267,7 +267,7 @@ struct BYOKOnboardingProvidersDemo: View {
     .animation(.snappy(duration: 0.34), value: showsDirectConnection)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
-      "Preview of connected AI providers including Anthropic, OpenRouter, and local servers with Keychain-stored API keys and direct requests."
+      "Preview of connected AI providers including Anthropic, OpenAI, Gemini, OpenRouter, and local servers with Keychain-stored API keys and direct requests."
     )
     .task(id: loopID) {
       await runLoop()
@@ -485,7 +485,7 @@ struct BYOKOnboardingWorkspaceDemo: View {
           .font(.subheadline.bold())
           .foregroundStyle(theme.primaryForegroundColor)
           .lineLimit(1)
-        Text("12 chats · Claude Sonnet 4.5")
+        Text("12 chats · GPT-6.2 Sol")
           .font(.caption2)
           .foregroundStyle(theme.secondaryForegroundColor)
           .lineLimit(1)
