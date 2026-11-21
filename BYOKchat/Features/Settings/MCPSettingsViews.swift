@@ -235,7 +235,7 @@ struct MCPServerListView: View {
   }
 }
 
-private struct MCPServerEditorView: View {
+struct MCPServerEditorView: View {
   @Bindable var model: MCPManagementModel
   let server: MCPRemoteServer?
 

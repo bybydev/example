@@ -473,6 +473,7 @@ struct ChatView: View {
           Button("Tools", systemImage: "wrench.and.screwdriver") {
             showToolSettings = true
           }
+          .disabled(conversation == nil)
           if let project {
             Button("Project Settings", systemImage: "folder.badge.gearshape") {
               showProjectEditorSheet = true
@@ -546,11 +547,25 @@ struct ChatView: View {
       }
     }
     .sheet(isPresented: $showToolSettings) {
-      ConversationToolsView(
-        conversationID: conversationID,
-        projects: projects,
-        mcp: mcp
-      )
+      if conversation != nil {
+        ConversationToolsView(
+          conversationID: conversationID,
+          chats: chats,
+          providers: providers,
+          projects: projects,
+          mcp: mcp
+        )
+        .presentationDragIndicator(.visible)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Chat Unavailable", systemImage: "wrench.and.screwdriver")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showToolSettings = false }
+              }
+            }
+        }
+      }
     }
     .sheet(isPresented: $showProjectEditorSheet) {
       if let project {
@@ -1032,15 +1047,49 @@ struct ChatView: View {
 
 private struct ConversationToolsView: View {
   let conversationID: ConversationID
+  @Bindable var chats: ChatManagementModel
+  @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
   @State private var errorPresenterID = UUID()
+  @State private var showAddServer = false
+  @State private var showProUpsell = false
+  @State private var toastCenter = BYOKToastCenter()
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(PurchaseManager.self) private var purchaseManager
 
   private var project: ChatProject? {
     projects.project(for: conversationID)
+  }
+
+  private var conversation: ChatConversation? {
+    chats.conversation(conversationID)
+  }
+
+  private var isGenerating: Bool {
+    chats.isGenerating(conversationID)
+  }
+
+  private var isMutationDisabled: Bool {
+    mcp.isBusy || isGenerating
+  }
+
+  private var modelDoesNotSupportTools: Bool {
+    guard let conversation,
+      let accountID = conversation.accountID,
+      let modelID = conversation.modelID,
+      let account = providers.accounts.first(where: { $0.id == accountID })
+    else { return false }
+    let record = providers.models(for: accountID, includeHidden: true)
+      .first { $0.model.id == modelID }
+    let capabilities = ModelCapabilityResolver.resolve(
+      kind: account.kind,
+      modelID: modelID,
+      model: record?.model
+    )
+    return capabilities[.tools] == .unsupported
   }
 
   var body: some View {
@@ -1054,6 +1103,24 @@ private struct ConversationToolsView: View {
           .font(.footnote)
           .foregroundStyle(theme.secondaryForegroundColor)
 
+          if isGenerating {
+            Label(
+              "Wait for the current response to finish before changing tools.",
+              systemImage: "hourglass"
+            )
+            .font(.footnote)
+            .foregroundStyle(.orange)
+          }
+
+          if modelDoesNotSupportTools {
+            Label(
+              "The current model does not support tools. Enabled tools will not be sent until you switch models.",
+              systemImage: "exclamationmark.triangle"
+            )
+            .font(.footnote)
+            .foregroundStyle(.orange)
+          }
+
           if mcp.inheritsProjectTools(conversationID), let project {
             Label("Inheriting defaults from \(project.name)", systemImage: "arrow.triangle.branch")
               .font(.footnote)
@@ -1064,13 +1131,14 @@ private struct ConversationToolsView: View {
                 await mcp.removeChatConfiguration(conversationID)
               }
             }
+            .disabled(isMutationDisabled)
           }
         }
         .listRowBackground(theme.surfaceColor)
 
         if let project, !project.projectToolPresets.isEmpty {
           let activeConfig = normalizedToolConfiguration(mcp.chatConfiguration(for: conversationID))
-          Section("Project Tool Presets") {
+          Section {
             ForEach(project.projectToolPresets) { preset in
               let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
               Button {
@@ -1083,46 +1151,79 @@ private struct ConversationToolsView: View {
               } label: {
                 HStack {
                   Label(preset.name, systemImage: "wrench.adjustable")
+                    .foregroundStyle(theme.primaryForegroundColor)
                   Spacer()
                   if isApplied {
                     Image(systemName: "checkmark")
                       .font(.footnote.weight(.semibold))
-                      .foregroundStyle(.tint)
+                      .foregroundStyle(theme.accentColor)
                   }
                 }
+                .contentShape(Rectangle())
               }
+              .buttonStyle(.plain)
+              .disabled(isMutationDisabled)
             }
+          } header: {
+            Text("Project Tool Presets")
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
           .listRowBackground(theme.surfaceColor)
         }
 
         if mcp.servers.isEmpty {
           Section {
-            ContentUnavailableView(
-              "No MCP Servers",
-              systemImage: "server.rack",
-              description: Text("Add a remote MCP server in MCP Servers first.")
-            )
+            ContentUnavailableView {
+              Label("No MCP Servers", systemImage: "server.rack")
+            } description: {
+              Text("Add a remote MCP server to discover and enable tools for this chat.")
+            } actions: {
+              Button("Add MCP Server") {
+                requestAddServer()
+              }
+              .buttonStyle(.borderedProminent)
+              .tint(theme.accentColor)
+              .disabled(mcp.isBusy)
+            }
           }
           .listRowBackground(theme.surfaceColor)
         } else {
           ForEach(mcp.servers) { server in
             serverSection(server)
           }
-          .listRowBackground(theme.surfaceColor)
         }
       }
+      .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
+      .refreshable {
+        await refreshEnabledServers()
+      }
       .foregroundStyle(theme.primaryForegroundColor)
       .background(AppThemeBackground(theme: theme))
       .navigationTitle("Tools")
-      .disabled(mcp.isBusy)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
+        if mcp.isBusy {
+          ToolbarItem(placement: .topBarLeading) {
+            ProgressView()
+              .controlSize(.small)
+              .accessibilityLabel("Updating MCP tools")
+          }
+        }
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
       }
+    }
+    .byokToastOverlay(toastCenter)
+    .sheet(isPresented: $showAddServer) {
+      NavigationStack {
+        MCPServerEditorView(model: mcp, server: nil)
+      }
+      .presentationDragIndicator(.visible)
+    }
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .mcpServers)
     }
     .alert(
       "MCP Error",
@@ -1135,13 +1236,47 @@ private struct ConversationToolsView: View {
     } message: {
       Text(mcp.errorMessage ?? "Unknown error")
     }
-    .onAppear { mcp.registerErrorPresenter(errorPresenterID) }
-    .onDisappear { mcp.unregisterErrorPresenter(errorPresenterID) }
+    .onChange(of: mcp.statusMessage) { _, message in
+      guard let message else { return }
+      mcp.statusMessage = nil
+      guard mcp.errorMessage == nil else { return }
+      toastCenter.success(message)
+    }
+    .onAppear {
+      mcp.statusMessage = nil
+      mcp.registerErrorPresenter(errorPresenterID)
+    }
+    .onDisappear {
+      toastCenter.dismiss()
+      mcp.unregisterErrorPresenter(errorPresenterID)
+    }
+  }
+
+  private func requestAddServer() {
+    if BYOKProAccess.canCreateMCPServer(
+      currentCount: mcp.servers.count,
+      hasPro: purchaseManager.hasPro
+    ) {
+      showAddServer = true
+    } else {
+      showProUpsell = true
+    }
+  }
+
+  private func refreshEnabledServers() async {
+    let targets = mcp.servers.filter {
+      $0.isEnabled && mcp.isServerEnabled($0.id, for: conversationID)
+    }
+    for server in targets {
+      guard !Task.isCancelled else { return }
+      await mcp.refresh(server.id)
+    }
   }
 
   @ViewBuilder
   private func serverSection(_ server: MCPRemoteServer) -> some View {
     let enabledForChat = mcp.isServerEnabled(server.id, for: conversationID)
+    let missingCredential = server.authentication.kind != .none && !mcp.hasCredential(server.id)
     let bindings = mcp.tools(for: server.id)
 
     Section {
@@ -1165,10 +1300,14 @@ private struct ConversationToolsView: View {
             Text("This server is disabled globally in MCP Servers.")
               .font(.caption)
               .foregroundStyle(.orange)
+          } else if missingCredential {
+            Text("Missing credential. Add it in MCP Servers before enabling.")
+              .font(.caption)
+              .foregroundStyle(.orange)
           }
         }
       }
-      .disabled((!server.isEnabled && !enabledForChat) || mcp.isBusy)
+      .disabled(((!server.isEnabled || missingCredential) && !enabledForChat) || isMutationDisabled)
 
       if server.isEnabled && enabledForChat {
         if bindings.isEmpty {
@@ -1179,6 +1318,7 @@ private struct ConversationToolsView: View {
             Button("Refresh Tools", systemImage: "arrow.clockwise") {
               Task { @MainActor in await mcp.refresh(server.id) }
             }
+            .disabled(mcp.isBusy)
           }
         } else {
           ForEach(bindings) { binding in
@@ -1187,22 +1327,39 @@ private struct ConversationToolsView: View {
         }
       }
     } header: {
-      HStack {
+      HStack(spacing: 8) {
         Text(server.name)
+          .foregroundStyle(theme.secondaryForegroundColor)
         Spacer()
         if let snapshot = mcp.snapshot(for: server.id) {
           Text(mcpToolCountLabel(snapshot.tools.count))
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        if server.isEnabled && !missingCredential {
+          Button {
+            Task { @MainActor in await mcp.refresh(server.id) }
+          } label: {
+            Image(systemName: "arrow.clockwise")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(theme.accentColor)
+          }
+          .buttonStyle(.plain)
+          .disabled(mcp.isBusy)
+          .accessibilityLabel("Refresh tools for \(server.name)")
         }
       }
     } footer: {
       if let snapshot = mcp.snapshot(for: server.id) {
         Text("MCP \(snapshot.protocolVersion)")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
     }
+    .listRowBackground(theme.surfaceColor)
   }
 
   private func toolRow(_ binding: MCPToolBinding) -> some View {
     let tool = binding.remoteTool
+    let description = tool.description.trimmingCharacters(in: .whitespacesAndNewlines)
     let isReadOnly = annotationBool("readOnlyHint", tool: tool) == true
     let isDestructive = annotationBool("destructiveHint", tool: tool) == true
     return VStack(alignment: .leading, spacing: 7) {
@@ -1210,10 +1367,12 @@ private struct ConversationToolsView: View {
         VStack(alignment: .leading, spacing: 3) {
           Text(tool.title ?? tool.remoteName)
             .font(.body.weight(.medium))
-          Text(tool.description)
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
-            .lineLimit(3)
+          if !description.isEmpty {
+            Text(description)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(3)
+          }
         }
 
         Spacer(minLength: 8)
@@ -1239,6 +1398,7 @@ private struct ConversationToolsView: View {
         }
         .labelsHidden()
         .pickerStyle(.menu)
+        .disabled(isMutationDisabled)
       }
 
       if isReadOnly || isDestructive {
