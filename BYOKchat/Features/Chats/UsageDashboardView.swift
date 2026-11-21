@@ -10,10 +10,6 @@ struct UsageDashboardView: View {
   @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
-  #if DEBUG
-  @AppStorage("byokchat.usage.monthlyBudgetUSD") private var monthlyBudgetUSD = 0.0
-  @AppStorage("byokchat.usage.budgetWarningFraction") private var budgetWarningFraction = 0.8
-  #endif
   @State private var range: UsageRange = .today
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
@@ -24,9 +20,6 @@ struct UsageDashboardView: View {
   @State private var confirmClearTelemetry = false
   @State private var showProUpsell = false
   @State private var didTrackOpening = false
-  #if DEBUG
-  @FocusState private var isBudgetFieldFocused: Bool
-  #endif
 
   init(
     conversations: [ChatConversation],
@@ -73,8 +66,7 @@ struct UsageDashboardView: View {
     return dashboardList(
       snapshot: snapshot,
       filteredEvents: filteredEvents,
-      range: activeRange,
-      referenceDate: referenceDate
+      range: activeRange
     )
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
@@ -89,13 +81,6 @@ struct UsageDashboardView: View {
       ToolbarItem(placement: .topBarTrailing) {
         analyticsRangeMenu
       }
-      #if DEBUG
-      if isBudgetFieldFocused {
-        ToolbarItem(placement: .keyboard) {
-          Button("Done") { isBudgetFieldFocused = false }
-        }
-      }
-      #endif
       if openSidebar != nil {
         ToolbarItem(placement: .cancellationAction) {
           Button("Open Sidebar", systemImage: "text.alignleft") { openSidebar?() }
@@ -138,8 +123,7 @@ struct UsageDashboardView: View {
   private func dashboardList(
     snapshot: UsageAnalyticsSnapshot,
     filteredEvents: [TelemetryEvent],
-    range: UsageRange,
-    referenceDate: Date
+    range: UsageRange
   ) -> some View {
     List {
       usageSummarySection(snapshot.aggregate, range: range)
@@ -153,10 +137,6 @@ struct UsageDashboardView: View {
       if !snapshot.modelBreakdown.isEmpty {
         modelsSection(snapshot.modelBreakdown)
       }
-
-      #if DEBUG
-      monthlyBudgetSection(referenceDate: referenceDate)
-      #endif
 
       localAnalyticsSection(filteredEventCount: filteredEvents.count)
     }
@@ -420,97 +400,9 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  #if DEBUG
-  private func monthlyBudgetSection(referenceDate: Date) -> some View {
-    let budgetRange: UsageRange = purchaseManager.hasPro ? .month : .today
-    let aggregate = ChatBilling.aggregate(
-      messages: UsageAnalytics.filteredMessages(
-        conversations: conversations,
-        range: budgetRange,
-        reference: referenceDate
-      )
-    )
-
-    return Section {
-      HStack {
-        Text("Budget")
-        Spacer()
-        Text("$")
-          .foregroundStyle(theme.secondaryForegroundColor)
-        TextField("0", value: $monthlyBudgetUSD, format: .number.precision(.fractionLength(0...2)))
-          .keyboardType(.decimalPad)
-          .focused($isBudgetFieldFocused)
-          .multilineTextAlignment(.trailing)
-          .frame(maxWidth: 100)
-      }
-
-      Picker("Warn at", selection: $budgetWarningFraction) {
-        Text("50%").tag(0.5)
-        Text("75%").tag(0.75)
-        Text("80%").tag(0.8)
-        Text("90%").tag(0.9)
-      }
-
-      if monthlyBudgetUSD > 0 {
-        LabeledContent(
-          purchaseManager.hasPro ? "This month" : "Today only",
-          value: usageAggregateCostText(aggregate)
-        )
-        if aggregate.assistantMessageCount == 0 {
-          Text(purchaseManager.hasPro ? "No saved requests this month." : "No saved requests today.")
-        } else if !aggregate.hasKnownCost {
-          Label("Budget status unavailable: request costs are unknown.", systemImage: "questionmark.circle")
-        } else {
-          if !aggregate.hasPartialCost { ProgressView(value: budgetProgress(for: aggregate)) }
-          if budgetWarningReached(for: aggregate) {
-            Label(budgetWarningText(for: aggregate), systemImage: "exclamationmark.triangle.fill")
-              .foregroundStyle(.orange)
-          } else if aggregate.hasPartialCost {
-            Label("Budget status uncertain: incomplete costs may already exceed the threshold; estimates may differ in either direction.", systemImage: "questionmark.circle")
-          }
-        }
-      }
-    } header: {
-      Text("Monthly budget")
-        .foregroundStyle(theme.secondaryForegroundColor)
-    } footer: {
-      Text(purchaseManager.hasPro
-        ? "The monthly budget warns about saved chat history; it is not a billing ledger. Regenerating, editing, or deleting messages can reduce totals. It excludes API-key usage in other apps and does not change provider spending limits."
-        : "Free evaluates this monthly threshold using today's saved usage only. Earlier days are excluded, so warnings may underestimate monthly spending. Upgrade to Pro for a complete month. This does not change provider spending limits.")
-        .foregroundStyle(theme.secondaryForegroundColor)
-    }
-    .listRowBackground(theme.surfaceColor)
-  }
-  #endif
-
   private func hasTelemetryActivity(_ performance: TelemetryPerformanceAggregate) -> Bool {
     performance.providerRequestCount > 0 || performance.toolCallCount > 0 || performance.mcpRequestCount > 0
   }
-
-  #if DEBUG
-  private func budgetProgress(for aggregate: ChatUsageAggregate) -> Double {
-    guard monthlyBudgetUSD > 0 else { return 0 }
-    let spent = NSDecimalNumber(decimal: aggregate.costUSD).doubleValue
-    return min(max(spent / monthlyBudgetUSD, 0), 1)
-  }
-
-  private func budgetWarningReached(for aggregate: ChatUsageAggregate) -> Bool {
-    guard monthlyBudgetUSD > 0 else { return false }
-    let spent = NSDecimalNumber(decimal: aggregate.costUSD).doubleValue
-    return spent >= monthlyBudgetUSD * budgetWarningFraction
-  }
-
-  private func budgetWarningText(for aggregate: ChatUsageAggregate) -> String {
-    if aggregate.hasPartialCost {
-      return aggregate.hasEstimatedCost
-        ? "Partial estimate reached the warning threshold"
-        : "Known subtotal reached the warning threshold"
-    }
-    return aggregate.hasEstimatedCost
-      ? "Estimated spend reached the warning threshold"
-      : "Reported spend reached the warning threshold"
-  }
-  #endif
 
   private var telemetryFootnote: String {
     if !purchaseManager.hasPro {

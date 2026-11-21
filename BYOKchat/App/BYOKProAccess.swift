@@ -49,11 +49,7 @@ enum BYOKProFeature: String, Sendable {
     case .mcpServers:
       "Keep your existing server, or upgrade to connect unlimited MCP servers."
     case .analytics:
-      #if DEBUG
-      "Every analytics feature is free for today. Upgrade to Pro to explore your usage, performance, reliability, breakdowns, and budgets across earlier dates."
-      #else
       "Every analytics feature is free for today. Upgrade to Pro to explore your usage, performance, reliability, and breakdowns across earlier dates."
-      #endif
     }
   }
 

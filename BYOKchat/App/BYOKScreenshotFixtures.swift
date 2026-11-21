@@ -44,8 +44,6 @@ enum BYOKScreenshotFixtures {
     defaults.removeObject(forKey: "byokchat.simulatedPurchases")
     defaults.removeObject(forKey: "byokchat.themeState.v1")
     defaults.set(launchConversationID.rawValue, forKey: "byokchat.sidebar.pinnedConversationIDs")
-    defaults.set(25.0, forKey: "byokchat.usage.monthlyBudgetUSD")
-    defaults.set(0.8, forKey: "byokchat.usage.budgetWarningFraction")
   }
 
   private static func prepareCredentials() throws {
