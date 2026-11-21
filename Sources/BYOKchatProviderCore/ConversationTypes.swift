@@ -306,6 +306,20 @@ public struct ConversationWorkspaceState: Codable, Sendable, Equatable {
 /// Compact message metadata kept in index.json for analytics and attachment
 /// history without storing message content/reasoning/tool payloads there.
 public struct ConversationIndexMessage: Codable, Sendable, Equatable {
+  private static let retainedBillingMetadataKeys: Set<String> = [
+    ChatBilling.completenessKey,
+    ChatBilling.requestsKey,
+    ChatBilling.reportedCostCompleteKey,
+    ChatBilling.unsupportedContextKey,
+    ChatBilling.scopedProviderCostKey,
+    ChatBilling.costKey,
+    ChatBilling.accuracyKey,
+    ChatBilling.inputPriceKey,
+    ChatBilling.outputPriceKey,
+    ChatBilling.modelRequestCountKey,
+    ChatBilling.toolCallCountKey,
+  ]
+
   public var id: ChatMessageID
   public var role: ChatMessageRole
   public var createdAt: Date
@@ -329,20 +343,26 @@ public struct ConversationIndexMessage: Codable, Sendable, Equatable {
     modelID = message.modelID
     usage = message.usage
 
-    var compactMetadata = message.metadata
-    if compactMetadata[ChatBilling.modelRequestCountKey] == nil,
-      message.role == .assistant,
-      message.status == .complete
-    {
-      compactMetadata[ChatBilling.modelRequestCountKey] = String(
-        max(1, (message.toolRounds?.count ?? 0) + 1)
-      )
+    if message.role == .assistant {
+      var compactMetadata: [String: String] = [:]
+      for (key, value) in message.metadata where Self.retainedBillingMetadataKeys.contains(key) {
+        compactMetadata[key] = value
+      }
+      if compactMetadata[ChatBilling.modelRequestCountKey] == nil,
+        message.status == .complete
+      {
+        compactMetadata[ChatBilling.modelRequestCountKey] = String(
+          max(1, (message.toolRounds?.count ?? 0) + 1)
+        )
+      }
+      if compactMetadata[ChatBilling.toolCallCountKey] == nil {
+        let count = (message.toolRounds ?? []).reduce(0) { $0 + $1.calls.count }
+        compactMetadata[ChatBilling.toolCallCountKey] = String(count)
+      }
+      metadata = compactMetadata
+    } else {
+      metadata = [:]
     }
-    if compactMetadata[ChatBilling.toolCallCountKey] == nil {
-      let count = (message.toolRounds ?? []).reduce(0) { $0 + $1.calls.count }
-      compactMetadata[ChatBilling.toolCallCountKey] = String(count)
-    }
-    metadata = compactMetadata
 
     attachments = message.attachments?.map { attachment in
       var value = attachment

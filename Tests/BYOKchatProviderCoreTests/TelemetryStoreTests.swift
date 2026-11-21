@@ -355,6 +355,188 @@ import Testing
   #expect(statistics.eventCount == 5)
 }
 
+@Test func telemetryPruneArchivesDailyRollupsAndErrorsWithoutDoubleCounting() async throws {
+  let location = temporaryTelemetryLocation()
+  defer { try? FileManager.default.removeItem(at: location.directory) }
+
+  let store = TelemetrySQLiteStore(
+    databaseURL: location.database,
+    configuration: TelemetryStoreConfiguration(
+      maximumAge: 30 * 24 * 60 * 60,
+      maximumEventCount: 10_000,
+      maximumDatabaseBytes: 10 * 1024 * 1024,
+      maintenanceInsertInterval: 1_000,
+      pruneBatchSize: 100
+    )
+  )
+  let now = Date(timeIntervalSince1970: 1_800_000_000)
+  let fortyDaysAgo = now.addingTimeInterval(-40 * 24 * 60 * 60)
+
+  try await store.append(
+    TelemetryEvent(
+      timestamp: fortyDaysAgo,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 2_000,
+      timeToFirstTokenMilliseconds: 400,
+      metadata: ["outputTokensPerSecond": "50.0"]
+    )
+  )
+  try await store.append(
+    TelemetryEvent(
+      timestamp: fortyDaysAgo.addingTimeInterval(60),
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestFailed,
+      severity: .error,
+      outcome: .failure,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 500,
+      errorCode: "rate_limited",
+      metadata: ["classification": "http"]
+    )
+  )
+  try await store.append(
+    TelemetryEvent(
+      timestamp: fortyDaysAgo.addingTimeInterval(120),
+      dataClass: .diagnostic,
+      category: .storage,
+      name: "storage.debug_note"
+    )
+  )
+  try await store.append(
+    TelemetryEvent(
+      timestamp: now.addingTimeInterval(-60),
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 1_000,
+      timeToFirstTokenMilliseconds: 200,
+      metadata: ["outputTokensPerSecond": "70.0"]
+    )
+  )
+
+  try await store.performMaintenance(referenceDate: now)
+
+  let stats = try await store.statistics()
+  #expect(stats.eventCount == 1)
+  #expect(stats.rollupRowCount == 2)
+
+  let recentEvents = try await store.analyticsEvents(
+    since: nil,
+    eventNames: TelemetryAnalytics.overviewEventNames
+  )
+  let rollups = try await store.dailyRollups(since: nil)
+  let errorRollups = try await store.dailyErrorRollups(since: nil)
+  #expect(recentEvents.count == 1)
+  #expect(rollups.count == 1)
+  #expect(errorRollups.count == 1)
+
+  let snapshot = UsageAnalytics.snapshot(
+    conversations: [],
+    telemetryEvents: recentEvents,
+    dailyRollups: rollups,
+    dailyErrorRollups: errorRollups,
+    range: .all,
+    reference: now
+  )
+  #expect(snapshot.performance.providerRequestCount == 3)
+  #expect(snapshot.performance.providerSuccessCount == 2)
+  #expect(snapshot.performance.providerFailureCount == 1)
+  #expect(snapshot.performance.totalDurationMilliseconds == 3_500)
+  #expect(snapshot.failureBreakdown.count == 1)
+  #expect(snapshot.failureBreakdown.first?.errorCode == "rate_limited")
+  #expect(snapshot.failureBreakdown.first?.count == 1)
+  #expect(snapshot.providerBreakdown.first?.id == "anthropic")
+  #expect(snapshot.providerBreakdown.first?.performance.providerRequestCount == 3)
+  #expect(snapshot.modelBreakdown.first?.id == "claude-sonnet-5-5")
+  #expect(snapshot.modelBreakdown.first?.performance.providerRequestCount == 3)
+
+  await store.close()
+}
+
+@Test func telemetryScopedAndFilteredQueriesAvoidNoiseAndTruncation() async throws {
+  let location = temporaryTelemetryLocation()
+  defer { try? FileManager.default.removeItem(at: location.directory) }
+
+  let recorder = TelemetryRecorder(
+    databaseURL: location.database,
+    configuration: testConfiguration(),
+    deviceID: "device-scoped",
+    sessionID: "session-scoped"
+  )
+  let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+  await recorder.record(
+    TelemetryEvent(
+      timestamp: base,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: "chat-old",
+      messageID: "msg-old",
+      providerID: "openai",
+      modelID: "gpt-6.2-sol",
+      durationMilliseconds: 900,
+      timeToFirstTokenMilliseconds: 180
+    )
+  )
+  await recorder.record(
+    TelemetryEvent(
+      timestamp: base.addingTimeInterval(1),
+      dataClass: .analytics,
+      category: .context,
+      name: .contextBuilt,
+      conversationID: "chat-old",
+      messageID: "msg-old",
+      metadata: ["omittedMessageCount": "2", "estimatedInputTokens": "4000"]
+    )
+  )
+
+  for index in 1...10 {
+    await recorder.record(
+      TelemetryEvent(
+        timestamp: base.addingTimeInterval(Double(10 + index)),
+        dataClass: .analytics,
+        category: .chat,
+        name: .chatTurnStarted,
+        conversationID: "chat-new",
+        messageID: ChatMessageID(rawValue: "msg-new-\(index)")
+      )
+    )
+  }
+
+  // Overview load filters out lifecycle noise so the real event is never crowded out.
+  let overview = await recorder.loadAnalytics(range: .all, reference: base.addingTimeInterval(30), limit: 5)
+  guard case .loaded(let overviewEvents, _, _, _) = overview else {
+    Issue.record("Expected overview analytics load to succeed")
+    return
+  }
+  #expect(overviewEvents.count == 1)
+  #expect(overviewEvents.first?.name == .providerRequestCompleted)
+
+  // Scoped conversation & message queries bypass global traffic completely.
+  let scopedChat = await recorder.loadConversationAnalytics(conversationID: "chat-old", limit: 10)
+  guard case .loaded(let chatEvents) = scopedChat else {
+    Issue.record("Expected conversation analytics load to succeed")
+    return
+  }
+  #expect(chatEvents.count == 2)
+
+  let messageEvents = await recorder.loadMessageAnalytics(messageID: "msg-old")
+  #expect(messageEvents.count == 2)
+  #expect(UsageAnalytics.messageOmittedContextCount(messageID: "msg-old", telemetryEvents: messageEvents) == 2)
+}
+
 private func testConfiguration() -> TelemetryStoreConfiguration {
   TelemetryStoreConfiguration(
     maximumAge: 30 * 24 * 60 * 60,

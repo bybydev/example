@@ -157,46 +157,100 @@ public enum UsageAnalytics {
   public static func snapshot(
     conversations: [ChatConversation],
     telemetryEvents: [TelemetryEvent],
+    dailyRollups: [TelemetryDailyRollup] = [],
+    dailyErrorRollups: [TelemetryDailyErrorRollup] = [],
     range: UsageAnalyticsRange,
     reference: Date = .now
   ) -> UsageAnalyticsSnapshot {
-    let messages = filteredMessages(
-      conversations: conversations,
-      range: range,
-      reference: reference
-    )
+    let startDate = range.startDate(reference: reference)
     let events = filteredAnalyticsEvents(
       telemetryEvents,
       range: range,
       reference: reference
     )
+    let rollups = filteredDailyRollups(
+      dailyRollups,
+      range: range,
+      reference: reference
+    )
+    let errorRollups = filteredDailyErrorRollups(
+      dailyErrorRollups,
+      range: range,
+      reference: reference
+    )
 
-    let startDate = range.startDate(reference: reference)
-    let eventsByConversation = Dictionary(grouping: events.compactMap { event -> (ConversationID, TelemetryEvent)? in
-      guard let conversationID = event.conversationID else { return nil }
-      return (conversationID, event)
-    }, by: \.0).mapValues { $0.map(\.1) }
-
-    let conversationsInRange: [ConversationUsageBreakdown] = conversations.compactMap { conversation in
-      let convMessages = conversation.messages.filter { message in
-        guard message.role == .assistant else { return false }
-        guard let startDate else { return true }
-        return message.updatedAt >= startDate
+    var eventsByConversation: [ConversationID: [TelemetryEvent]] = [:]
+    var eventsByProvider: [String: [TelemetryEvent]] = [:]
+    var eventsByModel: [String: [TelemetryEvent]] = [:]
+    for event in events {
+      if let conversationID = event.conversationID {
+        eventsByConversation[conversationID, default: []].append(event)
       }
-      let aggregate = ChatBilling.aggregate(messages: convMessages)
-      let performance = TelemetryAnalytics.aggregate(events: eventsByConversation[conversation.id] ?? [])
-      guard aggregate.assistantMessageCount > 0 || performance.providerRequestCount > 0 else {
-        return nil
+      if let providerKey = event.providerID?.rawValue, !providerKey.isEmpty {
+        eventsByProvider[providerKey, default: []].append(event)
+      }
+      if let modelKey = event.modelID?.rawValue, !modelKey.isEmpty {
+        eventsByModel[modelKey, default: []].append(event)
+      }
+    }
+
+    var rollupsByProvider: [String: [TelemetryDailyRollup]] = [:]
+    var rollupsByModel: [String: [TelemetryDailyRollup]] = [:]
+    for rollup in rollups {
+      if let providerKey = rollup.providerID, !providerKey.isEmpty {
+        rollupsByProvider[providerKey, default: []].append(rollup)
+      }
+      if let modelKey = rollup.modelID, !modelKey.isEmpty {
+        rollupsByModel[modelKey, default: []].append(rollup)
+      }
+    }
+
+    // Single pass over conversations & messages populates overall, provider,
+    // model, and per-conversation aggregates without redundant passes.
+    var overallAggregate = ChatUsageAggregate()
+    var providerUsage: [String: ChatUsageAggregate] = [:]
+    var modelUsage: [String: ChatUsageAggregate] = [:]
+    var conversationsInRange: [ConversationUsageBreakdown] = []
+
+    for conversation in conversations {
+      var conversationAggregate = ChatUsageAggregate()
+      for message in conversation.messages {
+        guard message.role == .assistant else { continue }
+        if let startDate, message.updatedAt < startDate { continue }
+
+        overallAggregate.add(message)
+        conversationAggregate.add(message)
+
+        if let providerKey = message.providerID?.rawValue, !providerKey.isEmpty {
+          var aggregate = providerUsage[providerKey] ?? ChatUsageAggregate()
+          aggregate.add(message)
+          providerUsage[providerKey] = aggregate
+        }
+        if let modelKey = message.modelID?.rawValue, !modelKey.isEmpty {
+          var aggregate = modelUsage[modelKey] ?? ChatUsageAggregate()
+          aggregate.add(message)
+          modelUsage[modelKey] = aggregate
+        }
+      }
+
+      let performance = TelemetryAnalytics.aggregate(
+        events: eventsByConversation[conversation.id] ?? []
+      )
+      guard conversationAggregate.assistantMessageCount > 0 || performance.providerRequestCount > 0 else {
+        continue
       }
       let trimmedTitle = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines)
-      return ConversationUsageBreakdown(
-        id: conversation.id,
-        title: trimmedTitle.isEmpty ? "Untitled Chat" : trimmedTitle,
-        aggregate: aggregate,
-        performance: performance
+      conversationsInRange.append(
+        ConversationUsageBreakdown(
+          id: conversation.id,
+          title: trimmedTitle.isEmpty ? "Untitled Chat" : trimmedTitle,
+          aggregate: conversationAggregate,
+          performance: performance
+        )
       )
     }
-    .sorted { lhs, rhs in
+
+    conversationsInRange.sort { lhs, rhs in
       if lhs.aggregate.costUSD != rhs.aggregate.costUSD {
         return lhs.aggregate.costUSD > rhs.aggregate.costUSD
       }
@@ -213,20 +267,21 @@ public enum UsageAnalytics {
     }
 
     return UsageAnalyticsSnapshot(
-      aggregate: ChatBilling.aggregate(messages: messages),
-      performance: TelemetryAnalytics.aggregate(events: events),
-      failureBreakdown: TelemetryAnalytics.failureBreakdown(events: events),
-      providerBreakdown: breakdown(
-        messages: messages,
+      aggregate: overallAggregate,
+      performance: TelemetryAnalytics.aggregate(events: events, rollups: rollups),
+      failureBreakdown: TelemetryAnalytics.failureBreakdown(
         events: events,
-        messageKey: { $0.providerID?.rawValue },
-        eventKey: { $0.providerID?.rawValue }
+        errorRollups: errorRollups
+      ),
+      providerBreakdown: breakdown(
+        usageByKey: providerUsage,
+        eventsByKey: eventsByProvider,
+        rollupsByKey: rollupsByProvider
       ),
       modelBreakdown: breakdown(
-        messages: messages,
-        events: events,
-        messageKey: { $0.modelID?.rawValue },
-        eventKey: { $0.modelID?.rawValue }
+        usageByKey: modelUsage,
+        eventsByKey: eventsByModel,
+        rollupsByKey: rollupsByModel
       ),
       activeConversationCount: conversationsInRange.count,
       conversationBreakdown: conversationsInRange
@@ -378,6 +433,30 @@ public enum UsageAnalytics {
     }
   }
 
+  public static func filteredDailyRollups(
+    _ rollups: [TelemetryDailyRollup],
+    range: UsageAnalyticsRange,
+    reference: Date = .now
+  ) -> [TelemetryDailyRollup] {
+    guard let startDate = range.startDate(reference: reference) else { return rollups }
+    let minDayStart = Date(
+      timeIntervalSince1970: floor(startDate.timeIntervalSince1970 / 86_400.0) * 86_400.0
+    )
+    return rollups.filter { $0.dayStart >= minDayStart }
+  }
+
+  public static func filteredDailyErrorRollups(
+    _ rollups: [TelemetryDailyErrorRollup],
+    range: UsageAnalyticsRange,
+    reference: Date = .now
+  ) -> [TelemetryDailyErrorRollup] {
+    guard let startDate = range.startDate(reference: reference) else { return rollups }
+    let minDayStart = Date(
+      timeIntervalSince1970: floor(startDate.timeIntervalSince1970 / 86_400.0) * 86_400.0
+    )
+    return rollups.filter { $0.dayStart >= minDayStart }
+  }
+
   public static func filteredMessages(
     conversations: [ChatConversation],
     range: UsageAnalyticsRange,
@@ -411,10 +490,27 @@ public enum UsageAnalytics {
       eventsByKey[key, default: []].append(event)
     }
 
-    let keys = Set(usageByKey.keys).union(eventsByKey.keys)
+    return breakdown(
+      usageByKey: usageByKey,
+      eventsByKey: eventsByKey,
+      rollupsByKey: [:]
+    )
+  }
+
+  private static func breakdown(
+    usageByKey: [String: ChatUsageAggregate],
+    eventsByKey: [String: [TelemetryEvent]],
+    rollupsByKey: [String: [TelemetryDailyRollup]]
+  ) -> [UsageAnalyticsBreakdown] {
+    let keys = Set(usageByKey.keys)
+      .union(eventsByKey.keys)
+      .union(rollupsByKey.keys)
     return keys.compactMap { key -> UsageAnalyticsBreakdown? in
       let aggregate = usageByKey[key] ?? ChatUsageAggregate()
-      let performance = TelemetryAnalytics.aggregate(events: eventsByKey[key] ?? [])
+      let performance = TelemetryAnalytics.aggregate(
+        events: eventsByKey[key] ?? [],
+        rollups: rollupsByKey[key] ?? []
+      )
       guard aggregate.assistantMessageCount > 0 || performance.providerRequestCount > 0 else {
         return nil
       }
@@ -428,9 +524,9 @@ public enum UsageAnalytics {
       if lhs.aggregate.costUSD != rhs.aggregate.costUSD {
         return lhs.aggregate.costUSD > rhs.aggregate.costUSD
       }
-      let lhsTokens = lhs.aggregate.inputTokens + lhs.aggregate.outputTokens
-      let rhsTokens = rhs.aggregate.inputTokens + rhs.aggregate.outputTokens
-      if lhsTokens != rhsTokens { return lhsTokens > rhsTokens }
+      if lhs.aggregate.totalTokens != rhs.aggregate.totalTokens {
+        return lhs.aggregate.totalTokens > rhs.aggregate.totalTokens
+      }
       if lhs.performance.providerRequestCount != rhs.performance.providerRequestCount {
         return lhs.performance.providerRequestCount > rhs.performance.providerRequestCount
       }

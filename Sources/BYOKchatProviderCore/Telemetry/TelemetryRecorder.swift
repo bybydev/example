@@ -25,6 +25,21 @@ public enum TelemetryAnalyticsLoadResult: Sendable {
   case unavailable
 }
 
+public enum TelemetryAnalyticsRangeLoadResult: Sendable {
+  case loaded(
+    events: [TelemetryEvent],
+    rollups: [TelemetryDailyRollup],
+    errorRollups: [TelemetryDailyErrorRollup],
+    statistics: TelemetryStoreStatistics
+  )
+  case unavailable
+}
+
+public enum TelemetryScopedLoadResult: Sendable {
+  case loaded(events: [TelemetryEvent])
+  case unavailable
+}
+
 protocol TelemetryAnalyticsReading: Sendable {
   func recentEvents(limit: Int) async throws -> [TelemetryEvent]
   func recentAnalyticsEvents(limit: Int) async throws -> [TelemetryEvent]
@@ -136,6 +151,71 @@ public actor TelemetryRecorder {
     } catch {
       markFailure(error)
       return .unavailable
+    }
+  }
+
+  public func loadAnalytics(
+    range: UsageAnalyticsRange,
+    reference: Date = .now,
+    limit: Int = TelemetryStoreConfiguration.maximumRecentEventQueryCount
+  ) async -> TelemetryAnalyticsRangeLoadResult {
+    guard !isDisabledForSession else { return .unavailable }
+    let startDate = range.startDate(reference: reference)
+    do {
+      let events = try await store.analyticsEvents(
+        since: startDate,
+        eventNames: TelemetryAnalytics.overviewEventNames,
+        limit: limit
+      )
+      let rollups = try await store.dailyRollups(since: startDate)
+      let errorRollups = try await store.dailyErrorRollups(since: startDate)
+      let statistics = try await store.statistics()
+      markSuccess()
+      return .loaded(
+        events: events,
+        rollups: rollups,
+        errorRollups: errorRollups,
+        statistics: statistics
+      )
+    } catch {
+      markFailure(error)
+      return .unavailable
+    }
+  }
+
+  public func loadConversationAnalytics(
+    conversationID: ConversationID,
+    limit: Int = TelemetryStoreConfiguration.maximumRecentEventQueryCount
+  ) async -> TelemetryScopedLoadResult {
+    guard !isDisabledForSession else { return .unavailable }
+    do {
+      let events = try await store.analyticsEvents(
+        forConversationID: conversationID,
+        limit: limit
+      )
+      markSuccess()
+      return .loaded(events: events)
+    } catch {
+      markFailure(error)
+      return .unavailable
+    }
+  }
+
+  public func loadMessageAnalytics(
+    messageID: ChatMessageID,
+    limit: Int = 200
+  ) async -> [TelemetryEvent] {
+    guard !isDisabledForSession else { return [] }
+    do {
+      let events = try await store.analyticsEvents(
+        forMessageID: messageID,
+        limit: limit
+      )
+      markSuccess()
+      return events
+    } catch {
+      markFailure(error)
+      return []
     }
   }
 

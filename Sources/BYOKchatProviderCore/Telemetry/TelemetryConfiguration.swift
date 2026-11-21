@@ -34,6 +34,7 @@ public struct TelemetryStoreStatistics: Sendable, Equatable {
   public var oldestEventAt: Date?
   public var newestEventAt: Date?
   public var schemaVersion: Int
+  public var rollupRowCount: Int
 
   public init(
     eventCount: Int,
@@ -42,7 +43,8 @@ public struct TelemetryStoreStatistics: Sendable, Equatable {
     databaseBytes: Int64,
     oldestEventAt: Date?,
     newestEventAt: Date?,
-    schemaVersion: Int
+    schemaVersion: Int,
+    rollupRowCount: Int = 0
   ) {
     self.eventCount = eventCount
     self.diagnosticEventCount = diagnosticEventCount
@@ -51,6 +53,7 @@ public struct TelemetryStoreStatistics: Sendable, Equatable {
     self.oldestEventAt = oldestEventAt
     self.newestEventAt = newestEventAt
     self.schemaVersion = schemaVersion
+    self.rollupRowCount = rollupRowCount
   }
 
   public static let empty = TelemetryStoreStatistics(
@@ -60,6 +63,7 @@ public struct TelemetryStoreStatistics: Sendable, Equatable {
     databaseBytes: 0,
     oldestEventAt: nil,
     newestEventAt: nil,
-    schemaVersion: 0
+    schemaVersion: 0,
+    rollupRowCount: 0
   )
 }

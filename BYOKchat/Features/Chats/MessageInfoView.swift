@@ -210,23 +210,17 @@ struct MessageInfoView: View {
       omittedContextCount = 0
       return
     }
-    let recorder = model.telemetryRecorder
-    switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
-    case .loaded(let events, _):
-      let performance = UsageAnalytics.messagePerformance(
-        messageID: message.id,
-        telemetryEvents: events,
-        range: .all
-      )
-      messagePerformance = performance.hasLatencyOrSpeedMetrics ? performance : nil
-      omittedContextCount = UsageAnalytics.messageOmittedContextCount(
-        messageID: message.id,
-        telemetryEvents: events
-      )
-    case .unavailable:
-      messagePerformance = nil
-      omittedContextCount = 0
-    }
+    let events = await model.telemetryRecorder.loadMessageAnalytics(messageID: message.id)
+    let performance = UsageAnalytics.messagePerformance(
+      messageID: message.id,
+      telemetryEvents: events,
+      range: .all
+    )
+    messagePerformance = performance.hasLatencyOrSpeedMetrics ? performance : nil
+    omittedContextCount = UsageAnalytics.messageOmittedContextCount(
+      messageID: message.id,
+      telemetryEvents: events
+    )
   }
 
   private var costLabel: String {

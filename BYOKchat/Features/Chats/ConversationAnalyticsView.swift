@@ -374,8 +374,11 @@ struct ConversationAnalyticsView: View {
     defer { isLoadingTelemetry = false }
     let recorder = model.telemetryRecorder
     if retry { await recorder.retryAfterFailure() }
-    switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
-    case .loaded(let events, _):
+    switch await recorder.loadConversationAnalytics(
+      conversationID: conversation.id,
+      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+    ) {
+    case .loaded(let events):
       telemetryEvents = events
       telemetryUnavailable = false
     case .unavailable:

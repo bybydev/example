@@ -13,6 +13,13 @@ struct UsageDashboardView: View {
   @State private var range: UsageRange = .today
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var telemetryStatistics = TelemetryStoreStatistics.empty
+  @State private var snapshot = UsageAnalyticsSnapshot(
+    aggregate: ChatUsageAggregate(),
+    performance: TelemetryPerformanceAggregate(),
+    failureBreakdown: [],
+    providerBreakdown: [],
+    modelBreakdown: []
+  )
   @State private var hasLoadedTelemetry = false
   @State private var telemetryUnavailable = false
   @State private var isLoadingTelemetry = false
@@ -20,6 +27,22 @@ struct UsageDashboardView: View {
   @State private var confirmClearTelemetry = false
   @State private var showProUpsell = false
   @State private var didTrackOpening = false
+
+  private struct DashboardReloadKey: Equatable {
+    let range: UsageRange
+    let conversationCount: Int
+    let totalMessageCount: Int
+    let latestConversationUpdate: Date?
+  }
+
+  private var reloadKey: DashboardReloadKey {
+    DashboardReloadKey(
+      range: accessibleRange,
+      conversationCount: conversations.count,
+      totalMessageCount: conversations.reduce(0) { $0 + $1.messages.count },
+      latestConversationUpdate: conversations.map(\.updatedAt).max()
+    )
+  }
 
   init(
     conversations: [ChatConversation],
@@ -48,30 +71,17 @@ struct UsageDashboardView: View {
   }
 
   private var dashboard: some View {
-    let referenceDate = Date.now
     let activeRange = accessibleRange
-    let activeTelemetry = telemetryUnavailable ? [] : telemetryEvents
-    let filteredEvents = UsageAnalytics.filteredAnalyticsEvents(
-      activeTelemetry,
-      range: activeRange,
-      reference: referenceDate
-    )
-    let snapshot = UsageAnalytics.snapshot(
-      conversations: conversations,
-      telemetryEvents: activeTelemetry,
-      range: activeRange,
-      reference: referenceDate
-    )
 
     return dashboardList(
       snapshot: snapshot,
-      filteredEvents: filteredEvents,
+      filteredEventCount: telemetryUnavailable ? 0 : telemetryEvents.count,
       range: activeRange
     )
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
     .refreshable {
-      await loadTelemetry()
+      await loadAndCompute(retry: false)
     }
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
@@ -93,12 +103,12 @@ struct UsageDashboardView: View {
         }
       }
     }
-    .task {
+    .task(id: reloadKey) {
       if !didTrackOpening {
         didTrackOpening = true
         BYOKAppAnalytics.track(.featureOpened, dimension: .analytics)
       }
-      await loadTelemetry()
+      await loadAndCompute(retry: false)
     }
     .onChange(of: purchaseManager.hasPro) { _, hasPro in
       if !hasPro { range = .today }
@@ -116,13 +126,13 @@ struct UsageDashboardView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Removes locally stored performance and reliability events. Saved chat history, usage, and spend are unaffected.")
+      Text("Removes locally stored performance and reliability events and daily rollups. Saved chat history, usage, and spend are unaffected.")
     }
   }
 
   private func dashboardList(
     snapshot: UsageAnalyticsSnapshot,
-    filteredEvents: [TelemetryEvent],
+    filteredEventCount: Int,
     range: UsageRange
   ) -> some View {
     List {
@@ -146,7 +156,7 @@ struct UsageDashboardView: View {
         topChatsSection(snapshot.conversationBreakdown)
       }
 
-      localAnalyticsSection(filteredEventCount: filteredEvents.count)
+      localAnalyticsSection(filteredEventCount: filteredEventCount)
     }
   }
 
@@ -254,7 +264,7 @@ struct UsageDashboardView: View {
           systemImage: "exclamationmark.triangle",
           description: Text("Local telemetry could not be read. Saved usage and spend remain available.")
         )
-        Button("Retry") { Task { await loadTelemetry(retry: true) } }
+        Button("Retry") { Task { await loadAndCompute(retry: true) } }
           .disabled(isLoadingTelemetry || isClearingTelemetry)
       }
       .listRowBackground(theme.surfaceColor)
@@ -293,9 +303,13 @@ struct UsageDashboardView: View {
   private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
     Section {
       LabeledContent("Median TTFT", value: usageDuration(performance.medianTTFTMilliseconds))
-      LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
+      if performance.p95TTFTMilliseconds != nil {
+        LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
+      }
       LabeledContent("Median duration", value: usageDuration(performance.medianDurationMilliseconds))
-      LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
+      if performance.p95DurationMilliseconds != nil {
+        LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
+      }
       LabeledContent("Median speed", value: usageRate(performance.medianOutputTokensPerSecond))
     } header: {
       Text("Performance")
@@ -430,6 +444,9 @@ struct UsageDashboardView: View {
         LabeledContent("Telemetry events", value: "Loading…")
       } else {
         LabeledContent("Telemetry events", value: filteredEventCount.formatted())
+        if telemetryStatistics.rollupRowCount > 0 {
+          LabeledContent("Daily rollups", value: telemetryStatistics.rollupRowCount.formatted())
+        }
       }
       if telemetryStatistics.databaseBytes > 0 {
         LabeledContent(
@@ -440,7 +457,7 @@ struct UsageDashboardView: View {
           )
         )
       }
-      if telemetryStatistics.eventCount > 0 || telemetryUnavailable {
+      if telemetryStatistics.eventCount > 0 || telemetryStatistics.rollupRowCount > 0 || telemetryUnavailable {
         Button("Clear Local Telemetry", role: .destructive) {
           confirmClearTelemetry = true
         }
@@ -462,31 +479,69 @@ struct UsageDashboardView: View {
 
   private var telemetryFootnote: String {
     if !purchaseManager.hasPro {
-      return "Only today's local telemetry is shown. Historical ranges require Pro. Events are retained on device for up to 30 days by default, and saved chat usage is retained with your messages."
+      return "Only today's local telemetry is shown. Historical ranges require Pro. Detailed events are kept for up to 30 days and summarized into lightweight daily rollups for long-term history."
     }
-    if telemetryStatistics.analyticsEventCount > telemetryEvents.count {
+    if telemetryEvents.count >= TelemetryStoreConfiguration.maximumRecentEventQueryCount {
       let queryLimit = TelemetryStoreConfiguration.maximumRecentEventQueryCount.formatted()
-      return "Performance and reliability use the latest \(queryLimit) local analytics events. Raw telemetry is device-local, disposable, and retained for up to 30 days by default. Chat usage and spend remain available from message history."
+      return "Recent performance uses up to \(queryLimit) detailed events in this range plus archived daily rollups. Raw telemetry is device-local, and saved chat usage remains available from message history."
     }
-    return "Performance and reliability are calculated from device-local telemetry retained for up to 30 days by default. Chat usage and spend remain available from message history even if telemetry is cleared."
+    return "Detailed telemetry is kept on device for up to 30 days and automatically summarized into daily rollups before pruning. Chat usage and spend remain available from message history even if telemetry is cleared."
   }
 
-  private func loadTelemetry(retry: Bool = false) async {
-    guard !isLoadingTelemetry else { return }
+  private func loadAndCompute(retry: Bool) async {
     isLoadingTelemetry = true
     defer { isLoadingTelemetry = false }
+
+    let activeRange = accessibleRange
+    let referenceDate = Date.now
+    let conversationsSnapshot = conversations
     let recorder = model.telemetryRecorder
     if retry { await recorder.retryAfterFailure() }
-    switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
-    case .loaded(let events, let statistics):
-      telemetryEvents = events
-      telemetryStatistics = statistics
-      telemetryUnavailable = false
+
+    let loadedEvents: [TelemetryEvent]
+    let loadedRollups: [TelemetryDailyRollup]
+    let loadedErrorRollups: [TelemetryDailyErrorRollup]
+    let loadedStatistics: TelemetryStoreStatistics
+    let unavailable: Bool
+
+    switch await recorder.loadAnalytics(
+      range: activeRange,
+      reference: referenceDate,
+      limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
+    ) {
+    case .loaded(let events, let rollups, let errorRollups, let statistics):
+      loadedEvents = events
+      loadedRollups = rollups
+      loadedErrorRollups = errorRollups
+      loadedStatistics = statistics
+      unavailable = false
     case .unavailable:
-      telemetryEvents = []
-      telemetryStatistics = .empty
-      telemetryUnavailable = true
+      loadedEvents = []
+      loadedRollups = []
+      loadedErrorRollups = []
+      loadedStatistics = .empty
+      unavailable = true
     }
+
+    guard !Task.isCancelled else { return }
+
+    let computed = await Task.detached(priority: .userInitiated) {
+      UsageAnalytics.snapshot(
+        conversations: conversationsSnapshot,
+        telemetryEvents: loadedEvents,
+        dailyRollups: loadedRollups,
+        dailyErrorRollups: loadedErrorRollups,
+        range: activeRange,
+        reference: referenceDate
+      )
+    }.value
+
+    guard !Task.isCancelled else { return }
+
+    telemetryEvents = loadedEvents
+    telemetryStatistics = loadedStatistics
+    telemetryUnavailable = unavailable
+    snapshot = computed
     hasLoadedTelemetry = true
   }
 
@@ -495,7 +550,7 @@ struct UsageDashboardView: View {
     isClearingTelemetry = true
     defer { isClearingTelemetry = false }
     await model.telemetryRecorder.clearAllTelemetry()
-    await loadTelemetry(retry: true)
+    await loadAndCompute(retry: true)
   }
 }
 

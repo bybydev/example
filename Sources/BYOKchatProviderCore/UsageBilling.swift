@@ -53,13 +53,15 @@ public struct ChatUsageAggregate: Sendable, Equatable {
 
   public mutating func add(_ message: ChatMessage) {
     guard message.role == .assistant else { return }
-    let billing = ChatBilling.snapshot(for: message)
+    let billing = ChatBilling.snapshot(for: message, includeRequests: false)
+    let rawRequests = message.metadata[ChatBilling.requestsKey]
+    let hasRequests = rawRequests.map { $0.count > 2 } ?? false
     // Ignore pre-flight failed/cancelled placeholders that never attempted a
     // model request and carry no usage or cost, so local validation failures do
     // not mark spend totals as "(partial)" or "Unavailable".
     if message.status != .complete,
       billing.modelRequestCount == 0,
-      billing.requests.isEmpty,
+      !hasRequests,
       billing.costUSD == nil,
       message.usage == nil
     {
@@ -78,7 +80,9 @@ public struct ChatUsageAggregate: Sendable, Equatable {
     modelRequestCount += billing.modelRequestCount
     toolCallCount += billing.toolCallCount
     if !billing.isComplete { incompleteCostMessageCount += 1 }
-    if billing.requests.contains(where: { $0.missingDimensions.contains("provider billing scope") }) {
+    if message.metadata[ChatBilling.scopedProviderCostKey] == "true"
+      || (rawRequests?.contains("provider billing scope") == true)
+    {
       scopedProviderCostMessageCount += 1
     }
     if billing.accuracy == .calculated { estimatedCostMessageCount += 1 }
@@ -106,6 +110,7 @@ public enum ChatBilling {
   public static let requestsKey = "byokchat.billing.requests.v1"
   public static let reportedCostCompleteKey = "byokchat.billing.reportedCostComplete"
   public static let unsupportedContextKey = "byokchat.billing.unsupportedContext"
+  public static let scopedProviderCostKey = "byokchat.billing.scopedProviderCost"
   public static let costKey = "byokchat.billing.costUSD"
   public static let accuracyKey = "byokchat.billing.accuracy"
   public static let inputPriceKey = "byokchat.billing.inputPricePerToken"
@@ -181,6 +186,13 @@ public enum ChatBilling {
   }
 
   public static func snapshot(for message: ChatMessage) -> ChatBillingSnapshot {
+    snapshot(for: message, includeRequests: true)
+  }
+
+  public static func snapshot(
+    for message: ChatMessage,
+    includeRequests: Bool
+  ) -> ChatBillingSnapshot {
     let metadata = message.metadata
     let cost = decimal(metadata[costKey])
     let accuracy = metadata[accuracyKey].flatMap(ChatCostAccuracy.init(rawValue:))
@@ -197,8 +209,10 @@ public enum ChatBilling {
       modelRequestCount: requestCount,
       toolCallCount: toolCalls
     )
-    snapshot.requests = metadata[requestsKey].flatMap { $0.data(using: .utf8) }
-      .flatMap { try? JSONDecoder().decode([ChatRequestBilling].self, from: $0) } ?? []
+    if includeRequests {
+      snapshot.requests = metadata[requestsKey].flatMap { $0.data(using: .utf8) }
+        .flatMap { try? JSONDecoder().decode([ChatRequestBilling].self, from: $0) } ?? []
+    }
     // Old calculated totals do not prove every tool request supplied usage.
     // Only a single request with both saved rates and complete plain usage
     // can be classified without consulting today's prices.
@@ -342,6 +356,11 @@ extension ChatBilling {
     result[modelRequestCountKey] = String(requests.count)
     result[toolCallCountKey] = String(max(0, toolCallCount))
     result[completenessKey] = String(!requests.isEmpty && requests.allSatisfy(\.isComplete))
+    if requests.contains(where: { $0.missingDimensions.contains("provider billing scope") }) {
+      result[scopedProviderCostKey] = "true"
+    } else {
+      result.removeValue(forKey: scopedProviderCostKey)
+    }
     let amounts = requests.compactMap { decimal($0.costUSD) }
     if !amounts.isEmpty {
       result[costKey] = decimalString(amounts.reduce(0, +))

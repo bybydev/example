@@ -881,3 +881,50 @@ func analyticsEnrichmentsTrackCacheWritesTopChatsContextAndTotalDuration() throw
   #expect(context.isEstimated == false)
   #expect(UsageAnalytics.messageOmittedContextCount(messageID: heavyMessage.id, telemetryEvents: events) == 3)
 }
+
+@Test("Index message strips non-billing metadata and aggregate tracks BYOK scope without decoding receipts")
+func indexMessageWhitelistsBillingMetadataAndAggregateTracksScopedCost() throws {
+  let byokReceipt = ChatBilling.requestBilling(
+    metadata: ["openrouter.costUSD": "0.01", ChatBilling.reportedCostCompleteKey: "false"],
+    usage: ProviderUsage(inputTokens: 500, outputTokens: 100),
+    pricing: nil
+  )
+  let metadata = ChatBilling.metadata(
+    existing: [
+      "requestID": "req_12345",
+      "responseID": "resp_67890",
+      "generationID": "gen_abc",
+      "provider": "upstream-host",
+    ],
+    requests: [byokReceipt],
+    toolCallCount: 0
+  )
+  #expect(metadata[ChatBilling.scopedProviderCostKey] == "true")
+
+  let assistant = ChatMessage(
+    role: .assistant,
+    status: .complete,
+    usage: ProviderUsage(inputTokens: 500, outputTokens: 100),
+    metadata: metadata
+  )
+  let user = ChatMessage(
+    role: .user,
+    content: "Hello",
+    status: .complete,
+    metadata: ["customWireKey": "noise"]
+  )
+
+  let indexedAssistant = ConversationIndexMessage(message: assistant).summaryMessage
+  #expect(indexedAssistant.metadata["requestID"] == nil)
+  #expect(indexedAssistant.metadata["responseID"] == nil)
+  #expect(indexedAssistant.metadata["generationID"] == nil)
+  #expect(indexedAssistant.metadata["provider"] == nil)
+  #expect(ChatBilling.snapshot(for: indexedAssistant) == ChatBilling.snapshot(for: assistant))
+
+  let indexedUser = ConversationIndexMessage(message: user).summaryMessage
+  #expect(indexedUser.metadata.isEmpty)
+
+  let aggregate = ChatBilling.aggregate(messages: [indexedAssistant])
+  #expect(aggregate.scopedProviderCostMessageCount == 1)
+  #expect(aggregate.costUSD == Decimal(string: "0.01"))
+}

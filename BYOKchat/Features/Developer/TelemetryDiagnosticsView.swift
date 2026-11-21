@@ -61,6 +61,9 @@ struct TelemetryDiagnosticsView: View {
         LabeledContent("Events", value: statistics.eventCount.formatted())
         LabeledContent("Analytics", value: statistics.analyticsEventCount.formatted())
         LabeledContent("Diagnostic", value: statistics.diagnosticEventCount.formatted())
+        if statistics.rollupRowCount > 0 {
+          LabeledContent("Daily rollups", value: statistics.rollupRowCount.formatted())
+        }
         LabeledContent(
           "Database",
           value: ByteCountFormatter.string(fromByteCount: statistics.databaseBytes, countStyle: .file)
@@ -114,7 +117,7 @@ struct TelemetryDiagnosticsView: View {
         Button("Clear All Telemetry", systemImage: "trash", role: .destructive) {
           confirmClearAll = true
         }
-        .disabled(isWorking || statistics.eventCount == 0)
+        .disabled(isWorking || (statistics.eventCount == 0 && statistics.rollupRowCount == 0))
       } header: {
         Text("Clear")
           .foregroundStyle(theme.secondaryForegroundColor)
