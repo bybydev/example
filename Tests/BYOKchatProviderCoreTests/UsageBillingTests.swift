@@ -592,4 +592,132 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   )
   #expect(detail.failureBreakdown.count == 1)
   #expect(detail.failureBreakdown.first?.errorCode == "context_window_exceeded")
+  #expect(detail.providerBreakdown.map(\.id) == ["openai"])
+  #expect(detail.modelBreakdown.map(\.id) == ["gpt-6.2-sol"])
+}
+
+@Test func conversationAndMessageAnalyticsStayStrictlyScoped() {
+  let reference = Date(timeIntervalSince1970: 1_700_000_000)
+  let earlier = Calendar.current.date(byAdding: .day, value: -3, to: reference)!
+
+  let msgA = ChatMessage(
+    id: ChatMessageID(rawValue: "msg-a"),
+    role: .assistant,
+    createdAt: reference,
+    updatedAt: reference,
+    status: .complete,
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    usage: ProviderUsage(inputTokens: 200, outputTokens: 80)
+  )
+  let msgB = ChatMessage(
+    id: ChatMessageID(rawValue: "msg-b"),
+    role: .assistant,
+    createdAt: earlier,
+    updatedAt: earlier,
+    status: .complete,
+    providerID: "anthropic",
+    accountID: "ant",
+    modelID: "claude-sonnet-5-5",
+    usage: ProviderUsage(inputTokens: 400, outputTokens: 120)
+  )
+  let targetChat = ChatConversation(
+    id: "chat-target",
+    title: "Target Chat",
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    messages: [msgA, msgB]
+  )
+
+  let events: [TelemetryEvent] = [
+    TelemetryEvent(
+      timestamp: reference,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: targetChat.id,
+      messageID: msgA.id,
+      providerID: "openai",
+      modelID: "gpt-6.2-sol",
+      durationMilliseconds: 1_200,
+      timeToFirstTokenMilliseconds: 250,
+      metadata: ["outputTokensPerSecond": "64.0"]
+    ),
+    TelemetryEvent(
+      timestamp: earlier,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: targetChat.id,
+      messageID: msgB.id,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 2_400,
+      timeToFirstTokenMilliseconds: 500,
+      metadata: ["outputTokensPerSecond": "48.0"]
+    ),
+    // Different conversation event must never leak into targetChat or message queries.
+    TelemetryEvent(
+      timestamp: reference,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: "chat-other",
+      messageID: ChatMessageID(rawValue: "msg-other"),
+      providerID: "gemini",
+      modelID: "gemini-3-pro",
+      durationMilliseconds: 9_999,
+      timeToFirstTokenMilliseconds: 9_999,
+      metadata: ["outputTokensPerSecond": "1.0"]
+    ),
+  ]
+
+  let chatAll = UsageAnalytics.conversationSnapshot(
+    conversation: targetChat,
+    telemetryEvents: events,
+    range: .all,
+    reference: reference
+  )
+  #expect(chatAll.aggregate.inputTokens == 600)
+  #expect(chatAll.aggregate.outputTokens == 200)
+  #expect(chatAll.performance.providerRequestCount == 2)
+  #expect(Set(chatAll.providerBreakdown.map(\.id)) == Set(["openai", "anthropic"]))
+  #expect(Set(chatAll.modelBreakdown.map(\.id)) == Set(["gpt-6.2-sol", "claude-sonnet-5-5"]))
+
+  let msgAPerf = UsageAnalytics.messagePerformance(
+    messageID: msgA.id,
+    telemetryEvents: events,
+    range: .today,
+    reference: reference
+  )
+  #expect(msgAPerf.providerRequestCount == 1)
+  #expect(msgAPerf.medianTTFTMilliseconds == 250)
+  #expect(msgAPerf.medianDurationMilliseconds == 1_200)
+  #expect(msgAPerf.medianOutputTokensPerSecond == 64.0)
+
+  // Historical message telemetry stays gated when clamped to Today (Free) and visible on All (Pro).
+  let msgBFree = UsageAnalytics.messagePerformance(
+    messageID: msgB.id,
+    telemetryEvents: events,
+    range: UsageAnalyticsRange.all.accessible(hasPro: false),
+    reference: reference
+  )
+  #expect(msgBFree.providerRequestCount == 0)
+  #expect(!msgBFree.hasLatencyOrSpeedMetrics)
+
+  let msgBPro = UsageAnalytics.messagePerformance(
+    messageID: msgB.id,
+    telemetryEvents: events,
+    range: UsageAnalyticsRange.all.accessible(hasPro: true),
+    reference: reference
+  )
+  #expect(msgBPro.providerRequestCount == 1)
+  #expect(msgBPro.medianTTFTMilliseconds == 500)
+  #expect(msgBPro.medianDurationMilliseconds == 2_400)
+  #expect(msgBPro.medianOutputTokensPerSecond == 48.0)
 }

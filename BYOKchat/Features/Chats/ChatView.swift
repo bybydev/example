@@ -547,10 +547,18 @@ struct ChatView: View {
       }
     }
     .sheet(isPresented: $showUsage) {
-      UsageDashboardView(
-        conversations: chats.conversations,
-        currentConversationID: conversationID
-      )
+      if let targetConversation = conversation ?? chats.conversations.first(where: { $0.id == conversationID }) {
+        ConversationAnalyticsView(conversation: targetConversation)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Chat Unavailable", systemImage: "chart.bar.xaxis")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showUsage = false }
+              }
+            }
+        }
+      }
     }
     .sheet(item: $editTarget) { message in
       MessageEditorSheet(

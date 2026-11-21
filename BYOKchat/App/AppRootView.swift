@@ -782,7 +782,7 @@ struct AppRootView: View {
     case .library: BYOKAppAnalytics.track(.featureOpened, dimension: .library)
     case .projects: BYOKAppAnalytics.track(.featureOpened, dimension: .projects)
     case .plugins: BYOKAppAnalytics.track(.featureOpened, dimension: .mcp)
-    case .usage, .allChats: break // The dashboard also records openings from chat sheets.
+    case .usage, .allChats: break // Analytics views record their own openings.
     }
   }
 

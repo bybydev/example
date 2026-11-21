@@ -5,7 +5,6 @@ import SwiftUI
 
 struct UsageDashboardView: View {
   let conversations: [ChatConversation]
-  let currentConversationID: ConversationID?
 
   @Environment(\.dismiss) private var dismiss
   @Environment(PurchaseManager.self) private var purchaseManager
@@ -31,18 +30,16 @@ struct UsageDashboardView: View {
 
   init(
     conversations: [ChatConversation],
-    currentConversationID: ConversationID? = nil,
     openSidebar: (() -> Void)? = nil
   ) {
     self.conversations = conversations
-    self.currentConversationID = currentConversationID
     self.openSidebar = openSidebar
   }
 
-  /// Set when this renders as the app's main screen (drawer Usage
+  /// Set when this renders as the app's main screen (drawer Analytics
   /// destination): shows a leading sidebar-hamburger button and relies on the
-  /// ambient navigation stack. Left nil for the chat ⋯-menu sheet, which keeps
-  /// its own stack and a Done button.
+  /// ambient navigation stack. When nil, wraps itself in a NavigationStack with
+  /// a Done button.
   var openSidebar: (() -> Void)? = nil
 
   var body: some View {
@@ -79,6 +76,7 @@ struct UsageDashboardView: View {
       range: activeRange,
       referenceDate: referenceDate
     )
+    .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
     .refreshable {
       await loadTelemetry()
@@ -147,15 +145,6 @@ struct UsageDashboardView: View {
       usageSummarySection(snapshot.aggregate, range: range)
 
       telemetryStatusSections(snapshot: snapshot)
-
-      if let conversation = currentConversation {
-        currentConversationSection(
-          conversation,
-          filteredEvents: filteredEvents,
-          range: range,
-          referenceDate: referenceDate
-        )
-      }
 
       if !snapshot.providerBreakdown.isEmpty {
         providersSection(snapshot.providerBreakdown)
@@ -364,34 +353,6 @@ struct UsageDashboardView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  private func currentConversationSection(
-    _ conversation: ChatConversation,
-    filteredEvents: [TelemetryEvent],
-    range: UsageRange,
-    referenceDate: Date
-  ) -> some View {
-    let conversationSnapshot = UsageAnalytics.conversationSnapshot(
-      conversation: conversation,
-      telemetryEvents: filteredEvents,
-      range: range,
-      reference: referenceDate
-    )
-
-    return Section("This conversation") {
-      NavigationLink {
-        ConversationAnalyticsView(
-          conversation: conversation,
-          range: range,
-          telemetryEvents: filteredEvents,
-          telemetryAvailable: !telemetryUnavailable
-        )
-      } label: {
-        conversationSummaryLabel(conversationSnapshot)
-      }
-    }
-    .listRowBackground(theme.surfaceColor)
-  }
-
   private func providersSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
     let accounts = model.providers.accounts
     return Section("Providers") {
@@ -526,44 +487,6 @@ struct UsageDashboardView: View {
     performance.providerRequestCount > 0 || performance.toolCallCount > 0 || performance.mcpRequestCount > 0
   }
 
-  private var currentConversation: ChatConversation? {
-    guard let currentConversationID else { return nil }
-    return conversations.first(where: { $0.id == currentConversationID })
-  }
-
-  private func conversationSummaryLabel(_ snapshot: ConversationUsageAnalyticsSnapshot) -> some View {
-    let aggregate = snapshot.aggregate
-    let performance = snapshot.performance
-    let hasSavedMessages = aggregate.assistantMessageCount > 0
-
-    return VStack(alignment: .leading, spacing: 4) {
-      HStack {
-        Text("Details")
-        Spacer()
-        Text(hasSavedMessages || performance.providerRequestCount == 0
-          ? usageAggregateCostText(aggregate)
-          : "—")
-          .foregroundStyle(theme.secondaryForegroundColor)
-          .monospacedDigit()
-      }
-      HStack(spacing: 6) {
-        Text(usageRequestCountLabel(hasSavedMessages
-          ? aggregate.modelRequestCount
-          : performance.providerRequestCount))
-        if performance.providerSuccessRate != nil {
-          Text("·")
-          Text("\(usagePercent(performance.providerSuccessRate)) success")
-        }
-        if performance.medianTTFTMilliseconds != nil {
-          Text("·")
-          Text("\(usageDuration(performance.medianTTFTMilliseconds)) TTFT")
-        }
-      }
-      .font(.caption)
-      .foregroundStyle(theme.secondaryForegroundColor)
-    }
-  }
-
   #if DEBUG
   private func budgetProgress(for aggregate: ChatUsageAggregate) -> Double {
     guard monthlyBudgetUSD > 0 else { return 0 }
@@ -628,7 +551,7 @@ struct UsageDashboardView: View {
   }
 }
 
-private struct UsageBreakdownRowView: View {
+struct UsageBreakdownRowView: View {
   let row: UsageBreakdown
 
   @Environment(\.appFoundationTheme) private var theme

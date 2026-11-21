@@ -7,7 +7,11 @@ struct MessageInfoView: View {
   let accountLabel: String?
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(AppModel.self) private var model
+  @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
+
+  @State private var messagePerformance: TelemetryPerformanceAggregate?
 
   private var billing: ChatBillingSnapshot { ChatBilling.snapshot(for: message) }
 
@@ -69,6 +73,10 @@ struct MessageInfoView: View {
           .listRowBackground(theme.surfaceColor)
         }
 
+        if message.role == .assistant, let performance = messagePerformance, performance.hasLatencyOrSpeedMetrics {
+          performanceSection(performance)
+        }
+
         if firstPricingSnapshot != nil || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
           Section {
             if !billing.requests.isEmpty {
@@ -128,6 +136,7 @@ struct MessageInfoView: View {
         }
         .listRowBackground(theme.surfaceColor)
       }
+      .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
       .foregroundStyle(theme.primaryForegroundColor)
       .background(AppThemeBackground(theme: theme))
@@ -138,6 +147,51 @@ struct MessageInfoView: View {
           Button("Done") { dismiss() }
         }
       }
+      .task(id: message.id) {
+        await loadMessagePerformance()
+      }
+      .onChange(of: purchaseManager.hasPro) { _, _ in
+        Task { await loadMessagePerformance() }
+      }
+    }
+  }
+
+  private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
+    let isMultiRequest = performance.providerRequestCount > 1
+    return Section {
+      if let ttft = performance.medianTTFTMilliseconds {
+        LabeledContent(isMultiRequest ? "Median TTFT" : "TTFT", value: usageDuration(ttft))
+      }
+      if let duration = performance.medianDurationMilliseconds {
+        LabeledContent(isMultiRequest ? "Median duration" : "Duration", value: usageDuration(duration))
+      }
+      if let speed = performance.medianOutputTokensPerSecond {
+        LabeledContent(isMultiRequest ? "Median speed" : "Speed", value: usageRate(speed))
+      }
+    } header: {
+      Text("Performance")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func loadMessagePerformance() async {
+    guard message.role == .assistant else {
+      messagePerformance = nil
+      return
+    }
+    let recorder = model.telemetryRecorder
+    switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
+    case .loaded(let events, _):
+      let range: UsageRange = purchaseManager.hasPro ? .all : .today
+      let performance = UsageAnalytics.messagePerformance(
+        messageID: message.id,
+        telemetryEvents: events,
+        range: range
+      )
+      messagePerformance = performance.hasLatencyOrSpeedMetrics ? performance : nil
+    case .unavailable:
+      messagePerformance = nil
     }
   }
 

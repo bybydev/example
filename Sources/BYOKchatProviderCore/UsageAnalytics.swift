@@ -86,15 +86,21 @@ public struct ConversationUsageAnalyticsSnapshot: Sendable, Equatable {
   public let aggregate: ChatUsageAggregate
   public let performance: TelemetryPerformanceAggregate
   public let failureBreakdown: [TelemetryFailureBreakdown]
+  public let providerBreakdown: [UsageAnalyticsBreakdown]
+  public let modelBreakdown: [UsageAnalyticsBreakdown]
 
   public init(
     aggregate: ChatUsageAggregate,
     performance: TelemetryPerformanceAggregate,
-    failureBreakdown: [TelemetryFailureBreakdown] = []
+    failureBreakdown: [TelemetryFailureBreakdown] = [],
+    providerBreakdown: [UsageAnalyticsBreakdown] = [],
+    modelBreakdown: [UsageAnalyticsBreakdown] = []
   ) {
     self.aggregate = aggregate
     self.performance = performance
     self.failureBreakdown = failureBreakdown
+    self.providerBreakdown = providerBreakdown
+    self.modelBreakdown = modelBreakdown
   }
 }
 
@@ -156,8 +162,34 @@ public enum UsageAnalytics {
     return ConversationUsageAnalyticsSnapshot(
       aggregate: ChatBilling.aggregate(messages: messages),
       performance: TelemetryAnalytics.aggregate(events: events),
-      failureBreakdown: TelemetryAnalytics.failureBreakdown(events: events)
+      failureBreakdown: TelemetryAnalytics.failureBreakdown(events: events),
+      providerBreakdown: breakdown(
+        messages: messages,
+        events: events,
+        messageKey: { $0.providerID?.rawValue },
+        eventKey: { $0.providerID?.rawValue }
+      ),
+      modelBreakdown: breakdown(
+        messages: messages,
+        events: events,
+        messageKey: { $0.modelID?.rawValue },
+        eventKey: { $0.modelID?.rawValue }
+      )
     )
+  }
+
+  public static func messagePerformance(
+    messageID: ChatMessageID,
+    telemetryEvents: [TelemetryEvent],
+    range: UsageAnalyticsRange,
+    reference: Date = .now
+  ) -> TelemetryPerformanceAggregate {
+    let events = filteredAnalyticsEvents(
+      telemetryEvents,
+      range: range,
+      reference: reference
+    ).filter { $0.messageID == messageID }
+    return TelemetryAnalytics.aggregate(events: events)
   }
 
   public static func filteredAnalyticsEvents(
