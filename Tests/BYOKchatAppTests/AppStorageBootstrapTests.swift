@@ -781,7 +781,10 @@ struct DataManagementModelTests {
       runtime: chatRuntime,
       preferences: preferences,
       mcpWorkspace: mcpWorkspace,
-      projectWorkspace: projectWorkspace
+      projectWorkspace: projectWorkspace,
+      resolveDefaultAccountID: { [weak providersModel] in
+        providersModel?.resolvedDefaultAccount?.id
+      }
     )
     let mcpModel = MCPManagementModel(
       runtime: mcpRuntime,
