@@ -25,7 +25,16 @@ enum ResponseImageScanner {
       return false
     }
     for block in AnswerContentParser.parse(content) {
-      guard case .markdown(let markdown) = block, markdown.contains("![") else { continue }
+      let markdown: String
+      switch block {
+      case .markdown(let text):
+        markdown = text
+      case .table(let table):
+        markdown = table.rawMarkdown
+      case .code, .math:
+        continue
+      }
+      guard markdown.contains("![") else { continue }
       let range = NSRange(markdown.startIndex..., in: markdown)
       for match in regex.matches(in: markdown, range: range) {
         guard match.numberOfRanges >= 3,
@@ -55,7 +64,16 @@ enum ResponseImageScanner {
     var seen = Set<String>()
 
     for block in AnswerContentParser.parse(content) {
-      guard case .markdown(let markdown) = block, markdown.contains("![") else { continue }
+      let markdown: String
+      switch block {
+      case .markdown(let text):
+        markdown = text
+      case .table(let table):
+        markdown = table.rawMarkdown
+      case .code, .math:
+        continue
+      }
+      guard markdown.contains("![") else { continue }
       let range = NSRange(markdown.startIndex..., in: markdown)
       for match in regex.matches(in: markdown, range: range) {
         guard

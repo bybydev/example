@@ -226,4 +226,157 @@ struct AnswerContentParserTests {
     #expect(!ChatViewSupport.canSaveEditedMessage(draft: " Hello \n", original: "Hello"))
     #expect(ChatViewSupport.canSaveEditedMessage(draft: "Hello!", original: "Hello"))
   }
+
+  @Test("Parses GFM tables with alignments, escaped pipes, code pipes, <br>, and ragged rows")
+  func parsesRichGFMTables() {
+    let text = """
+    Summary:
+    | # | Expression | Notes |
+    | ---: | :---: | :--- |
+    | 1 | `a | b` | Bitwise OR<br>Inline `<br>` stays literal |
+    | 2 | `foo \\| bar` | Escaped \\| pipe | Extra ignored |
+    | 3 | |
+    """
+
+    let blocks = AnswerContentParser.parse(text)
+    #expect(blocks.count == 2)
+    #expect(blocks[0] == .markdown("Summary:"))
+
+    guard case .table(let table) = blocks[1] else {
+      Issue.record("Expected second block to be a parsed table")
+      return
+    }
+    #expect(table.headers == ["#", "Expression", "Notes"])
+    #expect(table.alignments == [.trailing, .center, .leading])
+    #expect(table.rows.count == 3)
+    #expect(table.rows[0] == ["1", "`a | b`", "Bitwise OR\nInline `<br>` stays literal"])
+    #expect(table.rows[1] == ["2", "`foo | bar`", "Escaped | pipe"])
+    #expect(table.rows[2] == ["3", "", ""])
+    #expect(
+      table.tsvText
+        == "#\tExpression\tNotes\n1\ta | b\tBitwise OR Inline <br> stays literal\n2\tfoo | bar\tEscaped | pipe\n3\t\t"
+    )
+  }
+
+  @Test("Parses pipeless tables, multiple tables with distinct alignments, and header-only tables")
+  func parsesPipelessAndMultipleTables() {
+    let text = """
+    Formula | Meaning
+    --- | ---:
+    $E = mc^2$ | Mass-energy
+
+    | | Col A | Col B |
+    | --- | :---: | :---: |
+    | Row 1 | X | Y |
+
+    | Only Header |
+    | :---: |
+    """
+
+    let blocks = AnswerContentParser.parse(text)
+    #expect(blocks.count == 3)
+
+    guard case .table(let first) = blocks[0],
+      case .table(let second) = blocks[1],
+      case .table(let third) = blocks[2]
+    else {
+      Issue.record("Expected three separate table blocks")
+      return
+    }
+
+    #expect(first.headers == ["Formula", "Meaning"])
+    #expect(first.alignments == [.leading, .trailing])
+    #expect(first.rows == [["$E = mc^2$", "Mass-energy"]])
+    #expect(AnswerContentParser.shouldRenderCellAsInlineMath("$E = mc^2$"))
+    #expect(!AnswerContentParser.shouldRenderCellAsInlineMath("**$E = mc^2$**"))
+
+    #expect(second.headers == ["", "Col A", "Col B"])
+    #expect(second.alignments == [.leading, .center, .center])
+    #expect(second.rows == [["Row 1", "X", "Y"]])
+
+    #expect(third.headers == ["Only Header"])
+    #expect(third.alignments == [.center])
+    #expect(third.rows.isEmpty)
+  }
+
+  @Test("Rejects malformed table delimiters and preserves links/images inside tables")
+  func rejectsInvalidTablesAndExtractsTableMedia() {
+    let malformed = """
+    A | B
+    :::---::: | ---
+    1 | 2
+
+    ```markdown
+    | In Code | Ignored |
+    | --- | --- |
+    | 1 | 2 |
+    ```
+
+    | Resource | Preview |
+    | --- | --- |
+    | [Apple](https://apple.com) | ![Logo](https://example.com/logo.png) |
+    """
+
+    let blocks = AnswerContentParser.parse(malformed)
+    let tables = blocks.compactMap { block -> ParsedMarkdownTable? in
+      guard case .table(let table) = block else { return nil }
+      return table
+    }
+    #expect(tables.count == 1)
+    #expect(tables[0].headers == ["Resource", "Preview"])
+
+    let sources = AnswerContentParser.sources(in: blocks)
+    #expect(sources.contains { $0.url.absoluteString == "https://apple.com" })
+
+    #expect(ResponseImageScanner.hasImageCandidates(in: malformed))
+    let images = ResponseImageScanner.imageCandidates(in: malformed)
+    #expect(images.count == 1)
+    #expect(images[0].label == "Logo")
+  }
+
+  @Test("Computes content-aware, Dynamic-Type-scaled table column widths")
+  func computesAdaptiveTableColumnWidths() {
+    let compactTable = ParsedMarkdownTable(
+      headers: ["#", "Feature", "Description"],
+      alignments: [.trailing, .leading, .leading],
+      rows: [
+        ["1", "Offline", "Runs models locally with Ollama and LM Studio without cloud calls."],
+        ["2", "Export", "Save full conversations to Markdown."],
+      ],
+      rawMarkdown: ""
+    )
+
+    let metrics = MarkdownTableLayout.compute(
+      for: compactTable,
+      availableWidth: 360,
+      fontSize: 15,
+      fillsWidth: true
+    )
+    #expect(metrics.columnWidths.count == 3)
+    #expect(metrics.columnWidths[0] < metrics.columnWidths[2])
+    #expect(metrics.columnWidths[2] > 170)
+
+    let wideTable = ParsedMarkdownTable(
+      headers: ["Metric", "Claude", "GPT", "Gemini", "DeepSeek", "Llama"],
+      alignments: Array(repeating: .leading, count: 6),
+      rows: [["Context Window", "200K tokens", "1M tokens", "1M tokens", "128K tokens", "128K tokens"]],
+      rawMarkdown: ""
+    )
+    let wideMetrics = MarkdownTableLayout.compute(
+      for: wideTable,
+      availableWidth: 360,
+      fontSize: 15,
+      fillsWidth: true
+    )
+    #expect(wideMetrics.overflowsViewport)
+    #expect(wideMetrics.totalWidth > 360)
+
+    let largeTypeMetrics = MarkdownTableLayout.compute(
+      for: wideTable,
+      availableWidth: 360,
+      fontSize: 24,
+      fillsWidth: true
+    )
+    #expect(largeTypeMetrics.totalWidth > wideMetrics.totalWidth)
+  }
 }
