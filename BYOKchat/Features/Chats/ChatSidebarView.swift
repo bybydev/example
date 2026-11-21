@@ -12,8 +12,22 @@ struct ChatSidebarView: View {
     case projects
     case plugins
     case usage
+    case allChats
 
     var id: String { rawValue }
+  }
+
+  /// Maximum number of unpinned recent conversations displayed inline in the
+  /// sidebar drawer before offering the "All Chats" destination.
+  nonisolated static let recentDisplayLimit = 20
+
+  nonisolated struct SidebarConversationBuckets: Equatable {
+    let pinned: [ChatConversation]
+    let recent: [ChatConversation]
+    let totalHistoryCount: Int
+    let hiddenRecentCount: Int
+
+    var hasMoreRecent: Bool { hiddenRecentCount > 0 }
   }
 
   @Bindable var chats: ChatManagementModel
@@ -66,7 +80,9 @@ struct ChatSidebarView: View {
     .contentShape(Rectangle())
     .accessibilityAction(.escape) { close() }
     .onDisappear {
-      chats.search("")
+      if isSearching || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        chats.search("")
+      }
     }
     .animation(.snappy(duration: 0.2), value: isSearching)
     .sheet(isPresented: $showPaywall) {
@@ -271,20 +287,16 @@ struct ChatSidebarView: View {
   }
 
   private var scrollableSidebarContent: some View {
-    let history = chats.historyConversations
-    let pinnedIDs = SidebarPinStore.parse(pinnedConversationIDs)
-    let pinned = history
-      .filter { pinnedIDs.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
-    let recent = history
-      .filter { !pinnedIDs.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
+    let buckets = Self.conversationBuckets(
+      from: chats.historyConversations,
+      pinnedRaw: pinnedConversationIDs
+    )
 
     return ScrollView {
       LazyVStack(alignment: .leading, spacing: 1) {
         primaryNavigation
 
-        if history.isEmpty {
+        if buckets.totalHistoryCount == 0 {
           ContentUnavailableView(
             "No Chats",
             systemImage: "bubble.left",
@@ -293,27 +305,72 @@ struct ChatSidebarView: View {
           .frame(maxWidth: .infinity)
           .padding(.top, 20)
         } else {
-          if !pinned.isEmpty {
+          if !buckets.pinned.isEmpty {
             sidebarSectionTitle("Pinned", topPadding: 2)
-            ForEach(pinned) { conversation in
+            ForEach(buckets.pinned) { conversation in
               conversationButton(conversation, isPinned: true)
             }
           }
 
-          if !recent.isEmpty {
+          if !buckets.recent.isEmpty {
             sidebarSectionTitle(
               "Recent",
-              topPadding: pinned.isEmpty ? 2 : 12
+              topPadding: buckets.pinned.isEmpty ? 2 : 12
             )
-            ForEach(recent) { conversation in
+            ForEach(buckets.recent) { conversation in
               conversationButton(conversation, isPinned: false)
             }
+          }
+
+          if buckets.hasMoreRecent || activeDestination == .allChats {
+            allChatsButton(totalCount: buckets.totalHistoryCount)
+              .padding(.top, 6)
           }
         }
       }
       .padding(.bottom, 10)
     }
     .scrollIndicators(.hidden)
+  }
+
+  private func allChatsButton(totalCount: Int) -> some View {
+    let selected = activeDestination == .allChats
+    return Button {
+      openDestination(.allChats)
+    } label: {
+      HStack(alignment: .center, spacing: 10) {
+        Image(systemName: "bubble.left.and.bubble.right")
+          .font(.system(size: 15, weight: .medium))
+          .foregroundStyle(selected ? theme.accentColor : theme.secondaryForegroundColor)
+          .frame(width: 20, height: 20)
+
+        Text("All Chats")
+          .font(.system(size: 15, weight: selected ? .semibold : .medium))
+          .foregroundStyle(selected ? theme.primaryForegroundColor : theme.secondaryForegroundColor)
+          .lineLimit(1)
+
+        Spacer(minLength: 8)
+
+        Text("\(totalCount)")
+          .font(.system(size: 13, weight: .medium).monospacedDigit())
+          .foregroundStyle(theme.secondaryForegroundColor)
+
+        Image(systemName: "chevron.right")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+      }
+      .padding(.horizontal, 12)
+      .frame(minHeight: 40)
+      .background(
+        selected ? theme.elevatedSurfaceColor.opacity(0.62) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("All Chats, \(totalCount) conversation\(totalCount == 1 ? "" : "s")")
+    .accessibilityAddTraits(selected ? .isSelected : [])
+    .padding(.horizontal, 8)
   }
 
   private func sidebarSectionTitle(_ title: String, topPadding: CGFloat) -> some View {
@@ -489,6 +546,34 @@ struct ChatSidebarView: View {
 
   private func removePinned(_ id: ConversationID) {
     pinnedConversationIDs = SidebarPinStore.removing(id, from: pinnedConversationIDs)
+  }
+
+  nonisolated static func conversationBuckets(
+    from history: [ChatConversation],
+    pinnedRaw: String,
+    recentLimit: Int = recentDisplayLimit
+  ) -> SidebarConversationBuckets {
+    let pinnedIDs = SidebarPinStore.parse(pinnedRaw)
+    let sortedByRecency: (ChatConversation, ChatConversation) -> Bool = { lhs, rhs in
+      if lhs.updatedAt != rhs.updatedAt {
+        return lhs.updatedAt > rhs.updatedAt
+      }
+      return lhs.id.rawValue < rhs.id.rawValue
+    }
+    let pinned = history
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let allRecent = history
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let limit = max(0, recentLimit)
+    let displayedRecent = Array(allRecent.prefix(limit))
+    return SidebarConversationBuckets(
+      pinned: pinned,
+      recent: displayedRecent,
+      totalHistoryCount: history.count,
+      hiddenRecentCount: max(0, allRecent.count - displayedRecent.count)
+    )
   }
 
   nonisolated static func searchSubtitle(

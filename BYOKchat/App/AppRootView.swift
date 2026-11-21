@@ -12,10 +12,10 @@ enum AppRoute: Hashable {
   /// A live conversation shown inside the stack. "New chat" inside a project
   /// creates the conversation eagerly, so this is the only chat shape there
   /// is — an empty one is just a chat with no messages yet.
-  case chat(ConversationID)
+  case chat(ConversationID, messageID: ChatMessageID? = nil)
 
   var chatID: ConversationID? {
-    if case .chat(let id) = self { return id }
+    if case .chat(let id, _) = self { return id }
     return nil
   }
 }
@@ -366,6 +366,15 @@ struct AppRootView: View {
               conversations: model.chats.conversations,
               openSidebar: openSidebar
             )
+          case .allChats:
+            ChatListView(
+              chats: model.chats,
+              providers: model.providers,
+              projects: model.projects,
+              mcp: model.mcp,
+              openSidebar: openSidebar,
+              startNewChat: { startNewChat(in: nil) }
+            )
           }
         } else if isCreatingNewChat {
           ProgressView()
@@ -416,9 +425,10 @@ struct AppRootView: View {
             pushedFromStack: true,
             onReadyForConversation: { startNewChat(in: projectID) }
           )
-        case .chat(let conversationID):
+        case .chat(let conversationID, let messageID):
           ChatView(
             subject: .existing(conversationID),
+            initialScrollMessageID: messageID,
             chats: model.chats,
             providers: model.providers,
             projects: model.projects,
@@ -704,7 +714,7 @@ struct AppRootView: View {
     case .library: BYOKAppAnalytics.track(.featureOpened, dimension: .library)
     case .projects: BYOKAppAnalytics.track(.featureOpened, dimension: .projects)
     case .plugins: BYOKAppAnalytics.track(.featureOpened, dimension: .mcp)
-    case .usage: break // The dashboard also records openings from chat sheets.
+    case .usage, .allChats: break // The dashboard also records openings from chat sheets.
     }
   }
 

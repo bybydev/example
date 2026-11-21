@@ -1,82 +1,196 @@
 import AppFoundation
 import BYOKchatProviderCore
+import Foundation
 import SwiftUI
+
+nonisolated struct ChatListSection: Identifiable, Equatable {
+  let id: String
+  let title: String
+  let isPinned: Bool
+  let conversations: [ChatConversation]
+}
+
+nonisolated enum ChatListGrouping {
+  static func sections(
+    from history: [ChatConversation],
+    pinnedRaw: String,
+    now: Date = .now,
+    calendar: Calendar = .current,
+    locale: Locale = .current
+  ) -> [ChatListSection] {
+    let pinnedIDs = SidebarPinStore.parse(pinnedRaw)
+    let sortedByRecency: (ChatConversation, ChatConversation) -> Bool = { lhs, rhs in
+      if lhs.updatedAt != rhs.updatedAt {
+        return lhs.updatedAt > rhs.updatedAt
+      }
+      return lhs.id.rawValue < rhs.id.rawValue
+    }
+
+    let pinned = history
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let unpinned = history
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+
+    var sections: [ChatListSection] = []
+    if !pinned.isEmpty {
+      sections.append(
+        ChatListSection(
+          id: "pinned",
+          title: "Pinned",
+          isPinned: true,
+          conversations: pinned
+        )
+      )
+    }
+
+    let startOfToday = calendar.startOfDay(for: now)
+    let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+    let startOfLast7Days = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
+    let startOfLast30Days = calendar.date(byAdding: .day, value: -30, to: startOfToday) ?? startOfToday
+
+    var today: [ChatConversation] = []
+    var yesterday: [ChatConversation] = []
+    var last7Days: [ChatConversation] = []
+    var last30Days: [ChatConversation] = []
+    var monthOrder: [String] = []
+    var monthTitles: [String: String] = [:]
+    var monthBuckets: [String: [ChatConversation]] = [:]
+    let monthFormat = Date.FormatStyle(
+      locale: locale,
+      calendar: calendar,
+      timeZone: calendar.timeZone
+    ).month(.wide).year()
+
+    for conversation in unpinned {
+      if conversation.updatedAt >= startOfToday {
+        today.append(conversation)
+      } else if conversation.updatedAt >= startOfYesterday {
+        yesterday.append(conversation)
+      } else if conversation.updatedAt >= startOfLast7Days {
+        last7Days.append(conversation)
+      } else if conversation.updatedAt >= startOfLast30Days {
+        last30Days.append(conversation)
+      } else {
+        let components = calendar.dateComponents([.year, .month], from: conversation.updatedAt)
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let key = "month-\(year)-\(month)"
+        if monthBuckets[key] == nil {
+          monthOrder.append(key)
+          let monthAnchor = calendar.date(from: DateComponents(year: year, month: month, day: 1))
+            ?? conversation.updatedAt
+          monthTitles[key] = monthAnchor.formatted(monthFormat)
+        }
+        monthBuckets[key, default: []].append(conversation)
+      }
+    }
+
+    if !today.isEmpty {
+      sections.append(ChatListSection(id: "today", title: "Today", isPinned: false, conversations: today))
+    }
+    if !yesterday.isEmpty {
+      sections.append(
+        ChatListSection(id: "yesterday", title: "Yesterday", isPinned: false, conversations: yesterday)
+      )
+    }
+    if !last7Days.isEmpty {
+      sections.append(
+        ChatListSection(
+          id: "last7days",
+          title: "Previous 7 Days",
+          isPinned: false,
+          conversations: last7Days
+        )
+      )
+    }
+    if !last30Days.isEmpty {
+      sections.append(
+        ChatListSection(
+          id: "last30days",
+          title: "Previous 30 Days",
+          isPinned: false,
+          conversations: last30Days
+        )
+      )
+    }
+    for key in monthOrder {
+      guard let items = monthBuckets[key], !items.isEmpty else { continue }
+      sections.append(
+        ChatListSection(
+          id: key,
+          title: monthTitles[key] ?? "Older",
+          isPinned: false,
+          conversations: items
+        )
+      )
+    }
+
+    return sections
+  }
+}
 
 struct ChatListView: View {
   @Bindable var chats: ChatManagementModel
   @Bindable var providers: ProviderManagementModel
   @Bindable var projects: ProjectManagementModel
   @Bindable var mcp: MCPManagementModel
-  let library: LibraryManagementModel
-  let openProviders: () -> Void
+  let openSidebar: () -> Void
+  let startNewChat: () -> Void
 
-  @State private var path: [ConversationID] = []
+  @Environment(\.appFoundationTheme) private var theme
+  @AppStorage(SidebarPinStore.storageKey) private var pinnedConversationIDs = ""
+  @State private var searchText = ""
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
-  @State private var searchText = ""
-  @State private var searchTarget: ConversationSearchResult?
-  @State private var isCreatingChat = false
-  @State private var creationRevision: UInt = 0
-  @Environment(\.appFoundationTheme) private var theme
+  @State private var pendingDelete: ChatConversation?
+
+  private var trimmedSearchText: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
 
   var body: some View {
-    NavigationStack(path: $path) {
-      Group {
-        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          searchResults
-        } else if chats.historyConversations.isEmpty {
-          ContentUnavailableView {
-            Label("No Chats", systemImage: "bubble.left.and.bubble.right")
-          } description: {
-            Text(
-              providers.accounts.isEmpty
-                ? "Add a provider account, then start your first conversation."
-                : "Start a conversation with your own provider account."
-            )
-          } actions: {
-            if providers.accounts.isEmpty {
-              Button("Configure Provider", action: openProviders)
-            } else {
-              Button("New Chat") { createChat() }
-                .buttonStyle(.borderedProminent)
-            }
-          }
-        } else {
-          conversationList
+    Group {
+      if !trimmedSearchText.isEmpty {
+        searchResults
+      } else if chats.historyConversations.isEmpty {
+        ContentUnavailableView {
+          Label("No Chats", systemImage: "bubble.left.and.bubble.right")
+        } description: {
+          Text("Your conversations will appear here.")
+        } actions: {
+          Button("New Chat", action: startNewChat)
+            .buttonStyle(.borderedProminent)
         }
-      }
-      .scrollContentBackground(.hidden)
-      .foregroundStyle(theme.primaryForegroundColor)
-      .background(AppThemeBackground(theme: theme))
-      .navigationTitle("BYOKchat")
-      .searchable(text: $searchText, prompt: "Search chats and messages")
-      .onChange(of: searchText) { _, value in chats.search(value) }
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("New Chat", systemImage: "square.and.pencil") { createChat() }
-            .disabled(providers.accounts.isEmpty || isCreatingChat)
-        }
-      }
-      .navigationDestination(for: ConversationID.self) { id in
-        ChatView(
-          subject: .existing(id),
-          initialScrollMessageID: searchTarget?.conversationID == id
-            ? searchTarget?.messageID : nil,
-          chats: chats,
-          providers: providers,
-          projects: projects,
-          mcp: mcp,
-          library: library,
-          pushedFromStack: true,
-          startNewChat: createChat
-        )
+      } else {
+        conversationList
       }
     }
-    .onChange(of: path) { oldValue, newValue in
-      if isCreatingChat { creationRevision &+= 1 }
-      let kept = Set(newValue)
-      for id in oldValue where !kept.contains(id) { chats.abandonNewChat(id) }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("All Chats")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search chats and messages")
+    .onChange(of: searchText) { _, value in chats.search(value) }
+    .onAppear {
+      if !trimmedSearchText.isEmpty {
+        chats.search(searchText)
+      }
     }
+    .onDisappear { chats.search("") }
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
+          .labelStyle(.iconOnly)
+          .accessibilityLabel("Open sidebar")
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button("New Chat", systemImage: "square.and.pencil", action: startNewChat)
+      }
+    }
+    .projectErrorPresenter(projects)
     .alert(
       "Rename Chat",
       isPresented: Binding(
@@ -84,111 +198,166 @@ struct ChatListView: View {
         set: { if !$0 { renameTarget = nil } }
       )
     ) {
+      let trimmedTitle = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
       TextField("Title", text: $renameText)
       Button("Cancel", role: .cancel) { renameTarget = nil }
       Button("Save") {
-        guard let id = renameTarget?.id else { return }
-        Task { await chats.renameConversation(id, title: renameText) }
+        guard let id = renameTarget?.id, !trimmedTitle.isEmpty else { return }
         renameTarget = nil
+        Task { @MainActor in
+          await chats.renameConversation(id, title: trimmedTitle)
+        }
       }
+      .disabled(trimmedTitle.isEmpty)
+    }
+    .confirmationDialog(
+      "Delete chat?",
+      isPresented: Binding(
+        get: { pendingDelete != nil },
+        set: { if !$0 { pendingDelete = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Delete Chat", role: .destructive) {
+        guard let target = pendingDelete else { return }
+        pendingDelete = nil
+        Task { @MainActor in
+          await chats.deleteConversation(target.id)
+          await projects.reloadFromStorage()
+          await mcp.reloadFromStorage()
+          if !chats.hasConversation(target.id) {
+            pinnedConversationIDs = SidebarPinStore.removing(target.id, from: pinnedConversationIDs)
+          }
+        }
+      }
+      Button("Cancel", role: .cancel) { pendingDelete = nil }
+    } message: {
+      Text(deleteConfirmationMessage)
     }
   }
 
+  private var deleteConfirmationMessage: String {
+    guard let title = pendingDelete?.title.trimmingCharacters(in: .whitespacesAndNewlines),
+      !title.isEmpty
+    else {
+      return "This chat and its messages will be permanently deleted."
+    }
+    return "\"\(title)\" and its messages will be permanently deleted."
+  }
+
   private var conversationList: some View {
-    List {
-      ForEach(chats.historyConversations) { conversation in
-        NavigationLink(value: conversation.id) {
-          ConversationRow(
-            conversation: conversation,
-            account: providers.accounts.first { $0.id == conversation.accountID }
-          )
-        }
-        .simultaneousGesture(TapGesture().onEnded { searchTarget = nil })
-        .contextMenu {
-          Button("Rename", systemImage: "pencil") {
-            renameTarget = conversation
-            renameText = conversation.title
-          }
-          ConversationProjectMenu(conversationID: conversation.id, projects: projects)
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            Task {
-              await chats.deleteConversation(conversation.id)
-              await projects.reloadFromStorage()
-              await mcp.reloadFromStorage()
+    let sections = ChatListGrouping.sections(
+      from: chats.historyConversations,
+      pinnedRaw: pinnedConversationIDs
+    )
+    let accountsByID = Dictionary(
+      providers.accounts.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
+
+    return List {
+      ForEach(sections) { section in
+        Section {
+          ForEach(section.conversations) { conversation in
+            let isPinned = section.isPinned
+            NavigationLink(value: AppRoute.chat(conversation.id)) {
+              ConversationRow(
+                conversation: conversation,
+                account: accountsByID[conversation.accountID],
+                project: projects.project(for: conversation.id),
+                isGenerating: chats.isGenerating(conversation.id)
+              )
             }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+              Button(
+                isPinned ? "Unpin" : "Pin",
+                systemImage: isPinned ? "pin.slash" : "pin"
+              ) {
+                pinnedConversationIDs = SidebarPinStore.toggled(
+                  conversation.id,
+                  in: pinnedConversationIDs
+                )
+              }
+              .tint(.orange)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              Button("Delete", systemImage: "trash", role: .destructive) {
+                pendingDelete = conversation
+              }
+            }
+            .contextMenu {
+              Button(
+                isPinned ? "Unpin" : "Pin",
+                systemImage: isPinned ? "pin.slash" : "pin"
+              ) {
+                pinnedConversationIDs = SidebarPinStore.toggled(
+                  conversation.id,
+                  in: pinnedConversationIDs
+                )
+              }
+              Button("Rename", systemImage: "pencil") {
+                renameTarget = conversation
+                renameText = conversation.title
+              }
+              ConversationProjectMenu(conversationID: conversation.id, projects: projects)
+              Button("Delete", systemImage: "trash", role: .destructive) {
+                pendingDelete = conversation
+              }
+            }
+            .listRowBackground(Color.clear)
           }
+        } header: {
+          Text(section.title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
       }
-      .onDelete { offsets in
-        let ids = offsets.map { chats.historyConversations[$0].id }
-        for id in ids {
-          Task {
-            await chats.deleteConversation(id)
-            await projects.reloadFromStorage()
-            await mcp.reloadFromStorage()
-          }
-        }
-      }
-      .listRowBackground(theme.surfaceColor)
     }
     .listStyle(.plain)
+    .listRowSeparatorTint(theme.borderColor)
   }
 
   @ViewBuilder
   private var searchResults: some View {
-    if chats.searchResults.isEmpty {
+    if chats.isSearching && chats.searchResults.isEmpty {
+      ProgressView("Searching…")
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if chats.searchResults.isEmpty {
       ContentUnavailableView.search(text: searchText)
     } else {
       List(chats.searchResults) { result in
-        Button {
-          searchTarget = result
-          path.append(result.conversationID)
-        } label: {
-          SearchResultRow(result: result)
+        NavigationLink(value: AppRoute.chat(result.conversationID, messageID: result.messageID)) {
+          SearchResultRow(
+            result: result,
+            subtitle: ChatSidebarView.searchSubtitle(
+              for: result,
+              summary: chats.summary(result.conversationID)
+            ),
+            project: projects.project(for: result.conversationID)
+          )
         }
-        .buttonStyle(.plain)
-        .listRowBackground(theme.surfaceColor)
+        .listRowBackground(Color.clear)
       }
       .listStyle(.plain)
-    }
-  }
-
-  private func createChat() {
-    guard !isCreatingChat else { return }
-    if let id = path.last, chats.hasConversation(id), !chats.isGenerating(id),
-      !chats.historyConversations.contains(where: { $0.id == id })
-    { return }
-    searchTarget = nil
-    let requestedPath = path
-    let revision = creationRevision
-    isCreatingChat = true
-    Task { @MainActor in
-      defer { isCreatingChat = false }
-      guard let id = await chats.newChat(projectID: nil) else { return }
-      guard creationRevision == revision, path == requestedPath else {
-        chats.abandonNewChat(id)
-        return
-      }
-      await projects.reloadFromStorage()
-      await mcp.reloadFromStorage()
-      guard creationRevision == revision, path == requestedPath else {
-        chats.abandonNewChat(id)
-        return
-      }
-      if let previous = path.last { chats.abandonNewChat(previous) }
-      path = [id]
+      .listRowSeparatorTint(theme.borderColor)
     }
   }
 }
 
 private struct SearchResultRow: View {
   let result: ConversationSearchResult
+  let subtitle: String?
+  let project: ChatProject?
 
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
-      HStack {
+      HStack(spacing: 6) {
+        if let project {
+          ProjectIconView(project: project, size: 20)
+        }
         Text(result.title)
           .font(.headline)
           .lineLimit(1)
@@ -197,10 +366,12 @@ private struct SearchResultRow: View {
           .labelStyle(.iconOnly)
           .foregroundStyle(theme.secondaryForegroundColor)
       }
-      Text(result.snippet)
-        .font(.subheadline)
-        .foregroundStyle(theme.secondaryForegroundColor)
-        .lineLimit(3)
+      if let subtitle {
+        Text(subtitle)
+          .font(.subheadline)
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .lineLimit(3)
+      }
     }
     .contentShape(Rectangle())
     .padding(.vertical, 3)
@@ -226,16 +397,26 @@ private struct SearchResultRow: View {
 struct ConversationRow: View {
   let conversation: ChatConversation
   let account: ProviderAccount?
+  var project: ChatProject? = nil
+  var isGenerating: Bool = false
 
   @Environment(\.appFoundationTheme) private var theme
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      HStack(alignment: .firstTextBaseline) {
+      HStack(alignment: .center, spacing: 6) {
+        if let project {
+          ProjectIconView(project: project, size: 18)
+        }
         Text(conversation.title)
           .font(.headline)
           .lineLimit(1)
         Spacer()
+        if isGenerating {
+          ProgressView()
+            .controlSize(.mini)
+            .accessibilityLabel("Generating")
+        }
         Text(conversation.updatedAt, style: .relative)
           .font(.caption)
           .foregroundStyle(theme.secondaryForegroundColor)

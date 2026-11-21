@@ -424,6 +424,147 @@ struct SidebarHelperTests {
         == "…lowers input token cost by 30%…"
     )
   }
+
+  @Test("Sidebar conversation buckets keep all pinned chats and cap recent chats")
+  func conversationBucketsCapsRecentAndPreservesAllPinned() {
+    let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+    let conversations: [ChatConversation] = (0..<26).map { index in
+      let timestamp = baseDate.addingTimeInterval(Double(index) * 60)
+      return ChatConversation(
+        id: ConversationID(rawValue: String(format: "chat-%02d", index)),
+        title: "Chat \(index)",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        providerID: "openai",
+        accountID: "acct-1",
+        modelID: "gpt-4o",
+        indexedMessageCount: 2
+      )
+    }
+    let pinnedRaw = SidebarPinStore.serialize(["chat-00", "chat-05", "chat-10"])
+
+    let buckets = ChatSidebarView.conversationBuckets(
+      from: conversations,
+      pinnedRaw: pinnedRaw,
+      recentLimit: 20
+    )
+
+    #expect(buckets.pinned.map(\.id.rawValue) == ["chat-10", "chat-05", "chat-00"])
+    #expect(buckets.recent.count == 20)
+    #expect(buckets.recent.first?.id.rawValue == "chat-25")
+    #expect(buckets.recent.last?.id.rawValue == "chat-04")
+    #expect(buckets.totalHistoryCount == 26)
+    #expect(buckets.hiddenRecentCount == 3)
+    #expect(buckets.hasMoreRecent)
+  }
+
+  @Test("Sidebar conversation buckets hide All Chats trigger when unpinned chats fit in the cap")
+  func conversationBucketsHidesAllChatsWhenRecentWithinLimit() {
+    let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+    let conversations: [ChatConversation] = (0..<22).map { index in
+      let timestamp = baseDate.addingTimeInterval(Double(index) * 60)
+      return ChatConversation(
+        id: ConversationID(rawValue: String(format: "chat-%02d", index)),
+        title: "Chat \(index)",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        providerID: "openai",
+        accountID: "acct-1",
+        modelID: "gpt-4o",
+        indexedMessageCount: 1
+      )
+    }
+    let pinnedRaw = SidebarPinStore.serialize(["chat-00", "chat-01"])
+
+    let buckets = ChatSidebarView.conversationBuckets(
+      from: conversations,
+      pinnedRaw: pinnedRaw,
+      recentLimit: 20
+    )
+
+    #expect(buckets.pinned.count == 2)
+    #expect(buckets.recent.count == 20)
+    #expect(buckets.hiddenRecentCount == 0)
+    #expect(!buckets.hasMoreRecent)
+  }
+
+  @Test("All Chats grouping splits pinned, relative recency, and monthly sections")
+  func chatListGroupingBuildsPinnedRelativeAndMonthlySections() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let locale = Locale(identifier: "en_US")
+    let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 15))!
+
+    func makeChat(_ id: String, date: Date) -> ChatConversation {
+      ChatConversation(
+        id: ConversationID(rawValue: id),
+        title: id,
+        createdAt: date,
+        updatedAt: date,
+        providerID: "openai",
+        accountID: "acct-1",
+        modelID: "gpt-4o",
+        indexedMessageCount: 2
+      )
+    }
+
+    let pinnedOld = makeChat(
+      "pinned-old",
+      date: calendar.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 12))!
+    )
+    let todayChat = makeChat(
+      "today",
+      date: calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9))!
+    )
+    let yesterdayChat = makeChat(
+      "yesterday",
+      date: calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 18))!
+    )
+    let weekChat = makeChat(
+      "week",
+      date: calendar.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 12))!
+    )
+    let monthChat = makeChat(
+      "last30",
+      date: calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!
+    )
+    let octoberChat = makeChat(
+      "october",
+      date: calendar.date(from: DateComponents(year: 2026, month: 10, day: 12, hour: 12))!
+    )
+    let septemberChat = makeChat(
+      "september",
+      date: calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 12))!
+    )
+
+    let sections = ChatListGrouping.sections(
+      from: [septemberChat, todayChat, pinnedOld, monthChat, octoberChat, yesterdayChat, weekChat],
+      pinnedRaw: SidebarPinStore.serialize(["pinned-old"]),
+      now: now,
+      calendar: calendar,
+      locale: locale
+    )
+
+    #expect(
+      sections.map(\.title) == [
+        "Pinned",
+        "Today",
+        "Yesterday",
+        "Previous 7 Days",
+        "Previous 30 Days",
+        "October 2026",
+        "September 2026",
+      ]
+    )
+    #expect(sections[0].isPinned)
+    #expect(sections[0].conversations.map(\.id.rawValue) == ["pinned-old"])
+    #expect(sections[1].conversations.map(\.id.rawValue) == ["today"])
+    #expect(sections[2].conversations.map(\.id.rawValue) == ["yesterday"])
+    #expect(sections[3].conversations.map(\.id.rawValue) == ["week"])
+    #expect(sections[4].conversations.map(\.id.rawValue) == ["last30"])
+    #expect(sections[5].conversations.map(\.id.rawValue) == ["october"])
+    #expect(sections[6].conversations.map(\.id.rawValue) == ["september"])
+  }
 }
 
 private actor PartiallyFailingCredentialVault: CredentialVault {
