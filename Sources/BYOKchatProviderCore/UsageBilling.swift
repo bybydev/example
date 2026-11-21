@@ -39,6 +39,7 @@ public struct ChatUsageAggregate: Sendable, Equatable {
   public var inputTokens = 0
   public var outputTokens = 0
   public var cachedInputTokens = 0
+  public var cacheWriteTokens = 0
   public var reasoningTokens = 0
   public var modelRequestCount = 0
   public var toolCallCount = 0
@@ -70,6 +71,7 @@ public struct ChatUsageAggregate: Sendable, Equatable {
       inputTokens += usage.inputTokens ?? 0
       outputTokens += usage.outputTokens ?? 0
       cachedInputTokens += usage.cachedInputTokens ?? 0
+      cacheWriteTokens += usage.cacheWriteTokens ?? 0
       reasoningTokens += usage.reasoningTokens ?? 0
     }
 
@@ -86,6 +88,11 @@ public struct ChatUsageAggregate: Sendable, Equatable {
     }
   }
 
+  public var totalTokens: Int { inputTokens + outputTokens }
+  public var cacheHitRate: Double? {
+    guard inputTokens > 0, cachedInputTokens > 0 else { return nil }
+    return min(max(Double(cachedInputTokens) / Double(inputTokens), 0), 1)
+  }
   public var hasEstimatedCost: Bool { estimatedCostMessageCount > 0 }
   public var isLowerBound: Bool { hasKnownCost && hasPartialCost && !hasEstimatedCost }
   public var hasKnownCost: Bool { knownCostMessageCount > 0 }

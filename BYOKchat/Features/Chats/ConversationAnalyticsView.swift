@@ -21,6 +21,12 @@ struct ConversationAnalyticsView: View {
     return trimmed.isEmpty ? "Chat Analytics" : trimmed
   }
 
+  private var activeModelContextWindow: Int? {
+    model.providers.modelsByAccount[conversation.accountID]?
+      .first { $0.model.id == conversation.modelID }?
+      .model.contextWindow
+  }
+
   var body: some View {
     NavigationStack {
       let activeTelemetry = telemetryUnavailable ? [] : telemetryEvents
@@ -29,9 +35,18 @@ struct ConversationAnalyticsView: View {
         telemetryEvents: activeTelemetry,
         range: .all
       )
+      let contextUsage = UsageAnalytics.latestContextUsage(
+        conversation: conversation,
+        telemetryEvents: activeTelemetry,
+        modelContextWindow: activeModelContextWindow
+      )
 
       List {
         usageSection(snapshot.aggregate)
+
+        if let contextUsage {
+          contextSection(contextUsage)
+        }
 
         telemetryStatusSections(snapshot: snapshot)
 
@@ -39,7 +54,7 @@ struct ConversationAnalyticsView: View {
           providersSection(snapshot.providerBreakdown)
         }
 
-        if !snapshot.modelBreakdown.isEmpty {
+        if snapshot.modelBreakdown.count > 1 {
           modelsSection(snapshot.modelBreakdown)
         }
       }
@@ -68,13 +83,37 @@ struct ConversationAnalyticsView: View {
   }
 
   private func usageSection(_ aggregate: ChatUsageAggregate) -> some View {
-    Section {
+    let messageCount = conversation.messages.count
+    let replyCount = aggregate.assistantMessageCount
+
+    return Section {
       LabeledContent("Spend", value: usageAggregateCostText(aggregate))
+      if messageCount > 0 {
+        LabeledContent(
+          "Messages",
+          value: replyCount > 0
+            ? "\(messageCount.formatted()) (\(replyCount.formatted()) \(replyCount == 1 ? "reply" : "replies"))"
+            : messageCount.formatted()
+        )
+      }
       LabeledContent("Model requests", value: aggregate.modelRequestCount.formatted())
+      if aggregate.totalTokens > 0 {
+        LabeledContent("Total tokens", value: usageCompactTokens(aggregate.totalTokens))
+      }
       LabeledContent("Input", value: usageCompactTokens(aggregate.inputTokens))
       LabeledContent("Output", value: usageCompactTokens(aggregate.outputTokens))
       if aggregate.cachedInputTokens > 0 {
-        LabeledContent("Cached input", value: usageCompactTokens(aggregate.cachedInputTokens))
+        LabeledContent(
+          "Cached input",
+          value: usageCachedTokensWithRate(
+            cached: aggregate.cachedInputTokens,
+            input: aggregate.inputTokens,
+            compact: true
+          )
+        )
+      }
+      if aggregate.cacheWriteTokens > 0 {
+        LabeledContent("Cache write", value: usageCompactTokens(aggregate.cacheWriteTokens))
       }
       if aggregate.reasoningTokens > 0 {
         LabeledContent("Reasoning", value: usageCompactTokens(aggregate.reasoningTokens))
@@ -88,6 +127,41 @@ struct ConversationAnalyticsView: View {
     } footer: {
       Text(usageHistoryFootnote(aggregate))
         .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func contextSection(_ contextUsage: ConversationContextUsage) -> some View {
+    Section {
+      if let window = contextUsage.contextWindow, let fill = contextUsage.fillFraction {
+        LabeledContent(
+          "Latest turn",
+          value: "\(usageCompactTokens(contextUsage.usedInputTokens)) / \(usageCompactTokens(window)) (\(usagePercent(fill)))"
+        )
+        ProgressView(value: fill)
+          .tint(fill >= 0.95 ? .red : fill >= 0.8 ? .orange : .accentColor)
+      } else {
+        LabeledContent("Latest turn input", value: usageCompactTokens(contextUsage.usedInputTokens))
+      }
+
+      if contextUsage.omittedMessageCount > 0 {
+        Label(
+          "\(contextUsage.omittedMessageCount.formatted()) earlier \(contextUsage.omittedMessageCount == 1 ? "message" : "messages") omitted to fit context",
+          systemImage: "scissors"
+        )
+        .font(.footnote)
+        .foregroundStyle(.orange)
+      }
+    } header: {
+      Text("Context")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text(
+        contextUsage.isEstimated
+          ? "Estimated from the latest built request context."
+          : "Based on the latest request's input tokens."
+      )
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -132,11 +206,19 @@ struct ConversationAnalyticsView: View {
       }
       if !hasActivity && snapshot.failureBreakdown.isEmpty {
         Section {
-          ContentUnavailableView(
-            "No Performance Data Yet",
-            systemImage: "waveform.path.ecg",
-            description: Text("No local performance metrics are stored for this conversation.")
-          )
+          if snapshot.aggregate.assistantMessageCount > 0 {
+            ContentUnavailableView(
+              "No Recent Performance Data",
+              systemImage: "waveform.path.ecg",
+              description: Text("Local performance telemetry is retained for up to 30 days. Saved usage and spend above remain available.")
+            )
+          } else {
+            ContentUnavailableView(
+              "No Performance Data Yet",
+              systemImage: "waveform.path.ecg",
+              description: Text("Send a message in this chat to start collecting local performance metrics.")
+            )
+          }
         }
         .listRowBackground(theme.surfaceColor)
       }
@@ -144,12 +226,31 @@ struct ConversationAnalyticsView: View {
   }
 
   private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
-    Section("Performance") {
-      LabeledContent("Median TTFT", value: usageDuration(performance.medianTTFTMilliseconds))
-      LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
-      LabeledContent("Median duration", value: usageDuration(performance.medianDurationMilliseconds))
-      LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
-      LabeledContent("Median speed", value: usageRate(performance.medianOutputTokensPerSecond))
+    let isSingleRequest = performance.providerRequestCount <= 1
+    let showPercentiles = performance.providerRequestCount >= 5
+
+    return Section {
+      LabeledContent(
+        isSingleRequest ? "TTFT" : "Median TTFT",
+        value: usageDuration(performance.medianTTFTMilliseconds)
+      )
+      if showPercentiles {
+        LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
+      }
+      LabeledContent(
+        isSingleRequest ? "Duration" : "Median duration",
+        value: usageDuration(performance.medianDurationMilliseconds)
+      )
+      if showPercentiles {
+        LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
+      }
+      LabeledContent(
+        isSingleRequest ? "Speed" : "Median speed",
+        value: usageRate(performance.medianOutputTokensPerSecond)
+      )
+    } header: {
+      Text("Performance")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -173,7 +274,7 @@ struct ConversationAnalyticsView: View {
   }
 
   private func toolsAndMCPSection(_ performance: TelemetryPerformanceAggregate) -> some View {
-    Section("Tools & MCP") {
+    Section {
       if performance.toolCallCount > 0 {
         LabeledContent("Tool calls", value: performance.toolCallCount.formatted())
         LabeledContent("Tool success", value: usagePercent(performance.toolSuccessRate))
@@ -188,6 +289,9 @@ struct ConversationAnalyticsView: View {
         LabeledContent("MCP requests", value: performance.mcpRequestCount.formatted())
         LabeledContent("MCP failures", value: performance.mcpFailureCount.formatted())
       }
+    } header: {
+      Text("Tools & MCP")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -223,7 +327,7 @@ struct ConversationAnalyticsView: View {
 
   private func providersSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
     let accounts = model.providers.accounts
-    return Section("Providers") {
+    return Section {
       ForEach(rows) { item in
         UsageBreakdownRowView(
           row: UsageBreakdown(
@@ -234,12 +338,15 @@ struct ConversationAnalyticsView: View {
           )
         )
       }
+    } header: {
+      Text("Providers")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
   private func modelsSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
-    Section("Models") {
+    Section {
       ForEach(rows) { item in
         UsageBreakdownRowView(
           row: UsageBreakdown(
@@ -250,6 +357,9 @@ struct ConversationAnalyticsView: View {
           )
         )
       }
+    } header: {
+      Text("Models")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }

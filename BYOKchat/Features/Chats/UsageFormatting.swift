@@ -45,6 +45,39 @@ nonisolated func usageCompactTokens(_ value: Int) -> String {
   return value.formatted()
 }
 
+nonisolated func usageCachedTokensWithRate(
+  cached: Int,
+  input: Int,
+  compact: Bool
+) -> String {
+  let formatted = compact ? usageCompactTokens(cached) : usageTokenCount(cached)
+  guard input > 0, cached > 0 else { return formatted }
+  let rate = min(max(Double(cached) / Double(input), 0), 1)
+  return "\(formatted) (\(usagePercent(rate)))"
+}
+
+nonisolated func usageFinishReasonTitle(_ raw: String) -> String {
+  let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+  switch normalized {
+  case "stop", "end_turn", "completed", "complete":
+    return "Completed"
+  case "length", "max_tokens", "max_output_tokens", "model_length":
+    return "Max tokens reached"
+  case "tool_calls", "tool_use", "function_call":
+    return "Tool calls"
+  case "content_filter", "safety", "recitation", "refusal":
+    return "Filtered by safety"
+  case "pause_turn":
+    return "Paused"
+  case "stop_sequence":
+    return "Stop sequence"
+  case "cancelled", "canceled":
+    return "Stopped"
+  default:
+    return usageErrorTitle(normalized)
+  }
+}
+
 nonisolated func usagePricePerMillion(_ perToken: Decimal) -> String {
   usageFormatUSD(perToken * Decimal(1_000_000))
 }

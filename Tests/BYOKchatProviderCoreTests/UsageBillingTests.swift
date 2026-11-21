@@ -713,3 +713,171 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   #expect(msgBPerf.medianDurationMilliseconds == 2_400)
   #expect(msgBPerf.medianOutputTokensPerSecond == 48.0)
 }
+
+@Test("Analytics tracks cache writes, top chats, context fill, and multi-request total duration")
+func analyticsEnrichmentsTrackCacheWritesTopChatsContextAndTotalDuration() throws {
+  let reference = Date(timeIntervalSince1970: 1_800_000_000)
+
+  let round1 = ChatRequestBilling(
+    costUSD: "0.02",
+    accuracy: .calculated,
+    isComplete: true,
+    pricing: nil,
+    usage: ProviderUsage(inputTokens: 10_000, outputTokens: 200),
+    missingDimensions: []
+  )
+  let round2 = ChatRequestBilling(
+    costUSD: "0.03",
+    accuracy: .calculated,
+    isComplete: true,
+    pricing: nil,
+    usage: ProviderUsage(inputTokens: 15_000, outputTokens: 300),
+    missingDimensions: []
+  )
+  let multiRoundMetadata = ChatBilling.metadata(
+    existing: [:],
+    requests: [round1, round2],
+    toolCallCount: 1
+  )
+
+  let heavyMessage = ChatMessage(
+    id: ChatMessageID(rawValue: "msg-heavy"),
+    role: .assistant,
+    createdAt: reference,
+    updatedAt: reference,
+    status: .complete,
+    providerID: "anthropic",
+    accountID: "ant",
+    modelID: "claude-sonnet-5-5",
+    usage: ProviderUsage(
+      inputTokens: 25_000,
+      outputTokens: 500,
+      cachedInputTokens: 15_000,
+      cacheWriteTokens: 4_000
+    ),
+    metadata: multiRoundMetadata
+  )
+  let lightMessage = ChatMessage(
+    id: ChatMessageID(rawValue: "msg-light"),
+    role: .assistant,
+    createdAt: reference,
+    updatedAt: reference,
+    status: .complete,
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    usage: ProviderUsage(inputTokens: 1_000, outputTokens: 200),
+    metadata: [
+      ChatBilling.costKey: "0.005",
+      ChatBilling.accuracyKey: ChatCostAccuracy.providerReported.rawValue,
+      ChatBilling.completenessKey: "true",
+      ChatBilling.modelRequestCountKey: "1",
+    ]
+  )
+
+  let heavyChat = ChatConversation(
+    id: "chat-heavy",
+    title: "Architecture Review",
+    providerID: "anthropic",
+    accountID: "ant",
+    modelID: "claude-sonnet-5-5",
+    messages: [heavyMessage]
+  )
+  let untitledChat = ChatConversation(
+    id: "chat-untitled",
+    title: "   ",
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    messages: [lightMessage]
+  )
+  let emptyChat = ChatConversation(
+    id: "chat-empty",
+    title: "Unused",
+    providerID: "openai",
+    accountID: "oai",
+    modelID: "gpt-6.2-sol",
+    messages: []
+  )
+
+  let events: [TelemetryEvent] = [
+    TelemetryEvent(
+      timestamp: reference,
+      dataClass: .analytics,
+      category: .context,
+      name: .contextBuilt,
+      conversationID: heavyChat.id,
+      messageID: heavyMessage.id,
+      metadata: [
+        "estimatedInputTokens": "14500",
+        "contextWindow": "200000",
+        "omittedMessageCount": "3",
+      ]
+    ),
+    TelemetryEvent(
+      timestamp: reference,
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: heavyChat.id,
+      messageID: heavyMessage.id,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 1_100,
+      timeToFirstTokenMilliseconds: 200,
+      metadata: ["outputTokensPerSecond": "55.0"]
+    ),
+    TelemetryEvent(
+      timestamp: reference.addingTimeInterval(2),
+      dataClass: .analytics,
+      category: .provider,
+      name: .providerRequestCompleted,
+      outcome: .success,
+      conversationID: heavyChat.id,
+      messageID: heavyMessage.id,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-5-5",
+      durationMilliseconds: 2_300,
+      timeToFirstTokenMilliseconds: 300,
+      metadata: ["outputTokensPerSecond": "65.0"]
+    ),
+  ]
+
+  let overview = UsageAnalytics.snapshot(
+    conversations: [untitledChat, emptyChat, heavyChat],
+    telemetryEvents: events,
+    range: .all,
+    reference: reference
+  )
+  #expect(overview.aggregate.cacheWriteTokens == 4_000)
+  #expect(overview.aggregate.totalTokens == 26_700)
+  #expect(overview.activeConversationCount == 2)
+  #expect(overview.conversationBreakdown.map(\.id) == [heavyChat.id, untitledChat.id])
+  #expect(overview.conversationBreakdown.last?.title == "Untitled Chat")
+
+  let msgPerf = UsageAnalytics.messagePerformance(
+    messageID: heavyMessage.id,
+    telemetryEvents: events,
+    range: .all,
+    reference: reference
+  )
+  #expect(msgPerf.providerRequestCount == 2)
+  #expect(msgPerf.totalDurationMilliseconds == 3_400)
+  #expect(msgPerf.medianDurationMilliseconds == 1_700)
+
+  // Latest context usage uses the final request's inputTokens (15,000), not the multi-round sum (25,000).
+  let context = try #require(
+    UsageAnalytics.latestContextUsage(
+      conversation: heavyChat,
+      telemetryEvents: events,
+      modelContextWindow: 100_000
+    )
+  )
+  #expect(context.usedInputTokens == 15_000)
+  #expect(context.contextWindow == 100_000)
+  #expect(context.fillFraction == 0.15)
+  #expect(context.omittedMessageCount == 3)
+  #expect(context.isEstimated == false)
+  #expect(UsageAnalytics.messageOmittedContextCount(messageID: heavyMessage.id, telemetryEvents: events) == 3)
+}

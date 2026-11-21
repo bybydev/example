@@ -126,7 +126,11 @@ struct UsageDashboardView: View {
     range: UsageRange
   ) -> some View {
     List {
-      usageSummarySection(snapshot.aggregate, range: range)
+      usageSummarySection(
+        snapshot.aggregate,
+        activeConversationCount: snapshot.activeConversationCount,
+        range: range
+      )
 
       telemetryStatusSections(snapshot: snapshot)
 
@@ -136,6 +140,10 @@ struct UsageDashboardView: View {
 
       if !snapshot.modelBreakdown.isEmpty {
         modelsSection(snapshot.modelBreakdown)
+      }
+
+      if !snapshot.conversationBreakdown.isEmpty {
+        topChatsSection(snapshot.conversationBreakdown)
       }
 
       localAnalyticsSection(filteredEventCount: filteredEvents.count)
@@ -189,14 +197,34 @@ struct UsageDashboardView: View {
     .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
-  private func usageSummarySection(_ aggregate: ChatUsageAggregate, range: UsageRange) -> some View {
+  private func usageSummarySection(
+    _ aggregate: ChatUsageAggregate,
+    activeConversationCount: Int,
+    range: UsageRange
+  ) -> some View {
     Section {
       LabeledContent("Spend", value: usageAggregateCostText(aggregate))
+      if activeConversationCount > 0 {
+        LabeledContent("Chats", value: activeConversationCount.formatted())
+      }
       LabeledContent("Model requests", value: aggregate.modelRequestCount.formatted())
+      if aggregate.totalTokens > 0 {
+        LabeledContent("Total tokens", value: usageCompactTokens(aggregate.totalTokens))
+      }
       LabeledContent("Input", value: usageCompactTokens(aggregate.inputTokens))
       LabeledContent("Output", value: usageCompactTokens(aggregate.outputTokens))
       if aggregate.cachedInputTokens > 0 {
-        LabeledContent("Cached input", value: usageCompactTokens(aggregate.cachedInputTokens))
+        LabeledContent(
+          "Cached input",
+          value: usageCachedTokensWithRate(
+            cached: aggregate.cachedInputTokens,
+            input: aggregate.inputTokens,
+            compact: true
+          )
+        )
+      }
+      if aggregate.cacheWriteTokens > 0 {
+        LabeledContent("Cache write", value: usageCompactTokens(aggregate.cacheWriteTokens))
       }
       if aggregate.reasoningTokens > 0 {
         LabeledContent("Reasoning", value: usageCompactTokens(aggregate.reasoningTokens))
@@ -263,12 +291,15 @@ struct UsageDashboardView: View {
   }
 
   private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
-    Section("Performance") {
+    Section {
       LabeledContent("Median TTFT", value: usageDuration(performance.medianTTFTMilliseconds))
       LabeledContent("P95 TTFT", value: usageDuration(performance.p95TTFTMilliseconds))
       LabeledContent("Median duration", value: usageDuration(performance.medianDurationMilliseconds))
       LabeledContent("P95 duration", value: usageDuration(performance.p95DurationMilliseconds))
       LabeledContent("Median speed", value: usageRate(performance.medianOutputTokensPerSecond))
+    } header: {
+      Text("Performance")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -335,7 +366,7 @@ struct UsageDashboardView: View {
 
   private func providersSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
     let accounts = model.providers.accounts
-    return Section("Providers") {
+    return Section {
       ForEach(rows) { item in
         UsageBreakdownRowView(
           row: UsageBreakdown(
@@ -346,12 +377,15 @@ struct UsageDashboardView: View {
           )
         )
       }
+    } header: {
+      Text("Providers")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
 
   private func modelsSection(_ rows: [UsageAnalyticsBreakdown]) -> some View {
-    Section("Models") {
+    Section {
       ForEach(rows) { item in
         UsageBreakdownRowView(
           row: UsageBreakdown(
@@ -362,6 +396,28 @@ struct UsageDashboardView: View {
           )
         )
       }
+    } header: {
+      Text("Models")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func topChatsSection(_ rows: [ConversationUsageBreakdown]) -> some View {
+    Section {
+      ForEach(Array(rows.prefix(5))) { item in
+        UsageBreakdownRowView(
+          row: UsageBreakdown(
+            id: item.id.rawValue,
+            title: item.title,
+            aggregate: item.aggregate,
+            performance: item.performance
+          )
+        )
+      }
+    } header: {
+      Text("Top Chats")
+        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -452,6 +508,18 @@ struct UsageBreakdownRowView: View {
     row.aggregate.assistantMessageCount > 0
   }
 
+  private var performanceSummaryLine: String? {
+    guard row.performance.providerRequestCount > 0 else { return nil }
+    var parts = ["\(usagePercent(row.performance.providerSuccessRate)) success"]
+    if let ttft = row.performance.medianTTFTMilliseconds {
+      parts.append("\(usageDuration(ttft)) TTFT")
+    }
+    if let speed = row.performance.medianOutputTokensPerSecond {
+      parts.append(usageRate(speed))
+    }
+    return parts.joined(separator: " · ")
+  }
+
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 3) {
@@ -460,7 +528,7 @@ struct UsageBreakdownRowView: View {
 
         if hasSavedMessages {
           Text(
-            "\(usageCompactTokens(row.aggregate.inputTokens + row.aggregate.outputTokens)) tokens · \(usageRequestCountLabel(row.aggregate.modelRequestCount))"
+            "\(usageCompactTokens(row.aggregate.totalTokens)) tokens · \(usageRequestCountLabel(row.aggregate.modelRequestCount))"
           )
           .font(.caption)
           .foregroundStyle(theme.secondaryForegroundColor)
@@ -470,16 +538,10 @@ struct UsageBreakdownRowView: View {
             .foregroundStyle(theme.secondaryForegroundColor)
         }
 
-        if row.performance.providerRequestCount > 0 {
-          HStack(spacing: 4) {
-            Text("\(usagePercent(row.performance.providerSuccessRate)) success")
-            if row.performance.medianTTFTMilliseconds != nil {
-              Text("·")
-              Text("\(usageDuration(row.performance.medianTTFTMilliseconds)) TTFT")
-            }
-          }
-          .font(.caption2)
-          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+        if let performanceSummaryLine {
+          Text(performanceSummaryLine)
+            .font(.caption2)
+            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
         }
       }
       Spacer(minLength: 12)

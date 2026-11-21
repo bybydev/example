@@ -9,6 +9,7 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
   public var p95TTFTMilliseconds: Double?
   public var medianDurationMilliseconds: Double?
   public var p95DurationMilliseconds: Double?
+  public var totalDurationMilliseconds: Double?
   public var medianOutputTokensPerSecond: Double?
   public var toolCallCount: Int
   public var toolSuccessCount: Int
@@ -32,7 +33,8 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
     toolFailureCount: Int = 0,
     toolCancelledCount: Int = 0,
     mcpRequestCount: Int = 0,
-    mcpFailureCount: Int = 0
+    mcpFailureCount: Int = 0,
+    totalDurationMilliseconds: Double? = nil
   ) {
     self.providerRequestCount = providerRequestCount
     self.providerSuccessCount = providerSuccessCount
@@ -42,6 +44,7 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
     self.p95TTFTMilliseconds = p95TTFTMilliseconds
     self.medianDurationMilliseconds = medianDurationMilliseconds
     self.p95DurationMilliseconds = p95DurationMilliseconds
+    self.totalDurationMilliseconds = totalDurationMilliseconds
     self.medianOutputTokensPerSecond = medianOutputTokensPerSecond
     self.toolCallCount = toolCallCount
     self.toolSuccessCount = toolSuccessCount
@@ -71,6 +74,7 @@ public struct TelemetryPerformanceAggregate: Sendable, Equatable {
       || p95TTFTMilliseconds != nil
       || medianDurationMilliseconds != nil
       || p95DurationMilliseconds != nil
+      || totalDurationMilliseconds != nil
       || medianOutputTokensPerSecond != nil
   }
 }
@@ -184,7 +188,8 @@ public enum TelemetryAnalytics {
       toolFailureCount: toolFailureCount,
       toolCancelledCount: toolCancelledCount,
       mcpRequestCount: mcpRequestCount,
-      mcpFailureCount: mcpFailureCount
+      mcpFailureCount: mcpFailureCount,
+      totalDurationMilliseconds: durationValues.isEmpty ? nil : durationValues.reduce(0, +)
     )
   }
 

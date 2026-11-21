@@ -11,6 +11,7 @@ struct MessageInfoView: View {
   @Environment(\.appFoundationTheme) private var theme
 
   @State private var messagePerformance: TelemetryPerformanceAggregate?
+  @State private var omittedContextCount = 0
 
   private var billing: ChatBillingSnapshot { ChatBilling.snapshot(for: message) }
 
@@ -48,17 +49,30 @@ struct MessageInfoView: View {
         if message.role == .assistant {
           let usage = message.usage
           Section {
-            if let value = usage?.inputTokens {
-              LabeledContent("Input", value: usageTokenCount(value))
+            if let input = usage?.inputTokens {
+              LabeledContent("Input", value: usageTokenCount(input))
             }
             if let value = usage?.cachedInputTokens, value > 0 {
-              LabeledContent("Cached input", value: usageTokenCount(value))
+              LabeledContent(
+                "Cached input",
+                value: usageCachedTokensWithRate(
+                  cached: value,
+                  input: usage?.inputTokens ?? 0,
+                  compact: false
+                )
+              )
             }
-            if let value = usage?.outputTokens {
-              LabeledContent("Output", value: usageTokenCount(value))
+            if let value = usage?.cacheWriteTokens, value > 0 {
+              LabeledContent("Cache write", value: usageTokenCount(value))
+            }
+            if let output = usage?.outputTokens {
+              LabeledContent("Output", value: usageTokenCount(output))
             }
             if let value = usage?.reasoningTokens, value > 0 {
               LabeledContent("Reasoning", value: usageTokenCount(value))
+            }
+            if let input = usage?.inputTokens, let output = usage?.outputTokens {
+              LabeledContent("Total tokens", value: usageTokenCount(input + output))
             }
 
             LabeledContent(costLabel, value: costValue)
@@ -76,40 +90,11 @@ struct MessageInfoView: View {
           performanceSection(performance)
         }
 
-        if firstPricingSnapshot != nil || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
-          Section {
-            if !billing.requests.isEmpty {
-              LabeledContent("Saved request snapshots", value: billing.requests.count.formatted())
-            }
-            if let snapshot = firstPricingSnapshot {
-              LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
-              if let version = snapshot.version { LabeledContent("Version", value: version) }
-              if let verified = snapshot.verifiedAt { LabeledContent("Verified", value: verified) }
-              if let sourceURL = snapshot.sourceURL, let url = URL(string: sourceURL), url.scheme == "https" {
-                Link("Official pricing", destination: url)
-              }
-            }
-            if let price = billing.inputPricePerToken {
-              LabeledContent("First request input / 1M", value: usagePricePerMillion(price))
-            }
-            if let price = billing.outputPricePerToken {
-              LabeledContent("First request output / 1M", value: usagePricePerMillion(price))
-            }
-          } header: {
-            Text("Pricing snapshot")
-              .foregroundStyle(theme.secondaryForegroundColor)
-          } footer: {
-            Text("Prices and billing rules are stored per request. The rates shown are for the first request; tool rounds may differ. Later price changes do not rewrite saved spend.")
-              .foregroundStyle(theme.secondaryForegroundColor)
-          }
-          .listRowBackground(theme.surfaceColor)
-        }
-
         Section {
           if message.status == .failed {
             LabeledContent("Status", value: "Failed")
             if let errorCode = message.errorCode, !errorCode.isEmpty {
-              LabeledContent("Error code", value: errorCode)
+              LabeledContent("Error code", value: usageErrorTitle(errorCode))
             }
           } else if message.status == .cancelled {
             LabeledContent("Status", value: "Stopped")
@@ -122,8 +107,14 @@ struct MessageInfoView: View {
           if billing.toolCallCount > 0 {
             LabeledContent("Tool calls", value: String(billing.toolCallCount))
           }
+          if omittedContextCount > 0 {
+            LabeledContent(
+              "Context trimmed",
+              value: "\(omittedContextCount.formatted()) earlier \(omittedContextCount == 1 ? "message" : "messages")"
+            )
+          }
           if let finishReason = message.finishReason, !finishReason.isEmpty {
-            LabeledContent("Finish reason", value: finishReason)
+            LabeledContent("Finish reason", value: usageFinishReasonTitle(finishReason))
           }
           LabeledContent("Generated") {
             Text(message.updatedAt, format: .dateTime.year().month().day().hour().minute().second())
@@ -134,6 +125,45 @@ struct MessageInfoView: View {
             .foregroundStyle(theme.secondaryForegroundColor)
         }
         .listRowBackground(theme.surfaceColor)
+
+        if firstPricingSnapshot != nil || billing.inputPricePerToken != nil || billing.outputPricePerToken != nil {
+          let isMultiRequest = billing.modelRequestCount > 1
+          Section {
+            if let price = billing.inputPricePerToken {
+              LabeledContent(
+                isMultiRequest ? "First request input / 1M" : "Input / 1M",
+                value: usagePricePerMillion(price)
+              )
+            }
+            if let price = billing.outputPricePerToken {
+              LabeledContent(
+                isMultiRequest ? "First request output / 1M" : "Output / 1M",
+                value: usagePricePerMillion(price)
+              )
+            }
+            if let snapshot = firstPricingSnapshot {
+              if let sourceURL = snapshot.sourceURL, let url = URL(string: sourceURL), url.scheme == "https" {
+                Link("Official pricing", destination: url)
+              }
+              DisclosureGroup("Catalog details") {
+                LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
+                if let version = snapshot.version { LabeledContent("Version", value: version) }
+                if let verified = snapshot.verifiedAt { LabeledContent("Verified", value: verified) }
+              }
+            }
+          } header: {
+            Text("Pricing snapshot")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          } footer: {
+            Text(
+              isMultiRequest
+                ? "Prices and billing rules are stored per request. The rates shown are for the first request; tool rounds may differ. Later price changes do not rewrite saved spend."
+                : "Prices and billing rules are stored per request. Later price changes do not rewrite saved spend."
+            )
+            .foregroundStyle(theme.secondaryForegroundColor)
+          }
+          .listRowBackground(theme.surfaceColor)
+        }
       }
       .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
@@ -155,11 +185,14 @@ struct MessageInfoView: View {
   private func performanceSection(_ performance: TelemetryPerformanceAggregate) -> some View {
     let isMultiRequest = performance.providerRequestCount > 1
     return Section {
+      if isMultiRequest, let totalDuration = performance.totalDurationMilliseconds {
+        LabeledContent("Total duration", value: usageDuration(totalDuration))
+      }
       if let ttft = performance.medianTTFTMilliseconds {
         LabeledContent(isMultiRequest ? "Median TTFT" : "TTFT", value: usageDuration(ttft))
       }
       if let duration = performance.medianDurationMilliseconds {
-        LabeledContent(isMultiRequest ? "Median duration" : "Duration", value: usageDuration(duration))
+        LabeledContent(isMultiRequest ? "Median request" : "Duration", value: usageDuration(duration))
       }
       if let speed = performance.medianOutputTokensPerSecond {
         LabeledContent(isMultiRequest ? "Median speed" : "Speed", value: usageRate(speed))
@@ -174,6 +207,7 @@ struct MessageInfoView: View {
   private func loadMessagePerformance() async {
     guard message.role == .assistant else {
       messagePerformance = nil
+      omittedContextCount = 0
       return
     }
     let recorder = model.telemetryRecorder
@@ -185,8 +219,13 @@ struct MessageInfoView: View {
         range: .all
       )
       messagePerformance = performance.hasLatencyOrSpeedMetrics ? performance : nil
+      omittedContextCount = UsageAnalytics.messageOmittedContextCount(
+        messageID: message.id,
+        telemetryEvents: events
+      )
     case .unavailable:
       messagePerformance = nil
+      omittedContextCount = 0
     }
   }
 
