@@ -754,22 +754,36 @@ public actor ConversationStore {
   }
 
   private func decodeShard(_ data: Data, expectedID: String) throws -> DecodedShard {
-    let header = try? JSONDecoder.provider.decode(ShardVersionHeader.self, from: data)
-    if let schemaVersion = header?.schemaVersion {
-      let minimumReaderVersion = header?.minimumReaderVersion ?? schemaVersion
-      if schemaVersion > ConversationShardRecord.currentSchemaVersion
-        || minimumReaderVersion > ConversationShardRecord.currentReaderVersion
-      {
-        throw ProviderError.conversationVersionUnsupported(schemaVersion)
-      }
+    // Fast path: decode versioned ConversationShardRecord in a single JSON pass
+    // so large conversation shards are not parsed twice on open.
+    do {
       let record = try JSONDecoder.provider.decode(ConversationShardRecord.self, from: data)
-      guard record.schemaVersion == schemaVersion else {
-        throw ProviderError.invalidRequest("Conversation shard version metadata is inconsistent.")
+      if record.schemaVersion > ConversationShardRecord.currentSchemaVersion
+        || record.minimumReaderVersion > ConversationShardRecord.currentReaderVersion
+      {
+        throw ProviderError.conversationVersionUnsupported(record.schemaVersion)
       }
       guard record.conversation.id.rawValue == expectedID else {
         throw ProviderError.invalidRequest("Conversation shard identity does not match its filename.")
       }
       return DecodedShard(conversation: record.conversation, isLegacy: false)
+    } catch let error as ProviderError {
+      throw error
+    } catch {
+      // Fall back to header inspection so future schemas whose conversation
+      // payload changed still report conversationVersionUnsupported instead of
+      // being quarantined as corrupt.
+      if let header = try? JSONDecoder.provider.decode(ShardVersionHeader.self, from: data),
+        let schemaVersion = header.schemaVersion
+      {
+        let minimumReaderVersion = header.minimumReaderVersion ?? schemaVersion
+        if schemaVersion > ConversationShardRecord.currentSchemaVersion
+          || minimumReaderVersion > ConversationShardRecord.currentReaderVersion
+        {
+          throw ProviderError.conversationVersionUnsupported(schemaVersion)
+        }
+        throw error
+      }
     }
 
     // v0 migration: builds before the envelope stored a bare ChatConversation.

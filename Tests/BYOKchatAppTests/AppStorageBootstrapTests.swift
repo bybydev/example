@@ -624,6 +624,30 @@ struct SidebarHelperTests {
       )
     )
   }
+
+  @Test("Message window policy slices the recent tail and includes search targets with context")
+  func messageWindowPolicyVisibleRange() {
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 0, visibleCount: 30, targetMessageIndex: nil) == 0..<0)
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 12, visibleCount: 30, targetMessageIndex: nil) == 0..<12)
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 120, visibleCount: 30, targetMessageIndex: nil) == 90..<120)
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 120, visibleCount: 60, targetMessageIndex: nil) == 60..<120)
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 120, visibleCount: 30, targetMessageIndex: 40) == 25..<120)
+    #expect(ChatMessageWindowPolicy.visibleRange(totalCount: 120, visibleCount: 30, targetMessageIndex: 5) == 0..<120)
+  }
+
+  @Test("Markdown parse cache reuses prepared content and respects LRU bounds")
+  func markdownParseCacheCachesAndEvicts() {
+    let cache = MarkdownParseCache(limit: 2, byteLimit: 1024)
+    let first = cache.prepare(for: "# First\n\n| A | B |\n| :--- | ---: |\n| 1 | 2 |")
+    let firstAgain = cache.cached(for: first.source)
+    #expect(firstAgain === first)
+
+    _ = cache.prepare(for: "Second message")
+    _ = cache.prepare(for: "Third message")
+    #expect(cache.cached(for: first.source) == nil)
+    #expect(cache.cached(for: "Second message") != nil)
+    #expect(cache.cached(for: "Third message") != nil)
+  }
 }
 
 private actor PartiallyFailingCredentialVault: CredentialVault {

@@ -335,7 +335,16 @@ final class ChatManagementModel {
     guard hydratedConversations[id] == nil else { return }
     let task = Task { @MainActor in
       do {
-        self.hydratedConversations[id] = try await self.conversationStore.conversation(id: id)
+        let loaded = try await self.conversationStore.conversation(id: id)
+        // Pre-parse the initially visible tail messages off the main actor so
+        // MarkdownUI does not run cmark-gfm parsing synchronously on frame 1.
+        let tailMessages = Array(
+          loaded.messages.suffix(ChatMessageWindowPolicy.initialVisibleCount)
+        )
+        await Task.detached(priority: .userInitiated) {
+          MarkdownParseCache.shared.prewarm(messages: tailMessages)
+        }.value
+        self.hydratedConversations[id] = loaded
         self.conversationLoadFailures.remove(id)
         let refreshedSummaries = await self.conversationStore.conversationSummaries()
         if self.conversations != refreshedSummaries {

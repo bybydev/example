@@ -3,6 +3,49 @@ import BYOKchatProviderCore
 import SwiftUI
 import UIKit
 
+nonisolated enum ChatMessageWindowPolicy {
+  static let initialVisibleCount = 30
+  static let loadMoreBatchSize = 30
+  static let searchContextAbove = 15
+
+  /// Returns the tail slice of messages to mount in the timeline `List`,
+  /// expanding automatically to include a search-result target with context.
+  static func visibleRange(
+    totalCount: Int,
+    visibleCount: Int,
+    targetMessageIndex: Int?
+  ) -> Range<Int> {
+    guard totalCount > 0 else { return 0..<0 }
+    var start = max(0, totalCount - max(1, visibleCount))
+    if let targetMessageIndex, targetMessageIndex >= 0, targetMessageIndex < totalCount {
+      start = min(start, max(0, targetMessageIndex - searchContextAbove))
+    }
+    return start..<totalCount
+  }
+}
+
+/// Non-observable scroll bookkeeping box held by `ChatView` so high-frequency
+/// scroll geometry and phase callbacks do not invalidate the SwiftUI view tree.
+@MainActor
+final class ChatScrollCoordinator {
+  var isNearBottom = true
+  var followsLatest = true
+  var isUserDraggingTimeline = false
+  var isProgrammaticScroll = false
+  var isAnimatedProgrammaticScroll = false
+  var programmaticScrollGeneration = 0
+  var latestGeometry: ChatTimelineGeometry?
+
+  func reset(followsLatest: Bool) {
+    isNearBottom = true
+    self.followsLatest = followsLatest
+    isUserDraggingTimeline = false
+    isProgrammaticScroll = false
+    isAnimatedProgrammaticScroll = false
+    programmaticScrollGeneration &+= 1
+  }
+}
+
 nonisolated struct ChatTimelineGeometry: Equatable, Sendable {
   let contentHeight: CGFloat
   let containerHeight: CGFloat
@@ -65,8 +108,8 @@ extension ChatView {
 
   private var jumpToLatestButton: some View {
     Button {
-      followsLatest = true
-      isUserDraggingTimeline = false
+      scrollCoordinator.followsLatest = true
+      scrollCoordinator.isUserDraggingTimeline = false
       showJumpToLatest = false
       scrollToBottom()
     } label: {
@@ -115,11 +158,29 @@ extension ChatView {
   }
 
   private func scrollViewContent(_ conversation: ChatConversation) -> some View {
+    let isGenerating = chats.isGenerating(conversationID)
     let canMutateConversation = configurationIssue(conversation) == nil && chats.canSend(conversation.id)
     let approvals = mcp.pendingApprovals(for: conversationID)
     let approvalCallIDs = Set(approvals.map(\.callID))
     let elicitations = mcp.pendingElicitations(for: conversationID)
     let activeTools = chats.activeToolCalls(for: conversationID)
+
+    let allMessages = conversation.messages
+    let targetIndex = initialScrollMessageID.flatMap { targetID in
+      allMessages.firstIndex { $0.id == targetID }
+    }
+    let visibleRange = ChatMessageWindowPolicy.visibleRange(
+      totalCount: allMessages.count,
+      visibleCount: visibleMessageLimit,
+      targetMessageIndex: targetIndex
+    )
+    let visibleMessages = allMessages[visibleRange]
+    let hiddenEarlierCount = visibleRange.lowerBound
+    let latestAssistantMessageID = allMessages.last(where: { $0.role == .assistant })?.id
+    let accountsByID = Dictionary(
+      providers.accounts.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
 
     // Use a plain List (UICollectionView-backed) rather than ScrollView + LazyVStack:
     // UICollectionView recycles self-sizing variable-height Markdown cells reliably,
@@ -143,20 +204,30 @@ extension ChatView {
           .chatTimelineRow()
         }
 
-        ForEach(conversation.messages) { stored in
+        if hiddenEarlierCount > 0 {
+          loadEarlierMessagesButton(
+            hiddenCount: hiddenEarlierCount,
+            allMessages: allMessages,
+            currentStartIndex: visibleRange.lowerBound,
+            anchorMessageID: visibleMessages.first?.id
+          )
+          .chatTimelineRow()
+        }
+
+        ForEach(visibleMessages) { stored in
           let displayed = chats.displayMessage(stored)
-          let isLatest = stored.id == latestAssistantID
+          let isLatest = stored.id == latestAssistantMessageID
           VStack(alignment: .leading, spacing: 10) {
             ChatMessageView(
               message: displayed,
-              accountLabel: accountLabel(for: stored),
-              failureContext: failureContextLabel(for: stored),
+              accountLabel: stored.accountID.flatMap { accountsByID[$0]?.label },
+              failureContext: failureContextLabel(for: stored, accountsByID: accountsByID),
               canEdit: stored.role == .user
-                && !chats.isGenerating(conversationID)
+                && !isGenerating
                 && canMutateConversation,
               isLatestAssistant: isLatest,
               canRegenerate: isLatest
-                && !chats.isGenerating(conversationID)
+                && !isGenerating
                 && canMutateConversation,
               conversationID: conversationID,
               library: library,
@@ -242,36 +313,36 @@ extension ChatView {
           if !hasCompletedInitialScroll {
             hasCompletedInitialScroll = true
           }
-          isProgrammaticScroll = false
-          isAnimatedProgrammaticScroll = false
-          isUserDraggingTimeline = true
-          if !isNearBottom {
-            followsLatest = false
-            showJumpToLatest = true
+          scrollCoordinator.isProgrammaticScroll = false
+          scrollCoordinator.isAnimatedProgrammaticScroll = false
+          scrollCoordinator.isUserDraggingTimeline = true
+          if !scrollCoordinator.isNearBottom {
+            scrollCoordinator.followsLatest = false
+            if !showJumpToLatest { showJumpToLatest = true }
           }
         case .idle:
-          let wasUserDriven = isUserDraggingTimeline
-          isUserDraggingTimeline = false
-          isProgrammaticScroll = false
-          isAnimatedProgrammaticScroll = false
-          if isNearBottom {
-            followsLatest = true
-            showJumpToLatest = false
+          let wasUserDriven = scrollCoordinator.isUserDraggingTimeline
+          scrollCoordinator.isUserDraggingTimeline = false
+          scrollCoordinator.isProgrammaticScroll = false
+          scrollCoordinator.isAnimatedProgrammaticScroll = false
+          if scrollCoordinator.isNearBottom {
+            scrollCoordinator.followsLatest = true
+            if showJumpToLatest { showJumpToLatest = false }
           } else if wasUserDriven || !chats.isGenerating(conversationID) {
-            followsLatest = false
-            showJumpToLatest = true
+            scrollCoordinator.followsLatest = false
+            if !showJumpToLatest { showJumpToLatest = true }
           }
         case .animating:
           // Non-programmatic animating transitions include status-bar tap to top
           // and VoiceOver scroll; treat them as user-driven so auto-follow pauses.
-          if !isProgrammaticScroll {
-            isUserDraggingTimeline = true
-            if !isNearBottom {
-              followsLatest = false
-              showJumpToLatest = true
+          if !scrollCoordinator.isProgrammaticScroll {
+            scrollCoordinator.isUserDraggingTimeline = true
+            if !scrollCoordinator.isNearBottom {
+              scrollCoordinator.followsLatest = false
+              if !showJumpToLatest { showJumpToLatest = true }
             }
           } else {
-            isUserDraggingTimeline = false
+            scrollCoordinator.isUserDraggingTimeline = false
           }
         @unknown default:
           break
@@ -286,19 +357,19 @@ extension ChatView {
           isNearBottom: distanceFromBottom <= 28
         )
       } action: { oldGeometry, newGeometry in
-        latestTimelineGeometry = newGeometry
-        isNearBottom = newGeometry.isNearBottom
+        scrollCoordinator.latestGeometry = newGeometry
+        scrollCoordinator.isNearBottom = newGeometry.isNearBottom
         if newGeometry.isNearBottom {
-          followsLatest = true
-          showJumpToLatest = false
-        } else if hasCompletedInitialScroll && isUserDraggingTimeline {
-          followsLatest = false
-          showJumpToLatest = true
+          scrollCoordinator.followsLatest = true
+          if showJumpToLatest { showJumpToLatest = false }
+        } else if hasCompletedInitialScroll && scrollCoordinator.isUserDraggingTimeline {
+          scrollCoordinator.followsLatest = false
+          if !showJumpToLatest { showJumpToLatest = true }
         }
         guard hasCompletedInitialScroll,
-          followsLatest,
-          !isUserDraggingTimeline,
-          !isAnimatedProgrammaticScroll,
+          scrollCoordinator.followsLatest,
+          !scrollCoordinator.isUserDraggingTimeline,
+          !scrollCoordinator.isAnimatedProgrammaticScroll,
           newGeometry.needsBottomPin
         else { return }
 
@@ -310,6 +381,16 @@ extension ChatView {
           performScrollToBottom(using: proxy, animated: false)
         }
       }
+      .task(id: pendingEarlierAnchorID) {
+        guard let anchorID = pendingEarlierAnchorID else { return }
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        scrollCoordinator.isProgrammaticScroll = true
+        proxy.scrollTo(anchorID, anchor: .top)
+        await Task.yield()
+        scrollCoordinator.isProgrammaticScroll = false
+        pendingEarlierAnchorID = nil
+      }
       .task(id: scrollToBottomRequest) {
         guard scrollToBottomRequest.id > 0 else { return }
         await Task.yield()
@@ -318,50 +399,51 @@ extension ChatView {
       }
       .onChange(of: chats.isGenerating(conversationID)) { _, generating in
         if generating {
-          followsLatest = true
-          showJumpToLatest = false
-        } else if !isNearBottom {
-          showJumpToLatest = true
+          scrollCoordinator.followsLatest = true
+          if showJumpToLatest { showJumpToLatest = false }
+        } else if !scrollCoordinator.isNearBottom {
+          if !showJumpToLatest { showJumpToLatest = true }
         }
       }
       .task(id: conversationID) {
         hasCompletedInitialScroll = false
-        isProgrammaticScroll = false
-        isAnimatedProgrammaticScroll = false
-        followsLatest = initialScrollMessageID == nil
+        visibleMessageLimit = ChatMessageWindowPolicy.initialVisibleCount
+        isLoadingEarlierMessages = false
+        pendingEarlierAnchorID = nil
+        scrollCoordinator.reset(followsLatest: initialScrollMessageID == nil)
         showJumpToLatest = false
 
-        isProgrammaticScroll = true
+        scrollCoordinator.isProgrammaticScroll = true
         await Task.yield()
         guard !Task.isCancelled else {
-          isProgrammaticScroll = false
+          scrollCoordinator.isProgrammaticScroll = false
           return
         }
 
         if initialScrollMessageID == nil {
-          if !isUserDraggingTimeline {
+          if !scrollCoordinator.isUserDraggingTimeline {
             proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
           }
-          var previousContentHeight = latestTimelineGeometry?.contentHeight ?? 0
+          var previousContentHeight = scrollCoordinator.latestGeometry?.contentHeight ?? 0
           // Give List + MarkdownUI up to a few brief layout frames to
           // measure tall self-sizing bottom rows, stopping early once pinned.
           for _ in 0..<3 {
             do {
               try await Task.sleep(for: .milliseconds(32))
             } catch {
-              isProgrammaticScroll = false
+              scrollCoordinator.isProgrammaticScroll = false
               return
             }
             guard !Task.isCancelled else {
-              isProgrammaticScroll = false
+              scrollCoordinator.isProgrammaticScroll = false
               return
             }
-            if isUserDraggingTimeline { break }
-            let geometry = latestTimelineGeometry
+            if scrollCoordinator.isUserDraggingTimeline { break }
+            let geometry = scrollCoordinator.latestGeometry
             let shouldContinue = ChatTimelineGeometry.shouldContinueBottomSettle(
               geometry: geometry,
               previousContentHeight: previousContentHeight,
-              isNearBottom: isNearBottom
+              isNearBottom: scrollCoordinator.isNearBottom
             )
             previousContentHeight = geometry?.contentHeight ?? previousContentHeight
             if shouldContinue {
@@ -371,37 +453,90 @@ extension ChatView {
             }
           }
           await Task.yield()
-          isProgrammaticScroll = false
+          scrollCoordinator.isProgrammaticScroll = false
           withAnimation(.easeOut(duration: 0.14)) {
             hasCompletedInitialScroll = true
           }
           return
         }
 
-        if !isUserDraggingTimeline {
+        if !scrollCoordinator.isUserDraggingTimeline {
           scrollToInitialTarget(proxy)
         }
 
         do {
           try await Task.sleep(for: .milliseconds(32))
         } catch {
-          isProgrammaticScroll = false
+          scrollCoordinator.isProgrammaticScroll = false
           return
         }
         guard !Task.isCancelled else {
-          isProgrammaticScroll = false
+          scrollCoordinator.isProgrammaticScroll = false
           return
         }
-        if !isUserDraggingTimeline {
+        if !scrollCoordinator.isUserDraggingTimeline {
           scrollToInitialTarget(proxy)
         }
         await Task.yield()
-        isProgrammaticScroll = false
+        scrollCoordinator.isProgrammaticScroll = false
         withAnimation(.easeOut(duration: 0.14)) {
           hasCompletedInitialScroll = true
         }
-        showJumpToLatest = !isNearBottom
+        showJumpToLatest = !scrollCoordinator.isNearBottom
       }
+    }
+  }
+
+  private func loadEarlierMessagesButton(
+    hiddenCount: Int,
+    allMessages: [ChatMessage],
+    currentStartIndex: Int,
+    anchorMessageID: ChatMessageID?
+  ) -> some View {
+    let batchCount = min(hiddenCount, ChatMessageWindowPolicy.loadMoreBatchSize)
+    return HStack {
+      Spacer()
+      Button {
+        guard !isLoadingEarlierMessages else { return }
+        isLoadingEarlierMessages = true
+        let targetConversationID = conversationID
+        let batchStart = max(0, currentStartIndex - batchCount)
+        let nextBatch = Array(allMessages[batchStart..<currentStartIndex])
+        let expandedCount = (allMessages.count - currentStartIndex) + batchCount
+        Task { @MainActor in
+          await Task.detached(priority: .userInitiated) {
+            MarkdownParseCache.shared.prewarm(messages: nextBatch)
+          }.value
+          guard conversationID == targetConversationID else { return }
+          pendingEarlierAnchorID = anchorMessageID
+          visibleMessageLimit = max(visibleMessageLimit, expandedCount)
+          isLoadingEarlierMessages = false
+        }
+      } label: {
+        HStack(spacing: 8) {
+          if isLoadingEarlierMessages {
+            ProgressView()
+              .controlSize(.mini)
+          } else {
+            Image(systemName: "arrow.up.circle")
+              .font(.system(size: 13, weight: .semibold))
+          }
+          Text(
+            hiddenCount > batchCount
+              ? "Load \(batchCount) earlier messages (\(hiddenCount) hidden)"
+              : "Load \(hiddenCount) earlier message\(hiddenCount == 1 ? "" : "s")"
+          )
+          .font(.system(size: 13, weight: .medium))
+        }
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.surfaceColor, in: Capsule())
+        .overlay(Capsule().stroke(theme.borderColor, lineWidth: 0.75))
+      }
+      .buttonStyle(.plain)
+      .disabled(isLoadingEarlierMessages)
+      Spacer()
     }
   }
 
@@ -413,7 +548,7 @@ extension ChatView {
   private func send() {
     let text = draft
     let attachments = pendingAttachments
-    followsLatest = true
+    scrollCoordinator.followsLatest = true
     showJumpToLatest = false
     chats.send(
       conversationID: conversationID,
@@ -426,7 +561,7 @@ extension ChatView {
         pendingAttachments.removeAll { sentIDs.contains($0.id) }
       }
     )
-    scrollToBottom(animated: !isNearBottom)
+    scrollToBottom(animated: !scrollCoordinator.isNearBottom)
   }
 
   private func regenerate() {
@@ -434,13 +569,13 @@ extension ChatView {
       configurationIssue(currentConversation) == nil,
       chats.canSend(conversationID)
     else { return }
-    followsLatest = true
+    scrollCoordinator.followsLatest = true
     showJumpToLatest = false
     if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
       showRegenerateConfirmation = true
     } else {
       chats.regenerate(conversationID: conversationID)
-      scrollToBottom(animated: !isNearBottom)
+      scrollToBottom(animated: !scrollCoordinator.isNearBottom)
     }
   }
 
@@ -453,19 +588,17 @@ extension ChatView {
     return "\(accountName) · \(modelName)"
   }
 
-  private func accountLabel(for message: ChatMessage) -> String? {
-    guard let accountID = message.accountID else { return nil }
-    return providers.accounts.first { $0.id == accountID }?.label
-  }
-
   /// Remote failures name the connection that rejected the request: provider
   /// and model, with the account label only when one provider has several
   /// accounts and the label is the only way to tell them apart. Local failures
   /// never reached an account, so they get no context line at all.
-  private func failureContextLabel(for message: ChatMessage) -> String? {
+  private func failureContextLabel(
+    for message: ChatMessage,
+    accountsByID: [ProviderAccountID: ProviderAccount]
+  ) -> String? {
     guard message.status == .failed, message.failureOrigin == .remote else { return nil }
     guard let accountID = message.accountID,
-      let account = providers.accounts.first(where: { $0.id == accountID })
+      let account = accountsByID[accountID]
     else { return nil }
 
     var parts: [String] = []
@@ -531,10 +664,10 @@ extension ChatView {
   }
 
   private func performScrollToBottom(using proxy: ScrollViewProxy, animated: Bool) {
-    programmaticScrollGeneration &+= 1
-    let generation = programmaticScrollGeneration
-    isProgrammaticScroll = true
-    isAnimatedProgrammaticScroll = animated
+    scrollCoordinator.programmaticScrollGeneration &+= 1
+    let generation = scrollCoordinator.programmaticScrollGeneration
+    scrollCoordinator.isProgrammaticScroll = true
+    scrollCoordinator.isAnimatedProgrammaticScroll = animated
     if animated {
       withAnimation(.easeOut(duration: 0.22)) {
         proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
@@ -544,19 +677,19 @@ extension ChatView {
     }
     Task { @MainActor in
       try? await Task.sleep(for: animated ? .milliseconds(250) : .milliseconds(60))
-      guard programmaticScrollGeneration == generation else { return }
+      guard scrollCoordinator.programmaticScrollGeneration == generation else { return }
       // If tall variable-height cells expanded during a long animated jump,
       // finish with one silent un-animated snap to the true bottom.
-      if animated, !isUserDraggingTimeline, followsLatest,
-        latestTimelineGeometry?.needsBottomPin ?? false
+      if animated, !scrollCoordinator.isUserDraggingTimeline, scrollCoordinator.followsLatest,
+        scrollCoordinator.latestGeometry?.needsBottomPin ?? false
       {
-        isAnimatedProgrammaticScroll = false
+        scrollCoordinator.isAnimatedProgrammaticScroll = false
         proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
         try? await Task.sleep(for: .milliseconds(50))
-        guard programmaticScrollGeneration == generation else { return }
+        guard scrollCoordinator.programmaticScrollGeneration == generation else { return }
       }
-      isProgrammaticScroll = false
-      isAnimatedProgrammaticScroll = false
+      scrollCoordinator.isProgrammaticScroll = false
+      scrollCoordinator.isAnimatedProgrammaticScroll = false
     }
   }
 }

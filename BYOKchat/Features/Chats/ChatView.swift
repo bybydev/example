@@ -160,16 +160,13 @@ struct ChatView: View {
   @State var showRegenerateConfirmation = false
   @State var showDeleteConfirmation = false
   @State var isDeleting = false
-  @State var isNearBottom = true
-  @State var followsLatest = true
-  @State var isUserDraggingTimeline = false
-  @State var isProgrammaticScroll = false
-  @State var isAnimatedProgrammaticScroll = false
-  @State var programmaticScrollGeneration = 0
+  @State var scrollCoordinator = ChatScrollCoordinator()
   @State var showJumpToLatest = false
   @State var hasCompletedInitialScroll = false
-  @State var latestTimelineGeometry: ChatTimelineGeometry?
   @State var scrollToBottomRequest = ChatScrollToBottomRequest()
+  @State var visibleMessageLimit = ChatMessageWindowPolicy.initialVisibleCount
+  @State var isLoadingEarlierMessages = false
+  @State var pendingEarlierAnchorID: ChatMessageID?
   @State var markdownDocument: MarkdownExportDocument?
   @State var showMarkdownExporter = false
   @State var pendingAttachments: [ChatAttachment] = []
@@ -566,7 +563,7 @@ struct ChatView: View {
             chats.errorMessage = "Fix the chat configuration before editing and resending."
             return
           }
-          followsLatest = true
+          scrollCoordinator.followsLatest = true
           showJumpToLatest = false
           chats.editAndResend(
             conversationID: conversationID,
@@ -574,7 +571,7 @@ struct ChatView: View {
             text: editText
           )
           editTarget = nil
-          scrollToBottom(animated: !isNearBottom)
+          scrollToBottom(animated: !scrollCoordinator.isNearBottom)
         },
         cancel: { editTarget = nil }
       )
@@ -607,13 +604,13 @@ struct ChatView: View {
     .alert("Regenerate response?", isPresented: $showRegenerateConfirmation) {
       Button("Cancel", role: .cancel) {}
       Button("Regenerate Anyway", role: .destructive) {
-        followsLatest = true
+        scrollCoordinator.followsLatest = true
         showJumpToLatest = false
         chats.regenerate(
           conversationID: conversationID,
           confirmingUncertainCompletion: true
         )
-        scrollToBottom(animated: !isNearBottom)
+        scrollToBottom(animated: !scrollCoordinator.isNearBottom)
       }
     } message: {
       Text(

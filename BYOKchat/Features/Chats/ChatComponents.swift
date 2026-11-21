@@ -625,8 +625,12 @@ struct ChatMessageView: View {
         return (sources, images)
       }.value
       guard !Task.isCancelled else { return }
-      cachedSources = analyzed.0
-      cachedImageCandidates = analyzed.1
+      if cachedSources != analyzed.0 {
+        cachedSources = analyzed.0
+      }
+      if cachedImageCandidates != analyzed.1 {
+        cachedImageCandidates = analyzed.1
+      }
     }
     .sheet(isPresented: $showMessageInfo) {
       MessageInfoView(message: message, accountLabel: accountLabel)

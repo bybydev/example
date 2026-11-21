@@ -1,98 +1,59 @@
 import AppFoundation
+import BYOKchatProviderCore
+import Foundation
 import LaTeXSwiftUI
 import MarkdownUI
 import SwiftUI
 
-struct MarkdownMessageContent: View {
-  let text: String
-  /// Stretch every block to the offered width. Off inside right-hugging user
-  /// bubbles so the capsule shrinks to its content instead of filling the row.
-  var fillsWidth = true
-  var isStreaming = false
-
-  @Environment(\.appFoundationTheme) private var theme
-  @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = 17
-  @State private var browserDestination: BrowserDestination?
-
-  var body: some View {
-    let blocks = AnswerContentParser.parseDetailed(text)
-
-    VStack(alignment: .leading, spacing: 12) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, parsed in
-        blockView(parsed)
-      }
-    }
-    .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
-    .environment(
-      \.openURL,
-      OpenURLAction { url in
-        guard AnswerContentParser.isValidBrowsableURL(url) else {
-          return .systemAction
-        }
-        browserDestination = BrowserDestination(url: url)
-        return .handled
-      }
-    )
-    .sheet(item: $browserDestination) { destination in
-      InAppBrowserView(url: destination.url)
-        .ignoresSafeArea()
-    }
+/// Immutable pre-parsed representation of a message's Markdown/code/math blocks.
+/// MarkdownUI's `MarkdownContent` wraps immutable block nodes but predates
+/// `Sendable`; instances are constructed once off the main actor and published
+/// read-only.
+nonisolated final class PreparedMarkdownMessage: @unchecked Sendable {
+  struct Segment: @unchecked Sendable {
+    let text: String
+    let useLaTeX: Bool
+    let markdownContent: MarkdownContent?
+    let columnAlignments: [TextAlignment]
   }
 
-  @ViewBuilder
-  private func blockView(_ parsed: ParsedAnswerBlock) -> some View {
-    switch parsed.block {
-    case .markdown(let markdown):
-      let segments = AnswerContentParser.splitMarkdownForInlineMath(markdown)
-      if segments.count == 1, let only = segments.first {
-        markdownSegmentView(only)
-      } else {
-        VStack(alignment: .leading, spacing: 10) {
-          ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-            markdownSegmentView(segment)
+  enum Block: @unchecked Sendable {
+    case markdown([Segment])
+    case code(language: String?, content: String, isClosed: Bool)
+    case math(String)
+  }
+
+  let source: String
+  let blocks: [Block]
+
+  init(source: String) {
+    self.source = source
+    let parsedBlocks = AnswerContentParser.parseDetailed(source)
+    self.blocks = parsedBlocks.map { parsed in
+      switch parsed.block {
+      case .markdown(let markdown):
+        let segments = AnswerContentParser.splitMarkdownForInlineMath(markdown).map { segment in
+          if segment.useLaTeX {
+            return Segment(
+              text: segment.text,
+              useLaTeX: true,
+              markdownContent: nil,
+              columnAlignments: []
+            )
           }
-        }
-      }
-
-    case .code(let language, let content):
-      let blockComplete = parsed.isClosed || !isStreaming
-      if AnswerContentParser.isMermaidLanguage(language) {
-        MermaidAnswerView(source: content, isComplete: blockComplete)
-      } else {
-        HighlightedCodeBlock(language: language, content: content, isComplete: blockComplete)
-      }
-
-    case .math(let expression):
-      MathAnswerView(expression: expression)
-    }
-  }
-
-  @ViewBuilder
-  private func markdownSegmentView(_ segment: MarkdownMathSegment) -> some View {
-    if segment.useLaTeX {
-      LaTeX(segment.text)
-        .parsingMode(.onlyEquations)
-        .blockMode(.blockViews)
-        .processEscapes()
-        .renderingStyle(.redactedOriginal)
-        .renderingAnimation(.easeOut(duration: 0.18))
-        .errorMode(.original)
-        .imageRenderingMode(.template)
-        .imageAccessibility(.sre)
-        .font(.system(size: bodyFontSize))
-        .foregroundStyle(theme.primaryForegroundColor)
-        .textSelection(.enabled)
-        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
-    } else {
-      Markdown(segment.text)
-        .markdownTheme(
-          chatTheme(
-            columnAlignments: tableColumnAlignments(in: segment.text) ?? []
+          return Segment(
+            text: segment.text,
+            useLaTeX: false,
+            markdownContent: MarkdownContent(segment.text),
+            columnAlignments: Self.tableColumnAlignments(in: segment.text) ?? []
           )
-        )
-        .textSelection(.enabled)
-        .tint(theme.accentColor)
-        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+        }
+        return .markdown(segments)
+      case .code(let language, let content):
+        return .code(language: language, content: content, isClosed: parsed.isClosed)
+      case .math(let expression):
+        return .math(expression)
+      }
     }
   }
 
@@ -103,7 +64,8 @@ struct MarkdownMessageContent: View {
   /// it must be recovered from the source text here. Returns the first
   /// delimiter row outside code fences; tables after the first in the same
   /// markdown chunk share its alignments.
-  private func tableColumnAlignments(in markdown: String) -> [TextAlignment]? {
+  static func tableColumnAlignments(in markdown: String) -> [TextAlignment]? {
+    guard markdown.contains("|"), markdown.contains("-") else { return nil }
     var inFence = false
     for line in markdown.components(separatedBy: .newlines) {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -130,7 +92,7 @@ struct MarkdownMessageContent: View {
     return nil
   }
 
-  private func isTableDelimiterRow(_ line: String) -> Bool {
+  private static func isTableDelimiterRow(_ line: String) -> Bool {
     guard line.contains("|"), line.contains("-") else { return false }
     let cells = line
       .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
@@ -140,6 +102,163 @@ struct MarkdownMessageContent: View {
       let body = c.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
       return !body.isEmpty && body.allSatisfy { $0 == "-" }
         && c.contains("-")
+    }
+  }
+}
+
+/// Bounded thread-safe LRU cache for pre-parsed Markdown messages.
+/// Parsing runs off the main actor (during conversation hydration or batch
+/// expansion) so `MarkdownMessageContent.body` hits pre-built `MarkdownContent`
+/// trees synchronously on frame 1.
+nonisolated final class MarkdownParseCache: @unchecked Sendable {
+  static let shared = MarkdownParseCache()
+
+  private let lock = NSLock()
+  private var values: [String: PreparedMarkdownMessage] = [:]
+  private var order: [String] = []
+  private var sourceBytes = 0
+  private let limit: Int
+  private let byteLimit: Int
+
+  init(limit: Int = 128, byteLimit: Int = 8 * 1_024 * 1_024) {
+    self.limit = max(limit, 1)
+    self.byteLimit = max(byteLimit, 1)
+  }
+
+  func cached(for source: String) -> PreparedMarkdownMessage? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let value = values[source] else { return nil }
+    order.removeAll { $0 == source }
+    order.append(source)
+    return value
+  }
+
+  func prepare(for source: String) -> PreparedMarkdownMessage {
+    if let existing = cached(for: source) {
+      return existing
+    }
+    let prepared = PreparedMarkdownMessage(source: source)
+    insert(prepared)
+    return prepared
+  }
+
+  func prewarm(messages: [ChatMessage]) {
+    for message in messages {
+      if Task.isCancelled { return }
+      guard !message.content.isEmpty, message.status != .streaming else { continue }
+      _ = prepare(for: message.content)
+    }
+  }
+
+  private func insert(_ value: PreparedMarkdownMessage) {
+    let cost = value.source.utf8.count
+    guard cost <= byteLimit else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    if values[value.source] == nil {
+      sourceBytes += cost
+    }
+    values[value.source] = value
+    order.removeAll { $0 == value.source }
+    order.append(value.source)
+    while order.count > limit || sourceBytes > byteLimit {
+      let evicted = order.removeFirst()
+      sourceBytes -= evicted.utf8.count
+      values.removeValue(forKey: evicted)
+    }
+  }
+}
+
+struct MarkdownMessageContent: View {
+  let text: String
+  /// Stretch every block to the offered width. Off inside right-hugging user
+  /// bubbles so the capsule shrinks to its content instead of filling the row.
+  var fillsWidth = true
+  var isStreaming = false
+
+  @Environment(\.appFoundationTheme) private var theme
+  @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = 17
+  @State private var browserDestination: BrowserDestination?
+
+  var body: some View {
+    let prepared = isStreaming
+      ? PreparedMarkdownMessage(source: text)
+      : MarkdownParseCache.shared.prepare(for: text)
+
+    VStack(alignment: .leading, spacing: 12) {
+      ForEach(Array(prepared.blocks.enumerated()), id: \.offset) { _, block in
+        blockView(block)
+      }
+    }
+    .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+    .environment(
+      \.openURL,
+      OpenURLAction { url in
+        guard AnswerContentParser.isValidBrowsableURL(url) else {
+          return .systemAction
+        }
+        browserDestination = BrowserDestination(url: url)
+        return .handled
+      }
+    )
+    .sheet(item: $browserDestination) { destination in
+      InAppBrowserView(url: destination.url)
+        .ignoresSafeArea()
+    }
+  }
+
+  @ViewBuilder
+  private func blockView(_ block: PreparedMarkdownMessage.Block) -> some View {
+    switch block {
+    case .markdown(let segments):
+      if segments.count == 1, let only = segments.first {
+        markdownSegmentView(only)
+      } else {
+        VStack(alignment: .leading, spacing: 10) {
+          ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+            markdownSegmentView(segment)
+          }
+        }
+      }
+
+    case .code(let language, let content, let isClosed):
+      let blockComplete = isClosed || !isStreaming
+      if AnswerContentParser.isMermaidLanguage(language) {
+        MermaidAnswerView(source: content, isComplete: blockComplete)
+      } else {
+        HighlightedCodeBlock(language: language, content: content, isComplete: blockComplete)
+      }
+
+    case .math(let expression):
+      MathAnswerView(expression: expression)
+    }
+  }
+
+  @ViewBuilder
+  private func markdownSegmentView(_ segment: PreparedMarkdownMessage.Segment) -> some View {
+    if segment.useLaTeX {
+      LaTeX(segment.text)
+        .parsingMode(.onlyEquations)
+        .blockMode(.blockViews)
+        .processEscapes()
+        .renderingStyle(.redactedOriginal)
+        .renderingAnimation(.easeOut(duration: 0.18))
+        .errorMode(.original)
+        .imageRenderingMode(.template)
+        .imageAccessibility(.sre)
+        .font(.system(size: bodyFontSize))
+        .foregroundStyle(theme.primaryForegroundColor)
+        .textSelection(.enabled)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+    } else {
+      Markdown(segment.markdownContent ?? MarkdownContent(segment.text))
+        .markdownTheme(
+          chatTheme(columnAlignments: segment.columnAlignments)
+        )
+        .textSelection(.enabled)
+        .tint(theme.accentColor)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     }
   }
 
