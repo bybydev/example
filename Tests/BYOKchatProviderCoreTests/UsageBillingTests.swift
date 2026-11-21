@@ -692,7 +692,7 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   let msgAPerf = UsageAnalytics.messagePerformance(
     messageID: msgA.id,
     telemetryEvents: events,
-    range: .today,
+    range: .all,
     reference: reference
   )
   #expect(msgAPerf.providerRequestCount == 1)
@@ -700,24 +700,16 @@ func analyticsRangesClampHistoryAfterEntitlementLoss() {
   #expect(msgAPerf.medianDurationMilliseconds == 1_200)
   #expect(msgAPerf.medianOutputTokensPerSecond == 64.0)
 
-  // Historical message telemetry stays gated when clamped to Today (Free) and visible on All (Pro).
-  let msgBFree = UsageAnalytics.messagePerformance(
+  // Older message performance is accumulated ungated when queried across .all,
+  // while remaining isolated from other messages in the same or other chats.
+  let msgBPerf = UsageAnalytics.messagePerformance(
     messageID: msgB.id,
     telemetryEvents: events,
-    range: UsageAnalyticsRange.all.accessible(hasPro: false),
+    range: .all,
     reference: reference
   )
-  #expect(msgBFree.providerRequestCount == 0)
-  #expect(!msgBFree.hasLatencyOrSpeedMetrics)
-
-  let msgBPro = UsageAnalytics.messagePerformance(
-    messageID: msgB.id,
-    telemetryEvents: events,
-    range: UsageAnalyticsRange.all.accessible(hasPro: true),
-    reference: reference
-  )
-  #expect(msgBPro.providerRequestCount == 1)
-  #expect(msgBPro.medianTTFTMilliseconds == 500)
-  #expect(msgBPro.medianDurationMilliseconds == 2_400)
-  #expect(msgBPro.medianOutputTokensPerSecond == 48.0)
+  #expect(msgBPerf.providerRequestCount == 1)
+  #expect(msgBPerf.medianTTFTMilliseconds == 500)
+  #expect(msgBPerf.medianDurationMilliseconds == 2_400)
+  #expect(msgBPerf.medianOutputTokensPerSecond == 48.0)
 }

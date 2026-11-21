@@ -7,23 +7,14 @@ struct ConversationAnalyticsView: View {
   let conversation: ChatConversation
 
   @Environment(\.dismiss) private var dismiss
-  @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(AppModel.self) private var model
   @Environment(\.appFoundationTheme) private var theme
 
-  // Pro users see the entire conversation by default and can narrow by date range.
-  // Free users are strictly clamped to Today via accessibleRange.
-  @State private var range: UsageRange = .all
   @State private var telemetryEvents: [TelemetryEvent] = []
   @State private var hasLoadedTelemetry = false
   @State private var telemetryUnavailable = false
   @State private var isLoadingTelemetry = false
-  @State private var showProUpsell = false
   @State private var didTrackOpening = false
-
-  private var accessibleRange: UsageRange {
-    range.accessible(hasPro: purchaseManager.hasPro)
-  }
 
   private var navigationTitleText: String {
     let trimmed = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,18 +23,15 @@ struct ConversationAnalyticsView: View {
 
   var body: some View {
     NavigationStack {
-      let referenceDate = Date.now
-      let activeRange = accessibleRange
       let activeTelemetry = telemetryUnavailable ? [] : telemetryEvents
       let snapshot = UsageAnalytics.conversationSnapshot(
         conversation: conversation,
         telemetryEvents: activeTelemetry,
-        range: activeRange,
-        reference: referenceDate
+        range: .all
       )
 
       List {
-        usageSection(snapshot.aggregate, range: activeRange)
+        usageSection(snapshot.aggregate)
 
         telemetryStatusSections(snapshot: snapshot)
 
@@ -65,9 +53,6 @@ struct ConversationAnalyticsView: View {
       .navigationTitle(navigationTitleText)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          analyticsRangeMenu
-        }
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
@@ -79,56 +64,10 @@ struct ConversationAnalyticsView: View {
         }
         await loadTelemetry()
       }
-      .onChange(of: purchaseManager.hasPro) { _, hasPro in
-        if !hasPro { range = .today }
-      }
-      .sheet(isPresented: $showProUpsell) {
-        BYOKProUpsellFlow(feature: .analytics)
-      }
     }
   }
 
-  private var analyticsRangeMenu: some View {
-    Menu {
-      ForEach(UsageRange.allCases) { value in
-        rangeMenuButton(for: value)
-      }
-    } label: {
-      Text(accessibleRange.label)
-    }
-    .menuIndicator(.hidden)
-    .accessibilityLabel("Analytics date range, \(accessibleRange.label)")
-    .accessibilityHint("Choose the analytics date range.")
-  }
-
-  private func rangeMenuButton(for value: UsageRange) -> some View {
-    let locked = value.requiresPro && !purchaseManager.hasPro
-    let selected = accessibleRange == value
-
-    return Button {
-      if locked {
-        showProUpsell = true
-      } else if accessibleRange != value {
-        range = value
-        BYOKAppAnalytics.track(.analyticsRangeSelected, dimension: .init(range: value))
-      }
-    } label: {
-      if locked {
-        Label(value.label, systemImage: "lock.fill")
-      } else if selected {
-        Label(value.label, systemImage: "checkmark")
-      } else {
-        Text(value.label)
-      }
-    }
-    .accessibilityLabel(locked ? "\(value.label), locked, requires BYOK Pro" : value.label)
-    .accessibilityHint(locked
-      ? "Open BYOK Pro to unlock historical analytics."
-      : "Show analytics for \(value.label).")
-    .accessibilityAddTraits(selected ? .isSelected : [])
-  }
-
-  private func usageSection(_ aggregate: ChatUsageAggregate, range: UsageRange) -> some View {
+  private func usageSection(_ aggregate: ChatUsageAggregate) -> some View {
     Section {
       LabeledContent("Spend", value: usageAggregateCostText(aggregate))
       LabeledContent("Model requests", value: aggregate.modelRequestCount.formatted())
@@ -144,7 +83,7 @@ struct ConversationAnalyticsView: View {
         LabeledContent("Tool calls", value: aggregate.toolCallCount.formatted())
       }
     } header: {
-      Text("Usage · \(range.label)")
+      Text("Usage")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
       Text(usageHistoryFootnote(aggregate))
@@ -196,7 +135,7 @@ struct ConversationAnalyticsView: View {
           ContentUnavailableView(
             "No Performance Data Yet",
             systemImage: "waveform.path.ecg",
-            description: Text("No local performance metrics are stored for this conversation in the selected range.")
+            description: Text("No local performance metrics are stored for this conversation.")
           )
         }
         .listRowBackground(theme.surfaceColor)

@@ -151,6 +151,7 @@ struct ChatView: View {
   @State var attachmentImportGeneration = 0
   @State var showConnections = false
   @State var showProjectEditorSheet = false
+  @State var showChatSettings = false
   @State var showTargetSettings = false
   @State var showToolSettings = false
   @State var showUsage = false
@@ -466,7 +467,7 @@ struct ChatView: View {
             }
           }
           Button("Chat Settings", systemImage: "slider.horizontal.3") {
-            showTargetSettings = true
+            showChatSettings = true
           }
           .disabled(conversation == nil)
           Button("Tools", systemImage: "wrench.and.screwdriver") {
@@ -501,6 +502,26 @@ struct ChatView: View {
           Image(systemName: "ellipsis")
         }
         .accessibilityLabel("More options")
+      }
+    }
+    .sheet(isPresented: $showChatSettings) {
+      if let conversation {
+        ChatSettingsView(
+          conversation: conversation,
+          chats: chats,
+          providers: providers,
+          projects: projects
+        )
+        .presentationDragIndicator(.visible)
+      } else {
+        NavigationStack {
+          ContentUnavailableView("Chat Unavailable", systemImage: "slider.horizontal.3")
+            .toolbar {
+              ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showChatSettings = false }
+              }
+            }
+        }
       }
     }
     .sheet(isPresented: $showTargetSettings) {
@@ -1251,5 +1272,716 @@ private struct ConversationToolsView: View {
       case .bool(let value)? = annotations[key]
     else { return nil }
     return value
+  }
+}
+
+nonisolated enum ChatSettingsSupport {
+  static func temperatureRange(for kind: ProviderKind?) -> ClosedRange<Double> {
+    kind == .minimax ? 0.01...1.0 : 0.0...2.0
+  }
+
+  static func clampedTemperature(_ value: Double, for kind: ProviderKind?) -> Double {
+    let range = temperatureRange(for: kind)
+    let clamped = min(max(value, range.lowerBound), range.upperBound)
+    return (clamped * 100).rounded() / 100
+  }
+
+  static func clampedTopP(_ value: Double) -> Double {
+    let clamped = min(max(value, 0.05), 1.0)
+    return (clamped * 100).rounded() / 100
+  }
+
+  static func supportsSamplingControls(
+    kind: ProviderKind?,
+    modelID: ModelID?,
+    reasoning: ReasoningOptions?,
+    reasoningControl: ModelReasoningControl
+  ) -> Bool {
+    guard let kind else { return true }
+    switch kind {
+    case .anthropic:
+      return false
+    case .openai:
+      if reasoningControl.kind != .unsupported && reasoningControl.kind != .unknown {
+        return reasoningControl.allowsOff && reasoning?.enabled == false
+      }
+      return true
+    case .gemini:
+      let id = (modelID?.rawValue ?? "").lowercased()
+      return !id.hasPrefix("gemini-4")
+        && !id.hasPrefix("gemini-3.8")
+        && !id.hasPrefix("gemini-3.7")
+        && !id.hasPrefix("gemini-3.6")
+        && !id.hasPrefix("gemini-3.5-flash-lite")
+    case .deepSeek:
+      return reasoning?.enabled == false
+    case .moonshot:
+      let id = (modelID?.rawValue ?? "").lowercased().replacingOccurrences(of: "_", with: "-")
+      return !id.hasPrefix("kimi-k3")
+        && !id.hasPrefix("kimi-k2.6")
+        && !id.hasPrefix("kimi-k2.5")
+    case .xAI, .openRouter, .zAI, .minimax, .mistral, .nvidia, .ollama, .lmStudio, .openAICompatible:
+      return true
+    }
+  }
+
+  static func parseMaxOutputTokens(
+    _ raw: String,
+    maxAllowed: Int?,
+    anthropicReasoningBudget: Int?
+  ) -> (value: Int?, error: String?) {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return (nil, nil) }
+    guard let parsed = Int(trimmed), parsed > 0 else {
+      return (nil, "Enter a positive whole number of tokens.")
+    }
+    if let maxAllowed, parsed > maxAllowed {
+      return (nil, "This model supports at most \(maxAllowed.formatted()) output tokens.")
+    }
+    if let budget = anthropicReasoningBudget, parsed <= budget {
+      return (
+        nil,
+        "Max output tokens must exceed the thinking budget (\((budget + 1).formatted()) or higher)."
+      )
+    }
+    return (parsed, nil)
+  }
+
+  static func parseProviderOrder(_ raw: String) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for token in raw.split(whereSeparator: { $0 == "," || $0 == "\n" }) {
+      let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !cleaned.isEmpty, seen.insert(cleaned).inserted else { continue }
+      result.append(cleaned)
+    }
+    return result
+  }
+
+  static func normalizedOpenRouterRouting(
+    _ routing: OpenRouterRoutingOptions
+  ) -> OpenRouterRoutingOptions? {
+    let hasValue =
+      !routing.providerOrder.isEmpty
+      || routing.allowFallbacks != nil
+      || routing.requireParameters != nil
+      || routing.dataCollection != nil
+      || routing.zeroDataRetention != nil
+      || routing.sort != nil
+    return hasValue ? routing : nil
+  }
+}
+
+private struct ChatSettingsView: View {
+  private enum FocusField: Hashable {
+    case systemPrompt
+    case maxOutputTokens
+    case openRouterOrder
+  }
+
+  private enum FallbackChoice: String, CaseIterable, Identifiable {
+    case `default`
+    case allow
+    case disable
+
+    var id: String { rawValue }
+
+    var label: String {
+      switch self {
+      case .default: "Default"
+      case .allow: "Allow"
+      case .disable: "Disable"
+      }
+    }
+
+    var boolValue: Bool? {
+      switch self {
+      case .default: nil
+      case .allow: true
+      case .disable: false
+      }
+    }
+
+    init(boolValue: Bool?) {
+      switch boolValue {
+      case true: self = .allow
+      case false: self = .disable
+      case nil: self = .default
+      }
+    }
+  }
+
+  let initialConversation: ChatConversation
+  @Bindable var chats: ChatManagementModel
+  @Bindable var providers: ProviderManagementModel
+  @Bindable var projects: ProjectManagementModel
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @Environment(AppModel.self) private var appModel
+
+  @State private var systemPrompt: String
+  @State private var useCustomTemperature: Bool
+  @State private var temperature: Double
+  @State private var useCustomTopP: Bool
+  @State private var topP: Double
+  @State private var maxOutputTokensText: String
+  @State private var openRouterSort: OpenRouterSort?
+  @State private var openRouterDataCollection: OpenRouterDataCollection?
+  @State private var openRouterFallbacks: FallbackChoice
+  @State private var openRouterRequireParameters: Bool
+  @State private var openRouterZeroDataRetention: Bool
+  @State private var openRouterProviderOrderText: String
+
+  @State private var showTargetPicker = false
+  @State private var isSaving = false
+  @State private var saveError: String?
+  @FocusState private var focusedField: FocusField?
+
+  init(
+    conversation: ChatConversation,
+    chats: ChatManagementModel,
+    providers: ProviderManagementModel,
+    projects: ProjectManagementModel
+  ) {
+    self.initialConversation = conversation
+    self.chats = chats
+    self.providers = providers
+    self.projects = projects
+
+    let accountKind = conversation.accountID.flatMap { id in
+      providers.accounts.first { $0.id == id }?.kind
+    }
+    let initialTemp = conversation.options.temperature
+    let initialTopP = conversation.options.topP
+    let routing = conversation.options.openRouterRouting
+
+    _systemPrompt = State(initialValue: conversation.systemPrompt)
+    _useCustomTemperature = State(initialValue: initialTemp != nil)
+    _temperature = State(
+      initialValue: ChatSettingsSupport.clampedTemperature(initialTemp ?? 0.7, for: accountKind)
+    )
+    _useCustomTopP = State(initialValue: initialTopP != nil)
+    _topP = State(initialValue: ChatSettingsSupport.clampedTopP(initialTopP ?? 1.0))
+    _maxOutputTokensText = State(
+      initialValue: conversation.options.maxOutputTokens.map(String.init) ?? ""
+    )
+    _openRouterSort = State(initialValue: routing?.sort)
+    _openRouterDataCollection = State(initialValue: routing?.dataCollection)
+    _openRouterFallbacks = State(initialValue: FallbackChoice(boolValue: routing?.allowFallbacks))
+    _openRouterRequireParameters = State(initialValue: routing?.requireParameters == true)
+    _openRouterZeroDataRetention = State(initialValue: routing?.zeroDataRetention == true)
+    _openRouterProviderOrderText = State(
+      initialValue: routing?.providerOrder.joined(separator: ", ") ?? ""
+    )
+  }
+
+  private var liveConversation: ChatConversation {
+    chats.conversation(initialConversation.id) ?? initialConversation
+  }
+
+  private var project: ChatProject? {
+    projects.project(for: initialConversation.id)
+  }
+
+  private var account: ProviderAccount? {
+    liveConversation.accountID.flatMap { id in
+      providers.accounts.first { $0.id == id && $0.isEnabled }
+    }
+  }
+
+  private var modelRecord: AccountModelRecord? {
+    guard let accountID = liveConversation.accountID,
+      let modelID = liveConversation.modelID
+    else { return nil }
+    return providers.models(for: accountID, includeHidden: true)
+      .first { $0.model.id == modelID }
+  }
+
+  private var capabilities: ResolvedModelCapabilities? {
+    guard let account, let modelID = liveConversation.modelID else { return nil }
+    return ModelCapabilityResolver.resolve(
+      kind: account.kind,
+      modelID: modelID,
+      model: modelRecord?.model
+    )
+  }
+
+  private var reasoningControl: ModelReasoningControl {
+    capabilities?.reasoning ?? .init()
+  }
+
+  private var supportsSamplingControls: Bool {
+    ChatSettingsSupport.supportsSamplingControls(
+      kind: account?.kind,
+      modelID: liveConversation.modelID,
+      reasoning: liveConversation.options.reasoning,
+      reasoningControl: reasoningControl
+    )
+  }
+
+  private var temperatureRange: ClosedRange<Double> {
+    ChatSettingsSupport.temperatureRange(for: account?.kind)
+  }
+
+  private var anthropicReasoningBudget: Int? {
+    guard account?.kind == .anthropic else { return nil }
+    let normalized = reasoningControl.normalize(liveConversation.options.reasoning)
+    guard normalized?.enabled != false else { return nil }
+    return normalized?.maxTokens
+  }
+
+  private var maxOutputTokensValidation: (value: Int?, error: String?) {
+    ChatSettingsSupport.parseMaxOutputTokens(
+      maxOutputTokensText,
+      maxAllowed: capabilities?.maxOutputTokens,
+      anthropicReasoningBudget: anthropicReasoningBudget
+    )
+  }
+
+  private var normalizedSystemPrompt: String {
+    AppPreferencesModel.normalizedSystemPrompt(systemPrompt)
+  }
+
+  private var normalizedProjectInstructions: String {
+    AppPreferencesModel.normalizedSystemPrompt(project?.instructions ?? "")
+  }
+
+  private var normalizedDefaultPrompt: String {
+    AppPreferencesModel.normalizedSystemPrompt(appModel.preferences.defaultSystemPrompt)
+  }
+
+  private var hasCustomParameters: Bool {
+    (supportsSamplingControls && (useCustomTemperature || useCustomTopP))
+      || !maxOutputTokensText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var hasCustomOpenRouterRouting: Bool {
+    buildOpenRouterRouting() != nil
+  }
+
+  private var isGenerating: Bool {
+    chats.isGenerating(liveConversation.id)
+  }
+
+  private var canSave: Bool {
+    !isSaving
+      && !isGenerating
+      && account != nil
+      && liveConversation.modelID != nil
+      && maxOutputTokensValidation.error == nil
+  }
+
+  private var modelDisplayTitle: String {
+    if let record = modelRecord {
+      return record.model.displayName
+    }
+    if let modelID = liveConversation.modelID, !modelID.rawValue.isEmpty {
+      return modelID.rawValue
+    }
+    return "Select Model"
+  }
+
+  private var modelSubtitle: String {
+    var parts: [String] = []
+    if let account {
+      parts.append(account.label)
+    } else {
+      parts.append("No connection")
+    }
+    let reasoningLabel = reasoningControl.label(for: liveConversation.options.reasoning)
+    if !reasoningLabel.isEmpty {
+      parts.append("Reasoning: \(reasoningLabel)")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        modelSection
+        systemPromptSection
+        parametersSection
+        if account?.kind == .openRouter {
+          openRouterRoutingSection
+        }
+      }
+      .listStyle(.insetGrouped)
+      .scrollDismissesKeyboard(.interactively)
+      .scrollContentBackground(.hidden)
+      .foregroundStyle(theme.primaryForegroundColor)
+      .background(AppThemeBackground(theme: theme))
+      .navigationTitle("Chat Settings")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+            .disabled(isSaving)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          if isSaving {
+            ProgressView()
+              .controlSize(.small)
+              .accessibilityLabel("Saving chat settings")
+          } else {
+            Button("Save") {
+              Task { await save() }
+            }
+            .fontWeight(.semibold)
+            .disabled(!canSave)
+          }
+        }
+        if focusedField != nil {
+          ToolbarItem(placement: .keyboard) {
+            HStack {
+              Spacer()
+              Button("Done") { focusedField = nil }
+                .fontWeight(.semibold)
+            }
+          }
+        }
+      }
+      .sheet(isPresented: $showTargetPicker) {
+        TargetPickerView(
+          providers: providers,
+          initialAccountID: liveConversation.accountID,
+          initialModelID: liveConversation.modelID,
+          initialReasoning: liveConversation.options.reasoning,
+          mode: .existingChat(conversation: liveConversation, chats: chats)
+        )
+        .presentationDragIndicator(.visible)
+      }
+      .onChange(of: account?.kind) { _, newKind in
+        temperature = ChatSettingsSupport.clampedTemperature(temperature, for: newKind)
+      }
+      .alert(
+        "Chat Settings Error",
+        isPresented: Binding(
+          get: { saveError != nil },
+          set: { if !$0 { saveError = nil } }
+        )
+      ) {
+        Button("OK") { saveError = nil }
+      } message: {
+        Text(saveError ?? "Unable to save chat settings.")
+      }
+    }
+    .interactiveDismissDisabled(isSaving)
+  }
+
+  private var modelSection: some View {
+    Section {
+      Button {
+        focusedField = nil
+        showTargetPicker = true
+      } label: {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(modelDisplayTitle)
+              .font(.body.weight(.medium))
+              .foregroundStyle(theme.primaryForegroundColor)
+              .lineLimit(1)
+            Text(modelSubtitle)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(1)
+          }
+          Spacer(minLength: 8)
+          Image(systemName: "chevron.right")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.65))
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .disabled(isSaving)
+    } header: {
+      Text("Model & Reasoning")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      if account == nil || liveConversation.modelID == nil {
+        Text("Choose an enabled connection and model before saving chat settings.")
+          .foregroundStyle(.orange)
+      } else if isGenerating {
+        Text("Wait for the current response to finish before saving changes.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var systemPromptSection: some View {
+    Section {
+      ZStack(alignment: .topLeading) {
+        TextEditor(text: $systemPrompt)
+          .font(.body)
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 130)
+          .focused($focusedField, equals: .systemPrompt)
+          .accessibilityLabel("Chat System Prompt")
+
+        if systemPrompt.isEmpty {
+          Text("Optional instructions for this conversation…")
+            .font(.body)
+            .foregroundStyle(theme.secondaryForegroundColor.opacity(0.65))
+            .padding(.top, 8)
+            .padding(.leading, 5)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
+
+      if !normalizedProjectInstructions.isEmpty,
+        normalizedSystemPrompt != normalizedProjectInstructions
+      {
+        Button("Reset to Project Instructions") {
+          focusedField = nil
+          systemPrompt = normalizedProjectInstructions
+        }
+        .disabled(isSaving)
+      } else if normalizedProjectInstructions.isEmpty,
+        !normalizedDefaultPrompt.isEmpty,
+        normalizedSystemPrompt != normalizedDefaultPrompt
+      {
+        Button("Reset to Default Prompt") {
+          focusedField = nil
+          systemPrompt = normalizedDefaultPrompt
+        }
+        .disabled(isSaving)
+      }
+
+      if !normalizedSystemPrompt.isEmpty {
+        Button("Clear System Prompt", role: .destructive) {
+          focusedField = nil
+          systemPrompt = ""
+        }
+        .disabled(isSaving)
+      }
+    } header: {
+      Text("System Prompt")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      if let project, !normalizedProjectInstructions.isEmpty {
+        Text(
+          "Applies only to this conversation. Instructions from \(project.name) were copied when this chat started."
+        )
+        .foregroundStyle(theme.secondaryForegroundColor)
+      } else {
+        Text("Applies only to this conversation and overrides your global default system prompt.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var parametersSection: some View {
+    Section {
+      if supportsSamplingControls {
+        VStack(alignment: .leading, spacing: 8) {
+          Toggle(isOn: $useCustomTemperature) {
+            HStack {
+              Text("Temperature")
+              Spacer()
+              Text(useCustomTemperature ? String(format: "%.2f", temperature) : "Default")
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+          .disabled(isSaving)
+
+          if useCustomTemperature {
+            Slider(value: $temperature, in: temperatureRange, step: 0.05)
+              .tint(theme.accentColor)
+              .disabled(isSaving)
+              .accessibilityLabel("Temperature value")
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 8) {
+          Toggle(isOn: $useCustomTopP) {
+            HStack {
+              Text("Top-P")
+              Spacer()
+              Text(useCustomTopP ? String(format: "%.2f", topP) : "Default")
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+          .disabled(isSaving)
+
+          if useCustomTopP {
+            Slider(value: $topP, in: 0.05...1.0, step: 0.05)
+              .tint(theme.accentColor)
+              .disabled(isSaving)
+              .accessibilityLabel("Top-P value")
+          }
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack {
+          Text("Max Output Tokens")
+          Spacer(minLength: 12)
+          TextField("Default", text: $maxOutputTokensText)
+            .keyboardType(.numberPad)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .focused($focusedField, equals: .maxOutputTokens)
+            .frame(maxWidth: 120)
+            .disabled(isSaving)
+        }
+
+        if let error = maxOutputTokensValidation.error {
+          Text(error)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
+      }
+
+      if hasCustomParameters {
+        Button("Reset Parameters") {
+          focusedField = nil
+          useCustomTemperature = false
+          useCustomTopP = false
+          maxOutputTokensText = ""
+        }
+        .disabled(isSaving)
+      }
+    } header: {
+      Text("Parameters")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text(parametersFooter)
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var parametersFooter: String {
+    var parts: [String] = []
+    if let maximum = capabilities?.maxOutputTokens {
+      parts.append(
+        "Leave Max Output Tokens blank to use the model default (up to \(maximum.formatted()) tokens)."
+      )
+    } else {
+      parts.append("Leave Max Output Tokens blank to use the provider default.")
+    }
+    if !supportsSamplingControls {
+      parts.append("Temperature and Top-P are managed automatically by this model.")
+    }
+    return parts.joined(separator: " ")
+  }
+
+  private var openRouterRoutingSection: some View {
+    Section {
+      Picker("Sort", selection: $openRouterSort) {
+        Text("Default").tag(OpenRouterSort?.none)
+        Text("Price").tag(OpenRouterSort?.some(.price))
+        Text("Throughput").tag(OpenRouterSort?.some(.throughput))
+        Text("Latency").tag(OpenRouterSort?.some(.latency))
+      }
+      .disabled(isSaving)
+
+      Picker("Data Collection", selection: $openRouterDataCollection) {
+        Text("Default").tag(OpenRouterDataCollection?.none)
+        Text("Allow").tag(OpenRouterDataCollection?.some(.allow))
+        Text("Deny").tag(OpenRouterDataCollection?.some(.deny))
+      }
+      .disabled(isSaving)
+
+      Picker("Allow Fallbacks", selection: $openRouterFallbacks) {
+        ForEach(FallbackChoice.allCases) { choice in
+          Text(choice.label).tag(choice)
+        }
+      }
+      .disabled(isSaving)
+
+      Toggle("Require Parameter Support", isOn: $openRouterRequireParameters)
+        .disabled(isSaving)
+
+      Toggle("Zero Data Retention", isOn: $openRouterZeroDataRetention)
+        .disabled(isSaving)
+
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Provider Order")
+          .font(.subheadline)
+        TextField("e.g. anthropic, openai", text: $openRouterProviderOrderText)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .focused($focusedField, equals: .openRouterOrder)
+          .disabled(isSaving)
+      }
+
+      if hasCustomOpenRouterRouting {
+        Button("Reset Routing") {
+          focusedField = nil
+          openRouterSort = nil
+          openRouterDataCollection = nil
+          openRouterFallbacks = .default
+          openRouterRequireParameters = false
+          openRouterZeroDataRetention = false
+          openRouterProviderOrderText = ""
+        }
+        .disabled(isSaving)
+      }
+    } header: {
+      Text("OpenRouter Routing")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text("Optional routing preferences sent to OpenRouter for this conversation.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func buildOpenRouterRouting() -> OpenRouterRoutingOptions? {
+    let routing = OpenRouterRoutingOptions(
+      providerOrder: ChatSettingsSupport.parseProviderOrder(openRouterProviderOrderText),
+      allowFallbacks: openRouterFallbacks.boolValue,
+      requireParameters: openRouterRequireParameters ? true : nil,
+      dataCollection: openRouterDataCollection,
+      zeroDataRetention: openRouterZeroDataRetention ? true : nil,
+      sort: openRouterSort
+    )
+    return ChatSettingsSupport.normalizedOpenRouterRouting(routing)
+  }
+
+  private func save() async {
+    guard canSave, let account, let modelID = liveConversation.modelID else { return }
+    focusedField = nil
+    isSaving = true
+    defer { isSaving = false }
+
+    // Start from the live conversation's options so any model/reasoning changes
+    // committed via the embedded Model picker are preserved.
+    var updatedOptions = liveConversation.options
+    if supportsSamplingControls {
+      updatedOptions.temperature = useCustomTemperature
+        ? ChatSettingsSupport.clampedTemperature(temperature, for: account.kind)
+        : nil
+      updatedOptions.topP = useCustomTopP
+        ? ChatSettingsSupport.clampedTopP(topP)
+        : nil
+    }
+    updatedOptions.maxOutputTokens = maxOutputTokensValidation.value
+    updatedOptions.openRouterRouting = account.kind == .openRouter
+      ? buildOpenRouterRouting()
+      : nil
+
+    let saved = await chats.updateTarget(
+      conversationID: liveConversation.id,
+      account: account,
+      modelID: modelID,
+      systemPrompt: normalizedSystemPrompt,
+      options: updatedOptions
+    )
+
+    if saved {
+      dismiss()
+    } else {
+      saveError = chats.errorMessage ?? "Unable to save chat settings."
+    }
   }
 }

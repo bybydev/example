@@ -1118,4 +1118,102 @@ struct DataManagementModelTests {
     #expect(turn.userMessage.id == suppliedID)
     #expect(persisted.messages.first?.id == suppliedID)
   }
+
+  @Test("ChatSettingsSupport validates sampling support, max output tokens, and OpenRouter routing")
+  func chatSettingsSupportValidation() {
+    let effortControl = ModelReasoningControl(
+      kind: .efforts,
+      efforts: [.low, .medium, .high],
+      defaultEffort: .medium,
+      allowsOff: true
+    )
+    let lockedControl = ModelReasoningControl(
+      kind: .efforts,
+      efforts: [.low, .medium, .high],
+      defaultEffort: .medium,
+      allowsOff: false
+    )
+
+    // Sampling support mirrors adapter contracts.
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .anthropic,
+      modelID: "claude-sonnet-4-5",
+      reasoning: nil,
+      reasoningControl: effortControl
+    ))
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .openai,
+      modelID: "gpt-5.4",
+      reasoning: ReasoningOptions(enabled: true, effort: .medium),
+      reasoningControl: effortControl
+    ))
+    #expect(ChatSettingsSupport.supportsSamplingControls(
+      kind: .openai,
+      modelID: "gpt-5.4",
+      reasoning: ReasoningOptions(enabled: false),
+      reasoningControl: effortControl
+    ))
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .openai,
+      modelID: "o3",
+      reasoning: ReasoningOptions(enabled: false),
+      reasoningControl: lockedControl
+    ))
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .deepSeek,
+      modelID: "deepseek-reasoner",
+      reasoning: nil,
+      reasoningControl: effortControl
+    ))
+    #expect(ChatSettingsSupport.supportsSamplingControls(
+      kind: .deepSeek,
+      modelID: "deepseek-chat",
+      reasoning: ReasoningOptions(enabled: false),
+      reasoningControl: effortControl
+    ))
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .moonshot,
+      modelID: "kimi-k2.5",
+      reasoning: nil,
+      reasoningControl: .init()
+    ))
+    #expect(ChatSettingsSupport.supportsSamplingControls(
+      kind: .gemini,
+      modelID: "gemini-2.5-pro",
+      reasoning: nil,
+      reasoningControl: .init()
+    ))
+    #expect(!ChatSettingsSupport.supportsSamplingControls(
+      kind: .gemini,
+      modelID: "gemini-3.6-pro",
+      reasoning: nil,
+      reasoningControl: .init()
+    ))
+
+    // MiniMax temperature range clamps to 0.01...1.0; others allow 0.0...2.0.
+    #expect(ChatSettingsSupport.clampedTemperature(0.0, for: .minimax) == 0.01)
+    #expect(ChatSettingsSupport.clampedTemperature(1.8, for: .minimax) == 1.0)
+    #expect(ChatSettingsSupport.clampedTemperature(1.5, for: .openai) == 1.5)
+
+    // Max output tokens validation checks syntax, upper bound, and Anthropic budget.
+    let blank = ChatSettingsSupport.parseMaxOutputTokens("  ", maxAllowed: 8_192, anthropicReasoningBudget: 2_048)
+    #expect(blank.value == nil && blank.error == nil)
+
+    let invalid = ChatSettingsSupport.parseMaxOutputTokens("-5", maxAllowed: 8_192, anthropicReasoningBudget: nil)
+    #expect(invalid.value == nil && invalid.error != nil)
+
+    let tooHigh = ChatSettingsSupport.parseMaxOutputTokens("9000", maxAllowed: 8_192, anthropicReasoningBudget: nil)
+    #expect(tooHigh.value == nil && tooHigh.error != nil)
+
+    let belowBudget = ChatSettingsSupport.parseMaxOutputTokens("2048", maxAllowed: 8_192, anthropicReasoningBudget: 2_048)
+    #expect(belowBudget.value == nil && belowBudget.error != nil)
+
+    let valid = ChatSettingsSupport.parseMaxOutputTokens("4096", maxAllowed: 8_192, anthropicReasoningBudget: 2_048)
+    #expect(valid.value == 4_096 && valid.error == nil)
+
+    // OpenRouter provider order parsing & empty normalization.
+    #expect(ChatSettingsSupport.parseProviderOrder(" anthropic, openai , anthropic,\n google ") == ["anthropic", "openai", "google"])
+    #expect(ChatSettingsSupport.normalizedOpenRouterRouting(OpenRouterRoutingOptions()) == nil)
+    #expect(ChatSettingsSupport.normalizedOpenRouterRouting(OpenRouterRoutingOptions(sort: .latency))?.sort == .latency)
+  }
 }

@@ -8,7 +8,6 @@ struct MessageInfoView: View {
 
   @Environment(\.dismiss) private var dismiss
   @Environment(AppModel.self) private var model
-  @Environment(PurchaseManager.self) private var purchaseManager
   @Environment(\.appFoundationTheme) private var theme
 
   @State private var messagePerformance: TelemetryPerformanceAggregate?
@@ -150,9 +149,6 @@ struct MessageInfoView: View {
       .task(id: message.id) {
         await loadMessagePerformance()
       }
-      .onChange(of: purchaseManager.hasPro) { _, _ in
-        Task { await loadMessagePerformance() }
-      }
     }
   }
 
@@ -183,11 +179,10 @@ struct MessageInfoView: View {
     let recorder = model.telemetryRecorder
     switch await recorder.loadAnalytics(limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount) {
     case .loaded(let events, _):
-      let range: UsageRange = purchaseManager.hasPro ? .all : .today
       let performance = UsageAnalytics.messagePerformance(
         messageID: message.id,
         telemetryEvents: events,
-        range: range
+        range: .all
       )
       messagePerformance = performance.hasLatencyOrSpeedMetrics ? performance : nil
     case .unavailable:
