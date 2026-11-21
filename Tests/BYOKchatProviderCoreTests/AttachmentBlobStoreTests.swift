@@ -170,4 +170,59 @@ struct AttachmentBlobStoreTests {
     // "unavailable" state in the UI.
     #expect(await store.referencedAttachmentIDs() == [])
   }
+
+  @Test func batchWritePersistsAllBlobsAndMetadataOnce() async throws {
+    let (store, directory) = makeStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    try await store.writeBatchIfAbsent([
+      AttachmentBlobWriteItem(
+        id: "batch-1",
+        data: Data([1, 2]),
+        metadata: AttachmentBlobMetadata(
+          filename: "one.bin",
+          mimeType: "application/octet-stream",
+          byteCount: 2,
+          createdAt: Date(timeIntervalSince1970: 10)
+        )
+      ),
+      AttachmentBlobWriteItem(
+        id: "batch-2",
+        data: Data([3, 4, 5]),
+        metadata: AttachmentBlobMetadata(
+          filename: "two.bin",
+          mimeType: "application/octet-stream",
+          byteCount: 3,
+          createdAt: Date(timeIntervalSince1970: 20)
+        )
+      ),
+    ])
+
+    let reloaded = FileAttachmentBlobStore(directory: directory)
+    #expect(try await reloaded.storedIDs() == ["batch-1", "batch-2"])
+    #expect(try await reloaded.metadata(for: "batch-1")?.filename == "one.bin")
+    #expect(try await reloaded.metadata(for: "batch-2")?.byteCount == 3)
+  }
+
+  @Test func sweepOrphanedDerivativesCleansDanglingThumbnailsAndExcludesFromBackup() async throws {
+    let (store, directory) = makeStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    try await store.writeIfAbsent("live-1", data: Data([1, 2, 3]), metadata: metadata)
+
+    let derived = directory.appendingPathComponent("derived", isDirectory: true)
+    try FileManager.default.createDirectory(at: derived, withIntermediateDirectories: true)
+    for name in ["live-1-128", "dead-1-128", "dead-2", "non-matching.tmp"] {
+      try Data([9]).write(to: derived.appendingPathComponent(name), options: .atomic)
+    }
+
+    await store.sweepOrphanedDerivatives()
+
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("live-1-128").path))
+    #expect(!FileManager.default.fileExists(atPath: derived.appendingPathComponent("dead-1-128").path))
+    #expect(!FileManager.default.fileExists(atPath: derived.appendingPathComponent("dead-2").path))
+    #expect(FileManager.default.fileExists(atPath: derived.appendingPathComponent("non-matching.tmp").path))
+    let backupValues = try derived.resourceValues(forKeys: [.isExcludedFromBackupKey])
+    #expect(backupValues.isExcludedFromBackup == true)
+  }
 }

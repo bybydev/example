@@ -26,6 +26,18 @@ public extension AttachmentBlobMetadata {
   }
 }
 
+public struct AttachmentBlobWriteItem: Sendable {
+  public var id: String
+  public var data: Data
+  public var metadata: AttachmentBlobMetadata?
+
+  public init(id: String, data: Data, metadata: AttachmentBlobMetadata? = nil) {
+    self.id = id
+    self.data = data
+    self.metadata = metadata
+  }
+}
+
 /// Stores attachment byte payloads as individual files keyed by ID so
 /// workspace JSON stays metadata-only (see `ConversationStore.persist`).
 /// Reads are on demand — the "remote image" model: rows carry IDs and
@@ -40,6 +52,8 @@ public protocol AttachmentBlobStoring: Sendable {
     data: Data,
     metadata: AttachmentBlobMetadata?
   ) async throws
+  /// Batch-writes multiple blobs and flushes the metadata index once.
+  func writeBatchIfAbsent(_ items: [AttachmentBlobWriteItem]) async throws
   /// Returns nil when no blob exists for the ID.
   func loadData(_ id: String) async throws -> Data?
   /// Index lookup without touching bytes. nil when the blob is not stored.
@@ -57,6 +71,12 @@ public extension AttachmentBlobStoring {
   /// of byte-only payloads).
   func writeIfAbsent(_ id: String, data: Data) async throws {
     try await writeIfAbsent(id, data: data, metadata: nil)
+  }
+
+  func writeBatchIfAbsent(_ items: [AttachmentBlobWriteItem]) async throws {
+    for item in items {
+      try await writeIfAbsent(item.id, data: item.data, metadata: item.metadata)
+    }
   }
 }
 
@@ -106,27 +126,51 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     data: Data,
     metadata: AttachmentBlobMetadata?
   ) async throws {
-    guard !data.isEmpty else { return }
-    guard Self.isValidID(id) else {
-      throw ProviderError.invalidRequest("Attachment blob ID is not usable as a file name.")
-    }
+    try await writeBatchIfAbsent([
+      AttachmentBlobWriteItem(id: id, data: data, metadata: metadata)
+    ])
+  }
+
+  public func writeBatchIfAbsent(_ items: [AttachmentBlobWriteItem]) async throws {
+    guard !items.isEmpty else { return }
+
     var known = knownIDs ?? Self.blobIDs(
       fromContents: (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
     )
-    if known.contains(id) { return }
+    var didEnsureDirectory = false
+    var pendingIndexUpdates: [(String, AttachmentBlobMetadata)] = []
 
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-    let target = url(for: id)
-    if !fileManager.fileExists(atPath: target.path) {
-      try data.write(to: target, options: .atomic)
+    for item in items {
+      guard !item.data.isEmpty else { continue }
+      guard Self.isValidID(item.id) else {
+        throw ProviderError.invalidRequest("Attachment blob ID is not usable as a file name.")
+      }
+      if known.contains(item.id) { continue }
+
+      if !didEnsureDirectory {
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        didEnsureDirectory = true
+      }
+      let target = url(for: item.id)
+      if !fileManager.fileExists(atPath: target.path) {
+        try item.data.write(to: target, options: .atomic)
+      }
+      known.insert(item.id)
+      if let metadata = item.metadata {
+        pendingIndexUpdates.append((item.id, metadata))
+      }
     }
-    known.insert(id)
+
     knownIDs = known
 
-    // Index last: a crash between blob and index leaves the blob as an
-    // orphan (cleaned by the sweep), never metadata pointing at nothing.
-    if let metadata {
-      updateIndex { $0.entries[id] = metadata }
+    // Index last in one atomic write: a crash between blobs and index leaves
+    // only sweepable orphan blobs, never metadata pointing at nothing.
+    if !pendingIndexUpdates.isEmpty {
+      updateIndex { index in
+        for (id, metadata) in pendingIndexUpdates {
+          index.entries[id] = metadata
+        }
+      }
     }
   }
 
@@ -170,7 +214,7 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
       Self.downsampledThumbnail(from: original, maxPixelSize: CGFloat(clamped))
     }.value
     guard let thumbnail else { return nil }
-    try? fileManager.createDirectory(at: derivedDirectory, withIntermediateDirectories: true)
+    try? ensureDerivedDirectory()
     try? thumbnail.write(to: derivedURL, options: .atomic)
     return thumbnail
   }
@@ -178,10 +222,17 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
   public func deleteIDs(_ ids: Set<String>) async throws {
     guard !ids.isEmpty else { return }
     let validIDs = Set(ids.filter(Self.isValidID))
+    var removedIDs = Set<String>()
 
     for id in validIDs {
-      try? fileManager.removeItem(at: url(for: id))
-      knownIDs?.remove(id)
+      let target = url(for: id)
+      if fileManager.fileExists(atPath: target.path) {
+        try? fileManager.removeItem(at: target)
+      }
+      if !fileManager.fileExists(atPath: target.path) {
+        knownIDs?.remove(id)
+        removedIDs.insert(id)
+      }
     }
 
     // Thumbnail files are named `<blob-id>-<pixel-size>`. Enumerate once so a
@@ -191,15 +242,51 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     let derivedNames = (try? fileManager.contentsOfDirectory(atPath: derivedDirectory.path)) ?? []
     for name in derivedNames {
       let ownerID = Self.derivedBlobID(from: name)
-      let isLegacyExactName = validIDs.contains(name)
-      guard isLegacyExactName || ownerID.map(validIDs.contains) == true else { continue }
+      let isLegacyExactName = removedIDs.contains(name)
+      guard isLegacyExactName || ownerID.map(removedIDs.contains) == true else { continue }
       try? fileManager.removeItem(
         at: derivedDirectory.appendingPathComponent(name, isDirectory: false)
       )
     }
 
-    updateIndex { index in
-      for id in ids { index.entries.removeValue(forKey: id) }
+    let indexRemovals = removedIDs.union(ids.subtracting(validIDs))
+    if !indexRemovals.isEmpty {
+      updateIndex { index in
+        for id in indexRemovals { index.entries.removeValue(forKey: id) }
+      }
+    }
+  }
+
+  /// Removes derived thumbnail files whose parent blob no longer exists and
+  /// ensures the regenerable `derived/` cache directory is excluded from iCloud
+  /// Backup.
+  public func sweepOrphanedDerivatives(validBlobIDs: Set<String>? = nil) async {
+    guard fileManager.fileExists(atPath: derivedDirectory.path) else { return }
+    excludeDerivedDirectoryFromBackup()
+
+    let liveIDs: Set<String>
+    if let validBlobIDs {
+      liveIDs = validBlobIDs
+    } else if let stored = try? await storedIDs() {
+      liveIDs = stored
+    } else {
+      return
+    }
+
+    let derivedNames = (try? fileManager.contentsOfDirectory(atPath: derivedDirectory.path)) ?? []
+    for name in derivedNames {
+      let ownerID: String?
+      if let parsed = Self.derivedBlobID(from: name) {
+        ownerID = parsed
+      } else if Self.isValidID(name) {
+        ownerID = name
+      } else {
+        ownerID = nil
+      }
+      guard let ownerID, !liveIDs.contains(ownerID) else { continue }
+      try? fileManager.removeItem(
+        at: derivedDirectory.appendingPathComponent(name, isDirectory: false)
+      )
     }
   }
 
@@ -337,6 +424,18 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
   private func derivedURL(for id: String, maxPixelSize: Int) -> URL {
     derivedDirectory
       .appendingPathComponent("\(id)-\(maxPixelSize)", isDirectory: false)
+  }
+
+  private func ensureDerivedDirectory() throws {
+    try fileManager.createDirectory(at: derivedDirectory, withIntermediateDirectories: true)
+    excludeDerivedDirectoryFromBackup()
+  }
+
+  private func excludeDerivedDirectoryFromBackup() {
+    var directoryURL = derivedDirectory
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? directoryURL.setResourceValues(values)
   }
 
   private var derivedDirectory: URL {

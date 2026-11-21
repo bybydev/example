@@ -247,6 +247,36 @@ struct LibraryStoreTransactionTests {
     try await store.rename(entry.id, filename: "  notes.md  ")
     #expect(await store.entry(id: entry.id)?.updatedAt == entry.updatedAt)
   }
+
+  @Test("Add sanitizes path separators and rejects dot-only filenames")
+  func addSanitizesUnsafeFilenames() async throws {
+    let store = LibraryStore(
+      persistence: InMemoryLibraryWorkspacePersistence(),
+      blobs: InMemoryAttachmentBlobStore()
+    )
+    try await store.load()
+
+    let entry = try await store.add(
+      filename: "2026/04/report\0.pdf",
+      mimeType: "application/pdf",
+      data: Data("pdf".utf8)
+    )
+    #expect(entry.filename == "2026-04-report.pdf")
+
+    for invalid in ["", "   ", ".", ".."] {
+      var threw = false
+      do {
+        _ = try await store.add(
+          filename: invalid,
+          mimeType: "text/plain",
+          data: Data("x".utf8)
+        )
+      } catch {
+        threw = true
+      }
+      #expect(threw)
+    }
+  }
 }
 
 private enum LibraryTransactionTestError: Error {

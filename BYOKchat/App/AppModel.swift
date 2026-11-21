@@ -22,6 +22,8 @@ final class AppModel {
   /// reference files; startup cleanup garbage-collects unused bytes.
   let fileBlobStore: FileAttachmentBlobStore
   private let coreServices: BYOKCoreServices
+  @ObservationIgnored private var orphanSweepTask: Task<Void, Never>?
+  @ObservationIgnored private var isSweepingOrphans = false
 
   private(set) var hasLoaded = false
 
@@ -127,28 +129,57 @@ final class AppModel {
     dataPortability.onConversationsDeleted = { [weak self] in
       await self?.sweepOrphanFilesIfIdle()
     }
+    libraryModel.onFileReferencesChanged = { [weak self] in
+      self?.scheduleOrphanFileSweep()
+    }
+    chatModel.onFileReferencesChanged = { [weak self] in
+      self?.scheduleOrphanFileSweep()
+    }
+    projectModel.onFileReferencesChanged = { [weak self] in
+      self?.scheduleOrphanFileSweep()
+    }
   }
 
-  /// Reclaims unreferenced attachment blobs after bulk deletion when no
-  /// reference-owning store has a live write in flight.
+  /// Coalesces rapid file/chat/project deletions into one idle orphan sweep.
+  private func scheduleOrphanFileSweep() {
+    orphanSweepTask?.cancel()
+    orphanSweepTask = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(250))
+      guard !Task.isCancelled else { return }
+      await self?.sweepOrphanFilesIfIdle()
+    }
+  }
+
+  /// Reclaims unreferenced attachment blobs after deletion when no
+  /// reference-owning store or streaming generation has a live write in flight.
   func sweepOrphanFilesIfIdle() async {
-    guard !chats.isBusy, !projects.isBusy, !library.isBusy else { return }
+    guard !isSweepingOrphans,
+      !chats.isBusy,
+      !chats.hasActiveGenerations,
+      !projects.isBusy,
+      !library.isBusy,
+      !dataPortability.isBusy
+    else { return }
     await sweepOrphanFilesAtStartup()
   }
 
-  /// Startup-only cleanup, after every reference-owning store has loaded and
-  /// before interactive use. Live saves write blobs before committing their
-  /// references, so sweeping during a mutation can delete an in-flight file.
-  /// Removed files are reclaimed on the next launch.
+  /// Reclaims unreferenced blobs and orphaned derived thumbnails. Safe at
+  /// startup and when idle (no in-flight saves or active chat generations).
   func sweepOrphanFilesAtStartup() async {
+    guard !isSweepingOrphans else { return }
+    isSweepingOrphans = true
+    defer { isSweepingOrphans = false }
+
     var referenced = await chats.referencedAttachmentIDs()
     referenced.formUnion(await projects.referencedFileIDs())
     referenced.formUnion(await library.referencedEntryIDs())
 
     let stored = (try? await fileBlobStore.storedIDs()) ?? []
     let orphans = stored.subtracting(referenced)
-    guard !orphans.isEmpty else { return }
-    try? await fileBlobStore.deleteIDs(orphans)
+    if !orphans.isEmpty {
+      try? await fileBlobStore.deleteIDs(orphans)
+    }
+    await fileBlobStore.sweepOrphanedDerivatives()
   }
 
   func load() async {

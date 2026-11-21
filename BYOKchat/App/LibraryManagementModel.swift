@@ -48,7 +48,6 @@ final class LibraryManagementModel {
     source: LibraryEntrySource = .manual,
     onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    let existingIDs = Set(await store.entries().map(\.id))
     let entry = await performReturning(onError: onError) {
       try await self.store.add(
         filename: filename,
@@ -57,9 +56,7 @@ final class LibraryManagementModel {
         source: source
       )
     }
-    if let entry, !existingIDs.contains(entry.id),
-      analyticsRecordedEntryIDs.insert(entry.id).inserted
-    {
+    if let entry, analyticsRecordedEntryIDs.insert(entry.id).inserted {
       BYOKAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
     }
     return entry
@@ -71,16 +68,13 @@ final class LibraryManagementModel {
     source: LibraryEntrySource,
     onError: ((Error) -> Void)? = nil
   ) async -> LibraryEntry? {
-    let existingIDs = Set(await store.entries().map(\.id))
     let entry = await performReturning(onError: onError) {
       try await self.store.addAttachment(
         attachment,
         source: source
       )
     }
-    if let entry, !existingIDs.contains(entry.id),
-      analyticsRecordedEntryIDs.insert(entry.id).inserted
-    {
+    if let entry, analyticsRecordedEntryIDs.insert(entry.id).inserted {
       BYOKAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
     }
     return entry

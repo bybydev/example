@@ -189,17 +189,20 @@ public actor LibraryStore {
     }
 
     let blobMetadata = try? await blobs.metadata(for: fileID)
-    let effectiveByteCount = max(blobMetadata?.byteCount ?? 0, byteCount)
-    guard effectiveByteCount > 0 else {
+    let authoritativeByteCount = (blobMetadata?.byteCount ?? 0) > 0 ? (blobMetadata?.byteCount ?? 0) : byteCount
+    guard authoritativeByteCount > 0 else {
       throw ProviderError.invalidRequest("A library entry cannot reference empty bytes.")
+    }
+    guard let safeFilename = Self.sanitizedImportFilename(filename) else {
+      throw ProviderError.invalidRequest("A library entry needs a valid filename.")
     }
 
     let entry = LibraryEntry(
       id: LibraryEntryID(rawValue: fileID),
-      filename: filename,
+      filename: safeFilename,
       kind: mimeType.lowercased().hasPrefix("image/") ? .image : .file,
       mimeType: mimeType,
-      byteCount: effectiveByteCount,
+      byteCount: authoritativeByteCount,
       createdAt: date,
       source: source
     )
@@ -275,23 +278,28 @@ public actor LibraryStore {
       candidate.entries.removeAll()
     }
     var existing = Set(candidate.entries.map(\.id))
+    var pendingBlobs: [AttachmentBlobWriteItem] = []
+    var restoredEntries: [LibraryEntry] = []
 
     for value in values where !existing.contains(value.id) {
       guard !value.data.isEmpty, value.data.count <= Self.maxByteCount else { continue }
-      try await blobs.writeIfAbsent(
-        value.id.rawValue,
-        data: value.data,
-        metadata: AttachmentBlobMetadata(
-          filename: value.filename,
-          mimeType: value.mimeType,
-          byteCount: value.data.count,
-          createdAt: value.createdAt
+      let safeFilename = Self.sanitizedImportFilename(value.filename) ?? "file"
+      pendingBlobs.append(
+        AttachmentBlobWriteItem(
+          id: value.id.rawValue,
+          data: value.data,
+          metadata: AttachmentBlobMetadata(
+            filename: safeFilename,
+            mimeType: value.mimeType,
+            byteCount: value.data.count,
+            createdAt: value.createdAt
+          )
         )
       )
-      candidate.entries.append(
+      restoredEntries.append(
         LibraryEntry(
           id: value.id,
-          filename: value.filename,
+          filename: safeFilename,
           kind: value.kind,
           mimeType: value.mimeType,
           byteCount: value.data.count,
@@ -300,6 +308,10 @@ public actor LibraryStore {
         )
       )
       existing.insert(value.id)
+    }
+    if !pendingBlobs.isEmpty {
+      try await blobs.writeBatchIfAbsent(pendingBlobs)
+      candidate.entries.append(contentsOf: restoredEntries)
     }
     try await commit(candidate)
   }
@@ -319,9 +331,8 @@ public actor LibraryStore {
     guard !items.isEmpty else { return [] }
 
     let entries = try items.map { item -> LibraryEntry in
-      let trimmedName = item.filename.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmedName.isEmpty else {
-        throw ProviderError.invalidRequest("A library entry needs a filename.")
+      guard let safeName = Self.sanitizedImportFilename(item.filename) else {
+        throw ProviderError.invalidRequest("A library entry needs a valid filename.")
       }
       guard !item.data.isEmpty else {
         throw ProviderError.invalidRequest("Library entries cannot be empty.")
@@ -330,7 +341,7 @@ public actor LibraryStore {
         throw ProviderError.invalidRequest("Library entries cannot exceed 20 MB.")
       }
       return LibraryEntry(
-        filename: trimmedName,
+        filename: safeName,
         kind: item.mimeType.lowercased().hasPrefix("image/") ? .image : .file,
         mimeType: item.mimeType,
         byteCount: item.data.count,
@@ -347,23 +358,36 @@ public actor LibraryStore {
     // Blobs land before metadata for the same crash-ordering reason as
     // ConversationStore.persist. Failed metadata persistence leaves only
     // sweepable orphan blobs, never an uncommitted live Library row.
-    for (entry, item) in zip(entries, items) {
-      try await blobs.writeIfAbsent(
-        entry.id.rawValue,
-        data: item.data,
-        metadata: AttachmentBlobMetadata(
-          filename: entry.filename,
-          mimeType: entry.mimeType,
-          byteCount: entry.byteCount,
-          createdAt: entry.createdAt
+    try await blobs.writeBatchIfAbsent(
+      zip(entries, items).map { entry, item in
+        AttachmentBlobWriteItem(
+          id: entry.id.rawValue,
+          data: item.data,
+          metadata: AttachmentBlobMetadata(
+            filename: entry.filename,
+            mimeType: entry.mimeType,
+            byteCount: entry.byteCount,
+            createdAt: entry.createdAt
+          )
         )
-      )
-    }
+      }
+    )
 
     var candidate = state
     candidate.entries.append(contentsOf: entries)
     try await commit(candidate)
     return entries
+  }
+
+  /// Normalizes imported filenames so path separators or NUL bytes never leak
+  /// into Library entries (which are later used for QuickLook/Share temp paths).
+  private static func sanitizedImportFilename(_ raw: String) -> String? {
+    let cleaned = raw
+      .replacingOccurrences(of: "\0", with: "")
+      .replacingOccurrences(of: "/", with: "-")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty, cleaned != ".", cleaned != ".." else { return nil }
+    return cleaned
   }
 
   /// Must run under the mutation lock, against the last committed state.

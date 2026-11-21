@@ -861,6 +861,10 @@ final class ChatManagementModel {
     try? await reloadSnapshot()
   }
 
+  var hasActiveGenerations: Bool {
+    !activeConversationIDs.isEmpty
+  }
+
   func isGenerating(_ conversationID: ConversationID) -> Bool {
     activeConversationIDs.contains(conversationID)
   }

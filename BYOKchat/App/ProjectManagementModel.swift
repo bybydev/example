@@ -26,6 +26,8 @@ final class ProjectManagementModel {
   }
   var beginChatConfiguration: (ConversationID, String) -> Bool = { _, _ in true }
   var endChatConfiguration: (ConversationID, String, Bool) -> Void = { _, _, _ in }
+  /// App-layer hook invoked after mutations that remove project file references.
+  var onFileReferencesChanged: (() -> Void)?
   private var errorPresenterIDs: [UUID] = []
 
   func registerErrorPresenter(_ id: UUID) {
@@ -142,7 +144,7 @@ final class ProjectManagementModel {
     promptPresets: [ProjectPromptPreset]? = nil,
     toolPresets: [ProjectToolPreset]? = nil
   ) async -> Bool {
-    await performResult("Project updated") {
+    let succeeded = await performResult("Project updated") {
       _ = try await workspace.updateProject(
         id: id,
         name: name,
@@ -159,22 +161,34 @@ final class ProjectManagementModel {
       )
       await reloadSnapshot()
     }
+    if succeeded, files != nil {
+      onFileReferencesChanged?()
+    }
+    return succeeded
   }
 
   @discardableResult
   func removeProjectFile(_ fileID: String, from projectID: ProjectID) async -> Bool {
-    await performResult("File removed") {
+    let succeeded = await performResult("File removed") {
       _ = try await workspace.removeProjectFile(fileID, from: projectID)
       await reloadSnapshot()
     }
+    if succeeded {
+      onFileReferencesChanged?()
+    }
+    return succeeded
   }
 
   @discardableResult
   func deleteProject(_ id: ProjectID) async -> Bool {
-    await performResult("Project deleted; its chats are now standalone") {
+    let succeeded = await performResult("Project deleted; its chats are now standalone") {
       try await workspace.deleteProject(id)
       await reloadSnapshot()
     }
+    if succeeded {
+      onFileReferencesChanged?()
+    }
+    return succeeded
   }
 
   @discardableResult
