@@ -476,8 +476,12 @@ enum AnswerContentParser {
 
   static func isMermaidLanguage(_ language: String?) -> Bool {
     guard let language else { return false }
-    switch language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "mermaid", "mmd": return true
+    var normalized = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if let delimiterIndex = normalized.firstIndex(where: { $0 == "{" || $0 == "," || $0 == ";" }) {
+      normalized = String(normalized[..<delimiterIndex]).trimmingCharacters(in: .whitespaces)
+    }
+    switch normalized {
+    case "mermaid", "mmd", "mermaidjs", "mermaid-js": return true
     default: return false
     }
   }

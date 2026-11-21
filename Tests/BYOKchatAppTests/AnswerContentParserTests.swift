@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -86,7 +87,84 @@ struct AnswerContentParserTests {
   func recognizesMermaid() {
     #expect(AnswerContentParser.isMermaidLanguage("mermaid"))
     #expect(AnswerContentParser.isMermaidLanguage("MMD"))
+    #expect(AnswerContentParser.isMermaidLanguage("mermaid-js"))
+    #expect(AnswerContentParser.isMermaidLanguage("mermaidjs"))
+    #expect(AnswerContentParser.isMermaidLanguage("mermaid{theme=dark}"))
+    #expect(AnswerContentParser.isMermaidLanguage("mermaid,title=Flow"))
     #expect(!AnswerContentParser.isMermaidLanguage("swift"))
+    #expect(!AnswerContentParser.isMermaidLanguage("markdown"))
+  }
+
+  @Test("Classifies Mermaid diagrams, strips YAML frontmatter, flags unsupported types, and sizes proportionally")
+  func mermaidDiagramSupportHelpers() {
+    let frontmatterFlow = """
+    ---
+    title: "Request Pipeline"
+    ---
+    %% comment before header
+    flowchart LR
+      A --> B
+    """
+    let flowAnalysis = MermaidDiagramSupport.analyze(frontmatterFlow)
+    #expect(!flowAnalysis.isEmpty)
+    #expect(flowAnalysis.title == "Request Pipeline")
+    #expect(flowAnalysis.kindLabel == "FLOWCHART")
+    #expect(flowAnalysis.headerLabel == "FLOWCHART · Request Pipeline")
+    #expect(flowAnalysis.unsupportedKindName == nil)
+    #expect(!flowAnalysis.renderSource.contains("---"))
+    #expect(flowAnalysis.renderSource.contains("flowchart LR"))
+
+    let seqAnalysis = MermaidDiagramSupport.analyze("%%{init: {'theme': 'dark'}}%%\nsequenceDiagram\n  Alice->>Bob: Hi")
+    #expect(seqAnalysis.kindLabel == "SEQUENCE")
+    #expect(seqAnalysis.unsupportedKindName == nil)
+
+    let ganttAnalysis = MermaidDiagramSupport.analyze("gantt\n  title Roadmap\n  section A\n  Task :a1, 2026-01-01, 5d")
+    #expect(ganttAnalysis.kindLabel == "GANTT")
+    #expect(ganttAnalysis.unsupportedKindName == "Gantt charts")
+
+    let pieAnalysis = MermaidDiagramSupport.analyze("pie title Pets\n  \"Dogs\" : 60\n  \"Cats\" : 40")
+    #expect(pieAnalysis.kindLabel == "PIE CHART")
+    #expect(pieAnalysis.unsupportedKindName == "Pie charts")
+
+    let emptyAnalysis = MermaidDiagramSupport.analyze("   \n\t  ")
+    #expect(emptyAnalysis.isEmpty)
+
+    // Wide horizontal diagram scales height down proportionally instead of leaving huge vertical dead space.
+    let wideHeight = MermaidDiagramSupport.inlineHeight(
+      for: CGRect(x: 0, y: 0, width: 1200, height: 280),
+      availableWidth: 340
+    )
+    #expect(wideHeight == MermaidDiagramSupport.minInlineHeight)
+
+    // Medium diagram fits naturally without clipping.
+    let mediumHeight = MermaidDiagramSupport.inlineHeight(
+      for: CGRect(x: 0, y: 0, width: 320, height: 260),
+      availableWidth: 340
+    )
+    #expect(mediumHeight == 280)
+
+    // Tall diagram caps at maxInlineHeight.
+    let tallHeight = MermaidDiagramSupport.inlineHeight(
+      for: CGRect(x: 0, y: 0, width: 300, height: 900),
+      availableWidth: 340
+    )
+    #expect(tallHeight == MermaidDiagramSupport.maxInlineHeight)
+
+    // Zero bounds falls back to defaultInlineHeight.
+    #expect(
+      MermaidDiagramSupport.inlineHeight(for: .zero, availableWidth: 340)
+        == MermaidDiagramSupport.defaultInlineHeight
+    )
+
+    // Render scale stays sharp for normal graphs and clamps safely for huge graphs.
+    #expect(MermaidDiagramSupport.renderScale(for: CGSize(width: 600, height: 400), desiredScale: 3.0) == 3.0)
+    let hugeScale = MermaidDiagramSupport.renderScale(
+      for: CGSize(width: 3200, height: 1200),
+      desiredScale: 3.0,
+      maxPixelDimension: 4096
+    )
+    #expect(hugeScale < 1.3)
+    #expect(hugeScale >= 1.0)
   }
 
   @Test("Supports nested longer code fences and reports unclosed streaming fences")
