@@ -31,40 +31,53 @@ struct SidebarProjectsView: View {
             .buttonStyle(.borderedProminent)
         }
       } else {
-        List(projects.projects) { project in
-          NavigationLink(value: AppRoute.project(project.id)) {
-            HStack(spacing: 12) {
-              ProjectIconView(project: project, size: 34)
+        List {
+          Section {
+            ForEach(projects.projects) { project in
+              NavigationLink(value: AppRoute.project(project.id)) {
+                HStack(spacing: 12) {
+                  ProjectIconView(project: project, size: 36)
 
-              VStack(alignment: .leading, spacing: 3) {
-                Text(project.name)
-                  .font(.body.weight(.medium))
-                  .lineLimit(1)
-                Text(projectDetail(project))
-                  .font(.caption)
-                  .foregroundStyle(theme.secondaryForegroundColor)
-                  .lineLimit(1)
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(project.name)
+                      .font(.body.weight(.semibold))
+                      .lineLimit(1)
+                    Text(projectDetail(project))
+                      .font(.caption)
+                      .foregroundStyle(theme.secondaryForegroundColor)
+                      .lineLimit(1)
+                  }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
               }
-
-              Spacer(minLength: 8)
+              .swipeActions(edge: .leading) {
+                Button("New Chat", systemImage: "square.and.pencil") {
+                  newChat(project.id)
+                }
+                .tint(theme.accentColor)
+              }
+              .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                  pendingDelete = project
+                }
+              }
+              .contextMenu {
+                Button("New Chat", systemImage: "square.and.pencil") {
+                  newChat(project.id)
+                }
+                Divider()
+                Button("Delete Project", systemImage: "trash", role: .destructive) {
+                  pendingDelete = project
+                }
+              }
             }
-            .contentShape(Rectangle())
+            .listRowSeparatorTint(theme.borderColor)
           }
-          .swipeActions(edge: .leading) {
-            Button("New Chat", systemImage: "square.and.pencil") {
-              newChat(project.id)
-            }
-            .tint(.accentColor)
-          }
-          .swipeActions(edge: .trailing) {
-            Button("Delete", systemImage: "trash", role: .destructive) {
-              pendingDelete = project
-            }
-          }
-          .listRowBackground(Color.clear)
+          .listRowBackground(theme.surfaceColor)
         }
-        .listStyle(.plain)
-        .listRowSeparatorTint(theme.borderColor)
+        .listStyle(.insetGrouped)
       }
     }
     .scrollContentBackground(.hidden)
@@ -95,7 +108,7 @@ struct SidebarProjectsView: View {
       BYOKProUpsellFlow(feature: .projects)
     }
     .confirmationDialog(
-      "Delete project?",
+      deleteConfirmationTitle,
       isPresented: Binding(
         get: { pendingDelete != nil },
         set: { if !$0 { pendingDelete = nil } }
@@ -114,6 +127,11 @@ struct SidebarProjectsView: View {
       Text("Chats in this project will be kept and moved back to standalone chats.")
     }
     .projectErrorPresenter(projects)
+  }
+
+  private var deleteConfirmationTitle: String {
+    guard let project = pendingDelete else { return "Delete project?" }
+    return "Delete \"\(project.name)\"?"
   }
 
   private func requestNewProject() {

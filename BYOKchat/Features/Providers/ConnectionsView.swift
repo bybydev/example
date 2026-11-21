@@ -2,9 +2,9 @@ import AppFoundation
 import BYOKchatProviderCore
 import SwiftUI
 
-/// Flat provider list: one row per account, no sections. The default account
-/// is pinned first; remaining built-in and custom connections interleave
-/// alphabetically by display name then label.
+/// Inset-grouped provider list: one row per account. Active accounts appear
+/// first with the default account pinned at the top; disabled accounts are
+/// grouped into a separate section when present.
 struct ProvidersView: View {
   @Bindable var model: ProviderManagementModel
   /// Non-nil means this screen was opened to repair/setup a chat rather than
@@ -111,7 +111,7 @@ struct ProvidersView: View {
       Text(model.errorMessage ?? "Unknown error")
     }
     .confirmationDialog(
-      "Delete this connection?",
+      deleteConfirmationTitle,
       isPresented: Binding(
         get: { pendingDelete != nil },
         set: { if !$0 { pendingDelete = nil } }
@@ -133,16 +133,57 @@ struct ProvidersView: View {
     }
   }
 
+  private var enabledAccounts: [ProviderAccount] {
+    model.accounts.filter(\.isEnabled)
+  }
+
+  private var disabledAccounts: [ProviderAccount] {
+    model.accounts.filter { !$0.isEnabled }
+  }
+
+  private var deleteConfirmationTitle: String {
+    guard let account = pendingDelete else { return "Delete this connection?" }
+    return "Delete \"\(ProviderRow.displayTitle(for: account, in: model))\"?"
+  }
+
   private var managerList: some View {
     List {
-      ForEach(model.accounts) { account in
-        connectionLink(account)
+      if !enabledAccounts.isEmpty {
+        Section {
+          ForEach(enabledAccounts) { account in
+            connectionLink(account)
+          }
+          .listRowSeparatorTint(theme.borderColor)
+        } header: {
+          if !disabledAccounts.isEmpty {
+            Text("Active")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        } footer: {
+          if enabledAccounts.count > 1 {
+            Text(
+              "The default connection is used for new chats. Swipe right on a connection to make it the default."
+            )
+            .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+        .listRowBackground(theme.surfaceColor)
       }
-      .listRowBackground(Color.clear)
-      .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-      .listRowSeparatorTint(theme.borderColor)
+
+      if !disabledAccounts.isEmpty {
+        Section {
+          ForEach(disabledAccounts) { account in
+            connectionLink(account)
+          }
+          .listRowSeparatorTint(theme.borderColor)
+        } header: {
+          Text("Disabled")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
     }
-    .listStyle(.plain)
+    .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
     .disabled(model.isBusy)
     .refreshable { await model.load() }
@@ -154,6 +195,11 @@ struct ProvidersView: View {
       model.accounts.count > 1
       && !model.isDefaultAccount(account.id)
       && model.isReady(account)
+    let canRefreshModels =
+      account.isEnabled
+      && model.isReady(account)
+      && (model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath)
+        != nil
     NavigationLink {
       ConnectionEditorView(
         model: model,
@@ -188,6 +234,13 @@ struct ProvidersView: View {
         Button("Set as Default", systemImage: "star") {
           Task { @MainActor in
             _ = await model.setDefaultAccount(account.id)
+          }
+        }
+      }
+      if canRefreshModels {
+        Button("Refresh Models", systemImage: "arrow.clockwise") {
+          Task { @MainActor in
+            _ = await model.refreshModelsResult(accountID: account.id)
           }
         }
       }
@@ -272,12 +325,20 @@ private struct ProviderRow: View {
     model.provider(for: account.providerID)
   }
 
+  private var providerName: String {
+    provider?.displayName ?? account.providerID.rawValue
+  }
+
   private var status: ConnectionStatus {
     connectionStatus(model: model, account: account)
   }
 
   private var rowTitle: String {
-    let providerName = provider?.displayName ?? account.providerID.rawValue
+    Self.displayTitle(for: account, in: model)
+  }
+
+  static func displayTitle(for account: ProviderAccount, in model: ProviderManagementModel) -> String {
+    let providerName = model.provider(for: account.providerID)?.displayName ?? account.providerID.rawValue
     // A user label matching the provider name (or the legacy "Personal"
     // default when it is the only account for that provider) presents as the
     // provider itself.
@@ -290,8 +351,8 @@ private struct ProviderRow: View {
   }
 
   private var statusDotColor: Color {
-    if status.isReady { return theme.accentColor }
-    return account.isEnabled ? .orange : Color.secondary
+    if status.isReady { return .green }
+    return account.isEnabled ? .orange : theme.secondaryForegroundColor.opacity(0.6)
   }
 
   private var subtitleColor: Color {
@@ -299,6 +360,33 @@ private struct ProviderRow: View {
       return .orange
     }
     return theme.secondaryForegroundColor
+  }
+
+  private var providerContextPrefix: String? {
+    if account.kind == .openAICompatible {
+      let host = (account.baseURLOverride ?? provider?.defaultBaseURL)?.host
+      if let host, !host.isEmpty, host.localizedCaseInsensitiveCompare(rowTitle) != .orderedSame {
+        return host
+      }
+      return nil
+    }
+    if rowTitle != providerName {
+      return providerName
+    }
+    return nil
+  }
+
+  private var subtitleText: String {
+    let detail: String
+    if status.isReady, let modelName = activeVisibleModelName {
+      detail = modelName
+    } else {
+      detail = status.label
+    }
+    guard let prefix = providerContextPrefix else {
+      return detail
+    }
+    return "\(prefix) · \(detail)"
   }
 
   private var activeVisibleModelName: String? {
@@ -312,10 +400,10 @@ private struct ProviderRow: View {
   }
 
   var body: some View {
-    HStack(spacing: 14) {
-      ConnectionProviderMark(definition: provider, size: 44)
+    HStack(spacing: 12) {
+      ConnectionProviderMark(definition: provider, size: 38)
         .opacity(account.isEnabled ? 1 : 0.55)
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 7) {
           Text(rowTitle)
             .font(.body.weight(.semibold))
@@ -337,19 +425,13 @@ private struct ProviderRow: View {
               .fixedSize()
           }
         }
-        HStack(spacing: 5) {
-          if status.isReady, let modelName = activeVisibleModelName {
-            Text(modelName)
-              .lineLimit(1)
-          } else {
-            Text(status.label)
-          }
-        }
-        .font(.caption)
-        .foregroundStyle(subtitleColor)
+        Text(subtitleText)
+          .font(.caption)
+          .foregroundStyle(subtitleColor)
+          .lineLimit(1)
       }
-      Spacer(minLength: 8)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 2)
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)

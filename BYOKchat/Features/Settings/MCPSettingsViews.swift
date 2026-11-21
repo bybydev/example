@@ -116,7 +116,7 @@ struct MCPServerListView: View {
     .onAppear { model.registerErrorPresenter(errorPresenterID) }
     .onDisappear { model.unregisterErrorPresenter(errorPresenterID) }
     .confirmationDialog(
-      "Delete MCP server?",
+      deleteConfirmationTitle,
       isPresented: Binding(
         get: { pendingDelete != nil },
         set: { if !$0 { pendingDelete = nil } }
@@ -134,6 +134,19 @@ struct MCPServerListView: View {
     }
   }
 
+  private var enabledServers: [MCPRemoteServer] {
+    model.servers.filter(\.isEnabled)
+  }
+
+  private var disabledServers: [MCPRemoteServer] {
+    model.servers.filter { !$0.isEnabled }
+  }
+
+  private var deleteConfirmationTitle: String {
+    guard let server = pendingDelete else { return "Delete MCP server?" }
+    return "Delete \"\(server.name)\"?"
+  }
+
   private func requestAddServer() {
     if BYOKProAccess.canCreateMCPServer(
       currentCount: model.servers.count,
@@ -147,91 +160,154 @@ struct MCPServerListView: View {
 
   private var serverList: some View {
     List {
-      ForEach(model.servers) { server in
-        NavigationLink {
-          MCPServerEditorView(model: model, server: server)
-        } label: {
-          serverRow(server)
-        }
-        .swipeActions(edge: .leading) {
-          if server.isEnabled {
-            Button("Refresh", systemImage: "arrow.clockwise") {
-              Task { await model.refresh(server.id) }
-            }
-            .tint(.accentColor)
+      if !enabledServers.isEmpty {
+        Section {
+          ForEach(enabledServers) { server in
+            serverLink(server)
+          }
+          .listRowSeparatorTint(theme.borderColor)
+        } header: {
+          if !disabledServers.isEmpty {
+            Text("Active")
+              .foregroundStyle(theme.secondaryForegroundColor)
           }
         }
-        .swipeActions(edge: .trailing) {
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            pendingDelete = server
+        .listRowBackground(theme.surfaceColor)
+      }
+
+      if !disabledServers.isEmpty {
+        Section {
+          ForEach(disabledServers) { server in
+            serverLink(server)
           }
+          .listRowSeparatorTint(theme.borderColor)
+        } header: {
+          Text("Disabled")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
-        .contextMenu {
-          if server.isEnabled {
-            Button("Refresh Tools", systemImage: "arrow.clockwise") {
-              Task { await model.refresh(server.id) }
-            }
-          }
-          Button(
-            server.isEnabled ? "Disable" : "Enable",
-            systemImage: server.isEnabled ? "pause.circle" : "play.circle"
-          ) {
-            Task { await model.setEnabled(!server.isEnabled, serverID: server.id) }
-          }
-          Divider()
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            pendingDelete = server
-          }
+        .listRowBackground(theme.surfaceColor)
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .disabled(model.isBusy)
+  }
+
+  @ViewBuilder
+  private func serverLink(_ server: MCPRemoteServer) -> some View {
+    NavigationLink {
+      MCPServerEditorView(model: model, server: server)
+    } label: {
+      serverRow(server)
+    }
+    .swipeActions(edge: .leading) {
+      if server.isEnabled {
+        Button("Refresh", systemImage: "arrow.clockwise") {
+          Task { await model.refresh(server.id) }
+        }
+        .tint(theme.accentColor)
+      }
+    }
+    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+      Button("Delete", systemImage: "trash", role: .destructive) {
+        pendingDelete = server
+      }
+    }
+    .contextMenu {
+      if server.isEnabled {
+        Button("Refresh Tools", systemImage: "arrow.clockwise") {
+          Task { await model.refresh(server.id) }
         }
       }
-      .listRowBackground(Color.clear)
+      Button(
+        server.isEnabled ? "Disable" : "Enable",
+        systemImage: server.isEnabled ? "pause.circle" : "play.circle"
+      ) {
+        Task { await model.setEnabled(!server.isEnabled, serverID: server.id) }
+      }
+      Divider()
+      Button("Delete", systemImage: "trash", role: .destructive) {
+        pendingDelete = server
+      }
     }
-    .listStyle(.plain)
-    .disabled(model.isBusy)
-    .listRowSeparatorTint(theme.borderColor)
   }
 
   @ViewBuilder
   private func serverRow(_ server: MCPRemoteServer) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack(spacing: 8) {
-        Text(server.name)
-          .font(.body.weight(.medium))
-        if !server.isEnabled {
-          Text("Disabled")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.orange)
-        }
-        Spacer()
-        if let snapshot = model.snapshot(for: server.id) {
-          Text(mcpToolCountLabel(snapshot.tools.count))
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
-        } else if server.isEnabled {
-          Text("Not discovered")
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
-        }
+    let snapshot = model.snapshot(for: server.id)
+    let isUndiscovered = server.isEnabled && snapshot == nil
+    let statusDotColor: Color = {
+      guard server.isEnabled else { return theme.secondaryForegroundColor.opacity(0.6) }
+      return snapshot != nil ? .green : .orange
+    }()
+    let iconColor = server.isEnabled ? theme.accentColor : theme.secondaryForegroundColor
+    let host = endpointDisplayHost(server.endpoint)
+    let subtitle: String = {
+      if let snapshot {
+        return "\(host) · \(mcpToolCountLabel(snapshot.tools.count))"
       }
-      Text(server.endpoint.absoluteString)
-        .font(.caption)
-        .foregroundStyle(theme.secondaryForegroundColor)
-        .lineLimit(1)
-      if let snapshot = model.snapshot(for: server.id) {
-        Text(statusText(snapshot))
-          .font(.caption2)
-          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+      return server.isEnabled ? "Not discovered · \(host)" : host
+    }()
+
+    HStack(spacing: 12) {
+      MCPServerIconView(color: iconColor, size: 36)
+        .opacity(server.isEnabled ? 1 : 0.6)
+
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 7) {
+          Text(server.name)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(
+              server.isEnabled ? theme.primaryForegroundColor : theme.secondaryForegroundColor
+            )
+            .lineLimit(1)
+          Circle()
+            .fill(statusDotColor)
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+        }
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(isUndiscovered ? Color.orange : theme.secondaryForegroundColor)
+          .lineLimit(1)
       }
     }
-    .padding(.vertical, 3)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.vertical, 2)
+    .contentShape(Rectangle())
+    .accessibilityElement(children: .combine)
+    .accessibilityValue(server.isEnabled && snapshot != nil ? "Connected" : "")
   }
 
-  private func statusText(_ snapshot: MCPServerSnapshot) -> String {
-    let era = snapshot.era == .modern ? "Modern" : "Legacy"
-    if let info = snapshot.serverInfo {
-      return "\(era) · MCP \(snapshot.protocolVersion) · \(info.name) \(info.version)"
+  private func endpointDisplayHost(_ endpoint: URL) -> String {
+    guard let host = endpoint.host, !host.isEmpty else {
+      return endpoint.absoluteString
     }
-    return "\(era) · MCP \(snapshot.protocolVersion)"
+    if let port = endpoint.port {
+      let scheme = endpoint.scheme?.lowercased()
+      let isDefaultPort = (scheme == "https" && port == 443) || (scheme == "http" && port == 80)
+      if !isDefaultPort {
+        return "\(host):\(port)"
+      }
+    }
+    return host
+  }
+}
+
+private struct MCPServerIconView: View {
+  let color: Color
+  var size: CGFloat = 36
+
+  var body: some View {
+    Image(systemName: "puzzlepiece.extension.fill")
+      .font(.system(size: size * 0.45, weight: .semibold))
+      .foregroundStyle(color)
+      .frame(width: size, height: size)
+      .background(
+        color.opacity(0.14),
+        in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+      )
+      .accessibilityHidden(true)
   }
 }
 

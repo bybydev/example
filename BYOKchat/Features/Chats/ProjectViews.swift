@@ -1182,7 +1182,7 @@ struct ProjectDetailView: View {
 
   private enum Segment: String, CaseIterable, Identifiable {
     case chats
-    case sources
+    case files
     case settings
 
     var id: String { rawValue }
@@ -1190,7 +1190,7 @@ struct ProjectDetailView: View {
     var title: String {
       switch self {
       case .chats: "Chats"
-      case .sources: "Sources"
+      case .files: "Files"
       case .settings: "Settings"
       }
     }
@@ -1250,7 +1250,7 @@ struct ProjectDetailView: View {
         .ignoresSafeArea()
       }
       .confirmationDialog(
-        "Delete project?",
+        deleteConfirmationTitle,
         isPresented: $confirmDelete,
         titleVisibility: .visible
       ) {
@@ -1283,6 +1283,11 @@ struct ProjectDetailView: View {
       .projectErrorPresenter(projects)
   }
 
+  private var deleteConfirmationTitle: String {
+    guard let project else { return "Delete project?" }
+    return "Delete \"\(project.name)\"?"
+  }
+
   @ViewBuilder
   private var detailContent: some View {
     if let project {
@@ -1293,14 +1298,14 @@ struct ProjectDetailView: View {
           }
         }
         .pickerStyle(.segmented)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
 
         switch segment {
         case .chats:
           chatList(project)
-        case .sources:
-          sourceList(project)
+        case .files:
+          fileList(project)
         case .settings:
           settingsList(project)
         }
@@ -1323,7 +1328,16 @@ struct ProjectDetailView: View {
           .accessibilityLabel("Back")
       }
     }
-    if project != nil {
+    if let project {
+      ToolbarItem(placement: .principal) {
+        HStack(spacing: 7) {
+          ProjectIconView(project: project, size: 22)
+          Text(project.name)
+            .font(.headline)
+            .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+      }
       ToolbarItemGroup(placement: .primaryAction) {
         Button("New Chat", systemImage: "square.and.pencil", action: startChatHere)
           .labelStyle(.iconOnly)
@@ -1359,42 +1373,50 @@ struct ProjectDetailView: View {
           .buttonStyle(.borderedProminent)
       }
     } else {
-      List(conversations) { conversation in
-        Button {
-          openChat(conversation.id)
-        } label: {
-          ConversationRow(
-            conversation: conversation,
-            account: providers.accounts.first { $0.id == conversation.accountID }
-          )
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-          Button("Rename", systemImage: "pencil") {
-            renameTarget = conversation
-            renameText = conversation.title
-          }
-          ConversationProjectMenu(conversationID: conversation.id, projects: projects)
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            deleteConversation(conversation.id)
-          }
-        }
-        .swipeActions(edge: .trailing) {
-          Button("Delete", systemImage: "trash", role: .destructive) {
-            deleteConversation(conversation.id)
-          }
-          Button("Remove", systemImage: "folder.badge.minus") {
-            Task { @MainActor in
-              if await projects.removeConversation(conversation.id) {
-                toastCenter.success("Removed from \(project.name)")
+      List {
+        Section {
+          ForEach(conversations) { conversation in
+            Button {
+              openChat(conversation.id)
+            } label: {
+              ConversationRow(
+                conversation: conversation,
+                account: providers.accounts.first { $0.id == conversation.accountID },
+                isGenerating: chats.isGenerating(conversation.id)
+              )
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+              Button("Rename", systemImage: "pencil") {
+                renameTarget = conversation
+                renameText = conversation.title
+              }
+              ConversationProjectMenu(conversationID: conversation.id, projects: projects)
+              Divider()
+              Button("Delete", systemImage: "trash", role: .destructive) {
+                deleteConversation(conversation.id)
               }
             }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              Button("Delete", systemImage: "trash", role: .destructive) {
+                deleteConversation(conversation.id)
+              }
+              Button("Remove", systemImage: "folder.badge.minus") {
+                Task { @MainActor in
+                  if await projects.removeConversation(conversation.id) {
+                    toastCenter.success("Removed from \(project.name)")
+                  }
+                }
+              }
+              .tint(.orange)
+            }
           }
-          .tint(.orange)
+          .listRowSeparatorTint(theme.borderColor)
         }
         .listRowBackground(theme.surfaceColor)
       }
-      .listStyle(.plain)
+      .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
     }
   }
@@ -1408,7 +1430,7 @@ struct ProjectDetailView: View {
   }
 
   @ViewBuilder
-  private func sourceList(_ project: ChatProject) -> some View {
+  private func fileList(_ project: ChatProject) -> some View {
     if project.projectFiles.isEmpty {
       ContentUnavailableView {
         Label("No Files", systemImage: "doc")
@@ -1421,44 +1443,76 @@ struct ProjectDetailView: View {
         .buttonStyle(.borderedProminent)
       }
     } else {
-      List(project.projectFiles) { file in
-        Button {
-          openFilePreview(file)
-        } label: {
-          HStack(spacing: 10) {
-            Image(systemName: ProjectFileImportSupport.isImageMIMEType(file.mimeType) ? "photo" : "doc.fill")
-              .foregroundStyle(theme.secondaryForegroundColor)
+      List {
+        Section {
+          ForEach(project.projectFiles) { file in
+            Button {
+              openFilePreview(file)
+            } label: {
+              HStack(spacing: 12) {
+                ProjectFileIconView(
+                  mimeType: file.mimeType,
+                  color: project.projectColor,
+                  size: 36
+                )
 
-            VStack(alignment: .leading, spacing: 2) {
-              Text(file.filename)
-                .lineLimit(1)
-              Text(projectFileDetail(file))
-                .font(.caption)
-                .foregroundStyle(theme.secondaryForegroundColor)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(file.filename)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                  Text(projectFileDetail(file))
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                    .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if loadingFileID == file.id {
+                  ProgressView()
+                    .controlSize(.small)
+                }
+              }
+              .padding(.vertical, 2)
+              .contentShape(Rectangle())
             }
-
-            Spacer(minLength: 8)
-
-            if loadingFileID == file.id {
-              ProgressView()
-                .controlSize(.small)
+            .buttonStyle(.plain)
+            .contextMenu {
+              Button("Preview", systemImage: "eye") {
+                openFilePreview(file)
+              }
+              Divider()
+              Button("Remove", systemImage: "trash", role: .destructive) {
+                Task { @MainActor in
+                  await projects.removeProjectFile(file.id, from: project.id)
+                }
+              }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              Button("Remove", systemImage: "trash", role: .destructive) {
+                Task { @MainActor in
+                  await projects.removeProjectFile(file.id, from: project.id)
+                }
+              }
             }
           }
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .swipeActions(edge: .trailing) {
-          Button("Remove", systemImage: "trash", role: .destructive) {
-            Task { @MainActor in
-              await projects.removeProjectFile(file.id, from: project.id)
-            }
-          }
+          .listRowSeparatorTint(theme.borderColor)
+        } footer: {
+          Text(projectFilesFooter(project.projectFiles))
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
         .listRowBackground(theme.surfaceColor)
       }
-      .listStyle(.plain)
+      .listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
     }
+  }
+
+  private func projectFilesFooter(_ files: [ProjectFile]) -> String {
+    let totalBytes = files.reduce(Int64(0)) { $0 + Int64($1.byteCount) }
+    let size = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+    let countLabel = files.count == 1 ? "1 file" : "\(files.count) files"
+    return "\(countLabel) · \(size). Attach project files from the chat composer when a message needs them."
   }
 
   private func openFilePreview(_ file: ProjectFile) {
@@ -1497,24 +1551,32 @@ struct ProjectDetailView: View {
         }
       } header: {
         Text("New Chat Defaults")
+          .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
         Text("Applied when a chat is created. Existing chats keep their current provider and model.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowSeparatorTint(theme.borderColor)
       .listRowBackground(theme.surfaceColor)
 
-      Section("Instructions") {
+      Section {
         let instructions = project.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if instructions.isEmpty {
           Text("App default system prompt.")
             .foregroundStyle(theme.secondaryForegroundColor)
         } else {
           Text(instructions)
+            .lineLimit(6)
         }
+      } header: {
+        Text("Instructions")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowSeparatorTint(theme.borderColor)
       .listRowBackground(theme.surfaceColor)
 
       if !project.projectPromptPresets.isEmpty {
-        Section("Reusable Prompts") {
+        Section {
           ForEach(project.projectPromptPresets) { preset in
             VStack(alignment: .leading, spacing: 2) {
               Text(preset.name)
@@ -1524,6 +1586,10 @@ struct ProjectDetailView: View {
                 .lineLimit(1)
             }
           }
+          .listRowSeparatorTint(theme.borderColor)
+        } header: {
+          Text("Reusable Prompts")
+            .foregroundStyle(theme.secondaryForegroundColor)
         }
         .listRowBackground(theme.surfaceColor)
       }
@@ -1538,16 +1604,28 @@ struct ProjectDetailView: View {
         )
       } footer: {
         Text("Chats start with these MCP servers and permissions until they customize Tools themselves.")
+          .foregroundStyle(theme.secondaryForegroundColor)
       }
+      .listRowSeparatorTint(theme.borderColor)
       .listRowBackground(theme.surfaceColor)
 
       Section {
-        Button("Delete Project…", role: .destructive) {
+        Button {
+          showEditor = true
+        } label: {
+          Label("Edit Project", systemImage: "slider.horizontal.3")
+            .foregroundStyle(theme.accentColor)
+        }
+        Button(role: .destructive) {
           confirmDelete = true
+        } label: {
+          Label("Delete Project…", systemImage: "trash")
         }
       }
+      .listRowSeparatorTint(theme.borderColor)
       .listRowBackground(theme.surfaceColor)
     }
+    .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
   }
 
@@ -1574,6 +1652,34 @@ struct ProjectDetailView: View {
       return ("\(record.model.displayName) (Unavailable)", true)
     }
     return ("\(modelID.rawValue) (Unavailable)", true)
+  }
+}
+
+private struct ProjectFileIconView: View {
+  let mimeType: String
+  let color: Color
+  var size: CGFloat = 36
+
+  private var symbolName: String {
+    if ProjectFileImportSupport.isImageMIMEType(mimeType) {
+      return "photo"
+    }
+    if ProjectFileImportSupport.isTextLikeMIMEType(mimeType) {
+      return "doc.text.fill"
+    }
+    return "doc.fill"
+  }
+
+  var body: some View {
+    Image(systemName: symbolName)
+      .font(.system(size: size * 0.44, weight: .semibold))
+      .foregroundStyle(color)
+      .frame(width: size, height: size)
+      .background(
+        color.opacity(0.14),
+        in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+      )
+      .accessibilityHidden(true)
   }
 }
 
