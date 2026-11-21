@@ -63,8 +63,8 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
     quarantined[id] = data
     return true
   }
-  public func quarantinedShardIDs() -> [String] { Array(quarantined.keys).sorted() }
-  public func deleteQuarantinedShards() -> Int {
+  public func quarantinedShardIDs() async throws -> [String] { Array(quarantined.keys).sorted() }
+  public func deleteQuarantinedShards() async throws -> Int {
     let count = quarantined.count
     quarantined.removeAll()
     return count
@@ -141,7 +141,7 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
     for id in try shardIDs() {
       try deleteShard(id: id)
     }
-    _ = try deleteQuarantinedShards()
+    _ = try removeQuarantinedShardFiles()
     if FileManager.default.fileExists(atPath: indexURL.path) {
       try FileManager.default.removeItem(at: indexURL)
     }
@@ -158,7 +158,7 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
     return true
   }
 
-  public func quarantinedShardIDs() throws -> [String] {
+  public func quarantinedShardIDs() async throws -> [String] {
     guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
     let contents = try FileManager.default.contentsOfDirectory(
       at: directory,
@@ -171,7 +171,11 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
     }.sorted()
   }
 
-  public func deleteQuarantinedShards() throws -> Int {
+  public func deleteQuarantinedShards() async throws -> Int {
+    try removeQuarantinedShardFiles()
+  }
+
+  private func removeQuarantinedShardFiles() throws -> Int {
     guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
     let contents = try FileManager.default.contentsOfDirectory(
       at: directory,

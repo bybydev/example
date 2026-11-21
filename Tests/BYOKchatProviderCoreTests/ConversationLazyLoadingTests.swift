@@ -169,7 +169,7 @@ import Testing
   let store = ConversationStore(persistence: persistence)
   try await store.load()
   #expect(await store.quarantinedShardCount == 1)
-  #expect(await persistence.quarantinedShardIDs() == ["corrupt-chat"])
+  #expect(try await persistence.quarantinedShardIDs() == ["corrupt-chat"])
 
   let created = try await store.createConversation(
     providerID: "provider",
@@ -185,7 +185,7 @@ import Testing
   let purged = try await store.purgeQuarantinedShards()
   #expect(purged == 1)
   #expect(await store.quarantinedShardCount == 0)
-  #expect(await persistence.quarantinedShardIDs().isEmpty)
+  #expect(try await persistence.quarantinedShardIDs().isEmpty)
 }
 
 @Test func derivedThumbnailCacheClearsWithoutDeletingOriginals() async throws {
