@@ -106,6 +106,17 @@ struct AppRootView: View {
       model.themeManager.bind(to: purchases.manager)
       await purchases.prepare()
     }
+    .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+      var pinned = Set<ConversationID>()
+      if let selectedConversationID { pinned.insert(selectedConversationID) }
+      if let pendingID = pendingSidebarChat?.conversationID { pinned.insert(pendingID) }
+      for route in navigationPath {
+        if let routeChatID = route.chatID { pinned.insert(routeChatID) }
+      }
+      Task { @MainActor in
+        await model.handleMemoryWarning(keeping: pinned)
+      }
+    }
   }
 
   private var readyAppContent: some View {

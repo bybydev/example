@@ -21,6 +21,9 @@ struct SettingsView: View {
       .onAppear {
         model.dataPortability.statusMessage = nil
       }
+      .task {
+        await model.dataPortability.refreshStorageUsage()
+      }
       .onChange(of: model.dataPortability.statusMessage) { _, message in
         guard let message else { return }
         model.dataPortability.statusMessage = nil
@@ -129,6 +132,37 @@ struct SettingsView: View {
       .listRowBackground(theme.surfaceColor)
 
       Section {
+        NavigationLink {
+          StorageManagementView(
+            dataPortability: model.dataPortability,
+            chats: model.chats
+          )
+        } label: {
+          LabeledContent {
+            HStack(spacing: 6) {
+              if model.dataPortability.storageReport?.hasCleanupWarning == true
+                || model.chats.quarantinedShardCount > 0
+              {
+                Image(systemName: "exclamationmark.triangle.fill")
+                  .font(.footnote)
+                  .foregroundStyle(Color.orange)
+              }
+              if let report = model.dataPortability.storageReport {
+                Text(ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file))
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              } else if model.dataPortability.isMeasuringStorage {
+                ProgressView()
+                  .controlSize(.small)
+              } else {
+                Text("Calculating…")
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              }
+            }
+          } label: {
+            Label("Local Storage", systemImage: "internaldrive")
+          }
+        }
+
         Button("Delete All Conversations", systemImage: "trash", role: .destructive) {
           confirmDeleteConversations = true
         }
@@ -327,5 +361,172 @@ private struct DefaultSystemPromptView: View {
         await chats.syncDefaultSystemPrompt(from: previous, to: normalized)
       }
     }
+  }
+}
+
+private struct StorageManagementView: View {
+  @Bindable var dataPortability: DataPortabilityModel
+  @Bindable var chats: ChatManagementModel
+
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var confirmPurgeQuarantined = false
+
+  private var report: BYOKStorageUsageReport? {
+    dataPortability.storageReport
+  }
+
+  private var quarantinedCount: Int {
+    max(report?.quarantinedCount ?? 0, chats.quarantinedShardCount)
+  }
+
+  var body: some View {
+    List {
+      if let report, report.hasCleanupWarning || quarantinedCount > 0 {
+        Section {
+          if report.isDeviceSpaceLow {
+            warningRow(
+              icon: "externaldrive.badge.exclamationmark",
+              title: "iPhone storage is running low",
+              detail: "Less than 250 MB is available on this device. Clear cached thumbnails or remove large chats and files to avoid failed saves."
+            )
+          }
+          if report.isStorageLarge {
+            warningRow(
+              icon: "internaldrive",
+              title: "Local data is over 500 MB",
+              detail: "Consider clearing cached thumbnails or removing older conversations and unused Library files you no longer need."
+            )
+          }
+          if quarantinedCount > 0 {
+            warningRow(
+              icon: "doc.badge.exclamationmark",
+              title: "\(quarantinedCount) unreadable chat \(quarantinedCount == 1 ? "file" : "files") quarantined",
+              detail: "Corrupted conversation files were set aside so the rest of your history stays safe. You can remove them below to reclaim space."
+            )
+          }
+        } header: {
+          Text("Warnings")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        .listRowBackground(theme.surfaceColor)
+        .listRowSeparatorTint(theme.borderColor)
+      }
+
+      Section {
+        if let report {
+          sizeRow("Chats (\(chats.historyConversations.count))", bytes: report.conversationsBytes)
+          sizeRow("Files & Attachments", bytes: report.attachmentsBytes)
+          sizeRow("Cached Thumbnails", bytes: report.thumbnailCacheBytes)
+          sizeRow("Analytics & Settings", bytes: report.analyticsBytes + report.otherBytes)
+          if report.quarantinedBytes > 0 {
+            sizeRow("Quarantined Files", bytes: report.quarantinedBytes)
+          }
+          LabeledContent("Total Used") {
+            Text(formattedBytes(report.totalBytes))
+              .fontWeight(.semibold)
+              .foregroundStyle(theme.primaryForegroundColor)
+          }
+          if let available = report.availableDeviceBytes {
+            LabeledContent("Available on iPhone") {
+              Text(formattedBytes(available))
+                .foregroundStyle(report.isDeviceSpaceLow ? Color.orange : theme.secondaryForegroundColor)
+            }
+          }
+        } else {
+          HStack(spacing: 10) {
+            ProgressView()
+            Text("Calculating storage…")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+      } header: {
+        Text("Usage Breakdown")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      } footer: {
+        Text("Cached thumbnails are excluded from iCloud Backup and regenerate automatically when needed.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+      .listRowSeparatorTint(theme.borderColor)
+
+      Section {
+        Button {
+          Task { await dataPortability.clearThumbnailCache() }
+        } label: {
+          Label("Clear Cached Thumbnails", systemImage: "photo.on.rectangle.angled")
+        }
+        .disabled(dataPortability.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
+
+        if quarantinedCount > 0 {
+          Button(role: .destructive) {
+            confirmPurgeQuarantined = true
+          } label: {
+            Label(
+              "Remove Unreadable Shards (\(quarantinedCount))",
+              systemImage: "trash"
+            )
+          }
+          .disabled(dataPortability.isBusy)
+        }
+      } header: {
+        Text("Cleanup")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      } footer: {
+        Text("Clearing cached thumbnails never deletes your chats, original attachments, or Library files.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+      .listRowSeparatorTint(theme.borderColor)
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Local Storage")
+    .navigationBarTitleDisplayMode(.inline)
+    .refreshable {
+      await dataPortability.refreshStorageUsage()
+    }
+    .task {
+      await dataPortability.refreshStorageUsage()
+    }
+    .alert("Remove unreadable chat files?", isPresented: $confirmPurgeQuarantined) {
+      Button("Cancel", role: .cancel) {}
+      Button("Remove", role: .destructive) {
+        Task { await dataPortability.purgeQuarantinedConversations() }
+      }
+    } message: {
+      Text("This permanently deletes \(quarantinedCount) quarantined file\(quarantinedCount == 1 ? "" : "s") that could not be decoded. Healthy conversations are unaffected.")
+    }
+  }
+
+  private func sizeRow(_ title: String, bytes: Int64) -> some View {
+    LabeledContent(title) {
+      Text(formattedBytes(bytes))
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+  }
+
+  private func warningRow(icon: String, title: String, detail: String) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: icon)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(Color.orange)
+        .padding(.top, 2)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(theme.primaryForegroundColor)
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(theme.secondaryForegroundColor)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.vertical, 2)
+  }
+
+  private func formattedBytes(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
   }
 }

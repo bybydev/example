@@ -64,6 +64,10 @@ nonisolated enum AttachmentThumbnailLoader {
     cache.storage.object(forKey: storageKey(cacheKey: cacheKey, maxPixelSize: maxPixelSize))
   }
 
+  static func clearMemoryCache() {
+    cache.storage.removeAllObjects()
+  }
+
   /// Bounded-concurrency async decode at `.utility` priority so a burst of
   /// image tiles never starves main-thread animations (e.g., sidebar close).
   /// When `alreadyDownsampled` is true (derived thumbnail bytes from the blob

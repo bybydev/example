@@ -290,6 +290,22 @@ public actor FileAttachmentBlobStore: AttachmentBlobStoring {
     }
   }
 
+  /// Removes every regenerable thumbnail under `derived/` to reclaim local disk
+  /// space without affecting original attachments or library files.
+  @discardableResult
+  public func clearDerivedCache() async -> Int {
+    guard fileManager.fileExists(atPath: derivedDirectory.path) else { return 0 }
+    let derivedNames = (try? fileManager.contentsOfDirectory(atPath: derivedDirectory.path)) ?? []
+    var removed = 0
+    for name in derivedNames {
+      let target = derivedDirectory.appendingPathComponent(name, isDirectory: false)
+      if (try? fileManager.removeItem(at: target)) != nil {
+        removed += 1
+      }
+    }
+    return removed
+  }
+
   public func storedIDs() async throws -> Set<String> {
     if let knownIDs { return knownIDs }
     try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)

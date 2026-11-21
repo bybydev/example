@@ -18,6 +18,13 @@ public protocol ConversationWorkspacePersistence: Sendable {
   /// Moves a genuinely unreadable shard aside so one bad conversation cannot
   /// break the workspace. Unsupported/newer formats must never be quarantined.
   func quarantineShard(id: String) async throws -> Bool
+  func quarantinedShardIDs() async throws -> [String]
+  func deleteQuarantinedShards() async throws -> Int
+}
+
+public extension ConversationWorkspacePersistence {
+  func quarantinedShardIDs() async throws -> [String] { [] }
+  func deleteQuarantinedShards() async throws -> Int { 0 }
 }
 
 public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePersistence {
@@ -25,6 +32,7 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
   private var shards: [String: Data]
   private var quarantined: [String: Data] = [:]
   private var shardReadCount = 0
+  private var indexWriteCount = 0
 
   public init() { shards = [:] }
 
@@ -34,7 +42,10 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
   }
 
   public func loadIndex() -> Data? { index }
-  public func saveIndex(_ data: Data) { index = data }
+  public func saveIndex(_ data: Data) {
+    indexWriteCount += 1
+    index = data
+  }
   public func shardIDs() -> [String] { Array(shards.keys).sorted() }
   public func loadShard(id: String) -> Data? {
     shardReadCount += 1
@@ -42,15 +53,27 @@ public actor InMemoryConversationWorkspacePersistence: ConversationWorkspacePers
   }
   public func saveShard(id: String, data: Data) { shards[id] = data }
   public func deleteShard(id: String) { shards.removeValue(forKey: id) }
-  public func deleteAllShards() { shards.removeAll() }
+  public func deleteAllShards() {
+    shards.removeAll()
+    quarantined.removeAll()
+    index = nil
+  }
   public func quarantineShard(id: String) -> Bool {
     guard let data = shards.removeValue(forKey: id) else { return false }
     quarantined[id] = data
     return true
   }
+  public func quarantinedShardIDs() -> [String] { Array(quarantined.keys).sorted() }
+  public func deleteQuarantinedShards() -> Int {
+    let count = quarantined.count
+    quarantined.removeAll()
+    return count
+  }
 
   /// Test/diagnostic hook proving normal startup did not read full shards.
   public func shardLoadCount() -> Int { shardReadCount }
+  /// Test/diagnostic hook verifying streaming/imports avoid redundant index writes.
+  public func indexSaveCount() -> Int { indexWriteCount }
 }
 
 public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePersistence {
@@ -118,6 +141,7 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
     for id in try shardIDs() {
       try deleteShard(id: id)
     }
+    _ = try deleteQuarantinedShards()
     if FileManager.default.fileExists(atPath: indexURL.path) {
       try FileManager.default.removeItem(at: indexURL)
     }
@@ -132,5 +156,32 @@ public actor JSONFileConversationWorkspacePersistence: ConversationWorkspacePers
     }
     try FileManager.default.moveItem(at: url, to: destination)
     return true
+  }
+
+  public func quarantinedShardIDs() throws -> [String] {
+    guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+    let contents = try FileManager.default.contentsOfDirectory(
+      at: directory,
+      includingPropertiesForKeys: [.isRegularFileKey]
+    )
+    return contents.compactMap { url -> String? in
+      let name = url.lastPathComponent
+      guard name.hasSuffix(".json.corrupt") else { return nil }
+      return String(name.dropLast(".json.corrupt".count))
+    }.sorted()
+  }
+
+  public func deleteQuarantinedShards() throws -> Int {
+    guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
+    let contents = try FileManager.default.contentsOfDirectory(
+      at: directory,
+      includingPropertiesForKeys: [.isRegularFileKey]
+    )
+    var removed = 0
+    for url in contents where url.lastPathComponent.hasSuffix(".json.corrupt") {
+      try FileManager.default.removeItem(at: url)
+      removed += 1
+    }
+    return removed
   }
 }

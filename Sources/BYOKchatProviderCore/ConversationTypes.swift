@@ -395,6 +395,11 @@ public struct ConversationIndexMessage: Codable, Sendable, Equatable {
 /// omits message content/reasoning while retaining compact per-message usage
 /// and attachment metadata needed by existing analytics/library surfaces.
 public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable {
+  /// Maximum characters stored in `index.json` for list previews and draft
+  /// snippets so multi-year indexes stay lightweight even when replies or
+  /// drafts are tens of kilobytes long.
+  public static let maxPreviewLength = 240
+
   public var id: ConversationID
   public var title: String
   public var createdAt: Date
@@ -419,12 +424,12 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
     providerID = conversation.providerID
     accountID = conversation.accountID
     modelID = conversation.modelID
-    draftText = conversation.draftText
+    draftText = conversation.draftText.map(Self.truncatedPreview)
     isIOSNewChat = conversation.isIOSNewChat
     messageCount = conversation.messages.count
     lastMessagePreview = conversation.messages.last(where: {
       !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    })?.content
+    }).map { Self.truncatedPreview($0.content) }
     messages = conversation.messages.map(ConversationIndexMessage.init)
     referencedAttachmentIDs = Array(
       Set(
@@ -435,6 +440,13 @@ public struct ConversationIndexEntry: Codable, Sendable, Equatable, Identifiable
     ).sorted()
     shardSchemaVersion = ConversationShardRecord.currentSchemaVersion
     minimumReaderVersion = ConversationShardRecord.currentReaderVersion
+  }
+
+  public static func truncatedPreview(_ raw: String) -> String {
+    guard raw.count > maxPreviewLength else { return raw }
+    let capped = String(raw.prefix(maxPreviewLength - 1))
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return capped + "…"
   }
 
   public var summaryConversation: ChatConversation {

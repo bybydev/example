@@ -124,7 +124,9 @@ final class AppModel {
       providersModel: providerModel,
       chatsModel: chatModel,
       projectsModel: projectModel,
-      mcpModel: mcpModel
+      mcpModel: mcpModel,
+      storageEnvironment: coreServices.environment,
+      fileBlobStore: coreServices.fileBlobStore
     )
     dataPortability.onConversationsDeleted = { [weak self] in
       await self?.sweepOrphanFilesIfIdle()
@@ -180,6 +182,10 @@ final class AppModel {
       try? await fileBlobStore.deleteIDs(orphans)
     }
     await fileBlobStore.sweepOrphanedDerivatives()
+  }
+
+  func handleMemoryWarning(keeping pinnedChatIDs: Set<ConversationID> = []) async {
+    await chats.trimMemoryCaches(keeping: pinnedChatIDs)
   }
 
   func load() async {

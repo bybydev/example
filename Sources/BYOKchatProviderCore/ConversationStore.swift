@@ -3,11 +3,17 @@ import Foundation
 // One versioned shard per conversation plus a lightweight index used for
 // startup/list surfaces. Full message histories are loaded on demand.
 public actor ConversationStore {
+  public static let defaultMaxCachedConversations = 16
+
   private let persistence: any ConversationWorkspacePersistence
   private let blobs: any AttachmentBlobStoring
+  private let maxCachedConversations: Int
 
-  /// Loaded full conversations only. This is deliberately not the whole corpus.
-  private var state = ConversationWorkspaceState()
+  /// Bounded LRU cache of hydrated full conversations. Active/dirty shards are
+  /// pinned until flushed; idle shards evict cleanly and reload on demand.
+  private var cachedByID: [ConversationID: ChatConversation] = [:]
+  private var cacheOrder: [ConversationID] = []
+  private var tombstones: [String: Date] = [:]
   /// Complete lightweight catalog loaded from index.json at startup.
   private var indexEntries: [ConversationID: ConversationIndexEntry] = [:]
   private var hasLoaded = false
@@ -37,10 +43,12 @@ public actor ConversationStore {
 
   public init(
     persistence: any ConversationWorkspacePersistence,
-    blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore()
+    blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore(),
+    maxCachedConversations: Int = ConversationStore.defaultMaxCachedConversations
   ) {
     self.persistence = persistence
     self.blobs = blobs
+    self.maxCachedConversations = max(1, maxCachedConversations)
   }
 
   public func load() async throws {
@@ -63,7 +71,8 @@ public actor ConversationStore {
           Set(catalog.keys.map(\.rawValue)) == shardIDs
         {
           indexEntries = catalog
-          state.tombstones = SyncTombstonePolicy.pruned(index.tombstones)
+          tombstones = SyncTombstonePolicy.pruned(index.tombstones)
+          quarantinedShardCount = (try? await persistence.quarantinedShardIDs().count) ?? 0
           hasLoaded = true
           return
         }
@@ -71,7 +80,7 @@ public actor ConversationStore {
 
       // Preserve deletion tombstones while rebuilding an old/stale index.
       if let old = try? JSONDecoder.provider.decode(IndexTombstones.self, from: indexData) {
-        state.tombstones = old.tombstones ?? [:]
+        tombstones = old.tombstones ?? [:]
       }
     }
 
@@ -86,7 +95,7 @@ public actor ConversationStore {
   public func snapshot() async -> ConversationWorkspaceState {
     ConversationWorkspaceState(
       conversations: await allConversations(),
-      tombstones: state.tombstones
+      tombstones: tombstones
     )
   }
 
@@ -102,7 +111,34 @@ public actor ConversationStore {
 
   /// Returns a full conversation only when it is already hydrated in memory.
   public func cachedConversation(id: ConversationID) -> ChatConversation? {
-    state.conversations.first { $0.id == id }
+    guard let value = cachedByID[id] else { return nil }
+    touchCache(id)
+    return value
+  }
+
+  public func cachedConversationCount() -> Int {
+    cachedByID.count
+  }
+
+  /// Evicts idle hydrated shards from memory (for example on iOS memory
+  /// warnings), keeping pinned, streaming, and dirty-pending conversations.
+  public func evictCachedConversations(keeping pinnedIDs: Set<ConversationID> = []) {
+    cacheOrder.removeAll { id in
+      guard !pinnedIDs.contains(id), canEvictFromCache(id) else { return false }
+      cachedByID.removeValue(forKey: id)
+      return true
+    }
+  }
+
+  public func clearFlushError() {
+    flushError = nil
+  }
+
+  @discardableResult
+  public func purgeQuarantinedShards() async throws -> Int {
+    let removed = try await persistence.deleteQuarantinedShards()
+    quarantinedShardCount = (try? await persistence.quarantinedShardIDs().count) ?? 0
+    return removed
   }
 
   /// Attachment IDs remain available from the index, so app-level orphan GC
@@ -135,13 +171,13 @@ public actor ConversationStore {
     return try JSONEncoder.providerEncoder.encode(exported)
   }
 
-  /// Explicit full-corpus read for backup/analytics/library flows. This is not
-  /// used by startup or the sidebar.
+  /// Explicit full-corpus read for backup/analytics/library flows. Reads without
+  /// flooding the bounded hydrated LRU cache.
   public func allConversations() async -> [ChatConversation] {
     var values: [ChatConversation] = []
     values.reserveCapacity(indexEntries.count)
     for entry in sortedIndexEntries() {
-      if let conversation = try? await loadConversation(id: entry.id, cache: true) {
+      if let conversation = try? await loadConversation(id: entry.id, cache: false) {
         values.append(conversation)
       }
     }
@@ -172,7 +208,7 @@ public actor ConversationStore {
       options: options,
       isIOSNewChat: isIOSNewChat
     )
-    state.conversations.append(value)
+    storeInCache(value)
     try await persist(conversationIDs: [value.id])
     return value
   }
@@ -190,11 +226,11 @@ public actor ConversationStore {
   public func restorePersistedConversation(id: ConversationID) async throws {
     // Evict first, even when the durable read fails. A later draft/save must
     // reload the shard rather than accidentally commit the failed append.
-    state.conversations.removeAll { $0.id == id }
+    removeFromCache(id)
     deferredDirtyIDs.remove(id)
     guard var persisted = try await persistedConversation(id: id) else { return }
     let repaired = repairInterruptedMessages(in: &persisted)
-    state.conversations.append(persisted)
+    storeInCache(persisted)
     indexEntries[id] = ConversationIndexEntry(conversation: persisted)
     if repaired {
       try await persistence.saveShard(id: id.rawValue, data: shardData(persisted))
@@ -203,24 +239,28 @@ public actor ConversationStore {
   }
 
   public func deleteConversation(_ id: ConversationID) async throws {
-    state.conversations.removeAll { $0.id == id }
+    removeFromCache(id)
     indexEntries.removeValue(forKey: id)
     deferredDirtyIDs.remove(id)
-    state.tombstones[id.rawValue] = .now
+    tombstones = SyncTombstonePolicy.pruned(tombstones)
+    tombstones[id.rawValue] = .now
     try await persistence.deleteShard(id: id.rawValue)
     try await persistIndex()
   }
 
   public func deleteAllConversations() async throws {
-    guard !indexEntries.isEmpty else { return }
+    guard !indexEntries.isEmpty || quarantinedShardCount > 0 else { return }
     let removedIDs = Array(indexEntries.keys)
-    state.conversations.removeAll()
+    cachedByID.removeAll()
+    cacheOrder.removeAll()
     indexEntries.removeAll()
     deferredDirtyIDs.removeAll()
+    tombstones = SyncTombstonePolicy.pruned(tombstones)
     for id in removedIDs {
-      state.tombstones[id.rawValue] = .now
+      tombstones[id.rawValue] = .now
     }
     try await persistence.deleteAllShards()
+    quarantinedShardCount = 0
     try await persistIndex()
   }
 
@@ -259,11 +299,14 @@ public actor ConversationStore {
 
   public func setDraft(_ text: String, conversationID: ConversationID) async throws {
     try await ensureConversationLoaded(conversationID)
+    var didChange = false
     try mutateConversation(conversationID) { conversation in
       let value = text.isEmpty ? nil : text
       guard conversation.draftText != value else { return }
       conversation.draftText = value
+      didChange = true
     }
+    guard didChange else { return }
     try await persist(conversationIDs: [conversationID])
   }
 
@@ -276,6 +319,7 @@ public actor ConversationStore {
 
     var results: [ConversationSearchResult] = []
     for entry in sortedIndexEntries() {
+      if Task.isCancelled { return [] }
       if entry.title.localizedCaseInsensitiveContains(trimmed) {
         results.append(
           ConversationSearchResult(
@@ -292,6 +336,7 @@ public actor ConversationStore {
       guard let conversation = try? await readConversationWithoutCaching(id: entry.id) else {
         continue
       }
+      if Task.isCancelled { return [] }
       for message in conversation.messages where message.status == .complete {
         let contentMatches = message.content.localizedCaseInsensitiveContains(trimmed)
         let matchingAttachment = (message.attachments ?? []).first {
@@ -687,13 +732,16 @@ public actor ConversationStore {
     }
 
     indexEntries = rebuilt
-    state.conversations.removeAll()
-    state.tombstones = SyncTombstonePolicy.pruned(state.tombstones)
+    cachedByID.removeAll()
+    cacheOrder.removeAll()
+    tombstones = SyncTombstonePolicy.pruned(tombstones)
+    quarantinedShardCount = (try? await persistence.quarantinedShardIDs().count) ?? quarantinedShardCount
     try await persistIndex()
   }
 
   private func loadConversation(id: ConversationID, cache: Bool) async throws -> ChatConversation {
-    if let cached = state.conversations.first(where: { $0.id == id }) {
+    if let cached = cachedByID[id] {
+      if cache { touchCache(id) }
       return cached
     }
     guard indexEntries[id] != nil else {
@@ -712,8 +760,7 @@ public actor ConversationStore {
       let didRepair = repairInterruptedMessages(in: &conversation)
 
       if cache {
-        state.conversations.removeAll { $0.id == id }
-        state.conversations.append(conversation)
+        storeInCache(conversation)
       }
 
       let newEntry = ConversationIndexEntry(conversation: conversation)
@@ -744,7 +791,7 @@ public actor ConversationStore {
   }
 
   private func readConversationWithoutCaching(id: ConversationID) async throws -> ChatConversation {
-    if let cached = state.conversations.first(where: { $0.id == id }) {
+    if let cached = cachedByID[id] {
       return cached
     }
     guard let data = try await persistence.loadShard(id: id.rawValue) else {
@@ -797,14 +844,56 @@ public actor ConversationStore {
   private func quarantineUnreadableShard(_ id: ConversationID) async throws {
     _ = try? await persistence.quarantineShard(id: id.rawValue)
     quarantinedShardCount += 1
-    state.conversations.removeAll { $0.id == id }
+    removeFromCache(id)
     indexEntries.removeValue(forKey: id)
     try? await persistIndex()
   }
 
   private func ensureConversationLoaded(_ id: ConversationID) async throws {
-    guard !state.conversations.contains(where: { $0.id == id }) else { return }
+    if cachedByID[id] != nil {
+      touchCache(id)
+      return
+    }
     _ = try await loadConversation(id: id, cache: true)
+  }
+
+  private func storeInCache(_ conversation: ChatConversation) {
+    cachedByID[conversation.id] = conversation
+    cacheOrder.removeAll { $0 == conversation.id }
+    cacheOrder.append(conversation.id)
+    evictCachedConversationsIfNeeded()
+  }
+
+  private func touchCache(_ id: ConversationID) {
+    guard cachedByID[id] != nil else { return }
+    if cacheOrder.last == id { return }
+    cacheOrder.removeAll { $0 == id }
+    cacheOrder.append(id)
+  }
+
+  private func removeFromCache(_ id: ConversationID) {
+    cachedByID.removeValue(forKey: id)
+    cacheOrder.removeAll { $0 == id }
+  }
+
+  private func canEvictFromCache(_ id: ConversationID) -> Bool {
+    guard !deferredDirtyIDs.contains(id) else { return false }
+    if let conversation = cachedByID[id],
+      conversation.messages.contains(where: { $0.status == .pending || $0.status == .streaming })
+    {
+      return false
+    }
+    return true
+  }
+
+  private func evictCachedConversationsIfNeeded() {
+    while cacheOrder.count > maxCachedConversations {
+      guard let evictIndex = cacheOrder.firstIndex(where: { canEvictFromCache($0) }) else {
+        break
+      }
+      let evictedID = cacheOrder.remove(at: evictIndex)
+      cachedByID.removeValue(forKey: evictedID)
+    }
   }
 
   private func backfillAttachmentByteCounts(in conversation: inout ChatConversation) async -> Bool {
@@ -844,36 +933,54 @@ public actor ConversationStore {
   }
 
   private func offloadAttachmentBlobs(for ids: Set<ConversationID>) async throws {
+    var batchItems: [AttachmentBlobWriteItem] = []
+    var updatedConversations: [ConversationID: ChatConversation] = [:]
+
     for id in ids {
-      guard let conversationIndex = state.conversations.firstIndex(where: { $0.id == id }) else {
-        continue
-      }
-      let conversation = state.conversations[conversationIndex]
+      guard var conversation = cachedByID[id] else { continue }
+      var conversationChanged = false
       for messageIndex in conversation.messages.indices {
         guard let attachments = conversation.messages[messageIndex].attachments,
           !attachments.isEmpty
         else { continue }
         var stored = attachments
+        var messageChanged = false
         for attachmentIndex in stored.indices {
           let attachment = stored[attachmentIndex]
           guard !attachment.data.isEmpty else { continue }
-          try await blobs.writeIfAbsent(
-            attachment.id,
-            data: attachment.data,
-            metadata: AttachmentBlobMetadata(
-              filename: attachment.filename,
-              mimeType: attachment.mimeType,
-              byteCount: attachment.data.count,
-              createdAt: conversation.createdAt
+          batchItems.append(
+            AttachmentBlobWriteItem(
+              id: attachment.id,
+              data: attachment.data,
+              metadata: AttachmentBlobMetadata(
+                filename: attachment.filename,
+                mimeType: attachment.mimeType,
+                byteCount: attachment.data.count,
+                createdAt: conversation.createdAt
+              )
             )
           )
           stored[attachmentIndex].data = Data()
           if stored[attachmentIndex].declaredByteCount == nil {
             stored[attachmentIndex].declaredByteCount = attachment.data.count
           }
+          messageChanged = true
         }
-        state.conversations[conversationIndex].messages[messageIndex].attachments = stored
+        if messageChanged {
+          conversation.messages[messageIndex].attachments = stored
+          conversationChanged = true
+        }
       }
+      if conversationChanged {
+        updatedConversations[id] = conversation
+      }
+    }
+
+    if !batchItems.isEmpty {
+      try await blobs.writeBatchIfAbsent(batchItems)
+    }
+    for (id, conversation) in updatedConversations {
+      cachedByID[id] = conversation
     }
   }
 
@@ -881,10 +988,12 @@ public actor ConversationStore {
     _ id: ConversationID,
     mutation: (inout ChatConversation) throws -> Void
   ) throws {
-    guard let index = state.conversations.firstIndex(where: { $0.id == id }) else {
+    guard var conversation = cachedByID[id] else {
       throw ProviderError.conversationNotFound(id)
     }
-    try mutation(&state.conversations[index])
+    try mutation(&conversation)
+    cachedByID[id] = conversation
+    touchCache(id)
   }
 
   private func mutateMessage(
@@ -970,20 +1079,77 @@ public actor ConversationStore {
 
   // MARK: - Sharded persistence
 
-  private func persist(conversationIDs involved: Set<ConversationID>) async throws {
+  /// Internal helper for batch imports: offloads blobs and writes one shard
+  /// without triggering an intermediate full `index.json` rewrite.
+  func commitImportedConversation(_ conversation: ChatConversation) async throws {
+    var prepared = conversation
+    var batchItems: [AttachmentBlobWriteItem] = []
+    for messageIndex in prepared.messages.indices {
+      guard let attachments = prepared.messages[messageIndex].attachments, !attachments.isEmpty
+      else { continue }
+      try Self.validateAttachments(attachments)
+      var stored = attachments
+      for attachmentIndex in stored.indices {
+        let attachment = stored[attachmentIndex]
+        guard !attachment.data.isEmpty else { continue }
+        batchItems.append(
+          AttachmentBlobWriteItem(
+            id: attachment.id,
+            data: attachment.data,
+            metadata: AttachmentBlobMetadata(
+              filename: attachment.filename,
+              mimeType: attachment.mimeType,
+              byteCount: attachment.data.count,
+              createdAt: prepared.createdAt
+            )
+          )
+        )
+        stored[attachmentIndex].data = Data()
+        if stored[attachmentIndex].declaredByteCount == nil {
+          stored[attachmentIndex].declaredByteCount = attachment.data.count
+        }
+      }
+      prepared.messages[messageIndex].attachments = stored
+    }
+    if !batchItems.isEmpty {
+      try await blobs.writeBatchIfAbsent(batchItems)
+    }
+    try await persistence.saveShard(id: prepared.id.rawValue, data: shardData(prepared))
+    indexEntries[prepared.id] = ConversationIndexEntry(conversation: prepared)
+  }
+
+  func flushImportedIndex() async throws {
+    try await persistIndex()
+  }
+
+  private func persist(
+    conversationIDs involved: Set<ConversationID>,
+    updateIndex: Bool = true
+  ) async throws {
     let targets = involved.union(deferredDirtyIDs)
     try await offloadAttachmentBlobs(for: targets)
+    var indexChanged = false
     for id in targets.map(\.rawValue).sorted() {
-      guard let conversation = state.conversations.first(where: { $0.id.rawValue == id }) else {
-        deferredDirtyIDs.remove(ConversationID(rawValue: id))
+      let conversationID = ConversationID(rawValue: id)
+      guard let conversation = cachedByID[conversationID] else {
+        deferredDirtyIDs.remove(conversationID)
         continue
       }
       try await persistence.saveShard(id: id, data: shardData(conversation))
-      indexEntries[conversation.id] = ConversationIndexEntry(conversation: conversation)
+      if updateIndex {
+        let newEntry = ConversationIndexEntry(conversation: conversation)
+        if indexEntries[conversation.id] != newEntry {
+          indexEntries[conversation.id] = newEntry
+          indexChanged = true
+        }
+      }
       deferredDirtyIDs.remove(conversation.id)
     }
     flushError = nil
-    try await persistIndex()
+    if updateIndex, indexChanged {
+      try await persistIndex()
+    }
+    evictCachedConversationsIfNeeded()
   }
 
   private func markConversationDirty(_ id: ConversationID) {
@@ -1004,7 +1170,9 @@ public actor ConversationStore {
     isDeferredFlushScheduled = false
     guard !deferredDirtyIDs.isEmpty else { return }
     do {
-      try await persist(conversationIDs: [])
+      // Mid-stream checkpoints persist only the dirty shard; index.json updates
+      // when the turn starts, appends a tool round, or reaches a terminal state.
+      try await persist(conversationIDs: [], updateIndex: false)
     } catch {
       flushError = error
     }
@@ -1018,7 +1186,7 @@ public actor ConversationStore {
   private func persistIndex() async throws {
     let index = ConversationIndexState(
       entries: sortedIndexEntries(),
-      tombstones: state.tombstones
+      tombstones: tombstones
     )
     try await persistence.saveIndex(JSONEncoder.providerEncoder.encode(index))
   }

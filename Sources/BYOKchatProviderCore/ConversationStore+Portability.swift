@@ -35,6 +35,7 @@ extension ConversationStore {
     }
 
     var mapping: [ConversationID: ConversationID] = [:]
+    var didImportAny = false
     for source in imported.conversations {
       if !replacing, let existing = existingByID[source.id] {
         mapping[source.id] = existing.id
@@ -50,20 +51,22 @@ extension ConversationStore {
       let restoredID = try await restorePortableConversation(source)
       mapping[source.id] = restoredID
       fingerprintToID[fingerprint] = restoredID
+      didImportAny = true
+    }
+    if didImportAny {
+      try await flushImportedIndex()
     }
     return mapping
   }
 
   private func restorePortableConversation(_ source: ChatConversation) async throws -> ConversationID {
-    let created = try await createConversation(
-      providerID: source.providerID,
-      accountID: source.accountID,
-      modelID: source.modelID,
-      systemPrompt: source.systemPrompt,
-      options: source.options
-    )
-    try await renameConversation(created.id, title: source.title)
-    if let draft = source.draftText { try await setDraft(draft, conversationID: created.id) }
+    let now = Date.now
+    let trimmedTitle = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let title = trimmedTitle.isEmpty ? "New Chat" : trimmedTitle
+    let draft = source.draftText?.isEmpty == true ? nil : source.draftText
+
+    var restoredMessages: [ChatMessage] = []
+    restoredMessages.reserveCapacity(source.messages.count)
 
     var index = 0
     while index < source.messages.count {
@@ -73,73 +76,117 @@ extension ConversationStore {
         continue
       }
 
-      let turn = try await beginTurn(
-        conversationID: created.id,
-        userText: message.content,
-        attachments: message.attachments ?? []
+      let trimmedUser = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+      let userAttachments = message.attachments ?? []
+      guard !trimmedUser.isEmpty || !userAttachments.isEmpty else {
+        throw ProviderError.invalidMessages
+      }
+
+      let userMessage = ChatMessage(
+        role: .user,
+        content: trimmedUser,
+        attachments: userAttachments.isEmpty ? nil : userAttachments,
+        createdAt: now,
+        updatedAt: now,
+        status: .complete,
+        providerID: source.providerID,
+        accountID: source.accountID,
+        modelID: source.modelID
       )
+      restoredMessages.append(userMessage)
+
       let assistant = index + 1 < source.messages.count ? source.messages[index + 1] : nil
       if let assistant, assistant.role == .assistant {
-        for round in assistant.toolRounds ?? [] {
-          _ = try await appendToolRound(
-            conversationID: created.id,
-            messageID: turn.assistantMessage.id,
-            round: round
-          )
-        }
-
+        let assistantMessage: ChatMessage
         switch assistant.status {
         case .complete:
-          _ = try await completeMessage(
-            conversationID: created.id,
-            messageID: turn.assistantMessage.id,
-            response: ProviderResponse(
-              text: assistant.content,
-              reasoning: assistant.reasoning,
-              providerID: assistant.providerID ?? source.providerID,
-              accountID: assistant.accountID ?? source.accountID,
-              modelID: assistant.modelID ?? source.modelID,
-              finishReason: assistant.finishReason,
-              usage: assistant.usage,
-              metadata: assistant.metadata,
-              toolContinuation: assistant.providerContinuation
-            )
-          )
-        case .cancelled:
-          _ = try await cancelMessage(
-            conversationID: created.id,
-            messageID: turn.assistantMessage.id,
-            content: assistant.content,
-            reasoning: assistant.reasoning
-          )
-        case .failed, .interrupted, .pending, .streaming:
-          _ = try await failMessage(
-            conversationID: created.id,
-            messageID: turn.assistantMessage.id,
+          assistantMessage = ChatMessage(
+            role: .assistant,
             content: assistant.content,
             reasoning: assistant.reasoning,
-            error: ProviderError.invalidRequest(
-              assistant.errorDescription ?? "Imported generation did not complete."
-            )
+            toolRounds: assistant.toolRounds,
+            createdAt: now,
+            updatedAt: now,
+            status: .complete,
+            providerID: assistant.providerID ?? source.providerID,
+            accountID: assistant.accountID ?? source.accountID,
+            modelID: assistant.modelID ?? source.modelID,
+            finishReason: assistant.finishReason,
+            usage: assistant.usage,
+            providerContinuation: assistant.providerContinuation,
+            metadata: assistant.metadata,
+            completionUncertain: false
+          )
+        case .cancelled:
+          assistantMessage = ChatMessage(
+            role: .assistant,
+            content: assistant.content,
+            reasoning: assistant.reasoning,
+            toolRounds: assistant.toolRounds,
+            createdAt: now,
+            updatedAt: now,
+            status: .cancelled,
+            providerID: assistant.providerID ?? source.providerID,
+            accountID: assistant.accountID ?? source.accountID,
+            modelID: assistant.modelID ?? source.modelID,
+            completionUncertain: false
+          )
+        case .failed, .interrupted, .pending, .streaming:
+          let description = assistant.errorDescription ?? "Imported generation did not complete."
+          let error = ProviderError.invalidRequest(description)
+          assistantMessage = ChatMessage(
+            role: .assistant,
+            content: assistant.content,
+            reasoning: assistant.reasoning,
+            toolRounds: assistant.toolRounds,
+            createdAt: now,
+            updatedAt: now,
+            status: .failed,
+            providerID: assistant.providerID ?? source.providerID,
+            accountID: assistant.accountID ?? source.accountID,
+            modelID: assistant.modelID ?? source.modelID,
+            errorCode: String(describing: error),
+            errorDescription: error.errorDescription ?? description,
+            completionUncertain: false
           )
         }
+        restoredMessages.append(assistantMessage)
         index += 2
       } else {
-        _ = try await cancelMessage(
-          conversationID: created.id,
-          messageID: turn.assistantMessage.id,
-          content: "",
-          reasoning: ""
+        restoredMessages.append(
+          ChatMessage(
+            role: .assistant,
+            content: "",
+            reasoning: "",
+            createdAt: now,
+            updatedAt: now,
+            status: .cancelled,
+            providerID: source.providerID,
+            accountID: source.accountID,
+            modelID: source.modelID,
+            completionUncertain: false
+          )
         )
         index += 1
       }
     }
 
-    try await setContextOmissionCount(
-      source.lastContextOmittedMessageCount,
-      conversationID: created.id
+    let restored = ChatConversation(
+      id: ConversationID(),
+      title: title,
+      createdAt: now,
+      updatedAt: now,
+      providerID: source.providerID,
+      accountID: source.accountID,
+      modelID: source.modelID,
+      systemPrompt: source.systemPrompt,
+      options: source.options,
+      messages: restoredMessages,
+      lastContextOmittedMessageCount: max(0, source.lastContextOmittedMessageCount),
+      draftText: draft
     )
-    return created.id
+    try await commitImportedConversation(restored)
+    return restored.id
   }
 
   private static func portableFingerprint(_ conversation: ChatConversation) throws -> String {

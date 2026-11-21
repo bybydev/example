@@ -26,11 +26,15 @@ final class ChatManagementModel {
   private(set) var searchResults: [ConversationSearchResult] = []
   private(set) var isSearching = false
   private(set) var streamRevisions: [ConversationID: Int] = [:]
+  private(set) var quarantinedShardCount = 0
   var isBusy = false
   var errorMessage: String?
   var onFileReferencesChanged: (() -> Void)?
   var onNewChatDiscarded: (() async -> Void)?
   var backgroundKeeper: BackgroundActivityKeeper?
+
+  private static let maxHydratedConversations = 12
+  private static let draftSaveDebounce: Duration = .milliseconds(650)
 
   private let providerWorkspace: ProviderWorkspaceStore
   private let conversationStore: ConversationStore
@@ -42,6 +46,7 @@ final class ChatManagementModel {
   /// rule. Wired from AppModel so chat creation and every UI surface agree.
   var resolveDefaultAccountID: () -> ProviderAccountID?
   private var hydratedConversations: [ConversationID: ChatConversation] = [:]
+  @ObservationIgnored private var hydratedOrder: [ConversationID] = []
   private var loadingConversationTasks: [ConversationID: Task<Void, Never>] = [:]
   private var conversationLoadFailures: Set<ConversationID> = []
   private var generationTasks: [ConversationID: Task<Void, Never>] = [:]
@@ -219,7 +224,7 @@ final class ChatManagementModel {
       try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
       try await projectWorkspace?.removeConversation(id)
       try await conversationStore.deleteConversation(id)
-      hydratedConversations.removeValue(forKey: id)
+      removeHydratedConversation(id)
       failedConfigurationKeys.removeValue(forKey: id)
       configurationOperations.removeValue(forKey: id)
       abandonedNewChatIDs.remove(id)
@@ -273,7 +278,10 @@ final class ChatManagementModel {
     guard !abandonedNewChatIDs.contains(id), !discardingConversationIDs.contains(id) else {
       return nil
     }
-    if let hydrated = hydratedConversations[id] { return hydrated }
+    if let hydrated = hydratedConversations[id] {
+      touchHydratedOrder(id)
+      return hydrated
+    }
     guard conversations.contains(where: { $0.id == id }), !conversationLoadFailures.contains(id) else {
       return nil
     }
@@ -340,7 +348,7 @@ final class ChatManagementModel {
       do {
         let loaded = try await self.conversationStore.conversation(id: id)
         await self.prewarmConversationContent(loaded, displayScale: displayScale)
-        self.hydratedConversations[id] = loaded
+        self.setHydratedConversation(loaded)
         self.conversationLoadFailures.remove(id)
         let refreshedSummaries = await self.conversationStore.conversationSummaries()
         if self.conversations != refreshedSummaries {
@@ -462,7 +470,7 @@ final class ChatManagementModel {
     draftTasks[conversationID] = Task { @MainActor [weak self] in
       guard let self else { return }
       do {
-        try await Task.sleep(for: .milliseconds(250))
+        try await Task.sleep(for: Self.draftSaveDebounce)
         try Task.checkCancellation()
         guard draftRevisions[conversationID] == revision else { return }
         try await conversationStore.setDraft(text, conversationID: conversationID)
@@ -585,7 +593,7 @@ final class ChatManagementModel {
         id: id,
         isIOSNewChat: managedNewChat ? true : nil
       )
-      hydratedConversations[conversation.id] = conversation
+      setHydratedConversation(conversation)
 
       if let projectID, let projectWorkspace {
         do {
@@ -593,7 +601,7 @@ final class ChatManagementModel {
         } catch {
           if !managedNewChat {
             try? await conversationStore.deleteConversation(conversation.id)
-            hydratedConversations.removeValue(forKey: conversation.id)
+            removeHydratedConversation(conversation.id)
           }
           throw error
         }
@@ -625,7 +633,7 @@ final class ChatManagementModel {
     draftRevisions.removeValue(forKey: id)
     streamRevisions.removeValue(forKey: id)
     activeToolCallsByConversation.removeValue(forKey: id)
-    hydratedConversations.removeValue(forKey: id)
+    removeHydratedConversation(id)
     conversationLoadFailures.remove(id)
     do {
       try await mcpWorkspace?.removeChatConfiguration(conversationID: id)
@@ -1119,11 +1127,19 @@ final class ChatManagementModel {
     searchResults.removeAll { !visibleIDs.contains($0.conversationID) }
     let validIDs = Set(conversations.map(\.id))
     for id in Array(hydratedConversations.keys) where !validIDs.contains(id) {
-      hydratedConversations.removeValue(forKey: id)
+      removeHydratedConversation(id)
     }
     for id in Array(hydratedConversations.keys) {
       if let refreshed = await conversationStore.cachedConversation(id: id) {
         hydratedConversations[id] = refreshed
+      }
+    }
+    evictHydratedConversationsIfNeeded()
+    quarantinedShardCount = await conversationStore.quarantinedShardCount
+    if let flushError = await conversationStore.flushError {
+      await conversationStore.clearFlushError()
+      if errorMessage == nil {
+        errorMessage = "Could not save recent chat changes: \(flushError.localizedDescription)"
       }
     }
 
@@ -1135,6 +1151,62 @@ final class ChatManagementModel {
     liveMessages = liveMessages.filter { currentMessageIDs.contains($0.key) }
     streamTargets = streamTargets.filter { currentMessageIDs.contains($0.key) }
     onFileReferencesChanged?()
+  }
+
+  /// Releases idle hydrated conversations, parsed Markdown trees, and decoded
+  /// thumbnails under iOS memory pressure without disrupting visible/active chats.
+  func trimMemoryCaches(keeping pinnedIDs: Set<ConversationID> = []) async {
+    let protected = protectedHydratedIDs(including: pinnedIDs)
+    for id in Array(hydratedConversations.keys) where !protected.contains(id) {
+      removeHydratedConversation(id)
+    }
+    await conversationStore.evictCachedConversations(keeping: protected)
+    MarkdownParseCache.shared.removeAll()
+    AttachmentThumbnailLoader.clearMemoryCache()
+  }
+
+  private func setHydratedConversation(_ conversation: ChatConversation) {
+    hydratedConversations[conversation.id] = conversation
+    touchHydratedOrder(conversation.id)
+    evictHydratedConversationsIfNeeded()
+  }
+
+  private func removeHydratedConversation(_ id: ConversationID) {
+    hydratedConversations.removeValue(forKey: id)
+    hydratedOrder.removeAll { $0 == id }
+  }
+
+  private func touchHydratedOrder(_ id: ConversationID) {
+    if hydratedOrder.last == id { return }
+    hydratedOrder.removeAll { $0 == id }
+    hydratedOrder.append(id)
+  }
+
+  private func protectedHydratedIDs(including extra: Set<ConversationID> = []) -> Set<ConversationID> {
+    var protected = extra
+    protected.formUnion(activeConversationIDs)
+    protected.formUnion(preparingConversationIDs)
+    protected.formUnion(loadingConversationTasks.keys)
+    protected.formUnion(draftTasks.keys)
+    for (id, count) in configurationOperations where count > 0 {
+      protected.insert(id)
+    }
+    if let activeNewChatID {
+      protected.insert(activeNewChatID)
+    }
+    return protected
+  }
+
+  private func evictHydratedConversationsIfNeeded() {
+    guard hydratedOrder.count > Self.maxHydratedConversations else { return }
+    let protected = protectedHydratedIDs()
+    while hydratedOrder.count > Self.maxHydratedConversations {
+      guard let index = hydratedOrder.firstIndex(where: { !protected.contains($0) }) else {
+        break
+      }
+      let evictedID = hydratedOrder.remove(at: index)
+      hydratedConversations.removeValue(forKey: evictedID)
+    }
   }
 
   private func clearLiveMessages(for conversationID: ConversationID) {

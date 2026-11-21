@@ -58,9 +58,13 @@ final class DataPortabilityModel {
   private let chatsModel: ChatManagementModel
   private let projectsModel: ProjectManagementModel
   private let mcpModel: MCPManagementModel
+  private let storageEnvironment: BYOKStorageEnvironment?
+  private let fileBlobStore: FileAttachmentBlobStore?
 
   var onConversationsDeleted: (@MainActor () async -> Void)?
   var isBusy = false
+  var isMeasuringStorage = false
+  var storageReport: BYOKStorageUsageReport?
   var statusMessage: String?
   var errorMessage: String?
 
@@ -71,7 +75,9 @@ final class DataPortabilityModel {
     providersModel: ProviderManagementModel,
     chatsModel: ChatManagementModel,
     projectsModel: ProjectManagementModel,
-    mcpModel: MCPManagementModel
+    mcpModel: MCPManagementModel,
+    storageEnvironment: BYOKStorageEnvironment? = nil,
+    fileBlobStore: FileAttachmentBlobStore? = nil
   ) {
     self.conversations = conversations
     self.accountManager = accountManager
@@ -80,6 +86,36 @@ final class DataPortabilityModel {
     self.chatsModel = chatsModel
     self.projectsModel = projectsModel
     self.mcpModel = mcpModel
+    self.storageEnvironment = storageEnvironment
+    self.fileBlobStore = fileBlobStore
+  }
+
+  func refreshStorageUsage() async {
+    guard let storageEnvironment, !isMeasuringStorage else { return }
+    isMeasuringStorage = true
+    defer { isMeasuringStorage = false }
+    let layout = storageEnvironment.layout
+    let telemetryDir = storageEnvironment.telemetryDirectory
+    let report = await Task.detached(priority: .utility) {
+      layout.measureUsage(telemetryDirectory: telemetryDir)
+    }.value
+    storageReport = report
+  }
+
+  func clearThumbnailCache() async {
+    await perform("Cached thumbnails cleared.") {
+      _ = await fileBlobStore?.clearDerivedCache()
+      AttachmentThumbnailLoader.clearMemoryCache()
+      await refreshStorageUsage()
+    }
+  }
+
+  func purgeQuarantinedConversations() async {
+    await perform("Unreadable chat files removed.") {
+      _ = try await conversations.purgeQuarantinedShards()
+      await chatsModel.reloadFromStorage()
+      await refreshStorageUsage()
+    }
   }
 
   func deleteAllConversations() async {
@@ -98,6 +134,7 @@ final class DataPortabilityModel {
         await mcpModel.reloadFromStorage()
       }
       await onConversationsDeleted?()
+      await refreshStorageUsage()
       if let cleanupError {
         throw cleanupError
       }

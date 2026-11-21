@@ -137,6 +137,14 @@ nonisolated final class MarkdownParseCache: @unchecked Sendable {
     }
   }
 
+  func removeAll() {
+    lock.lock()
+    defer { lock.unlock() }
+    values.removeAll()
+    order.removeAll()
+    sourceBytes = 0
+  }
+
   private func insert(_ value: PreparedMarkdownMessage) {
     let cost = value.source.utf8.count
     guard cost <= byteLimit else { return }
