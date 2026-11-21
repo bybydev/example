@@ -577,28 +577,48 @@ struct SidebarHelperTests {
     )
     #expect(
       ChatTimelineGeometry.shouldContinueBottomSettle(
-        geometry: ChatTimelineGeometry(contentHeight: 2_400, containerHeight: 700, needsBottomPin: true),
+        geometry: ChatTimelineGeometry(
+          contentHeight: 2_400,
+          containerHeight: 700,
+          needsBottomPin: true,
+          isNearBottom: false
+        ),
         previousContentHeight: 2_400,
         isNearBottom: true
       )
     )
     #expect(
       ChatTimelineGeometry.shouldContinueBottomSettle(
-        geometry: ChatTimelineGeometry(contentHeight: 2_400, containerHeight: 700, needsBottomPin: false),
+        geometry: ChatTimelineGeometry(
+          contentHeight: 2_400,
+          containerHeight: 700,
+          needsBottomPin: false,
+          isNearBottom: true
+        ),
         previousContentHeight: 2_400,
         isNearBottom: false
       )
     )
     #expect(
       ChatTimelineGeometry.shouldContinueBottomSettle(
-        geometry: ChatTimelineGeometry(contentHeight: 4_200, containerHeight: 700, needsBottomPin: false),
+        geometry: ChatTimelineGeometry(
+          contentHeight: 4_200,
+          containerHeight: 700,
+          needsBottomPin: false,
+          isNearBottom: true
+        ),
         previousContentHeight: 2_400,
         isNearBottom: true
       )
     )
     #expect(
       !ChatTimelineGeometry.shouldContinueBottomSettle(
-        geometry: ChatTimelineGeometry(contentHeight: 4_200, containerHeight: 700, needsBottomPin: false),
+        geometry: ChatTimelineGeometry(
+          contentHeight: 4_200,
+          containerHeight: 700,
+          needsBottomPin: false,
+          isNearBottom: true
+        ),
         previousContentHeight: 4_200,
         isNearBottom: true
       )
