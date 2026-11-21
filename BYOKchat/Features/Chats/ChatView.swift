@@ -1078,15 +1078,14 @@ private struct ConversationToolsView: View {
 
   private var modelDoesNotSupportTools: Bool {
     guard let conversation,
-      let accountID = conversation.accountID,
-      let modelID = conversation.modelID,
-      let account = providers.accounts.first(where: { $0.id == accountID })
+      !conversation.modelID.rawValue.isEmpty,
+      let account = providers.accounts.first(where: { $0.id == conversation.accountID })
     else { return false }
-    let record = providers.models(for: accountID, includeHidden: true)
-      .first { $0.model.id == modelID }
+    let record = providers.models(for: conversation.accountID, includeHidden: true)
+      .first { $0.model.id == conversation.modelID }
     let capabilities = ModelCapabilityResolver.resolve(
       kind: account.kind,
-      modelID: modelID,
+      modelID: conversation.modelID,
       model: record?.model
     )
     return capabilities[.tools] == .unsupported
@@ -1609,9 +1608,7 @@ private struct ChatSettingsView: View {
     self.providers = providers
     self.projects = projects
 
-    let accountKind = conversation.accountID.flatMap { id in
-      providers.accounts.first { $0.id == id }?.kind
-    }
+    let accountKind = providers.accounts.first { $0.id == conversation.accountID }?.kind
     let initialTemp = conversation.options.temperature
     let initialTopP = conversation.options.topP
     let routing = conversation.options.openRouterRouting
@@ -1645,24 +1642,24 @@ private struct ChatSettingsView: View {
   }
 
   private var account: ProviderAccount? {
-    liveConversation.accountID.flatMap { id in
-      providers.accounts.first { $0.id == id && $0.isEnabled }
-    }
+    providers.accounts.first { $0.id == liveConversation.accountID && $0.isEnabled }
+  }
+
+  private var hasModelID: Bool {
+    !liveConversation.modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private var modelRecord: AccountModelRecord? {
-    guard let accountID = liveConversation.accountID,
-      let modelID = liveConversation.modelID
-    else { return nil }
-    return providers.models(for: accountID, includeHidden: true)
-      .first { $0.model.id == modelID }
+    guard hasModelID else { return nil }
+    return providers.models(for: liveConversation.accountID, includeHidden: true)
+      .first { $0.model.id == liveConversation.modelID }
   }
 
   private var capabilities: ResolvedModelCapabilities? {
-    guard let account, let modelID = liveConversation.modelID else { return nil }
+    guard let account, hasModelID else { return nil }
     return ModelCapabilityResolver.resolve(
       kind: account.kind,
-      modelID: modelID,
+      modelID: liveConversation.modelID,
       model: modelRecord?.model
     )
   }
@@ -1728,7 +1725,7 @@ private struct ChatSettingsView: View {
     !isSaving
       && !isGenerating
       && account != nil
-      && liveConversation.modelID != nil
+      && hasModelID
       && maxOutputTokensValidation.error == nil
   }
 
@@ -1736,8 +1733,8 @@ private struct ChatSettingsView: View {
     if let record = modelRecord {
       return record.model.displayName
     }
-    if let modelID = liveConversation.modelID, !modelID.rawValue.isEmpty {
-      return modelID.rawValue
+    if hasModelID {
+      return liveConversation.modelID.rawValue
     }
     return "Select Model"
   }
@@ -1859,7 +1856,7 @@ private struct ChatSettingsView: View {
       Text("Model & Reasoning")
         .foregroundStyle(theme.secondaryForegroundColor)
     } footer: {
-      if account == nil || liveConversation.modelID == nil {
+      if account == nil || !hasModelID {
         Text("Choose an enabled connection and model before saving chat settings.")
           .foregroundStyle(.orange)
       } else if isGenerating {
@@ -2109,7 +2106,8 @@ private struct ChatSettingsView: View {
   }
 
   private func save() async {
-    guard canSave, let account, let modelID = liveConversation.modelID else { return }
+    guard canSave, let account, hasModelID else { return }
+    let modelID = liveConversation.modelID
     focusedField = nil
     isSaving = true
     defer { isSaving = false }
