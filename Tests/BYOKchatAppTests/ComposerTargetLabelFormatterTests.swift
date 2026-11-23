@@ -223,6 +223,39 @@ struct ComposerTargetLabelFormatterTests {
     #expect(lowercased == "MiniMax M3 · Off")
   }
 
+  @Test("Alibaba Qwen models preserve Qwen casing and explicit effort")
+  func qwenLabels() {
+    let flagship = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.qwenID,
+      providerName: "Alibaba Qwen",
+      modelName: "qwen4-max",
+      modelID: "qwen4-max",
+      supportedParameters: ["thinking", "reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .xhigh)
+    )
+    #expect(flagship == "Qwen 4 Max · X-High")
+
+    let flashOff = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.qwenID,
+      providerName: "Alibaba Qwen",
+      modelName: "qwen3.8-flash",
+      modelID: "qwen3.8-flash",
+      supportedParameters: ["thinking", "reasoning_effort"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(flashOff == "Qwen 3.8 Flash · Off")
+
+    let coder = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.qwenID,
+      providerName: "Alibaba Qwen",
+      modelName: "qwen3-coder-plus",
+      modelID: "qwen3-coder-plus",
+      supportedParameters: ["tools"],
+      reasoning: nil
+    )
+    #expect(coder == "Qwen 3 Coder Plus")
+  }
+
   @Test("Mistral AI models preserve family names and explicit effort")
   func mistralLabels() {
     let large4 = ComposerTargetLabelFormatter.make(

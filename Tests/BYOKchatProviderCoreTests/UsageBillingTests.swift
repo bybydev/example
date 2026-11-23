@@ -257,6 +257,41 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(qwen38.rates.cachedInput == nil)
 }
 
+@Test func qwenCatalogPricingResolvesVerifiedModelsAndRejectsRegionalOverrides() throws {
+  let qwen = ProviderAccount(kind: .qwen, id: "qw", providerID: "qwen", label: "Alibaba Qwen")
+
+  let qwen4Max = try #require(
+    ModelPriceResolver.resolve(account: qwen, modelID: "qwen4-max", model: nil)
+  )
+  #expect(qwen4Max.rates.input == "1.5")
+  #expect(qwen4Max.rates.output == "4.5")
+  #expect(qwen4Max.rates.cachedInput == "0.075")
+
+  let qwen38Flash = try #require(
+    ModelPriceResolver.resolve(account: qwen, modelID: "qwen3.8-flash", model: nil)
+  )
+  #expect(qwen38Flash.rates.input == "0.15")
+  #expect(qwen38Flash.rates.output == "0.47")
+  #expect(qwen38Flash.rates.cachedInput == "0.015")
+
+  let qwen37Plus = try #require(
+    ModelPriceResolver.resolve(account: qwen, modelID: "qwen3.7-plus", model: nil)
+  )
+  #expect(qwen37Plus.rates.input == "0.4")
+  #expect(qwen37Plus.rates.output == "1.6")
+  #expect(qwen37Plus.rates.cachedInput == "0.04")
+
+  // Beijing endpoint uses different regional pricing and must not inherit Singapore catalog rates.
+  let chinaAccount = ProviderAccount(
+    kind: .qwen,
+    id: "qw-cn",
+    providerID: "qwen",
+    label: "Alibaba Qwen China",
+    baseURLOverride: URL(string: "https://dashscope.aliyuncs.com/compatible-mode/v1")!
+  )
+  #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "qwen4-max", model: nil) == nil)
+}
+
 @Test func geminiCurrentCatalogPricingResolvesAndRespectsExpiry() throws {
   let active = try #require(ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z"))
   let carbonExpiry = try #require(ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"))

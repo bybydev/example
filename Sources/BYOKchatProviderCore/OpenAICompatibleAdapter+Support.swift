@@ -188,6 +188,22 @@ extension OpenAICompatibleAdapter {
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])
       }
+    case .qwen:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["enable_thinking"] = .bool(false)
+        } else {
+          body["enable_thinking"] = .bool(true)
+          if let tokens = reasoning.maxTokens {
+            body["thinking_budget"] = .number(Double(tokens))
+          } else if let effort = reasoning.effort {
+            body["reasoning_effort"] = .string(effort.rawValue)
+          }
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .mistral:
       if let reasoning = request.options.reasoning {
         if reasoning.enabled == false {

@@ -323,6 +323,7 @@ extension ProviderDefinition {
     case .zAI: return .zAI
     case .moonshot: return .moonshot
     case .minimax: return .minimax
+    case .qwen: return .qwen
     case .mistral: return .mistral
     case .groq: return .groq
     case .openRouter: return .openRouter

@@ -267,7 +267,8 @@ struct UsageWire: Decodable {
       outputTokens: completionTokens,
       cachedInputTokens: promptTokensDetails?.cachedTokens ?? cachedTokens ?? promptCacheHitTokens,
       reasoningTokens: completionTokensDetails?.reasoningTokens,
-      cacheWriteTokens: promptTokensDetails?.cacheWriteTokens,
+      cacheWriteTokens: promptTokensDetails?.cacheWriteTokens
+        ?? promptTokensDetails?.cacheCreationInputTokens,
       hasUnpricedCharges: (promptTokensDetails?.audioTokens ?? 0) > 0
         || (completionTokensDetails?.audioTokens ?? 0) > 0
         || (completionTokensDetails?.imageTokens ?? 0) > 0 ? true : nil
@@ -278,10 +279,12 @@ struct UsageWire: Decodable {
 struct PromptTokensDetailsWire: Decodable {
   var cachedTokens: Int?
   var cacheWriteTokens: Int?
+  var cacheCreationInputTokens: Int?
   var audioTokens: Int?
   enum CodingKeys: String, CodingKey {
     case cachedTokens = "cached_tokens"
     case cacheWriteTokens = "cache_write_tokens"
+    case cacheCreationInputTokens = "cache_creation_input_tokens"
     case audioTokens = "audio_tokens"
   }
 }

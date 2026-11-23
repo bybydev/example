@@ -1676,3 +1676,113 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   let req = try #require(await transport.lastRequest())
   #expect(req.url?.absoluteString == "https://api.groq.com/openai/v1/models")
 }
+
+@Test func qwenStreamSendsEnableThinkingEffortAndDecodesReasoningAndCacheUsage() async throws {
+  let stream = """
+    data: {"id":"q1","model":"qwen4-max","choices":[{"delta":{"reasoning_content":"Step 1 "},"finish_reason":null}]}
+
+    data: {"id":"q1","model":"qwen4-max","choices":[{"delta":{"content":"Result"},"finish_reason":"stop"}]}
+
+    data: {"id":"q1","model":"qwen4-max","choices":[],"usage":{"prompt_tokens":200,"completion_tokens":32,"prompt_tokens_details":{"cached_tokens":128,"cache_creation_input_tokens":64},"completion_tokens_details":{"reasoning_tokens":18}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.qwen, transport: transport)
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "qwen4-max",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(temperature: 0.7, reasoning: .init(enabled: true, effort: .xhigh))
+    ),
+    account: account(providerID: "qwen")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(
+    sent.url?.absoluteString == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+  )
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["enable_thinking"] == .bool(true))
+  #expect(root["reasoning_effort"] == .string("xhigh"))
+  #expect(root["thinking_budget"] == nil)
+  #expect(root["temperature"] == .number(0.7))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+
+  #expect(events.contains(.reasoningDelta("Step 1 ")))
+  #expect(events.contains(.textDelta("Result")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Step 1 ")
+  #expect(response.text == "Result")
+  #expect(response.usage?.inputTokens == 200)
+  #expect(response.usage?.outputTokens == 32)
+  #expect(response.usage?.cachedInputTokens == 128)
+  #expect(response.usage?.cacheWriteTokens == 64)
+  #expect(response.usage?.reasoningTokens == 18)
+}
+
+@Test func qwenReasoningOffSendsEnableThinkingFalseAndListModelsReturnsCuratedSeeds() async throws {
+  let okResponse = Data(
+    #"{"id":"q2","model":"qwen4-max","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+      .utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.qwen, transport: transport)
+
+  // Off sends enable_thinking: false without reasoning_effort.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "qwen4-max",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "qwen")
+  )
+  let offBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let offRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: offBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(offRoot["enable_thinking"] == .bool(false))
+  #expect(offRoot["reasoning_effort"] == nil)
+
+  // Non-thinking coder model omits enable_thinking even if reasoning was passed.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "qwen3-coder-plus",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "qwen")
+  )
+  let coderBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let coderRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: coderBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(coderRoot["enable_thinking"] == nil)
+  #expect(coderRoot["reasoning_effort"] == nil)
+
+  // DashScope compatible-mode does not expose GET /models, so listModels returns curated seeds without a request.
+  let seedTransport = MockTransport()
+  let seedAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.qwen, transport: seedTransport
+  )
+  let models = try await seedAdapter.listModels(account: account(providerID: "qwen"))
+  #expect(models.map(\.id) == BuiltInProviders.qwen.seedModels.map(\.id))
+  #expect(await seedTransport.lastRequest() == nil)
+}

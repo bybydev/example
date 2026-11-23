@@ -618,8 +618,8 @@ enum ComposerTargetLabelFormatter {
     // Strip vendor metadata, not the distinctive model family. On OpenRouter,
     // for example, "Claude" or "DeepSeek" must remain in the visible name.
     for prefix in [
-      "Google DeepMind", "Meta AI", "Mistral AI", "Moonshot AI", "Zhipu AI", "OpenAI",
-      "Anthropic", "Google", "Meta", "Alibaba", "NVIDIA", "Moonshot", "Zhipu", "Z.ai",
+      "Google DeepMind", "Alibaba Cloud", "Meta AI", "Mistral AI", "Moonshot AI", "Zhipu AI",
+      "OpenAI", "Anthropic", "Google", "Meta", "Alibaba", "NVIDIA", "Moonshot", "Zhipu", "Z.ai",
     ] {
       if let stripped = removingPrefix(text, prefix) {
         text = stripped
@@ -655,12 +655,13 @@ enum ComposerTargetLabelFormatter {
     let familyNames: [String: String] = [
       "claude": "Claude", "sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku",
       "gemini": "Gemini", "deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "gpt-oss": "GPT-OSS",
-      "qwen": "Qwen",
+      "qwen": "Qwen", "qwq": "QwQ",
       "llama": "Llama", "mistral": "Mistral", "codestral": "Codestral",
       "devstral": "Devstral", "magistral": "Magistral", "ministral": "Ministral", "grok": "Grok",
       "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
       "flash": "Flash", "flashx": "FlashX", "air": "Air", "airx": "AirX",
-      "pro": "Pro", "highspeed": "Highspeed", "mini": "Mini", "nano": "Nano",
+      "pro": "Pro", "max": "Max", "plus": "Plus", "highspeed": "Highspeed",
+      "mini": "Mini", "nano": "Nano",
       "turbo": "Turbo", "lite": "Lite", "preview": "Preview", "instant": "Instant",
       "instruct": "Instruct", "reasoner": "Reasoner", "coder": "Coder",
       "chat": "Chat", "thinking": "Thinking", "sol": "Sol",
@@ -668,6 +669,9 @@ enum ComposerTargetLabelFormatter {
     return value.split(separator: " ").map { piece in
       let token = String(piece)
       if let styled = familyNames[token.lowercased()] { return styled }
+      if token.lowercased().hasPrefix("qwen"), token.dropFirst(4).first?.isNumber == true {
+        return "Qwen " + String(token.dropFirst(4))
+      }
       if token.hasPrefix("GLM-"), token.hasSuffix("v"),
         let beforeV = token.dropLast().last, beforeV.isNumber
       {
@@ -749,6 +753,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.zAIID: return "Z.ai"
     case BuiltInProviders.moonshotID: return "Moonshot"
     case BuiltInProviders.minimaxID: return "MiniMax"
+    case BuiltInProviders.qwenID: return "Qwen"
     case BuiltInProviders.mistralID: return "Mistral"
     case BuiltInProviders.groqID: return "Groq"
     case BuiltInProviders.anthropicID: return "Anthropic"

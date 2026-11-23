@@ -165,6 +165,27 @@ struct ModelCapabilityPolicyTests {
     #expect(m3.normalize(.init(enabled: false))?.enabled == false)
     #expect(m3.normalize(.init(enabled: true, effort: .high)) == nil)
 
+    let qwen4Max = ModelCapabilityResolver.reasoningControl(kind: .qwen, modelID: "qwen4-max")
+    #expect(
+      qwen4Max.choices == [.providerDefault, .off, .effort(.low), .effort(.high), .effort(.xhigh)]
+    )
+    #expect(qwen4Max.label(for: nil) == "Default (High)")
+    #expect(qwen4Max.normalize(.init(enabled: false))?.enabled == false)
+    #expect(qwen4Max.normalize(.init(enabled: true, effort: .xhigh))?.effort == .xhigh)
+    #expect(qwen4Max.normalize(.init(enabled: true, effort: .medium)) == nil)
+
+    let qwen38Flash = ModelCapabilityResolver.reasoningControl(kind: .qwen, modelID: "qwen3.8-flash")
+    #expect(
+      qwen38Flash.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high), .effort(.xhigh)]
+    )
+    #expect(qwen38Flash.label(for: nil) == "Default (Extra High)")
+    #expect(qwen38Flash.normalize(.init(enabled: false))?.enabled == false)
+
+    let qwenCoder = ModelCapabilityResolver.reasoningControl(kind: .qwen, modelID: "qwen3-coder-plus")
+    #expect(qwenCoder.kind == .unsupported)
+    #expect(qwenCoder.choices.isEmpty)
+
     let large4 = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "mistral-large-4-0")
     #expect(large4.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
     #expect(large4.label(for: nil) == "Default (High)")

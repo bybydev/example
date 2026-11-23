@@ -624,6 +624,9 @@ struct ProviderLogoCatalogTests {
       ProviderLogoCatalog.assetName(for: BuiltInProviders.minimax)
         == "provider.minimax")
     #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.qwen)
+        == "provider.qwen")
+    #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.mistral)
         == "provider.mistral")
     #expect(

@@ -97,7 +97,9 @@ enum ProviderLogoCatalog {
       hosts: ["api-inference.huggingface.co"]),
     .init("meta", aliases: ["meta", "meta-ai", "llama"]),
     .init("alibaba", aliases: ["alibaba", "alibaba-cloud"], hosts: ["dashscope.aliyuncs.com"]),
-    .init("qwen", aliases: ["qwen", "tongyi-qianwen"]),
+    .init(
+      "qwen", aliases: ["qwen", "alibaba-qwen", "tongyi-qianwen"],
+      hosts: ["dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"]),
     .init(
       "moonshot", aliases: ["moonshot", "moonshot-ai", "kimi"],
       hosts: ["api.moonshot.ai", "api.moonshot.cn"]),

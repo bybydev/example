@@ -9,8 +9,8 @@ import Testing
   #expect(
     Set(definitions.map(\.id))
       == [
-        "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "groq", "openrouter",
-        "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
+        "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "qwen", "mistral", "groq",
+        "openrouter", "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
       ]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
@@ -133,6 +133,33 @@ import Testing
   #expect(ProviderKind.minimax.defaultProviderID == "minimax")
   #expect(ProviderKind.minimax.logo == .brand(assetName: "provider.minimax"))
   #expect(ProviderKind.minimax.reasoningDefault == nil)
+
+  let qwen = try #require(definitions.first { $0.id == "qwen" })
+  #expect(
+    qwen.defaultBaseURL.absoluteString == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  )
+  #expect(qwen.apiFamily == .openAIChatCompletions)
+  #expect(qwen.behavior == .qwen)
+  #expect(qwen.authentication == .bearer)
+  #expect(qwen.modelsPath == nil)
+  #expect(qwen.chatCompletionsPath == "/chat/completions")
+  #expect(qwen.kind == .qwen)
+  #expect(!ProviderKind.qwen.supportsDiscovery)
+  #expect(
+    qwen.seedModels.map(\.id)
+      == ["qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3-coder-plus"]
+  )
+  let qwen4Max = try #require(qwen.seedModels.first)
+  #expect(qwen4Max.id == "qwen4-max")
+  #expect(qwen4Max.contextWindow == 1_000_000)
+  #expect(qwen4Max.maxOutputTokens == 393_216)
+  #expect(qwen4Max.inputModalities.contains("image"))
+  #expect(qwen4Max.supportedParameters.contains("tools"))
+
+  #expect(ProviderKind.catalog.contains(.qwen))
+  #expect(ProviderKind.qwen.defaultProviderID == "qwen")
+  #expect(ProviderKind.qwen.logo == .brand(assetName: "provider.qwen"))
+  #expect(ProviderKind.qwen.reasoningDefault == nil)
 
   let mistral = try #require(definitions.first { $0.id == "mistral" })
   #expect(mistral.defaultBaseURL.absoluteString == "https://api.mistral.ai/v1")

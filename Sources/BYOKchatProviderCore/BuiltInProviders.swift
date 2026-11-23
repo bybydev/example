@@ -7,6 +7,7 @@ public enum BuiltInProviders {
   public static let zAIID: ProviderID = "zai"
   public static let moonshotID: ProviderID = "moonshot"
   public static let minimaxID: ProviderID = "minimax"
+  public static let qwenID: ProviderID = "qwen"
   public static let mistralID: ProviderID = "mistral"
   public static let groqID: ProviderID = "groq"
   public static let openRouterID: ProviderID = "openrouter"
@@ -101,6 +102,20 @@ public enum BuiltInProviders {
       seedModels: ProviderKind.minimax.seedModels,
       isBuiltIn: true,
       kind: .minimax
+    )
+  }
+
+  public static var qwen: ProviderDefinition {
+    ProviderDefinition(
+      id: qwenID,
+      displayName: "Alibaba Qwen",
+      behavior: .qwen,
+      defaultBaseURL: URL(string: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")!,
+      modelsPath: nil,
+      authentication: .bearer,
+      seedModels: ProviderKind.qwen.seedModels,
+      isBuiltIn: true,
+      kind: .qwen
     )
   }
 
@@ -222,8 +237,8 @@ public enum BuiltInProviders {
 
   public static var all: [ProviderDefinition] {
     [
-      openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, groq, openRouter, nvidia, anthropic,
-      gemini, ollama, lmStudio,
+      openAI, xAI, deepSeek, zAI, moonshot, minimax, qwen, mistral, groq, openRouter, nvidia,
+      anthropic, gemini, ollama, lmStudio,
     ]
   }
 }
