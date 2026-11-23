@@ -216,6 +216,33 @@ struct ModelCapabilityPolicyTests {
     #expect(groqLlama.kind == .unsupported)
     #expect(groqLlama.choices.isEmpty)
 
+    let togetherGPTOSS = ModelCapabilityResolver.reasoningControl(
+      kind: .together, modelID: "openai/gpt-oss-120b"
+    )
+    #expect(togetherGPTOSS.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(togetherGPTOSS.label(for: nil) == "Default (Medium)")
+    #expect(togetherGPTOSS.normalize(.init(enabled: false)) == nil)
+    #expect(togetherGPTOSS.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let togetherKimi = ModelCapabilityResolver.reasoningControl(
+      kind: .together, modelID: "moonshotai/Kimi-K3.1-Pro"
+    )
+    #expect(togetherKimi.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(togetherKimi.label(for: nil) == "Default (High)")
+    #expect(togetherKimi.normalize(.init(enabled: false)) == nil)
+
+    let togetherDeepSeek = ModelCapabilityResolver.reasoningControl(
+      kind: .together, modelID: "deepseek-ai/DeepSeek-V4.1-Flash"
+    )
+    #expect(togetherDeepSeek.choices == [.providerDefault, .off, .on])
+    #expect(togetherDeepSeek.normalize(.init(enabled: false))?.enabled == false)
+
+    let togetherLlama = ModelCapabilityResolver.reasoningControl(
+      kind: .together, modelID: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    )
+    #expect(togetherLlama.kind == .unsupported)
+    #expect(togetherLlama.choices.isEmpty)
+
     let haiku55 = ModelCapabilityResolver.reasoningControl(kind: .anthropic, modelID: "claude-haiku-5-5")
     #expect(
       haiku55.choices

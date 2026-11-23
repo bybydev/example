@@ -10,7 +10,7 @@ import Testing
     Set(definitions.map(\.id))
       == [
         "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "qwen", "mistral", "groq",
-        "openrouter", "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
+        "together", "openrouter", "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
       ]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
@@ -209,6 +209,36 @@ import Testing
   #expect(ProviderKind.groq.defaultProviderID == "groq")
   #expect(ProviderKind.groq.logo == .brand(assetName: "provider.groq"))
   #expect(ProviderKind.groq.reasoningDefault == nil)
+
+  let together = try #require(definitions.first { $0.id == "together" })
+  #expect(together.defaultBaseURL.absoluteString == "https://api.together.ai/v1")
+  #expect(together.apiFamily == .openAIChatCompletions)
+  #expect(together.behavior == .together)
+  #expect(together.authentication == .bearer)
+  #expect(together.modelsPath == "/models")
+  #expect(together.chatCompletionsPath == "/chat/completions")
+  #expect(together.kind == .together)
+  #expect(ProviderKind.together.supportsDiscovery)
+  #expect(
+    together.seedModels.map(\.id)
+      == [
+        "deepseek-ai/DeepSeek-V4.1-Flash",
+        "deepseek-ai/DeepSeek-V4-Pro-0813",
+        "moonshotai/Kimi-K3.1-Pro",
+        "zai-org/GLM-5.3-Flash",
+        "openai/gpt-oss-120b",
+      ]
+  )
+  let togetherFlash = try #require(together.seedModels.first)
+  #expect(togetherFlash.id == "deepseek-ai/DeepSeek-V4.1-Flash")
+  #expect(togetherFlash.contextWindow == 1_000_000)
+  #expect(togetherFlash.inputModalities.contains("image"))
+  #expect(togetherFlash.supportedParameters.contains("tools"))
+
+  #expect(ProviderKind.catalog.contains(.together))
+  #expect(ProviderKind.together.defaultProviderID == "together")
+  #expect(ProviderKind.together.logo == .brand(assetName: "provider.together"))
+  #expect(ProviderKind.together.reasoningDefault == nil)
 
   let nvidia = try #require(definitions.first { $0.id == "nvidia" })
   #expect(nvidia.defaultBaseURL.absoluteString == "https://integrate.api.nvidia.com/v1")

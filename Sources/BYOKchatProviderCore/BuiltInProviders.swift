@@ -10,6 +10,7 @@ public enum BuiltInProviders {
   public static let qwenID: ProviderID = "qwen"
   public static let mistralID: ProviderID = "mistral"
   public static let groqID: ProviderID = "groq"
+  public static let togetherID: ProviderID = "together"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let ollamaID: ProviderID = "ollama"
@@ -147,6 +148,20 @@ public enum BuiltInProviders {
     )
   }
 
+  public static var together: ProviderDefinition {
+    ProviderDefinition(
+      id: togetherID,
+      displayName: "Together AI",
+      behavior: .together,
+      defaultBaseURL: URL(string: "https://api.together.ai/v1")!,
+      modelsPath: "/models",
+      authentication: .bearer,
+      seedModels: ProviderKind.together.seedModels,
+      isBuiltIn: true,
+      kind: .together
+    )
+  }
+
   public static var openRouter: ProviderDefinition {
     ProviderDefinition(
       id: openRouterID,
@@ -237,8 +252,8 @@ public enum BuiltInProviders {
 
   public static var all: [ProviderDefinition] {
     [
-      openAI, xAI, deepSeek, zAI, moonshot, minimax, qwen, mistral, groq, openRouter, nvidia,
-      anthropic, gemini, ollama, lmStudio,
+      openAI, xAI, deepSeek, zAI, moonshot, minimax, qwen, mistral, groq, together, openRouter,
+      nvidia, anthropic, gemini, ollama, lmStudio,
     ]
   }
 }

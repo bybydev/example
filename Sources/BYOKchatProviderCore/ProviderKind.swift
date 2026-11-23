@@ -18,6 +18,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case qwen
   case mistral
   case groq
+  case together
   case openRouter
   case nvidia
   case ollama
@@ -26,7 +27,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
 
   /// Cloud providers shown under the "Cloud Providers" group in pickers.
   public static var cloudCatalog: [ProviderKind] {
-    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .openRouter, .nvidia]
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .together, .openRouter, .nvidia]
   }
 
   /// Local and custom providers shown under the "Local & Custom" group in pickers.
@@ -55,6 +56,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     case .qwen: "qwen"
     case .mistral: "mistral"
     case .groq: "groq"
+    case .together: "together"
     case .openRouter: "openrouter"
     case .nvidia: "nvidia"
     case .ollama: "ollama"
@@ -129,6 +131,7 @@ public extension ProviderKind {
     case .qwen: "Alibaba Qwen"
     case .mistral: "Mistral AI"
     case .groq: "Groq"
+    case .together: "Together AI"
     case .openRouter: "OpenRouter"
     case .nvidia: "NVIDIA"
     case .ollama: "Ollama"
@@ -142,7 +145,7 @@ public extension ProviderKind {
     case .anthropic: .anthropicMessages
     case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .together, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -150,7 +153,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio: .bearer
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .together, .openRouter, .nvidia, .ollama, .lmStudio: .bearer
     case .openAICompatible: .userChoice
     }
   }
@@ -210,6 +213,7 @@ public extension ProviderKind {
     case .qwen: .fixed(chat: "/chat/completions", models: nil)
     case .mistral: .fixed(chat: "/chat/completions", models: "/models")
     case .groq: .fixed(chat: "/chat/completions", models: "/models")
+    case .together: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
     case .nvidia: .fixed(chat: "/chat/completions", models: "/models")
     case .ollama, .lmStudio: .fixed(chat: "/chat/completions", models: "/models")
@@ -240,6 +244,7 @@ public extension ProviderKind {
     case .qwen: .brand(assetName: "provider.qwen")
     case .mistral: .brand(assetName: "provider.mistral")
     case .groq: .brand(assetName: "provider.groq")
+    case .together: .brand(assetName: "provider.together")
     case .openRouter: .brand(assetName: "provider.openrouter")
     case .nvidia: .brand(assetName: "provider.nvidia")
     case .ollama: .brand(assetName: "provider.ollama")
@@ -254,14 +259,14 @@ public extension ProviderKind {
     switch self {
     case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
-    case .openai, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: nil
+    case .openai, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .together, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: nil
     }
   }
 
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .qwen, .mistral, .groq, .together, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .combined
     }
   }
 
@@ -409,6 +414,7 @@ public extension ProviderKind {
     case .qwen: URL(string: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
     case .mistral: URL(string: "https://api.mistral.ai/v1")
     case .groq: URL(string: "https://api.groq.com/openai/v1")
+    case .together: URL(string: "https://api.together.ai/v1")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
     case .nvidia: URL(string: "https://integrate.api.nvidia.com/v1")
     case .ollama: URL(string: "http://localhost:11434/v1")
@@ -429,6 +435,7 @@ public extension ProviderKind {
     case .qwen: .qwen
     case .mistral: .mistral
     case .groq: .groq
+    case .together: .together
     case .openRouter: .openRouter
     case .nvidia: .nvidia
     case .ollama, .lmStudio, .openAICompatible: .genericOpenAICompatible

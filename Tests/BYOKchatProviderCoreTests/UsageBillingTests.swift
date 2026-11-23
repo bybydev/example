@@ -292,6 +292,63 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   #expect(ModelPriceResolver.resolve(account: chinaAccount, modelID: "qwen4-max", model: nil) == nil)
 }
 
+@Test func togetherCatalogPricingResolvesVerifiedModelsAndLegacyHostAlias() throws {
+  let together = ProviderAccount(
+    kind: .together, id: "tg", providerID: "together", label: "Together AI"
+  )
+
+  let deepSeekFlash = try #require(
+    ModelPriceResolver.resolve(
+      account: together, modelID: "deepseek-ai/DeepSeek-V4.1-Flash", model: nil
+    )
+  )
+  #expect(deepSeekFlash.rates.input == "0.3")
+  #expect(deepSeekFlash.rates.output == "1.2")
+  #expect(deepSeekFlash.rates.cachedInput == "0.006")
+
+  let kimiPro = try #require(
+    ModelPriceResolver.resolve(account: together, modelID: "moonshotai/Kimi-K3.1-Pro", model: nil)
+  )
+  #expect(kimiPro.rates.input == "2")
+  #expect(kimiPro.rates.output == "10")
+  #expect(kimiPro.rates.cachedInput == "0.2")
+
+  let gptOSS = try #require(
+    ModelPriceResolver.resolve(account: together, modelID: "openai/gpt-oss-120b", model: nil)
+  )
+  #expect(gptOSS.rates.input == "0.15")
+  #expect(gptOSS.rates.output == "0.6")
+  #expect(gptOSS.rates.cachedInput == nil)
+
+  // Legacy api.together.xyz/v1 endpoint alias still resolves official Together serverless rates.
+  let legacyHost = ProviderAccount(
+    kind: .together,
+    id: "tg-xyz",
+    providerID: "together",
+    label: "Together Legacy",
+    baseURLOverride: URL(string: "https://api.together.xyz/v1")!
+  )
+  #expect(
+    ModelPriceResolver.resolve(
+      account: legacyHost, modelID: "deepseek-ai/DeepSeek-V4.1-Flash", model: nil
+    )?.rates.input == "0.3"
+  )
+
+  // Arbitrary proxy overrides must never inherit Together catalog rates.
+  let proxyAccount = ProviderAccount(
+    kind: .together,
+    id: "tg-proxy",
+    providerID: "together",
+    label: "Together Proxy",
+    baseURLOverride: URL(string: "https://proxy.example.test/v1")!
+  )
+  #expect(
+    ModelPriceResolver.resolve(
+      account: proxyAccount, modelID: "deepseek-ai/DeepSeek-V4.1-Flash", model: nil
+    ) == nil
+  )
+}
+
 @Test func geminiCurrentCatalogPricingResolvesAndRespectsExpiry() throws {
   let active = try #require(ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z"))
   let carbonExpiry = try #require(ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"))

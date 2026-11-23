@@ -265,6 +265,14 @@ public enum ModelPriceResolver {
       components.path = ""
       guard let url = components.url else { return nil }
       normalized = url
+    } else if account.kind == .together, configured.host?.lowercased() == "api.together.xyz" {
+      // Together AI serves the same serverless API on both api.together.ai and legacy api.together.xyz.
+      guard var components = URLComponents(url: configured, resolvingAgainstBaseURL: false) else {
+        return nil
+      }
+      components.host = "api.together.ai"
+      guard let url = components.url else { return nil }
+      normalized = url
     }
     guard sameEndpoint(normalized, endpoint) else { return nil }
     return snapshot.pricingEntry(provider: account.providerID.rawValue, modelID: modelID.rawValue)

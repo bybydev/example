@@ -326,6 +326,7 @@ extension ProviderDefinition {
     case .qwen: return .qwen
     case .mistral: return .mistral
     case .groq: return .groq
+    case .together: return .together
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

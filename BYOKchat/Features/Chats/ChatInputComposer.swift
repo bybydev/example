@@ -756,6 +756,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.qwenID: return "Qwen"
     case BuiltInProviders.mistralID: return "Mistral"
     case BuiltInProviders.groqID: return "Groq"
+    case BuiltInProviders.togetherID: return "Together"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     case BuiltInProviders.ollamaID: return "Ollama"

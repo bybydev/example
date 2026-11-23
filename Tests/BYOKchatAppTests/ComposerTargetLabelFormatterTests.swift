@@ -322,6 +322,39 @@ struct ComposerTargetLabelFormatterTests {
     #expect(llama == "Llama 3.1 8B Instant")
   }
 
+  @Test("Together AI models preserve vendor families and explicit reasoning choices")
+  func togetherLabels() {
+    let deepSeekOff = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.togetherID,
+      providerName: "Together AI",
+      modelName: "DeepSeek V4.1 Flash",
+      modelID: "deepseek-ai/DeepSeek-V4.1-Flash",
+      supportedParameters: ["reasoning"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(deepSeekOff == "DeepSeek V4.1 Flash · Off")
+
+    let kimiHigh = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.togetherID,
+      providerName: "Together AI",
+      modelName: "Kimi K3.1 Pro",
+      modelID: "moonshotai/Kimi-K3.1-Pro",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(kimiHigh == "Kimi K3.1 Pro · High")
+
+    let customFamily = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.togetherID,
+      providerName: "Together AI",
+      modelName: "Glimpse 1.0",
+      modelID: "elorian-labs/glimpse-1.0",
+      supportedParameters: ["tools"],
+      reasoning: nil
+    )
+    #expect(customFamily == "Together · Glimpse 1.0")
+  }
+
   @Test("Hyphenated custom provider name still strips duplicate prefix from normalized model")
   func hyphenatedCustomProviderPrefix() {
     let label = ComposerTargetLabelFormatter.make(

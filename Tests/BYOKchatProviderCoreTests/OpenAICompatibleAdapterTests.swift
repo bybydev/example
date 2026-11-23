@@ -1786,3 +1786,183 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   #expect(models.map(\.id) == BuiltInProviders.qwen.seedModels.map(\.id))
   #expect(await seedTransport.lastRequest() == nil)
 }
+
+@Test func togetherStreamSendsEffortAndReasoningToggleWithStreamUsage() async throws {
+  let stream = """
+    data: {"id":"t1","model":"openai/gpt-oss-120b","choices":[{"delta":{"reasoning":"Plan "},"finish_reason":null}]}
+
+    data: {"id":"t1","model":"openai/gpt-oss-120b","choices":[{"delta":{"content":"Done"},"finish_reason":"stop"}]}
+
+    data: {"id":"t1","model":"openai/gpt-oss-120b","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":24,"prompt_tokens_details":{"cached_tokens":60}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.together, transport: transport)
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "openai/gpt-oss-120b",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(temperature: 0.7, reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "together")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.together.ai/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["reasoning_effort"] == .string("high"))
+  #expect(root["reasoning"] == nil)
+  #expect(root["temperature"] == .number(0.7))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+
+  #expect(events.contains(.reasoningDelta("Plan ")))
+  #expect(events.contains(.textDelta("Done")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Plan ")
+  #expect(response.text == "Done")
+  #expect(response.usage?.inputTokens == 120)
+  #expect(response.usage?.outputTokens == 24)
+  #expect(response.usage?.cachedInputTokens == 60)
+
+  // Toggleable hybrid models send reasoning.enabled = false / true.
+  let toggleTransport = MockTransport(
+    data: Data(
+      #"{"id":"t2","model":"deepseek-ai/DeepSeek-V4.1-Flash","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+        .utf8
+    )
+  )
+  let toggleAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.together, transport: toggleTransport
+  )
+  _ = try await toggleAdapter.generate(
+    request: ProviderRequest(
+      model: "deepseek-ai/DeepSeek-V4.1-Flash",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "together")
+  )
+  let offBody = try #require(await toggleTransport.lastRequest()?.httpBody)
+  guard case .object(let offRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: offBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(offRoot["reasoning"] == .object(["enabled": .bool(false)]))
+  #expect(offRoot["reasoning_effort"] == nil)
+
+  _ = try await toggleAdapter.generate(
+    request: ProviderRequest(
+      model: "deepseek-ai/DeepSeek-V4.1-Flash",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true))
+    ),
+    account: account(providerID: "together")
+  )
+  let onBody = try #require(await toggleTransport.lastRequest()?.httpBody)
+  guard case .object(let onRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: onBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(onRoot["reasoning"] == .object(["enabled": .bool(true)]))
+  #expect(onRoot["reasoning_effort"] == nil)
+}
+
+@Test func togetherListModelsDecodesBareArrayFiltersNonChatAndConvertsPerMillionPricing() async throws {
+  let payload = """
+    [
+      {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "object": "model",
+        "display_name": "DeepSeek V4.1 Flash",
+        "type": "chat",
+        "context_length": 1000000,
+        "pricing": {
+          "input": 0.30,
+          "cached_input": 0.006,
+          "output": 1.20,
+          "hourly": 0,
+          "base": 0
+        }
+      },
+      {
+        "id": "dedicated/Custom-Chat",
+        "object": "model",
+        "display_name": "Dedicated Custom Chat",
+        "type": "chat",
+        "context_length": 65536,
+        "pricing": {
+          "input": 0,
+          "output": 0,
+          "hourly": 3.5
+        }
+      },
+      {
+        "id": "black-forest-labs/FLUX.1-schnell",
+        "object": "model",
+        "display_name": "FLUX.1 Schnell",
+        "type": "image"
+      },
+      {
+        "id": "BAAI/bge-large-en-v1.5",
+        "object": "model",
+        "display_name": "BGE Large",
+        "type": "embedding"
+      },
+      {
+        "id": "meta-llama/Meta-Llama-3-8B",
+        "object": "model",
+        "display_name": "Llama 3 8B Base",
+        "type": "language"
+      }
+    ]
+    """
+  let transport = MockTransport(data: Data(payload.utf8))
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.together, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "together"))
+
+  let ids = Set(models.map(\.id))
+  #expect(ids.contains("deepseek-ai/DeepSeek-V4.1-Flash"))
+  #expect(ids.contains("dedicated/Custom-Chat"))
+  #expect(!ids.contains("black-forest-labs/FLUX.1-schnell"))
+  #expect(!ids.contains("BAAI/bge-large-en-v1.5"))
+  #expect(!ids.contains("meta-llama/Meta-Llama-3-8B"))
+
+  let flash = try #require(models.first { $0.id == "deepseek-ai/DeepSeek-V4.1-Flash" })
+  #expect(flash.displayName == "DeepSeek V4.1 Flash")
+  #expect(flash.contextWindow == 1_000_000)
+  #expect(flash.inputModalities.contains("image"))
+  #expect(flash.supportedParameters.contains("tools"))
+  let resolvedPrice = try #require(
+    ModelPriceResolver.resolve(
+      account: ProviderAccount(kind: .together, id: "tg", providerID: "together", label: "Together AI"),
+      modelID: flash.id,
+      model: flash
+    )
+  )
+  #expect(resolvedPrice.source == "providerModelAPI")
+  #expect(resolvedPrice.rates.input == "0.3")
+  #expect(resolvedPrice.rates.output == "1.2")
+  #expect(resolvedPrice.rates.cachedInput == "0.006")
+
+  let dedicated = try #require(models.first { $0.id == "dedicated/Custom-Chat" })
+  #expect(dedicated.promptPricePerToken == nil)
+  #expect(dedicated.completionPricePerToken == nil)
+
+  let req = try #require(await transport.lastRequest())
+  #expect(req.url?.absoluteString == "https://api.together.ai/v1/models")
+}

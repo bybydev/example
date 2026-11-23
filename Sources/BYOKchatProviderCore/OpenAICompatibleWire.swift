@@ -476,10 +476,27 @@ struct ProviderValidationErrorWire: Decodable {
     return "\(path.joined(separator: ".")): \(msg)"
   }
 }
-struct ModelsResponse: Decodable { var data: [ModelWire] }
+struct ModelsResponse: Decodable {
+  var data: [ModelWire]
+
+  private enum CodingKeys: String, CodingKey { case data }
+
+  init(from decoder: Decoder) throws {
+    if let container = try? decoder.container(keyedBy: CodingKeys.self),
+      let list = try? container.decode([ModelWire].self, forKey: .data)
+    {
+      data = list
+      return
+    }
+    let singleValue = try decoder.singleValueContainer()
+    data = try singleValue.decode([ModelWire].self)
+  }
+}
 struct ModelWire: Decodable {
   var id: String
   var name: String?
+  var displayName: String?
+  var type: String?
   var active: Bool?
   var contextLength: Int?
   var maxContextLength: Int?
@@ -497,7 +514,8 @@ struct ModelWire: Decodable {
   var capabilities: ModelCapabilitiesWire?
   var archived: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, name, active, architecture, pricing, capabilities, archived, effort, reasoning
+    case id, name, type, active, architecture, pricing, capabilities, archived, effort, reasoning
+    case displayName = "display_name"
     case contextLength = "context_length"
     case maxContextLength = "max_context_length"
     case contextWindow = "context_window"
@@ -562,6 +580,10 @@ struct PricingWire: Decodable {
   var completion: String?
   var cachedInput: String?
   var cacheWrite: String?
+  var inputPerMillion: BillingAmountWire?
+  var outputPerMillion: BillingAmountWire?
+  var cachedInputPerMillion: BillingAmountWire?
+  var hourly: BillingAmountWire?
   var request: String?
   var image: String?
   var imageOutput: String?
@@ -573,7 +595,10 @@ struct PricingWire: Decodable {
     return extra.contains { (ChatBilling.decimal($0) ?? -1) != 0 } ? true : nil
   }
   enum CodingKeys: String, CodingKey {
-    case prompt, completion, request, image, audio
+    case prompt, completion, hourly, request, image, audio
+    case inputPerMillion = "input"
+    case outputPerMillion = "output"
+    case cachedInputPerMillion = "cached_input"
     case imageOutput = "image_output"
     case webSearch = "web_search"
     case internalReasoning = "internal_reasoning"

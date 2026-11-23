@@ -46,6 +46,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     } else if definition.behavior == .deepSeek
       || definition.behavior == .openRouter
       || definition.behavior == .nvidia
+      || definition.behavior == .together
     {
       probeReasoning = nil
       probeMaxTokens = 1_024
@@ -100,6 +101,15 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       wire.active == false || !Self.isLikelyGroqChatModel(id: wire.id)
     {
       return nil
+    }
+    if definition.behavior == .together {
+      if let type = wire.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        !type.isEmpty
+      {
+        guard type == "chat" else { return nil }
+      } else if !Self.isLikelyTogetherChatModel(id: wire.id) {
+        return nil
+      }
     }
     var evidence = ModelCapabilityEvidence()
     // OpenRouter and DeepSeek supply exhaustive modality lists when present.
@@ -226,19 +236,47 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     }
     if contextWindow != nil { evidence.contextWindowSource = .discovery }
     if outputLimit != nil { evidence.maxOutputTokensSource = .discovery }
+    let resolvedDisplayName: String = {
+      if let displayName = wire.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !displayName.isEmpty
+      {
+        return displayName
+      }
+      if let name = wire.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+        return name
+      }
+      return wire.id
+    }()
+    var promptPricePerToken = wire.pricing?.prompt
+    var completionPricePerToken = wire.pricing?.completion
+    var cachedInputPricePerToken = wire.pricing?.cachedInput
+    if definition.behavior == .together, let pricing = wire.pricing,
+      (pricing.hourly?.value ?? 0) == 0,
+      ((pricing.inputPerMillion?.value ?? 0) > 0 || (pricing.outputPerMillion?.value ?? 0) > 0)
+    {
+      if promptPricePerToken == nil, let input = pricing.inputPerMillion?.value {
+        promptPricePerToken = ChatBilling.decimalString(input / 1_000_000)
+      }
+      if completionPricePerToken == nil, let output = pricing.outputPerMillion?.value {
+        completionPricePerToken = ChatBilling.decimalString(output / 1_000_000)
+      }
+      if cachedInputPricePerToken == nil, let cached = pricing.cachedInputPerMillion?.value {
+        cachedInputPricePerToken = ChatBilling.decimalString(cached / 1_000_000)
+      }
+    }
     return ProviderModel(
       providerID: definition.id,
       id: ModelID(rawValue: wire.id),
-      displayName: wire.name ?? wire.id,
+      displayName: resolvedDisplayName,
       contextWindow: contextWindow,
       maxOutputTokens: outputLimit,
       supportedParameters: supportedParameters,
       inputModalities: inputModalities,
       outputModalities: Set(rawOutputModalities ?? ["text"]),
-      promptPricePerToken: wire.pricing?.prompt,
-      completionPricePerToken: wire.pricing?.completion,
+      promptPricePerToken: promptPricePerToken,
+      completionPricePerToken: completionPricePerToken,
       capabilityEvidence: evidence,
-      cachedInputPricePerToken: wire.pricing?.cachedInput,
+      cachedInputPricePerToken: cachedInputPricePerToken,
       cacheWritePricePerToken: wire.pricing?.cacheWrite,
       hasAdditionalPricingDimensions: wire.pricing?.hasAdditionalPricingDimensions
     )
@@ -610,6 +648,24 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
     )
     let nonChatTokens: Set<String> = ["tts", "asr", "stt"]
+    return tokens.isDisjoint(with: nonChatTokens)
+  }
+
+  /// Fallback filter for Together AI model entries that omit the `type` field.
+  private static func isLikelyTogetherChatModel(id: String) -> Bool {
+    let lowered = id.lowercased()
+    let nonChatSubstrings = [
+      "whisper", "flux", "stable-diffusion", "m2-bert", "uae-large",
+      "embed", "rerank", "moderation", "llama-guard", "virtueguard",
+      "cartesia", "kokoro", "orpheus",
+    ]
+    if nonChatSubstrings.contains(where: { lowered.contains($0) }) {
+      return false
+    }
+    let tokens = Set(
+      lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
+    )
+    let nonChatTokens: Set<String> = ["tts", "asr", "stt", "bge", "sdxl"]
     return tokens.isDisjoint(with: nonChatTokens)
   }
 }

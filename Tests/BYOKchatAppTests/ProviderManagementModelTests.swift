@@ -633,6 +633,9 @@ struct ProviderLogoCatalogTests {
       ProviderLogoCatalog.assetName(for: BuiltInProviders.groq)
         == "provider.groq")
     #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.together)
+        == "provider.together")
+    #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.ollama)
         == "provider.ollama")
     #expect(

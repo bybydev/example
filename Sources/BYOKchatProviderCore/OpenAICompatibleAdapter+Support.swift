@@ -240,6 +240,19 @@ extension OpenAICompatibleAdapter {
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])
       }
+    case .together:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["reasoning"] = .object(["enabled": .bool(false)])
+        } else if let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        } else if reasoning.enabled == true {
+          body["reasoning"] = .object(["enabled": .bool(true)])
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .openRouter:
       if let reasoning = request.options.reasoning {
         var object: [String: JSONValue] = [:]

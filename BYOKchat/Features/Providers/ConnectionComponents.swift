@@ -69,7 +69,9 @@ enum ProviderLogoCatalog {
     .init("cohere", aliases: ["cohere"], hosts: ["api.cohere.com"]),
     .init("ai21", aliases: ["ai21", "ai21-labs"], hosts: ["api.ai21.com"]),
     .init("groq", aliases: ["groq", "groqcloud"], hosts: ["api.groq.com"]),
-    .init("together", aliases: ["together", "together-ai"], hosts: ["api.together.xyz"]),
+    .init(
+      "together", aliases: ["together", "together-ai"],
+      hosts: ["api.together.ai", "api.together.xyz"]),
     .init("fireworks", aliases: ["fireworks", "fireworks-ai"], hosts: ["api.fireworks.ai"]),
     .init("cerebras", aliases: ["cerebras"], hosts: ["api.cerebras.ai"]),
     .init("perplexity", aliases: ["perplexity", "pplx"], hosts: ["api.perplexity.ai"]),

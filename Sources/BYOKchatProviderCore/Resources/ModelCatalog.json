@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 2026112303,
+  "revision": 2026112304,
   "version": "2026-11-23",
   "generatedAt": "2026-11-23T00:00:00Z",
   "providers": {
@@ -971,6 +971,107 @@
           },
           "control": {
             "kind": "unsupported",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "together": {
+      "models": [
+        {
+          "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "displayName": "DeepSeek V4.1 Flash",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+          "displayName": "DeepSeek V4 Pro",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "moonshotai/Kimi-K3.1-Pro",
+          "displayName": "Kimi K3.1 Pro",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "zai-org/GLM-5.3-Flash",
+          "displayName": "GLM-5.3 Flash",
+          "contextWindow": 1048575,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "displayName": "GPT-OSS 120B",
+          "contextWindow": 131072,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "containsAny": ["qwen3-coder", "qwen-coder", "llama-3", "llama-4"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["gpt-oss"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["kimi-k3", "glm-5.3", "minimax-m3.1"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["deepseek-v4", "deepseek-v3.1", "deepseek-v3.2", "glm-5", "glm-4.7", "qwen4", "qwen3.8", "qwen3.6", "qwen3.5", "qwen3-"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["deepseek-r1", "qwq"]
+          },
+          "control": {
+            "kind": "fixed",
             "allowsOff": false
           }
         }
@@ -2204,6 +2305,109 @@
         "rates": {
           "input": "0.8",
           "output": "4"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "deepseek-ai/DeepSeek-V4.1-Flash"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.3",
+          "output": "1.2",
+          "cachedInput": "0.006"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "deepseek-ai/DeepSeek-V4-Pro-0813"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "1.32",
+          "output": "3.96",
+          "cachedInput": "0.13"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "moonshotai/Kimi-K3.1-Pro"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.2"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "moonshotai/Kimi-K3"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "3",
+          "output": "15",
+          "cachedInput": "0.3"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "zai-org/GLM-5.3"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "1.4",
+          "output": "4.4",
+          "cachedInput": "0.26"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "zai-org/GLM-5.3-Flash"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.15",
+          "output": "0.5",
+          "cachedInput": "0.03"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "openai/gpt-oss-120b"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6"
+        }
+      },
+      {
+        "provider": "together",
+        "modelIDs": [
+          "MiniMaxAI/MiniMax-M3.1-Flash"
+        ],
+        "sourceURL": "https://docs.together.ai/docs/serverless-models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6",
+          "cachedInput": "0.015"
         }
       },
       {
