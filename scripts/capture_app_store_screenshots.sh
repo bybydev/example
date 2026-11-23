@@ -56,14 +56,26 @@ OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/AppStore/Screenshots/${RUN_SLUG}}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-${BUILD_DIR}/DerivedData}"
 SOURCE_PACKAGES_PATH="${SOURCE_PACKAGES_PATH:-}"
 
-# Resolve exact iOS runtime matching the requested major version (fail fast if unavailable).
-RUNTIME_ID="$(
-  xcrun simctl list runtimes -j | python3 -c '
-import json, sys
-target_major = sys.argv[1]
-data = json.load(sys.stdin)
-matches = []
-for runtime in data.get("runtimes", []):
+# Resolve matching iOS runtime + simulator for the requested phone & major iOS version.
+# Note: Xcode 27+ can ship multiple runtimes with the same version (e.g. standard
+# `iOS-27-2` alongside device-specific `iOS-27-2-iPhone19-4` for iPhone Duo), so we
+# match runtime + device together using available devices and `supportedDeviceTypes`.
+RESOLUTION="$(
+  python3 -c '
+import json, subprocess, sys
+
+target_major, device_name = sys.argv[1], sys.argv[2]
+
+def simctl_json(*args):
+    out = subprocess.check_output(["xcrun", "simctl", *args, "-j"], text=True)
+    return json.loads(out)
+
+runtimes_data = simctl_json("list", "runtimes")
+devices_data = simctl_json("list", "devices", "available")
+devicetypes_data = simctl_json("list", "devicetypes")
+
+candidates = []
+for runtime in runtimes_data.get("runtimes", []):
     if not runtime.get("isAvailable", False):
         continue
     identifier = runtime.get("identifier", "")
@@ -73,58 +85,105 @@ for runtime in data.get("runtimes", []):
         continue
     if version == target_major or version.startswith(target_major + "."):
         parts = tuple(int(p) for p in version.split(".") if p.isdigit())
-        matches.append((parts, identifier))
-matches.sort(reverse=True)
-print(matches[0][1] if matches else "")
-' "${IOS_VERSION}"
+        # Prefer highest minor version, and standard runtimes (shorter identifier) over device-specific suffixes on ties.
+        candidates.append((parts, -len(identifier), identifier, runtime))
+
+if not candidates:
+    print("NO_RUNTIME")
+    sys.exit(0)
+
+candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+# 1. Prefer an existing available simulator matching the exact device name in the best compatible runtime.
+all_devices = devices_data.get("devices", {})
+for _, _, runtime_id, _ in candidates:
+    for device in all_devices.get(runtime_id, []):
+        if device.get("isAvailable", False) and device.get("name") == device_name:
+            udid = device["udid"]
+            print(f"EXISTING|{runtime_id}|{udid}")
+            sys.exit(0)
+
+# 2. Otherwise look up the exact device type and pick a runtime that explicitly supports it.
+device_type_id = next(
+    (dt["identifier"] for dt in devicetypes_data.get("devicetypes", []) if dt.get("name") == device_name),
+    ""
+)
+if not device_type_id:
+    print("NO_DEVICETYPE|" + ",".join(item[2] for item in candidates))
+    sys.exit(0)
+
+compatible_runtimes = []
+for _, _, runtime_id, runtime in candidates:
+    supported = runtime.get("supportedDeviceTypes")
+    if supported:
+        supported_ids = {dt.get("identifier") for dt in supported}
+        supported_names = {dt.get("name") for dt in supported}
+        if device_type_id in supported_ids or device_name in supported_names:
+            compatible_runtimes.append(runtime_id)
+    else:
+        compatible_runtimes.append(runtime_id)
+
+if not compatible_runtimes:
+    print("INCOMPATIBLE|" + ",".join(item[2] for item in candidates))
+    sys.exit(0)
+
+print("CREATE|" + device_type_id + "|" + ",".join(compatible_runtimes))
+' "${IOS_VERSION}" "${PHONE}"
 )"
 
-if [[ -z "${RUNTIME_ID}" ]]; then
-  echo "error: no available iOS ${IOS_VERSION} simulator runtime found on this machine." >&2
-  echo "Available runtimes:" >&2
-  xcrun simctl list runtimes >&2
-  exit 1
-fi
-
-# Resolve exact device within that runtime; create it if the device type exists and is supported by this runtime.
-SIMULATOR_UDID="$(
-  xcrun simctl list devices available -j | python3 -c '
-import json, sys
-runtime_id, device_name = sys.argv[1], sys.argv[2]
-data = json.load(sys.stdin)
-devices = data.get("devices", {}).get(runtime_id, [])
-match = next((d["udid"] for d in devices if d.get("isAvailable", False) and d.get("name") == device_name), "")
-print(match)
-' "${RUNTIME_ID}" "${PHONE}"
-)"
-
+IFS="|" read -r RES_KIND RES_A RES_B <<< "${RESOLUTION}"
 CREATED_SIMULATOR=false
-if [[ -z "${SIMULATOR_UDID}" ]]; then
-  DEVICE_TYPE_ID="$(
-    xcrun simctl list devicetypes -j | python3 -c '
-import json, sys
-device_name = sys.argv[1]
-data = json.load(sys.stdin)
-match = next((dt["identifier"] for dt in data.get("devicetypes", []) if dt.get("name") == device_name), "")
-print(match)
-' "${PHONE}"
-  )"
+RUNTIME_ID=""
+SIMULATOR_UDID=""
 
-  if [[ -z "${DEVICE_TYPE_ID}" ]]; then
+case "${RES_KIND}" in
+  EXISTING)
+    RUNTIME_ID="${RES_A}"
+    SIMULATOR_UDID="${RES_B}"
+    ;;
+  CREATE)
+    DEVICE_TYPE_ID="${RES_A}"
+    IFS="," read -r -a COMPATIBLE_RUNTIMES <<< "${RES_B}"
+    LAST_ERR=""
+    for candidate_runtime in "${COMPATIBLE_RUNTIMES[@]}"; do
+      if created_udid="$(xcrun simctl create "${PHONE}" "${DEVICE_TYPE_ID}" "${candidate_runtime}" 2>&1)"; then
+        RUNTIME_ID="${candidate_runtime}"
+        SIMULATOR_UDID="${created_udid}"
+        CREATED_SIMULATOR=true
+        break
+      else
+        LAST_ERR="${created_udid}"
+      fi
+    done
+    if [[ -z "${SIMULATOR_UDID}" ]]; then
+      echo "error: combination '${PHONE}' + iOS ${IOS_VERSION} is not supported: ${LAST_ERR}" >&2
+      echo "Checked runtimes: ${RES_B}" >&2
+      exit 1
+    fi
+    ;;
+  NO_RUNTIME)
+    echo "error: no available iOS ${IOS_VERSION} simulator runtime found on this machine." >&2
+    echo "Available runtimes:" >&2
+    xcrun simctl list runtimes >&2
+    exit 1
+    ;;
+  NO_DEVICETYPE)
     echo "error: simulator device type '${PHONE}' is not supported by this Xcode installation." >&2
     echo "Available iPhone device types:" >&2
     xcrun simctl list devicetypes | grep -i "iPhone" >&2 || true
-    echo "Available devices for ${RUNTIME_ID}:" >&2
-    xcrun simctl list devices available "${RUNTIME_ID}" >&2 || true
     exit 1
-  fi
-
-  if ! SIMULATOR_UDID="$(xcrun simctl create "${PHONE}" "${DEVICE_TYPE_ID}" "${RUNTIME_ID}" 2>&1)"; then
-    echo "error: combination '${PHONE}' + '${RUNTIME_ID}' is not supported: ${SIMULATOR_UDID}" >&2
+    ;;
+  INCOMPATIBLE)
+    echo "error: combination '${PHONE}' + iOS ${IOS_VERSION} is not supported by any available iOS ${IOS_VERSION} runtime (${RES_A})." >&2
+    echo "Available iPhone devices:" >&2
+    xcrun simctl list devices available | grep -E "^-- iOS ${IOS_VERSION}|iPhone" >&2 || true
     exit 1
-  fi
-  CREATED_SIMULATOR=true
-fi
+    ;;
+  *)
+    echo "error: unexpected simulator resolution output: ${RESOLUTION}" >&2
+    exit 1
+    ;;
+esac
 
 echo "Selected runtime: ${RUNTIME_ID}"
 echo "Selected device:  ${PHONE} (${SIMULATOR_UDID})"
