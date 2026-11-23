@@ -7,8 +7,11 @@ on:
         description: iPhone simulator model
         required: true
         type: choice
-        default: iPhone 18 Pro Max
+        default: iPhone 17 Pro Max
         options:
+          - iPhone 17
+          - iPhone 17 Pro
+          - iPhone 17 Pro Max
           - iPhone 18 Pro
           - iPhone 18 Pro Max
           - iPhone Duo
@@ -55,7 +58,7 @@ concurrency:
 jobs:
   screenshots:
     name: Capture raw iOS screenshots
-    runs-on: ${{ inputs.ios_version == '27' && 'macos-27' || 'macos-26' }}
+    runs-on: ${{ inputs.ios_version == '27' && 'xcode-27' || 'macos-26' }}
     timeout-minutes: 60
 
     steps:

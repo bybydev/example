@@ -3,16 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PHONE="${PHONE:-iPhone 18 Pro Max}"
+PHONE="${PHONE:-iPhone 17 Pro Max}"
 IOS_VERSION="${IOS_VERSION:-26}"
 THEME="${THEME:-midnight}"
 ORIENTATION="${ORIENTATION:-portrait}"
 PRESET="${PRESET:-showcase}"
 
 case "${PHONE}" in
-  "iPhone 18 Pro"|"iPhone 18 Pro Max"|"iPhone Duo") ;;
+  "iPhone 17"|"iPhone 17 Pro"|"iPhone 17 Pro Max"|"iPhone 18 Pro"|"iPhone 18 Pro Max"|"iPhone Duo") ;;
   *)
-    echo "error: unsupported phone '${PHONE}'. Expected one of: 'iPhone 18 Pro', 'iPhone 18 Pro Max', 'iPhone Duo'." >&2
+    echo "error: unsupported phone '${PHONE}'. Expected one of: 'iPhone 17', 'iPhone 17 Pro', 'iPhone 17 Pro Max', 'iPhone 18 Pro', 'iPhone 18 Pro Max', 'iPhone Duo'." >&2
     exit 1
     ;;
 esac
@@ -112,8 +112,10 @@ print(match)
 
   if [[ -z "${DEVICE_TYPE_ID}" ]]; then
     echo "error: simulator device type '${PHONE}' is not supported by this Xcode installation." >&2
+    echo "Available iPhone device types:" >&2
+    xcrun simctl list devicetypes | grep -i "iPhone" >&2 || true
     echo "Available devices for ${RUNTIME_ID}:" >&2
-    xcrun simctl list devices available "${RUNTIME_ID}" >&2
+    xcrun simctl list devices available "${RUNTIME_ID}" >&2 || true
     exit 1
   fi
 
