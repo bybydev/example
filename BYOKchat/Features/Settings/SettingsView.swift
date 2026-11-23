@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
   @Bindable var model: AppModel
   let purchases: BYOKPurchaseStore
+  var restartApp: () -> Void = {}
 
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
@@ -264,7 +265,13 @@ struct SettingsView: View {
       #if DEBUG
       Section("Developer") {
         NavigationLink {
-          BYOKDeveloperToolsView(purchases: purchases)
+          BYOKDeveloperToolsView(
+            purchases: purchases,
+            restartApp: {
+              dismiss()
+              restartApp()
+            }
+          )
         } label: {
           Label("Developer Tools", systemImage: "hammer")
         }

@@ -1,0 +1,263 @@
+name: Screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      phone:
+        description: iPhone simulator model
+        required: true
+        type: choice
+        default: iPhone 18 Pro Max
+        options:
+          - iPhone 18 Pro
+          - iPhone 18 Pro Max
+          - iPhone Duo
+      theme:
+        description: App theme
+        required: true
+        type: choice
+        default: midnight
+        options:
+          - midnight
+          - aubergine
+          - obsidian
+          - evergreen
+          - velvet
+          - daylight
+          - paper
+          - iris
+          - sage
+          - sakura
+      ios_version:
+        description: Simulator iOS version
+        required: true
+        type: choice
+        default: "26"
+        options:
+          - "26"
+          - "27"
+      orientation:
+        description: Device orientation
+        required: true
+        type: choice
+        default: portrait
+        options:
+          - portrait
+          - landscape
+
+permissions:
+  contents: write
+
+concurrency:
+  group: byokchat-screenshots-${{ github.repository }}-${{ inputs.phone }}-${{ inputs.ios_version }}-${{ inputs.theme }}-${{ inputs.orientation }}
+  cancel-in-progress: false
+
+jobs:
+  screenshots:
+    name: Capture raw iOS screenshots
+    runs-on: ${{ inputs.ios_version == '27' && 'macos-27' || 'macos-26' }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Authenticate private GitHub repositories (if configured)
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PRIVATE_REPO_TOKEN" ]]; then
+            echo "PRIVATE_REPO_TOKEN is not configured; skipping private repository authentication."
+            exit 0
+          fi
+          git config --global \
+            url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      - name: Select Xcode with iOS ${{ inputs.ios_version }} simulator runtime
+        id: xcode
+        env:
+          TARGET_IOS_VERSION: ${{ inputs.ios_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SELECTED_DEVELOPER_DIR=""
+
+          check_xcode() {
+            local dev_dir="$1"
+            [[ -d "$dev_dir" ]] || return 1
+            local matched
+            matched="$(
+              DEVELOPER_DIR="$dev_dir" xcrun simctl list runtimes -j 2>/dev/null | python3 -c '
+import json, sys
+target = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+for runtime in data.get("runtimes", []):
+    if not runtime.get("isAvailable", False):
+        continue
+    identifier = runtime.get("identifier", "")
+    platform = runtime.get("platform", "")
+    version = str(runtime.get("version", ""))
+    if platform != "iOS" and "iOS" not in identifier:
+        continue
+    if version == target or version.startswith(target + "."):
+        print(identifier)
+        sys.exit(0)
+print("")
+' "$TARGET_IOS_VERSION"
+            )"
+            [[ -n "$matched" ]]
+          }
+
+          ACTIVE_DIR="$(xcode-select -p)"
+          if check_xcode "$ACTIVE_DIR"; then
+            SELECTED_DEVELOPER_DIR="$ACTIVE_DIR"
+          else
+            for app in /Applications/Xcode*.app; do
+              [[ -d "$app/Contents/Developer" ]] || continue
+              if check_xcode "$app/Contents/Developer"; then
+                SELECTED_DEVELOPER_DIR="$app/Contents/Developer"
+                break
+              fi
+            done
+          fi
+
+          if [[ -z "$SELECTED_DEVELOPER_DIR" ]]; then
+            echo "error: no installed Xcode on this runner has an available iOS $TARGET_IOS_VERSION simulator runtime." >&2
+            ls -d /Applications/Xcode*.app >&2 || true
+            xcrun simctl list runtimes >&2 || true
+            exit 1
+          fi
+
+          echo "DEVELOPER_DIR=$SELECTED_DEVELOPER_DIR" >> "$GITHUB_ENV"
+          echo "Using DEVELOPER_DIR=$SELECTED_DEVELOPER_DIR"
+
+      - name: Show selection and toolchain
+        env:
+          PHONE: ${{ inputs.phone }}
+          THEME: ${{ inputs.theme }}
+          IOS_VERSION: ${{ inputs.ios_version }}
+          ORIENTATION: ${{ inputs.orientation }}
+        run: |
+          echo "Phone:       $PHONE"
+          echo "Theme:       $THEME"
+          echo "iOS Version: $IOS_VERSION"
+          echo "Orientation: $ORIENTATION"
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+          xcrun simctl list runtimes
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache Swift package sources
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/BYOKchat-SourcePackages
+          key: byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'Package.swift') }}
+          restore-keys: |
+            byokchat-source-packages-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Set screenshot release metadata
+        id: release
+        env:
+          PHONE: ${{ inputs.phone }}
+          THEME: ${{ inputs.theme }}
+          IOS_VERSION: ${{ inputs.ios_version }}
+          ORIENTATION: ${{ inputs.orientation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          phone_slug="$(echo "$PHONE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+          tag="screenshots-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          slug="${phone_slug}-ios${IOS_VERSION}-${THEME}-${ORIENTATION}"
+          title="Screenshots · ${PHONE} · iOS ${IOS_VERSION} · ${THEME} · ${ORIENTATION}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Capture raw screenshots
+        env:
+          PHONE: ${{ inputs.phone }}
+          THEME: ${{ inputs.theme }}
+          IOS_VERSION: ${{ inputs.ios_version }}
+          ORIENTATION: ${{ inputs.orientation }}
+          PRESET: showcase
+          OUTPUT_DIR: ${{ runner.temp }}/screenshots/${{ steps.release.outputs.slug }}
+          BUILD_DIR: ${{ runner.temp }}/BYOKchat-screenshots-build
+          DERIVED_DATA_PATH: ${{ runner.temp }}/BYOKchat-screenshots-derived
+          SOURCE_PACKAGES_PATH: ${{ runner.temp }}/BYOKchat-SourcePackages
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/capture_app_store_screenshots.sh
+          ./scripts/capture_app_store_screenshots.sh
+
+      - name: Package raw screenshots archive
+        env:
+          SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots/${{ steps.release.outputs.slug }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RUN_SLUG: ${{ steps.release.outputs.slug }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          archive="artifacts/BYOKchat-screenshots-${RUN_SLUG}-${RELEASE_TAG}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$SCREENSHOTS_DIR" "$archive"
+          test -s "$archive"
+
+          png_count="$(unzip -Z1 "$archive" | grep -c '\.png$')"
+          echo "Packaged $png_count PNG screenshots in $archive"
+          if [[ "$png_count" -ne 16 ]]; then
+            echo "error: expected 16 PNG screenshots in $archive, found $png_count" >&2
+            unzip -Z1 "$archive" >&2
+            exit 1
+          fi
+
+          bytes="$(stat -f%z "$archive")"
+          if (( bytes >= 2147483648 )); then
+            echo "error: $archive is too large for a GitHub Release asset" >&2
+            exit 1
+          fi
+          ls -lh artifacts
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+          RELEASE_SHA: ${{ steps.release.outputs.release_sha }}
+          PHONE: ${{ inputs.phone }}
+          THEME: ${{ inputs.theme }}
+          IOS_VERSION: ${{ inputs.ios_version }}
+          ORIENTATION: ${{ inputs.orientation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES="$(cat <<EOF
+          Raw iOS screenshots captured from \`${RELEASE_SHA}\`.
+
+          - **Phone:** ${PHONE}
+          - **iOS:** ${IOS_VERSION}
+          - **Theme:** ${THEME}
+          - **Orientation:** ${ORIENTATION}
+          EOF
+          )"
+          gh release create "$RELEASE_TAG" artifacts/*.zip \
+            --target "$RELEASE_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes "$NOTES" \
+            --prerelease

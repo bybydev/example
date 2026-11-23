@@ -24,6 +24,15 @@ final class AppBootstrapController {
 
     do {
       state = .loading(.preparingStorage)
+      #if DEBUG
+      if let seedConfig = BYOKSeedLaunchOptions.consumePendingLaunchSeed() {
+        try await BYOKSeedDataService.seedStorage(
+          seedConfig,
+          environment: model.storageEnvironment,
+          telemetryRecorder: model.telemetryRecorder
+        )
+      }
+      #endif
       try await AppStorageBootstrap.prepare(environment: model.storageEnvironment)
 
       // Index first: stores read blob metadata (sizes) during their loads.
@@ -231,11 +240,14 @@ enum AppStorageBootstrap {
 
   static func resetLocalData(
     environment: BYOKStorageEnvironment = AppStorageEnvironment.current,
-    telemetryRecorder: TelemetryRecorder? = nil
+    telemetryRecorder: TelemetryRecorder? = nil,
+    createBackup: Bool = true
   ) async throws {
     let root = environment.rootDirectory
     try await Task.detached(priority: .userInitiated) {
-      try createResetBackup(root: root)
+      if createBackup {
+        try createResetBackup(root: root)
+      }
       try removeLocalFiles(root: root)
     }.value
 

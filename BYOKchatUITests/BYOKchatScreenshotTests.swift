@@ -1,154 +1,317 @@
+import UIKit
 import XCTest
 
 final class BYOKchatScreenshotTests: XCTestCase {
   private var app: XCUIApplication!
 
+  private var themeID: String {
+    let raw = ProcessInfo.processInfo.environment["SCREENSHOT_THEME"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return (raw?.isEmpty == false ? raw : nil) ?? "midnight"
+  }
+
+  private var presetID: String {
+    let raw = ProcessInfo.processInfo.environment["SCREENSHOT_PRESET"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return (raw?.isEmpty == false ? raw : nil) ?? "showcase"
+  }
+
+  private var targetOrientation: UIDeviceOrientation {
+    let raw = ProcessInfo.processInfo.environment["SCREENSHOT_ORIENTATION"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return raw == "landscape" ? .landscapeLeft : .portrait
+  }
+
   override func setUpWithError() throws {
     continueAfterFailure = false
     app = XCUIApplication()
-    app.launchArguments = [
-      "UI_TEST_SCREENSHOTS",
-      "-AppleLanguages", "(en)",
-      "-AppleLocale", "en_US",
-    ]
-    app.launch()
-    waitForHome()
   }
 
   override func tearDownWithError() throws {
-    app.terminate()
+    app?.terminate()
   }
 
-  func test01Home() throws {
-    capture("01_Home")
+  // MARK: - Tier 1: Core App Store Screens
+
+  func test01ChatHero() throws {
+    launchSeededApp()
+    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
+    capture("01_Chat_Hero")
   }
 
-  func test02Sidebar() throws {
+  func test02ChatRichRender() throws {
+    launchSeededApp()
+    openChat(title: "Sync architecture & cost model", expectedContent: "Direct request flow")
+    // Allow Mermaid & LaTeX renderers a brief settle pass before capture.
+    sleep(1)
+    capture("02_Chat_RichRender")
+  }
+
+  func test03Providers() throws {
+    launchSeededApp()
     openSidebar()
-    capture("02_Sidebar")
+    tapSidebarDestination("AI Providers")
+    XCTAssertTrue(app.navigationBars["AI Providers"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Personal"].waitForExistence(timeout: 6))
+    capture("03_Providers")
   }
 
-  func test03Chat() throws {
+  func test04ModelPicker() throws {
+    launchSeededApp()
+    openModelPicker()
+    XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 8))
+    capture("04_Model_Picker")
+  }
+
+  func test05MCPServers() throws {
+    launchSeededApp()
     openSidebar()
-    let conversation = app.buttons["Ship a polished iOS launch"]
-    XCTAssertTrue(conversation.waitForExistence(timeout: 5))
-    conversation.tap()
-
-    let heading = app.staticTexts.matching(
-      NSPredicate(format: "label CONTAINS[c] %@", "Launch readiness")
-    ).firstMatch
-    XCTAssertTrue(heading.waitForExistence(timeout: 8))
-    capture("03_Chat")
-  }
-
-  func test04Projects() throws {
-    openSidebar()
-    let projects = app.buttons["Projects"]
-    XCTAssertTrue(projects.waitForExistence(timeout: 5))
-    projects.tap()
-
-    XCTAssertTrue(app.staticTexts["BYOK Launch"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Model Research"].exists)
-    capture("04_Projects")
-  }
-
-  func test05Providers() throws {
-    openSettings()
-
-    let providers = app.staticTexts["Providers & Accounts"]
-    XCTAssertTrue(providers.waitForExistence(timeout: 5))
-    providers.tap()
-
-    XCTAssertTrue(app.navigationBars["Providers"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Personal"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Research"].exists)
-    capture("05_Providers")
-  }
-
-  func test06MCPServers() throws {
-    openSettings()
-
-    let mcpServers = app.staticTexts["MCP Servers"]
-    XCTAssertTrue(mcpServers.waitForExistence(timeout: 5))
-    mcpServers.tap()
-
+    tapSidebarDestination("MCP Servers")
     XCTAssertTrue(app.navigationBars["MCP Servers"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["GitHub"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Web Search"].exists)
-    capture("06_MCP")
+    XCTAssertTrue(app.staticTexts["GitHub"].waitForExistence(timeout: 6))
+    capture("05_MCP_Servers")
   }
 
-  func test07Themes() throws {
-    openSettings()
-
-    XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 5))
-    let paper = app.staticTexts["Paper"]
-    let midnight = app.staticTexts["Midnight"]
-    XCTAssertTrue(paper.waitForExistence(timeout: 5) || midnight.waitForExistence(timeout: 5))
-    capture("07_Themes")
-  }
-
-  func test08Paywall() throws {
+  func test06ProjectDetail() throws {
+    launchSeededApp()
     openSidebar()
-
-    let upgrade = app.buttons["Upgrade to Pro"]
-    XCTAssertTrue(upgrade.waitForExistence(timeout: 5))
-    upgrade.tap()
-
-    XCTAssertTrue(app.staticTexts["Upgrade to BYOK Pro"].waitForExistence(timeout: 8))
-    capture("08_Paywall")
+    tapSidebarDestination("Projects")
+    let launchProject = app.staticTexts["Product Launch"]
+    XCTAssertTrue(launchProject.waitForExistence(timeout: 8))
+    launchProject.tap()
+    XCTAssertTrue(
+      app.staticTexts["Product Launch"].waitForExistence(timeout: 8)
+        || app.navigationBars["Product Launch"].waitForExistence(timeout: 4)
+    )
+    capture("06_Project_Detail")
   }
 
-  /// Regression: Screenshot Studio renders its default Chat preview immediately
-  /// on navigation. A missing screenshot environment or a heavyweight interactive
-  /// chat component used to terminate the app before the Studio appeared.
-  func test09ScreenshotStudioOpens() throws {
+  func test07Analytics() throws {
+    launchSeededApp()
+    openSidebar()
+    tapSidebarDestination("Analytics")
+    XCTAssertTrue(app.navigationBars["Analytics"].waitForExistence(timeout: 8))
+
+    // Switch range from Today to 30D so multi-day telemetry and provider breakdown shine.
+    let rangeMenu = app.buttons.matching(
+      NSPredicate(format: "label BEGINSWITH %@", "Analytics date range")
+    ).firstMatch
+    if rangeMenu.waitForExistence(timeout: 5) {
+      rangeMenu.tap()
+      let thirtyDays = app.buttons["30D"]
+      if thirtyDays.waitForExistence(timeout: 4) {
+        thirtyDays.tap()
+      }
+    }
+    XCTAssertTrue(app.staticTexts["Spend"].waitForExistence(timeout: 8))
+    sleep(1)
+    capture("07_Analytics")
+  }
+
+  func test08Sidebar() throws {
+    launchSeededApp()
+    openSidebar()
+    capture("08_Sidebar")
+  }
+
+  func test09Library() throws {
+    launchSeededApp()
+    openSidebar()
+    tapSidebarDestination("Library")
+    XCTAssertTrue(app.staticTexts["latency-benchmark.png"].waitForExistence(timeout: 8))
+    sleep(1)
+    capture("09_Library")
+  }
+
+  // MARK: - Tier 2: Promo Video & Landing Page Cutaways
+
+  func test10HomeNewChat() throws {
+    launchSeededApp()
+    capture("10_Home_NewChat")
+  }
+
+  func test11ProjectsList() throws {
+    launchSeededApp()
+    openSidebar()
+    tapSidebarDestination("Projects")
+    XCTAssertTrue(app.staticTexts["Product Launch"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Core Architecture"].waitForExistence(timeout: 4))
+    capture("11_Projects_List")
+  }
+
+  func test12ChatTools() throws {
+    launchSeededApp()
+    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
+    let moreOptions = app.buttons["More options"]
+    XCTAssertTrue(moreOptions.waitForExistence(timeout: 6))
+    moreOptions.tap()
+
+    let toolsButton = app.buttons["Tools"]
+    XCTAssertTrue(toolsButton.waitForExistence(timeout: 6))
+    toolsButton.tap()
+
+    XCTAssertTrue(app.navigationBars["Tools"].waitForExistence(timeout: 8))
+    capture("12_Chat_Tools")
+  }
+
+  func test13ReasoningSheet() throws {
+    launchSeededApp()
+    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
+
+    let reasoningButton = app.buttons["Reasoning"].firstMatch
+    ensureElementVisible(reasoningButton, scrollDownFirst: false)
+    XCTAssertTrue(reasoningButton.waitForExistence(timeout: 6))
+    reasoningButton.tap()
+
+    XCTAssertTrue(app.navigationBars["Reasoning"].waitForExistence(timeout: 8))
+    capture("13_Reasoning_Sheet")
+  }
+
+  func test14MessageInfo() throws {
+    launchSeededApp()
+    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
+
+    let moreButton = app.buttons["More"].firstMatch
+    ensureElementVisible(moreButton, scrollDownFirst: true)
+    XCTAssertTrue(moreButton.waitForExistence(timeout: 6))
+    moreButton.tap()
+
+    let infoButton = app.buttons["Message Info"]
+    XCTAssertTrue(infoButton.waitForExistence(timeout: 6))
+    infoButton.tap()
+
+    XCTAssertTrue(app.navigationBars["Message Info"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Usage"].waitForExistence(timeout: 6))
+    capture("14_Message_Info")
+  }
+
+  func test15SettingsThemes() throws {
+    launchSeededApp()
     openSettings()
+    XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 6))
+    capture("15_Settings_Themes")
+  }
 
-    let developerTools = app.staticTexts["Developer Tools"]
-    XCTAssertTrue(developerTools.waitForExistence(timeout: 8))
-    developerTools.tap()
+  func test16Paywall() throws {
+    launchSeededApp(openPaywall: true)
+    XCTAssertTrue(app.staticTexts["Upgrade to BYOK Pro"].waitForExistence(timeout: 12))
+    capture("16_Paywall")
+  }
 
-    let screenshotStudio = app.staticTexts["Screenshot Studio"]
-    XCTAssertTrue(screenshotStudio.waitForExistence(timeout: 8))
-    screenshotStudio.tap()
+  // MARK: - Helpers
 
-    // Waiting for a studio-owned action also ensures its first live preview
-    // has been mounted, not just that navigation started.
-    XCTAssertTrue(app.navigationBars["Screenshot Studio"].waitForExistence(timeout: 12))
-    XCTAssertTrue(
-      app.buttons["Export Selected PNG"].waitForExistence(timeout: 12),
-      "Default Screenshot Studio preview should mount without terminating BYOKchat"
-    )
-    XCTAssertTrue(app.buttons["Export All Registered PNGs"].exists)
+  private func launchSeededApp(openPaywall: Bool = false) {
+    XCUIDevice.shared.orientation = targetOrientation
+
+    var arguments = [
+      "-BYOKSeedPreset", presetID,
+      "-BYOKSeedTheme", themeID,
+      "-BYOKSeedPro", "true",
+      "-BYOKDisableAnimations",
+      "-AppleLanguages", "(en)",
+      "-AppleLocale", "en_US",
+    ]
+    if openPaywall {
+      arguments.append("-BYOKOpenPaywall")
+    }
+
+    app.launchArguments = arguments
+    app.launch()
+
+    if XCUIDevice.shared.orientation != targetOrientation {
+      XCUIDevice.shared.orientation = targetOrientation
+    }
+
+    if !openPaywall {
+      waitForHome()
+    }
   }
 
   private func waitForHome() {
-    XCTAssertTrue(app.staticTexts["How can I help?"].waitForExistence(timeout: 12))
-
-    let modelTarget = app.descendants(matching: .any).matching(
-      NSPredicate(format: "label CONTAINS[c] %@", "Claude Sonnet 5")
-    ).firstMatch
-    XCTAssertTrue(modelTarget.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["How can I help?"].waitForExistence(timeout: 15))
   }
 
   private func openSidebar() {
     let sidebar = app.buttons["Open sidebar"]
-    XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+    XCTAssertTrue(sidebar.waitForExistence(timeout: 8))
     sidebar.tap()
-    XCTAssertTrue(app.buttons["Projects"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Ship a polished iOS launch"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["AI Providers"].waitForExistence(timeout: 6))
+    XCTAssertTrue(app.buttons["Ship a native iOS AI client"].waitForExistence(timeout: 6))
+  }
+
+  private func tapSidebarDestination(_ title: String) {
+    let button = app.buttons[title]
+    if !button.isHittable {
+      app.scrollViews.firstMatch.swipeUp()
+    }
+    XCTAssertTrue(button.waitForExistence(timeout: 6))
+    button.tap()
+  }
+
+  private func openChat(title: String, expectedContent: String) {
+    openSidebar()
+    let conversation = app.buttons[title]
+    if !conversation.isHittable {
+      app.scrollViews.firstMatch.swipeUp()
+    }
+    XCTAssertTrue(conversation.waitForExistence(timeout: 6))
+    conversation.tap()
+
+    let heading = app.staticTexts.matching(
+      NSPredicate(format: "label CONTAINS[c] %@", expectedContent)
+    ).firstMatch
+    XCTAssertTrue(heading.waitForExistence(timeout: 10))
+  }
+
+  private func openModelPicker() {
+    let messageField = app.textViews["Message"].exists
+      ? app.textViews["Message"]
+      : app.textFields["Message"]
+    XCTAssertTrue(messageField.waitForExistence(timeout: 6))
+    messageField.tap()
+
+    let targetButton = app.buttons["Model and reasoning"]
+    XCTAssertTrue(targetButton.waitForExistence(timeout: 6))
+    targetButton.tap()
   }
 
   private func openSettings() {
     openSidebar()
     let settings = app.buttons["Settings"]
-    XCTAssertTrue(settings.waitForExistence(timeout: 5))
+    XCTAssertTrue(settings.waitForExistence(timeout: 6))
     settings.tap()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 8))
   }
 
+  private func ensureElementVisible(_ element: XCUIElement, scrollDownFirst: Bool) {
+    guard !element.isHittable else { return }
+    let container = app.collectionViews.firstMatch.exists
+      ? app.collectionViews.firstMatch
+      : app.tables.firstMatch
+    guard container.exists else { return }
+
+    for _ in 0..<4 {
+      if element.exists && element.isHittable { return }
+      if scrollDownFirst {
+        container.swipeUp()
+      } else {
+        container.swipeDown()
+      }
+    }
+    for _ in 0..<4 {
+      if element.exists && element.isHittable { return }
+      if scrollDownFirst {
+        container.swipeDown()
+      } else {
+        container.swipeUp()
+      }
+    }
+  }
+
   private func capture(_ name: String) {
+    usleep(300_000)
     let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
     attachment.name = name
     attachment.lifetime = .keepAlways

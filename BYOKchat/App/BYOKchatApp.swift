@@ -7,12 +7,12 @@ import SwiftUI
 @MainActor
 struct BYOKchatApp: App {
   @State private var model: AppModel
-  private let purchases: BYOKPurchaseStore
+  @State private var purchases: BYOKPurchaseStore
   private let analytics = BYOKAppAnalytics.client
 
   init() {
     #if DEBUG
-    BYOKScreenshotFixtures.prepareIfNeeded()
+    BYOKSeedLaunchOptions.prepareLaunchIfNeeded()
     #endif
     let appModel = AppModel()
     let purchaseStore = BYOKPurchaseStore()
@@ -20,7 +20,7 @@ struct BYOKchatApp: App {
     // stay in sync even when the root view is not mounted yet.
     appModel.themeManager.bind(to: purchaseStore.manager)
     _model = State(initialValue: appModel)
-    purchases = purchaseStore
+    _purchases = State(initialValue: purchaseStore)
   }
 
   var body: some Scene {
@@ -28,7 +28,13 @@ struct BYOKchatApp: App {
       AppRootView(
         model: model,
         purchases: purchases,
-        restartApp: { model = AppModel() }
+        restartApp: {
+          let newModel = AppModel()
+          let newPurchases = BYOKPurchaseStore()
+          newModel.themeManager.bind(to: newPurchases.manager)
+          purchases = newPurchases
+          model = newModel
+        }
       )
       .id(ObjectIdentifier(model))
       .appFoundationTheme(model.themeManager, purchaseManager: purchases.manager)

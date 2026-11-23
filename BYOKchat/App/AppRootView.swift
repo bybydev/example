@@ -73,6 +73,9 @@ struct AppRootView: View {
   @State private var sidebarChatSelectionRevision: UInt = 0
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
+  #if DEBUG
+  @State private var debugPaywallManager: PurchaseManager?
+  #endif
   /// The visible chat was opened from a project's chat list, so it shows a
   /// back chevron instead of the sidebar hamburger.
   @State private var openedChatFromProject = false
@@ -99,6 +102,11 @@ struct AppRootView: View {
       await bootstrap.start(model: model) { initialConversationID in
         selectedConversationID = initialConversationID
       }
+      #if DEBUG
+      if case .ready = bootstrap.state, BYOKSeedLaunchOptions.consumePendingOpenPaywall() {
+        debugPaywallManager = BYOKPurchaseStore.makeScreenshotPreviewManager()
+      }
+      #endif
     }
     .task {
       // Also bind a newly recreated AppModel before StoreKit preparation.
@@ -232,10 +240,30 @@ struct AppRootView: View {
       }
     }
     .sheet(isPresented: $isSettingsPresented) {
-      SettingsView(model: model, purchases: purchases)
+      SettingsView(model: model, purchases: purchases, restartApp: restartApp)
         .appFoundationTheme(model.themeManager)
         .presentationDragIndicator(.visible)
     }
+    #if DEBUG
+    .sheet(
+      isPresented: Binding(
+        get: { debugPaywallManager != nil },
+        set: { presented in
+          if !presented { debugPaywallManager = nil }
+        }
+      )
+    ) {
+      if let previewManager = debugPaywallManager {
+        ProPaywallView(
+          purchases: previewManager,
+          configuration: BYOKPurchaseStore.paywallConfiguration,
+          initialSelectedProductID: BYOKPurchaseStore.yearlyProductID
+        )
+        .appFoundationTheme(model.themeManager)
+        .environment(previewManager)
+      }
+    }
+    #endif
     .fullScreenCover(
       isPresented: Binding(
         get: { !hasCompletedOnboarding },

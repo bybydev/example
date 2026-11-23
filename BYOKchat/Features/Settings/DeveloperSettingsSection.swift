@@ -6,6 +6,7 @@ import SwiftUI
 #if DEBUG
 struct BYOKDeveloperToolsView: View {
   let purchases: BYOKPurchaseStore
+  var restartApp: () -> Void = {}
 
   @Environment(AppModel.self) private var model
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = true
@@ -119,6 +120,15 @@ struct BYOKDeveloperToolsView: View {
                 systemImage: "terminal"
               ) {
                 ProviderConsoleView(model: model.providers)
+              }
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "seed-data",
+                title: "Seed Data",
+                systemImage: "tray.and.arrow.down.fill"
+              ) {
+                SeedDataDeveloperView(restartApp: restartApp)
               }
             ),
             .destination(
@@ -910,6 +920,164 @@ private struct ModelCatalogDeveloperView: View {
       actionStatus = "Cleared cached Layer 2 catalog and reverted to Layer 1 bundled."
     } catch {
       actionError = error.localizedDescription
+    }
+  }
+}
+
+private struct SeedDataDeveloperView: View {
+  let restartApp: () -> Void
+
+  @Environment(AppModel.self) private var model
+  @Environment(\.appFoundationTheme) private var theme
+
+  @State private var preset: BYOKSeedPreset = .showcase
+  @State private var themeID = BYOKchatThemes.midnight.id
+  @State private var proEnabled = true
+  @State private var isWorking = false
+  @State private var errorMessage: String?
+  @State private var confirmSeed = false
+  @State private var confirmReset = false
+
+  var body: some View {
+    Form {
+      Section {
+        Picker("Preset", selection: $preset) {
+          ForEach(BYOKSeedPreset.allCases) { option in
+            Text(option.title).tag(option)
+          }
+        }
+
+        Picker("Theme", selection: $themeID) {
+          ForEach(BYOKchatThemes.catalog.themes) { option in
+            Label(option.title, systemImage: option.symbolName).tag(option.id)
+          }
+        }
+
+        Toggle("Simulated Pro Access", isOn: $proEnabled)
+      } header: {
+        Text("Configuration")
+      } footer: {
+        Text(preset.subtitle)
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .disabled(isWorking)
+      .listRowBackground(theme.surfaceColor)
+
+      Section {
+        Button("Seed & Restart App", systemImage: "tray.and.arrow.down.fill") {
+          confirmSeed = true
+        }
+        .disabled(isWorking)
+
+        Button("Reset All Local Data", systemImage: "trash", role: .destructive) {
+          confirmReset = true
+        }
+        .disabled(isWorking)
+
+        if isWorking {
+          HStack(spacing: 10) {
+            ProgressView()
+            Text("Updating local data…")
+              .font(.footnote)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.footnote)
+            .foregroundStyle(.red)
+        }
+      } header: {
+        Text("Actions")
+      } footer: {
+        Text("Seeding replaces all local providers, projects, MCP servers, chats, Library files, credentials, and analytics telemetry, then restarts BYOKchat with the selected theme.")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+    }
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Seed Data")
+    .navigationBarTitleDisplayMode(.inline)
+    .onAppear {
+      themeID = model.themeManager.effectiveTheme.id
+    }
+    .confirmationDialog(
+      "Replace local data with seeded data?",
+      isPresented: $confirmSeed,
+      titleVisibility: .visible
+    ) {
+      Button("Seed & Restart App", role: .destructive) {
+        Task { @MainActor in
+          await runSeed()
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("All current local chats, connections, projects, MCP servers, Library files, and analytics on this device will be wiped and replaced.")
+    }
+    .confirmationDialog(
+      "Reset all local data?",
+      isPresented: $confirmReset,
+      titleVisibility: .visible
+    ) {
+      Button("Reset & Restart App", role: .destructive) {
+        Task { @MainActor in
+          await runReset()
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Deletes all local workspaces, Keychain credentials, and telemetry, then restarts BYOKchat to onboarding.")
+    }
+  }
+
+  @MainActor
+  private func runSeed() async {
+    guard !isWorking else { return }
+    isWorking = true
+    errorMessage = nil
+
+    do {
+      await model.chats.stopAllGenerations()
+      let configuration = BYOKSeedConfiguration(
+        preset: preset,
+        themeID: themeID,
+        proEnabled: proEnabled
+      )
+      try await BYOKSeedDataService.seedAll(
+        configuration,
+        environment: model.storageEnvironment,
+        telemetryRecorder: model.telemetryRecorder
+      )
+      isWorking = false
+      restartApp()
+    } catch {
+      isWorking = false
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func runReset() async {
+    guard !isWorking else { return }
+    isWorking = true
+    errorMessage = nil
+
+    do {
+      await model.chats.stopAllGenerations()
+      try await AppStorageBootstrap.resetLocalData(
+        environment: model.storageEnvironment,
+        telemetryRecorder: model.telemetryRecorder,
+        createBackup: false
+      )
+      isWorking = false
+      restartApp()
+    } catch {
+      isWorking = false
+      errorMessage = error.localizedDescription
     }
   }
 }
