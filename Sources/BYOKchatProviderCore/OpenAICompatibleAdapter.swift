@@ -96,6 +96,11 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     if definition.behavior == .nvidia, !Self.isLikelyNVIDIAChatModel(id: wire.id) {
       return nil
     }
+    if definition.behavior == .groq,
+      wire.active == false || !Self.isLikelyGroqChatModel(id: wire.id)
+    {
+      return nil
+    }
     var evidence = ModelCapabilityEvidence()
     // OpenRouter and DeepSeek supply exhaustive modality lists when present.
     // Custom-compatible catalogs may provide partial hints using the same field names.
@@ -151,6 +156,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     )
     let outputLimit = Self.firstPositive(
       wire.maxOutputTokens,
+      wire.maxCompletionTokens,
       wire.topProvider?.maxCompletionTokens
     )
     if definition.behavior == .openRouter {
@@ -586,6 +592,24 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
     let nonChatTokens: Set<String> = [
       "tts", "asr", "ocr", "bge", "e5", "clip", "sdxl", "flux", "sam2", "esm2", "evo2", "riva",
     ]
+    return tokens.isDisjoint(with: nonChatTokens)
+  }
+
+  /// Groq's `GET /openai/v1/models` mixes chat LLMs with speech-to-text,
+  /// text-to-speech, and safety guard models.
+  private static func isLikelyGroqChatModel(id: String) -> Bool {
+    let lowered = id.lowercased()
+    let nonChatSubstrings = [
+      "whisper", "playai-tts", "orpheus", "distil-whisper",
+      "llama-guard", "prompt-guard", "safeguard", "embed", "rerank",
+    ]
+    if nonChatSubstrings.contains(where: { lowered.contains($0) }) {
+      return false
+    }
+    let tokens = Set(
+      lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
+    )
+    let nonChatTokens: Set<String> = ["tts", "asr", "stt"]
     return tokens.isDisjoint(with: nonChatTokens)
   }
 }

@@ -180,6 +180,21 @@ struct ModelCapabilityPolicyTests {
     let magistral = ModelCapabilityResolver.reasoningControl(kind: .mistral, modelID: "magistral-medium-2509")
     #expect(magistral.choices == [.providerDefault, .on])
 
+    let groqGPTOSS = ModelCapabilityResolver.reasoningControl(kind: .groq, modelID: "openai/gpt-oss-120b")
+    #expect(groqGPTOSS.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(groqGPTOSS.label(for: nil) == "Default (Medium)")
+    #expect(groqGPTOSS.normalize(.init(enabled: false)) == nil)
+    #expect(groqGPTOSS.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let groqQwen38 = ModelCapabilityResolver.reasoningControl(kind: .groq, modelID: "qwen/qwen3.8-27b")
+    #expect(groqQwen38.choices == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(groqQwen38.normalize(.init(enabled: false))?.enabled == false)
+    #expect(groqQwen38.normalize(.init(enabled: true, effort: .low))?.effort == .low)
+
+    let groqLlama = ModelCapabilityResolver.reasoningControl(kind: .groq, modelID: "llama-3.1-8b-instant")
+    #expect(groqLlama.kind == .unsupported)
+    #expect(groqLlama.choices.isEmpty)
+
     let haiku55 = ModelCapabilityResolver.reasoningControl(kind: .anthropic, modelID: "claude-haiku-5-5")
     #expect(
       haiku55.choices

@@ -8,6 +8,7 @@ public enum BuiltInProviders {
   public static let moonshotID: ProviderID = "moonshot"
   public static let minimaxID: ProviderID = "minimax"
   public static let mistralID: ProviderID = "mistral"
+  public static let groqID: ProviderID = "groq"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let ollamaID: ProviderID = "ollama"
@@ -117,6 +118,20 @@ public enum BuiltInProviders {
     )
   }
 
+  public static var groq: ProviderDefinition {
+    ProviderDefinition(
+      id: groqID,
+      displayName: "Groq",
+      behavior: .groq,
+      defaultBaseURL: URL(string: "https://api.groq.com/openai/v1")!,
+      modelsPath: "/models",
+      authentication: .bearer,
+      seedModels: ProviderKind.groq.seedModels,
+      isBuiltIn: true,
+      kind: .groq
+    )
+  }
+
   public static var openRouter: ProviderDefinition {
     ProviderDefinition(
       id: openRouterID,
@@ -207,8 +222,8 @@ public enum BuiltInProviders {
 
   public static var all: [ProviderDefinition] {
     [
-      openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, openRouter, nvidia, anthropic, gemini,
-      ollama, lmStudio,
+      openAI, xAI, deepSeek, zAI, moonshot, minimax, mistral, groq, openRouter, nvidia, anthropic,
+      gemini, ollama, lmStudio,
     ]
   }
 }

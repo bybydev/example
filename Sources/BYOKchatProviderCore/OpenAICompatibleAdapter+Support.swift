@@ -144,7 +144,11 @@ extension OpenAICompatibleAdapter {
       if let value = request.options.topP { body["top_p"] = .number(value) }
     }
     if let value = request.options.maxOutputTokens {
-      body["max_tokens"] = .number(Double(value))
+      if definition.behavior == .groq {
+        body["max_completion_tokens"] = .number(Double(value))
+      } else {
+        body["max_tokens"] = .number(Double(value))
+      }
     }
 
     switch definition.behavior {
@@ -191,6 +195,31 @@ extension OpenAICompatibleAdapter {
         } else if let effort = reasoning.effort {
           body["reasoning_effort"] = .string(effort.rawValue)
         }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
+    case .groq:
+      let isGPTOSS = normalizedModelID.contains("gpt-oss")
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["reasoning_effort"] = .string("none")
+        } else if let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        }
+        if isGPTOSS, reasoning.excludeFromResponse {
+          body["include_reasoning"] = .bool(false)
+        }
+      }
+      if !isGPTOSS,
+        request.options.reasoning?.enabled != false,
+        let capabilities = request.capabilities,
+        capabilities.reasoning.kind != .unknown,
+        capabilities.reasoning.kind != .unsupported
+      {
+        body["reasoning_format"] = .string(
+          request.options.reasoning?.excludeFromResponse == true ? "hidden" : "parsed"
+        )
       }
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])

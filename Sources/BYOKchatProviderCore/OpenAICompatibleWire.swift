@@ -366,6 +366,11 @@ struct ProviderErrorWire: Decodable {
   }
 }
 
+struct XGroqWire: Decodable {
+  var id: String?
+  var usage: UsageWire?
+}
+
 struct ChatCompletionResponse: Decodable {
   var id: String?
   var model: String?
@@ -373,6 +378,7 @@ struct ChatCompletionResponse: Decodable {
   var serviceTier: String?
   var choices: [ChatCompletionChoiceWire]
   var usage: UsageWire?
+  var xGroq: XGroqWire?
   var error: ProviderErrorWire?
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -381,12 +387,14 @@ struct ChatCompletionResponse: Decodable {
     provider = try c.decodeIfPresent(String.self, forKey: .provider)
     serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
     choices = try c.decodeIfPresent([ChatCompletionChoiceWire].self, forKey: .choices) ?? []
-    usage = try c.decodeIfPresent(UsageWire.self, forKey: .usage)
+    xGroq = try c.decodeIfPresent(XGroqWire.self, forKey: .xGroq)
+    usage = try c.decodeIfPresent(UsageWire.self, forKey: .usage) ?? xGroq?.usage
     error = try c.decodeIfPresent(ProviderErrorWire.self, forKey: .error)
   }
   private enum CodingKeys: String, CodingKey {
     case id, model, provider, choices, usage, error
     case serviceTier = "service_tier"
+    case xGroq = "x_groq"
   }
 }
 
@@ -469,10 +477,12 @@ struct ModelsResponse: Decodable { var data: [ModelWire] }
 struct ModelWire: Decodable {
   var id: String
   var name: String?
+  var active: Bool?
   var contextLength: Int?
   var maxContextLength: Int?
   var contextWindow: Int?
   var maxOutputTokens: Int?
+  var maxCompletionTokens: Int?
   var inputModalities: [String]?
   var outputModalities: [String]?
   var effort: ModelEffortWire?
@@ -484,11 +494,12 @@ struct ModelWire: Decodable {
   var capabilities: ModelCapabilitiesWire?
   var archived: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, name, architecture, pricing, capabilities, archived, effort, reasoning
+    case id, name, active, architecture, pricing, capabilities, archived, effort, reasoning
     case contextLength = "context_length"
     case maxContextLength = "max_context_length"
     case contextWindow = "context_window"
     case maxOutputTokens = "max_output_tokens"
+    case maxCompletionTokens = "max_completion_tokens"
     case inputModalities = "input_modalities"
     case outputModalities = "output_modalities"
     case supportedParameters = "supported_parameters"

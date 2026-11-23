@@ -256,6 +256,39 @@ struct ComposerTargetLabelFormatterTests {
     #expect(devstral == "Devstral 2")
   }
 
+  @Test("Groq models preserve GPT-OSS, Qwen, and Llama labels with explicit effort")
+  func groqLabels() {
+    let gptOSS = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.groqID,
+      providerName: "Groq",
+      modelName: "GPT-OSS 120B",
+      modelID: "openai/gpt-oss-120b",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(gptOSS == "GPT-OSS 120B · High")
+
+    let qwenOff = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.groqID,
+      providerName: "Groq",
+      modelName: "Qwen 3.8 27B",
+      modelID: "qwen/qwen3.8-27b",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(qwenOff == "Qwen 3.8 27B · Off")
+
+    let llama = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.groqID,
+      providerName: "Groq",
+      modelName: "Llama 3.1 8B Instant",
+      modelID: "llama-3.1-8b-instant",
+      supportedParameters: ["tools"],
+      reasoning: nil
+    )
+    #expect(llama == "Llama 3.1 8B Instant")
+  }
+
   @Test("Hyphenated custom provider name still strips duplicate prefix from normalized model")
   func hyphenatedCustomProviderPrefix() {
     let label = ComposerTargetLabelFormatter.make(

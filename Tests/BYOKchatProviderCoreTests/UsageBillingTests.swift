@@ -223,13 +223,38 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   let date = try #require(ISO8601DateFormatter().date(from: "2026-10-07T02:00:00Z"))
   let account = ProviderAccount(kind: .deepSeek, id: "d", providerID: "deepseek", label: "D")
   let peak = try #require(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: date))
-  #expect(peak.rates.input == "0.3" && peak.version == "2026-11-20:peak")
+  #expect(peak.rates.input == "0.3" && peak.version == "2026-11-23:peak")
   #expect(peak.timeRule != nil)
   let offPeakDate = try #require(ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: account, modelID: "deepseek-v4-flash", model: nil, at: offPeakDate)?.rates.input == "0.15")
   let gemini = ProviderAccount(kind: .gemini, id: "g", providerID: "gemini", label: "G")
   let expiry = try #require(ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z"))
   #expect(ModelPriceResolver.resolve(account: gemini, modelID: "gemini-3.6-flash", model: nil, at: expiry) == nil)
+}
+
+@Test func groqCatalogPricingResolvesVerifiedModels() throws {
+  let groq = ProviderAccount(kind: .groq, id: "gr", providerID: "groq", label: "Groq")
+
+  let gptOSS120B = try #require(
+    ModelPriceResolver.resolve(account: groq, modelID: "openai/gpt-oss-120b", model: nil)
+  )
+  #expect(gptOSS120B.rates.input == "0.15")
+  #expect(gptOSS120B.rates.output == "0.6")
+  #expect(gptOSS120B.rates.cachedInput == "0.075")
+
+  let gptOSS20B = try #require(
+    ModelPriceResolver.resolve(account: groq, modelID: "openai/gpt-oss-20b", model: nil)
+  )
+  #expect(gptOSS20B.rates.input == "0.075")
+  #expect(gptOSS20B.rates.output == "0.3")
+  #expect(gptOSS20B.rates.cachedInput == "0.0375")
+
+  let qwen38 = try #require(
+    ModelPriceResolver.resolve(account: groq, modelID: "qwen/qwen3.8-27b", model: nil)
+  )
+  #expect(qwen38.rates.input == "0.8")
+  #expect(qwen38.rates.output == "4")
+  #expect(qwen38.rates.cachedInput == nil)
 }
 
 @Test func geminiCurrentCatalogPricingResolvesAndRespectsExpiry() throws {

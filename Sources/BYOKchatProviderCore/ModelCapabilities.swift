@@ -324,6 +324,7 @@ extension ProviderDefinition {
     case .moonshot: return .moonshot
     case .minimax: return .minimax
     case .mistral: return .mistral
+    case .groq: return .groq
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

@@ -1472,3 +1472,207 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
     Issue.record("Expected JSON object for NVIDIA probe request")
   }
 }
+
+@Test func groqStreamSendsEffortMaxCompletionTokensAndDecodesXGroqUsage() async throws {
+  let stream = """
+    data: {"id":"g1","model":"openai/gpt-oss-120b","choices":[{"delta":{"reasoning":"Plan "},"finish_reason":null}]}
+
+    data: {"id":"g1","model":"openai/gpt-oss-120b","choices":[{"delta":{"content":"Answer"},"finish_reason":"stop"}]}
+
+    data: {"id":"g1","model":"openai/gpt-oss-120b","choices":[],"x_groq":{"id":"req_123","usage":{"prompt_tokens":40,"completion_tokens":15,"prompt_tokens_details":{"cached_tokens":20}}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.groq, transport: transport)
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "openai/gpt-oss-120b",
+      messages: [.init(role: .user, content: "Hello")],
+      options: .init(
+        temperature: 0.6,
+        maxOutputTokens: 2_048,
+        reasoning: .init(enabled: true, effort: .high)
+      )
+    ),
+    account: account(providerID: "groq")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.groq.com/openai/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["reasoning_effort"] == .string("high"))
+  #expect(root["reasoning_format"] == nil)
+  #expect(root["include_reasoning"] == nil)
+  #expect(root["max_completion_tokens"] == .number(2048))
+  #expect(root["max_tokens"] == nil)
+  #expect(root["temperature"] == .number(0.6))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+
+  #expect(events.contains(.reasoningDelta("Plan ")))
+  #expect(events.contains(.textDelta("Answer")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Plan ")
+  #expect(response.text == "Answer")
+  #expect(response.usage?.inputTokens == 40)
+  #expect(response.usage?.outputTokens == 15)
+  #expect(response.usage?.cachedInputTokens == 20)
+}
+
+@Test func groqReasoningWireRulesRespectModelFamilies() async throws {
+  let okResponse = Data(
+    #"{"id":"g2","model":"qwen/qwen3.8-27b","choices":[{"message":{"content":"OK","reasoning":"Think"},"finish_reason":"stop"}]}"#
+      .utf8
+  )
+  let transport = MockTransport(data: okResponse)
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.groq, transport: transport)
+
+  // Qwen3.8 sends reasoning_format: "parsed" by default so reasoning stays structured and tool-safe.
+  let defaultQwen = try await adapter.generate(
+    request: ProviderRequest(
+      model: "qwen/qwen3.8-27b",
+      messages: [.init(role: .user, content: "Hi")]
+    ),
+    account: account(providerID: "groq")
+  )
+  #expect(defaultQwen.reasoning == "Think")
+  #expect(defaultQwen.text == "OK")
+  let defaultBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let defaultRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: defaultBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(defaultRoot["reasoning_format"] == .string("parsed"))
+  #expect(defaultRoot["reasoning_effort"] == nil)
+
+  // Qwen3.8 Off sends reasoning_effort: "none" and omits reasoning_format.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "qwen/qwen3.8-27b",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "groq")
+  )
+  let offBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let offRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: offBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(offRoot["reasoning_effort"] == .string("none"))
+  #expect(offRoot["reasoning_format"] == nil)
+
+  // Non-reasoning Llama models omit both reasoning_effort and reasoning_format.
+  _ = try await adapter.generate(
+    request: ProviderRequest(
+      model: "llama-3.1-8b-instant",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "groq")
+  )
+  let llamaBody = try #require(await transport.lastRequest()?.httpBody)
+  guard case .object(let llamaRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: llamaBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(llamaRoot["reasoning_effort"] == nil)
+  #expect(llamaRoot["reasoning_format"] == nil)
+}
+
+@Test func groqListModelsFiltersInactiveAndNonChatAndReadsMaxCompletionTokens() async throws {
+  let payload = """
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "openai/gpt-oss-120b",
+          "object": "model",
+          "owned_by": "OpenAI",
+          "active": true,
+          "context_window": 131072,
+          "max_completion_tokens": 65536
+        },
+        {
+          "id": "qwen/qwen3.8-27b",
+          "object": "model",
+          "owned_by": "Alibaba Cloud",
+          "active": true,
+          "context_window": 131072,
+          "max_completion_tokens": 16384
+        },
+        {
+          "id": "whisper-large-v3",
+          "object": "model",
+          "owned_by": "OpenAI",
+          "active": true,
+          "context_window": 448
+        },
+        {
+          "id": "playai-tts",
+          "object": "model",
+          "owned_by": "PlayAI",
+          "active": true,
+          "context_window": 8192
+        },
+        {
+          "id": "meta-llama/llama-prompt-guard-2-86m",
+          "object": "model",
+          "owned_by": "Meta",
+          "active": true,
+          "context_window": 512
+        },
+        {
+          "id": "openai/gpt-oss-safeguard-20b",
+          "object": "model",
+          "owned_by": "OpenAI",
+          "active": true,
+          "context_window": 131072
+        },
+        {
+          "id": "llama-3.3-70b-versatile",
+          "object": "model",
+          "owned_by": "Meta",
+          "active": false,
+          "context_window": 131072
+        }
+      ]
+    }
+    """
+  let transport = MockTransport(data: Data(payload.utf8))
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.groq, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "groq"))
+
+  let ids = Set(models.map(\.id))
+  #expect(ids.contains("openai/gpt-oss-120b"))
+  #expect(ids.contains("qwen/qwen3.8-27b"))
+  #expect(!ids.contains("whisper-large-v3"))
+  #expect(!ids.contains("playai-tts"))
+  #expect(!ids.contains("meta-llama/llama-prompt-guard-2-86m"))
+  #expect(!ids.contains("openai/gpt-oss-safeguard-20b"))
+  #expect(!ids.contains("llama-3.3-70b-versatile"))
+
+  let qwen = try #require(models.first { $0.id == "qwen/qwen3.8-27b" })
+  #expect(qwen.contextWindow == 131_072)
+  #expect(qwen.maxOutputTokens == 16_384)
+  #expect(qwen.inputModalities.contains("image"))
+  #expect(qwen.supportedParameters.contains("tools"))
+
+  let req = try #require(await transport.lastRequest())
+  #expect(req.url?.absoluteString == "https://api.groq.com/openai/v1/models")
+}

@@ -654,13 +654,14 @@ enum ComposerTargetLabelFormatter {
     // only to known family tokens, leaving version numbers and suffixes intact.
     let familyNames: [String: String] = [
       "claude": "Claude", "sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku",
-      "gemini": "Gemini", "deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "qwen": "Qwen",
+      "gemini": "Gemini", "deepseek": "DeepSeek", "glm": "GLM", "gpt": "GPT", "gpt-oss": "GPT-OSS",
+      "qwen": "Qwen",
       "llama": "Llama", "mistral": "Mistral", "codestral": "Codestral",
       "devstral": "Devstral", "magistral": "Magistral", "ministral": "Ministral", "grok": "Grok",
       "kimi": "Kimi", "nemotron": "Nemotron", "phi": "Phi", "minimax": "MiniMax",
       "flash": "Flash", "flashx": "FlashX", "air": "Air", "airx": "AirX",
       "pro": "Pro", "highspeed": "Highspeed", "mini": "Mini", "nano": "Nano",
-      "turbo": "Turbo", "lite": "Lite", "preview": "Preview",
+      "turbo": "Turbo", "lite": "Lite", "preview": "Preview", "instant": "Instant",
       "instruct": "Instruct", "reasoner": "Reasoner", "coder": "Coder",
       "chat": "Chat", "thinking": "Thinking", "sol": "Sol",
     ]
@@ -749,6 +750,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.moonshotID: return "Moonshot"
     case BuiltInProviders.minimaxID: return "MiniMax"
     case BuiltInProviders.mistralID: return "Mistral"
+    case BuiltInProviders.groqID: return "Groq"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     case BuiltInProviders.ollamaID: return "Ollama"

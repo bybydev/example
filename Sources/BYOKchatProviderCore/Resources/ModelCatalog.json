@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "revision": 2026112001,
-  "version": "2026-11-20",
-  "generatedAt": "2026-11-20T00:00:00Z",
+  "revision": 2026112302,
+  "version": "2026-11-23",
+  "generatedAt": "2026-11-23T00:00:00Z",
   "providers": {
     "openai": {
       "models": [
@@ -776,6 +776,93 @@
           },
           "control": {
             "kind": "fixed",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "groq": {
+      "models": [
+        {
+          "id": "openai/gpt-oss-120b",
+          "displayName": "GPT-OSS 120B",
+          "contextWindow": 131072,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_completion_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "displayName": "GPT-OSS 20B",
+          "contextWindow": 131072,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_completion_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "qwen/qwen3.8-27b",
+          "displayName": "Qwen 3.8 27B",
+          "contextWindow": 131072,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 16384,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_completion_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "llama-3.1-8b-instant",
+          "displayName": "Llama 3.1 8B Instant",
+          "contextWindow": 131072,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 131072,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_completion_tokens", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "containsAny": ["gpt-oss"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["qwen/qwen3.8", "qwen/qwen3.6"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["qwen/qwen3-"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["llama-3", "llama-4"]
+          },
+          "control": {
+            "kind": "unsupported",
             "allowsOff": false
           }
         }
@@ -1919,6 +2006,44 @@
           "input": "0.3",
           "output": "0.9",
           "cachedInput": "0.03"
+        }
+      },
+      {
+        "provider": "groq",
+        "modelIDs": [
+          "openai/gpt-oss-120b"
+        ],
+        "sourceURL": "https://console.groq.com/docs/models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6",
+          "cachedInput": "0.075"
+        }
+      },
+      {
+        "provider": "groq",
+        "modelIDs": [
+          "openai/gpt-oss-20b"
+        ],
+        "sourceURL": "https://console.groq.com/docs/models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.075",
+          "output": "0.3",
+          "cachedInput": "0.0375"
+        }
+      },
+      {
+        "provider": "groq",
+        "modelIDs": [
+          "qwen/qwen3.8-27b"
+        ],
+        "sourceURL": "https://console.groq.com/docs/models",
+        "verifiedAt": "2026-11-23",
+        "rates": {
+          "input": "0.8",
+          "output": "4"
         }
       },
       {

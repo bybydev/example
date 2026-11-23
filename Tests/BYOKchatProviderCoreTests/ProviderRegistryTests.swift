@@ -9,7 +9,7 @@ import Testing
   #expect(
     Set(definitions.map(\.id))
       == [
-        "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "openrouter",
+        "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "mistral", "groq", "openrouter",
         "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
       ]
   )
@@ -155,6 +155,33 @@ import Testing
   #expect(ProviderKind.mistral.defaultProviderID == "mistral")
   #expect(ProviderKind.mistral.logo == .brand(assetName: "provider.mistral"))
   #expect(ProviderKind.mistral.reasoningDefault == nil)
+
+  let groq = try #require(definitions.first { $0.id == "groq" })
+  #expect(groq.defaultBaseURL.absoluteString == "https://api.groq.com/openai/v1")
+  #expect(groq.apiFamily == .openAIChatCompletions)
+  #expect(groq.behavior == .groq)
+  #expect(groq.authentication == .bearer)
+  #expect(groq.modelsPath == "/models")
+  #expect(groq.chatCompletionsPath == "/chat/completions")
+  #expect(groq.kind == .groq)
+  #expect(
+    groq.seedModels.map(\.id)
+      == ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "llama-3.1-8b-instant"]
+  )
+  let gptOSS120B = try #require(groq.seedModels.first)
+  #expect(gptOSS120B.id == "openai/gpt-oss-120b")
+  #expect(gptOSS120B.contextWindow == 131_072)
+  #expect(gptOSS120B.maxOutputTokens == 65_536)
+  #expect(gptOSS120B.supportedParameters.contains("tools"))
+  let qwen38 = try #require(groq.seedModels.first { $0.id == "qwen/qwen3.8-27b" })
+  #expect(qwen38.contextWindow == 131_072)
+  #expect(qwen38.maxOutputTokens == 16_384)
+  #expect(qwen38.inputModalities.contains("image"))
+
+  #expect(ProviderKind.catalog.contains(.groq))
+  #expect(ProviderKind.groq.defaultProviderID == "groq")
+  #expect(ProviderKind.groq.logo == .brand(assetName: "provider.groq"))
+  #expect(ProviderKind.groq.reasoningDefault == nil)
 
   let nvidia = try #require(definitions.first { $0.id == "nvidia" })
   #expect(nvidia.defaultBaseURL.absoluteString == "https://integrate.api.nvidia.com/v1")

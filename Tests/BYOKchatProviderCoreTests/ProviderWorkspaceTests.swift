@@ -20,6 +20,7 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.moonshotID,
         BuiltInProviders.minimaxID,
         BuiltInProviders.mistralID,
+        BuiltInProviders.groqID,
         BuiltInProviders.ollamaID,
         BuiltInProviders.lmStudioID,
       ]

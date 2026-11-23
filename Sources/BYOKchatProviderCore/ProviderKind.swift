@@ -16,6 +16,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
   case moonshot
   case minimax
   case mistral
+  case groq
   case openRouter
   case nvidia
   case ollama
@@ -24,7 +25,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
 
   /// Cloud providers shown under the "Cloud Providers" group in pickers.
   public static var cloudCatalog: [ProviderKind] {
-    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia]
+    [.anthropic, .openai, .xAI, .gemini, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .groq, .openRouter, .nvidia]
   }
 
   /// Local and custom providers shown under the "Local & Custom" group in pickers.
@@ -51,6 +52,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable {
     case .moonshot: "moonshot"
     case .minimax: "minimax"
     case .mistral: "mistral"
+    case .groq: "groq"
     case .openRouter: "openrouter"
     case .nvidia: "nvidia"
     case .ollama: "ollama"
@@ -123,6 +125,7 @@ public extension ProviderKind {
     case .moonshot: "Moonshot AI"
     case .minimax: "MiniMax"
     case .mistral: "Mistral AI"
+    case .groq: "Groq"
     case .openRouter: "OpenRouter"
     case .nvidia: "NVIDIA"
     case .ollama: "Ollama"
@@ -136,7 +139,7 @@ public extension ProviderKind {
     case .anthropic: .anthropicMessages
     case .openai, .xAI: .openAIResponses
     case .gemini: .geminiGenerateContent
-    case .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .openAIChatCompletions
+    case .deepSeek, .zAI, .moonshot, .minimax, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .openAIChatCompletions
     }
   }
 
@@ -144,7 +147,7 @@ public extension ProviderKind {
     switch self {
     case .anthropic: .header(name: "x-api-key")
     case .gemini: .header(name: "x-goog-api-key")
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio: .bearer
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio: .bearer
     case .openAICompatible: .userChoice
     }
   }
@@ -202,6 +205,7 @@ public extension ProviderKind {
     case .moonshot: .fixed(chat: "/chat/completions", models: "/models")
     case .minimax: .fixed(chat: "/chat/completions", models: "/models")
     case .mistral: .fixed(chat: "/chat/completions", models: "/models")
+    case .groq: .fixed(chat: "/chat/completions", models: "/models")
     case .openRouter: .fixed(chat: "/chat/completions", models: "/models")
     case .nvidia: .fixed(chat: "/chat/completions", models: "/models")
     case .ollama, .lmStudio: .fixed(chat: "/chat/completions", models: "/models")
@@ -230,6 +234,7 @@ public extension ProviderKind {
     case .moonshot: .brand(assetName: "provider.moonshot")
     case .minimax: .brand(assetName: "provider.minimax")
     case .mistral: .brand(assetName: "provider.mistral")
+    case .groq: .brand(assetName: "provider.groq")
     case .openRouter: .brand(assetName: "provider.openrouter")
     case .nvidia: .brand(assetName: "provider.nvidia")
     case .ollama: .brand(assetName: "provider.ollama")
@@ -244,14 +249,14 @@ public extension ProviderKind {
     switch self {
     case .deepSeek, .anthropic, .xAI: .init(enabled: true, effort: .high)
     case .gemini: .init(enabled: true, effort: .medium)
-    case .openai, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: nil
+    case .openai, .zAI, .moonshot, .minimax, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: nil
     }
   }
 
   var contextWindowKind: ProviderContextWindowKind {
     switch self {
     case .anthropic, .gemini: .inputOnly
-    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .combined
+    case .openai, .xAI, .deepSeek, .zAI, .moonshot, .minimax, .mistral, .groq, .openRouter, .nvidia, .ollama, .lmStudio, .openAICompatible: .combined
     }
   }
 
@@ -397,6 +402,7 @@ public extension ProviderKind {
     case .moonshot: URL(string: "https://api.moonshot.ai/v1")
     case .minimax: URL(string: "https://api.minimax.io/v1")
     case .mistral: URL(string: "https://api.mistral.ai/v1")
+    case .groq: URL(string: "https://api.groq.com/openai/v1")
     case .openRouter: URL(string: "https://openrouter.ai/api/v1")
     case .nvidia: URL(string: "https://integrate.api.nvidia.com/v1")
     case .ollama: URL(string: "http://localhost:11434/v1")
@@ -415,6 +421,7 @@ public extension ProviderKind {
     case .moonshot: .moonshot
     case .minimax: .minimax
     case .mistral: .mistral
+    case .groq: .groq
     case .openRouter: .openRouter
     case .nvidia: .nvidia
     case .ollama, .lmStudio, .openAICompatible: .genericOpenAICompatible
