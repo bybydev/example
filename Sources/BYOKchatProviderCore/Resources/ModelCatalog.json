@@ -1,0 +1,2026 @@
+{
+  "schemaVersion": 1,
+  "revision": 2026112001,
+  "version": "2026-11-20",
+  "generatedAt": "2026-11-20T00:00:00Z",
+  "providers": {
+    "openai": {
+      "models": [
+        {
+          "id": "gpt-6.2-astra",
+          "displayName": "GPT-6.2 Astra",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-6.2-sol",
+          "displayName": "GPT-6.2 Sol",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-6.1-terra",
+          "displayName": "GPT-6.1 Terra",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-6-luna",
+          "displayName": "GPT-6 Luna",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-6.1-sol",
+          "displayName": "GPT-6.1 Sol",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-6-astra",
+          "displayName": "GPT-6 Astra",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "displayName": "GPT-5.6 Sol",
+          "contextWindow": 1050000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["gpt-6"],
+            "containsAny": ["terra", "luna"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-6"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.6"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.5", "gpt-5.4", "gpt-5.2"],
+            "containsAny": ["pro"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["medium", "high", "xhigh"],
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "medium",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.4", "gpt-5.2"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.1"],
+            "containsAny": ["codex-max"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["medium", "high", "xhigh"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.1"],
+            "containsAny": ["codex"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5.1"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5-pro"]
+          },
+          "control": {
+            "kind": "fixed",
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "exactAny": ["gpt-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-5-"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["o1-mini", "o1-preview", "o1-pro"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["o1", "o3", "o4", "codex-"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gpt-4", "chatgpt-4"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "xai": {
+      "models": [
+        {
+          "id": "grok-4.7",
+          "displayName": "Grok 4.7",
+          "contextWindow": 500000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "grok-4.6",
+          "displayName": "Grok 4.6",
+          "contextWindow": 500000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "grok-4.3",
+          "displayName": "Grok 4.3",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "grok-4.20-0309-reasoning",
+          "displayName": "Grok 4.20 Reasoning",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        },
+        {
+          "id": "grok-4.20-non-reasoning",
+          "displayName": "Grok 4.20 Non-Reasoning",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_output_tokens", "tools"]
+        },
+        {
+          "id": "grok-4.20-multi-agent",
+          "displayName": "Grok 4.20 Multi-Agent",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_output_tokens", "reasoning", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "containsAny": ["non-reasoning"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-4.7", "grok-4.6", "grok-4.20-multi-agent"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-4.5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-4.3"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "low",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-3-mini"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high"],
+            "defaultEffort": "low",
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-4.20", "grok-4-fast", "grok-4-1-fast", "grok-4-0709", "grok-code-fast"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "exactAny": ["grok-4"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "exactAny": ["grok-3"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["grok-3-"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "deepseek": {
+      "models": [
+        {
+          "id": "deepseek-flash",
+          "displayName": "DeepSeek Flash",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 384000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 384000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["deepseek-v4"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "exactAny": ["deepseek-flash", "deepseek-pro"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        }
+      ]
+    },
+    "zai": {
+      "models": [
+        {
+          "id": "glm-5.3",
+          "displayName": "GLM-5.3",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "glm-5.3-flash",
+          "displayName": "GLM-5.3 Flash",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "glm-5.3-flashx",
+          "displayName": "GLM-5.3 FlashX",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "glm-5.2",
+          "displayName": "GLM-5.2",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "glm-5.1",
+          "displayName": "GLM-5.1",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        },
+        {
+          "id": "glm-5v-turbo",
+          "displayName": "GLM-5V Turbo",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        },
+        {
+          "id": "glm-5-turbo",
+          "displayName": "GLM-5 Turbo",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        },
+        {
+          "id": "glm-5",
+          "displayName": "GLM-5",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        },
+        {
+          "id": "glm-4.7",
+          "displayName": "GLM-4.7",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        },
+        {
+          "id": "glm-4.7-flash",
+          "displayName": "GLM-4.7 Flash",
+          "contextWindow": 200000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["glm-5.3"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "max",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["glm-5.2"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "max",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        }
+      ]
+    },
+    "moonshot": {
+      "models": [
+        {
+          "id": "kimi-k3.1-pro",
+          "displayName": "Kimi K3.1 Pro",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "kimi-k3.1-pro-highspeed",
+          "displayName": "Kimi K3.1 Pro Highspeed",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "kimi-k3",
+          "displayName": "Kimi K3",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "reasoning_effort", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["kimi-k3"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "max",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["kimi-k2.6", "kimi-k2.5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["kimi-k2-thinking"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "minimax": {
+      "models": [
+        {
+          "id": "MiniMax-M3.1-Flash",
+          "displayName": "MiniMax M3.1 Flash",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 512000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "MiniMax-M3",
+          "displayName": "MiniMax M3",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "maxOutputTokens": 512000,
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "thinking", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["minimax-m3.1"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "max",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "exactAny": ["minimax-m3"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["minimax-m3-"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        }
+      ]
+    },
+    "mistral": {
+      "models": [
+        {
+          "id": "mistral-large-4-0",
+          "displayName": "Mistral Large 4",
+          "contextWindow": 1048576,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "mistral-small-2603",
+          "displayName": "Mistral Small 4",
+          "contextWindow": 262144,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning_effort", "tools"]
+        },
+        {
+          "id": "devstral-2512",
+          "displayName": "Devstral 2",
+          "contextWindow": 262144,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        },
+        {
+          "id": "codestral-2508",
+          "displayName": "Codestral",
+          "contextWindow": 262144,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["mistral-large-4"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["mistral-small-2603", "mistral-small-4", "mistral-medium-3-5", "mistral-medium-3.5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["high"],
+            "allowsOff": true,
+            "offWireValue": "none"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["magistral"]
+          },
+          "control": {
+            "kind": "fixed",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "openrouter": {
+      "models": [
+        {
+          "id": "openrouter/free",
+          "displayName": "OpenRouter Free",
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "reasoning"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "exactAny": ["openrouter/free"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "nvidia": {
+      "models": [
+        {
+          "id": "deepseek-ai/deepseek-v4-flash",
+          "displayName": "DeepSeek V4 Flash",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        },
+        {
+          "id": "deepseek-ai/deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "contextWindow": 262144,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        },
+        {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "displayName": "Nemotron 3 Ultra 550B",
+          "contextWindow": 1000000,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        },
+        {
+          "id": "qwen/qwen3.5-122b-a10b",
+          "displayName": "Qwen 3.5 122B A10B",
+          "contextWindow": 262144,
+          "contextWindowKind": "combined",
+          "inputModalities": ["text", "image"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["temperature", "top_p", "max_tokens", "tools"]
+        }
+      ],
+      "reasoningRules": []
+    },
+    "anthropic": {
+      "models": [
+        {
+          "id": "claude-sonnet-5-5",
+          "displayName": "Claude Sonnet 5.5",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-opus-5-5",
+          "displayName": "Claude Opus 5.5",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-fable-5-1",
+          "displayName": "Claude Fable 5.1",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-mythos-5-1",
+          "displayName": "Claude Mythos 5.1",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "displayName": "Claude Haiku 5.5",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-fable-5-2",
+          "displayName": "Claude Fable 5.2",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        },
+        {
+          "id": "claude-mythos-5-2",
+          "displayName": "Claude Mythos 5.2",
+          "contextWindow": 1000000,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 128000,
+          "inputModalities": ["text", "image", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["max_tokens", "thinking", "effort", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "prefixAny": ["claude-haiku-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["claude-opus-5"],
+            "containsAny": ["5.5", "5-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["claude-sonnet-5"],
+            "containsAny": ["5.5", "5-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["claude-fable-5", "claude-mythos-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["claude-opus-5", "claude-sonnet-5"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["4-6", "4.6"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "max"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled"
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["opus-4-5", "opus-4.5"]
+          },
+          "control": {
+            "kind": "budget",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": true,
+            "offWireValue": "disabled",
+            "budget": {
+              "minimum": 1024,
+              "defaultTokens": 2048,
+              "allowsAutomatic": false
+            },
+            "combinesEffortAndBudget": true
+          }
+        },
+        {
+          "match": {
+            "containsAny": ["claude-3-7", "claude-3.7", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4"]
+          },
+          "control": {
+            "kind": "budget",
+            "allowsOff": true,
+            "offWireValue": "disabled",
+            "budget": {
+              "minimum": 1024,
+              "defaultTokens": 2048,
+              "allowsAutomatic": false
+            }
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["claude-3"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        }
+      ]
+    },
+    "gemini": {
+      "models": [
+        {
+          "id": "gemini-3.8-flash",
+          "displayName": "Gemini 3.8 Flash",
+          "contextWindow": 1048576,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text", "image", "audio", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["maxOutputTokens", "thinkingConfig", "tools"]
+        },
+        {
+          "id": "gemini-4-carbon",
+          "displayName": "Gemini 4 Carbon",
+          "contextWindow": 1048576,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text", "image", "audio", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["maxOutputTokens", "thinkingConfig", "tools"]
+        },
+        {
+          "id": "gemini-4-argon",
+          "displayName": "Gemini 4 Argon",
+          "contextWindow": 1048576,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text", "image", "audio", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["maxOutputTokens", "thinkingConfig", "tools"]
+        },
+        {
+          "id": "gemini-4-neon",
+          "displayName": "Gemini 4 Neon",
+          "contextWindow": 1048576,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text", "image", "audio", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["maxOutputTokens", "thinkingConfig", "tools"]
+        },
+        {
+          "id": "gemini-4-hydrogen",
+          "displayName": "Gemini 4 Hydrogen",
+          "contextWindow": 1048576,
+          "contextWindowKind": "inputOnly",
+          "maxOutputTokens": 65536,
+          "inputModalities": ["text", "image", "audio", "file"],
+          "outputModalities": ["text"],
+          "supportedParameters": ["maxOutputTokens", "thinkingConfig", "tools"]
+        }
+      ],
+      "reasoningRules": [
+        {
+          "match": {
+            "containsAny": ["image", "tts", "live", "transcribe"]
+          },
+          "control": {
+            "kind": "unknown",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-4-hydrogen", "gemini-4-neon"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-4"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3-pro"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3.1-pro"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3.8-flash", "gemini-3.7-flash"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3.1-flash-lite"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "minimal",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3-flash"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "high",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3.5-flash-lite"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "minimal",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-3.6-flash", "gemini-3.5-flash"]
+          },
+          "control": {
+            "kind": "efforts",
+            "efforts": ["minimal", "low", "medium", "high"],
+            "defaultEffort": "medium",
+            "allowsOff": false
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-2.5"],
+            "containsAny": ["pro"]
+          },
+          "control": {
+            "kind": "budget",
+            "allowsOff": false,
+            "budget": {
+              "minimum": 128,
+              "maximum": 32768,
+              "defaultTokens": -1,
+              "allowsAutomatic": true
+            }
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-2.5"],
+            "containsAny": ["lite"]
+          },
+          "control": {
+            "kind": "budget",
+            "allowsOff": true,
+            "offWireValue": "0",
+            "budget": {
+              "minimum": 512,
+              "maximum": 24576,
+              "defaultTokens": -1,
+              "allowsAutomatic": true
+            }
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-2.5"]
+          },
+          "control": {
+            "kind": "budget",
+            "allowsOff": true,
+            "offWireValue": "0",
+            "budget": {
+              "minimum": 1,
+              "maximum": 24576,
+              "defaultTokens": -1,
+              "allowsAutomatic": true
+            }
+          }
+        },
+        {
+          "match": {
+            "prefixAny": ["gemini-2.0", "gemini-1"]
+          },
+          "control": {
+            "kind": "unsupported",
+            "allowsOff": false
+          }
+        }
+      ]
+    }
+  },
+  "pricing": {
+    "currency": "USD",
+    "units": "USD per 1000000 tokens",
+    "entries": [
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6.2-astra"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "8",
+          "output": "40",
+          "cachedInput": "0.4",
+          "cacheWrite": "10",
+          "longCacheWrite": "20"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6.2-sol"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.1",
+          "cacheWrite": "2.5",
+          "longCacheWrite": "5"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6.1-sol"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.1",
+          "cacheWrite": "2.5",
+          "longCacheWrite": "5"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6.1-terra"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1",
+          "output": "5",
+          "cachedInput": "0.05",
+          "cacheWrite": "1.25",
+          "longCacheWrite": "2.5"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6-luna"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "0.1",
+          "output": "0.5",
+          "cachedInput": "0.01",
+          "cacheWrite": "0.125",
+          "longCacheWrite": "0.25"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-6-astra"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-10-07",
+        "rates": {
+          "input": "10",
+          "output": "50",
+          "cachedInput": "1",
+          "cacheWrite": "12.5",
+          "longCacheWrite": "25"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "openai",
+        "modelIDs": [
+          "gpt-5.6-sol"
+        ],
+        "sourceURL": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-10-07",
+        "rates": {
+          "input": "4",
+          "output": "20",
+          "cachedInput": "0.4",
+          "cacheWrite": "5",
+          "longCacheWrite": "10"
+        },
+        "longContextThreshold": 272000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "1.5"
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-sonnet-5"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-10-07",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.2",
+          "cacheWrite": "2.5",
+          "longCacheWrite": "4"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-opus-5"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-10-07",
+        "rates": {
+          "input": "5",
+          "output": "25",
+          "cachedInput": "0.5",
+          "cacheWrite": "6.25",
+          "longCacheWrite": "10"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-sonnet-5-5"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.1",
+          "cacheWrite": "2.5",
+          "longCacheWrite": "4"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-opus-5-5"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "4",
+          "output": "20",
+          "cachedInput": "0.2",
+          "cacheWrite": "5",
+          "longCacheWrite": "8"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-haiku-5-5"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "0.1",
+          "output": "0.5",
+          "cachedInput": "0.01",
+          "cacheWrite": "0.125",
+          "longCacheWrite": "0.2"
+        },
+        "longContextThreshold": 100001,
+        "longContextInputMultiplier": "5",
+        "longContextOutputMultiplier": "5"
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-fable-5-2"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "8",
+          "output": "40",
+          "cachedInput": "0.2",
+          "cacheWrite": "10",
+          "longCacheWrite": "16"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-mythos-5-2"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "8",
+          "output": "40",
+          "cachedInput": "0.2",
+          "cacheWrite": "10",
+          "longCacheWrite": "16"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-fable-5-1"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "10",
+          "output": "50",
+          "cachedInput": "0.25",
+          "cacheWrite": "12.5",
+          "longCacheWrite": "20"
+        }
+      },
+      {
+        "provider": "anthropic",
+        "modelIDs": [
+          "claude-mythos-5-1"
+        ],
+        "sourceURL": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "10",
+          "output": "50",
+          "cachedInput": "0.25",
+          "cacheWrite": "12.5",
+          "longCacheWrite": "20"
+        }
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-3.6-flash"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-10-07",
+        "rates": {
+          "input": "0.75",
+          "output": "3.75",
+          "cachedInput": "0.075"
+        },
+        "validUntil": "2027-01-01",
+        "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-3.8-flash"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "0.75",
+          "output": "3.75",
+          "cachedInput": "0.075"
+        },
+        "validUntil": "2027-01-01",
+        "contextNote": "Introductory paid-tier token estimate through 2026-12-31; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-4-carbon"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.1"
+        },
+        "validUntil": "2026-12-01",
+        "contextNote": "Introductory paid-tier token estimate through 2026-11-30; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-4-argon"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.1"
+        },
+        "validUntil": "2026-12-01",
+        "contextNote": "Introductory paid-tier token estimate through 2026-11-30; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-4-neon"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "3",
+          "output": "15",
+          "cachedInput": "0.15"
+        },
+        "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "gemini",
+        "modelIDs": [
+          "gemini-4-hydrogen"
+        ],
+        "sourceURL": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1.5",
+          "output": "7.5",
+          "cachedInput": "0.075"
+        },
+        "contextNote": "Standard paid-tier token estimate; account free-tier eligibility and cache storage are not inferred."
+      },
+      {
+        "provider": "deepseek",
+        "modelIDs": [
+          "deepseek-v4-flash",
+          "deepseek-flash",
+          "deepseek-v4-flash-vision-exp"
+        ],
+        "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6",
+          "cachedInput": "0.003"
+        },
+        "peakMultiplier": "2",
+        "contextNote": "Peak hours apply Mon–Fri 01:00–04:00 and 06:00–10:00 UTC; Chinese public holiday off-peak discounts are not inferred."
+      },
+      {
+        "provider": "deepseek",
+        "modelIDs": [
+          "deepseek-v4-pro"
+        ],
+        "sourceURL": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "0.66",
+          "output": "1.98",
+          "cachedInput": "0.022"
+        },
+        "peakMultiplier": "2",
+        "contextNote": "Peak hours apply Mon–Fri 01:00–04:00 and 06:00–10:00 UTC; Chinese public holiday off-peak discounts are not inferred."
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5.3"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1.4",
+          "output": "4.4",
+          "cachedInput": "0.26"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5.3-flash"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.15",
+          "output": "0.5",
+          "cachedInput": "0.03"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5.3-flashx"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.37",
+          "output": "1.25",
+          "cachedInput": "0.075"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5.2"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1.4",
+          "output": "4.4",
+          "cachedInput": "0.26"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5.1"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1.4",
+          "output": "4.4",
+          "cachedInput": "0.26"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5v-turbo"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1.2",
+          "output": "4",
+          "cachedInput": "0.24"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5-turbo"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1.2",
+          "output": "4",
+          "cachedInput": "0.24"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-5"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "1",
+          "output": "3.2",
+          "cachedInput": "0.2"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-4.7"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.6",
+          "output": "2.2",
+          "cachedInput": "0.11"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-4.7-flashx"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.07",
+          "output": "0.4",
+          "cachedInput": "0.01"
+        }
+      },
+      {
+        "provider": "zai",
+        "modelIDs": [
+          "glm-4.7-flash"
+        ],
+        "sourceURL": "https://docs.z.ai/guides/overview/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0",
+          "output": "0",
+          "cachedInput": "0"
+        }
+      },
+      {
+        "provider": "moonshot",
+        "modelIDs": [
+          "kimi-k3.1-pro"
+        ],
+        "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "2",
+          "output": "10",
+          "cachedInput": "0.2"
+        }
+      },
+      {
+        "provider": "moonshot",
+        "modelIDs": [
+          "kimi-k3.1-pro-highspeed"
+        ],
+        "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "4",
+          "output": "20",
+          "cachedInput": "0.2"
+        }
+      },
+      {
+        "provider": "moonshot",
+        "modelIDs": [
+          "kimi-k3"
+        ],
+        "sourceURL": "https://platform.moonshot.ai/docs/pricing/chat",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "3",
+          "output": "15",
+          "cachedInput": "0.3"
+        }
+      },
+      {
+        "provider": "minimax",
+        "modelIDs": [
+          "MiniMax-M3.1-Flash"
+        ],
+        "sourceURL": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6",
+          "cachedInput": "0.015"
+        }
+      },
+      {
+        "provider": "minimax",
+        "modelIDs": [
+          "MiniMax-M3"
+        ],
+        "sourceURL": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.3",
+          "output": "1.2",
+          "cachedInput": "0.06"
+        },
+        "longContextThreshold": 512000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "mistral",
+        "modelIDs": [
+          "mistral-large-4-0"
+        ],
+        "sourceURL": "https://mistral.ai/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.7",
+          "output": "2.1",
+          "cachedInput": "0.07"
+        }
+      },
+      {
+        "provider": "mistral",
+        "modelIDs": [
+          "mistral-small-2603"
+        ],
+        "sourceURL": "https://mistral.ai/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.15",
+          "output": "0.6",
+          "cachedInput": "0.015"
+        }
+      },
+      {
+        "provider": "mistral",
+        "modelIDs": [
+          "devstral-2512"
+        ],
+        "sourceURL": "https://mistral.ai/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.4",
+          "output": "2",
+          "cachedInput": "0.04"
+        }
+      },
+      {
+        "provider": "mistral",
+        "modelIDs": [
+          "codestral-2508"
+        ],
+        "sourceURL": "https://mistral.ai/pricing",
+        "verifiedAt": "2026-11-19",
+        "rates": {
+          "input": "0.3",
+          "output": "0.9",
+          "cachedInput": "0.03"
+        }
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.7"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "6",
+          "cachedInput": "0.5"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.6"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "2",
+          "output": "6",
+          "cachedInput": "0.5"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.3",
+          "grok-4.3-latest"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1.25",
+          "output": "2.5",
+          "cachedInput": "0.2"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.20-0309-reasoning",
+          "grok-4.20-reasoning"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1.25",
+          "output": "2.5",
+          "cachedInput": "0.2"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.20-non-reasoning",
+          "grok-4.20-0309-non-reasoning"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1.25",
+          "output": "2.5",
+          "cachedInput": "0.2"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      },
+      {
+        "provider": "xai",
+        "modelIDs": [
+          "grok-4.20-multi-agent",
+          "grok-4.20-multi-agent-0309"
+        ],
+        "sourceURL": "https://docs.x.ai/developers/models",
+        "verifiedAt": "2026-11-20",
+        "rates": {
+          "input": "1.25",
+          "output": "2.5",
+          "cachedInput": "0.2"
+        },
+        "longContextThreshold": 200000,
+        "longContextInputMultiplier": "2",
+        "longContextOutputMultiplier": "2"
+      }
+    ]
+  }
+}

@@ -11,8 +11,12 @@ final class ProviderManagementModel {
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
   private(set) var lastModelRefreshByAccount: [ProviderAccountID: Date] = [:]
+  private(set) var modelCatalogStatus: ModelCatalogStatus?
+  private(set) var modelCatalogRevision: Int = ModelCatalogRegistry.current?.revision ?? 0
+  private(set) var isRefreshingModelCatalog = false
   @ObservationIgnored private var catalogRefreshTasks: [ProviderAccountID: Task<Void, Error>] = [:]
   @ObservationIgnored private var catalogRefreshFailures: [ProviderAccountID: Date] = [:]
+  @ObservationIgnored private var modelCatalogRefreshTask: Task<ModelCatalogRefreshResult, Error>?
 
   enum CatalogRefreshResult: Equatable {
     case refreshed, current, throttled, unsupported
@@ -29,17 +33,20 @@ final class ProviderManagementModel {
   private let workspace: ProviderWorkspaceStore
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
+  private let modelCatalog: ModelCatalogStore?
 
   init(
     registry: ProviderRegistry,
     workspace: ProviderWorkspaceStore,
     accountManager: ProviderAccountManager,
-    runtime: ProviderRuntime
+    runtime: ProviderRuntime,
+    modelCatalog: ModelCatalogStore? = nil
   ) {
     self.registry = registry
     self.workspace = workspace
     self.accountManager = accountManager
     self.runtime = runtime
+    self.modelCatalog = modelCatalog
   }
 
   func capabilities(accountID: ProviderAccountID, modelID: ModelID) -> ResolvedModelCapabilities {
@@ -50,6 +57,10 @@ final class ProviderManagementModel {
 
   func load() async {
     await perform() {
+      if let modelCatalog {
+        await modelCatalog.load()
+        try await registry.refreshBuiltIns()
+      }
       try await workspace.load()
       try await accountManager.synchronizeCustomProviders()
       try await reloadSnapshot()
@@ -58,9 +69,87 @@ final class ProviderManagementModel {
 
   func reloadFromStorage() async {
     await perform() {
+      if let modelCatalog {
+        await modelCatalog.load()
+        try await registry.refreshBuiltIns()
+      }
       try await accountManager.synchronizeCustomProviders()
       try await reloadSnapshot()
     }
+  }
+
+  /// Background non-blocking refresh of the remote Layer 2 catalog.
+  /// Errors are absorbed so offline launches and transient outages stay quiet.
+  func refreshModelCatalogIfNeeded() async {
+    guard modelCatalog != nil else { return }
+    _ = try? await refreshModelCatalog(force: false)
+  }
+
+  /// Fetches Layer 2 static catalog JSON from `spokiostudio.com` using ETag
+  /// conditional requests, persists valid newer revisions, and merges updated
+  /// seed models into existing built-in cloud accounts.
+  @discardableResult
+  func refreshModelCatalog(force: Bool = true) async throws -> ModelCatalogRefreshResult {
+    guard let modelCatalog else { return .upToDate }
+    if let existing = modelCatalogRefreshTask {
+      return try await existing.value
+    }
+    isRefreshingModelCatalog = true
+    let task: Task<ModelCatalogRefreshResult, Error> = Task { @MainActor in
+      let result = try await modelCatalog.refresh(force: force)
+      switch result {
+      case .updated:
+        try await applyActiveModelCatalogToWorkspace()
+      case .ignoredOlderThanBundled:
+        try await registry.refreshBuiltIns()
+        try await reloadSnapshot()
+      case .notModified, .upToDate, .throttled:
+        modelCatalogStatus = await modelCatalog.status()
+        modelCatalogRevision = ModelCatalogRegistry.current?.revision ?? 0
+      }
+      return result
+    }
+    modelCatalogRefreshTask = task
+    defer {
+      modelCatalogRefreshTask = nil
+      isRefreshingModelCatalog = false
+    }
+    do {
+      return try await task.value
+    } catch {
+      modelCatalogStatus = await modelCatalog.status()
+      modelCatalogRevision = ModelCatalogRegistry.current?.revision ?? 0
+      throw error
+    }
+  }
+
+  private func applyActiveModelCatalogToWorkspace() async throws {
+    try await registry.refreshBuiltIns()
+    let existingAccounts = await workspace.allAccounts()
+    for account in existingAccounts
+    where account.kind != .openAICompatible && !account.kind.isLocalServer {
+      let seeds = account.kind.seedModels.map { model in
+        var value = model
+        value.providerID = account.providerID
+        return value
+      }
+      guard !seeds.isEmpty else { continue }
+      _ = try await workspace.mergeModels(
+        seeds,
+        for: account.id,
+        expectedAccount: account,
+        markRefreshed: false
+      )
+    }
+    try await reloadSnapshot()
+  }
+
+  /// Removes any cached Layer 2 remote catalog and reverts to Layer 1 bundled.
+  func clearModelCatalogCache() async throws {
+    guard let modelCatalog else { return }
+    try await modelCatalog.clearCache()
+    try await registry.refreshBuiltIns()
+    try await reloadSnapshot()
   }
 
   func accounts(for providerID: ProviderID) -> [ProviderAccount] {
@@ -588,6 +677,10 @@ final class ProviderManagementModel {
     modelsByAccount = modelValues
     lastModelRefreshByAccount = refreshDates
     credentialAccountIDs = credentialValues
+    if let modelCatalog {
+      modelCatalogStatus = await modelCatalog.status()
+    }
+    modelCatalogRevision = ModelCatalogRegistry.current?.revision ?? 0
 
     // Plain-value inputs instead of closures: the resolver runs on the
     // workspace actor, and closures capturing MainActor-isolated state would

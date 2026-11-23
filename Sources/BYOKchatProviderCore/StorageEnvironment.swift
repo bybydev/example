@@ -59,6 +59,8 @@ public struct BYOKStorageEnvironment: Sendable, Equatable {
 /// duplicate these filenames when constructing stores.
 public struct BYOKStorageLayout: Sendable, Equatable {
   public static let providersFileName = "providers-v1.json"
+  public static let modelCatalogFileName = "model-catalog-v1.json"
+  public static let modelCatalogMetadataFileName = "model-catalog-meta-v1.json"
   public static let conversationsDirectoryName = "conversations-v1"
   public static let libraryFileName = "library-v1.json"
   public static let projectsFileName = "projects-v1.json"
@@ -74,6 +76,14 @@ public struct BYOKStorageLayout: Sendable, Equatable {
 
   public var providersFile: URL {
     rootDirectory.appendingPathComponent(Self.providersFileName, isDirectory: false)
+  }
+
+  public var modelCatalogFile: URL {
+    rootDirectory.appendingPathComponent(Self.modelCatalogFileName, isDirectory: false)
+  }
+
+  public var modelCatalogMetadataFile: URL {
+    rootDirectory.appendingPathComponent(Self.modelCatalogMetadataFileName, isDirectory: false)
   }
 
   public var conversationsDirectory: URL {
@@ -137,6 +147,8 @@ public struct BYOKStorageLayout: Sendable, Equatable {
 
     let metadataURLs = [
       providersFile,
+      modelCatalogFile,
+      modelCatalogMetadataFile,
       libraryFile,
       projectsFile,
       mcpServersFile,

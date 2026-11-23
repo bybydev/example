@@ -146,7 +146,14 @@ struct MessageInfoView: View {
                 Link("Official pricing", destination: url)
               }
               DisclosureGroup("Catalog details") {
-                LabeledContent("Source", value: snapshot.source == "bundledCatalog" ? "Bundled catalog" : "Model API")
+                LabeledContent(
+                  "Source",
+                  value: snapshot.source == "remoteCatalog"
+                    ? "Remote catalog"
+                    : snapshot.source == "bundledCatalog"
+                      ? "Bundled catalog"
+                      : "Model API"
+                )
                 if let version = snapshot.version { LabeledContent("Version", value: version) }
                 if let verified = snapshot.verifiedAt { LabeledContent("Verified", value: verified) }
               }

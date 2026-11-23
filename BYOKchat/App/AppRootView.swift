@@ -226,6 +226,9 @@ struct AppRootView: View {
         Task { await model.chats.persistActiveMessages() }
       } else {
         model.chats.retryAbandonedNewChats()
+        Task(priority: .utility) {
+          await model.providers.refreshModelCatalogIfNeeded()
+        }
       }
     }
     .sheet(isPresented: $isSettingsPresented) {

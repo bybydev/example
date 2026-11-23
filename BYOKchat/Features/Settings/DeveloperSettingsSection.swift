@@ -83,6 +83,26 @@ struct BYOKDeveloperToolsView: View {
                 value: { String(model.mcp.servers.count) }
               )
             ),
+            .value(
+              FoundationDeveloperValue(
+                id: "model-catalog-status",
+                title: "Model catalog",
+                value: {
+                  guard let status = model.providers.modelCatalogStatus else { return "Unavailable" }
+                  let layer = status.source == .remote ? "Remote" : "Bundled"
+                  return "\(layer) · \(status.version)"
+                }
+              )
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "model-catalog",
+                title: "Model Catalog",
+                systemImage: "square.stack.3d.up"
+              ) {
+                ModelCatalogDeveloperView()
+              }
+            ),
             .destination(
               FoundationDeveloperDestination(
                 id: "provider-simulator",
@@ -493,6 +513,282 @@ private enum SimulatorConfigurationError: LocalizedError {
       "Simulator manifest request failed with HTTP \(status)."
     case .missingAPIKey:
       "This simulator deployment requires a Simulator API Key."
+    }
+  }
+}
+
+private struct ModelCatalogDeveloperView: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.appFoundationTheme) private var theme
+
+  @State private var isWorking = false
+  @State private var actionStatus: String?
+  @State private var actionError: String?
+  @State private var cachedFileBytes: Int64?
+
+  private var status: ModelCatalogStatus? {
+    model.providers.modelCatalogStatus
+  }
+
+  private var activeSnapshot: ModelCatalogSnapshot? {
+    _ = model.providers.modelCatalogRevision
+    return ModelCatalogRegistry.current
+  }
+
+  private var bundledSnapshot: ModelCatalogSnapshot? {
+    ModelCatalogRegistry.bundled
+  }
+
+  private struct ProviderSummary: Identifiable {
+    var id: String { key }
+    let key: String
+    let models: Int
+    let rules: Int
+  }
+
+  private var providerSummaries: [ProviderSummary] {
+    guard let providers = activeSnapshot?.catalog.providers else { return [] }
+    return providers
+      .map { ProviderSummary(key: $0.key, models: $0.value.models.count, rules: $0.value.reasoningRules.count) }
+      .sorted { $0.key < $1.key }
+  }
+
+  var body: some View {
+    List {
+      Section {
+        if let status {
+          LabeledContent(
+            "Active Layer",
+            value: status.source == .remote ? "Layer 2 (Remote)" : "Layer 1 (Bundled)"
+          )
+          LabeledContent("Version", value: status.version)
+          LabeledContent("Revision", value: String(status.revision))
+          LabeledContent("Schema", value: "v\(status.schemaVersion)")
+          if let generatedAt = status.generatedAt {
+            LabeledContent("Generated", value: generatedAt)
+          }
+          LabeledContent(
+            "Contents",
+            value: "\(status.providerCount) providers · \(status.modelCount) models · \(status.pricingEntryCount) prices"
+          )
+          LabeledContent("Reasoning Rules", value: status.reasoningRuleCount.formatted())
+        } else {
+          Text("Catalog status unavailable.")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      } header: {
+        Text("Active Catalog")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      Section {
+        if let bundled = bundledSnapshot {
+          LabeledContent("Version", value: bundled.version)
+          LabeledContent("Revision", value: String(bundled.revision))
+          LabeledContent(
+            "Contents",
+            value: "\(bundled.catalog.providers.count) providers · \(bundled.catalog.providers.values.reduce(0) { $0 + $1.models.count }) models · \(bundled.catalog.pricing.entries.count) prices"
+          )
+        } else {
+          Text("Bundled catalog missing.")
+            .foregroundStyle(.red)
+        }
+      } header: {
+        Text("Layer 1 · Bundled")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      Section {
+        if let status {
+          LabeledContent("Endpoint") {
+            Text(status.remoteURL.absoluteString)
+              .font(.caption.monospaced())
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .multilineTextAlignment(.trailing)
+              .textSelection(.enabled)
+          }
+          LabeledContent(
+            "Cached Remote",
+            value: status.cachedVersion.map { version in
+              if let revision = status.cachedRevision {
+                return "\(version) (\(revision))"
+              }
+              return version
+            } ?? "None"
+          )
+          if let cachedFileBytes {
+            LabeledContent(
+              "Disk Cache",
+              value: ByteCountFormatter.string(fromByteCount: cachedFileBytes, countStyle: .file)
+            )
+          }
+          if let etag = status.etag {
+            LabeledContent("ETag") {
+              Text(etag)
+                .font(.caption.monospaced())
+                .foregroundStyle(theme.secondaryForegroundColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            }
+          }
+          if let lastCheckedAt = status.lastCheckedAt {
+            LabeledContent("Last Checked") {
+              Text(lastCheckedAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+          if let lastUpdatedAt = status.lastUpdatedAt {
+            LabeledContent("Last Updated") {
+              Text(lastUpdatedAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+          if let lastFailureAt = status.lastFailureAt {
+            LabeledContent("Last Failure") {
+              Text(lastFailureAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+                .foregroundStyle(.red)
+            }
+          }
+          if let lastFailureMessage = status.lastFailureMessage {
+            Text(lastFailureMessage)
+              .font(.footnote)
+              .foregroundStyle(.red)
+          }
+        }
+      } header: {
+        Text("Layer 2 · Remote (spokiostudio.com)")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      Section {
+        Button {
+          Task { await refreshCatalog(force: true) }
+        } label: {
+          HStack(spacing: 10) {
+            Label("Force Refresh Remote Catalog", systemImage: "arrow.clockwise")
+            if isWorking || model.providers.isRefreshingModelCatalog {
+              Spacer()
+              ProgressView()
+                .controlSize(.small)
+            }
+          }
+        }
+        .disabled(isWorking || model.providers.isRefreshingModelCatalog)
+
+        Button("Check If Stale (Respects TTL)", systemImage: "clock.arrow.circlepath") {
+          Task { await refreshCatalog(force: false) }
+        }
+        .disabled(isWorking || model.providers.isRefreshingModelCatalog)
+
+        Button("Clear Cached Remote Catalog", systemImage: "trash", role: .destructive) {
+          Task { await clearCache() }
+        }
+        .disabled(
+          isWorking || model.providers.isRefreshingModelCatalog
+            || (status?.cachedRevision == nil && status?.etag == nil && cachedFileBytes == nil)
+        )
+
+        if let actionStatus {
+          Text(actionStatus)
+            .font(.footnote)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        if let actionError {
+          Text(actionError)
+            .font(.footnote)
+            .foregroundStyle(.red)
+        }
+      } header: {
+        Text("Actions")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      .listRowBackground(theme.surfaceColor)
+
+      if !providerSummaries.isEmpty {
+        Section {
+          ForEach(providerSummaries) { item in
+            LabeledContent(item.key) {
+              Text("\(item.models) models · \(item.rules) rules")
+                .foregroundStyle(theme.secondaryForegroundColor)
+            }
+          }
+        } header: {
+          Text("Active Providers")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        .listRowBackground(theme.surfaceColor)
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Model Catalog")
+    .navigationBarTitleDisplayMode(.inline)
+    .onAppear {
+      refreshDiskCacheSize()
+    }
+    .onChange(of: model.providers.modelCatalogRevision) { _, _ in
+      refreshDiskCacheSize()
+    }
+  }
+
+  private func refreshDiskCacheSize() {
+    let url = model.storageEnvironment.layout.modelCatalogFile
+    let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+    if values?.isRegularFile == true, let size = values?.fileSize {
+      cachedFileBytes = Int64(size)
+    } else {
+      cachedFileBytes = nil
+    }
+  }
+
+  @MainActor
+  private func refreshCatalog(force: Bool) async {
+    isWorking = true
+    actionStatus = nil
+    actionError = nil
+    defer {
+      isWorking = false
+      refreshDiskCacheSize()
+    }
+    do {
+      let result = try await model.providers.refreshModelCatalog(force: force)
+      switch result {
+      case .updated(let revision, let version):
+        actionStatus = "Updated to Layer 2 remote catalog \(version) (rev \(revision))."
+      case .notModified:
+        actionStatus = "HTTP 304 Not Modified (ETag matched)."
+      case .upToDate:
+        actionStatus = "Skipped network check (within refresh interval)."
+      case .throttled:
+        actionStatus = "Skipped network check (recent failure retry cooldown)."
+      case .ignoredOlderThanBundled(let remoteRevision, let bundledRevision):
+        actionStatus = "Remote rev \(remoteRevision) is not newer than bundled rev \(bundledRevision); kept Layer 1."
+      }
+    } catch {
+      actionError = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func clearCache() async {
+    isWorking = true
+    actionStatus = nil
+    actionError = nil
+    defer {
+      isWorking = false
+      refreshDiskCacheSize()
+    }
+    do {
+      try await model.providers.clearModelCatalogCache()
+      actionStatus = "Cleared cached Layer 2 catalog and reverted to Layer 1 bundled."
+    } catch {
+      actionError = error.localizedDescription
     }
   }
 }

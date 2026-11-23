@@ -56,6 +56,15 @@ public actor ProviderRegistry {
     definitions.removeValue(forKey: id)
   }
 
+  /// Refreshes registered built-in provider definitions from the active
+  /// 2-layer model catalog without touching custom providers.
+  public func refreshBuiltIns() throws {
+    for definition in BuiltInProviders.all {
+      try Self.validate(definition)
+      definitions[definition.id] = definition
+    }
+  }
+
   public static func validate(_ definition: ProviderDefinition) throws {
     let id = definition.id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !id.isEmpty else { throw ProviderError.invalidDefinition("Provider ID cannot be empty.") }

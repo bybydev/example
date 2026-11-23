@@ -66,7 +66,8 @@ final class AppModel {
       registry: coreServices.providerRegistry,
       workspace: coreServices.providerWorkspace,
       accountManager: coreServices.accountManager,
-      runtime: coreServices.providerRuntime
+      runtime: coreServices.providerRuntime,
+      modelCatalog: coreServices.modelCatalog
     )
     let projectModel = ProjectManagementModel(workspace: coreServices.projectWorkspace)
     let chatModel = ChatManagementModel(

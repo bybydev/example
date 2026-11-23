@@ -302,177 +302,16 @@ public enum ModelCapabilityResolver {
     )
   }
 
-  /// API-scoped rules. Unknown model families never receive a guessed control ladder.
+  /// API-scoped rules from the active 2-layer model catalog.
+  /// Unknown model families never receive a guessed control ladder.
   public static func reasoningControl(kind: ProviderKind, modelID: ModelID) -> ModelReasoningControl {
-    let id = modelID.rawValue.lowercased().replacingOccurrences(of: "_", with: "-")
-    func efforts(_ values: [ReasoningEffort], defaultEffort value: ReasoningEffort? = .medium,
-      off: String? = nil) -> ModelReasoningControl {
-      .init(kind: .efforts, efforts: values, defaultEffort: value, allowsOff: off != nil,
-        offWireValue: off, source: .adapter)
-    }
     switch kind {
-    case .openai:
-      if id.hasPrefix("gpt-6") {
-        if id.contains("terra") || id.contains("luna") {
-          return efforts([.low, .medium, .high, .xhigh, .max], off: "none")
-        }
-        return efforts([.low, .medium, .high, .xhigh, .max])
-      }
-      if id.hasPrefix("gpt-5.6") { return efforts([.low, .medium, .high, .xhigh, .max], off: "none") }
-      if id.hasPrefix("gpt-5.5") || id.hasPrefix("gpt-5.4") || id.hasPrefix("gpt-5.2") {
-        if id.contains("pro") { return efforts([.medium, .high, .xhigh], defaultEffort: nil) }
-        return efforts([.low, .medium, .high, .xhigh], defaultEffort: id.hasPrefix("gpt-5.5") ? .medium : nil, off: "none")
-      }
-      if id.hasPrefix("gpt-5.1") {
-        if id.contains("codex-max") { return efforts([.medium, .high, .xhigh]) }
-        if id.contains("codex") { return efforts([.low, .medium, .high]) }
-        return efforts([.low, .medium, .high], defaultEffort: nil, off: "none")
-      }
-      if id.hasPrefix("gpt-5-pro") { return .init(kind: .fixed, defaultEffort: .high, source: .adapter) }
-      if id == "gpt-5" || id.hasPrefix("gpt-5-") { return efforts([.minimal, .low, .medium, .high]) }
-      if id.hasPrefix("o1-mini") || id.hasPrefix("o1-preview") || id.hasPrefix("o1-pro") {
-        return .init(kind: .fixed, source: .adapter)
-      }
-      if id.hasPrefix("o1") || id.hasPrefix("o3") || id.hasPrefix("o4") || id.hasPrefix("codex-") {
-        return efforts([.low, .medium, .high])
-      }
-      if id.hasPrefix("gpt-4") || id.hasPrefix("chatgpt-4") { return .init(kind: .unsupported, source: .adapter) }
-    case .deepSeek:
-      if id.hasPrefix("deepseek-v4") || id == "deepseek-flash" || id == "deepseek-pro" {
-        return efforts([.low, .high, .max], defaultEffort: .high, off: "disabled")
-      }
-    case .zAI:
-      if id.hasPrefix("glm-5.3") {
-        return efforts([.low, .high, .max], defaultEffort: .max)
-      }
-      if id.hasPrefix("glm-5.2") {
-        return efforts([.low, .high, .max], defaultEffort: .max, off: "disabled")
-      }
-      if id.hasPrefix("glm-5") || id.hasPrefix("glm-4.7")
-        || id.hasPrefix("glm-4.6") || id.hasPrefix("glm-4.5")
-      {
-        return .init(kind: .fixed, allowsOff: true, offWireValue: "disabled", source: .adapter)
-      }
-    case .moonshot:
-      if id.hasPrefix("kimi-k3") {
-        return efforts([.low, .high, .max], defaultEffort: .max)
-      }
-      if id.hasPrefix("kimi-k2.6") || id.hasPrefix("kimi-k2.5") {
-        return efforts([.low, .high, .max], defaultEffort: .high, off: "disabled")
-      }
-      if id.hasPrefix("kimi-k2-thinking") {
-        return .init(kind: .fixed, source: .adapter)
-      }
-    case .minimax:
-      if id.hasPrefix("minimax-m3.1") {
-        return efforts([.low, .medium, .high, .xhigh, .max], defaultEffort: .max)
-      }
-      if id == "minimax-m3" || id.hasPrefix("minimax-m3-") {
-        return .init(kind: .fixed, allowsOff: true, offWireValue: "disabled", source: .adapter)
-      }
-    case .mistral:
-      if id.hasPrefix("mistral-large-4") {
-        return efforts([.low, .medium, .high], defaultEffort: .high)
-      }
-      if id.hasPrefix("mistral-small-2603") || id.hasPrefix("mistral-small-4")
-        || id.hasPrefix("mistral-medium-3-5") || id.hasPrefix("mistral-medium-3.5")
-      {
-        return efforts([.high], defaultEffort: nil, off: "none")
-      }
-      if id.hasPrefix("magistral") {
-        return .init(kind: .fixed, source: .adapter)
-      }
-    case .gemini:
-      if id.contains("image") || id.contains("tts") || id.contains("live")
-        || id.contains("transcribe")
-      {
-        return .init()
-      }
-      if id.hasPrefix("gemini-4-hydrogen") || id.hasPrefix("gemini-4-neon") {
-        return efforts([.low, .medium, .high, .xhigh], defaultEffort: .high)
-      }
-      if id.hasPrefix("gemini-4") {
-        return efforts([.low, .medium, .high], defaultEffort: .medium)
-      }
-      if id.hasPrefix("gemini-3-pro") { return efforts([.low, .high], defaultEffort: .high) }
-      if id.hasPrefix("gemini-3.1-pro") { return efforts([.low, .medium, .high], defaultEffort: .high) }
-      if id.hasPrefix("gemini-3.8-flash") || id.hasPrefix("gemini-3.7-flash") {
-        return efforts([.low, .medium, .high])
-      }
-      if id.hasPrefix("gemini-3.1-flash-lite") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .minimal) }
-      if id.hasPrefix("gemini-3-flash") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .high) }
-      if id.hasPrefix("gemini-3.5-flash-lite") { return efforts([.minimal, .low, .medium, .high], defaultEffort: .minimal) }
-      if id.hasPrefix("gemini-3.6-flash") || id.hasPrefix("gemini-3.5-flash") {
-        return efforts([.minimal, .low, .medium, .high])
-      }
-      if id.hasPrefix("gemini-2.5") {
-        let pro = id.contains("pro")
-        return .init(kind: .budget, allowsOff: !pro, offWireValue: pro ? nil : "0",
-          budget: .init(minimum: pro ? 128 : id.contains("lite") ? 512 : 1, maximum: pro ? 32_768 : 24_576,
-            defaultTokens: -1, allowsAutomatic: true), source: .adapter)
-      }
-      if id.hasPrefix("gemini-2.0") || id.hasPrefix("gemini-1") { return .init(kind: .unsupported, source: .adapter) }
-    case .anthropic:
-      if id.hasPrefix("claude-haiku-5") {
-        return efforts([.low, .medium, .high, .xhigh, .max], defaultEffort: .medium, off: "disabled")
-      }
-      let v5 = id.hasPrefix("claude-opus-5") || id.hasPrefix("claude-sonnet-5")
-        || id.hasPrefix("claude-fable-5") || id.hasPrefix("claude-mythos-5")
-      if v5 {
-        let mandatory = id.contains("5.5") || id.contains("5-5") || id.contains("fable") || id.contains("mythos")
-        return efforts([.low, .medium, .high, .xhigh, .max],
-          defaultEffort: id.contains("opus-5.5") || id.contains("opus-5-5") ? .medium : .high,
-          off: mandatory ? nil : "disabled")
-      }
-      if id.contains("opus-4-7") || id.contains("opus-4.7") || id.contains("opus-4-8") || id.contains("opus-4.8") {
-        return efforts([.low, .medium, .high, .xhigh, .max], defaultEffort: .high, off: "disabled")
-      }
-      if id.contains("4-6") || id.contains("4.6") { return efforts([.low, .medium, .high, .max], defaultEffort: .high, off: "disabled") }
-      if id.contains("opus-4-5") || id.contains("opus-4.5") {
-        return .init(kind: .budget, efforts: [.low, .medium, .high], defaultEffort: .high,
-          allowsOff: true, offWireValue: "disabled",
-          budget: .init(minimum: 1_024, maximum: nil, defaultTokens: 2_048),
-          combinesEffortAndBudget: true, source: .adapter)
-      }
-      if id.contains("claude-3-7") || id.contains("claude-3.7") || id.contains("claude-sonnet-4")
-        || id.contains("claude-opus-4") || id.contains("claude-haiku-4") {
-        return .init(kind: .budget, allowsOff: true, offWireValue: "disabled",
-          budget: .init(minimum: 1_024, maximum: nil, defaultTokens: 2_048), source: .adapter)
-      }
-      if id.hasPrefix("claude-3") { return .init(kind: .unsupported, source: .adapter) }
-    case .xAI:
-      if id.contains("non-reasoning") { return .init(kind: .unsupported, source: .adapter) }
-      if id.hasPrefix("grok-4.7") || id.hasPrefix("grok-4.6") || id.hasPrefix("grok-4.20-multi-agent") {
-        return efforts([.low, .medium, .high, .xhigh], defaultEffort: .high)
-      }
-      if id.hasPrefix("grok-4.5") { return efforts([.low, .medium, .high], defaultEffort: .high) }
-      if id.hasPrefix("grok-4.3") {
-        return efforts([.low, .medium, .high, .xhigh], defaultEffort: .low, off: "none")
-      }
-      if id.hasPrefix("grok-3-mini") {
-        return efforts([.low, .high], defaultEffort: .low, off: "none")
-      }
-      if id.hasPrefix("grok-4.20")
-        || id.hasPrefix("grok-4-fast")
-        || id.hasPrefix("grok-4-1-fast")
-        || id.hasPrefix("grok-4-0709")
-        || id == "grok-4"
-        || id.hasPrefix("grok-code-fast")
-      {
-        return .init(kind: .fixed, source: .adapter)
-      }
-      if id == "grok-3" || id.hasPrefix("grok-3-") {
-        return .init(kind: .unsupported, source: .adapter)
-      }
-    case .openRouter:
-      if id == "openrouter/free" {
-        return efforts([.low, .medium, .high], defaultEffort: nil)
-      }
     case .nvidia, .ollama, .lmStudio, .openAICompatible:
       // A parameter name does not establish the routed/custom model's valid values.
-      break
+      return .init()
+    default:
+      return ModelCatalogRegistry.current?.reasoningControl(kind: kind, modelID: modelID) ?? .init()
     }
-    return .init()
   }
 }
 
@@ -537,6 +376,11 @@ extension ProviderModel {
     }
     if result.promptPricePerToken == nil { result.promptPricePerToken = fallback.promptPricePerToken }
     if result.completionPricePerToken == nil { result.completionPricePerToken = fallback.completionPricePerToken }
+    if result.cachedInputPricePerToken == nil { result.cachedInputPricePerToken = fallback.cachedInputPricePerToken }
+    if result.cacheWritePricePerToken == nil { result.cacheWritePricePerToken = fallback.cacheWritePricePerToken }
+    if result.hasAdditionalPricingDimensions == nil {
+      result.hasAdditionalPricingDimensions = fallback.hasAdditionalPricingDimensions
+    }
     var incomingEvidence = capabilityEvidence ?? .init()
     var fallbackEvidence = fallback.capabilityEvidence ?? .init()
     if contextWindow == nil { incomingEvidence.contextWindowSource = nil }

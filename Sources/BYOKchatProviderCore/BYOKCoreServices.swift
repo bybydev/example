@@ -9,6 +9,7 @@ import Foundation
 public struct BYOKCoreServices {
   public let environment: BYOKStorageEnvironment
   public let telemetryRecorder: TelemetryRecorder
+  public let modelCatalog: ModelCatalogStore
 
   public let providerRegistry: ProviderRegistry
   public let providerWorkspace: ProviderWorkspaceStore
@@ -40,7 +41,8 @@ public struct BYOKCoreServices {
     credentialVault: any CredentialVault,
     mcpCredentialVault: any MCPCredentialVault,
     toolRuntime: ToolRuntime = ToolRuntime(),
-    telemetryRecorder: TelemetryRecorder? = nil
+    telemetryRecorder: TelemetryRecorder? = nil,
+    modelCatalog: ModelCatalogStore? = nil
   ) throws {
     let providerRegistry = try ProviderRegistry.builtIn()
     self.init(
@@ -49,7 +51,8 @@ public struct BYOKCoreServices {
       credentialVault: credentialVault,
       mcpCredentialVault: mcpCredentialVault,
       toolRuntime: toolRuntime,
-      telemetryRecorder: telemetryRecorder
+      telemetryRecorder: telemetryRecorder,
+      modelCatalog: modelCatalog
     )
   }
 
@@ -63,7 +66,8 @@ public struct BYOKCoreServices {
     credentialVault: any CredentialVault,
     mcpCredentialVault: any MCPCredentialVault,
     toolRuntime: ToolRuntime = ToolRuntime(),
-    telemetryRecorder: TelemetryRecorder? = nil
+    telemetryRecorder: TelemetryRecorder? = nil,
+    modelCatalog: ModelCatalogStore? = nil
   ) {
     self.environment = environment
     let telemetryRecorder = telemetryRecorder ?? environment.makeTelemetryRecorder()
@@ -71,6 +75,13 @@ public struct BYOKCoreServices {
     self.providerRegistry = providerRegistry
 
     let layout = environment.layout
+    let modelCatalog = modelCatalog ?? ModelCatalogStore(
+      persistence: JSONFileModelCatalogPersistence(
+        catalogFileURL: layout.modelCatalogFile,
+        metadataFileURL: layout.modelCatalogMetadataFile
+      )
+    )
+    self.modelCatalog = modelCatalog
     let providerWorkspace = ProviderWorkspaceStore(
       persistence: JSONFileProviderWorkspacePersistence(fileURL: layout.providersFile)
     )
@@ -173,6 +184,8 @@ public struct BYOKCoreServices {
   /// refreshing MCP servers. Conversation startup remains index-only and does
   /// not hydrate message shards.
   public func loadStoredState() async throws {
+    await modelCatalog.load()
+    try await providerRegistry.refreshBuiltIns()
     try await providerWorkspace.load()
     try await projectWorkspace.load()
     try await mcpRuntime.load()

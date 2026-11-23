@@ -75,28 +75,71 @@ public struct ModelPricingRates: Codable, Sendable, Equatable {
   }
 }
 
-struct ModelPricingCatalog: Decodable, Sendable {
-  var schemaVersion: Int
-  var version: String
-  var currency: String
-  var units: String
-  var entries: [Entry]
+public struct ModelPricingCatalog: Codable, Sendable, Equatable {
+  public var schemaVersion: Int
+  public var version: String
+  public var currency: String
+  public var units: String
+  public var entries: [Entry]
 
-  struct Entry: Decodable, Sendable {
-    var provider: String
-    var modelIDs: [String]
-    var sourceURL: String
-    var verifiedAt: String
-    var rates: ModelPricingRates
-    var longContextThreshold: Int?
-    var longContextInputMultiplier: String?
-    var longContextOutputMultiplier: String?
-    var peakMultiplier: String?
-    var validUntil: String?
-    var contextNote: String?
+  public struct Entry: Codable, Sendable, Equatable {
+    public var provider: String
+    public var modelIDs: [String]
+    public var sourceURL: String
+    public var verifiedAt: String
+    public var rates: ModelPricingRates
+    public var longContextThreshold: Int?
+    public var longContextInputMultiplier: String?
+    public var longContextOutputMultiplier: String?
+    public var peakMultiplier: String?
+    public var validUntil: String?
+    public var contextNote: String?
+
+    public init(
+      provider: String,
+      modelIDs: [String],
+      sourceURL: String,
+      verifiedAt: String,
+      rates: ModelPricingRates,
+      longContextThreshold: Int? = nil,
+      longContextInputMultiplier: String? = nil,
+      longContextOutputMultiplier: String? = nil,
+      peakMultiplier: String? = nil,
+      validUntil: String? = nil,
+      contextNote: String? = nil
+    ) {
+      self.provider = provider
+      self.modelIDs = modelIDs
+      self.sourceURL = sourceURL
+      self.verifiedAt = verifiedAt
+      self.rates = rates
+      self.longContextThreshold = longContextThreshold
+      self.longContextInputMultiplier = longContextInputMultiplier
+      self.longContextOutputMultiplier = longContextOutputMultiplier
+      self.peakMultiplier = peakMultiplier
+      self.validUntil = validUntil
+      self.contextNote = contextNote
+    }
+  }
+
+  public init(
+    schemaVersion: Int,
+    version: String,
+    currency: String,
+    units: String,
+    entries: [Entry]
+  ) {
+    self.schemaVersion = schemaVersion
+    self.version = version
+    self.currency = currency
+    self.units = units
+    self.entries = entries
   }
 
   static let bundled: Self? = {
+    if let catalog = ModelCatalog.bundled {
+      return catalog.pricingCatalog
+    }
     guard let url = Bundle.module.url(forResource: "ModelPricingCatalog", withExtension: "json"),
       let data = try? Data(contentsOf: url)
     else { return nil }
@@ -106,8 +149,14 @@ struct ModelPricingCatalog: Decodable, Sendable {
   static func decode(_ data: Data) -> Self? {
     guard let catalog = try? JSONDecoder().decode(Self.self, from: data),
       catalog.schemaVersion == 1, !catalog.version.isEmpty,
-      catalog.currency == "USD", catalog.units == "USD per 1000000 tokens",
-      catalog.entries.allSatisfy({ entry in
+      isValid(currency: catalog.currency, units: catalog.units, entries: catalog.entries)
+    else { return nil }
+    return catalog
+  }
+
+  static func isValid(currency: String, units: String, entries: [Entry]) -> Bool {
+    guard currency == "USD", units == "USD per 1000000 tokens",
+      entries.allSatisfy({ entry in
         !entry.provider.isEmpty && !entry.modelIDs.isEmpty && entry.rates.isValid
           && entry.modelIDs.allSatisfy { !$0.isEmpty }
           && URL(string: entry.sourceURL)?.scheme == "https"
@@ -117,11 +166,11 @@ struct ModelPricingCatalog: Decodable, Sendable {
             .compactMap { $0 }.allSatisfy { (ChatBilling.decimal($0) ?? 0) > 0 }
           && (entry.longContextThreshold == nil || entry.longContextThreshold! > 0)
       })
-    else { return nil }
-    let keys = catalog.entries.flatMap { entry in entry.modelIDs.map { entry.provider + ":" + $0 } }
-    guard Set(keys).count == keys.count else { return nil }
-    return catalog
+    else { return false }
+    let keys = entries.flatMap { entry in entry.modelIDs.map { entry.provider + ":" + $0 } }
+    return Set(keys).count == keys.count
   }
+
   private static func validDay(_ text: String) -> Bool {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -156,13 +205,13 @@ public enum ModelPriceResolver {
 
     // Direct-provider catalog rates must never leak into proxies, regional
     // endpoints, or arbitrary compatible accounts with a matching model name.
-    guard let catalog = ModelPricingCatalog.bundled,
-      let entry = catalogEntry(account: account, modelID: modelID, catalog: catalog)
+    guard let active = ModelCatalogRegistry.current,
+      let entry = catalogEntry(account: account, modelID: modelID, snapshot: active)
     else { return nil }
     let day = utcDay(date)
     if let expiry = entry.validUntil, day >= expiry { return nil }
     var rates = entry.rates
-    var version = catalog.version
+    var version = active.version
     if let peak = entry.peakMultiplier, isDeepSeekPeak(date) {
       let multiplier = ChatBilling.decimal(peak) ?? 1
       rates = rates.multiplied(input: multiplier, output: multiplier)
@@ -171,7 +220,7 @@ public enum ModelPriceResolver {
       version += ":offPeak"
     }
     return ModelPricingSnapshot(
-      source: "bundledCatalog", version: version,
+      source: active.source.pricingSnapshotSource, version: version,
       sourceURL: entry.sourceURL, verifiedAt: entry.verifiedAt,
       modelID: modelID.rawValue, rates: rates,
       longContextThreshold: entry.longContextThreshold,
@@ -191,14 +240,14 @@ public enum ModelPriceResolver {
     account: ProviderAccount, requestedModelID: ModelID, responseModelID: ModelID
   ) -> Bool {
     if requestedModelID == responseModelID { return true }
-    guard let catalog = ModelPricingCatalog.bundled,
-      let entry = catalogEntry(account: account, modelID: requestedModelID, catalog: catalog)
+    guard let active = ModelCatalogRegistry.current,
+      let entry = catalogEntry(account: account, modelID: requestedModelID, snapshot: active)
     else { return false }
     return entry.modelIDs.contains(responseModelID.rawValue)
   }
 
   private static func catalogEntry(
-    account: ProviderAccount, modelID: ModelID, catalog: ModelPricingCatalog
+    account: ProviderAccount, modelID: ModelID, snapshot: ModelCatalogSnapshot
   ) -> ModelPricingCatalog.Entry? {
     guard account.kind != .openAICompatible,
       !account.kind.isLocalServer,
@@ -218,9 +267,7 @@ public enum ModelPriceResolver {
       normalized = url
     }
     guard sameEndpoint(normalized, endpoint) else { return nil }
-    return catalog.entries.first {
-      $0.provider == account.providerID.rawValue && $0.modelIDs.contains(modelID.rawValue)
-    }
+    return snapshot.pricingEntry(provider: account.providerID.rawValue, modelID: modelID.rawValue)
   }
 
   private static func perMillion(_ value: String?) -> String? {

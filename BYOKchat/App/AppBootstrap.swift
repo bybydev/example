@@ -84,6 +84,11 @@ final class AppBootstrapController {
       // must never render a setup/open-chat fallback for a usable connection.
       selectInitialConversation(initialConversationID)
       state = .ready
+      // Refresh Layer 2 remote model catalog asynchronously after startup so
+      // offline launches and slow networks never delay reaching .ready.
+      Task(priority: .utility) { @MainActor in
+        await model.providers.refreshModelCatalogIfNeeded()
+      }
     } catch {
       if case .preparingStorage = currentStage {
         BYOKAppAnalytics.reportError(
@@ -244,6 +249,7 @@ enum AppStorageBootstrap {
     let defaults = environment.makeUserDefaults()
     defaults.set(false, forKey: "byokchat.onboarding.completed.v1")
     SidebarPinStore.clear(in: defaults)
+    ModelCatalogRegistry.resetToBundled()
   }
 
   static func migrateDataForTesting(
@@ -318,6 +324,8 @@ enum AppStorageBootstrap {
     let layout = BYOKStorageLayout(rootDirectory: root)
     return [
       layout.providersFile,
+      layout.modelCatalogFile,
+      layout.modelCatalogMetadataFile,
       layout.projectsFile,
       layout.mcpServersFile,
       layout.libraryFile,
