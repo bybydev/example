@@ -300,7 +300,22 @@ expected_set = set(expected)
 
 pngs = list(attachments.rglob("*.png"))
 manifest_paths = list(attachments.rglob("manifest.json"))
-renamed = set()
+pattern = re.compile(r"(" + "|".join(re.escape(name) for name in expected) + r")")
+selected = {}
+
+def resolve_png(candidate, base_dir):
+    if not isinstance(candidate, str) or not candidate.lower().endswith(".png"):
+        return None
+    for path in (base_dir / candidate, attachments / candidate):
+        if path.is_file():
+            return path
+    matches = list(attachments.rglob(pathlib.Path(candidate).name))
+    return matches[0] if matches else None
+
+def record_match(display, source, priority):
+    current = selected.get(display)
+    if current is None or priority >= current[0]:
+        selected[display] = (priority, source)
 
 for manifest_path in manifest_paths:
     try:
@@ -308,19 +323,43 @@ for manifest_path in manifest_paths:
     except Exception:
         continue
 
+    base_dir = manifest_path.parent
+    order = 0
+
     def walk(value):
+        global order
         if isinstance(value, dict):
-            strings = [v for v in value.values() if isinstance(v, str)]
-            display = next((s for s in strings if s in expected_set), None)
-            filename = next((s for s in strings if s.lower().endswith(".png")), None)
-            if display and filename and display not in renamed:
-                source = attachments / filename
-                if not source.exists():
-                    matches = list(attachments.rglob(pathlib.Path(filename).name))
-                    source = matches[0] if matches else None
-                if source and source.exists():
-                    shutil.copy2(source, output / f"{display}.png")
-                    renamed.add(display)
+            name_candidates = [
+                value.get("suggestedHumanReadableName"),
+                value.get("name"),
+                value.get("humanReadableName"),
+            ] + [v for v in value.values() if isinstance(v, str)]
+            display = None
+            for candidate in name_candidates:
+                if isinstance(candidate, str):
+                    match = pattern.search(candidate)
+                    if match:
+                        display = match.group(1)
+                        break
+
+            file_candidates = [
+                value.get("exportedFileName"),
+                value.get("fileName"),
+                value.get("filename"),
+            ] + [v for v in value.values() if isinstance(v, str) and v.lower().endswith(".png")]
+            source = None
+            for candidate in file_candidates:
+                source = resolve_png(candidate, base_dir)
+                if source is not None:
+                    break
+
+            if display and source:
+                order += 1
+                timestamp = value.get("timestamp")
+                ts_val = float(timestamp) if isinstance(timestamp, (int, float)) else 0.0
+                not_failure = 0 if value.get("isAssociatedWithFailure") is True else 1
+                record_match(display, source, (not_failure, ts_val, order))
+
             for child in value.values():
                 walk(child)
         elif isinstance(value, list):
@@ -329,13 +368,15 @@ for manifest_path in manifest_paths:
 
     walk(manifest)
 
-pattern = re.compile(r"(" + "|".join(re.escape(name) for name in expected) + r")")
 for source in pngs:
     match = pattern.search(source.stem)
-    if match and match.group(1) not in renamed:
-        name = match.group(1)
-        shutil.copy2(source, output / f"{name}.png")
-        renamed.add(name)
+    if match and match.group(1) not in selected:
+        record_match(match.group(1), source, (0, 0.0, 0))
+
+renamed = set()
+for display, (_, source) in selected.items():
+    shutil.copy2(source, output / f"{display}.png")
+    renamed.add(display)
 
 missing = [name for name in expected if name not in renamed]
 if missing:
@@ -343,6 +384,9 @@ if missing:
     for name in missing:
         print(f"  - {name}", file=sys.stderr)
     print(f"Raw attachments directory: {attachments}", file=sys.stderr)
+    for manifest_path in manifest_paths:
+        print(f"Manifest ({manifest_path}):", file=sys.stderr)
+        print(manifest_path.read_text()[:4000], file=sys.stderr)
     sys.exit(1)
 
 print(f"Saved {len(renamed)} screenshots to {output}:")
