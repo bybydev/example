@@ -33,68 +33,103 @@ final class BYOKchatScreenshotTests: XCTestCase {
     app?.terminate()
   }
 
-  // MARK: - Tier 1: Core App Store Screens
+  /// Captures screens 01–15 inside a single seeded app launch so CI does not
+  /// pay 15x cold-boot, seeding, and simulator teardown overhead.
+  func test01ShowcaseScreenshots() throws {
+    launchSeededApp(openPaywall: false)
 
-  func test01ChatHero() throws {
-    launchSeededApp()
-    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
+    // 10_Home_NewChat
+    capture("10_Home_NewChat")
+
+    // 04_Model_Picker
+    openModelPicker()
+    assertExists(app.navigationBars["Model"], timeout: 8, context: "04_Model_Picker")
+    capture("04_Model_Picker")
+    dismissTopSheet()
+
+    // 08_Sidebar
+    openSidebar()
+    capture("08_Sidebar")
+
+    // 01_Chat_Hero (sidebar is already open)
+    tapChatInOpenSidebar(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
     capture("01_Chat_Hero")
-  }
 
-  func test02ChatRichRender() throws {
-    launchSeededApp()
-    openChat(title: "Sync architecture & cost model", expectedContent: "Direct request flow")
-    // Allow Mermaid & LaTeX renderers a brief settle pass before capture.
+    // 13_Reasoning_Sheet
+    let reasoningButton = app.buttons["Reasoning"].firstMatch
+    ensureElementVisible(reasoningButton, scrollDownFirst: false)
+    assertExists(reasoningButton, timeout: 6, context: "13_Reasoning_Sheet button")
+    reasoningButton.tap()
+    assertExists(app.navigationBars["Reasoning"], timeout: 8, context: "13_Reasoning_Sheet")
+    capture("13_Reasoning_Sheet")
+    dismissTopSheet()
+
+    // 14_Message_Info
+    let moreButton = app.buttons["More"].firstMatch
+    ensureElementVisible(moreButton, scrollDownFirst: true)
+    assertExists(moreButton, timeout: 6, context: "14_Message_Info More button")
+    moreButton.tap()
+    let infoButton = app.buttons["Message Info"]
+    assertExists(infoButton, timeout: 6, context: "14_Message_Info menu item")
+    infoButton.tap()
+    assertExists(app.navigationBars["Message Info"], timeout: 8, context: "14_Message_Info")
+    assertExists(app.staticTexts["Usage"], timeout: 6, context: "14_Message_Info Usage")
+    capture("14_Message_Info")
+    dismissTopSheet()
+
+    // 12_Chat_Tools
+    let moreOptions = app.buttons["More options"]
+    assertExists(moreOptions, timeout: 6, context: "12_Chat_Tools More options")
+    moreOptions.tap()
+    let toolsButton = app.buttons["Tools"]
+    assertExists(toolsButton, timeout: 6, context: "12_Chat_Tools menu item")
+    toolsButton.tap()
+    assertExists(app.navigationBars["Tools"], timeout: 8, context: "12_Chat_Tools")
+    capture("12_Chat_Tools")
+    dismissTopSheet()
+
+    // 02_Chat_RichRender
+    openSidebar()
+    tapChatInOpenSidebar(title: "Sync architecture & cost model", expectedContent: "Direct request flow")
     sleep(1)
     capture("02_Chat_RichRender")
-  }
 
-  func test03Providers() throws {
-    launchSeededApp()
+    // 03_Providers
     openSidebar()
     tapSidebarDestination("AI Providers")
-    XCTAssertTrue(app.navigationBars["AI Providers"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Personal"].waitForExistence(timeout: 6))
+    assertExists(app.navigationBars["AI Providers"], timeout: 8, context: "03_Providers")
+    assertExists(app.staticTexts["Personal"], timeout: 6, context: "03_Providers Personal")
     capture("03_Providers")
-  }
 
-  func test04ModelPicker() throws {
-    launchSeededApp()
-    openModelPicker()
-    XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 8))
-    capture("04_Model_Picker")
-  }
-
-  func test05MCPServers() throws {
-    launchSeededApp()
+    // 05_MCP_Servers
     openSidebar()
     tapSidebarDestination("MCP Servers")
-    XCTAssertTrue(app.navigationBars["MCP Servers"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["GitHub"].waitForExistence(timeout: 6))
+    assertExists(app.navigationBars["MCP Servers"], timeout: 8, context: "05_MCP_Servers")
+    assertExists(app.staticTexts["GitHub"], timeout: 6, context: "05_MCP_Servers GitHub")
     capture("05_MCP_Servers")
-  }
 
-  func test06ProjectDetail() throws {
-    launchSeededApp()
+    // 11_Projects_List
     openSidebar()
     tapSidebarDestination("Projects")
     let launchProject = app.staticTexts["Product Launch"]
-    XCTAssertTrue(launchProject.waitForExistence(timeout: 8))
+    assertExists(launchProject, timeout: 8, context: "11_Projects_List Product Launch")
+    assertExists(app.staticTexts["Core Architecture"], timeout: 4, context: "11_Projects_List Core Architecture")
+    capture("11_Projects_List")
+
+    // 06_Project_Detail
     launchProject.tap()
     XCTAssertTrue(
       app.staticTexts["Product Launch"].waitForExistence(timeout: 8)
-        || app.navigationBars["Product Launch"].waitForExistence(timeout: 4)
+        || app.navigationBars["Product Launch"].waitForExistence(timeout: 4),
+      "06_Project_Detail failed. Visible screen: \(visibleScreenSummary())"
     )
     capture("06_Project_Detail")
-  }
+    navigateBackIfNeeded()
 
-  func test07Analytics() throws {
-    launchSeededApp()
+    // 07_Analytics
     openSidebar()
     tapSidebarDestination("Analytics")
-    XCTAssertTrue(app.navigationBars["Analytics"].waitForExistence(timeout: 8))
-
-    // Switch range from Today to 30D so multi-day telemetry and provider breakdown shine.
+    assertExists(app.navigationBars["Analytics"], timeout: 8, context: "07_Analytics")
     let rangeMenu = app.buttons.matching(
       NSPredicate(format: "label BEGINSWITH %@", "Analytics date range")
     ).firstMatch
@@ -105,104 +140,37 @@ final class BYOKchatScreenshotTests: XCTestCase {
         thirtyDays.tap()
       }
     }
-    XCTAssertTrue(app.staticTexts["Spend"].waitForExistence(timeout: 8))
+    assertExists(app.staticTexts["Spend"], timeout: 8, context: "07_Analytics Spend")
     sleep(1)
     capture("07_Analytics")
-  }
 
-  func test08Sidebar() throws {
-    launchSeededApp()
-    openSidebar()
-    capture("08_Sidebar")
-  }
-
-  func test09Library() throws {
-    launchSeededApp()
+    // 09_Library
     openSidebar()
     tapSidebarDestination("Library")
-    XCTAssertTrue(app.staticTexts["latency-benchmark.png"].waitForExistence(timeout: 8))
+    assertExists(app.staticTexts["latency-benchmark.png"], timeout: 8, context: "09_Library")
     sleep(1)
     capture("09_Library")
-  }
 
-  // MARK: - Tier 2: Promo Video & Landing Page Cutaways
-
-  func test10HomeNewChat() throws {
-    launchSeededApp()
-    capture("10_Home_NewChat")
-  }
-
-  func test11ProjectsList() throws {
-    launchSeededApp()
+    // 15_Settings_Themes
     openSidebar()
-    tapSidebarDestination("Projects")
-    XCTAssertTrue(app.staticTexts["Product Launch"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Core Architecture"].waitForExistence(timeout: 4))
-    capture("11_Projects_List")
-  }
-
-  func test12ChatTools() throws {
-    launchSeededApp()
-    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
-    let moreOptions = app.buttons["More options"]
-    XCTAssertTrue(moreOptions.waitForExistence(timeout: 6))
-    moreOptions.tap()
-
-    let toolsButton = app.buttons["Tools"]
-    XCTAssertTrue(toolsButton.waitForExistence(timeout: 6))
-    toolsButton.tap()
-
-    XCTAssertTrue(app.navigationBars["Tools"].waitForExistence(timeout: 8))
-    capture("12_Chat_Tools")
-  }
-
-  func test13ReasoningSheet() throws {
-    launchSeededApp()
-    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
-
-    let reasoningButton = app.buttons["Reasoning"].firstMatch
-    ensureElementVisible(reasoningButton, scrollDownFirst: false)
-    XCTAssertTrue(reasoningButton.waitForExistence(timeout: 6))
-    reasoningButton.tap()
-
-    XCTAssertTrue(app.navigationBars["Reasoning"].waitForExistence(timeout: 8))
-    capture("13_Reasoning_Sheet")
-  }
-
-  func test14MessageInfo() throws {
-    launchSeededApp()
-    openChat(title: "Ship a native iOS AI client", expectedContent: "Launch readiness")
-
-    let moreButton = app.buttons["More"].firstMatch
-    ensureElementVisible(moreButton, scrollDownFirst: true)
-    XCTAssertTrue(moreButton.waitForExistence(timeout: 6))
-    moreButton.tap()
-
-    let infoButton = app.buttons["Message Info"]
-    XCTAssertTrue(infoButton.waitForExistence(timeout: 6))
-    infoButton.tap()
-
-    XCTAssertTrue(app.navigationBars["Message Info"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["Usage"].waitForExistence(timeout: 6))
-    capture("14_Message_Info")
-  }
-
-  func test15SettingsThemes() throws {
-    launchSeededApp()
-    openSettings()
-    XCTAssertTrue(app.staticTexts["Appearance"].waitForExistence(timeout: 6))
+    let settings = app.buttons["Settings"]
+    assertExists(settings, timeout: 6, context: "15_Settings_Themes button")
+    settings.tap()
+    assertExists(app.navigationBars["Settings"], timeout: 8, context: "15_Settings_Themes")
+    assertExists(app.staticTexts["Appearance"], timeout: 6, context: "15_Settings_Themes Appearance")
     capture("15_Settings_Themes")
   }
 
-  func test16Paywall() throws {
+  /// Launches directly into the full Paywall sheet while keeping the selected theme.
+  func test02PaywallScreenshot() throws {
     launchSeededApp(openPaywall: true)
-    XCTAssertTrue(app.staticTexts["Upgrade to BYOK Pro"].waitForExistence(timeout: 12))
+    assertExists(app.staticTexts["Upgrade to BYOK Pro"], timeout: 15, context: "16_Paywall")
     capture("16_Paywall")
   }
 
   // MARK: - Helpers
 
-  private func launchSeededApp(openPaywall: Bool = false) {
+  private func launchSeededApp(openPaywall: Bool) {
     XCUIDevice.shared.orientation = targetOrientation
 
     var arguments = [
@@ -225,20 +193,16 @@ final class BYOKchatScreenshotTests: XCTestCase {
     }
 
     if !openPaywall {
-      waitForHome()
+      assertExists(app.staticTexts["How can I help?"], timeout: 15, context: "waitForHome")
     }
-  }
-
-  private func waitForHome() {
-    XCTAssertTrue(app.staticTexts["How can I help?"].waitForExistence(timeout: 15))
   }
 
   private func openSidebar() {
     let sidebar = app.buttons["Open sidebar"]
-    XCTAssertTrue(sidebar.waitForExistence(timeout: 8))
+    assertExists(sidebar, timeout: 8, context: "Open sidebar")
     sidebar.tap()
-    XCTAssertTrue(app.buttons["AI Providers"].waitForExistence(timeout: 6))
-    XCTAssertTrue(app.buttons["Ship a native iOS AI client"].waitForExistence(timeout: 6))
+    assertExists(app.buttons["AI Providers"], timeout: 6, context: "Sidebar AI Providers")
+    assertExists(app.buttons["Ship a native iOS AI client"], timeout: 6, context: "Sidebar hero chat")
   }
 
   private func tapSidebarDestination(_ title: String) {
@@ -246,43 +210,62 @@ final class BYOKchatScreenshotTests: XCTestCase {
     if !button.isHittable {
       app.scrollViews.firstMatch.swipeUp()
     }
-    XCTAssertTrue(button.waitForExistence(timeout: 6))
+    assertExists(button, timeout: 6, context: "Sidebar destination \(title)")
     button.tap()
   }
 
-  private func openChat(title: String, expectedContent: String) {
-    openSidebar()
+  private func tapChatInOpenSidebar(title: String, expectedContent: String) {
     let conversation = app.buttons[title]
     if !conversation.isHittable {
       app.scrollViews.firstMatch.swipeUp()
     }
-    XCTAssertTrue(conversation.waitForExistence(timeout: 6))
+    assertExists(conversation, timeout: 6, context: "Sidebar chat \(title)")
     conversation.tap()
 
     let heading = app.staticTexts.matching(
       NSPredicate(format: "label CONTAINS[c] %@", expectedContent)
     ).firstMatch
-    XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    assertExists(heading, timeout: 10, context: "Chat content \(expectedContent)")
   }
 
   private func openModelPicker() {
     let messageField = app.textViews["Message"].exists
       ? app.textViews["Message"]
       : app.textFields["Message"]
-    XCTAssertTrue(messageField.waitForExistence(timeout: 6))
+    assertExists(messageField, timeout: 6, context: "Message composer field")
     messageField.tap()
 
     let targetButton = app.buttons["Model and reasoning"]
-    XCTAssertTrue(targetButton.waitForExistence(timeout: 6))
+    assertExists(targetButton, timeout: 6, context: "Model and reasoning button")
     targetButton.tap()
   }
 
-  private func openSettings() {
-    openSidebar()
-    let settings = app.buttons["Settings"]
-    XCTAssertTrue(settings.waitForExistence(timeout: 6))
-    settings.tap()
-    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 8))
+  private func dismissTopSheet() {
+    let navBar = app.navigationBars.firstMatch
+    for label in ["Done", "Close", "Cancel"] {
+      let navButton = navBar.buttons[label]
+      if navButton.exists && navButton.isHittable {
+        navButton.tap()
+        usleep(250_000)
+        return
+      }
+      let button = app.buttons[label].firstMatch
+      if button.exists && button.isHittable {
+        button.tap()
+        usleep(250_000)
+        return
+      }
+    }
+    app.swipeDown()
+    usleep(250_000)
+  }
+
+  private func navigateBackIfNeeded() {
+    let back = app.navigationBars.buttons.element(boundBy: 0)
+    if back.exists && back.isHittable && !app.buttons["Open sidebar"].exists {
+      back.tap()
+      usleep(250_000)
+    }
   }
 
   private func ensureElementVisible(_ element: XCUIElement, scrollDownFirst: Bool) {
@@ -308,6 +291,27 @@ final class BYOKchatScreenshotTests: XCTestCase {
         container.swipeUp()
       }
     }
+  }
+
+  private func assertExists(
+    _ element: XCUIElement,
+    timeout: TimeInterval,
+    context: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    XCTAssertTrue(
+      element.waitForExistence(timeout: timeout),
+      "[\(context)] Expected element did not appear. Visible screen: \(visibleScreenSummary())",
+      file: file,
+      line: line
+    )
+  }
+
+  private func visibleScreenSummary() -> String {
+    let navTitles = app.navigationBars.allElementsBoundByIndex.map(\.identifier).filter { !$0.isEmpty }
+    let texts = app.staticTexts.allElementsBoundByIndex.prefix(12).map(\.label).filter { !$0.isEmpty }
+    return "navBars=\(navTitles), staticTexts=\(texts)"
   }
 
   private func capture(_ name: String) {

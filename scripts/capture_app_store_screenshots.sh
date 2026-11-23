@@ -226,6 +226,9 @@ XCODEBUILD_ARGS=(
   -destination "platform=iOS Simulator,id=${SIMULATOR_UDID}"
   -derivedDataPath "${DERIVED_DATA_PATH}"
   -resultBundlePath "${RESULT_BUNDLE}"
+  -parallel-testing-enabled NO
+  -test-timeouts-enabled YES
+  -default-test-execution-time-allowance 180
   -only-testing:BYOKchatUITests/BYOKchatScreenshotTests
 )
 
@@ -233,9 +236,13 @@ if [[ -n "${SOURCE_PACKAGES_PATH}" ]]; then
   XCODEBUILD_ARGS+=(-clonedSourcePackagesDirPath "${SOURCE_PACKAGES_PATH}")
 fi
 
+# Ad-hoc sign simulator builds (do NOT set CODE_SIGNING_ALLOWED=NO) so the app
+# retains its simulator application-identifier entitlement and Keychain calls
+# do not fail with errSecMissingEntitlement (-34018).
 xcodebuild "${XCODEBUILD_ARGS[@]}" \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGN_IDENTITY="-" \
   CODE_SIGNING_REQUIRED=NO \
+  DEVELOPMENT_TEAM="" \
   "TEST_RUNNER_SCREENSHOT_THEME=${THEME}" \
   "TEST_RUNNER_SCREENSHOT_ORIENTATION=${ORIENTATION}" \
   "TEST_RUNNER_SCREENSHOT_PRESET=${PRESET}" \
