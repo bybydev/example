@@ -30,7 +30,6 @@
 		153CBB84523DCB60694DC82E /* ComposerTargetLabelFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E13BF9908B7CE54A91F65630 /* ComposerTargetLabelFormatterTests.swift */; };
 		15755B8F87548F5CDE97C811 /* MacDataManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49ABF7B4D3C38402AE9BB29 /* MacDataManagementView.swift */; };
 		1A4789121A5875370BF7B83A /* ConversationStoreAndLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B6C73138F1EE72A38D3A2B6 /* ConversationStoreAndLifecycleTests.swift */; };
-		1A5CA4394CD0212B273D89F0 /* BYOKScreenshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */; };
 		1BF694B0C9D801EBAC92E445 /* ConnectionComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0901EF8FFB7B2CFFE5E4CB4F /* ConnectionComponents.swift */; };
 		1C8A2955009CD395A8403B60 /* ChatManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39D9E1A556DE05C56A7C407A /* ChatManagementModel.swift */; };
 		1CAABD89D8F29CE3EC935FC6 /* MacMarkdownTableAlignmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7A2EC4E025354E7D7EAC02 /* MacMarkdownTableAlignmentTests.swift */; };
@@ -113,6 +112,7 @@
 		836A6FB37FEA2F9627F07876 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 9F7E331B1B0E5072DAA8BCBC /* MarkdownUI */; };
 		84E5CD201D8520CD2E97772D /* TelemetryAnalyticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B634DC98867B3FCCAAEC51 /* TelemetryAnalyticsTests.swift */; };
 		85EE6AF8B8CC6A6731857683 /* DeepSeekPricingRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052F9FE8999758C672CC4C41 /* DeepSeekPricingRegressionTests.swift */; };
+		860D5A81B6F26AFC4A38AECA /* ModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 635C7B5E3B1965293EF40973 /* ModelCatalogTests.swift */; };
 		8744A518745F45A07BD1B3E0 /* LibraryThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89967C536BE6E0636A9B2817 /* LibraryThumbnailView.swift */; };
 		88E574887F90E7E602A62CC2 /* Highlighter in Frameworks */ = {isa = PBXBuildFile; productRef = 8E533A2C7E8710F1144C0F09 /* Highlighter */; };
 		8C5C41CCFDBDAE6C8872199D /* MacStartupRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879070E7F276C85E209DD656 /* MacStartupRecoveryTests.swift */; };
@@ -125,6 +125,7 @@
 		911BC632AFC04F0541AF8C8C /* MacProviderModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86105D8D249E0A9B2CE68673 /* MacProviderModelTests.swift */; };
 		9573321968BB155F4A181774 /* ResponsesContinuationIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A1966DDCE8CD04687935E4 /* ResponsesContinuationIsolationTests.swift */; };
 		958AD385781655BAD731536D /* ProviderManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04A6B0A5CB5827C2AEC1EF6A /* ProviderManagementModel.swift */; };
+		96B1FCB7ABB03ADB01A9D68C /* BYOKSeedDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F28A8E2A620E1C68DE4D2FF8 /* BYOKSeedDataService.swift */; };
 		96E84F26C4B9A3ED6510BD51 /* MacDiagnosticsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B31EEE64F7FB3095762066C4 /* MacDiagnosticsModel.swift */; };
 		9784769D614562EC6EE4B434 /* PricingContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0B1E6C2F141A8C1C01F883 /* PricingContextTests.swift */; };
 		97FC498C1E5C1DAF6209E144 /* ProjectViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25141287CFF1D5EDB8A85BBE /* ProjectViews.swift */; };
@@ -196,6 +197,7 @@
 		E3EB13148236F43607797A66 /* TelemetryLogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA49CEA499F6964A280F36D6 /* TelemetryLogsView.swift */; };
 		E4574FB111527253FBC645CA /* MacUTType+Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD278A599509229392F2A4C /* MacUTType+Markdown.swift */; };
 		E62B334D744E45B1889F5A7D /* ModelCapabilityPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9684A80CDCA1D65EC7156601 /* ModelCapabilityPolicyTests.swift */; };
+		E81C745FF4EFBF27A3DC97C3 /* ConversationSearchIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98186EFE73A39E4FAFDC06E2 /* ConversationSearchIndexTests.swift */; };
 		E894420907460FFB337130F3 /* TelemetryReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA8E18C2717058DF2299B6A3 /* TelemetryReliabilityTests.swift */; };
 		EAEAA76BE6824AE03EB685C4 /* BYOKOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2930DD9C5F447605DCFBEC /* BYOKOnboardingView.swift */; };
 		EB882BED3ED3493D2F863066 /* BYOKchatProviderCore in Frameworks */ = {isa = PBXBuildFile; productRef = 838EC86185181391BADF241A /* BYOKchatProviderCore */; };
@@ -268,7 +270,6 @@
 		199FDED70D63E09181FE7EFA /* ChatSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSidebarView.swift; sourceTree = "<group>"; };
 		1B8E336B0A4C18465FE24601 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		1F3DE9FB586AB54C22B71A84 /* MCPWorkspaceTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPWorkspaceTransactionTests.swift; sourceTree = "<group>"; };
-		202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKScreenshotFixtures.swift; sourceTree = "<group>"; };
 		2335DF972D258FFDB0830354 /* MacDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDesignTokens.swift; sourceTree = "<group>"; };
 		23CB6F474095530D93A3EA60 /* ConversationLazyLoadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationLazyLoadingTests.swift; sourceTree = "<group>"; };
 		24E2D57B448807167BCD18ED /* MacPreferencesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPreferencesModel.swift; sourceTree = "<group>"; };
@@ -321,6 +322,7 @@
 		5F1AD6232C947D2EDD8E799F /* MacMarkdownTableAlignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownTableAlignment.swift; sourceTree = "<group>"; };
 		6068195DF1CF1A8D5B24091F /* MacStreamingAnswerRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStreamingAnswerRendererTests.swift; sourceTree = "<group>"; };
 		611F199EF5895E9B669C9FEC /* MacAttachmentWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAttachmentWorkflowTests.swift; sourceTree = "<group>"; };
+		635C7B5E3B1965293EF40973 /* ModelCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalogTests.swift; sourceTree = "<group>"; };
 		6383A2377DE304E234778AC7 /* ProviderManagementModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderManagementModelTests.swift; sourceTree = "<group>"; };
 		6802AA997CB41BFE9380FCBC /* TelemetryLogDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryLogDetailView.swift; sourceTree = "<group>"; };
 		68505C89AFEFC9500D9D7EA4 /* MCPRemoteRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPRemoteRuntimeTests.swift; sourceTree = "<group>"; };
@@ -358,6 +360,7 @@
 		95D2C269D303BD36378E7BAE /* MacTranscriptScrollPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTranscriptScrollPolicyTests.swift; sourceTree = "<group>"; };
 		961033A42E62C4FBA93AF12C /* MCPInputRequiredTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPInputRequiredTests.swift; sourceTree = "<group>"; };
 		9684A80CDCA1D65EC7156601 /* ModelCapabilityPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCapabilityPolicyTests.swift; sourceTree = "<group>"; };
+		98186EFE73A39E4FAFDC06E2 /* ConversationSearchIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSearchIndexTests.swift; sourceTree = "<group>"; };
 		990FE4D2A0FB21035913336F /* MacRichMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRichMessageView.swift; sourceTree = "<group>"; };
 		9A258B05BAFE155E861E0B39 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		9DC9FE58E59595C53DA61141 /* ConversationTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTestSupport.swift; sourceTree = "<group>"; };
@@ -429,6 +432,7 @@
 		EE8F22F6F08DF2A014989A27 /* MacMCPModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMCPModel.swift; sourceTree = "<group>"; };
 		EEAF155DBFCB79DAA95071D9 /* BYOKmac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BYOKmac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EFDC85555333BFDA69D7E532 /* ChatInputComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInputComposer.swift; sourceTree = "<group>"; };
+		F28A8E2A620E1C68DE4D2FF8 /* BYOKSeedDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKSeedDataService.swift; sourceTree = "<group>"; };
 		F2B634DC98867B3FCCAAEC51 /* TelemetryAnalyticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryAnalyticsTests.swift; sourceTree = "<group>"; };
 		F46C72A5A549DCC3D6A8DDA5 /* MacWorkspaceModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceModel.swift; sourceTree = "<group>"; };
 		F47580446635050B930A803A /* ToolMCPTelemetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolMCPTelemetryTests.swift; sourceTree = "<group>"; };
@@ -545,6 +549,7 @@
 				23CB6F474095530D93A3EA60 /* ConversationLazyLoadingTests.swift */,
 				728A86DAB307D55AC10B1F30 /* ConversationPortabilityRegressionTests.swift */,
 				939D4D1067ABC6D3D8DF8482 /* ConversationRuntimeAndCompatibilityTests.swift */,
+				98186EFE73A39E4FAFDC06E2 /* ConversationSearchIndexTests.swift */,
 				4B6C73138F1EE72A38D3A2B6 /* ConversationStoreAndLifecycleTests.swift */,
 				9DC9FE58E59595C53DA61141 /* ConversationTestSupport.swift */,
 				8C23F4C8665EE94303BF5CB1 /* DataPortabilityTransactionTests.swift */,
@@ -560,6 +565,7 @@
 				68505C89AFEFC9500D9D7EA4 /* MCPRemoteRuntimeTests.swift */,
 				1F3DE9FB586AB54C22B71A84 /* MCPWorkspaceTransactionTests.swift */,
 				9684A80CDCA1D65EC7156601 /* ModelCapabilityPolicyTests.swift */,
+				635C7B5E3B1965293EF40973 /* ModelCatalogTests.swift */,
 				4D6C68BC16333CDA5B9B8805 /* NativeProviderAdapterTests.swift */,
 				32D95AAD029B72A851A6947F /* OpenAICompatibleAdapterTests.swift */,
 				E8B1C96C15CAF2D050EFA4FA /* OpenAIResponsesAdapterTests.swift */,
@@ -649,7 +655,7 @@
 				0F2930DD9C5F447605DCFBEC /* BYOKOnboardingView.swift */,
 				A9E4E27EAED1F440936E1A62 /* BYOKProAccess.swift */,
 				306EAAD3FB0CA304C7C78E97 /* BYOKPurchaseStore.swift */,
-				202E8423938B25704EE1CDBF /* BYOKScreenshotFixtures.swift */,
+				F28A8E2A620E1C68DE4D2FF8 /* BYOKSeedDataService.swift */,
 				4382B79CD1D452BC6B3BEC3C /* BYOKToastCenter.swift */,
 				39D9E1A556DE05C56A7C407A /* ChatManagementModel.swift */,
 				BDFD4B26E72E48DB125F24EF /* ChatManagementModel+Portability.swift */,
@@ -1066,9 +1072,9 @@
 				EAEAA76BE6824AE03EB685C4 /* BYOKOnboardingView.swift in Sources */,
 				D87921410CCF99F63B7CA87F /* BYOKProAccess.swift in Sources */,
 				7016082A0F32EF2F4ACC9AE4 /* BYOKPurchaseStore.swift in Sources */,
-				1A5CA4394CD0212B273D89F0 /* BYOKScreenshotFixtures.swift in Sources */,
 				0BCD9717E3B376F7FA05B7BA /* BYOKScreenshotScenes.swift in Sources */,
 				1383CF9AC730DFFEEF09D560 /* BYOKScreenshotStudioView.swift in Sources */,
+				96B1FCB7ABB03ADB01A9D68C /* BYOKSeedDataService.swift in Sources */,
 				C68E85D7144ABFE5A7AA2ADB /* BYOKToastCenter.swift in Sources */,
 				6A5F9C578F011AE0B98E6E36 /* BYOKchatApp.swift in Sources */,
 				99C6CBD0062FF654A11214AE /* BYOKchatThemes.swift in Sources */,
@@ -1148,6 +1154,7 @@
 				DFF47CF402F5FF531248AC62 /* ConversationLazyLoadingTests.swift in Sources */,
 				6E47201781645FC494717B81 /* ConversationPortabilityRegressionTests.swift in Sources */,
 				3810C748AD9C9754E097E3E1 /* ConversationRuntimeAndCompatibilityTests.swift in Sources */,
+				E81C745FF4EFBF27A3DC97C3 /* ConversationSearchIndexTests.swift in Sources */,
 				1A4789121A5875370BF7B83A /* ConversationStoreAndLifecycleTests.swift in Sources */,
 				CBCA4A4017FAA587AD9E1E38 /* ConversationTestSupport.swift in Sources */,
 				593EE815919AFCBFC0524DA0 /* DataPortabilityTransactionTests.swift in Sources */,
@@ -1163,6 +1170,7 @@
 				3F91DB660157E80A8A19F402 /* MCPWorkspaceTransactionTests.swift in Sources */,
 				06A439BE28C57D45D8563024 /* MasterReviewRegressionTests.swift in Sources */,
 				E62B334D744E45B1889F5A7D /* ModelCapabilityPolicyTests.swift in Sources */,
+				860D5A81B6F26AFC4A38AECA /* ModelCatalogTests.swift in Sources */,
 				CF0105419A39C69099A542D3 /* NativeProviderAdapterTests.swift in Sources */,
 				0762E9B5D24BCC620EA7D6D1 /* OpenAICompatibleAdapterTests.swift in Sources */,
 				C12329DD443835A4411DE4E0 /* OpenAIResponsesAdapterTests.swift in Sources */,
@@ -1388,7 +1396,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_NAME = BYOKchat;
 				SDKROOT = iphoneos;
@@ -1662,7 +1670,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hoangbkit.byokchat;
 				PRODUCT_NAME = BYOKchat;
 				SDKROOT = iphoneos;
