@@ -76,39 +76,46 @@ struct AdditionalHeaderItem: Identifiable, Equatable, Sendable {
   }
 }
 
+/// Presentation target for the add/edit HTTP header modal sheet.
+enum AdditionalHeaderEditorTarget: Identifiable, Equatable {
+  case add
+  case edit(AdditionalHeaderItem)
+
+  var id: String {
+    switch self {
+    case .add: "add"
+    case .edit(let item): item.id.uuidString
+    }
+  }
+}
+
 /// Shared expandable Form section for viewing, adding, editing, and validating
 /// additional HTTP headers across Provider and MCP configuration editors.
+///
+/// Important: Attach `.additionalHeaderEditorSheet(...)` to the parent `Form`
+/// (never to a `Section` inside a `Form`) so sheet presentation survives
+/// collection-view relayouts when the keyboard appears or scrolls.
 struct AdditionalHeadersSection: View {
   @Binding var headers: [AdditionalHeaderItem]
   let policy: HTTPHeaderValidationPolicy
-  let footerText: String
+  var footerText: String? = nil
+  @Binding var editorTarget: AdditionalHeaderEditorTarget?
   var onChange: (() -> Void)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
   @State private var isExpanded: Bool
-  @State private var editorTarget: EditorTarget?
-
-  private enum EditorTarget: Identifiable {
-    case add
-    case edit(AdditionalHeaderItem)
-
-    var id: String {
-      switch self {
-      case .add: "add"
-      case .edit(let item): item.id.uuidString
-      }
-    }
-  }
 
   init(
     headers: Binding<[AdditionalHeaderItem]>,
     policy: HTTPHeaderValidationPolicy,
-    footerText: String,
+    footerText: String? = nil,
+    editorTarget: Binding<AdditionalHeaderEditorTarget?>,
     onChange: (() -> Void)? = nil
   ) {
     _headers = headers
     self.policy = policy
     self.footerText = footerText
+    _editorTarget = editorTarget
     self.onChange = onChange
     _isExpanded = State(initialValue: !headers.wrappedValue.isEmpty)
   }
@@ -173,7 +180,7 @@ struct AdditionalHeadersSection: View {
         .listRowSeparatorTint(theme.borderColor)
       }
     } footer: {
-      if isExpanded || hasAnyError {
+      if let footerText, !footerText.isEmpty, isExpanded || hasAnyError {
         Text(footerText)
           .foregroundStyle(theme.secondaryForegroundColor)
       }
@@ -185,35 +192,11 @@ struct AdditionalHeadersSection: View {
         }
       }
     }
-    .sheet(item: $editorTarget) { target in
-      switch target {
-      case .add:
-        AdditionalHeaderEditorSheet(
-          existingItem: nil,
-          existingNames: headers.map(\.name),
-          policy: policy,
-          onSave: { name, value in
-            headers.append(AdditionalHeaderItem(name: name, value: value))
-            if !isExpanded { isExpanded = true }
-            onChange?()
-          }
-        )
-      case .edit(let item):
-        AdditionalHeaderEditorSheet(
-          existingItem: item,
-          existingNames: headers.filter { $0.id != item.id }.map(\.name),
-          policy: policy,
-          onSave: { name, value in
-            if let index = headers.firstIndex(where: { $0.id == item.id }) {
-              headers[index].name = name
-              headers[index].value = value
-              onChange?()
-            }
-          },
-          onDelete: {
-            deleteHeader(id: item.id)
-          }
-        )
+    .onChange(of: headers.count) { oldCount, newCount in
+      if newCount > oldCount && !isExpanded {
+        withAnimation(.snappy(duration: 0.22)) {
+          isExpanded = true
+        }
       }
     }
   }
@@ -279,6 +262,50 @@ struct AdditionalHeadersSection: View {
   private func deleteHeader(id: UUID) {
     headers.removeAll { $0.id == id }
     onChange?()
+  }
+}
+
+extension View {
+  /// Presents the add/edit HTTP header sheet from a stable container outside `Form`/`List`.
+  func additionalHeaderEditorSheet(
+    target: Binding<AdditionalHeaderEditorTarget?>,
+    headers: Binding<[AdditionalHeaderItem]>,
+    policy: HTTPHeaderValidationPolicy,
+    onChange: (() -> Void)? = nil
+  ) -> some View {
+    sheet(item: target) { activeTarget in
+      switch activeTarget {
+      case .add:
+        AdditionalHeaderEditorSheet(
+          existingItem: nil,
+          existingNames: headers.wrappedValue.map(\.name),
+          policy: policy,
+          onSave: { name, value in
+            headers.wrappedValue.append(AdditionalHeaderItem(name: name, value: value))
+            onChange?()
+          }
+        )
+      case .edit(let item):
+        AdditionalHeaderEditorSheet(
+          existingItem: item,
+          existingNames: headers.wrappedValue
+            .filter { $0.id != item.id }
+            .map(\.name),
+          policy: policy,
+          onSave: { name, value in
+            if let index = headers.wrappedValue.firstIndex(where: { $0.id == item.id }) {
+              headers.wrappedValue[index].name = name
+              headers.wrappedValue[index].value = value
+              onChange?()
+            }
+          },
+          onDelete: {
+            headers.wrappedValue.removeAll { $0.id == item.id }
+            onChange?()
+          }
+        )
+      }
+    }
   }
 }
 
@@ -415,10 +442,11 @@ private struct AdditionalHeaderEditorSheet: View {
             .disabled(validationError != nil)
         }
       }
-      .onAppear {
-        if !isEditing {
-          focusedField = .name
-        }
+      .task {
+        guard !isEditing else { return }
+        try? await Task.sleep(for: .milliseconds(350))
+        guard !Task.isCancelled, focusedField == nil else { return }
+        focusedField = .name
       }
     }
     .presentationDetents([.medium, .large])

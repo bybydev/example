@@ -332,6 +332,7 @@ struct MCPServerEditorView: View {
   @State private var authenticationHeader: String
   @State private var credential = ""
   @State private var additionalHeaders: [AdditionalHeaderItem]
+  @State private var headerEditorTarget: AdditionalHeaderEditorTarget?
   @State private var isEnabled: Bool
   @State private var errorPresenterID = UUID()
 
@@ -439,6 +440,11 @@ struct MCPServerEditorView: View {
     } message: {
       Text(model.errorMessage ?? "Unknown error")
     }
+    .additionalHeaderEditorSheet(
+      target: $headerEditorTarget,
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy
+    )
     .onAppear { model.registerErrorPresenter(errorPresenterID) }
     .onDisappear { model.unregisterErrorPresenter(errorPresenterID) }
   }
@@ -495,7 +501,8 @@ struct MCPServerEditorView: View {
       headers: $additionalHeaders,
       policy: headerValidationPolicy,
       footerText:
-        "Optional non-secret headers sent with MCP requests. Stored in plain configuration, not Keychain. Authentication and MCP protocol headers are managed by BYOKchat."
+        "Optional non-secret headers sent with MCP requests. Stored in plain configuration, not Keychain. Authentication and MCP protocol headers are managed by BYOKchat.",
+      editorTarget: $headerEditorTarget
     )
   }
 

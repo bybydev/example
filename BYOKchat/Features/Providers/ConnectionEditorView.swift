@@ -40,6 +40,7 @@ struct ConnectionEditorView: View {
   @State private var isDraftCredentialVisible = false
   @State private var baseURL = ""
   @State private var additionalHeaders: [AdditionalHeaderItem] = []
+  @State private var headerEditorTarget: AdditionalHeaderEditorTarget?
   @State private var appTitle = ""
   @State private var httpReferer = ""
   @State private var selectedModelID: ModelID?
@@ -54,6 +55,7 @@ struct ConnectionEditorView: View {
   @State private var discoveryWarning: String?
   @State private var connectionTestState: ConnectionTestState = .idle
   @State private var showDelete = false
+  @State private var showDiscardChangesAlert = false
   @State private var isSaving = false
   @State private var replaceCredential = false
   @State private var clearCredential = false
@@ -294,18 +296,42 @@ struct ConnectionEditorView: View {
     .background(AppThemeBackground(theme: theme))
     .navigationTitle(isCreate ? "Add Connection" : "Edit Connection")
     .navigationBarTitleDisplayMode(.inline)
-    .interactiveDismissDisabled(isSaving)
-    .navigationBarBackButtonHidden(isSaving)
+    .interactiveDismissDisabled(isSaving || hasDirtyChanges)
+    .navigationBarBackButtonHidden(isSaving || (!isCreate && hasDirtyChanges))
     .toolbar {
       if isCreate {
         ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { cancel() }
+          Button("Cancel") { requestDismiss() }
+        }
+      } else if hasDirtyChanges {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Back", systemImage: "chevron.backward") {
+            requestDismiss()
+          }
+          .disabled(isSaving)
         }
       }
       ToolbarItem(placement: .confirmationAction) {
-        Button(isCreate ? "Save" : "Done") { save() }
+        Button("Save") { save() }
           .disabled(isSaving || !canSave)
       }
+    }
+    .alert("Unsaved Changes", isPresented: $showDiscardChangesAlert) {
+      Button("Discard Changes", role: .destructive) {
+        dismiss()
+      }
+      if canSave {
+        Button("Save") {
+          save()
+        }
+      }
+      Button("Keep Editing", role: .cancel) {}
+    } message: {
+      Text(
+        canSave
+          ? "You have unsaved changes to this connection. Do you want to save them before leaving?"
+          : "You have unsaved changes to this connection that will be lost if you leave."
+      )
     }
     .alert(
       "Connection Error",
@@ -317,6 +343,13 @@ struct ConnectionEditorView: View {
       Button("OK") { model.errorMessage = nil }
     } message: {
       Text(model.errorMessage ?? "Unknown error")
+    }
+    .additionalHeaderEditorSheet(
+      target: $headerEditorTarget,
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy
+    ) {
+      isDirty = true
     }
     .confirmationDialog("Delete this connection?", isPresented: $showDelete) {
       Button("Delete Connection", role: .destructive) {
@@ -375,15 +408,6 @@ struct ConnectionEditorView: View {
     .listRowBackground(theme.surfaceColor)
   }
 
-  private var providerTitle: String {
-    if isCustom {
-      let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !trimmed.isEmpty { return trimmed }
-      return existing?.label ?? "OpenAI-compatible"
-    }
-    return kind.displayName
-  }
-
   private var createProviderSection: some View {
     Section {
       NavigationLink {
@@ -410,9 +434,6 @@ struct ConnectionEditorView: View {
       .accessibilityValue(selectedKind.pickerTitle)
     } header: {
       Text("Provider")
-    } footer: {
-      Text("One connection per server or API key. Add the same provider twice to use multiple configurations.")
-        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -424,6 +445,7 @@ struct ConnectionEditorView: View {
     isDraftCredentialVisible = false
     clearCredential = false
     additionalHeaders = []
+    headerEditorTarget = nil
     appTitle = ""
     httpReferer = ""
     customAuth = .bearer
@@ -638,7 +660,7 @@ struct ConnectionEditorView: View {
         } else {
           credentialField
           if hasStoredCredential && clearCredential {
-            Text("Saved API key will be removed when you tap Done.")
+            Text("Saved API key will be removed when you tap Save.")
               .font(.caption)
               .foregroundStyle(theme.secondaryForegroundColor)
             Button("Keep Saved Key") {
@@ -660,7 +682,7 @@ struct ConnectionEditorView: View {
       } else {
         Label("This provider does not require an API key.", systemImage: "checkmark.shield")
         if hasStoredCredential {
-          Text("Saved API key will be removed when you tap Done.")
+          Text("Saved API key will be removed when you tap Save.")
             .font(.caption)
             .foregroundStyle(theme.secondaryForegroundColor)
         }
@@ -668,18 +690,9 @@ struct ConnectionEditorView: View {
     } header: {
       Text(showsCredentialField && !requiresCredential ? "API Key (Optional)" : "API Key")
     } footer: {
-      if showsCredentialField {
-        if requiresCredential {
-          Text(
-            "Stored in Keychain and sent only to \(providerTitle) when BYOKchat makes a request."
-          )
+      if isCreate && showsCredentialField {
+        Text("Stored securely in Keychain.")
           .foregroundStyle(theme.secondaryForegroundColor)
-        } else {
-          Text(
-            "Optional. Only sent when configured on your server. Stored in Keychain if provided."
-          )
-          .foregroundStyle(theme.secondaryForegroundColor)
-        }
       }
     }
     .listRowBackground(theme.surfaceColor)
@@ -798,11 +811,6 @@ struct ConnectionEditorView: View {
       }
     } header: {
       Text("Models")
-    } footer: {
-      Text(
-        "Choose a default or enter its exact model ID. Fetch previews models; \(isCreate ? "Save" : "Done") keeps your changes."
-      )
-      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -965,14 +973,7 @@ struct ConnectionEditorView: View {
         .foregroundStyle(.red)
       }
     } header: {
-      Text("Endpoint")
-    } footer: {
-      Text(
-        kind.displayName.isEmpty
-          ? "Optional custom base URL."
-          : "Optional. Leave blank to use the default \(kind.displayName) endpoint."
-      )
-      .foregroundStyle(theme.secondaryForegroundColor)
+      Text("Endpoint (Optional)")
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -1001,9 +1002,6 @@ struct ConnectionEditorView: View {
       .padding(.vertical, 2)
     } header: {
       Text("OpenRouter Attribution")
-    } footer: {
-      Text("Optional metadata sent to OpenRouter for app rankings and analytics.")
-        .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -1012,8 +1010,7 @@ struct ConnectionEditorView: View {
     AdditionalHeadersSection(
       headers: $additionalHeaders,
       policy: headerValidationPolicy,
-      footerText:
-        "Optional non-secret headers sent with requests. Stored in plain configuration, not Keychain. Authentication and protocol headers are managed by BYOKchat."
+      editorTarget: $headerEditorTarget
     ) {
       isDirty = true
     }
@@ -1042,13 +1039,6 @@ struct ConnectionEditorView: View {
         }
     } header: {
       Text("Name")
-    } footer: {
-      Text(
-        isCustom
-          ? "Shown in chats and pickers."
-          : "Shown in chats and pickers. Defaults to the provider name."
-      )
-      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -1078,11 +1068,6 @@ struct ConnectionEditorView: View {
     Section {
       Toggle("Enabled", isOn: $isEnabled)
         .onChange(of: isEnabled) { _, _ in isDirty = true }
-    } footer: {
-      Text(
-        "Disabled connections are hidden from chat pickers while keeping your saved settings and API key."
-      )
-      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
   }
@@ -1247,8 +1232,65 @@ struct ConnectionEditorView: View {
     }
   }
 
-  private func cancel() {
-    dismiss()
+  private var hasDirtyChanges: Bool {
+    let typedModel = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedModelID = typedModel.isEmpty ? selectedModelID : ModelID(rawValue: typedModel)
+    let manualIDs = manualModels.map { $0.id.rawValue } + (typedModel.isEmpty ? [] : [typedModel])
+    let sanitizedCredential = (isCustom && customAuth == .none) ? "" : trimmedCredential
+    let shouldClearCredential =
+      (clearCredential || (isCustom && customAuth == .none)) && sanitizedCredential.isEmpty
+    let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let persistedBaseURL = normalizedCloudBaseURL(trimmedBaseURL)
+    let effectiveRemoved = removedManualModelIDs.subtracting(
+      Set(manualIDs.map(ModelID.init(rawValue:)))
+    )
+
+    if let existing {
+      let latest = currentAccount ?? existing
+      let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+      let finalLabel = trimmedLabel.isEmpty ? suggestedName : trimmedLabel
+      if hasInvalidAdditionalHeaders { return true }
+      return hasUnsavedChanges(
+        against: latest,
+        finalLabel: finalLabel,
+        persistedBaseURL: persistedBaseURL,
+        parsedHeaders: additionalHeadersDictionary,
+        metadata: draftMetadata,
+        sanitizedCredential: sanitizedCredential,
+        shouldClearCredential: shouldClearCredential,
+        resolvedModelID: resolvedModelID,
+        manualIDs: manualIDs,
+        effectiveRemoved: effectiveRemoved,
+        preview: discoveredModels
+      )
+    }
+
+    if didEditName { return true }
+    if !sanitizedCredential.isEmpty { return true }
+    if !trimmedBaseURL.isEmpty { return true }
+    if !additionalHeaders.isEmpty { return true }
+    if !appTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+    if !httpReferer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+    if !manualIDs.isEmpty || discoveredModels != nil { return true }
+    if selectedModelID != kind.seedModels.first?.id { return true }
+    if isCustom {
+      if customAuth != .bearer { return true }
+      if customChatPath.trimmingCharacters(in: .whitespacesAndNewlines) != "/chat/completions" {
+        return true
+      }
+      if customModelsPath.trimmingCharacters(in: .whitespacesAndNewlines) != "/models" {
+        return true
+      }
+    }
+    return false
+  }
+
+  private func requestDismiss() {
+    if hasDirtyChanges {
+      showDiscardChangesAlert = true
+    } else {
+      dismiss()
+    }
   }
 
   private func normalizedCloudBaseURL(_ trimmedBaseURL: String) -> String {
