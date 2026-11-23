@@ -202,44 +202,6 @@ struct SettingsView: View {
       }
       .listRowBackground(theme.surfaceColor)
 
-      Section {
-        if let status = model.providers.modelCatalogStatus {
-          LabeledContent {
-            Text("\(status.source == .remote ? "Remote" : "Bundled") · \(status.version)")
-              .foregroundStyle(theme.secondaryForegroundColor)
-          } label: {
-            Label("Active Catalog", systemImage: "square.stack.3d.up")
-          }
-          if let lastCheckedAt = status.lastCheckedAt {
-            LabeledContent {
-              Text(lastCheckedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                .foregroundStyle(theme.secondaryForegroundColor)
-            } label: {
-              Label("Last Checked", systemImage: "clock")
-            }
-          }
-        }
-        Button {
-          Task { await checkModelCatalogUpdates() }
-        } label: {
-          HStack(spacing: 10) {
-            Label("Check for Catalog Updates", systemImage: "arrow.clockwise")
-            if model.providers.isRefreshingModelCatalog {
-              Spacer()
-              ProgressView()
-                .controlSize(.small)
-            }
-          }
-        }
-        .disabled(model.providers.isRefreshingModelCatalog)
-      } header: {
-        Text("Model Catalog")
-      } footer: {
-        Text("BYOKchat bundles a built-in model catalog and checks spokiostudio.com for newer model definitions and pricing.")
-          .foregroundStyle(theme.secondaryForegroundColor)
-      }
-      .listRowBackground(theme.surfaceColor)
-
       Section("About") {
         if let reviewURL = AppReviewPromptController.writeReviewURL {
           Link(destination: reviewURL) {
@@ -287,23 +249,6 @@ struct SettingsView: View {
     .scrollContentBackground(.hidden)
     .foregroundStyle(theme.primaryForegroundColor)
     .background(AppThemeBackground(theme: theme))
-  }
-
-  @MainActor
-  private func checkModelCatalogUpdates() async {
-    do {
-      let result = try await model.providers.refreshModelCatalog(force: true)
-      switch result {
-      case .updated(_, let version):
-        toastCenter.success("Model catalog updated to \(version)")
-      case .notModified, .upToDate, .ignoredOlderThanBundled:
-        toastCenter.success("Model catalog is up to date")
-      case .throttled:
-        toastCenter.success("Catalog was checked recently")
-      }
-    } catch {
-      toastCenter.error(error.localizedDescription)
-    }
   }
 }
 
