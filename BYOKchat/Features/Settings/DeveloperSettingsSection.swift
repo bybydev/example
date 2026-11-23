@@ -542,14 +542,28 @@ private struct ModelCatalogDeveloperView: View {
   private struct ProviderSummary: Identifiable {
     var id: String { key }
     let key: String
-    let models: Int
-    let rules: Int
+    let models: [ModelCatalog.ModelEntry]
+    let rules: [ModelCatalog.ReasoningRule]
+    let pricingByModelID: [String: ModelPricingCatalog.Entry]
   }
 
   private var providerSummaries: [ProviderSummary] {
-    guard let providers = activeSnapshot?.catalog.providers else { return [] }
-    return providers
-      .map { ProviderSummary(key: $0.key, models: $0.value.models.count, rules: $0.value.reasoningRules.count) }
+    guard let catalog = activeSnapshot?.catalog else { return [] }
+    var pricingByProvider: [String: [String: ModelPricingCatalog.Entry]] = [:]
+    for entry in catalog.pricing.entries {
+      for modelID in entry.modelIDs {
+        pricingByProvider[entry.provider, default: [:]][modelID] = entry
+      }
+    }
+    return catalog.providers
+      .map {
+        ProviderSummary(
+          key: $0.key,
+          models: $0.value.models,
+          rules: $0.value.reasoningRules,
+          pricingByModelID: pricingByProvider[$0.key] ?? [:]
+        )
+      }
       .sorted { $0.key < $1.key }
   }
 
@@ -711,9 +725,54 @@ private struct ModelCatalogDeveloperView: View {
       if !providerSummaries.isEmpty {
         Section {
           ForEach(providerSummaries) { item in
-            LabeledContent(item.key) {
-              Text("\(item.models) models · \(item.rules) rules")
-                .foregroundStyle(theme.secondaryForegroundColor)
+            DisclosureGroup {
+              DisclosureGroup("Models (\(item.models.count))") {
+                if item.models.isEmpty {
+                  Text("No seed models")
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                } else {
+                  ForEach(item.models, id: \.id) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                      Text(entry.displayName)
+                        .font(.subheadline.weight(.medium))
+                      Text(entry.id)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(theme.secondaryForegroundColor)
+                        .textSelection(.enabled)
+                      Text(modelDetailLine(entry, pricing: item.pricingByModelID[entry.id]))
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryForegroundColor)
+                    }
+                    .padding(.vertical, 2)
+                  }
+                }
+              }
+
+              DisclosureGroup("Reasoning Rules (\(item.rules.count))") {
+                if item.rules.isEmpty {
+                  Text("No reasoning rules")
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryForegroundColor)
+                } else {
+                  ForEach(Array(item.rules.enumerated()), id: \.offset) { index, rule in
+                    VStack(alignment: .leading, spacing: 3) {
+                      Text("#\(index + 1)  \(ruleMatchSummary(rule.match))")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                      Text(ruleControlSummary(rule.control))
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryForegroundColor)
+                    }
+                    .padding(.vertical, 2)
+                  }
+                }
+              }
+            } label: {
+              LabeledContent(item.key) {
+                Text("\(item.models.count) models · \(item.rules.count) rules")
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              }
             }
           }
         } header: {
@@ -735,6 +794,68 @@ private struct ModelCatalogDeveloperView: View {
     .onChange(of: model.providers.modelCatalogRevision) { _, _ in
       refreshDiskCacheSize()
     }
+  }
+
+  private func modelDetailLine(
+    _ entry: ModelCatalog.ModelEntry,
+    pricing: ModelPricingCatalog.Entry?
+  ) -> String {
+    var parts: [String] = []
+    if let ctx = entry.contextWindow {
+      parts.append("\(ctx.formatted()) ctx")
+    }
+    if let maxOut = entry.maxOutputTokens {
+      parts.append("\(maxOut.formatted()) out")
+    }
+    if !entry.inputModalities.isEmpty {
+      parts.append(entry.inputModalities.joined(separator: ", "))
+    }
+    if let pricing {
+      let input = pricing.rates.input ?? "?"
+      let output = pricing.rates.output ?? "?"
+      parts.append("$\(input)/$\(output) per 1M")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  private func ruleMatchSummary(_ match: ModelCatalog.ReasoningRule.Match) -> String {
+    var parts: [String] = []
+    if let exact = match.exactAny, !exact.isEmpty {
+      parts.append("exact: \(exact.joined(separator: ", "))")
+    }
+    if let prefix = match.prefixAny, !prefix.isEmpty {
+      parts.append("prefix: \(prefix.joined(separator: ", "))")
+    }
+    if let contains = match.containsAny, !contains.isEmpty {
+      parts.append("contains: \(contains.joined(separator: ", "))")
+    }
+    return parts.joined(separator: " & ")
+  }
+
+  private func ruleControlSummary(_ control: ModelCatalog.ReasoningRule.Control) -> String {
+    var parts: [String] = [control.kind.rawValue]
+    if let efforts = control.efforts, !efforts.isEmpty {
+      parts.append("[\(efforts.map(\.rawValue).joined(separator: ", "))]")
+    }
+    if let defaultEffort = control.defaultEffort {
+      parts.append("default: \(defaultEffort.rawValue)")
+    }
+    if let budget = control.budget {
+      let maxText = budget.maximum.map { $0.formatted() } ?? "∞"
+      let autoText = budget.allowsAutomatic ? " (auto)" : ""
+      parts.append("budget \(budget.minimum.formatted())..\(maxText)\(autoText)")
+    }
+    if control.combinesEffortAndBudget == true {
+      parts.append("effort+budget")
+    }
+    if control.allowsOff == true {
+      if let offWire = control.offWireValue {
+        parts.append("off: \(offWire)")
+      } else {
+        parts.append("allows off")
+      }
+    }
+    return parts.joined(separator: " · ")
   }
 
   private func refreshDiskCacheSize() {
