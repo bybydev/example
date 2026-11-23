@@ -164,11 +164,10 @@ final class BYOKchatScreenshotTests: XCTestCase {
   /// Launches directly into the full Paywall sheet while keeping the selected theme.
   func test02PaywallScreenshot() throws {
     launchSeededApp(openPaywall: true)
-    assertExists(
-      elementContaining("Choose the plan that fits you"),
-      timeout: 15,
-      context: "16_Paywall"
-    )
+    let headline = app.staticTexts.matching(
+      NSPredicate(format: "label CONTAINS[c] %@", "Choose the plan that fits you")
+    ).firstMatch
+    assertExists(headline, timeout: 15, context: "16_Paywall")
     assertExists(elementContaining("Monthly"), timeout: 6, context: "16_Paywall Monthly")
     capture("16_Paywall")
   }
@@ -247,14 +246,7 @@ final class BYOKchatScreenshotTests: XCTestCase {
   }
 
   private func dismissTopSheet() {
-    let navBar = app.navigationBars.firstMatch
     for label in ["Done", "Close", "Cancel"] {
-      let navButton = navBar.buttons[label]
-      if navButton.exists && navButton.isHittable {
-        navButton.tap()
-        usleep(250_000)
-        return
-      }
       let button = app.buttons[label].firstMatch
       if button.exists && button.isHittable {
         button.tap()
@@ -267,11 +259,35 @@ final class BYOKchatScreenshotTests: XCTestCase {
   }
 
   private func navigateBackIfNeeded() {
-    let back = app.navigationBars.buttons.element(boundBy: 0)
-    if back.exists && back.isHittable && !app.buttons["Open sidebar"].exists {
-      back.tap()
-      usleep(250_000)
+    let sidebar = app.buttons["Open sidebar"]
+    if sidebar.exists { return }
+
+    // On iOS 27 (Liquid Glass / iPhone Duo), floating navigation bar buttons
+    // are exposed directly under `app.buttons` rather than inside
+    // `app.navigationBars.buttons`, so check `app.buttons` first.
+    let candidates: [XCUIElement] = [
+      app.buttons["BackButton"].firstMatch,
+      app.buttons["Back"].firstMatch,
+      app.navigationBars.buttons["BackButton"].firstMatch,
+      app.navigationBars.buttons["Back"].firstMatch,
+      app.navigationBars.buttons.element(boundBy: 0),
+    ]
+
+    for back in candidates {
+      if back.exists && back.isHittable {
+        back.tap()
+        if sidebar.waitForExistence(timeout: 3) {
+          return
+        }
+      }
     }
+
+    // Fallback to native interactive pop edge-swipe if the back button label
+    // or hierarchy changed on a newer OS runtime.
+    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+    let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+    start.press(forDuration: 0.05, thenDragTo: end)
+    _ = sidebar.waitForExistence(timeout: 3)
   }
 
   private func ensureElementVisible(_ element: XCUIElement, scrollDownFirst: Bool) {
@@ -324,11 +340,15 @@ final class BYOKchatScreenshotTests: XCTestCase {
     let navTitles = app.navigationBars.allElementsBoundByIndex
       .map { $0.identifier }
       .filter { !$0.isEmpty }
+    let buttons = app.buttons.allElementsBoundByIndex
+      .prefix(10)
+      .map { $0.label.isEmpty ? $0.identifier : $0.label }
+      .filter { !$0.isEmpty }
     let texts = app.staticTexts.allElementsBoundByIndex
       .prefix(12)
       .map { $0.label }
       .filter { !$0.isEmpty }
-    return "navBars=\(navTitles), staticTexts=\(texts)"
+    return "navBars=\(navTitles), buttons=\(buttons), staticTexts=\(texts)"
   }
 
   private func capture(_ name: String) {

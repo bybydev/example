@@ -254,7 +254,7 @@ xcodebuild \
   -resultBundlePath "${RESULT_BUNDLE}" \
   -parallel-testing-enabled NO \
   -test-timeouts-enabled YES \
-  -default-test-execution-time-allowance 150 \
+  -default-test-execution-time-allowance 300 \
   -retry-tests-on-failure \
   -test-iterations 2 \
   -only-testing:BYOKchatUITests/BYOKchatScreenshotTests \
