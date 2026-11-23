@@ -114,6 +114,7 @@ extension BYOKProductAnalyticsDimension {
     case .projects: self = .projects
     case .mcpServers: self = .mcp
     case .analytics: self = .analyticsHistory
+    case .chatSearch: self = .chatSearch
     }
   }
 }

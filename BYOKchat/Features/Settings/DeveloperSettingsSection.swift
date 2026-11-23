@@ -17,6 +17,9 @@ struct BYOKDeveloperToolsView: View {
       configuration: configuration
     )
     .environment(purchases.manager)
+    .task {
+      _ = await model.chats.refreshSearchIndexStatus()
+    }
     .onChange(of: purchases.manager.isUsingSimulatedPurchases) { _, enabled in
       UserDefaults.standard.set(enabled, forKey: BYOKPurchaseStore.simulatedModeKey)
     }
@@ -43,6 +46,14 @@ struct BYOKDeveloperToolsView: View {
           systemImage: "crown"
         ) { _ in
           BYOKProUpsellFlow(feature: .providerAccounts)
+            .environment(purchases.manager)
+        },
+        FoundationDeveloperReplay(
+          id: "chat-search-upsell",
+          title: "Chat Search Upsell",
+          systemImage: "magnifyingglass"
+        ) { _ in
+          BYOKProUpsellFlow(feature: .chatSearch)
             .environment(purchases.manager)
         },
         FoundationDeveloperReplay(
@@ -94,6 +105,30 @@ struct BYOKDeveloperToolsView: View {
                   return "\(layer) · \(status.version)"
                 }
               )
+            ),
+            .value(
+              FoundationDeveloperValue(
+                id: "full-text-search-status",
+                title: "Full-text search",
+                value: {
+                  guard let status = model.chats.searchIndexStatus else {
+                    return purchases.hasPro ? "Checking…" : "Disabled (Free)"
+                  }
+                  if !status.isEnabled {
+                    return status.statistics.databaseExists ? "Paused (Free)" : "Disabled (Free)"
+                  }
+                  return "\(status.phase.displayTitle) · \(status.statistics.indexedConversationCount)/\(status.eligibleConversationCount)"
+                }
+              )
+            ),
+            .destination(
+              FoundationDeveloperDestination(
+                id: "full-text-search",
+                title: "Full Text Search",
+                systemImage: "magnifyingglass"
+              ) {
+                FullTextSearchDeveloperView(purchases: purchases)
+              }
             ),
             .destination(
               FoundationDeveloperDestination(
@@ -1079,6 +1114,394 @@ private struct SeedDataDeveloperView: View {
       isWorking = false
       errorMessage = error.localizedDescription
     }
+  }
+}
+
+private struct FullTextSearchDeveloperView: View {
+  let purchases: BYOKPurchaseStore
+
+  @Environment(AppModel.self) private var model
+  @Environment(\.appFoundationTheme) private var theme
+
+  @State private var status: ConversationSearchIndexStatus?
+  @State private var isWorking = false
+  @State private var actionStatus: String?
+  @State private var actionError: String?
+  @State private var confirmClear = false
+  @State private var testQuery = ""
+  @State private var isRunningQuery = false
+  @State private var testResult: ConversationSearchQueryResult?
+
+  var body: some View {
+    List {
+      statusSection
+      coverageSection
+      databaseSection
+      performanceSection
+      testQuerySection
+      actionsSection
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Full Text Search")
+    .navigationBarTitleDisplayMode(.inline)
+    .task {
+      await reloadStatus()
+    }
+    .refreshable {
+      await reloadStatus()
+    }
+    .onChange(of: purchases.hasPro) { _, _ in
+      Task { await reloadStatus() }
+    }
+    .confirmationDialog(
+      "Clear search index?",
+      isPresented: $confirmClear,
+      titleVisibility: .visible
+    ) {
+      Button("Clear Search Index", role: .destructive) {
+        Task { await clearIndex() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Deletes the derived SQLite FTS5 index files. Authoritative conversation shards are never modified and can be reindexed at any time.")
+    }
+  }
+
+  private var statusSection: some View {
+    Section {
+      LabeledContent("Entitlement", value: purchases.hasPro ? "Pro (Full text search)" : "Free (Titles only)")
+      if let status {
+        LabeledContent("Indexing Enabled", value: status.isEnabled ? "Yes" : "No")
+        LabeledContent("Index State", value: phaseLabel(for: status))
+        LabeledContent("Store Attached", value: status.isConfigured ? "SQLite FTS5" : "Not configured")
+        if status.statistics.consecutiveFailureCount > 0 {
+          LabeledContent("Consecutive Failures") {
+            Text(status.statistics.consecutiveFailureCount.formatted())
+              .foregroundStyle(.red)
+          }
+        }
+        if let lastErrorAt = status.statistics.lastErrorAt {
+          LabeledContent("Last Error At") {
+            Text(lastErrorAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+              .foregroundStyle(.red)
+          }
+        }
+        if let lastError = status.statistics.lastErrorDescription {
+          Text(lastError)
+            .font(.footnote)
+            .foregroundStyle(.red)
+        }
+      } else {
+        HStack(spacing: 10) {
+          ProgressView()
+          Text("Loading index status…")
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      }
+    } header: {
+      Text("Status")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text("Free users search chat titles in memory from index.json. Pro enables incremental SQLite FTS5 indexing across titles, message content, and attachment names.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var coverageSection: some View {
+    Section {
+      if let status {
+        LabeledContent("Total Chats in Index", value: status.totalConversationCount.formatted())
+        LabeledContent("Eligible Chats", value: status.eligibleConversationCount.formatted())
+        LabeledContent("Indexed Chats", value: status.statistics.indexedConversationCount.formatted())
+        LabeledContent("Stale / Pending Chats") {
+          Text(status.staleConversationCount.formatted())
+            .foregroundStyle(status.staleConversationCount > 0 ? Color.orange : theme.secondaryForegroundColor)
+        }
+        LabeledContent("Indexed Documents", value: status.statistics.indexedDocumentCount.formatted())
+        LabeledContent("Indexed Messages", value: status.statistics.indexedMessageCount.formatted())
+        if status.excludedEmptyChatCount > 0 {
+          LabeledContent("Excluded Empty Drafts", value: status.excludedEmptyChatCount.formatted())
+        }
+        if status.quarantinedShardCount > 0 {
+          LabeledContent("Quarantined Shards") {
+            Text(status.quarantinedShardCount.formatted())
+              .foregroundStyle(Color.orange)
+          }
+        }
+      } else {
+        Text("Unavailable")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+    } header: {
+      Text("Coverage")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var databaseSection: some View {
+    Section {
+      if let stats = status?.statistics {
+        LabeledContent("Database File", value: stats.databaseExists ? "Present" : "Not created")
+        LabeledContent("Schema Version", value: "v\(stats.schemaVersion)")
+        LabeledContent("Tokenizer") {
+          Text(stats.tokenizer)
+            .font(.caption.monospaced())
+            .foregroundStyle(theme.secondaryForegroundColor)
+            .multilineTextAlignment(.trailing)
+        }
+        LabeledContent("iCloud Backup", value: stats.isExcludedFromBackup ? "Excluded" : "Included")
+        LabeledContent("Total Footprint", value: formattedBytes(stats.totalBytes))
+        LabeledContent("Main DB", value: formattedBytes(stats.databaseBytes))
+        LabeledContent("WAL / SHM", value: "\(formattedBytes(stats.walBytes)) / \(formattedBytes(stats.shmBytes))")
+        if !stats.databasePath.isEmpty {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Path")
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+            Text(stats.databasePath)
+              .font(.caption2.monospaced())
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .textSelection(.enabled)
+          }
+          .padding(.vertical, 2)
+        }
+      } else {
+        Text("Unavailable")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+    } header: {
+      Text("Database & Engine")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var performanceSection: some View {
+    Section {
+      if let stats = status?.statistics {
+        if let rebuildAt = stats.lastRebuildAt {
+          LabeledContent("Last Full Rebuild") {
+            Text(rebuildAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        } else {
+          LabeledContent("Last Full Rebuild", value: "Never")
+        }
+        if let durationMs = stats.lastRebuildDurationMilliseconds {
+          LabeledContent("Rebuild Duration", value: formattedMilliseconds(durationMs))
+        }
+        if let syncAt = stats.lastIncrementalSyncAt {
+          LabeledContent("Last Sync") {
+            Text(syncAt, format: .dateTime.month(.abbreviated).day().hour().minute().second())
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        } else {
+          LabeledContent("Last Sync", value: "Never")
+        }
+        if let latencyMs = stats.lastQueryLatencyMilliseconds {
+          let hitsText = stats.lastQueryHitCount.map { " · \($0) hit\($0 == 1 ? "" : "s")" } ?? ""
+          LabeledContent("Last Query", value: "\(formattedMilliseconds(latencyMs))\(hitsText)")
+        } else {
+          LabeledContent("Last Query", value: "None")
+        }
+      } else {
+        Text("Unavailable")
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+    } header: {
+      Text("Performance & Timestamps")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var testQuerySection: some View {
+    Section {
+      HStack(spacing: 10) {
+        TextField("Run test FTS query…", text: $testQuery)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .submitLabel(.search)
+          .onSubmit {
+            Task { await runTestQuery() }
+          }
+        Button("Run") {
+          Task { await runTestQuery() }
+        }
+        .disabled(isRunningQuery || testQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+
+      if isRunningQuery {
+        HStack(spacing: 10) {
+          ProgressView()
+            .controlSize(.small)
+          Text("Querying FTS5…")
+            .font(.footnote)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+      } else if let testResult {
+        LabeledContent(
+          "Engine",
+          value: testResult.usedFTSIndex ? "SQLite FTS5" : "Linear Scan Fallback"
+        )
+        LabeledContent(
+          "Latency / Hits",
+          value: "\(formattedMilliseconds(testResult.latencyMilliseconds)) · \(testResult.results.count) match\(testResult.results.count == 1 ? "" : "es")"
+        )
+        ForEach(Array(testResult.results.prefix(10))) { match in
+          VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+              Text(match.role.rawValue.uppercased())
+                .font(.caption2.weight(.semibold).monospaced())
+                .foregroundStyle(theme.accentColor)
+              Text(match.title)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+            }
+            Text(match.snippet)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(2)
+          }
+          .padding(.vertical, 2)
+        }
+      }
+    } header: {
+      Text("Test Query")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } footer: {
+      Text("Executes full-text search directly against the store regardless of current entitlement for debugging.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var actionsSection: some View {
+    Section {
+      Button {
+        Task { await reconcileIndex() }
+      } label: {
+        HStack(spacing: 10) {
+          Label("Reconcile Stale Shards", systemImage: "arrow.triangle.2.circlepath")
+          if isWorking {
+            Spacer()
+            ProgressView()
+              .controlSize(.small)
+          }
+        }
+      }
+      .disabled(isWorking)
+
+      Button("Force Rebuild Index", systemImage: "arrow.clockwise") {
+        Task { await rebuildIndex() }
+      }
+      .disabled(isWorking)
+
+      Button("Clear Search Index", systemImage: "trash", role: .destructive) {
+        confirmClear = true
+      }
+      .disabled(isWorking || status?.statistics.databaseExists != true)
+
+      if let actionStatus {
+        Text(actionStatus)
+          .font(.footnote)
+          .foregroundStyle(theme.secondaryForegroundColor)
+      }
+      if let actionError {
+        Text(actionError)
+          .font(.footnote)
+          .foregroundStyle(.red)
+      }
+    } header: {
+      Text("Actions")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private func phaseLabel(for status: ConversationSearchIndexStatus) -> String {
+    if status.phase == .indexing, let progress = status.progress, progress.total > 0 {
+      return "Indexing (\(progress.processed)/\(progress.total))"
+    }
+    return status.phase.displayTitle
+  }
+
+  private func formattedBytes(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
+  }
+
+  private func formattedMilliseconds(_ value: Double) -> String {
+    if value < 1 {
+      return String(format: "%.2f ms", value)
+    }
+    return String(format: "%.1f ms", value)
+  }
+
+  @MainActor
+  private func reloadStatus() async {
+    status = await model.chats.refreshSearchIndexStatus()
+  }
+
+  @MainActor
+  private func reconcileIndex() async {
+    isWorking = true
+    actionStatus = nil
+    actionError = nil
+    defer { isWorking = false }
+    await model.chats.reconcileSearchIndex()
+    await reloadStatus()
+    if let status {
+      actionStatus = "Reconciled: \(status.statistics.indexedConversationCount)/\(status.eligibleConversationCount) chats indexed."
+    }
+  }
+
+  @MainActor
+  private func rebuildIndex() async {
+    isWorking = true
+    actionStatus = nil
+    actionError = nil
+    defer { isWorking = false }
+    do {
+      try await model.chats.rebuildSearchIndex()
+      await reloadStatus()
+      if let status {
+        let duration = status.statistics.lastRebuildDurationMilliseconds.map(formattedMilliseconds) ?? "—"
+        actionStatus = "Rebuilt index for \(status.statistics.indexedConversationCount) chats in \(duration)."
+      }
+    } catch {
+      actionError = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func clearIndex() async {
+    isWorking = true
+    actionStatus = nil
+    actionError = nil
+    defer { isWorking = false }
+    do {
+      try await model.chats.clearSearchIndex()
+      testResult = nil
+      await reloadStatus()
+      actionStatus = "Cleared derived SQLite FTS5 index."
+    } catch {
+      actionError = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func runTestQuery() async {
+    let trimmed = testQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    isRunningQuery = true
+    defer { isRunningQuery = false }
+    testResult = await model.chats.debugSearchFullText(trimmed, limit: 50)
+    await reloadStatus()
   }
 }
 #endif

@@ -479,6 +479,9 @@ private struct StorageManagementView: View {
           sizeRow("Chats (\(chats.historyConversations.count))", bytes: report.conversationsBytes)
           sizeRow("Files & Attachments", bytes: report.attachmentsBytes)
           sizeRow("Cached Thumbnails", bytes: report.thumbnailCacheBytes)
+          if report.searchIndexBytes > 0 {
+            sizeRow("Search Index", bytes: report.searchIndexBytes)
+          }
           sizeRow("Analytics & Settings", bytes: report.analyticsBytes + report.otherBytes)
           if report.quarantinedBytes > 0 {
             sizeRow("Quarantined Files", bytes: report.quarantinedBytes)
@@ -505,7 +508,7 @@ private struct StorageManagementView: View {
         Text("Usage Breakdown")
           .foregroundStyle(theme.secondaryForegroundColor)
       } footer: {
-        Text("Cached thumbnails are excluded from iCloud Backup and regenerate automatically when needed.")
+        Text("Cached thumbnails and the search index are excluded from iCloud Backup and regenerate automatically when needed.")
           .foregroundStyle(theme.secondaryForegroundColor)
       }
       .listRowBackground(theme.surfaceColor)
@@ -518,6 +521,15 @@ private struct StorageManagementView: View {
           Label("Clear Cached Thumbnails", systemImage: "photo.on.rectangle.angled")
         }
         .disabled(dataPortability.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
+
+        if (report?.searchIndexBytes ?? 0) > 0 {
+          Button {
+            Task { await dataPortability.clearSearchIndex() }
+          } label: {
+            Label("Clear Search Index", systemImage: "magnifyingglass")
+          }
+          .disabled(dataPortability.isBusy)
+        }
 
         if quarantinedCount > 0 {
           Button(role: .destructive) {

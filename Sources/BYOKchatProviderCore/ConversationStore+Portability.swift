@@ -55,6 +55,9 @@ extension ConversationStore {
     }
     if didImportAny {
       try await flushImportedIndex()
+      if isFullTextSearchEnabled {
+        await reconcileSearchIndex()
+      }
     }
     return mapping
   }

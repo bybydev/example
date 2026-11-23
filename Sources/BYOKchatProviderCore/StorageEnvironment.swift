@@ -66,6 +66,8 @@ public struct BYOKStorageLayout: Sendable, Equatable {
   public static let projectsFileName = "projects-v1.json"
   public static let mcpServersFileName = "mcp-servers-v1.json"
   public static let filesDirectoryName = "files-v1"
+  public static let searchDirectoryName = "search-v1"
+  public static let searchIndexFileName = "conversations-fts.sqlite"
   public static let recoveryDirectoryName = "Recovery"
 
   public var rootDirectory: URL
@@ -114,8 +116,17 @@ public struct BYOKStorageLayout: Sendable, Equatable {
     filesDirectory.appendingPathComponent("derived", isDirectory: true)
   }
 
+  public var searchDirectory: URL {
+    rootDirectory.appendingPathComponent(Self.searchDirectoryName, isDirectory: true)
+  }
+
+  public var searchIndexDatabaseFile: URL {
+    searchDirectory.appendingPathComponent(Self.searchIndexFileName, isDirectory: false)
+  }
+
   /// Computes a local disk-usage breakdown across chat shards, attachment blobs,
-  /// regenerable thumbnails, telemetry SQLite files, and remaining metadata.
+  /// regenerable thumbnails, search index SQLite files, telemetry SQLite files,
+  /// and remaining metadata.
   public func measureUsage(
     telemetryDirectory: URL,
     fileManager: FileManager = .default
@@ -142,6 +153,7 @@ public struct BYOKStorageLayout: Sendable, Equatable {
     let thumbnailCacheBytes = Self.directorySize(at: derivedThumbnailsDirectory, fileManager: fileManager)
     let totalFilesBytes = Self.directorySize(at: filesDirectory, fileManager: fileManager)
     let attachmentsBytes = max(0, totalFilesBytes - thumbnailCacheBytes)
+    let searchIndexBytes = Self.directorySize(at: searchDirectory, fileManager: fileManager)
 
     let analyticsBytes = Self.directorySize(at: telemetryDirectory, fileManager: fileManager)
 
@@ -174,6 +186,7 @@ public struct BYOKStorageLayout: Sendable, Equatable {
       quarantinedCount: quarantinedCount,
       attachmentsBytes: attachmentsBytes,
       thumbnailCacheBytes: thumbnailCacheBytes,
+      searchIndexBytes: searchIndexBytes,
       analyticsBytes: analyticsBytes,
       otherBytes: otherBytes,
       availableDeviceBytes: availableDeviceBytes
@@ -214,6 +227,7 @@ public struct BYOKStorageUsageReport: Sendable, Equatable {
   public var quarantinedCount: Int
   public var attachmentsBytes: Int64
   public var thumbnailCacheBytes: Int64
+  public var searchIndexBytes: Int64
   public var analyticsBytes: Int64
   public var otherBytes: Int64
   public var availableDeviceBytes: Int64?
@@ -224,6 +238,7 @@ public struct BYOKStorageUsageReport: Sendable, Equatable {
     quarantinedCount: Int = 0,
     attachmentsBytes: Int64 = 0,
     thumbnailCacheBytes: Int64 = 0,
+    searchIndexBytes: Int64 = 0,
     analyticsBytes: Int64 = 0,
     otherBytes: Int64 = 0,
     availableDeviceBytes: Int64? = nil
@@ -233,13 +248,15 @@ public struct BYOKStorageUsageReport: Sendable, Equatable {
     self.quarantinedCount = quarantinedCount
     self.attachmentsBytes = attachmentsBytes
     self.thumbnailCacheBytes = thumbnailCacheBytes
+    self.searchIndexBytes = searchIndexBytes
     self.analyticsBytes = analyticsBytes
     self.otherBytes = otherBytes
     self.availableDeviceBytes = availableDeviceBytes
   }
 
   public var totalBytes: Int64 {
-    conversationsBytes + quarantinedBytes + attachmentsBytes + thumbnailCacheBytes + analyticsBytes + otherBytes
+    conversationsBytes + quarantinedBytes + attachmentsBytes + thumbnailCacheBytes
+      + searchIndexBytes + analyticsBytes + otherBytes
   }
 
   public var isStorageLarge: Bool {

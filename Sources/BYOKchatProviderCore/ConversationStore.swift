@@ -7,6 +7,7 @@ public actor ConversationStore {
 
   private let persistence: any ConversationWorkspacePersistence
   private let blobs: any AttachmentBlobStoring
+  private let searchIndex: ConversationSearchIndexStore?
   private let maxCachedConversations: Int
 
   /// Bounded LRU cache of hydrated full conversations. Active/dirty shards are
@@ -19,6 +20,8 @@ public actor ConversationStore {
   private var hasLoaded = false
   private var deferredDirtyIDs: Set<ConversationID> = []
   private var isDeferredFlushScheduled = false
+  var isFullTextSearchEnabled = false
+  private var activeSearchIndexProgress: ConversationSearchIndexProgress?
 
   public private(set) var flushError: Error?
   public private(set) var quarantinedShardCount = 0
@@ -44,10 +47,12 @@ public actor ConversationStore {
   public init(
     persistence: any ConversationWorkspacePersistence,
     blobs: any AttachmentBlobStoring = InMemoryAttachmentBlobStore(),
+    searchIndex: ConversationSearchIndexStore? = nil,
     maxCachedConversations: Int = ConversationStore.defaultMaxCachedConversations
   ) {
     self.persistence = persistence
     self.blobs = blobs
+    self.searchIndex = searchIndex
     self.maxCachedConversations = max(1, maxCachedConversations)
   }
 
@@ -236,6 +241,9 @@ public actor ConversationStore {
       try await persistence.saveShard(id: id.rawValue, data: shardData(persisted))
       try await persistIndex()
     }
+    if isFullTextSearchEnabled {
+      await syncSearchIndex(for: [persisted])
+    }
   }
 
   public func deleteConversation(_ id: ConversationID) async throws {
@@ -246,10 +254,16 @@ public actor ConversationStore {
     tombstones[id.rawValue] = .now
     try await persistence.deleteShard(id: id.rawValue)
     try await persistIndex()
+    if isFullTextSearchEnabled {
+      try? await searchIndex?.removeConversations([id])
+    }
   }
 
   public func deleteAllConversations() async throws {
-    guard !indexEntries.isEmpty || quarantinedShardCount > 0 else { return }
+    guard !indexEntries.isEmpty || quarantinedShardCount > 0 else {
+      try? await searchIndex?.clearIndex()
+      return
+    }
     let removedIDs = Array(indexEntries.keys)
     cachedByID.removeAll()
     cacheOrder.removeAll()
@@ -262,6 +276,7 @@ public actor ConversationStore {
     try await persistence.deleteAllShards()
     quarantinedShardCount = 0
     try await persistIndex()
+    try? await searchIndex?.clearIndex()
   }
 
   public func renameConversation(_ id: ConversationID, title: String) async throws {
@@ -310,17 +325,266 @@ public actor ConversationStore {
     try await persist(conversationIDs: [conversationID])
   }
 
-  /// Search is intentionally an on-demand corpus scan. It does not populate
-  /// the normal conversation cache, so searching cannot turn startup laziness
-  /// into permanent all-history memory usage.
-  public func search(_ query: String, limit: Int = 100) async -> [ConversationSearchResult] {
-    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return [] }
+  // MARK: - Full-Text Search & Index Lifecycle
 
+  /// Enables or pauses incremental SQLite FTS5 indexing (Pro feature gate).
+  /// Pausing keeps any existing derived FTS database idle without modifying or
+  /// deleting authoritative conversation shards.
+  public func setFullTextSearchEnabled(_ enabled: Bool) {
+    isFullTextSearchEnabled = enabled
+  }
+
+  public func searchIndexStatus() async -> ConversationSearchIndexStatus {
+    let eligible = eligibleIndexEntries()
+    let excludedCount = max(0, indexEntries.count - eligible.count)
+
+    guard let searchIndex else {
+      return ConversationSearchIndexStatus(
+        isEnabled: isFullTextSearchEnabled,
+        isConfigured: false,
+        phase: isFullTextSearchEnabled ? .notBuilt : .disabled,
+        progress: activeSearchIndexProgress,
+        totalConversationCount: indexEntries.count,
+        eligibleConversationCount: eligible.count,
+        excludedEmptyChatCount: excludedCount,
+        staleConversationCount: eligible.count,
+        quarantinedShardCount: quarantinedShardCount,
+        statistics: ConversationSearchIndexStatistics()
+      )
+    }
+
+    let statistics = await searchIndex.statistics()
+    let signatures = await searchIndex.indexedSignaturesIfPresent()
+    let staleCount = staleConversationCount(eligible: eligible, indexedSignatures: signatures)
+
+    let phase: ConversationSearchIndexPhase
+    if activeSearchIndexProgress != nil {
+      phase = .indexing
+    } else if !isFullTextSearchEnabled {
+      phase = .disabled
+    } else if statistics.consecutiveFailureCount > 0 {
+      phase = .failed
+    } else if eligible.count > 0
+      && (!statistics.databaseExists || statistics.indexedConversationCount == 0)
+    {
+      phase = .notBuilt
+    } else if staleCount > 0 {
+      phase = .stale
+    } else {
+      phase = .ready
+    }
+
+    return ConversationSearchIndexStatus(
+      isEnabled: isFullTextSearchEnabled,
+      isConfigured: true,
+      phase: phase,
+      progress: activeSearchIndexProgress,
+      totalConversationCount: indexEntries.count,
+      eligibleConversationCount: eligible.count,
+      excludedEmptyChatCount: excludedCount,
+      staleConversationCount: staleCount,
+      quarantinedShardCount: quarantinedShardCount,
+      statistics: statistics
+    )
+  }
+
+  /// Incrementally reconciles missing, changed, or deleted conversations in the
+  /// derived SQLite FTS5 index without polluting the bounded LRU cache.
+  public func reconcileSearchIndex(
+    onProgress: (@Sendable (ConversationSearchIndexProgress) -> Void)? = nil
+  ) async {
+    guard let searchIndex else { return }
+
+    let eligible = eligibleIndexEntries()
+    let eligibleMap = Dictionary(
+      uniqueKeysWithValues: eligible.map { ($0.id.rawValue, Self.searchSignature(for: $0)) }
+    )
+    let existingSignatures = await searchIndex.indexedSignaturesIfPresent()
+
+    let obsoleteIDs = existingSignatures.keys
+      .filter { eligibleMap[$0] == nil }
+      .map { ConversationID(rawValue: $0) }
+    if !obsoleteIDs.isEmpty {
+      try? await searchIndex.removeConversations(obsoleteIDs)
+    }
+
+    let staleEntries = eligible.filter { entry in
+      existingSignatures[entry.id.rawValue] != eligibleMap[entry.id.rawValue]
+    }
+    guard !staleEntries.isEmpty else { return }
+
+    let total = staleEntries.count
+    var processed = 0
+    activeSearchIndexProgress = ConversationSearchIndexProgress(processed: 0, total: total)
+    onProgress?(ConversationSearchIndexProgress(processed: 0, total: total))
+    defer { activeSearchIndexProgress = nil }
+
+    let batchSize = 25
+    var batch: [(conversation: ChatConversation, signature: String)] = []
+    batch.reserveCapacity(batchSize)
+
+    for entry in staleEntries {
+      if Task.isCancelled { break }
+      guard let currentEntry = indexEntries[entry.id], Self.isEligibleForSearchIndex(currentEntry)
+      else {
+        processed += 1
+        continue
+      }
+      if let conversation = try? await readConversationWithoutCaching(id: entry.id) {
+        if Task.isCancelled { break }
+        guard let latestEntry = indexEntries[entry.id], Self.isEligibleForSearchIndex(latestEntry)
+        else {
+          processed += 1
+          continue
+        }
+        batch.append((conversation, Self.searchSignature(for: latestEntry)))
+      }
+      processed += 1
+
+      if batch.count >= batchSize {
+        try? await searchIndex.upsertConversations(batch)
+        batch.removeAll(keepingCapacity: true)
+        let progress = ConversationSearchIndexProgress(processed: processed, total: total)
+        activeSearchIndexProgress = progress
+        onProgress?(progress)
+      }
+    }
+
+    if !batch.isEmpty, !Task.isCancelled {
+      try? await searchIndex.upsertConversations(batch)
+    }
+    let finalProgress = ConversationSearchIndexProgress(processed: processed, total: total)
+    activeSearchIndexProgress = finalProgress
+    onProgress?(finalProgress)
+  }
+
+  /// Drops and recreates the derived SQLite FTS5 index from authoritative shards.
+  public func rebuildSearchIndex(
+    onProgress: (@Sendable (ConversationSearchIndexProgress) -> Void)? = nil
+  ) async throws {
+    guard let searchIndex else { return }
+    let startedAt = ContinuousClock.now
+    try await searchIndex.resetForRebuild()
+
+    let eligible = eligibleIndexEntries()
+    let total = eligible.count
+    var processed = 0
+    activeSearchIndexProgress = ConversationSearchIndexProgress(processed: 0, total: total)
+    onProgress?(ConversationSearchIndexProgress(processed: 0, total: total))
+    defer { activeSearchIndexProgress = nil }
+
+    let batchSize = 25
+    var batch: [(conversation: ChatConversation, signature: String)] = []
+    batch.reserveCapacity(batchSize)
+
+    for entry in eligible {
+      try Task.checkCancellation()
+      guard let currentEntry = indexEntries[entry.id], Self.isEligibleForSearchIndex(currentEntry)
+      else {
+        processed += 1
+        continue
+      }
+      if let conversation = try? await readConversationWithoutCaching(id: entry.id) {
+        try Task.checkCancellation()
+        guard let latestEntry = indexEntries[entry.id], Self.isEligibleForSearchIndex(latestEntry)
+        else {
+          processed += 1
+          continue
+        }
+        batch.append((conversation, Self.searchSignature(for: latestEntry)))
+      }
+      processed += 1
+
+      if batch.count >= batchSize {
+        try await searchIndex.upsertConversations(batch, markIncrementalSync: false)
+        batch.removeAll(keepingCapacity: true)
+        let progress = ConversationSearchIndexProgress(processed: processed, total: total)
+        activeSearchIndexProgress = progress
+        onProgress?(progress)
+      }
+    }
+
+    if !batch.isEmpty {
+      try await searchIndex.upsertConversations(batch, markIncrementalSync: false)
+    }
+    let elapsed = startedAt.duration(to: .now)
+    let components = elapsed.components
+    let durationMs = Double(components.seconds) * 1_000.0
+      + Double(components.attoseconds) / 1_000_000_000_000_000.0
+    try await searchIndex.recordRebuildCompleted(durationMilliseconds: durationMs)
+    let finalProgress = ConversationSearchIndexProgress(processed: processed, total: total)
+    activeSearchIndexProgress = finalProgress
+    onProgress?(finalProgress)
+  }
+
+  public func clearSearchIndex() async throws {
+    try await searchIndex?.clearIndex()
+  }
+
+  /// Full-text search backed by SQLite FTS5 when configured, with transparent
+  /// fallback to an on-demand corpus scan for in-memory test stores or SQLite
+  /// runtime failures.
+  public func searchFullText(_ query: String, limit: Int = 100) async -> [ConversationSearchResult] {
+    await searchFullTextWithMetrics(query, limit: limit).results
+  }
+
+  public func searchFullTextWithMetrics(
+    _ query: String,
+    limit: Int = 100
+  ) async -> ConversationSearchQueryResult {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      return ConversationSearchQueryResult(
+        results: [],
+        latencyMilliseconds: 0,
+        usedFTSIndex: searchIndex != nil
+      )
+    }
+
+    if let searchIndex {
+      let eligible = eligibleIndexEntries()
+      let signatures = await searchIndex.indexedSignaturesIfPresent()
+      if staleConversationCount(eligible: eligible, indexedSignatures: signatures) > 0 {
+        await reconcileSearchIndex()
+      }
+      if Task.isCancelled {
+        return ConversationSearchQueryResult(
+          results: [],
+          latencyMilliseconds: 0,
+          usedFTSIndex: true
+        )
+      }
+      if let ftsResult = try? await searchIndex.search(trimmed, limit: limit) {
+        return ftsResult
+      }
+    }
+
+    let startedAt = ContinuousClock.now
+    let results = await linearScanSearch(trimmed, limit: limit)
+    let elapsed = startedAt.duration(to: .now)
+    let components = elapsed.components
+    let latencyMs = Double(components.seconds) * 1_000.0
+      + Double(components.attoseconds) / 1_000_000_000_000_000.0
+    return ConversationSearchQueryResult(
+      results: results,
+      latencyMilliseconds: latencyMs,
+      usedFTSIndex: false
+    )
+  }
+
+  /// Backward-compatible full-text search entry point.
+  public func search(_ query: String, limit: Int = 100) async -> [ConversationSearchResult] {
+    await searchFullText(query, limit: limit)
+  }
+
+  /// Fallback corpus scan used when no SQLite FTS index is attached (for
+  /// example in-memory unit tests) or if SQLite encounters a runtime error.
+  /// Never populates the bounded conversation cache.
+  private func linearScanSearch(_ trimmed: String, limit: Int) async -> [ConversationSearchResult] {
     var results: [ConversationSearchResult] = []
-    for entry in sortedIndexEntries() {
+    for entry in eligibleIndexEntries() {
       if Task.isCancelled { return [] }
-      if entry.title.localizedCaseInsensitiveContains(trimmed) {
+      if entry.title.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
         results.append(
           ConversationSearchResult(
             conversationID: entry.id,
@@ -337,10 +601,12 @@ public actor ConversationStore {
         continue
       }
       if Task.isCancelled { return [] }
-      for message in conversation.messages where message.status == .complete {
-        let contentMatches = message.content.localizedCaseInsensitiveContains(trimmed)
+      var conversationMessageHits = 0
+      for message in conversation.messages where ConversationSearchIndexStore.isIndexableMessage(message) {
+        let contentMatches =
+          message.content.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         let matchingAttachment = (message.attachments ?? []).first {
-          $0.filename.localizedCaseInsensitiveContains(trimmed)
+          $0.filename.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
         guard contentMatches || matchingAttachment != nil else { continue }
         results.append(
@@ -355,6 +621,10 @@ public actor ConversationStore {
             updatedAt: message.updatedAt
           )
         )
+        conversationMessageHits += 1
+        if conversationMessageHits >= ConversationSearchIndexStore.maxMessageMatchesPerConversation {
+          break
+        }
       }
     }
 
@@ -847,6 +1117,7 @@ public actor ConversationStore {
     removeFromCache(id)
     indexEntries.removeValue(forKey: id)
     try? await persistIndex()
+    try? await searchIndex?.removeConversations([id])
   }
 
   private func ensureConversationLoaded(_ id: ConversationID) async throws {
@@ -1129,6 +1400,7 @@ public actor ConversationStore {
     let targets = involved.union(deferredDirtyIDs)
     try await offloadAttachmentBlobs(for: targets)
     var indexChanged = false
+    var syncedConversations: [ChatConversation] = []
     for id in targets.map(\.rawValue).sorted() {
       let conversationID = ConversationID(rawValue: id)
       guard let conversation = cachedByID[conversationID] else {
@@ -1142,6 +1414,9 @@ public actor ConversationStore {
           indexEntries[conversation.id] = newEntry
           indexChanged = true
         }
+        if isFullTextSearchEnabled {
+          syncedConversations.append(conversation)
+        }
       }
       deferredDirtyIDs.remove(conversation.id)
     }
@@ -1149,7 +1424,74 @@ public actor ConversationStore {
     if updateIndex, indexChanged {
       try await persistIndex()
     }
+    if updateIndex, isFullTextSearchEnabled, !syncedConversations.isEmpty {
+      await syncSearchIndex(for: syncedConversations)
+    }
     evictCachedConversationsIfNeeded()
+  }
+
+  private func syncSearchIndex(for conversations: [ChatConversation]) async {
+    guard let searchIndex, !conversations.isEmpty else { return }
+    var upserts: [(conversation: ChatConversation, signature: String)] = []
+    var removals: [ConversationID] = []
+    for conversation in conversations {
+      let entry = indexEntries[conversation.id] ?? ConversationIndexEntry(conversation: conversation)
+      if Self.isEligibleForSearchIndex(entry) {
+        upserts.append((conversation, Self.searchSignature(for: entry)))
+      } else {
+        removals.append(conversation.id)
+      }
+    }
+    if !removals.isEmpty {
+      try? await searchIndex.removeConversations(removals)
+    }
+    if !upserts.isEmpty {
+      try? await searchIndex.upsertConversations(upserts)
+    }
+  }
+
+  private func eligibleIndexEntries() -> [ConversationIndexEntry] {
+    sortedIndexEntries().filter(Self.isEligibleForSearchIndex)
+  }
+
+  private func staleConversationCount(
+    eligible: [ConversationIndexEntry],
+    indexedSignatures: [String: String]
+  ) -> Int {
+    let eligibleMap = Dictionary(
+      uniqueKeysWithValues: eligible.map { ($0.id.rawValue, Self.searchSignature(for: $0)) }
+    )
+    var stale = 0
+    for (id, signature) in eligibleMap where indexedSignatures[id] != signature {
+      stale += 1
+    }
+    for id in indexedSignatures.keys where eligibleMap[id] == nil {
+      stale += 1
+    }
+    return stale
+  }
+
+  private static func isEligibleForSearchIndex(_ entry: ConversationIndexEntry) -> Bool {
+    if entry.isIOSNewChat == true {
+      return entry.messages.contains { $0.role == .user }
+    }
+    return entry.messageCount > 0
+  }
+
+  private static func searchSignature(for entry: ConversationIndexEntry) -> String {
+    var parts: [String] = [
+      entry.title,
+      String(entry.updatedAt.timeIntervalSince1970.bitPattern),
+      String(entry.messageCount),
+    ]
+    parts.reserveCapacity(3 + entry.messages.count)
+    for message in entry.messages {
+      let attachmentPart = (message.attachments ?? []).map(\.filename).joined(separator: ",")
+      parts.append(
+        "\(message.id.rawValue):\(message.status.rawValue):\(message.updatedAt.timeIntervalSince1970.bitPattern):\(attachmentPart)"
+      )
+    }
+    return parts.joined(separator: "|")
   }
 
   private func markConversationDirty(_ id: ConversationID) {

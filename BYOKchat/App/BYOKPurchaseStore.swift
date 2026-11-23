@@ -53,7 +53,7 @@ final class BYOKPurchaseStore {
   static let paywallConfiguration = FoundationPaywallConfiguration(
     badge: "BYOK PRO",
     title: "Upgrade to BYOK Pro",
-    subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
+    subtitle: "Unlock every theme, full-text search, unlimited configurations, and your full analytics history.",
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
     privacyURL: URL(string: "https://spokiostudio.com/byokchat/privacy")!,

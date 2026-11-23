@@ -18,6 +18,7 @@ public struct BYOKCoreServices {
   public let providerRuntime: ProviderRuntime
 
   public let fileBlobStore: FileAttachmentBlobStore
+  public let conversationSearchIndex: ConversationSearchIndexStore
   public let conversationStore: ConversationStore
   public let libraryStore: LibraryStore
   public let projectWorkspace: ProjectWorkspaceStore
@@ -105,11 +106,17 @@ public struct BYOKCoreServices {
     let fileBlobStore = FileAttachmentBlobStore(directory: layout.filesDirectory)
     self.fileBlobStore = fileBlobStore
 
+    let conversationSearchIndex = ConversationSearchIndexStore(
+      databaseURL: layout.searchIndexDatabaseFile
+    )
+    self.conversationSearchIndex = conversationSearchIndex
+
     let conversationStore = ConversationStore(
       persistence: JSONFileConversationWorkspacePersistence(
         directory: layout.conversationsDirectory
       ),
-      blobs: fileBlobStore
+      blobs: fileBlobStore,
+      searchIndex: conversationSearchIndex
     )
     self.conversationStore = conversationStore
 

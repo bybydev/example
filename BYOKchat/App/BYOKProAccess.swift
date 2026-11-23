@@ -8,6 +8,7 @@ enum BYOKProFeature: String, Sendable {
   case projects
   case mcpServers
   case analytics
+  case chatSearch
 
   var upsellConfiguration: LimitReachedUpsellConfiguration {
     LimitReachedUpsellConfiguration(
@@ -35,6 +36,8 @@ enum BYOKProFeature: String, Sendable {
       "Free includes 1 MCP server"
     case .analytics:
       "Unlock analytics history"
+    case .chatSearch:
+      "Unlock full-text chat search"
     }
   }
 
@@ -50,6 +53,8 @@ enum BYOKProFeature: String, Sendable {
       "Keep your existing server, or upgrade to connect unlimited MCP servers."
     case .analytics:
       "Every analytics feature is free for today. Upgrade to Pro to explore your usage, performance, reliability, and breakdowns across earlier dates."
+    case .chatSearch:
+      "Search chat titles for free. Upgrade to Pro to search across every message and attachment name in your history."
     }
   }
 
@@ -60,6 +65,7 @@ enum BYOKProFeature: String, Sendable {
     case .projects: "folder.fill"
     case .mcpServers: "shippingbox.fill"
     case .analytics: "chart.bar.xaxis"
+    case .chatSearch: "magnifyingglass"
     }
   }
 }
@@ -106,6 +112,14 @@ enum BYOKProAccess {
       proValue: "All date ranges"
     ),
     PurchaseFeature(
+      id: "chat-search",
+      systemImage: "magnifyingglass",
+      title: "Chat search",
+      message: "Search chat titles for free. Pro unlocks fast full-text search across every message and attachment name.",
+      freeValue: "Titles",
+      proValue: "Full text search"
+    ),
+    PurchaseFeature(
       id: "themes",
       systemImage: "paintpalette.fill",
       title: "Themes",
@@ -129,6 +143,10 @@ enum BYOKProAccess {
 
   static func canCreateMCPServer(currentCount: Int, hasPro: Bool) -> Bool {
     BYOKProPolicy.canCreateMCPServer(currentCount: currentCount, hasPro: hasPro)
+  }
+
+  static func canUseFullTextSearch(hasPro: Bool) -> Bool {
+    BYOKProPolicy.canUseFullTextSearch(hasPro: hasPro)
   }
 }
 

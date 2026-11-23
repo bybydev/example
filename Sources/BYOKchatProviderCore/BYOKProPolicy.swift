@@ -41,4 +41,8 @@ public enum BYOKProPolicy: Sendable {
     hasPro || currentCount < freeMCPServerLimit
   }
 
+  public static func canUseFullTextSearch(hasPro: Bool) -> Bool {
+    hasPro
+  }
+
 }

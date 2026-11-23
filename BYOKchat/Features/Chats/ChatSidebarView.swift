@@ -54,6 +54,7 @@ struct ChatSidebarView: View {
   @State private var pendingDelete: ChatConversation?
   @State private var showPaywall = false
   @State private var showCelebration = false
+  @State private var showSearchUpsell = false
   @FocusState private var searchFocused: Bool
 
   var body: some View {
@@ -109,6 +110,10 @@ struct ChatSidebarView: View {
         )
       )
       .environment(purchases.manager)
+    }
+    .sheet(isPresented: $showSearchUpsell) {
+      BYOKProUpsellFlow(feature: .chatSearch)
+        .environment(purchases.manager)
     }
     .alert(
       "Rename Chat",
@@ -214,7 +219,10 @@ struct ChatSidebarView: View {
     HStack(spacing: 9) {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(theme.secondaryForegroundColor)
-      TextField("Search chats", text: $searchText)
+      TextField(
+        purchases.hasPro ? "Search chats and messages" : "Search chat titles",
+        text: $searchText
+      )
         .font(.system(size: 17))
         .foregroundStyle(theme.primaryForegroundColor)
         .submitLabel(.search)
@@ -242,7 +250,14 @@ struct ChatSidebarView: View {
     .padding(.horizontal, 20)
     .padding(.bottom, 8)
     .onAppear { searchFocused = true }
-    .onChange(of: searchText) { _, value in chats.search(value) }
+    .onChange(of: searchText) { _, value in
+      chats.search(value, hasPro: purchases.hasPro)
+    }
+    .onChange(of: purchases.hasPro) { _, hasPro in
+      if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        chats.search(searchText, hasPro: hasPro)
+      }
+    }
   }
 
   private var primaryNavigation: some View {
@@ -385,6 +400,54 @@ struct ChatSidebarView: View {
   private var searchResults: some View {
     ScrollView {
       LazyVStack(spacing: 2) {
+        if purchases.hasPro && chats.isIndexingSearch {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.mini)
+            Text(indexingProgressLabel)
+              .font(.system(size: 12))
+              .foregroundStyle(theme.secondaryForegroundColor)
+            Spacer()
+          }
+          .padding(.horizontal, 20)
+          .padding(.vertical, 6)
+        } else if !purchases.hasPro {
+          Button {
+            showSearchUpsell = true
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: "crown.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.accentColor)
+              VStack(alignment: .leading, spacing: 1) {
+                Text("Searching chat titles")
+                  .font(.system(size: 12.5, weight: .semibold))
+                  .foregroundStyle(theme.primaryForegroundColor)
+                Text("Upgrade to Pro for full-text message search")
+                  .font(.system(size: 11.5))
+                  .foregroundStyle(theme.secondaryForegroundColor)
+              }
+              Spacer(minLength: 4)
+              Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+              theme.surfaceColor,
+              in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(theme.borderColor, lineWidth: 0.5)
+            )
+          }
+          .buttonStyle(.plain)
+          .padding(.horizontal, 16)
+          .padding(.bottom, 6)
+        }
+
         if chats.isSearching && chats.searchResults.isEmpty {
           ProgressView("Searching…")
             .foregroundStyle(theme.secondaryForegroundColor)
@@ -431,6 +494,13 @@ struct ChatSidebarView: View {
       }
     }
     .scrollIndicators(.hidden)
+  }
+
+  private var indexingProgressLabel: String {
+    if let progress = chats.searchIndexingProgress, progress.total > 0 {
+      return "Indexing messages (\(progress.processed)/\(progress.total))…"
+    }
+    return "Indexing messages…"
   }
 
   private var footer: some View {

@@ -140,8 +140,10 @@ struct ChatListView: View {
   let startNewChat: () -> Void
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(PurchaseManager.self) private var purchaseManager
   @AppStorage(SidebarPinStore.storageKey) private var pinnedConversationIDs = ""
   @State private var searchText = ""
+  @State private var showSearchUpsell = false
   @State private var renameTarget: ChatConversation?
   @State private var renameText = ""
   @State private var pendingDelete: ChatConversation?
@@ -172,14 +174,27 @@ struct ChatListView: View {
     .background(AppThemeBackground(theme: theme))
     .navigationTitle("All Chats")
     .navigationBarTitleDisplayMode(.inline)
-    .searchable(text: $searchText, prompt: "Search chats and messages")
-    .onChange(of: searchText) { _, value in chats.search(value) }
+    .searchable(
+      text: $searchText,
+      prompt: purchaseManager.hasPro ? "Search chats and messages" : "Search chat titles"
+    )
+    .onChange(of: searchText) { _, value in
+      chats.search(value, hasPro: purchaseManager.hasPro)
+    }
+    .onChange(of: purchaseManager.hasPro) { _, hasPro in
+      if !trimmedSearchText.isEmpty {
+        chats.search(searchText, hasPro: hasPro)
+      }
+    }
     .onAppear {
       if !trimmedSearchText.isEmpty {
-        chats.search(searchText)
+        chats.search(searchText, hasPro: purchaseManager.hasPro)
       }
     }
     .onDisappear { chats.search("") }
+    .sheet(isPresented: $showSearchUpsell) {
+      BYOKProUpsellFlow(feature: .chatSearch)
+    }
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
         Button("Open Sidebar", systemImage: "text.alignleft", action: openSidebar)
@@ -324,24 +339,90 @@ struct ChatListView: View {
         .foregroundStyle(theme.secondaryForegroundColor)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else if chats.searchResults.isEmpty {
-      ContentUnavailableView.search(text: searchText)
-    } else {
-      List(chats.searchResults) { result in
-        NavigationLink(value: AppRoute.chat(result.conversationID, messageID: result.messageID)) {
-          SearchResultRow(
-            result: result,
-            subtitle: ChatSidebarView.searchSubtitle(
-              for: result,
-              summary: chats.summary(result.conversationID)
-            ),
-            project: projects.project(for: result.conversationID)
-          )
+      VStack(spacing: 0) {
+        if !purchaseManager.hasPro {
+          proSearchUpsellBanner
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
         }
-        .listRowBackground(Color.clear)
+        ContentUnavailableView.search(text: searchText)
+      }
+    } else {
+      List {
+        if purchaseManager.hasPro && chats.isIndexingSearch {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.mini)
+            Text(indexingProgressLabel)
+              .font(.footnote)
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+          .listRowBackground(Color.clear)
+        } else if !purchaseManager.hasPro {
+          proSearchUpsellBanner
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+
+        ForEach(chats.searchResults) { result in
+          NavigationLink(value: AppRoute.chat(result.conversationID, messageID: result.messageID)) {
+            SearchResultRow(
+              result: result,
+              subtitle: ChatSidebarView.searchSubtitle(
+                for: result,
+                summary: chats.summary(result.conversationID)
+              ),
+              project: projects.project(for: result.conversationID)
+            )
+          }
+          .listRowBackground(Color.clear)
+        }
       }
       .listStyle(.plain)
       .listRowSeparatorTint(theme.borderColor)
     }
+  }
+
+  private var indexingProgressLabel: String {
+    if let progress = chats.searchIndexingProgress, progress.total > 0 {
+      return "Indexing messages (\(progress.processed)/\(progress.total))…"
+    }
+    return "Indexing messages…"
+  }
+
+  private var proSearchUpsellBanner: some View {
+    Button {
+      showSearchUpsell = true
+    } label: {
+      HStack(spacing: 10) {
+        Image(systemName: "crown.fill")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(theme.accentColor)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Searching chat titles")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(theme.primaryForegroundColor)
+          Text("Upgrade to Pro for full-text search across messages and attachments.")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryForegroundColor)
+        }
+        Spacer(minLength: 4)
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(theme.secondaryForegroundColor.opacity(0.72))
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 10)
+      .background(
+        theme.surfaceColor,
+        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(theme.borderColor, lineWidth: 0.5)
+      )
+    }
+    .buttonStyle(.plain)
   }
 }
 

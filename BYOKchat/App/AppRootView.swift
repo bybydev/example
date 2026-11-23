@@ -244,6 +244,9 @@ struct AppRootView: View {
         .appFoundationTheme(model.themeManager)
         .presentationDragIndicator(.visible)
     }
+    .task(id: purchases.hasPro) {
+      model.chats.setFullTextSearchEnabled(purchases.hasPro)
+    }
     #if DEBUG
     .sheet(
       isPresented: Binding(

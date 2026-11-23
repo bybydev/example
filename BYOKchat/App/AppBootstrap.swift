@@ -365,12 +365,16 @@ enum AppStorageBootstrap {
 
   private static func removeLocalFiles(root: URL) throws {
     let fileManager = FileManager.default
+    let layout = BYOKStorageLayout(rootDirectory: root)
     for url in localDataURLs(root: root) where fileManager.fileExists(atPath: url.path) {
       try fileManager.removeItem(at: url)
     }
     for directory in blobDirectoryURLs(root: root)
     where fileManager.fileExists(atPath: directory.path) {
       try fileManager.removeItem(at: directory)
+    }
+    if fileManager.fileExists(atPath: layout.searchDirectory.path) {
+      try fileManager.removeItem(at: layout.searchDirectory)
     }
   }
 

@@ -66,27 +66,36 @@ struct BYOKProAccessTests {
     }
   }
 
-  @Test("Feature comparison reflects analytics history entitlement")
+  @Test("Feature comparison reflects analytics history and chat search entitlements")
   func comparisonRows() {
-    #expect(BYOKProAccess.comparisonRows.count == 5)
-    #expect(BYOKProAccess.comparisonRows.map(\.freeValue) == ["1", "1", "1", "Today", "Midnight"])
-    #expect(BYOKProAccess.comparisonRows.map(\.proValue) == ["Unlimited", "Unlimited", "Unlimited", "All date ranges", "All themes"])
+    #expect(BYOKProAccess.comparisonRows.count == 6)
+    #expect(
+      BYOKProAccess.comparisonRows.map(\.freeValue)
+        == ["1", "1", "1", "Today", "Titles", "Midnight"]
+    )
+    #expect(
+      BYOKProAccess.comparisonRows.map(\.proValue)
+        == ["Unlimited", "Unlimited", "Unlimited", "All date ranges", "Full text search", "All themes"]
+    )
   }
 
   @MainActor
-  @Test("Purchase manager provides all five features to Compare Plans and other Pro surfaces")
+  @Test("Purchase manager provides all six features to Compare Plans and other Pro surfaces")
   func sharedPurchaseFeatureCatalog() {
     let manager = BYOKPurchaseStore().manager
     #expect(manager.features == BYOKProAccess.features)
     #expect(manager.features.map(\.id) == [
-      "provider-accounts", "projects", "mcp-servers", "analytics-history", "themes",
+      "provider-accounts", "projects", "mcp-servers", "analytics-history", "chat-search", "themes",
     ])
-    #expect(manager.features.map(\.freeValue) == ["1", "1", "1", "Today", "Midnight"])
+    #expect(manager.features.map(\.freeValue) == ["1", "1", "1", "Today", "Titles", "Midnight"])
     #expect(manager.features.map(\.proValue) == [
-      "Unlimited", "Unlimited", "Unlimited", "All date ranges", "All themes",
+      "Unlimited", "Unlimited", "Unlimited", "All date ranges", "Full text search", "All themes",
     ])
     #expect(BYOKPurchaseStore.paywallConfiguration.features.isEmpty)
     #expect(BYOKProFeature.projects.upsellConfiguration.rows.isEmpty)
+    #expect(BYOKProFeature.chatSearch.upsellConfiguration.rows.isEmpty)
+    #expect(!BYOKProAccess.canUseFullTextSearch(hasPro: false))
+    #expect(BYOKProAccess.canUseFullTextSearch(hasPro: true))
   }
 
   @Test("Free analytics always resolves to today even with a stale historical selection")

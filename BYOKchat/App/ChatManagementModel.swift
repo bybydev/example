@@ -25,6 +25,9 @@ final class ChatManagementModel {
   private(set) var activeToolCallsByConversation: [ConversationID: [ChatToolCall]] = [:]
   private(set) var searchResults: [ConversationSearchResult] = []
   private(set) var isSearching = false
+  private(set) var isIndexingSearch = false
+  private(set) var searchIndexingProgress: ConversationSearchIndexProgress?
+  private(set) var searchIndexStatus: ConversationSearchIndexStatus?
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   private(set) var quarantinedShardCount = 0
   var isBusy = false
@@ -54,6 +57,7 @@ final class ChatManagementModel {
   private var draftRevisions: [ConversationID: UInt] = [:]
   private var searchTask: Task<Void, Never>?
   private var searchRevision: UInt = 0
+  private var searchIndexSyncTask: Task<Void, Never>?
   private var streamTargets: [ChatMessageID: LiveMessage] = [:]
   private var streamPresentationTasks: [ChatMessageID: Task<Void, Never>] = [:]
 
@@ -485,7 +489,81 @@ final class ChatManagementModel {
     }
   }
 
-  func search(_ query: String) {
+  func setFullTextSearchEnabled(_ enabled: Bool) {
+    searchIndexSyncTask?.cancel()
+    let store = conversationStore
+    searchIndexSyncTask = Task(priority: .utility) { @MainActor [weak self] in
+      guard let self else { return }
+      await store.setFullTextSearchEnabled(enabled)
+      if enabled {
+        self.isIndexingSearch = true
+        await store.reconcileSearchIndex { [weak self] progress in
+          Task { @MainActor in
+            self?.searchIndexingProgress = progress
+          }
+        }
+        self.isIndexingSearch = false
+        self.searchIndexingProgress = nil
+      } else {
+        self.isIndexingSearch = false
+        self.searchIndexingProgress = nil
+      }
+      if !Task.isCancelled {
+        self.searchIndexStatus = await store.searchIndexStatus()
+      }
+    }
+  }
+
+  @discardableResult
+  func refreshSearchIndexStatus() async -> ConversationSearchIndexStatus {
+    let status = await conversationStore.searchIndexStatus()
+    searchIndexStatus = status
+    return status
+  }
+
+  func reconcileSearchIndex() async {
+    isIndexingSearch = true
+    defer {
+      isIndexingSearch = false
+      searchIndexingProgress = nil
+    }
+    await conversationStore.reconcileSearchIndex { [weak self] progress in
+      Task { @MainActor in
+        self?.searchIndexingProgress = progress
+      }
+    }
+    searchIndexStatus = await conversationStore.searchIndexStatus()
+  }
+
+  func rebuildSearchIndex() async throws {
+    isIndexingSearch = true
+    defer {
+      isIndexingSearch = false
+      searchIndexingProgress = nil
+    }
+    try await conversationStore.rebuildSearchIndex { [weak self] progress in
+      Task { @MainActor in
+        self?.searchIndexingProgress = progress
+      }
+    }
+    searchIndexStatus = await conversationStore.searchIndexStatus()
+  }
+
+  func clearSearchIndex() async throws {
+    try await conversationStore.clearSearchIndex()
+    searchIndexStatus = await conversationStore.searchIndexStatus()
+  }
+
+  func debugSearchFullText(
+    _ query: String,
+    limit: Int = 50
+  ) async -> ConversationSearchQueryResult {
+    let result = await conversationStore.searchFullTextWithMetrics(query, limit: limit)
+    searchIndexStatus = await conversationStore.searchIndexStatus()
+    return result
+  }
+
+  func search(_ query: String, hasPro: Bool = false) {
     searchTask?.cancel()
     searchRevision &+= 1
     let revision = searchRevision
@@ -497,13 +575,19 @@ final class ChatManagementModel {
       return
     }
 
+    let allowFullText = BYOKProAccess.canUseFullTextSearch(hasPro: hasPro)
     isSearching = true
     searchTask = Task { @MainActor [weak self] in
       guard let self else { return }
       do {
         try await Task.sleep(for: .milliseconds(180))
         try Task.checkCancellation()
-        let results = await conversationStore.search(trimmed)
+        let results: [ConversationSearchResult]
+        if allowFullText {
+          results = await conversationStore.searchFullText(trimmed)
+        } else {
+          results = await conversationStore.searchTitles(trimmed)
+        }
         try Task.checkCancellation()
         guard searchRevision == revision else { return }
         let visibleIDs = Set(historyConversations.map(\.id))

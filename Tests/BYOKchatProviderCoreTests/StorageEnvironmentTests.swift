@@ -16,6 +16,8 @@ struct StorageEnvironmentTests {
     #expect(layout.projectsFile.lastPathComponent == "projects-v1.json")
     #expect(layout.mcpServersFile.lastPathComponent == "mcp-servers-v1.json")
     #expect(layout.filesDirectory.lastPathComponent == "files-v1")
+    #expect(layout.searchDirectory.lastPathComponent == "search-v1")
+    #expect(layout.searchIndexDatabaseFile.lastPathComponent == "conversations-fts.sqlite")
   }
 
   @Test("Telemetry database path comes from host environment")

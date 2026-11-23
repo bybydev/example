@@ -30,4 +30,10 @@ struct BYOKProPolicyTests {
     #expect(BYOKProPolicy.canCreateProject(currentCount: 100, hasPro: true))
     #expect(BYOKProPolicy.canCreateMCPServer(currentCount: 100, hasPro: true))
   }
+
+  @Test("Full-text chat search requires Pro")
+  func fullTextSearchPolicy() {
+    #expect(!BYOKProPolicy.canUseFullTextSearch(hasPro: false))
+    #expect(BYOKProPolicy.canUseFullTextSearch(hasPro: true))
+  }
 }

@@ -110,6 +110,13 @@ final class DataPortabilityModel {
     }
   }
 
+  func clearSearchIndex() async {
+    await perform("Search index cleared.") {
+      try await chatsModel.clearSearchIndex()
+      await refreshStorageUsage()
+    }
+  }
+
   func purgeQuarantinedConversations() async {
     await perform("Unreadable chat files removed.") {
       _ = try await conversations.purgeQuarantinedShards()

@@ -34,6 +34,7 @@ public enum BYOKProductAnalyticsDimension: String, Sendable {
   case providers, library, projects, mcp, analytics, settings, themes
   case today, sevenDays = "7d", thirtyDays = "30d", month, all
   case analyticsHistory = "analytics_history"
+  case chatSearch = "chat_search"
 
   public init(providerKind: ProviderKind) {
     switch providerKind {

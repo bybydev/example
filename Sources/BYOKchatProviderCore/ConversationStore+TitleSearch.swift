@@ -1,17 +1,23 @@
 import Foundation
 
 extension ConversationStore {
-  /// Sidebar search is intentionally index-only. Message content stays in
-  /// sharded conversation files and is never read just to search chat titles.
-  public func search(_ query: String) -> [ConversationSearchResult] {
+  /// Index-only chat title search used by Free tier and lightweight surfaces.
+  /// Message content stays in sharded conversation files and is never read.
+  public func searchTitles(_ query: String, limit: Int = 100) -> [ConversationSearchResult] {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return [] }
 
+    let cap = max(1, limit)
     var results: [ConversationSearchResult] = []
-    results.reserveCapacity(32)
+    results.reserveCapacity(min(cap, 32))
 
     for conversation in conversationSummaries() {
-      guard conversation.title.localizedCaseInsensitiveContains(trimmed) else { continue }
+      guard
+        conversation.title.range(
+          of: trimmed,
+          options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil
+      else { continue }
       results.append(
         ConversationSearchResult(
           conversationID: conversation.id,
@@ -22,7 +28,7 @@ extension ConversationStore {
           updatedAt: conversation.updatedAt
         )
       )
-      if results.count == 100 { break }
+      if results.count == cap { break }
     }
 
     return results
