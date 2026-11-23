@@ -39,10 +39,9 @@ struct ConnectionEditorView: View {
   @State private var credential = ""
   @State private var isDraftCredentialVisible = false
   @State private var baseURL = ""
-  @State private var headersText = ""
+  @State private var additionalHeaders: [AdditionalHeaderItem] = []
   @State private var appTitle = ""
   @State private var httpReferer = ""
-  @State private var isAdvancedExpanded = false
   @State private var selectedModelID: ModelID?
   @State private var manualModelID = ""
   @State private var discoveredModels: [ProviderModel]? = nil
@@ -85,7 +84,8 @@ struct ConnectionEditorView: View {
       _label = State(initialValue: existing.label)
       _isEnabled = State(initialValue: existing.isEnabled)
       _baseURL = State(initialValue: existing.baseURLOverride?.absoluteString ?? "")
-      _headersText = State(initialValue: serializeHeaders(existing.additionalHeaders))
+      _additionalHeaders = State(
+        initialValue: AdditionalHeaderItem.items(from: existing.additionalHeaders))
       _selectedModelID = State(initialValue: existing.defaultModelID)
       _appTitle = State(initialValue: existing.metadata["appTitle"] ?? "")
       _httpReferer = State(initialValue: existing.metadata["httpReferer"] ?? "")
@@ -103,15 +103,6 @@ struct ConnectionEditorView: View {
         _customChatPath = State(initialValue: definition.chatCompletionsPath)
         _customModelsPath = State(initialValue: definition.modelsPath ?? "")
       }
-      let hasEndpointOverride =
-        !existing.kind.isLocalServer && existing.kind != .openAICompatible
-        && existing.baseURLOverride != nil
-      let hasHeaders = !existing.additionalHeaders.isEmpty
-      let hasOpenRouterMeta =
-        !(existing.metadata["appTitle"] ?? "").isEmpty
-        || !(existing.metadata["httpReferer"] ?? "").isEmpty
-      _isAdvancedExpanded = State(
-        initialValue: hasEndpointOverride || hasHeaders || hasOpenRouterMeta)
     } else {
       let initial = initialKind ?? .anthropic
       // Built-in cloud providers inherit `kind.defaultEndpoint` when left empty
@@ -205,8 +196,24 @@ struct ConnectionEditorView: View {
     #endif
   }
 
+  private var headerValidationPolicy: HTTPHeaderValidationPolicy {
+    .provider(kind: kind, authentication: draftDefinition.authentication)
+  }
+
+  private var hasInvalidAdditionalHeaders: Bool {
+    AdditionalHeaderItem.hasValidationErrors(
+      in: additionalHeaders,
+      policy: headerValidationPolicy
+    )
+  }
+
+  private var additionalHeadersDictionary: [String: String] {
+    AdditionalHeaderItem.dictionary(from: additionalHeaders)
+  }
+
   private var canSave: Bool {
     guard resolvedDraftEndpoint != nil else { return false }
+    guard !hasInvalidAdditionalHeaders else { return false }
     if isCustom {
       guard !customChatPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         return false
@@ -253,7 +260,13 @@ struct ConnectionEditorView: View {
         }
         credentialSection
         modelSection
-        advancedSection
+        if !showsServerSection {
+          endpointSection
+        }
+        if kind.extraCredentialFields.contains(.appTitle) {
+          openRouterMetadataSection
+        }
+        additionalHeadersSection
       } else {
         lockedProviderHeader
         nameSection
@@ -264,7 +277,13 @@ struct ConnectionEditorView: View {
         }
         credentialSection
         modelSection
-        advancedSection
+        if !showsServerSection {
+          endpointSection
+        }
+        if kind.extraCredentialFields.contains(.appTitle) {
+          openRouterMetadataSection
+        }
+        additionalHeadersSection
         infoSection
         enabledSection
         deleteSection
@@ -404,7 +423,7 @@ struct ConnectionEditorView: View {
     credential = ""
     isDraftCredentialVisible = false
     clearCredential = false
-    headersText = ""
+    additionalHeaders = []
     appTitle = ""
     httpReferer = ""
     customAuth = .bearer
@@ -913,56 +932,91 @@ struct ConnectionEditorView: View {
     isDirty = true
   }
 
-  private var advancedSection: some View {
+  private var endpointSection: some View {
     Section {
-      DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
-        VStack(alignment: .leading, spacing: 10) {
-          if !showsServerSection {
-            Text("Endpoint Override")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(theme.secondaryForegroundColor)
-            TextField(endpointPlaceholder, text: $baseURL)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .keyboardType(.URL)
-              .onChange(of: baseURL) { _, _ in isDirty = true }
-          }
+      HStack(spacing: 8) {
+        TextField(endpointPlaceholder, text: $baseURL)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.URL)
+          .onChange(of: baseURL) { _, _ in isDirty = true }
 
-          if kind.extraCredentialFields.contains(.appTitle) {
-            Text("OpenRouter App Title")
-              .font(.caption.weight(.semibold))
+        if !baseURL.isEmpty {
+          Button {
+            baseURL = ""
+            isDirty = true
+          } label: {
+            Image(systemName: "xmark.circle.fill")
               .foregroundStyle(theme.secondaryForegroundColor)
-            TextField("BYOKchat", text: $appTitle)
-              .onChange(of: appTitle) { _, _ in isDirty = true }
-            Text("HTTP Referer")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(theme.secondaryForegroundColor)
-            TextField("Optional", text: $httpReferer)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .keyboardType(.URL)
-              .onChange(of: httpReferer) { _, _ in isDirty = true }
           }
-
-          Text("Additional Headers")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(theme.secondaryForegroundColor)
-          TextEditor(text: $headersText)
-            .font(.system(.body, design: .monospaced))
-            .frame(minHeight: 84)
-            .scrollContentBackground(.hidden)
-            .padding(8)
-            .background(
-              Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-            .onChange(of: headersText) { _, _ in isDirty = true }
-          Text("Enter one header per line as Name: Value — for example, X-API-Version: 2024-01-01. Both name and value are required; blank lines are ignored.")
-            .font(.caption)
-            .foregroundStyle(theme.secondaryForegroundColor)
+          .buttonStyle(.plain)
+          .accessibilityLabel("Reset endpoint to default")
         }
-        .padding(.vertical, 6)
       }
+
+      if !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        resolvedDraftEndpoint == nil
+      {
+        Label(
+          "Enter a valid URL starting with https:// or http://.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.red)
+      }
+    } header: {
+      Text("Endpoint")
+    } footer: {
+      Text(
+        kind.displayName.isEmpty
+          ? "Optional custom base URL."
+          : "Optional. Leave blank to use the default \(kind.displayName) endpoint."
+      )
+      .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
+  }
+
+  private var openRouterMetadataSection: some View {
+    Section {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("App Title")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(theme.secondaryForegroundColor)
+        TextField("BYOKchat", text: $appTitle)
+          .onChange(of: appTitle) { _, _ in isDirty = true }
+      }
+      .padding(.vertical, 2)
+
+      VStack(alignment: .leading, spacing: 6) {
+        Text("HTTP Referer")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(theme.secondaryForegroundColor)
+        TextField("Optional", text: $httpReferer)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.URL)
+          .onChange(of: httpReferer) { _, _ in isDirty = true }
+      }
+      .padding(.vertical, 2)
+    } header: {
+      Text("OpenRouter Attribution")
+    } footer: {
+      Text("Optional metadata sent to OpenRouter for app rankings and analytics.")
+        .foregroundStyle(theme.secondaryForegroundColor)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var additionalHeadersSection: some View {
+    AdditionalHeadersSection(
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy,
+      footerText:
+        "Optional non-secret headers sent with requests. Stored in plain configuration, not Keychain. Authentication and protocol headers are managed by BYOKchat."
+    ) {
+      isDirty = true
+    }
   }
 
   /// Connection name. The field is PRE-FILLED with the suggested name — the
@@ -1070,7 +1124,7 @@ struct ConnectionEditorView: View {
     let endpoint: String
     let credential: String
     let clearCredential: Bool
-    let headers: String
+    let headers: [String: String]
     let appTitle: String
     let referer: String
     let chatPath: String
@@ -1082,8 +1136,9 @@ struct ConnectionEditorView: View {
   private var discoveryInput: DiscoveryInput {
     DiscoveryInput(
       kind: kind, endpoint: baseURL, credential: credential, clearCredential: clearCredential,
-      headers: headersText, appTitle: appTitle, referer: httpReferer, chatPath: customChatPath,
-      modelsPath: customModelsPath, auth: customAuth, headerName: customHeaderName)
+      headers: additionalHeadersDictionary, appTitle: appTitle, referer: httpReferer,
+      chatPath: customChatPath, modelsPath: customModelsPath, auth: customAuth,
+      headerName: customHeaderName)
   }
 
   private var draftMetadata: [String: String] {
@@ -1122,7 +1177,10 @@ struct ConnectionEditorView: View {
     }
     let headers: [String: String]
     do {
-      headers = try parseHeadersStrict(headersText)
+      headers = try AdditionalHeaderItem.validatedDictionary(
+        from: additionalHeaders,
+        policy: headerValidationPolicy
+      )
     } catch {
       discoveryWarning = error.localizedDescription
       if recordConnectionTest || showsServerSection {
@@ -1241,9 +1299,11 @@ struct ConnectionEditorView: View {
   private func save() {
     let parsedHeaders: [String: String]
     do {
-      parsedHeaders = try parseHeadersStrict(headersText)
+      parsedHeaders = try AdditionalHeaderItem.validatedDictionary(
+        from: additionalHeaders,
+        policy: headerValidationPolicy
+      )
     } catch {
-      isAdvancedExpanded = true
       model.errorMessage = error.localizedDescription
       return
     }

@@ -555,54 +555,25 @@ public actor MCPWorkspaceStore {
       throw MCPError.invalidServer("MCP endpoint URLs cannot contain a fragment.")
     }
 
+    let basePolicy = HTTPHeaderValidationPolicy.mcp()
     if server.authentication.kind == .customHeader {
       guard let header = server.authentication.headerName,
-        isValidHeaderName(header),
-        !isReservedHeader(header)
+        HTTPHeaderValidator.isValidName(header),
+        !ProviderHTTP.isForbiddenCustomHeader(header),
+        !basePolicy.isReserved(header)
       else {
         throw MCPError.invalidServer("Enter a valid custom authentication header name.")
       }
     }
 
     let customAuthHeader = server.authentication.kind == .customHeader
-      ? server.authentication.headerName?.lowercased()
+      ? server.authentication.headerName
       : nil
-    var seenAdditionalHeaders: Set<String> = []
-    for (header, value) in server.additionalHeaders {
-      guard isValidHeaderName(header), !isReservedHeader(header) else {
-        throw MCPError.invalidServer("The additional header \(header) is reserved or invalid.")
-      }
-      let normalized = header.lowercased()
-      if let customAuthHeader, normalized == customAuthHeader {
-        throw MCPError.invalidServer(
-          "The additional header \(header) conflicts with the custom authentication header."
-        )
-      }
-      guard seenAdditionalHeaders.insert(normalized).inserted else {
-        throw MCPError.invalidServer("Duplicate additional header: \(header)")
-      }
-      guard !value.contains("\r"), !value.contains("\n") else {
-        throw MCPError.invalidServer("Header values cannot contain line breaks.")
-      }
+    let headerPolicy = HTTPHeaderValidationPolicy.mcp(authenticationHeader: customAuthHeader)
+    do {
+      try HTTPHeaderValidator.validateHeaders(server.additionalHeaders, policy: headerPolicy)
+    } catch {
+      throw MCPError.invalidServer(error.localizedDescription)
     }
-  }
-
-  private static func isValidHeaderName(_ value: String) -> Bool {
-    guard !value.isEmpty else { return false }
-    let allowed = Set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    return value.allSatisfy { allowed.contains($0) }
-  }
-
-  private static func isReservedHeader(_ value: String) -> Bool {
-    let normalized = value.lowercased()
-    return [
-      "authorization",
-      "content-type",
-      "accept",
-      "mcp-protocol-version",
-      "mcp-method",
-      "mcp-name",
-      "mcp-session-id",
-    ].contains(normalized) || normalized.hasPrefix("mcp-param-")
   }
 }

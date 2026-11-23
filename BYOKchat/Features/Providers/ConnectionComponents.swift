@@ -251,32 +251,3 @@ func modelDisplayName(
   return model.models(for: accountID, includeHidden: true)
     .first(where: { $0.model.id == modelID })?.model.displayName ?? modelID.rawValue
 }
-
-/// One strict parser shared by every surface: one `Name: Value` per line.
-struct HeaderParseError: LocalizedError {
-  let line: Int
-  var errorDescription: String? { "Header line \(line) must use Name: Value." }
-}
-
-func parseHeadersStrict(_ text: String) throws -> [String: String] {
-  var values: [String: String] = [:]
-  let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-  for (offset, rawLine) in lines.enumerated() {
-    let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !line.isEmpty else { continue }
-    guard let colon = line.firstIndex(of: ":") else {
-      throw HeaderParseError(line: offset + 1)
-    }
-    let name = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
-    let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty, !value.isEmpty else {
-      throw HeaderParseError(line: offset + 1)
-    }
-    values[name] = value
-  }
-  return values
-}
-
-func serializeHeaders(_ headers: [String: String]) -> String {
-  headers.keys.sorted().map { "\($0): \(headers[$0]!)" }.joined(separator: "\n")
-}

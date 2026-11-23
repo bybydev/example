@@ -7,24 +7,33 @@ nonisolated func mcpToolCountLabel(_ count: Int) -> String {
 }
 
 nonisolated enum MCPServerFormSupport {
-  static func parseHeaders(_ value: String) throws -> [String: String] {
+  static func parseHeaders(
+    _ value: String,
+    authenticationHeader: String? = nil
+  ) throws -> [String: String] {
     var headers: [String: String] = [:]
-    var seenNames: Set<String> = []
+    var seenNames: [String] = []
+    let policy = HTTPHeaderValidationPolicy.mcp(authenticationHeader: authenticationHeader)
     for rawLine in value.split(whereSeparator: \.isNewline) {
       let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
       guard !line.isEmpty else { continue }
       guard let separator = line.firstIndex(of: ":") else {
         throw MCPError.invalidServer("Each additional header must use Name: Value.")
       }
-      let name = String(line[..<separator]).trimmingCharacters(in: .whitespaces)
-      let headerValue = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
-      guard !name.isEmpty, !headerValue.isEmpty else {
-        throw MCPError.invalidServer("Each additional header needs both a name and value.")
+      let rawName = String(line[..<separator])
+      let rawValue = String(line[line.index(after: separator)...])
+      do {
+        let validated = try HTTPHeaderValidator.validateEntry(
+          name: rawName,
+          value: rawValue,
+          existingNames: seenNames,
+          policy: policy
+        )
+        seenNames.append(validated.name)
+        headers[validated.name] = validated.value
+      } catch {
+        throw MCPError.invalidServer(error.localizedDescription)
       }
-      guard seenNames.insert(name.lowercased()).inserted else {
-        throw MCPError.invalidServer("Duplicate additional header: \(name)")
-      }
-      headers[name] = headerValue
     }
     return headers
   }
@@ -322,27 +331,38 @@ struct MCPServerEditorView: View {
   @State private var authenticationKind: MCPAuthenticationKind
   @State private var authenticationHeader: String
   @State private var credential = ""
-  @State private var additionalHeadersText: String
+  @State private var additionalHeaders: [AdditionalHeaderItem]
   @State private var isEnabled: Bool
-  @State private var headerError: String?
   @State private var errorPresenterID = UUID()
 
-  private let initialAdditionalHeadersText: String
+  private let initialAdditionalHeaders: [String: String]
 
   init(model: MCPManagementModel, server: MCPRemoteServer?) {
     self.model = model
     self.server = server
-    let formattedHeaders = server?.additionalHeaders
-      .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
-      .map { "\($0.key): \($0.value)" }
-      .joined(separator: "\n") ?? ""
-    initialAdditionalHeadersText = formattedHeaders
+    let savedHeaders = server?.additionalHeaders ?? [:]
+    initialAdditionalHeaders = savedHeaders
     _name = State(initialValue: server?.name ?? "")
     _endpoint = State(initialValue: server?.endpoint.absoluteString ?? "https://")
     _authenticationKind = State(initialValue: server?.authentication.kind ?? .none)
     _authenticationHeader = State(initialValue: server?.authentication.headerName ?? "X-API-Key")
-    _additionalHeadersText = State(initialValue: formattedHeaders)
+    _additionalHeaders = State(initialValue: AdditionalHeaderItem.items(from: savedHeaders))
     _isEnabled = State(initialValue: server?.isEnabled ?? true)
+  }
+
+  private var headerValidationPolicy: HTTPHeaderValidationPolicy {
+    .mcp(
+      authenticationHeader: authenticationKind == .customHeader
+        ? authenticationHeader
+        : nil
+    )
+  }
+
+  private var hasInvalidAdditionalHeaders: Bool {
+    AdditionalHeaderItem.hasValidationErrors(
+      in: additionalHeaders,
+      policy: headerValidationPolicy
+    )
   }
 
   private var hasConnectionChanges: Bool {
@@ -350,7 +370,7 @@ struct MCPServerEditorView: View {
       return endpoint.trimmingCharacters(in: .whitespacesAndNewlines) != "https://"
         || authenticationKind != .none
         || !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !additionalHeadersText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !additionalHeaders.isEmpty
     }
     let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedHeader = authenticationHeader.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -360,7 +380,7 @@ struct MCPServerEditorView: View {
       || authenticationKind != server.authentication.kind
       || headerChanged
       || !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      || additionalHeadersText != initialAdditionalHeadersText
+      || AdditionalHeaderItem.dictionary(from: additionalHeaders) != initialAdditionalHeaders
   }
 
   private var hasUnsavedChanges: Bool {
@@ -397,9 +417,6 @@ struct MCPServerEditorView: View {
     .navigationTitle(server == nil ? "Add MCP Server" : "MCP Server")
     .navigationBarTitleDisplayMode(.inline)
     .interactiveDismissDisabled(server == nil && (hasUnsavedChanges || model.isBusy))
-    .onChange(of: additionalHeadersText) { _, _ in
-      if headerError != nil { headerError = nil }
-    }
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
         if server == nil {
@@ -408,7 +425,7 @@ struct MCPServerEditorView: View {
       }
       ToolbarItem(placement: .confirmationAction) {
         Button("Save") { save() }
-          .disabled(model.isBusy)
+          .disabled(model.isBusy || hasInvalidAdditionalHeaders)
       }
     }
     .alert(
@@ -474,25 +491,12 @@ struct MCPServerEditorView: View {
   }
 
   private var additionalHeadersSection: some View {
-    Section {
-      TextEditor(text: $additionalHeadersText)
-        .font(.system(.body, design: .monospaced))
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .frame(minHeight: 90)
-      if let headerError {
-        Text(headerError)
-          .font(.footnote)
-          .foregroundStyle(.red)
-      }
-    } header: {
-      Text("Additional Headers")
-        .foregroundStyle(theme.secondaryForegroundColor)
-    } footer: {
-      Text("Optional non-secret headers, one per line as Name: Value. Authentication and MCP protocol headers are managed by BYOKchat.")
-        .foregroundStyle(theme.secondaryForegroundColor)
-    }
-    .listRowBackground(theme.surfaceColor)
+    AdditionalHeadersSection(
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy,
+      footerText:
+        "Optional non-secret headers sent with MCP requests. Stored in plain configuration, not Keychain. Authentication and MCP protocol headers are managed by BYOKchat."
+    )
   }
 
   private func discoverySection(_ server: MCPRemoteServer) -> some View {
@@ -571,10 +575,12 @@ struct MCPServerEditorView: View {
   private func save() {
     let headers: [String: String]
     do {
-      headers = try MCPServerFormSupport.parseHeaders(additionalHeadersText)
-      headerError = nil
+      headers = try AdditionalHeaderItem.validatedDictionary(
+        from: additionalHeaders,
+        policy: headerValidationPolicy
+      )
     } catch {
-      headerError = error.localizedDescription
+      model.errorMessage = error.localizedDescription
       return
     }
 

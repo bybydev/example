@@ -73,9 +73,11 @@ public actor ProviderAccountManager {
         allowsLocalHTTP: definition.allowsLocalHTTP
       )
     }
-    for name in additionalHeaders.keys where ProviderHTTP.isForbiddenCustomHeader(name) {
-      throw ProviderError.unsafeHeader(name)
-    }
+    try validateAdditionalHeaders(
+      additionalHeaders,
+      kind: kind,
+      authentication: definition.authentication
+    )
     let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedLabel.isEmpty else {
       throw ProviderError.invalidRequest("Account label cannot be empty.")
@@ -117,10 +119,11 @@ public actor ProviderAccountManager {
         allowsLocalHTTP: definition.allowsLocalHTTP
       )
     }
-    for name in normalizedAccount.additionalHeaders.keys
-    where ProviderHTTP.isForbiddenCustomHeader(name) {
-      throw ProviderError.unsafeHeader(name)
-    }
+    try validateAdditionalHeaders(
+      normalizedAccount.additionalHeaders,
+      kind: normalizedAccount.kind,
+      authentication: definition.authentication
+    )
     try await workspace.upsertAccount(normalizedAccount)
   }
 
@@ -191,6 +194,21 @@ public actor ProviderAccountManager {
       }
     }
     return failures
+  }
+
+  private func validateAdditionalHeaders(
+    _ headers: [String: String],
+    kind: ProviderKind,
+    authentication: ProviderAuthentication
+  ) throws {
+    let policy = HTTPHeaderValidationPolicy.provider(kind: kind, authentication: authentication)
+    do {
+      try HTTPHeaderValidator.validateHeaders(headers, policy: policy)
+    } catch HTTPHeaderValidationError.forbiddenHeader(let name) {
+      throw ProviderError.unsafeHeader(name)
+    } catch {
+      throw ProviderError.invalidRequest(error.localizedDescription)
+    }
   }
 }
 
