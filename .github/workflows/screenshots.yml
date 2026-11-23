@@ -93,27 +93,7 @@ jobs:
             [[ -d "$dev_dir" ]] || return 1
             local matched
             matched="$(
-              DEVELOPER_DIR="$dev_dir" xcrun simctl list runtimes -j 2>/dev/null | python3 -c '
-import json, sys
-target = sys.argv[1]
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("")
-    sys.exit(0)
-for runtime in data.get("runtimes", []):
-    if not runtime.get("isAvailable", False):
-        continue
-    identifier = runtime.get("identifier", "")
-    platform = runtime.get("platform", "")
-    version = str(runtime.get("version", ""))
-    if platform != "iOS" and "iOS" not in identifier:
-        continue
-    if version == target or version.startswith(target + "."):
-        print(identifier)
-        sys.exit(0)
-print("")
-' "$TARGET_IOS_VERSION"
+              DEVELOPER_DIR="$dev_dir" xcrun simctl list runtimes -j 2>/dev/null | python3 -c 'import json, sys; target = sys.argv[1]; data = json.load(sys.stdin); print(next((r["identifier"] for r in data.get("runtimes", []) if r.get("isAvailable", False) and (r.get("platform") == "iOS" or "iOS" in r.get("identifier", "")) and (str(r.get("version", "")) == target or str(r.get("version", "")).startswith(target + "."))), ""))' "$TARGET_IOS_VERSION" 2>/dev/null || true
             )"
             [[ -n "$matched" ]]
           }
