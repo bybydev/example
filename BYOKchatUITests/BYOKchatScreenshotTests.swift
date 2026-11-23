@@ -98,31 +98,27 @@ final class BYOKchatScreenshotTests: XCTestCase {
     openSidebar()
     tapSidebarDestination("AI Providers")
     assertExists(app.navigationBars["AI Providers"], timeout: 8, context: "03_Providers")
-    assertExists(elementContaining("Anthropic"), timeout: 6, context: "03_Providers Anthropic")
+    assertTextOrButtonContaining("Anthropic", timeout: 6, context: "03_Providers Anthropic")
     capture("03_Providers")
 
     // 05_MCP_Servers
     openSidebar()
     tapSidebarDestination("MCP Servers")
     assertExists(app.navigationBars["MCP Servers"], timeout: 8, context: "05_MCP_Servers")
-    assertExists(elementContaining("GitHub"), timeout: 6, context: "05_MCP_Servers GitHub")
+    assertTextOrButtonContaining("GitHub", timeout: 6, context: "05_MCP_Servers GitHub")
     capture("05_MCP_Servers")
 
     // 11_Projects_List
     openSidebar()
     tapSidebarDestination("Projects")
-    let launchProject = elementContaining("Product Launch")
+    let launchProject = buttonContaining("Product Launch")
     assertExists(launchProject, timeout: 8, context: "11_Projects_List Product Launch")
-    assertExists(elementContaining("Core Architecture"), timeout: 4, context: "11_Projects_List Core Architecture")
+    assertTextOrButtonContaining("Core Architecture", timeout: 4, context: "11_Projects_List Core Architecture")
     capture("11_Projects_List")
 
     // 06_Project_Detail
     launchProject.tap()
-    XCTAssertTrue(
-      elementContaining("Product Launch").waitForExistence(timeout: 8)
-        || app.navigationBars["Product Launch"].waitForExistence(timeout: 4),
-      "06_Project_Detail failed. Visible screen: \(visibleScreenSummary())"
-    )
+    assertExists(app.navigationBars["Product Launch"], timeout: 8, context: "06_Project_Detail")
     capture("06_Project_Detail")
     navigateBackIfNeeded()
 
@@ -140,14 +136,14 @@ final class BYOKchatScreenshotTests: XCTestCase {
         thirtyDays.tap()
       }
     }
-    assertExists(elementContaining("Spend"), timeout: 8, context: "07_Analytics Spend")
+    assertTextOrButtonContaining("Spend", timeout: 8, context: "07_Analytics Spend")
     sleep(1)
     capture("07_Analytics")
 
     // 09_Library
     openSidebar()
     tapSidebarDestination("Library")
-    assertExists(elementContaining("latency-benchmark.png"), timeout: 8, context: "09_Library")
+    assertTextOrButtonContaining("latency-benchmark.png", timeout: 8, context: "09_Library")
     sleep(1)
     capture("09_Library")
 
@@ -157,18 +153,19 @@ final class BYOKchatScreenshotTests: XCTestCase {
     assertExists(settings, timeout: 6, context: "15_Settings_Themes button")
     settings.tap()
     assertExists(app.navigationBars["Settings"], timeout: 8, context: "15_Settings_Themes")
-    assertExists(elementContaining("Appearance"), timeout: 6, context: "15_Settings_Themes Appearance")
+    assertTextOrButtonContaining("Appearance", timeout: 6, context: "15_Settings_Themes Appearance")
     capture("15_Settings_Themes")
   }
 
   /// Launches directly into the full Paywall sheet while keeping the selected theme.
   func test02PaywallScreenshot() throws {
     launchSeededApp(openPaywall: true)
-    let headline = app.staticTexts.matching(
-      NSPredicate(format: "label CONTAINS[c] %@", "Choose the plan that fits you")
-    ).firstMatch
-    assertExists(headline, timeout: 15, context: "16_Paywall")
-    assertExists(elementContaining("Monthly"), timeout: 6, context: "16_Paywall Monthly")
+    assertExists(
+      staticTextContaining("Choose the plan that fits you"),
+      timeout: 15,
+      context: "16_Paywall"
+    )
+    assertTextOrButtonContaining("Monthly", timeout: 6, context: "16_Paywall Monthly")
     capture("16_Paywall")
   }
 
@@ -315,10 +312,44 @@ final class BYOKchatScreenshotTests: XCTestCase {
     }
   }
 
-  private func elementContaining(_ text: String) -> XCUIElement {
-    app.descendants(matching: .any).matching(
+  private func staticTextContaining(_ text: String) -> XCUIElement {
+    app.staticTexts.matching(
       NSPredicate(format: "label CONTAINS[c] %@", text)
     ).firstMatch
+  }
+
+  private func buttonContaining(_ text: String) -> XCUIElement {
+    app.buttons.matching(
+      NSPredicate(format: "label CONTAINS[c] %@", text)
+    ).firstMatch
+  }
+
+  /// Avoids `app.descendants(matching: .any)` which can stall `testmanagerd`
+  /// snapshot queries on iOS 27 (`iPhone Duo`), checking only typed
+  /// `staticTexts` and `buttons` queries instead.
+  private func assertTextOrButtonContaining(
+    _ text: String,
+    timeout: TimeInterval,
+    context: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let deadline = Date().addingTimeInterval(timeout)
+    let textElement = staticTextContaining(text)
+    let buttonElement = buttonContaining(text)
+
+    while Date() < deadline {
+      if textElement.exists || buttonElement.exists {
+        return
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    }
+
+    XCTFail(
+      "[\(context)] Expected text or button containing '\(text)' did not appear. Visible screen: \(visibleScreenSummary())",
+      file: file,
+      line: line
+    )
   }
 
   private func assertExists(
