@@ -70,9 +70,11 @@ struct ConversationSearchIndexTests {
     let reasoningHit = await store.searchFullText("secret-token-xyz")
     #expect(reasoningHit.isEmpty)
 
-    // Special FTS5 operator characters do not throw or break queries.
-    let punctuation = await store.searchFullText("SQLite: \"FTS5\" OR NOT (lookup)*")
+    // Special FTS5 operator characters are safely escaped and never throw syntax errors.
+    let punctuation = await store.searchFullText("SQLite: \"FTS5\" (lookup)*")
     #expect(punctuation.contains { $0.messageID == turn.assistantMessage.id })
+    // FTS5 keywords like OR / NOT are escaped as literal terms, not boolean operators.
+    #expect(await store.searchFullText("SQLite: \"FTS5\" OR NOT (lookup)*").isEmpty)
     #expect(await store.searchFullText("??? --- !!!").isEmpty)
   }
 
@@ -215,11 +217,13 @@ struct ConversationSearchIndexTests {
       accountID: "acct-1",
       modelID: "gpt-4o"
     )
-    _ = try await store.beginTurn(
+    let turn = try await store.beginTurn(
       conversationID: chat.id,
       userText: "Recoverable search content phoenix"
     )
-    #expect(await store.searchFullText("phoenix").count == 1)
+    let beforeCorrupt = await store.searchFullText("phoenix")
+    #expect(beforeCorrupt.contains { $0.role == .title && $0.conversationID == chat.id })
+    #expect(beforeCorrupt.contains { $0.messageID == turn.userMessage.id })
 
     // Corrupt the database file while closed.
     await searchIndex.close()
@@ -227,6 +231,7 @@ struct ConversationSearchIndexTests {
 
     let healed = await store.searchFullTextWithMetrics("phoenix")
     #expect(healed.usedFTSIndex)
-    #expect(healed.results.count == 1)
+    #expect(healed.results.contains { $0.role == .title && $0.conversationID == chat.id })
+    #expect(healed.results.contains { $0.messageID == turn.userMessage.id })
   }
 }
