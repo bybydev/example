@@ -12,6 +12,7 @@ final class AppModel {
   let projects: ProjectManagementModel
   let mcp: MCPManagementModel
   let preferences: AppPreferencesModel
+  let reviewPrompt: AppReviewPromptController
   let dataPortability: DataPortabilityModel
   let themeManager: ThemeManager
   let toolRuntime: ToolRuntime
@@ -53,8 +54,11 @@ final class AppModel {
     toolRuntime = coreServices.toolRuntime
     fileBlobStore = coreServices.fileBlobStore
 
-    let preferences = AppPreferencesModel(defaults: storageEnvironment.makeUserDefaults())
+    let defaults = storageEnvironment.makeUserDefaults()
+    let preferences = AppPreferencesModel(defaults: defaults)
     self.preferences = preferences
+    let reviewPrompt = AppReviewPromptController(defaults: defaults)
+    self.reviewPrompt = reviewPrompt
     // Preserve the committed Free theme while StoreKit resolves entitlement.
     // The purchase-aware binding in BYOKchatApp authorizes Pro selections.
     themeManager = ThemeManager(
@@ -117,6 +121,16 @@ final class AppModel {
     chatModel.onNewChatDiscarded = { [weak projectModel, weak mcpModel] in
       await projectModel?.reloadFromStorage()
       await mcpModel?.reloadFromStorage()
+    }
+    chatModel.onTurnOutcome = { [weak reviewPrompt] conversationID, succeeded, isRegenerate in
+      if succeeded {
+        reviewPrompt?.recordCompletedTurn(
+          conversationID: conversationID,
+          isRegenerate: isRegenerate
+        )
+      } else {
+        reviewPrompt?.recordSessionError()
+      }
     }
     dataPortability = DataPortabilityModel(
       conversations: coreServices.conversationStore,

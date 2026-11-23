@@ -5,10 +5,33 @@ import SwiftUI
 /// Provider identity mark: brand asset when the kind has one, monogram tile
 /// otherwise (`.openAICompatible` and unknown providers).
 struct ConnectionProviderMark: View {
-  let definition: ProviderDefinition?
+  private let assetName: String?
+  private let monogram: String?
+  private let fallbackSystemImage: String?
   let size: CGFloat
 
   @Environment(\.appFoundationTheme) private var theme
+
+  init(definition: ProviderDefinition?, size: CGFloat) {
+    self.assetName = ProviderLogoCatalog.assetName(for: definition)
+    self.monogram = definition?.displayName
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .first
+      .map { String($0).uppercased() }
+    self.fallbackSystemImage = definition?.kind == .openAICompatible ? "server.rack" : nil
+    self.size = size
+  }
+
+  init(kind: ProviderKind, size: CGFloat) {
+    if case .brand(let name) = kind.logo {
+      self.assetName = name
+    } else {
+      self.assetName = nil
+    }
+    self.monogram = nil
+    self.fallbackSystemImage = kind == .openAICompatible ? "server.rack" : nil
+    self.size = size
+  }
 
   var body: some View {
     providerLogo
@@ -27,11 +50,17 @@ struct ConnectionProviderMark: View {
 
   @ViewBuilder
   private var providerLogo: some View {
-    if let assetName = ProviderLogoCatalog.assetName(for: definition) {
+    if let assetName {
       Image(assetName).resizable().scaledToFit()
         .padding(size * 0.2)
+    } else if let monogram {
+      Text(monogram)
+        .foregroundStyle(theme.secondaryForegroundColor)
+    } else if let fallbackSystemImage {
+      Image(systemName: fallbackSystemImage)
+        .foregroundStyle(theme.secondaryForegroundColor)
     } else {
-      Text(String((definition?.displayName.first ?? "?")).uppercased())
+      Text("?")
         .foregroundStyle(theme.secondaryForegroundColor)
     }
   }
@@ -140,6 +169,11 @@ enum ProviderLogoCatalog {
     }?.assetName
   }
 
+  static func searchAliases(for kind: ProviderKind) -> [String] {
+    guard case .brand(let assetName) = kind.logo else { return [] }
+    return entries.first { $0.assetName == assetName }?.aliases ?? []
+  }
+
   private static func normalize(_ value: String) -> String {
     value
       .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -154,6 +188,29 @@ enum ProviderLogoCatalog {
       || identity.hasPrefix("\(alias)-")
       || identity.hasSuffix("-\(alias)")
       || identity.contains("-\(alias)-")
+  }
+}
+
+extension ProviderKind {
+  var pickerTitle: String {
+    self == .openAICompatible ? "Custom (OpenAI-Compatible)" : displayName
+  }
+
+  var pickerSubtitle: String? {
+    switch self {
+    case .ollama, .lmStudio: "Local server"
+    case .openAICompatible: "Any OpenAI-compatible API"
+    default: nil
+    }
+  }
+
+  func matchesProviderSearch(_ query: String) -> Bool {
+    pickerTitle.localizedCaseInsensitiveContains(query)
+      || rawValue.localizedCaseInsensitiveContains(query)
+      || (pickerSubtitle?.localizedCaseInsensitiveContains(query) ?? false)
+      || ProviderLogoCatalog.searchAliases(for: self).contains {
+        $0.localizedCaseInsensitiveContains(query)
+      }
   }
 }
 

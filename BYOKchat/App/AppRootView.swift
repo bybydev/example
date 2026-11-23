@@ -1,5 +1,6 @@
 import AppFoundation
 import BYOKchatProviderCore
+import StoreKit
 import SwiftUI
 import UIKit
 
@@ -57,6 +58,7 @@ struct AppRootView: View {
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.requestReview) private var requestReview
   @AppStorage("byokchat.onboarding.completed.v1") private var hasCompletedOnboarding = false
   @State private var bootstrap = AppBootstrapController()
   @State private var toastCenter = BYOKToastCenter()
@@ -73,6 +75,8 @@ struct AppRootView: View {
   @State private var sidebarChatSelectionRevision: UInt = 0
   @State private var isSidebarPresented = false
   @State private var isSettingsPresented = false
+  @State private var isKeyboardVisible = false
+  @State private var hasResolvedInitialProState = false
   #if DEBUG
   @State private var debugPaywallManager: PurchaseManager?
   #endif
@@ -113,6 +117,29 @@ struct AppRootView: View {
       // Binding is idempotent; unresolved checks must not be treated as Free.
       model.themeManager.bind(to: purchases.manager)
       await purchases.prepare()
+      hasResolvedInitialProState = true
+    }
+    .onChange(of: purchases.hasPro) { oldValue, newValue in
+      guard hasResolvedInitialProState, !oldValue, newValue else { return }
+      model.reviewPrompt.recordProUpgraded()
+    }
+    .task(id: model.reviewPrompt.promptRequestID) {
+      let requestID = model.reviewPrompt.promptRequestID
+      guard requestID > 0 else { return }
+      do {
+        try await Task.sleep(for: model.reviewPrompt.promptDelay)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled, canPresentReviewPromptNow else { return }
+      guard model.reviewPrompt.consumePromptRequest(requestID) else { return }
+      requestReview()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+      isKeyboardVisible = true
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+      isKeyboardVisible = false
     }
     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
       var pinned = Set<ConversationID>()
@@ -947,5 +974,28 @@ struct AppRootView: View {
     closeSidebar()
     isSettingsPresented = true
     BYOKAppAnalytics.track(.featureOpened, dimension: .settings)
+  }
+
+  private var canPresentReviewPromptNow: Bool {
+    guard case .ready = bootstrap.state,
+      scenePhase == .active,
+      hasCompletedOnboarding,
+      !isSettingsPresented,
+      !isSidebarPresented,
+      !isKeyboardVisible,
+      presentedRootError == nil,
+      model.chats.activeConversationIDs.isEmpty
+    else { return false }
+    return !Self.hasPresentedModalViewController()
+  }
+
+  private static func hasPresentedModalViewController() -> Bool {
+    UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .filter { $0.activationState == .foregroundActive }
+      .flatMap(\.windows)
+      .contains { window in
+        window.isKeyWindow && window.rootViewController?.presentedViewController != nil
+      }
   }
 }

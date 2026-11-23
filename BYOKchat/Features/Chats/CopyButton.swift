@@ -34,8 +34,11 @@ struct CopyButton: View {
   var accessibilityTitle = "Copy"
   var size: Size = .regular
   var alignment: Alignment = .center
+  var triggersReviewCheck = true
+  var onCopied: (() -> Void)? = nil
 
   @Environment(\.appFoundationTheme) private var theme
+  @Environment(AppModel.self) private var appModel: AppModel?
   @State private var isCopied = false
   @State private var feedbackRevision = 0
 
@@ -48,6 +51,10 @@ struct CopyButton: View {
       }
       // Each tap restarts the confirmation interval, even if already copied.
       feedbackRevision += 1
+      if triggersReviewCheck {
+        appModel?.reviewPrompt.recordAssistantContentCopied()
+      }
+      onCopied?()
     } label: {
       Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
         .contentTransition(.symbolEffect(.replace))

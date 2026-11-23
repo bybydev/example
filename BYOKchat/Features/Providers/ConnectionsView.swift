@@ -16,10 +16,13 @@ struct ProvidersView: View {
   let openSidebar: (() -> Void)?
 
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(AppModel.self) private var appModel: AppModel?
   @Environment(\.appFoundationTheme) private var theme
   @Environment(\.dismiss) private var dismiss
   @State private var showAddConnection = false
   @State private var showProUpsell = false
+  @State private var showPaywall = false
+  @State private var showSupportedProviders = false
   @State private var didHandleInitialSetup = false
   @State private var isVisible = false
   @State private var hasLoaded = false
@@ -97,6 +100,21 @@ struct ProvidersView: View {
     .sheet(isPresented: $showProUpsell) {
       BYOKProUpsellFlow(feature: .providerAccounts)
     }
+    .sheet(isPresented: $showPaywall) {
+      ProPaywallView(
+        purchases: purchaseManager,
+        configuration: BYOKPurchaseStore.paywallConfiguration,
+        initialSelectedProductID: BYOKPurchaseStore.yearlyProductID
+      )
+      .environment(purchaseManager)
+      .presentationDragIndicator(.visible)
+    }
+    .navigationDestination(isPresented: $showSupportedProviders) {
+      SupportedProvidersCatalogView(
+        model: model,
+        onFinished: finishConnectionSetup
+      )
+    }
     .onAppear { isVisible = true }
     .onDisappear { isVisible = false }
     .alert(
@@ -146,8 +164,65 @@ struct ProvidersView: View {
     return "Delete \"\(ProviderRow.displayTitle(for: account, in: model))\"?"
   }
 
+  private var showsFreeLimitSection: Bool {
+    !BYOKProAccess.canCreateProviderAccount(
+      currentCount: model.accounts.count,
+      hasPro: purchaseManager.hasPro
+    )
+  }
+
+  private var freeLimitSection: some View {
+    Section {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(
+          "Free includes 1 connection. Upgrade to BYOK Pro to add unlimited cloud, local, and custom providers."
+        )
+        .font(.subheadline)
+        .foregroundStyle(theme.secondaryForegroundColor)
+        .fixedSize(horizontal: false, vertical: true)
+
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 8) {
+            upgradeButton
+            browseSupportedProvidersButton
+          }
+          VStack(alignment: .leading, spacing: 8) {
+            upgradeButton
+            browseSupportedProvidersButton
+          }
+        }
+      }
+      .padding(.vertical, 4)
+    }
+    .listRowBackground(theme.surfaceColor)
+  }
+
+  private var upgradeButton: some View {
+    Button("Upgrade") {
+      appModel?.reviewPrompt.recordPaywallShown()
+      BYOKAppAnalytics.track(.upgradeRequested, dimension: .init(feature: .providerAccounts))
+      showPaywall = true
+    }
+    .buttonStyle(.borderedProminent)
+    .tint(theme.accentColor)
+    .controlSize(.small)
+  }
+
+  private var browseSupportedProvidersButton: some View {
+    Button("Supported Providers") {
+      showSupportedProviders = true
+    }
+    .buttonStyle(.bordered)
+    .tint(theme.accentColor)
+    .controlSize(.small)
+  }
+
   private var managerList: some View {
     List {
+      if showsFreeLimitSection {
+        freeLimitSection
+      }
+
       if !enabledAccounts.isEmpty {
         Section {
           ForEach(enabledAccounts) { account in
@@ -155,7 +230,7 @@ struct ProvidersView: View {
           }
           .listRowSeparatorTint(theme.borderColor)
         } header: {
-          if !disabledAccounts.isEmpty {
+          if !disabledAccounts.isEmpty || showsFreeLimitSection {
             Text("Active")
               .foregroundStyle(theme.secondaryForegroundColor)
           }
@@ -436,5 +511,144 @@ private struct ProviderRow: View {
     .contentShape(Rectangle())
     .accessibilityElement(children: .combine)
     .accessibilityValue(status.isReady ? "Ready" : "")
+  }
+}
+
+/// Searchable catalog of every supported provider, reachable from the free-limit
+/// section so users can explore supported cloud, local, and custom providers.
+private struct SupportedProvidersCatalogView: View {
+  private struct KindSelection: Identifiable {
+    let kind: ProviderKind
+    var id: ProviderKind { kind }
+  }
+
+  @Bindable var model: ProviderManagementModel
+  let onFinished: (() -> Void)?
+
+  @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var searchText = ""
+  @State private var showProUpsell = false
+  @State private var pendingCreate: KindSelection?
+
+  private var connectedKinds: Set<ProviderKind> {
+    Set(model.accounts.map(\.kind))
+  }
+
+  private var trimmedQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var filteredCloud: [ProviderKind] {
+    filtered(ProviderKind.cloudCatalog)
+  }
+
+  private var filteredLocalAndCustom: [ProviderKind] {
+    filtered(ProviderKind.localAndCustomCatalog)
+  }
+
+  private func filtered(_ candidates: [ProviderKind]) -> [ProviderKind] {
+    let query = trimmedQuery
+    guard !query.isEmpty else { return candidates }
+    return candidates.filter { $0.matchesProviderSearch(query) }
+  }
+
+  var body: some View {
+    List {
+      if filteredCloud.isEmpty && filteredLocalAndCustom.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .listRowBackground(Color.clear)
+      } else {
+        if !filteredCloud.isEmpty {
+          Section {
+            ForEach(filteredCloud, id: \.self) { candidate in
+              providerRow(candidate)
+            }
+          } header: {
+            Text("Cloud Providers")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+
+        if !filteredLocalAndCustom.isEmpty {
+          Section {
+            ForEach(filteredLocalAndCustom, id: \.self) { candidate in
+              providerRow(candidate)
+            }
+          } header: {
+            Text("Local & Custom")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Supported Providers")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search providers")
+    .sheet(isPresented: $showProUpsell) {
+      BYOKProUpsellFlow(feature: .providerAccounts)
+    }
+    .sheet(item: $pendingCreate) { selection in
+      NavigationStack {
+        ConnectionEditorView(
+          model: model,
+          initialKind: selection.kind,
+          onFinished: {
+            pendingCreate = nil
+            onFinished?()
+          }
+        )
+      }
+      .presentationDragIndicator(.visible)
+    }
+  }
+
+  private func providerRow(_ candidate: ProviderKind) -> some View {
+    let isConnected = connectedKinds.contains(candidate)
+    return Button {
+      if BYOKProAccess.canCreateProviderAccount(
+        currentCount: model.accounts.count,
+        hasPro: purchaseManager.hasPro
+      ) {
+        pendingCreate = KindSelection(kind: candidate)
+      } else {
+        showProUpsell = true
+      }
+    } label: {
+      HStack(spacing: 12) {
+        ConnectionProviderMark(kind: candidate, size: 32)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(candidate.pickerTitle)
+            .font(.body.weight(.medium))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .lineLimit(1)
+          if let subtitle = candidate.pickerSubtitle {
+            Text(subtitle)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(1)
+          }
+        }
+        Spacer(minLength: 8)
+        if isConnected {
+          Text("Connected")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.green.opacity(0.14), in: Capsule())
+            .fixedSize()
+        }
+      }
+      .padding(.vertical, 2)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .listRowBackground(theme.surfaceColor)
+    .listRowSeparatorTint(theme.borderColor)
   }
 }

@@ -34,6 +34,7 @@ final class ChatManagementModel {
   var errorMessage: String?
   var onFileReferencesChanged: (() -> Void)?
   var onNewChatDiscarded: (() async -> Void)?
+  var onTurnOutcome: ((ConversationID, Bool, Bool) -> Void)?
   var backgroundKeeper: BackgroundActivityKeeper?
 
   private static let maxHydratedConversations = 12
@@ -993,6 +994,10 @@ final class ChatManagementModel {
       var didReceiveInlineFailure = false
       var reportedPersistence = false
       var didRecordAnalyticsOutcome = false
+      let isRegenerate: Bool = {
+        if case .regenerate = action { return true }
+        return false
+      }()
       let previousUserCount = conversations.first(where: { $0.id == conversationID })?
         .messages.filter { $0.role == .user }.count ?? 0
       defer {
@@ -1056,6 +1061,7 @@ final class ChatManagementModel {
           case .completed(let message):
             if !didRecordAnalyticsOutcome {
               didRecordAnalyticsOutcome = true
+              onTurnOutcome?(conversationID, true, isRegenerate)
               BYOKAppAnalytics.track(
                 .chatTurnCompleted,
                 detail: await analyticsDimension(
@@ -1076,6 +1082,7 @@ final class ChatManagementModel {
           case .failed(let message):
             if !didRecordAnalyticsOutcome {
               didRecordAnalyticsOutcome = true
+              onTurnOutcome?(conversationID, false, isRegenerate)
               BYOKAppAnalytics.reportError("chat_generation_failed", component: "chat")
               BYOKAppAnalytics.track(
                 .chatTurnFailed,
@@ -1104,6 +1111,7 @@ final class ChatManagementModel {
       } catch {
         if !didRecordAnalyticsOutcome {
           didRecordAnalyticsOutcome = true
+          onTurnOutcome?(conversationID, false, isRegenerate)
           BYOKAppAnalytics.reportError("chat_generation_failed", component: "chat")
           if !reportedPersistence {
             BYOKAppAnalytics.reportError(

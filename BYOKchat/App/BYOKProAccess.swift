@@ -154,6 +154,7 @@ struct BYOKProUpsellFlow: View {
   let feature: BYOKProFeature
 
   @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(AppModel.self) private var appModel: AppModel?
   @State private var didTrackRequest = false
 
   var body: some View {
@@ -168,6 +169,7 @@ struct BYOKProUpsellFlow: View {
     .onAppear {
       guard !didTrackRequest else { return }
       didTrackRequest = true
+      appModel?.reviewPrompt.recordPaywallShown()
       BYOKAppAnalytics.track(.upgradeRequested, dimension: .init(feature: feature))
     }
   }

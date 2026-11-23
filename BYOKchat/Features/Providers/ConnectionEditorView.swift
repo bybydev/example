@@ -327,6 +327,10 @@ struct ConnectionEditorView: View {
       }
     }
     .onChange(of: discoveryInput) { _, _ in invalidateDiscovery() }
+    .onChange(of: selectedKind) { _, newValue in
+      guard isCreate else { return }
+      handleSelectedKindChange(to: newValue)
+    }
     .onDisappear { cancelDiscovery() }
     .disabled(isSaving)
   }
@@ -363,39 +367,28 @@ struct ConnectionEditorView: View {
 
   private var createProviderSection: some View {
     Section {
-      Picker("Provider", selection: $selectedKind) {
-        Section("Cloud Providers") {
-          ForEach(ProviderKind.cloudCatalog, id: \.self) { candidate in
-            Text(candidate.displayName).tag(candidate)
+      NavigationLink {
+        ConnectionProviderPickerView(selection: $selectedKind)
+      } label: {
+        HStack(spacing: 12) {
+          ConnectionProviderMark(kind: selectedKind, size: 34)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(selectedKind.pickerTitle)
+              .font(.body.weight(.medium))
+              .foregroundStyle(theme.primaryForegroundColor)
+              .lineLimit(1)
+            if let subtitle = selectedKind.pickerSubtitle {
+              Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(theme.secondaryForegroundColor)
+                .lineLimit(1)
+            }
           }
         }
-        Section("Local & Custom") {
-          ForEach(ProviderKind.localAndCustomCatalog, id: \.self) { candidate in
-            Text(candidate == .openAICompatible ? "Custom (OpenAI-Compatible)" : candidate.displayName)
-              .tag(candidate)
-          }
-        }
+        .padding(.vertical, 2)
       }
-      .onChange(of: selectedKind) { _, newValue in
-        invalidateDiscovery()
-        baseURL = ""
-        credential = ""
-        isDraftCredentialVisible = false
-        clearCredential = false
-        headersText = ""
-        appTitle = ""
-        httpReferer = ""
-        customAuth = .bearer
-        customHeaderName = "X-API-Key"
-        customChatPath = "/chat/completions"
-        customModelsPath = "/models"
-        manualModelID = ""
-        manualModels = []
-        removedManualModelIDs = []
-        selectedModelID = newValue.seedModels.first?.id
-        if !didEditName { applySuggestedLabel() }
-        isDirty = true
-      }
+      .accessibilityLabel("Provider")
+      .accessibilityValue(selectedKind.pickerTitle)
     } header: {
       Text("Provider")
     } footer: {
@@ -403,6 +396,27 @@ struct ConnectionEditorView: View {
         .foregroundStyle(theme.secondaryForegroundColor)
     }
     .listRowBackground(theme.surfaceColor)
+  }
+
+  private func handleSelectedKindChange(to newValue: ProviderKind) {
+    invalidateDiscovery()
+    baseURL = ""
+    credential = ""
+    isDraftCredentialVisible = false
+    clearCredential = false
+    headersText = ""
+    appTitle = ""
+    httpReferer = ""
+    customAuth = .bearer
+    customHeaderName = "X-API-Key"
+    customChatPath = "/chat/completions"
+    customModelsPath = "/models"
+    manualModelID = ""
+    manualModels = []
+    removedManualModelIDs = []
+    selectedModelID = newValue.seedModels.first?.id
+    if !didEditName { applySuggestedLabel() }
+    isDirty = true
   }
 
   private var localServerPlaceholder: String {
@@ -1355,6 +1369,110 @@ struct ConnectionEditorView: View {
       case .none: "No authentication"
       }
     }
+  }
+}
+
+/// Searchable provider list with brand icons. Tap selects and pops back to the
+/// connection editor.
+struct ConnectionProviderPickerView: View {
+  @Binding var selection: ProviderKind
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.appFoundationTheme) private var theme
+  @State private var searchText = ""
+
+  private var trimmedQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var filteredCloud: [ProviderKind] {
+    filtered(ProviderKind.cloudCatalog)
+  }
+
+  private var filteredLocalAndCustom: [ProviderKind] {
+    filtered(ProviderKind.localAndCustomCatalog)
+  }
+
+  private func filtered(_ candidates: [ProviderKind]) -> [ProviderKind] {
+    let query = trimmedQuery
+    guard !query.isEmpty else { return candidates }
+    return candidates.filter { $0.matchesProviderSearch(query) }
+  }
+
+  var body: some View {
+    List {
+      if filteredCloud.isEmpty && filteredLocalAndCustom.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .listRowBackground(Color.clear)
+      } else {
+        if !filteredCloud.isEmpty {
+          Section {
+            ForEach(filteredCloud, id: \.self) { candidate in
+              providerRow(candidate)
+            }
+          } header: {
+            Text("Cloud Providers")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+
+        if !filteredLocalAndCustom.isEmpty {
+          Section {
+            ForEach(filteredLocalAndCustom, id: \.self) { candidate in
+              providerRow(candidate)
+            }
+          } header: {
+            Text("Local & Custom")
+              .foregroundStyle(theme.secondaryForegroundColor)
+          }
+        }
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .foregroundStyle(theme.primaryForegroundColor)
+    .background(AppThemeBackground(theme: theme))
+    .navigationTitle("Choose Provider")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "Search providers")
+  }
+
+  private func providerRow(_ candidate: ProviderKind) -> some View {
+    let isSelected = candidate == selection
+    return Button {
+      if !isSelected {
+        selection = candidate
+      }
+      dismiss()
+    } label: {
+      HStack(spacing: 12) {
+        ConnectionProviderMark(kind: candidate, size: 32)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(candidate.pickerTitle)
+            .font(.body.weight(.medium))
+            .foregroundStyle(theme.primaryForegroundColor)
+            .lineLimit(1)
+          if let subtitle = candidate.pickerSubtitle {
+            Text(subtitle)
+              .font(.caption)
+              .foregroundStyle(theme.secondaryForegroundColor)
+              .lineLimit(1)
+          }
+        }
+        Spacer(minLength: 8)
+        if isSelected {
+          Image(systemName: "checkmark")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.tint)
+        }
+      }
+      .padding(.vertical, 2)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .listRowBackground(theme.surfaceColor)
+    .listRowSeparatorTint(theme.borderColor)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }
 

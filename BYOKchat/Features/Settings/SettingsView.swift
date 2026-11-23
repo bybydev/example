@@ -241,6 +241,11 @@ struct SettingsView: View {
       .listRowBackground(theme.surfaceColor)
 
       Section("About") {
+        if let reviewURL = AppReviewPromptController.writeReviewURL {
+          Link(destination: reviewURL) {
+            Label("Rate BYOKchat", systemImage: "star")
+          }
+        }
         Link(destination: URL(string: "https://spokiostudio.com/byokchat")!) {
           Label("Website", systemImage: "globe")
         }
