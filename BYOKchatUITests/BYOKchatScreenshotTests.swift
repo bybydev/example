@@ -309,8 +309,13 @@ final class BYOKchatScreenshotTests: XCTestCase {
   }
 
   private func visibleScreenSummary() -> String {
-    let navTitles = app.navigationBars.allElementsBoundByIndex.map(\.identifier).filter { !$0.isEmpty }
-    let texts = app.staticTexts.allElementsBoundByIndex.prefix(12).map(\.label).filter { !$0.isEmpty }
+    let navTitles = app.navigationBars.allElementsBoundByIndex
+      .map { $0.identifier }
+      .filter { !$0.isEmpty }
+    let texts = app.staticTexts.allElementsBoundByIndex
+      .prefix(12)
+      .map { $0.label }
+      .filter { !$0.isEmpty }
     return "navBars=\(navTitles), staticTexts=\(texts)"
   }
 
