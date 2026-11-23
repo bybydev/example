@@ -54,8 +54,34 @@ enum BYOKAppAnalytics {
 
   static let preferenceKey = "byokchat.analytics.shareUsageData"
 
+  /// Prevents unit tests, UI tests, and seeded screenshot runs from emitting
+  /// network events to the production analytics endpoint.
+  static var isSuppressedForTesting: Bool {
+    let processInfo = ProcessInfo.processInfo
+    let env = processInfo.environment
+    if env["XCTestConfigurationFilePath"] != nil
+      || env["XCTestSessionIdentifier"] != nil
+      || env["XCTestBundlePath"] != nil
+      || env["BYOK_DISABLE_ANALYTICS"] == "1"
+    {
+      return true
+    }
+
+    let args = processInfo.arguments
+    if args.contains("-BYOKDisableAnalytics")
+      || args.contains("-BYOKSeedPreset")
+      || args.contains("UI_TEST_SCREENSHOTS")
+    {
+      return true
+    }
+    return false
+  }
+
   static var isEnabled: Bool {
-    get { UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true }
+    get {
+      guard !isSuppressedForTesting else { return false }
+      return UserDefaults.standard.object(forKey: preferenceKey) as? Bool ?? true
+    }
     set { UserDefaults.standard.set(newValue, forKey: preferenceKey) }
   }
 
@@ -71,7 +97,7 @@ enum BYOKAppAnalytics {
 
   static func setEnabled(_ enabled: Bool) async {
     isEnabled = enabled
-    await client.setEnabled(enabled)
+    await client.setEnabled(isSuppressedForTesting ? false : enabled)
   }
 
   static func reportError(

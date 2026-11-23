@@ -98,28 +98,28 @@ final class BYOKchatScreenshotTests: XCTestCase {
     openSidebar()
     tapSidebarDestination("AI Providers")
     assertExists(app.navigationBars["AI Providers"], timeout: 8, context: "03_Providers")
-    assertExists(app.staticTexts["Personal"], timeout: 6, context: "03_Providers Personal")
+    assertExists(elementContaining("Anthropic"), timeout: 6, context: "03_Providers Anthropic")
     capture("03_Providers")
 
     // 05_MCP_Servers
     openSidebar()
     tapSidebarDestination("MCP Servers")
     assertExists(app.navigationBars["MCP Servers"], timeout: 8, context: "05_MCP_Servers")
-    assertExists(app.staticTexts["GitHub"], timeout: 6, context: "05_MCP_Servers GitHub")
+    assertExists(elementContaining("GitHub"), timeout: 6, context: "05_MCP_Servers GitHub")
     capture("05_MCP_Servers")
 
     // 11_Projects_List
     openSidebar()
     tapSidebarDestination("Projects")
-    let launchProject = app.staticTexts["Product Launch"]
+    let launchProject = elementContaining("Product Launch")
     assertExists(launchProject, timeout: 8, context: "11_Projects_List Product Launch")
-    assertExists(app.staticTexts["Core Architecture"], timeout: 4, context: "11_Projects_List Core Architecture")
+    assertExists(elementContaining("Core Architecture"), timeout: 4, context: "11_Projects_List Core Architecture")
     capture("11_Projects_List")
 
     // 06_Project_Detail
     launchProject.tap()
     XCTAssertTrue(
-      app.staticTexts["Product Launch"].waitForExistence(timeout: 8)
+      elementContaining("Product Launch").waitForExistence(timeout: 8)
         || app.navigationBars["Product Launch"].waitForExistence(timeout: 4),
       "06_Project_Detail failed. Visible screen: \(visibleScreenSummary())"
     )
@@ -140,14 +140,14 @@ final class BYOKchatScreenshotTests: XCTestCase {
         thirtyDays.tap()
       }
     }
-    assertExists(app.staticTexts["Spend"], timeout: 8, context: "07_Analytics Spend")
+    assertExists(elementContaining("Spend"), timeout: 8, context: "07_Analytics Spend")
     sleep(1)
     capture("07_Analytics")
 
     // 09_Library
     openSidebar()
     tapSidebarDestination("Library")
-    assertExists(app.staticTexts["latency-benchmark.png"], timeout: 8, context: "09_Library")
+    assertExists(elementContaining("latency-benchmark.png"), timeout: 8, context: "09_Library")
     sleep(1)
     capture("09_Library")
 
@@ -157,14 +157,19 @@ final class BYOKchatScreenshotTests: XCTestCase {
     assertExists(settings, timeout: 6, context: "15_Settings_Themes button")
     settings.tap()
     assertExists(app.navigationBars["Settings"], timeout: 8, context: "15_Settings_Themes")
-    assertExists(app.staticTexts["Appearance"], timeout: 6, context: "15_Settings_Themes Appearance")
+    assertExists(elementContaining("Appearance"), timeout: 6, context: "15_Settings_Themes Appearance")
     capture("15_Settings_Themes")
   }
 
   /// Launches directly into the full Paywall sheet while keeping the selected theme.
   func test02PaywallScreenshot() throws {
     launchSeededApp(openPaywall: true)
-    assertExists(app.staticTexts["Upgrade to BYOK Pro"], timeout: 15, context: "16_Paywall")
+    assertExists(
+      elementContaining("Choose the plan that fits you"),
+      timeout: 15,
+      context: "16_Paywall"
+    )
+    assertExists(elementContaining("Monthly"), timeout: 6, context: "16_Paywall Monthly")
     capture("16_Paywall")
   }
 
@@ -177,6 +182,7 @@ final class BYOKchatScreenshotTests: XCTestCase {
       "-BYOKSeedPreset", presetID,
       "-BYOKSeedTheme", themeID,
       "-BYOKSeedPro", "true",
+      "-BYOKDisableAnalytics",
       "-BYOKDisableAnimations",
       "-AppleLanguages", "(en)",
       "-AppleLocale", "en_US",
@@ -291,6 +297,12 @@ final class BYOKchatScreenshotTests: XCTestCase {
         container.swipeUp()
       }
     }
+  }
+
+  private func elementContaining(_ text: String) -> XCUIElement {
+    app.descendants(matching: .any).matching(
+      NSPredicate(format: "label CONTAINS[c] %@", text)
+    ).firstMatch
   }
 
   private func assertExists(
