@@ -582,11 +582,11 @@ public actor ModelCatalogStore {
   private var hasLoaded = false
 
   public init(
-    remoteURL: URL = Self.defaultRemoteURL,
+    remoteURL: URL = ModelCatalogStore.defaultRemoteURL,
     persistence: any ModelCatalogPersistence,
     transport: (any ProviderHTTPTransport)? = nil,
-    refreshInterval: TimeInterval = Self.defaultRefreshInterval,
-    retryInterval: TimeInterval = Self.defaultRetryInterval,
+    refreshInterval: TimeInterval = ModelCatalogStore.defaultRefreshInterval,
+    retryInterval: TimeInterval = ModelCatalogStore.defaultRetryInterval,
     activatesGlobally: Bool = true,
     bundledSnapshot: ModelCatalogSnapshot? = ModelCatalogRegistry.bundled
   ) {
