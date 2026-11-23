@@ -636,6 +636,9 @@ struct ProviderLogoCatalogTests {
       ProviderLogoCatalog.assetName(for: BuiltInProviders.together)
         == "provider.together")
     #expect(
+      ProviderLogoCatalog.assetName(for: BuiltInProviders.fireworks)
+        == "provider.fireworks")
+    #expect(
       ProviderLogoCatalog.assetName(for: BuiltInProviders.ollama)
         == "provider.ollama")
     #expect(

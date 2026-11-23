@@ -355,6 +355,39 @@ struct ComposerTargetLabelFormatterTests {
     #expect(customFamily == "Together · Glimpse 1.0")
   }
 
+  @Test("Fireworks AI models normalize p-decimal slugs and explicit reasoning choices")
+  func fireworksLabels() {
+    let deepSeekOff = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.fireworksID,
+      providerName: "Fireworks AI",
+      modelName: "accounts/fireworks/models/deepseek-v4p1-flash",
+      modelID: "accounts/fireworks/models/deepseek-v4p1-flash",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: false)
+    )
+    #expect(deepSeekOff == "DeepSeek V4.1 Flash · Off")
+
+    let kimiHigh = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.fireworksID,
+      providerName: "Fireworks AI",
+      modelName: "accounts/fireworks/models/kimi-k3p1-pro",
+      modelID: "accounts/fireworks/models/kimi-k3p1-pro",
+      supportedParameters: ["reasoning_effort"],
+      reasoning: .init(enabled: true, effort: .high)
+    )
+    #expect(kimiHigh == "Kimi K3.1 Pro · High")
+
+    let customFamily = ComposerTargetLabelFormatter.make(
+      providerID: BuiltInProviders.fireworksID,
+      providerName: "Fireworks AI",
+      modelName: "Glimpse 1.0",
+      modelID: "accounts/fireworks/models/glimpse-1p0",
+      supportedParameters: ["tools"],
+      reasoning: nil
+    )
+    #expect(customFamily == "Fireworks · Glimpse 1.0")
+  }
+
   @Test("Hyphenated custom provider name still strips duplicate prefix from normalized model")
   func hyphenatedCustomProviderPrefix() {
     let label = ComposerTargetLabelFormatter.make(

@@ -10,7 +10,8 @@ import Testing
     Set(definitions.map(\.id))
       == [
         "openai", "xai", "deepseek", "zai", "moonshot", "minimax", "qwen", "mistral", "groq",
-        "together", "openrouter", "nvidia", "anthropic", "gemini", "ollama", "lmstudio",
+        "together", "fireworks", "openrouter", "nvidia", "anthropic", "gemini", "ollama",
+        "lmstudio",
       ]
   )
   #expect(definitions.first { $0.id == "anthropic" }?.apiFamily == .anthropicMessages)
@@ -239,6 +240,36 @@ import Testing
   #expect(ProviderKind.together.defaultProviderID == "together")
   #expect(ProviderKind.together.logo == .brand(assetName: "provider.together"))
   #expect(ProviderKind.together.reasoningDefault == nil)
+
+  let fireworks = try #require(definitions.first { $0.id == "fireworks" })
+  #expect(fireworks.defaultBaseURL.absoluteString == "https://api.fireworks.ai/inference/v1")
+  #expect(fireworks.apiFamily == .openAIChatCompletions)
+  #expect(fireworks.behavior == .fireworks)
+  #expect(fireworks.authentication == .bearer)
+  #expect(fireworks.modelsPath == "/models")
+  #expect(fireworks.chatCompletionsPath == "/chat/completions")
+  #expect(fireworks.kind == .fireworks)
+  #expect(ProviderKind.fireworks.supportsDiscovery)
+  #expect(
+    fireworks.seedModels.map(\.id)
+      == [
+        "accounts/fireworks/models/deepseek-v4p1-flash",
+        "accounts/fireworks/models/kimi-k3p1-pro",
+        "accounts/fireworks/models/glm-5p3-flash",
+        "accounts/fireworks/models/qwen3p8-max",
+        "accounts/fireworks/models/gpt-oss-120b",
+      ]
+  )
+  let fireworksFlash = try #require(fireworks.seedModels.first)
+  #expect(fireworksFlash.id == "accounts/fireworks/models/deepseek-v4p1-flash")
+  #expect(fireworksFlash.contextWindow == 1_048_576)
+  #expect(fireworksFlash.inputModalities.contains("image"))
+  #expect(fireworksFlash.supportedParameters.contains("tools"))
+
+  #expect(ProviderKind.catalog.contains(.fireworks))
+  #expect(ProviderKind.fireworks.defaultProviderID == "fireworks")
+  #expect(ProviderKind.fireworks.logo == .brand(assetName: "provider.fireworks"))
+  #expect(ProviderKind.fireworks.reasoningDefault == nil)
 
   let nvidia = try #require(definitions.first { $0.id == "nvidia" })
   #expect(nvidia.defaultBaseURL.absoluteString == "https://integrate.api.nvidia.com/v1")

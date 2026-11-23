@@ -47,6 +47,7 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       || definition.behavior == .openRouter
       || definition.behavior == .nvidia
       || definition.behavior == .together
+      || definition.behavior == .fireworks
     {
       probeReasoning = nil
       probeMaxTokens = 1_024
@@ -111,6 +112,13 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         return nil
       }
     }
+    if definition.behavior == .fireworks {
+      if let supportsChat = wire.supportsChat {
+        guard supportsChat else { return nil }
+      } else if !Self.isLikelyFireworksChatModel(id: wire.id) {
+        return nil
+      }
+    }
     var evidence = ModelCapabilityEvidence()
     // OpenRouter and DeepSeek supply exhaustive modality lists when present.
     // Custom-compatible catalogs may provide partial hints using the same field names.
@@ -132,6 +140,14 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
         evidence.set(.imageInput, supported: vision, source: .discovery)
         if vision { inputModalities.insert("image") }
       }
+    }
+    if let supportsTools = wire.supportsTools {
+      evidence.set(.tools, supported: supportsTools, source: .discovery)
+      if supportsTools { supportedParameters.insert("tools") }
+    }
+    if let supportsImageInput = wire.supportsImageInput {
+      evidence.set(.imageInput, supported: supportsImageInput, source: .discovery)
+      if supportsImageInput { inputModalities.insert("image") }
     }
     if definition.behavior == .deepSeek, let effortWire = wire.effort {
       var parsedEfforts: [ReasoningEffort] = []
@@ -666,6 +682,24 @@ public struct OpenAICompatibleAdapter: ProviderAdapter, Sendable {
       lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
     )
     let nonChatTokens: Set<String> = ["tts", "asr", "stt", "bge", "sdxl"]
+    return tokens.isDisjoint(with: nonChatTokens)
+  }
+
+  /// Fallback filter for Fireworks AI model entries that omit `supports_chat`.
+  private static func isLikelyFireworksChatModel(id: String) -> Bool {
+    let lowered = id.lowercased()
+    let nonChatSubstrings = [
+      "whisper", "flux", "stable-diffusion", "embed", "rerank", "nomic",
+      "llama-guard", "shieldgemma", "moderation", "playground-v", "japanese-stable",
+      "ssd-1b", "kandinsky",
+    ]
+    if nonChatSubstrings.contains(where: { lowered.contains($0) }) {
+      return false
+    }
+    let tokens = Set(
+      lowered.split { $0 == "/" || $0 == "-" || $0 == "_" || $0 == "." }.map(String.init)
+    )
+    let nonChatTokens: Set<String> = ["tts", "asr", "stt", "bge", "sdxl", "sd3", "rune"]
     return tokens.isDisjoint(with: nonChatTokens)
   }
 }

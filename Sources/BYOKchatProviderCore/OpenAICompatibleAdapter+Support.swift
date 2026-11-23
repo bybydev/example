@@ -253,6 +253,17 @@ extension OpenAICompatibleAdapter {
       if streaming {
         body["stream_options"] = .object(["include_usage": .bool(true)])
       }
+    case .fireworks:
+      if let reasoning = request.options.reasoning {
+        if reasoning.enabled == false {
+          body["reasoning_effort"] = .string("none")
+        } else if let effort = reasoning.effort {
+          body["reasoning_effort"] = .string(effort.rawValue)
+        }
+      }
+      if streaming {
+        body["stream_options"] = .object(["include_usage": .bool(true)])
+      }
     case .openRouter:
       if let reasoning = request.options.reasoning {
         var object: [String: JSONValue] = [:]
@@ -394,7 +405,7 @@ extension OpenAICompatibleAdapter {
 
     if let calls = message.toolCalls, !calls.isEmpty {
       if (definition.behavior == .moonshot || definition.behavior == .minimax
-        || definition.behavior == .nvidia),
+        || definition.behavior == .fireworks || definition.behavior == .nvidia),
         message.role == .assistant,
         let reasoning = message.reasoning,
         !reasoning.isEmpty

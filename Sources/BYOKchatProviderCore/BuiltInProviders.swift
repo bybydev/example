@@ -11,6 +11,7 @@ public enum BuiltInProviders {
   public static let mistralID: ProviderID = "mistral"
   public static let groqID: ProviderID = "groq"
   public static let togetherID: ProviderID = "together"
+  public static let fireworksID: ProviderID = "fireworks"
   public static let openRouterID: ProviderID = "openrouter"
   public static let nvidiaID: ProviderID = "nvidia"
   public static let ollamaID: ProviderID = "ollama"
@@ -162,6 +163,20 @@ public enum BuiltInProviders {
     )
   }
 
+  public static var fireworks: ProviderDefinition {
+    ProviderDefinition(
+      id: fireworksID,
+      displayName: "Fireworks AI",
+      behavior: .fireworks,
+      defaultBaseURL: URL(string: "https://api.fireworks.ai/inference/v1")!,
+      modelsPath: "/models",
+      authentication: .bearer,
+      seedModels: ProviderKind.fireworks.seedModels,
+      isBuiltIn: true,
+      kind: .fireworks
+    )
+  }
+
   public static var openRouter: ProviderDefinition {
     ProviderDefinition(
       id: openRouterID,
@@ -252,8 +267,8 @@ public enum BuiltInProviders {
 
   public static var all: [ProviderDefinition] {
     [
-      openAI, xAI, deepSeek, zAI, moonshot, minimax, qwen, mistral, groq, together, openRouter,
-      nvidia, anthropic, gemini, ollama, lmStudio,
+      openAI, xAI, deepSeek, zAI, moonshot, minimax, qwen, mistral, groq, together, fireworks,
+      openRouter, nvidia, anthropic, gemini, ollama, lmStudio,
     ]
   }
 }

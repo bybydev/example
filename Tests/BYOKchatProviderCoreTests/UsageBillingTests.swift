@@ -349,6 +349,53 @@ private func billedMessage(_ receipts: [ChatRequestBilling]) -> ChatMessage {
   )
 }
 
+@Test func fireworksCatalogPricingResolvesVerifiedModels() throws {
+  let fireworks = ProviderAccount(
+    kind: .fireworks, id: "fw", providerID: "fireworks", label: "Fireworks AI"
+  )
+
+  let deepSeekFlash = try #require(
+    ModelPriceResolver.resolve(
+      account: fireworks, modelID: "accounts/fireworks/models/deepseek-v4p1-flash", model: nil
+    )
+  )
+  #expect(deepSeekFlash.rates.input == "0.3")
+  #expect(deepSeekFlash.rates.output == "1.2")
+  #expect(deepSeekFlash.rates.cachedInput == "0.006")
+
+  let kimiPro = try #require(
+    ModelPriceResolver.resolve(
+      account: fireworks, modelID: "accounts/fireworks/models/kimi-k3p1-pro", model: nil
+    )
+  )
+  #expect(kimiPro.rates.input == "2")
+  #expect(kimiPro.rates.output == "10")
+  #expect(kimiPro.rates.cachedInput == "0.2")
+
+  let gptOSS = try #require(
+    ModelPriceResolver.resolve(
+      account: fireworks, modelID: "accounts/fireworks/models/gpt-oss-120b", model: nil
+    )
+  )
+  #expect(gptOSS.rates.input == "0.15")
+  #expect(gptOSS.rates.output == "0.6")
+  #expect(gptOSS.rates.cachedInput == "0.015")
+
+  // Arbitrary proxy overrides must never inherit Fireworks catalog rates.
+  let proxyAccount = ProviderAccount(
+    kind: .fireworks,
+    id: "fw-proxy",
+    providerID: "fireworks",
+    label: "Fireworks Proxy",
+    baseURLOverride: URL(string: "https://proxy.example.test/inference/v1")!
+  )
+  #expect(
+    ModelPriceResolver.resolve(
+      account: proxyAccount, modelID: "accounts/fireworks/models/deepseek-v4p1-flash", model: nil
+    ) == nil
+  )
+}
+
 @Test func geminiCurrentCatalogPricingResolvesAndRespectsExpiry() throws {
   let active = try #require(ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z"))
   let carbonExpiry = try #require(ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"))

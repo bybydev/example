@@ -327,6 +327,7 @@ extension ProviderDefinition {
     case .mistral: return .mistral
     case .groq: return .groq
     case .together: return .together
+    case .fireworks: return .fireworks
     case .openRouter: return .openRouter
     case .nvidia: return .nvidia
     case .anthropic: return .anthropic

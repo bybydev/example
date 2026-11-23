@@ -1500,7 +1500,7 @@ nonisolated enum ChatSettingsSupport {
       return !id.hasPrefix("kimi-k3")
         && !id.hasPrefix("kimi-k2.6")
         && !id.hasPrefix("kimi-k2.5")
-    case .xAI, .openRouter, .zAI, .minimax, .qwen, .mistral, .groq, .together, .nvidia, .ollama, .lmStudio, .openAICompatible:
+    case .xAI, .openRouter, .zAI, .minimax, .qwen, .mistral, .groq, .together, .fireworks, .nvidia, .ollama, .lmStudio, .openAICompatible:
       return true
     }
   }

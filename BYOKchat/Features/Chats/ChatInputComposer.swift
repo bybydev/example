@@ -604,6 +604,15 @@ enum ComposerTargetLabelFormatter {
       text = String(text.split(separator: "/").last ?? Substring(text))
     }
 
+    // Fireworks model slugs encode decimal points as "p" between digits (e.g. "v4p1", "5p3", "3p8").
+    if providerID == BuiltInProviders.fireworksID {
+      text = text.replacingOccurrences(
+        of: #"(?<=\d)p(?=\d)"#,
+        with: ".",
+        options: .regularExpression
+      )
+    }
+
     // Normalize model-ID separators but preserve the familiar "GPT-5.x" and "GLM-5.x" spellings.
     text = text.replacingOccurrences(of: "_", with: " ")
     if text.lowercased().hasPrefix("gpt-") {
@@ -757,6 +766,7 @@ enum ComposerTargetLabelFormatter {
     case BuiltInProviders.mistralID: return "Mistral"
     case BuiltInProviders.groqID: return "Groq"
     case BuiltInProviders.togetherID: return "Together"
+    case BuiltInProviders.fireworksID: return "Fireworks"
     case BuiltInProviders.anthropicID: return "Anthropic"
     case BuiltInProviders.geminiID: return "Gemini"
     case BuiltInProviders.ollamaID: return "Ollama"

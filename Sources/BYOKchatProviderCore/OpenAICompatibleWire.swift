@@ -512,6 +512,9 @@ struct ModelWire: Decodable {
   var topProvider: TopProviderWire?
   var pricing: PricingWire?
   var capabilities: ModelCapabilitiesWire?
+  var supportsChat: Bool?
+  var supportsImageInput: Bool?
+  var supportsTools: Bool?
   var archived: Bool?
   enum CodingKeys: String, CodingKey {
     case id, name, type, active, architecture, pricing, capabilities, archived, effort, reasoning
@@ -525,6 +528,9 @@ struct ModelWire: Decodable {
     case outputModalities = "output_modalities"
     case supportedParameters = "supported_parameters"
     case topProvider = "top_provider"
+    case supportsChat = "supports_chat"
+    case supportsImageInput = "supports_image_input"
+    case supportsTools = "supports_tools"
   }
 }
 struct ModelEffortWire: Decodable {

@@ -243,6 +243,30 @@ struct ModelCapabilityPolicyTests {
     #expect(togetherLlama.kind == .unsupported)
     #expect(togetherLlama.choices.isEmpty)
 
+    let fireworksGPTOSS = ModelCapabilityResolver.reasoningControl(
+      kind: .fireworks, modelID: "accounts/fireworks/models/gpt-oss-120b"
+    )
+    #expect(fireworksGPTOSS.choices == [.providerDefault, .effort(.low), .effort(.medium), .effort(.high)])
+    #expect(fireworksGPTOSS.label(for: nil) == "Default (Medium)")
+    #expect(fireworksGPTOSS.normalize(.init(enabled: false)) == nil)
+    #expect(fireworksGPTOSS.normalize(.init(enabled: true, effort: .high))?.effort == .high)
+
+    let fireworksDeepSeek = ModelCapabilityResolver.reasoningControl(
+      kind: .fireworks, modelID: "accounts/fireworks/models/deepseek-v4p1-flash"
+    )
+    #expect(
+      fireworksDeepSeek.choices
+        == [.providerDefault, .off, .effort(.low), .effort(.medium), .effort(.high)]
+    )
+    #expect(fireworksDeepSeek.normalize(.init(enabled: false))?.enabled == false)
+    #expect(fireworksDeepSeek.normalize(.init(enabled: true, effort: .medium))?.effort == .medium)
+
+    let fireworksLlama = ModelCapabilityResolver.reasoningControl(
+      kind: .fireworks, modelID: "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    )
+    #expect(fireworksLlama.kind == .unsupported)
+    #expect(fireworksLlama.choices.isEmpty)
+
     let haiku55 = ModelCapabilityResolver.reasoningControl(kind: .anthropic, modelID: "claude-haiku-5-5")
     #expect(
       haiku55.choices

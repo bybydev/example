@@ -1966,3 +1966,155 @@ func openRouterNonStreamingCostIncludingZeroAndInvalid(cost: String) async throw
   let req = try #require(await transport.lastRequest())
   #expect(req.url?.absoluteString == "https://api.together.ai/v1/models")
 }
+
+@Test func fireworksStreamSendsReasoningEffortOffAndPreservesToolReasoningContent() async throws {
+  let stream = """
+    data: {"id":"fw1","model":"accounts/fireworks/models/deepseek-v4p1-flash","choices":[{"delta":{"reasoning_content":"Step 1. "},"finish_reason":null}]}
+
+    data: {"id":"fw1","model":"accounts/fireworks/models/deepseek-v4p1-flash","choices":[{"delta":{"content":"Answer"},"finish_reason":"stop"}]}
+
+    data: {"id":"fw1","model":"accounts/fireworks/models/deepseek-v4p1-flash","choices":[],"usage":{"prompt_tokens":90,"completion_tokens":18,"prompt_tokens_details":{"cached_tokens":45}}}
+
+    data: [DONE]
+
+    """
+  let transport = MockTransport(streamChunks: [Data(stream.utf8)])
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.fireworks, transport: transport)
+
+  var events: [ProviderStreamEvent] = []
+  for try await event in adapter.stream(
+    request: ProviderRequest(
+      model: "accounts/fireworks/models/deepseek-v4p1-flash",
+      messages: [
+        .init(role: .user, content: "Check weather"),
+        .init(
+          role: .assistant,
+          content: "",
+          reasoning: "I should look up the weather first.",
+          toolCalls: [.init(id: "call_1", name: "get_weather", arguments: .object(["city": .string("Paris")]))]
+        ),
+        .init(
+          role: .tool,
+          content: "",
+          toolResults: [.init(callID: "call_1", name: "get_weather", content: .object(["temp": .number(18)]))]
+        ),
+      ],
+      options: .init(temperature: 0.6, reasoning: .init(enabled: true, effort: .high))
+    ),
+    account: account(providerID: "fireworks")
+  ) {
+    events.append(event)
+  }
+
+  let sent = try #require(await transport.lastRequest())
+  #expect(sent.url?.absoluteString == "https://api.fireworks.ai/inference/v1/chat/completions")
+  let body = try #require(sent.httpBody)
+  guard case .object(let root) = try JSONDecoder.provider.decode(JSONValue.self, from: body) else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(root["reasoning_effort"] == .string("high"))
+  #expect(root["temperature"] == .number(0.6))
+  #expect(root["stream_options"] == .object(["include_usage": .bool(true)]))
+  if case .array(let messages)? = root["messages"], messages.count >= 2,
+    case .object(let assistantMsg) = messages[1]
+  {
+    #expect(assistantMsg["reasoning_content"] == .string("I should look up the weather first."))
+  } else {
+    Issue.record("Expected assistant tool-call message with reasoning_content")
+  }
+
+  #expect(events.contains(.reasoningDelta("Step 1. ")))
+  #expect(events.contains(.textDelta("Answer")))
+  guard case .completed(let response) = events.last else {
+    Issue.record("Missing completion event")
+    return
+  }
+  #expect(response.reasoning == "Step 1. ")
+  #expect(response.text == "Answer")
+  #expect(response.usage?.inputTokens == 90)
+  #expect(response.usage?.outputTokens == 18)
+  #expect(response.usage?.cachedInputTokens == 45)
+
+  let offTransport = MockTransport(
+    data: Data(
+      #"{"id":"fw2","model":"accounts/fireworks/models/deepseek-v4p1-flash","choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}"#
+        .utf8
+    )
+  )
+  let offAdapter = OpenAICompatibleAdapter(
+    definition: BuiltInProviders.fireworks, transport: offTransport
+  )
+  _ = try await offAdapter.generate(
+    request: ProviderRequest(
+      model: "accounts/fireworks/models/deepseek-v4p1-flash",
+      messages: [.init(role: .user, content: "Hi")],
+      options: .init(reasoning: .init(enabled: false))
+    ),
+    account: account(providerID: "fireworks")
+  )
+  let offBody = try #require(await offTransport.lastRequest()?.httpBody)
+  guard case .object(let offRoot) = try JSONDecoder.provider.decode(JSONValue.self, from: offBody)
+  else {
+    Issue.record("Expected JSON object request body")
+    return
+  }
+  #expect(offRoot["reasoning_effort"] == .string("none"))
+}
+
+@Test func fireworksListModelsFiltersNonChatAndReadsCapabilityFlags() async throws {
+  let payload = """
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "accounts/fireworks/models/qwen3p8-max",
+          "object": "model",
+          "owned_by": "fireworks",
+          "supports_chat": true,
+          "supports_image_input": true,
+          "supports_tools": true,
+          "context_length": 1048576
+        },
+        {
+          "id": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+          "object": "model",
+          "owned_by": "fireworks",
+          "supports_chat": true,
+          "supports_image_input": false,
+          "supports_tools": true,
+          "context_length": 131072
+        },
+        {
+          "id": "accounts/fireworks/models/flux-1-dev-fp8",
+          "object": "model",
+          "owned_by": "fireworks",
+          "supports_chat": false
+        },
+        {
+          "id": "nomic-ai/nomic-embed-text-v1.5",
+          "object": "model",
+          "owned_by": "fireworks"
+        }
+      ]
+    }
+    """
+  let transport = MockTransport(data: Data(payload.utf8))
+  let adapter = OpenAICompatibleAdapter(definition: BuiltInProviders.fireworks, transport: transport)
+  let models = try await adapter.listModels(account: account(providerID: "fireworks"))
+
+  let ids = Set(models.map(\.id))
+  #expect(ids.contains("accounts/fireworks/models/qwen3p8-max"))
+  #expect(ids.contains("accounts/fireworks/models/llama-v3p1-8b-instruct"))
+  #expect(!ids.contains("accounts/fireworks/models/flux-1-dev-fp8"))
+  #expect(!ids.contains("nomic-ai/nomic-embed-text-v1.5"))
+
+  let llama = try #require(models.first { $0.id == "accounts/fireworks/models/llama-v3p1-8b-instruct" })
+  #expect(llama.contextWindow == 131_072)
+  #expect(llama.supportedParameters.contains("tools"))
+  #expect(llama.capabilityEvidence?.facts[.tools]?.support == .supported)
+  #expect(llama.capabilityEvidence?.facts[.imageInput]?.support == .unsupported)
+
+  let req = try #require(await transport.lastRequest())
+  #expect(req.url?.absoluteString == "https://api.fireworks.ai/inference/v1/models")
+}

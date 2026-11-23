@@ -23,6 +23,7 @@ final class ProviderWorkspaceTests: XCTestCase {
         BuiltInProviders.mistralID,
         BuiltInProviders.groqID,
         BuiltInProviders.togetherID,
+        BuiltInProviders.fireworksID,
         BuiltInProviders.ollamaID,
         BuiltInProviders.lmStudioID,
       ]
