@@ -231,3 +231,25 @@ schemes:
       shared: true
       orderHint: 1
 
+  BYOKchatScreenshots:
+    build:
+      targets:
+        BYOKchat: all
+        BYOKchatUITests:
+          - test
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: BYOKchatUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    management:
+      shared: true
+      orderHint: 2
+

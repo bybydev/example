@@ -200,6 +200,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
+rm -rf "${RESULT_BUNDLE}" "${ATTACHMENTS_DIR}" "${OUTPUT_DIR}"
+mkdir -p "${BUILD_DIR}" "${OUTPUT_DIR}"
+
+cd "${ROOT_DIR}"
+xcodegen generate
+
+BUILD_ARGS=(
+  -project BYOKchat.xcodeproj
+  -scheme BYOKchatScreenshots
+  -configuration Debug
+  -destination "platform=iOS Simulator,id=${SIMULATOR_UDID}"
+  -derivedDataPath "${DERIVED_DATA_PATH}"
+)
+
+if [[ -n "${SOURCE_PACKAGES_PATH}" ]]; then
+  BUILD_ARGS+=(-clonedSourcePackagesDirPath "${SOURCE_PACKAGES_PATH}")
+fi
+
+# 1. Build while the simulator is shut down so compilation does not compete with
+# SpringBoard for CPU/RAM or leave the simulator unresponsive before launch.
+# Ad-hoc sign simulator builds (do NOT set CODE_SIGNING_ALLOWED=NO) so the app
+# retains its simulator application-identifier entitlement and Keychain calls
+# do not fail with errSecMissingEntitlement (-34018).
+xcodebuild "${BUILD_ARGS[@]}" \
+  CODE_SIGN_IDENTITY="-" \
+  CODE_SIGNING_REQUIRED=NO \
+  DEVELOPMENT_TEAM="" \
+  build-for-testing
+
+# 2. Boot the simulator and override the status bar right before UI tests run.
 xcrun simctl boot "${SIMULATOR_UDID}" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
 
@@ -213,40 +243,25 @@ xcrun simctl status_bar "${SIMULATOR_UDID}" override \
   --batteryState charged \
   --batteryLevel 100
 
-rm -rf "${RESULT_BUNDLE}" "${ATTACHMENTS_DIR}" "${OUTPUT_DIR}"
-mkdir -p "${BUILD_DIR}" "${OUTPUT_DIR}"
-
-cd "${ROOT_DIR}"
-xcodegen generate
-
-XCODEBUILD_ARGS=(
-  -project BYOKchat.xcodeproj
-  -scheme BYOKchat
-  -configuration Debug
-  -destination "platform=iOS Simulator,id=${SIMULATOR_UDID}"
-  -derivedDataPath "${DERIVED_DATA_PATH}"
-  -resultBundlePath "${RESULT_BUNDLE}"
-  -parallel-testing-enabled NO
-  -test-timeouts-enabled YES
-  -default-test-execution-time-allowance 180
-  -only-testing:BYOKchatUITests/BYOKchatScreenshotTests
-)
-
-if [[ -n "${SOURCE_PACKAGES_PATH}" ]]; then
-  XCODEBUILD_ARGS+=(-clonedSourcePackagesDirPath "${SOURCE_PACKAGES_PATH}")
-fi
-
-# Ad-hoc sign simulator builds (do NOT set CODE_SIGNING_ALLOWED=NO) so the app
-# retains its simulator application-identifier entitlement and Keychain calls
-# do not fail with errSecMissingEntitlement (-34018).
-xcodebuild "${XCODEBUILD_ARGS[@]}" \
-  CODE_SIGN_IDENTITY="-" \
-  CODE_SIGNING_REQUIRED=NO \
-  DEVELOPMENT_TEAM="" \
+# 3. Run UI screenshot tests without rebuilding, retrying once on transient
+# simulator first-launch hiccups.
+xcodebuild \
+  -project BYOKchat.xcodeproj \
+  -scheme BYOKchatScreenshots \
+  -configuration Debug \
+  -destination "platform=iOS Simulator,id=${SIMULATOR_UDID}" \
+  -derivedDataPath "${DERIVED_DATA_PATH}" \
+  -resultBundlePath "${RESULT_BUNDLE}" \
+  -parallel-testing-enabled NO \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 150 \
+  -retry-tests-on-failure \
+  -test-iterations 2 \
+  -only-testing:BYOKchatUITests/BYOKchatScreenshotTests \
   "TEST_RUNNER_SCREENSHOT_THEME=${THEME}" \
   "TEST_RUNNER_SCREENSHOT_ORIENTATION=${ORIENTATION}" \
   "TEST_RUNNER_SCREENSHOT_PRESET=${PRESET}" \
-  test
+  test-without-building
 
 xcrun xcresulttool export attachments \
   --path "${RESULT_BUNDLE}" \
