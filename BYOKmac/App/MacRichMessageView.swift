@@ -774,7 +774,7 @@ private struct MacEditAndResendView: View {
       }
     }
     .padding(20)
-    .frame(width: 560, minHeight: 320)
+    .frame(minWidth: 560, idealWidth: 560, maxWidth: 560, minHeight: 320)
     .onAppear { focused = true }
   }
 

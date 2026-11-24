@@ -311,26 +311,12 @@ struct MacShellView: View {
       MacProUpsellSheet(feature: feature)
     }
     .confirmationDialog(
-      deleteTarget.map { "Delete \"\($0.title.isEmpty ? "New Chat" : $0.title)\"?" } ?? "Delete conversation?",
-      isPresented: Binding(
-        get: { deleteTarget != nil },
-        set: { if !$0 { deleteTarget = nil } }
-      ),
+      deleteDialogTitle,
+      isPresented: deleteDialogPresented,
       titleVisibility: .visible
     ) {
       Button("Delete Conversation", role: .destructive) {
-        guard let target = deleteTarget else { return }
-        deleteTarget = nil
-        Task { @MainActor in
-          if await chats.deleteConversation(target.id) {
-            await mcp.reloadFromStorage()
-            await clearPendingAttachments(
-              conversationID: target.id,
-              chats: chats
-            )
-            navigation.removeDeletedConversations(validIDs: chats.conversationSummaries.map(\.id))
-          }
-        }
+        confirmDeleteConversation(chats: chats, mcp: mcp)
       }
       Button("Cancel", role: .cancel) {
         deleteTarget = nil
@@ -340,25 +326,62 @@ struct MacShellView: View {
     }
     .alert(
       "Chat Error",
-      isPresented: Binding(
-        get: { navigation.errorMessage != nil || chats.errorMessage != nil || mcp.errorMessage != nil },
-        set: {
-          if !$0 {
-            navigation.errorMessage = nil
-            chats.errorMessage = nil
-            mcp.errorMessage = nil
-          }
-        }
-      )
+      isPresented: chatErrorPresented(chats: chats, mcp: mcp)
     ) {
       Button("OK") {
-        navigation.errorMessage = nil
-        chats.errorMessage = nil
-        mcp.errorMessage = nil
+        clearChatErrors(chats: chats, mcp: mcp)
       }
     } message: {
-      Text(navigation.errorMessage ?? chats.errorMessage ?? mcp.errorMessage ?? "Unknown error")
+      Text(chatErrorMessage(chats: chats, mcp: mcp))
     }
+  }
+
+  private var deleteDialogTitle: String {
+    guard let target = deleteTarget else { return "Delete conversation?" }
+    let title = target.title.isEmpty ? "New Chat" : target.title
+    return "Delete \"\(title)\"?"
+  }
+
+  private var deleteDialogPresented: Binding<Bool> {
+    Binding(
+      get: { deleteTarget != nil },
+      set: { if !$0 { deleteTarget = nil } }
+    )
+  }
+
+  private func confirmDeleteConversation(chats: MacChatSessionModel, mcp: MacMCPModel) {
+    guard let target = deleteTarget else { return }
+    deleteTarget = nil
+    Task { @MainActor in
+      if await chats.deleteConversation(target.id) {
+        await mcp.reloadFromStorage()
+        await clearPendingAttachments(
+          conversationID: target.id,
+          chats: chats
+        )
+        navigation.removeDeletedConversations(validIDs: chats.conversationSummaries.map(\.id))
+      }
+    }
+  }
+
+  private func chatErrorPresented(
+    chats: MacChatSessionModel,
+    mcp: MacMCPModel
+  ) -> Binding<Bool> {
+    Binding(
+      get: { navigation.errorMessage != nil || chats.errorMessage != nil || mcp.errorMessage != nil },
+      set: { if !$0 { clearChatErrors(chats: chats, mcp: mcp) } }
+    )
+  }
+
+  private func clearChatErrors(chats: MacChatSessionModel, mcp: MacMCPModel) {
+    navigation.errorMessage = nil
+    chats.errorMessage = nil
+    mcp.errorMessage = nil
+  }
+
+  private func chatErrorMessage(chats: MacChatSessionModel, mcp: MacMCPModel) -> String {
+    navigation.errorMessage ?? chats.errorMessage ?? mcp.errorMessage ?? "Unknown error"
   }
 
   private func startNewChat(chats: MacChatSessionModel, forceReset: Bool = false) {
