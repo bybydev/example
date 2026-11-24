@@ -902,6 +902,7 @@ private struct MacProviderKindPickerSheet: View {
     case .deepSeek: "DeepSeek models"
     case .openRouter: "Multi-provider routing"
     case .nvidia: "NVIDIA hosted models"
+    case .zAI: "GLM models"
     case .openAICompatible: "Compatible APIs"
     }
   }

@@ -665,6 +665,7 @@ func providerSymbol(_ kind: ProviderKind) -> String {
   case .deepSeek: "wave.3.right.circle.fill"
   case .openRouter: "arrow.triangle.branch"
   case .nvidia: "memorychip.fill"
+  case .zAI: "z.circle.fill"
   case .openAICompatible: "server.rack"
   }
 }
