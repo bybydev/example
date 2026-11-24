@@ -101,7 +101,7 @@ struct MacShellView: View {
           showingChatSettings = true
         },
         openProjects: { utilitySheets.present(.projects) },
-        openAnalytics: { utilitySheets.present(.analytics) },
+        openAnalytics: { utilitySheets.presentAnalytics(conversationID: paneConversationID) },
         renameConversation: {
           if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
             renameTarget = conversation

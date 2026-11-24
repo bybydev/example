@@ -8,6 +8,9 @@ struct MacDataManagementView: View {
   @Bindable var data: MacDataManagementModel
 
   @State private var pendingImport: PendingImport?
+  @State private var confirmClearThumbnails = false
+  @State private var confirmClearSearchIndex = false
+  @State private var confirmPurgeQuarantined = false
   @State private var confirmDeleteConversations = false
   @State private var confirmDeleteCredentials = false
   @State private var confirmResetApplication = false
@@ -30,9 +33,23 @@ struct MacDataManagementView: View {
     let url: URL
   }
 
+  private var report: BYOKStorageUsageReport? {
+    data.storageReport
+  }
+
+  private var quarantinedCount: Int {
+    max(report?.quarantinedCount ?? 0, data.quarantinedShardCount)
+  }
+
+  private var conversationCount: Int {
+    app.chats?.conversationSummaries.count ?? 0
+  }
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
+        storageUsageSection
+
         GroupBox("Full Backup") {
           VStack(alignment: .leading, spacing: 12) {
             Text("A portable JSON backup includes conversations, attachments, projects, Library items, MCP configuration, connection configuration, and the default system prompt.")
@@ -122,6 +139,7 @@ struct MacDataManagementView: View {
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }
+          .disabled(data.isBusy)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(8)
         }
@@ -147,6 +165,9 @@ struct MacDataManagementView: View {
       .frame(maxWidth: 720, alignment: .leading)
     }
     .background(MacDesignTokens.Colors.canvas)
+    .task {
+      await data.refreshStorageUsage()
+    }
     .confirmationDialog(
       pendingImport?.kind.title ?? "Import Data",
       isPresented: Binding(
@@ -168,6 +189,42 @@ struct MacDataManagementView: View {
       } else {
         Text("Merge keeps existing connections. Replace uses the imported connection configuration as authoritative. Credentials are never imported.")
       }
+    }
+    .confirmationDialog(
+      "Clear cached thumbnails?",
+      isPresented: $confirmClearThumbnails,
+      titleVisibility: .visible
+    ) {
+      Button("Clear Cached Thumbnails", role: .destructive) {
+        Task { await data.clearThumbnailCache() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Thumbnails regenerate automatically when needed. Your chats, original attachments, and Library files are not deleted.")
+    }
+    .confirmationDialog(
+      "Clear search index?",
+      isPresented: $confirmClearSearchIndex,
+      titleVisibility: .visible
+    ) {
+      Button("Clear Search Index", role: .destructive) {
+        Task { await data.clearSearchIndex() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("The full-text search index will be deleted and rebuilt automatically the next time you search conversations.")
+    }
+    .confirmationDialog(
+      "Remove unreadable chat files?",
+      isPresented: $confirmPurgeQuarantined,
+      titleVisibility: .visible
+    ) {
+      Button("Remove Unreadable Shards", role: .destructive) {
+        Task { await data.purgeQuarantinedConversations() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This permanently deletes \(quarantinedCount) quarantined file\(quarantinedCount == 1 ? "" : "s") that could not be decoded. Healthy conversations are unaffected.")
     }
     .confirmationDialog(
       "Delete all conversations?",
@@ -216,6 +273,166 @@ struct MacDataManagementView: View {
     } message: {
       Text(data.errorMessage ?? "Unknown error")
     }
+  }
+
+  private var storageUsageSection: some View {
+    GroupBox {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack {
+          Text("Storage Usage")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+
+          Spacer()
+
+          if data.isMeasuringStorage {
+            ProgressView()
+              .controlSize(.small)
+          }
+
+          Button("Refresh", systemImage: "arrow.clockwise") {
+            Task { await data.refreshStorageUsage() }
+          }
+          .controlSize(.small)
+          .disabled(data.isMeasuringStorage || data.isBusy)
+        }
+
+        if let report, report.hasCleanupWarning || quarantinedCount > 0 {
+          VStack(alignment: .leading, spacing: 8) {
+            if report.isDeviceSpaceLow {
+              warningRow(
+                icon: "externaldrive.badge.exclamationmark",
+                title: "Mac storage is running low",
+                detail: "Less than 250 MB is available on this Mac. Clear cached thumbnails or remove large chats and files to avoid failed saves."
+              )
+            }
+            if report.isStorageLarge {
+              warningRow(
+                icon: "internaldrive",
+                title: "Local data is over 500 MB",
+                detail: "Consider clearing cached thumbnails or removing older conversations and unused Library files you no longer need."
+              )
+            }
+            if quarantinedCount > 0 {
+              warningRow(
+                icon: "doc.badge.exclamationmark",
+                title: "\(quarantinedCount) unreadable chat \(quarantinedCount == 1 ? "file" : "files") quarantined",
+                detail: "Corrupted conversation files were set aside so the rest of your history stays safe. You can remove them below to reclaim space."
+              )
+            }
+          }
+        }
+
+        if let report {
+          VStack(alignment: .leading, spacing: 8) {
+            sizeRow("Chats (\(conversationCount))", bytes: report.conversationsBytes)
+            sizeRow("Files & Attachments", bytes: report.attachmentsBytes)
+            sizeRow("Cached Thumbnails", bytes: report.thumbnailCacheBytes)
+            sizeRow("Search Index", bytes: report.searchIndexBytes)
+            sizeRow("Analytics & Settings", bytes: report.analyticsBytes + report.otherBytes)
+            if report.quarantinedBytes > 0 || quarantinedCount > 0 {
+              sizeRow("Quarantined Files", bytes: report.quarantinedBytes)
+            }
+
+            Divider()
+
+            LabeledContent("Total Used") {
+              Text(formattedBytes(report.totalBytes))
+                .fontWeight(.semibold)
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            }
+
+            if let available = report.availableDeviceBytes {
+              LabeledContent("Available on Mac") {
+                Text(formattedBytes(available))
+                  .foregroundStyle(
+                    report.isDeviceSpaceLow ? Color.orange : MacDesignTokens.Colors.textMuted
+                  )
+              }
+            }
+          }
+        } else {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.small)
+            Text("Calculating storage…")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+        }
+
+        Divider()
+
+        HStack(spacing: 10) {
+          Button("Clear Cached Thumbnails…", systemImage: "photo.on.rectangle.angled") {
+            confirmClearThumbnails = true
+          }
+          .disabled(data.isBusy || (report?.thumbnailCacheBytes ?? 0) == 0)
+
+          Button("Clear Search Index…", systemImage: "magnifyingglass") {
+            confirmClearSearchIndex = true
+          }
+          .disabled(data.isBusy || (report?.searchIndexBytes ?? 0) == 0)
+
+          if quarantinedCount > 0 {
+            Button(
+              "Remove Unreadable Shards (\(quarantinedCount))…",
+              systemImage: "trash",
+              role: .destructive
+            ) {
+              confirmPurgeQuarantined = true
+            }
+            .disabled(data.isBusy)
+          }
+        }
+
+        Text("Cached thumbnails and the search index regenerate automatically when needed. Clearing cached thumbnails never deletes your chats, original attachments, or Library files.")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(8)
+    }
+  }
+
+  private func sizeRow(_ title: String, bytes: Int64) -> some View {
+    LabeledContent(title) {
+      Text(formattedBytes(bytes))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
+  }
+
+  private func warningRow(icon: String, title: String, detail: String) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: icon)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(Color.orange)
+        .padding(.top, 1)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      Color.orange.opacity(0.1),
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+        .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+    }
+  }
+
+  private func formattedBytes(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: max(0, bytes), countStyle: .file)
   }
 
   private func exportBackup() {

@@ -5,24 +5,38 @@ import SwiftUI
 @Observable
 final class MacUtilitySheetCoordinator {
   var destination: MacUtilitySheetDestination?
+  var analyticsInitialConversationID: ConversationID?
 
   func present(_ destination: MacUtilitySheetDestination) {
-    if self.destination != destination {
-      let dimension: MacAppAnalytics.Dimension
-      switch destination {
-      case .providers: dimension = .providers
-      case .library: dimension = .library
-      case .projects: dimension = .projects
-      case .mcpServers: dimension = .mcp
-      case .analytics: dimension = .analytics
-      }
-      MacAppAnalytics.track(.featureOpened, dimension: dimension)
+    if destination == .analytics {
+      analyticsInitialConversationID = nil
     }
+    trackOpeningIfNeeded(destination)
     self.destination = destination
+  }
+
+  func presentAnalytics(conversationID: ConversationID? = nil) {
+    analyticsInitialConversationID = conversationID
+    trackOpeningIfNeeded(.analytics)
+    destination = .analytics
   }
 
   func dismiss() {
     destination = nil
+    analyticsInitialConversationID = nil
+  }
+
+  private func trackOpeningIfNeeded(_ destination: MacUtilitySheetDestination) {
+    guard self.destination != destination else { return }
+    let dimension: MacAppAnalytics.Dimension
+    switch destination {
+    case .providers: dimension = .providers
+    case .library: dimension = .library
+    case .projects: dimension = .projects
+    case .mcpServers: dimension = .mcp
+    case .analytics: dimension = .analytics
+    }
+    MacAppAnalytics.track(.featureOpened, dimension: dimension)
   }
 }
 

@@ -6,6 +6,9 @@ import Observation
 @Observable
 final class MacDataManagementModel {
   private(set) var isBusy = false
+  private(set) var isMeasuringStorage = false
+  private(set) var storageReport: BYOKStorageUsageReport?
+  private(set) var quarantinedShardCount = 0
   var statusMessage: String?
   var errorMessage: String?
 
@@ -14,6 +17,7 @@ final class MacDataManagementModel {
   private let providerWorkspace: ProviderWorkspaceStore
   private let projectWorkspace: ProjectWorkspaceStore
   private let conversations: ConversationStore
+  private let fileBlobStore: FileAttachmentBlobStore
   private let accountManager: ProviderAccountManager
   private let mcpRuntime: MCPRemoteRuntime
   private let mcpWorkspace: MCPWorkspaceStore
@@ -29,10 +33,55 @@ final class MacDataManagementModel {
     providerWorkspace = services.providerWorkspace
     projectWorkspace = services.projectWorkspace
     conversations = services.conversationStore
+    fileBlobStore = services.fileBlobStore
     accountManager = services.accountManager
     mcpRuntime = services.mcpRuntime
     mcpWorkspace = services.mcpWorkspace
     self.restrictions = restrictions
+  }
+
+  func refreshStorageUsage() async {
+    guard !isMeasuringStorage else { return }
+    isMeasuringStorage = true
+    defer { isMeasuringStorage = false }
+
+    let layout = app.storageEnvironment.layout
+    let telemetryDirectory = app.storageEnvironment.telemetryDirectory
+    async let measuredReport = Task.detached(priority: .utility) {
+      layout.measureUsage(telemetryDirectory: telemetryDirectory)
+    }.value
+    let storeQuarantinedCount = await conversations.quarantinedShardCount
+    let report = await measuredReport
+    storageReport = report
+    quarantinedShardCount = max(report.quarantinedCount, storeQuarantinedCount)
+  }
+
+  func clearThumbnailCache() async {
+    await perform("Cached thumbnails cleared.", errorCode: "clear_thumbnail_cache_failed") {
+      _ = await fileBlobStore.clearDerivedCache()
+      await refreshStorageUsage()
+    }
+  }
+
+  func clearSearchIndex() async {
+    await perform(
+      "Search index cleared. It will rebuild automatically on your next search.",
+      errorCode: "clear_search_index_failed"
+    ) {
+      try await conversations.clearSearchIndex()
+      await refreshStorageUsage()
+    }
+  }
+
+  func purgeQuarantinedConversations() async {
+    await perform(
+      "Unreadable chat files removed.",
+      errorCode: "purge_quarantined_shards_failed"
+    ) {
+      _ = try await conversations.purgeQuarantinedShards()
+      try await app.reloadAfterDataMutation()
+      await refreshStorageUsage()
+    }
   }
 
   func makeBackupData() async -> Data? {
@@ -64,6 +113,7 @@ final class MacDataManagementModel {
         // A failed full-backup import now rolls persistent workspaces back as one logical
         // transaction. Reload best-effort so the presentation reflects that restored state.
         try? await app.reloadAfterDataMutation()
+        await refreshStorageUsage()
         throw error
       }
 
@@ -93,6 +143,7 @@ final class MacDataManagementModel {
         statusMessage =
           "Backup imported, but the app could not refresh its views: \(error.localizedDescription)"
       }
+      await refreshStorageUsage()
 
       var cleanupMessages: [String] = []
       if !summary.credentialCleanupFailures.isEmpty {
@@ -150,12 +201,14 @@ final class MacDataManagementModel {
           statusMessage =
             "Connection configuration imported, but the app could not refresh its views: \(error.localizedDescription)"
         }
+        await refreshStorageUsage()
         if !cleanupFailures.isEmpty {
           errorMessage = ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription
         }
       } catch {
         MacAppAnalytics.reportError("provider_config_import_failed", component: "data")
         try? await app.reloadAfterDataMutation()
+        await refreshStorageUsage()
         throw error
       }
     }
@@ -170,6 +223,7 @@ final class MacDataManagementModel {
       // project references are secondary metadata and must never make a failed
       // cleanup look like the conversations themselves were not deleted.
       try await conversations.deleteAllConversations()
+      clearPinnedConversations()
 
       var cleanupWarnings: [String] = []
       for id in conversationIDs {
@@ -181,6 +235,7 @@ final class MacDataManagementModel {
       }
 
       try await app.reloadAfterDataMutation()
+      await refreshStorageUsage()
       if !cleanupWarnings.isEmpty {
         errorMessage =
           "All conversations were deleted, but some stale tool configuration could not be removed:\n\n"
@@ -234,9 +289,11 @@ final class MacDataManagementModel {
         telemetryRecorder: app.coreServices?.telemetryRecorder
       )
       restrictions.clear()
-      app.preferences.defaultSystemPrompt = ""
+      app.preferences.reset()
+      clearPinnedConversations()
       app.recordRecoveryBackup(result.backupURL)
       await app.restartAfterReset()
+      await app.dataManagement?.refreshStorageUsage()
 
       if result.cleanupWarnings.isEmpty {
         app.dataManagement?.statusMessage = result.backupURL == nil
@@ -250,6 +307,14 @@ final class MacDataManagementModel {
     } catch {
       MacAppAnalytics.reportError("reset_application_failed", component: "data")
       errorMessage = error.localizedDescription
+    }
+  }
+
+  private func clearPinnedConversations() {
+    app.preferences.clearPinnedConversations()
+    MacSidebarPinStore.clear(in: .standard)
+    if app.storageEnvironment.userDefaultsSuiteName != nil {
+      MacSidebarPinStore.clear(in: app.storageEnvironment.makeUserDefaults())
     }
   }
 

@@ -906,6 +906,7 @@ private struct MacTranscriptView: View {
                 transcriptRow(bottomSpacing: 48) {
                   VStack(alignment: .leading, spacing: 8) {
                     MacRichMessageView(
+                      providers: providers,
                       chats: chats,
                       mcp: mcp,
                       conversationID: conversationID,
@@ -918,11 +919,13 @@ private struct MacTranscriptView: View {
                       message.status != .streaming
                     {
                       MacAssistantMessageActions(
+                        providers: providers,
                         chats: chats,
                         conversationID: conversationID,
                         message: message,
                         includeRetry: message.status != .failed,
-                        hideEmptyContentActions: message.status == .failed
+                        hideEmptyContentActions: message.status == .failed,
+                        toolDisplayName: mcp.toolDisplayName
                       )
                     }
                   }
@@ -2060,11 +2063,13 @@ private struct MacAssistantMessageActions: View {
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(\.macToastCenter) private var toastCenter
+  @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
   var includeRetry: Bool = true
   var hideEmptyContentActions: Bool = false
+  var toolDisplayName: ((String) -> String)? = nil
 
   @State private var copied = false
   @State private var showingDetails = false
@@ -2178,6 +2183,14 @@ private struct MacAssistantMessageActions: View {
           }
         }
 
+        if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || !sources.isEmpty
+          || hasSavableImages
+          || (showContentActions && !message.content.isEmpty)
+        {
+          Divider()
+        }
+
         Button("Message Details", systemImage: "info.circle") {
           showingDetails = true
         }
@@ -2194,7 +2207,12 @@ private struct MacAssistantMessageActions: View {
     // first icon's visual edge lines up with the message text above.
     .padding(.leading, -7)
     .sheet(isPresented: $showingDetails) {
-      MacMessageDetailsView(message: message)
+      MacMessageDetailsView(
+        message: message,
+        providers: providers,
+        conversation: chats.conversation(conversationID),
+        toolDisplayName: toolDisplayName
+      )
     }
     .sheet(isPresented: $showingSources) {
       MacAnswerSourcesSheet(sources: activeSources)

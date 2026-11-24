@@ -491,6 +491,90 @@ final class MacChatSessionModel {
     }
   }
 
+  func clearSearchIndex() async throws {
+    try await store.clearSearchIndex()
+  }
+
+  /// Propagates a changed default system prompt into untouched empty
+  /// conversations and the unsent new-chat draft when they have no overriding
+  /// project instructions and still carry the previous default. Conversations
+  /// with messages or custom prompts are never modified.
+  func syncDefaultSystemPrompt(from previousDefault: String, to newDefault: String) async {
+    let previous = MacPreferencesModel.normalizedSystemPrompt(previousDefault)
+    let updated = MacPreferencesModel.normalizedSystemPrompt(newDefault)
+    guard previous != updated else { return }
+
+    if let draftOverride = newChatSystemPromptOverride {
+      let newChatHasProjectInstructions: Bool
+      if let projectID = newChatProjectID,
+        let project = try? await projectWorkspace.project(id: projectID)
+      {
+        newChatHasProjectInstructions = !project.instructions
+          .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      } else {
+        newChatHasProjectInstructions = false
+      }
+      if !newChatHasProjectInstructions,
+        MacPreferencesModel.normalizedSystemPrompt(draftOverride) == previous
+      {
+        newChatSystemPromptOverride = updated
+      }
+    }
+
+    let candidateIDs = conversationSummaries.compactMap { summary -> ConversationID? in
+      guard summary.messageCount == 0,
+        !activeConversationIDs.contains(summary.id)
+      else { return nil }
+      return summary.id
+    }
+    guard !candidateIDs.isEmpty else { return }
+
+    var didUpdateAny = false
+    for id in candidateIDs {
+      if let project = await projectWorkspace.project(for: id),
+        !project.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
+        continue
+      }
+
+      let full: ChatConversation
+      if let cached = hydratedConversations[id] {
+        full = cached
+      } else if let loaded = try? await store.conversation(id: id) {
+        full = loaded
+      } else {
+        continue
+      }
+
+      guard full.messages.isEmpty,
+        MacPreferencesModel.normalizedSystemPrompt(full.systemPrompt) == previous
+      else { continue }
+
+      do {
+        try await store.updateTarget(
+          id,
+          providerID: full.providerID,
+          accountID: full.accountID,
+          modelID: full.modelID,
+          systemPrompt: updated,
+          options: full.options
+        )
+        if var hydrated = hydratedConversations[id] {
+          hydrated.systemPrompt = updated
+          hydrated.updatedAt = .now
+          hydratedConversations[id] = hydrated
+        }
+        didUpdateAny = true
+      } catch {
+        continue
+      }
+    }
+
+    if didUpdateAny {
+      try? await reloadSummaries()
+    }
+  }
+
   func renameConversation(_ id: ConversationID, title: String) async -> Bool {
     do {
       try await store.renameConversation(id, title: title)

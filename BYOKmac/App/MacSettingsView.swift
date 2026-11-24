@@ -114,7 +114,10 @@ struct MacSettingsView: View {
   private var detailContent: some View {
     switch selection {
     case .general:
-      MacGeneralSettingsView(preferences: model.preferences)
+      MacGeneralSettingsView(
+        preferences: model.preferences,
+        chats: model.chats
+      )
     case .plan:
       ZStack {
         MacDesignTokens.Colors.canvas
@@ -162,7 +165,7 @@ struct MacSettingsView: View {
   private func subtitle(for tab: MacSettingsTab) -> String {
     switch tab {
     case .general:
-      "Chat behavior and defaults for new conversations."
+      "Chat defaults, privacy, and app information."
     case .plan:
       "Manage BYOK Pro access, purchases, and subscription status."
     case .theme:
@@ -306,6 +309,30 @@ private struct MacSettingsGroupBoxStyle: GroupBoxStyle {
 
 private struct MacGeneralSettingsView: View {
   @Bindable var preferences: MacPreferencesModel
+  let chats: MacChatSessionModel?
+
+  @State private var promptDraft: String
+  @State private var lastSyncedPrompt: String
+  @State private var confirmClearPrompt = false
+  @FocusState private var isPromptFocused: Bool
+
+  init(preferences: MacPreferencesModel, chats: MacChatSessionModel?) {
+    self.preferences = preferences
+    self.chats = chats
+    let initial = MacPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
+    _promptDraft = State(initialValue: initial)
+    _lastSyncedPrompt = State(initialValue: initial)
+  }
+
+  private var trimmedPrompt: String {
+    MacPreferencesModel.normalizedSystemPrompt(promptDraft)
+  }
+
+  private var appVersionSummary: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+    return "\(version) (\(build))"
+  }
 
   var body: some View {
     ScrollView {
@@ -319,31 +346,170 @@ private struct MacGeneralSettingsView: View {
 
         GroupBox("Default System Prompt") {
           VStack(alignment: .leading, spacing: 10) {
-            TextEditor(text: $preferences.defaultSystemPrompt)
-              .font(.system(size: 13))
-              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-              .scrollContentBackground(.hidden)
-              .frame(minHeight: 180)
-              .padding(8)
-              .background(
-                MacDesignTokens.Colors.codeSurface,
-                in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
-              )
-              .overlay {
-                RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
-                  .stroke(MacDesignTokens.Colors.separator.opacity(0.82), lineWidth: 1)
+            ZStack(alignment: .topLeading) {
+              TextEditor(text: $promptDraft)
+                .font(.system(size: 13))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                .scrollContentBackground(.hidden)
+                .focused($isPromptFocused)
+                .frame(minHeight: 160)
+                .padding(8)
+                .accessibilityLabel("Default System Prompt")
+
+              if promptDraft.isEmpty {
+                Text("e.g. Be concise, direct, and explain trade-offs clearly.")
+                  .font(.system(size: 13))
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.65))
+                  .padding(.top, 10)
+                  .padding(.leading, 13)
+                  .allowsHitTesting(false)
+                  .accessibilityHidden(true)
+              }
+            }
+            .background(
+              MacDesignTokens.Colors.codeSurface,
+              in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+            )
+            .overlay {
+              RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+                .stroke(MacDesignTokens.Colors.separator.opacity(0.82), lineWidth: 1)
+            }
+
+            HStack(alignment: .center, spacing: 12) {
+              Text("Copied into new conversations unless a project defines its own instructions. Existing conversations with messages are unchanged.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+              Spacer(minLength: 12)
+
+              Button("Clear Prompt", role: .destructive) {
+                confirmClearPrompt = true
+              }
+              .disabled(trimmedPrompt.isEmpty)
+            }
+          }
+        }
+
+        GroupBox("Privacy") {
+          VStack(alignment: .leading, spacing: 8) {
+            Toggle("Share Anonymous Usage Data", isOn: $preferences.shareUsageData)
+              .onChange(of: preferences.shareUsageData) { _, enabled in
+                Task { await MacAppAnalytics.setEnabled(enabled) }
               }
 
-            Text("Used for new standalone chats and as the fallback when a project has no instructions.")
+            Text("Sends anonymous product usage counters to help improve BYOKchat. Messages, prompts, and file names are never collected.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .fixedSize(horizontal: false, vertical: true)
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        GroupBox("About & Legal") {
+          VStack(alignment: .leading, spacing: 10) {
+            aboutLinkRow(
+              title: "Website",
+              systemImage: "globe",
+              destination: MacPurchaseStore.websiteURL
+            )
+            aboutLinkRow(
+              title: "Contact Us",
+              systemImage: "envelope",
+              destination: MacPurchaseStore.contactURL
+            )
+            aboutLinkRow(
+              title: "Privacy Policy",
+              systemImage: "hand.raised",
+              destination: MacPurchaseStore.privacyURL
+            )
+            aboutLinkRow(
+              title: "Terms of Use",
+              systemImage: "doc.text",
+              destination: MacPurchaseStore.termsURL
+            )
+
+            Rectangle()
+              .fill(MacDesignTokens.Colors.separator.opacity(0.72))
+              .frame(height: 1)
+
+            LabeledContent {
+              Text(appVersionSummary)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            } label: {
+              Label("App Version", systemImage: "info.circle")
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
       .padding(22)
       .frame(maxWidth: 760, alignment: .leading)
     }
     .background(MacDesignTokens.Colors.canvas)
+    .confirmationDialog(
+      "Clear default system prompt?",
+      isPresented: $confirmClearPrompt,
+      titleVisibility: .visible
+    ) {
+      Button("Clear", role: .destructive) {
+        isPromptFocused = false
+        promptDraft = ""
+        commitPromptIfNeeded()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("New conversations will start without a default system prompt.")
+    }
+    .task(id: promptDraft) {
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      commitPromptIfNeeded()
+    }
+    .onChange(of: isPromptFocused) { _, focused in
+      if !focused {
+        promptDraft = trimmedPrompt
+        commitPromptIfNeeded()
+      }
+    }
+    .onChange(of: preferences.defaultSystemPrompt) { _, updated in
+      let normalized = MacPreferencesModel.normalizedSystemPrompt(updated)
+      guard normalized != lastSyncedPrompt else { return }
+      lastSyncedPrompt = normalized
+      promptDraft = normalized
+    }
+    .onDisappear {
+      commitPromptIfNeeded()
+    }
+  }
+
+  private func aboutLinkRow(title: String, systemImage: String, destination: URL) -> some View {
+    Link(destination: destination) {
+      HStack(spacing: 8) {
+        Label(title, systemImage: systemImage)
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Spacer(minLength: 0)
+        Image(systemName: "arrow.up.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func commitPromptIfNeeded() {
+    let normalized = trimmedPrompt
+    let previous = MacPreferencesModel.normalizedSystemPrompt(preferences.defaultSystemPrompt)
+    lastSyncedPrompt = normalized
+    if preferences.defaultSystemPrompt != normalized {
+      preferences.defaultSystemPrompt = normalized
+    }
+    if previous != normalized {
+      Task {
+        await chats?.syncDefaultSystemPrompt(from: previous, to: normalized)
+      }
+    }
   }
 }
 

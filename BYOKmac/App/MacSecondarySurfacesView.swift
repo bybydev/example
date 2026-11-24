@@ -140,9 +140,15 @@ struct MacSecondarySurfacesView: View {
       .sheet(
         item: Binding(
           get: { utilitySheets.destination },
-          set: { utilitySheets.destination = $0 }
+          set: { next in
+            utilitySheets.destination = next
+            if next != .analytics {
+              utilitySheets.analyticsInitialConversationID = nil
+            }
+          }
         ),
         onDismiss: {
+          utilitySheets.analyticsInitialConversationID = nil
           model.chats?.refreshNewChatTargetAfterProviderChanges()
         }
       ) { destination in
@@ -210,7 +216,10 @@ struct MacSecondarySurfacesView: View {
 
     case .analytics:
       if let services = model.coreServices {
-        MacAnalyticsGateView(services: services)
+        MacAnalyticsGateView(
+          services: services,
+          initialConversationID: utilitySheets.analyticsInitialConversationID
+        )
       } else {
         unavailable("Analytics", systemImage: "chart.bar.xaxis")
       }

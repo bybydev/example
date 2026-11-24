@@ -84,16 +84,16 @@ Prioritized checklist to bring `BYOKmac` to feature parity with `BYOKchat` (iOS)
 
 ## P3 — Analytics, Message Info & Settings Parity
 
-- [ ] **Analytics Rollups, Off-Main Computation & Missing Metrics** (`BYOKmac/App/MacAnalyticsView.swift`)
+- [x] **Analytics Rollups, Off-Main Computation & Missing Metrics** (`BYOKmac/App/MacAnalyticsView.swift`)
   - Load `dailyRollups` & `dailyErrorRollups` via `telemetryRecorder.loadAnalytics(...)`, compute snapshots off-main-actor, handle `.unavailable` with Retry, and add **Top Chats** on Overview.
   - Add missing metrics (Active chats, Total tokens, Cache write tokens, Cached hit-rate %, Tool cancelled count, per-row median TTFT & tok/s), fix `macUsageDisplayName` for all `ProviderKind`s/UUIDs, fix cost formatting (`No requests` vs `Unavailable`, exact vs `~` vs `≥`, OpenRouter BYOK footnote), and preserve acronyms in error titles (`HTTP`, `MCP`, etc.).
-- [ ] **Per-Conversation Analytics & Context Window Fill** (`BYOKmac/App/MacAnalyticsView.swift`)
+- [x] **Per-Conversation Analytics & Context Window Fill** (`BYOKmac/App/MacAnalyticsView.swift`)
   - Query `loadConversationAnalytics`, make reachable from active chat header, and add **Context window fill bar + omitted-messages warning**, per-chat Errors, per-chat Providers/Models breakdowns, and Tool failures/cancelled counts.
-- [ ] **Rich Per-Message Details (`MessageInfoView` parity)** (`BYOKmac/App/MacRichMessageView.swift`)
+- [x] **Rich Per-Message Details (`MessageInfoView` parity)** (`BYOKmac/App/MacRichMessageView.swift`)
   - Show human-readable Provider/Account names, `ChatBilling.snapshot` cost + footnotes, **Pricing snapshot** (rates, official link, catalog metadata), **Performance** (total duration, TTFT, tok/s), context trimmed count, finish reason, cache write/hit rate, and expose `"Details"` in `MacAssistantMessageActions`'s `...` menu.
-- [ ] **Storage Usage Breakdown & Cache Cleanup** (`BYOKmac/App/MacDataManagementView.swift`, `BYOKmac/App/MacDataManagementModel.swift`)
+- [x] **Storage Usage Breakdown & Cache Cleanup** (`BYOKmac/App/MacDataManagementView.swift`, `BYOKmac/App/MacDataManagementModel.swift`)
   - Display `BYOKStorageUsageReport` per-category sizes + low-space/large-storage/quarantine warnings, add **Clear Cached Thumbnails**, **Clear Search Index**, and **Remove Unreadable Shards**, and clear `byokchat.sidebar.pinnedConversationIDs` on Delete All / Reset.
-- [ ] **Privacy, About, Legal URLs & Preferences Sync** (`BYOKmac/App/MacSettingsView.swift`, `BYOKmac/App/MacAppAnalytics.swift`, `BYOKmac/App/MacPurchaseStore.swift`, `BYOKmac/App/MacPreferencesModel.swift`)
+- [x] **Privacy, About, Legal URLs & Preferences Sync** (`BYOKmac/App/MacSettingsView.swift`, `BYOKmac/App/MacAppAnalytics.swift`, `BYOKmac/App/MacPurchaseStore.swift`, `BYOKmac/App/MacPreferencesModel.swift`)
   - Add **Share Anonymous Usage Data** opt-out toggle in Settings.
   - Add **About / Support / Legal** section (Website, Contact, Privacy Policy, Terms, Version/Build) and update stale `https://byok.pro/terms|privacy` paywall URLs + simulated prices in `MacPurchaseStore.swift`.
   - Normalize Default System Prompt, add **Clear Prompt** confirmation, and sync changes to untouched empty drafts (`syncDefaultSystemPrompt`).

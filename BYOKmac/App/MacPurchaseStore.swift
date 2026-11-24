@@ -276,6 +276,11 @@ enum MacPurchaseStore {
     features: features
   )
 
+  static let websiteURL = URL(string: "https://spokiostudio.com/byokchat")!
+  static let contactURL = URL(string: "https://spokiostudio.com/byokchat/contact")!
+  static let privacyURL = URL(string: "https://spokiostudio.com/byokchat/privacy")!
+  static let termsURL = URL(string: "https://spokiostudio.com/byokchat/terms")!
+
   static let simulatedProducts: [StoreProduct] = [
     StoreProduct(
       id: monthlyProductID,
@@ -289,16 +294,16 @@ enum MacPurchaseStore {
       id: yearlyProductID,
       displayName: "BYOK Pro Yearly",
       description: "BYOK Pro for one year",
-      displayPrice: "$49.99",
-      price: 49.99,
+      displayPrice: "$29.99",
+      price: 29.99,
       subscriptionPeriod: .init(value: 1, unit: .year)
     ),
     StoreProduct(
       id: lifetimeProductID,
       displayName: "BYOK Pro Lifetime",
       description: "Pay once and keep BYOK Pro forever",
-      displayPrice: "$129.99",
-      price: 129.99,
+      displayPrice: "$49.99",
+      price: 49.99,
       subscriptionPeriod: nil
     ),
   ]
@@ -323,8 +328,8 @@ enum MacPurchaseStore {
     subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
-    termsURL: URL(string: "https://byok.pro/terms")!,
-    privacyURL: URL(string: "https://byok.pro/privacy")!,
+    termsURL: termsURL,
+    privacyURL: privacyURL,
     showsRedeemCode: true
   )
 
