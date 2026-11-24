@@ -1295,7 +1295,7 @@ struct MacLibraryQuickLookView: NSViewRepresentable {
   let url: URL
 
   final class Coordinator {
-    var item: MacLibraryPreviewItem?
+    fileprivate var item: MacLibraryPreviewItem?
   }
 
   func makeCoordinator() -> Coordinator { Coordinator() }
