@@ -150,3 +150,22 @@ enum MacAppAnalytics {
     }
   }
 }
+
+extension BYOKProductAnalyticsDimension {
+  init(feature: MacProFeature) {
+    switch feature {
+    case .themes:
+      self = .themes
+    case .providerAccounts:
+      self = .providers
+    case .projects:
+      self = .projects
+    case .mcpServers:
+      self = .mcp
+    case .analytics:
+      self = .analyticsHistory
+    case .chatSearch:
+      self = .chatSearch
+    }
+  }
+}

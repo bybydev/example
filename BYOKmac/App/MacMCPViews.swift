@@ -175,16 +175,48 @@ struct MacMCPServerManagementView: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
+        let partition = MacActiveDisabledPartition(mcp.servers, isEnabled: \.isEnabled)
         ScrollView {
-          LazyVStack(spacing: 10) {
-            ForEach(mcp.servers) { server in
-              serverCard(server)
+          LazyVStack(alignment: .leading, spacing: 16) {
+            if !partition.active.isEmpty {
+              VStack(alignment: .leading, spacing: 10) {
+                if partition.showsSectionHeaders {
+                  serverSectionHeader("Active", count: partition.active.count)
+                }
+                ForEach(partition.active) { server in
+                  serverCard(server)
+                }
+              }
+            }
+
+            if !partition.disabled.isEmpty {
+              VStack(alignment: .leading, spacing: 10) {
+                serverSectionHeader("Disabled", count: partition.disabled.count)
+                ForEach(partition.disabled) { server in
+                  serverCard(server)
+                }
+              }
             }
           }
           .padding(16)
         }
       }
     }
+  }
+
+  private func serverSectionHeader(_ title: String, count: Int) -> some View {
+    HStack(spacing: 6) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Text("\(count)")
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(MacDesignTokens.Colors.surface, in: Capsule())
+    }
+    .accessibilityAddTraits(.isHeader)
   }
 
   private func serverCard(_ server: MCPRemoteServer) -> some View {
@@ -413,6 +445,10 @@ private struct MacMCPServerDetailView: View {
             if let info = snapshot.serverInfo {
               LabeledContent("Server", value: "\(info.name) \(info.version)")
             }
+            LabeledContent(
+              "Last refreshed",
+              value: snapshot.refreshedAt.formatted(date: .abbreviated, time: .shortened)
+            )
             if let instructions = snapshot.instructions,
               !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {

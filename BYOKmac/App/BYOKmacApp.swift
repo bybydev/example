@@ -3,9 +3,12 @@ import Foundation
 import MacAppFoundation
 import SwiftUI
 
-private enum BYOKmacWindowID {
+enum BYOKmacWindowID {
   static let main = "main"
   static let onboarding = "byokchat.onboarding"
+  #if DEBUG
+  static let developerTools = "byokchat.developer-tools"
+  #endif
 }
 
 @main
@@ -53,10 +56,14 @@ struct BYOKmacApp: App {
 
       #if DEBUG
       CommandMenu("Developer") {
-        Button("Developer Tools…") {
-          openWindow(id: MacAppFoundationDeveloperTools.windowID)
+        Button("Open Developer Tools…") {
+          openWindow(id: BYOKmacWindowID.developerTools)
         }
         .keyboardShortcut("d", modifiers: [.command, .option])
+
+        Button("Foundation Developer Tools…") {
+          openWindow(id: MacAppFoundationDeveloperTools.windowID)
+        }
 
         Divider()
 
@@ -92,8 +99,8 @@ struct BYOKmacApp: App {
       "Welcome to BYOKchat",
       id: BYOKmacWindowID.onboarding,
       state: onboarding,
-      defaultWidth: 680,
-      defaultHeight: 540
+      defaultWidth: 720,
+      defaultHeight: 590
     ) {
       MacBYOKOnboardingView(onboarding: onboarding)
         .macAppTheme(model.themeStore, purchaseManager: purchases)
@@ -112,6 +119,19 @@ struct BYOKmacApp: App {
     .windowResizability(.contentSize)
 
     #if DEBUG
+    Window("Developer Tools", id: BYOKmacWindowID.developerTools) {
+      MacDeveloperToolsView(
+        model: model,
+        purchases: purchases,
+        onboarding: onboarding
+      )
+      .macAppTheme(model.themeStore, purchaseManager: purchases)
+      .environment(purchases)
+      .environment(proGateCenter)
+      .managesAnalytics(analytics)
+    }
+    .defaultSize(width: 920, height: 680)
+
     Window(
       MacAppFoundationDeveloperTools.windowTitle,
       id: MacAppFoundationDeveloperTools.windowID
@@ -290,7 +310,7 @@ private struct MacBYOKOnboardingView: View {
       content
         .id(onboarding.currentStep)
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
-        .padding(40)
+        .padding(34)
         .background(MacDesignTokens.Colors.canvas)
     } leadingActions: {
       HStack(spacing: 8) {
@@ -320,7 +340,7 @@ private struct MacBYOKOnboardingView: View {
       }
       .buttonStyle(.borderedProminent)
     }
-    .frame(width: 680, height: 540)
+    .frame(width: 720, height: 590)
     .background(MacDesignTokens.Colors.canvas)
   }
 
@@ -350,7 +370,9 @@ private struct MacBYOKOnboardingView: View {
             detail: "Attach local files, saved Library items, and project sources."
           ),
         ]
-      )
+      ) {
+        MacOnboardingStreamingDemoCard()
+      }
 
     case 1:
       onboardingPage(
@@ -375,7 +397,9 @@ private struct MacBYOKOnboardingView: View {
             detail: "Switch provider, model, reasoning, and effort without leaving the conversation."
           ),
         ]
-      )
+      ) {
+        MacOnboardingProviderPillDemoCard()
+      }
 
     default:
       onboardingPage(
@@ -400,49 +424,58 @@ private struct MacBYOKOnboardingView: View {
             detail: "Reuse saved files and understand local usage, cost, and reliability."
           ),
         ]
-      )
+      ) {
+        MacOnboardingWorkspaceDemoCard()
+      }
     }
   }
 
-  private func onboardingPage(
+  private func onboardingPage<Demo: View>(
     eyebrow: String,
     symbol: String,
     title: String,
     message: String,
-    rows: [OnboardingFeature]
+    rows: [OnboardingFeature],
+    @ViewBuilder demo: () -> Demo
   ) -> some View {
-    VStack(alignment: .leading, spacing: 26) {
-      HStack(alignment: .top, spacing: 18) {
+    VStack(alignment: .leading, spacing: 20) {
+      HStack(alignment: .top, spacing: 16) {
         Image(systemName: symbol)
-          .font(.system(size: 30, weight: .semibold))
+          .font(.system(size: 26, weight: .semibold))
           .foregroundStyle(MacDesignTokens.Colors.accent)
-          .frame(width: 58, height: 58)
+          .frame(width: 52, height: 52)
           .background(
             MacDesignTokens.Colors.accentSoft,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
           )
 
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
           Text(eyebrow)
             .font(.caption.weight(.bold))
             .tracking(1.2)
             .foregroundStyle(MacDesignTokens.Colors.accent)
 
           Text(title)
-            .font(.system(size: 30, weight: .bold, design: .rounded))
+            .font(.system(size: 26, weight: .bold, design: .rounded))
             .foregroundStyle(MacDesignTokens.Colors.textPrimary)
 
           Text(message)
-            .font(.title3)
+            .font(.callout)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
             .fixedSize(horizontal: false, vertical: true)
         }
       }
 
-      VStack(spacing: 12) {
-        ForEach(rows) { row in
-          onboardingRow(row)
+      HStack(alignment: .top, spacing: 16) {
+        VStack(spacing: 10) {
+          ForEach(rows) { row in
+            onboardingRow(row)
+          }
         }
+        .frame(maxWidth: .infinity)
+
+        demo()
+          .frame(width: 286)
       }
 
       Spacer(minLength: 0)
@@ -451,29 +484,29 @@ private struct MacBYOKOnboardingView: View {
   }
 
   private func onboardingRow(_ feature: OnboardingFeature) -> some View {
-    HStack(alignment: .top, spacing: 13) {
+    HStack(alignment: .top, spacing: 11) {
       Image(systemName: feature.symbol)
-        .font(.system(size: 15, weight: .semibold))
+        .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(MacDesignTokens.Colors.accent)
-        .frame(width: 34, height: 34)
+        .frame(width: 30, height: 30)
         .background(
           MacDesignTokens.Colors.accentSoft.opacity(0.75),
-          in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+          in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 2) {
         Text(feature.title)
-          .font(.headline)
+          .font(.subheadline.weight(.semibold))
           .foregroundStyle(MacDesignTokens.Colors.textPrimary)
         Text(feature.detail)
-          .font(.callout)
+          .font(.caption)
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
           .fixedSize(horizontal: false, vertical: true)
       }
 
       Spacer(minLength: 0)
     }
-    .padding(14)
+    .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       MacDesignTokens.Colors.surface,
@@ -511,6 +544,402 @@ private struct MacBYOKOnboardingView: View {
     onboarding.complete()
     openWindow(id: BYOKmacWindowID.main)
     dismissWindow(id: BYOKmacWindowID.onboarding)
+  }
+}
+
+@MainActor
+private struct MacOnboardingStreamingDemoCard: View {
+  private enum Mode: String, CaseIterable, Identifiable {
+    case reasoning = "Reasoning"
+    case markdown = "Markdown"
+    var id: String { rawValue }
+  }
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var mode: Mode = .reasoning
+  @State private var visibleWordCount = 0
+  @State private var replayID = 0
+
+  private var previewText: String {
+    switch mode {
+    case .reasoning:
+      "Compared Q3 vs Q4 latency: median TTFT dropped 28% while prompt cache hits doubled."
+    case .markdown:
+      "Native rendering handles **tables**, `code blocks`, Mermaid diagrams, and inline LaTeX smoothly."
+    }
+  }
+
+  private var words: [Substring] {
+    previewText.split(separator: " ")
+  }
+
+  private var streamedText: String {
+    words.prefix(visibleWordCount).joined(separator: " ")
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 6) {
+        ForEach(Mode.allCases) { item in
+          Button {
+            withAnimation(.snappy(duration: 0.2)) {
+              mode = item
+              replayID &+= 1
+            }
+          } label: {
+            Text(item.rawValue)
+              .font(.caption.weight(.semibold))
+              .padding(.horizontal, 9)
+              .padding(.vertical, 4)
+              .background(
+                mode == item ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.canvas,
+                in: Capsule()
+              )
+              .foregroundStyle(
+                mode == item ? Color.white : MacDesignTokens.Colors.textMuted
+              )
+          }
+          .buttonStyle(.plain)
+        }
+        Spacer()
+        Button {
+          replayID &+= 1
+        } label: {
+          Image(systemName: "arrow.clockwise")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        .buttonStyle(.plain)
+        .help("Replay streaming preview")
+      }
+
+      HStack {
+        Spacer(minLength: 28)
+        Text(mode == .reasoning ? "Compare Q3 & Q4 latency?" : "Show formatted output?")
+          .font(.caption.weight(.medium))
+          .padding(.horizontal, 10)
+          .padding(.vertical, 6)
+          .background(MacDesignTokens.Colors.accentSoft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      }
+
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 5) {
+          Image(systemName: mode == .reasoning ? "brain" : "doc.richtext")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+          Text(mode == .reasoning ? "Thought for 1.2s · Medium" : "Markdown & Code Ready")
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        .font(.caption2.weight(.semibold))
+
+        Text(previewText)
+          .font(.caption)
+          .opacity(0)
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .overlay(alignment: .topLeading) {
+            Text(streamedText)
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .frame(maxWidth: .infinity, alignment: .topLeading)
+          }
+
+        if mode == .markdown {
+          Text("let stream = runtime.stream(request)")
+            .font(.caption2.monospaced())
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MacDesignTokens.Colors.codeSurface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+      }
+      .padding(11)
+      .background(MacDesignTokens.Colors.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 1)
+      }
+
+      HStack(spacing: 6) {
+        Image(systemName: "sparkles")
+          .font(.caption2.weight(.bold))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+        Text("Claude Sonnet · Direct Stream")
+          .font(.caption2.weight(.medium))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        Spacer()
+        Text("340 ms TTFT")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+    }
+    .padding(14)
+    .background(
+      MacDesignTokens.Colors.surface,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 1)
+    }
+    .task(id: "\(mode.rawValue)-\(replayID)-\(reduceMotion)") {
+      if reduceMotion {
+        visibleWordCount = words.count
+        return
+      }
+      visibleWordCount = 0
+      for count in 1...words.count {
+        try? await Task.sleep(for: .milliseconds(55))
+        if Task.isCancelled { return }
+        visibleWordCount = count
+      }
+    }
+  }
+}
+
+@MainActor
+private struct MacOnboardingProviderPillDemoCard: View {
+  private struct SampleProvider: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let endpoint: String
+    let models: String
+    let authBadge: String
+    let symbol: String
+  }
+
+  private let providers: [SampleProvider] = [
+    SampleProvider(
+      id: "anthropic",
+      name: "Anthropic",
+      endpoint: "api.anthropic.com",
+      models: "Claude Sonnet · Opus",
+      authBadge: "Keychain · Direct TLS",
+      symbol: "sparkles"
+    ),
+    SampleProvider(
+      id: "openai",
+      name: "OpenAI",
+      endpoint: "api.openai.com",
+      models: "GPT-5 · o3 · o4-mini",
+      authBadge: "Keychain · Direct TLS",
+      symbol: "bolt.fill"
+    ),
+    SampleProvider(
+      id: "gemini",
+      name: "Gemini",
+      endpoint: "generativelanguage.googleapis.com",
+      models: "Gemini 2.5 Pro · Flash",
+      authBadge: "Keychain · Direct TLS",
+      symbol: "wand.and.stars"
+    ),
+    SampleProvider(
+      id: "ollama",
+      name: "Ollama",
+      endpoint: "localhost:11434/v1",
+      models: "Qwen 3 · Llama · Local",
+      authBadge: "No API Key · Local",
+      symbol: "desktopcomputer"
+    ),
+  ]
+
+  @State private var selectedID = "anthropic"
+
+  private var selectedProvider: SampleProvider {
+    providers.first { $0.id == selectedID } ?? providers[0]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("PREVIEW CONNECTIONS")
+        .font(.caption2.weight(.bold))
+        .tracking(0.8)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+        ForEach(providers) { provider in
+          Button {
+            withAnimation(.snappy(duration: 0.2)) {
+              selectedID = provider.id
+            }
+          } label: {
+            HStack(spacing: 6) {
+              Image(systemName: provider.symbol)
+                .font(.caption2.weight(.semibold))
+              Text(provider.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+              selectedID == provider.id
+                ? MacDesignTokens.Colors.accent
+                : MacDesignTokens.Colors.canvas,
+              in: Capsule()
+            )
+            .foregroundStyle(
+              selectedID == provider.id ? Color.white : MacDesignTokens.Colors.textPrimary
+            )
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Label(selectedProvider.name, systemImage: selectedProvider.symbol)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Spacer()
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
+
+        LabeledContent("Endpoint") {
+          Text(selectedProvider.endpoint)
+            .font(.caption2.monospaced())
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+        .font(.caption)
+
+        LabeledContent("Models", value: selectedProvider.models)
+          .font(.caption)
+
+        HStack(spacing: 6) {
+          Image(systemName: "lock.shield.fill")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+          Text(selectedProvider.authBadge)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          Spacer()
+          Text("No proxy")
+            .font(.caption2)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        .padding(.top, 2)
+      }
+      .padding(11)
+      .background(MacDesignTokens.Colors.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 1)
+      }
+    }
+    .padding(14)
+    .background(
+      MacDesignTokens.Colors.surface,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 1)
+    }
+  }
+}
+
+@MainActor
+private struct MacOnboardingWorkspaceDemoCard: View {
+  @State private var requireToolApproval = true
+  @State private var keepKeysLocal = true
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 11) {
+      Text("PRIVACY & TOOLS PREVIEW")
+        .font(.caption2.weight(.bold))
+        .tracking(0.8)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+      VStack(alignment: .leading, spacing: 8) {
+        Toggle(isOn: $requireToolApproval) {
+          VStack(alignment: .leading, spacing: 1) {
+            Text("Ask before MCP tools")
+              .font(.caption.weight(.semibold))
+            Text(requireToolApproval ? "Prompt before each remote tool call" : "Auto-allow trusted server tools")
+              .font(.caption2)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+
+        Divider()
+
+        Toggle(isOn: $keepKeysLocal) {
+          VStack(alignment: .leading, spacing: 1) {
+            Text("Local-only Keychain")
+              .font(.caption.weight(.semibold))
+            Text("Secrets never leave macOS Keychain")
+              .font(.caption2)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .disabled(true)
+      }
+      .padding(10)
+      .background(MacDesignTokens.Colors.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.7), lineWidth: 1)
+      }
+
+      HStack(spacing: 8) {
+        Image(systemName: requireToolApproval ? "hand.raised.fill" : "checkmark.seal.fill")
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("search_docs · MCP")
+            .font(.caption.weight(.semibold))
+          Text(requireToolApproval ? "Waiting for your approval" : "Approved automatically")
+            .font(.caption2)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        Spacer()
+        Text(requireToolApproval ? "Ask" : "Allow")
+          .font(.caption2.weight(.bold))
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(MacDesignTokens.Colors.accentSoft, in: Capsule())
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+      }
+      .padding(10)
+      .background(MacDesignTokens.Colors.canvas, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+      HStack(spacing: 0) {
+        metricCell(value: "$12.48", label: "Local Spend")
+        Divider().frame(height: 24)
+        metricCell(value: "340 ms", label: "TTFT")
+        Divider().frame(height: 24)
+        metricCell(value: "99.4%", label: "Success")
+      }
+      .padding(.vertical, 8)
+      .background(MacDesignTokens.Colors.canvas, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+    .padding(14)
+    .background(
+      MacDesignTokens.Colors.surface,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 1)
+    }
+  }
+
+  private func metricCell(value: String, label: String) -> some View {
+    VStack(spacing: 1) {
+      Text(value)
+        .font(.caption.weight(.bold).monospacedDigit())
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      Text(label)
+        .font(.caption2)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+    }
+    .frame(maxWidth: .infinity)
   }
 }
 

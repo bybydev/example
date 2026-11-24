@@ -17,6 +17,32 @@ enum MacProviderPresentationState: String, Equatable {
   case modelRequired = "Model required"
 }
 
+nonisolated struct MacActiveDisabledPartition<Element> {
+  let active: [Element]
+  let disabled: [Element]
+
+  var showsSectionHeaders: Bool {
+    !disabled.isEmpty
+  }
+
+  init(_ elements: [Element], isEnabled: (Element) -> Bool) {
+    var activeItems: [Element] = []
+    var disabledItems: [Element] = []
+    for element in elements {
+      if isEnabled(element) {
+        activeItems.append(element)
+      } else {
+        disabledItems.append(element)
+      }
+    }
+    self.active = activeItems
+    self.disabled = disabledItems
+  }
+}
+
+extension MacActiveDisabledPartition: Equatable where Element: Equatable {}
+extension MacActiveDisabledPartition: Sendable where Element: Sendable {}
+
 @MainActor
 func macProviderPresentationState(
   model: MacProviderModel,
@@ -44,6 +70,7 @@ struct MacProviderManagementView: View {
   @State private var editorRoute: MacConnectionEditorRoute?
   @State private var deleteAccount: ProviderAccount?
   @State private var testingAccountID: ProviderAccountID?
+  @State private var refreshingAccountID: ProviderAccountID?
   @State private var testResultAccountID: ProviderAccountID?
   @State private var testSucceeded: Bool?
 
@@ -204,13 +231,35 @@ struct MacProviderManagementView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 80)
             } else {
-              LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
-              ) {
-                ForEach(visibleAccounts) { account in
-                  providerCard(account)
+              let partition = MacActiveDisabledPartition(visibleAccounts, isEnabled: \.isEnabled)
+              let columns = [
+                GridItem(.flexible(), spacing: 12),
+                GridItem(.flexible(), spacing: 12),
+              ]
+
+              if !partition.active.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                  if partition.showsSectionHeaders {
+                    providerSectionHeader("Active", count: partition.active.count)
+                  }
+                  LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(partition.active) { account in
+                      providerCard(account)
+                    }
+                  }
                 }
+              }
+
+              if !partition.disabled.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                  providerSectionHeader("Disabled", count: partition.disabled.count)
+                  LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(partition.disabled) { account in
+                      providerCard(account)
+                    }
+                  }
+                }
+                .padding(.top, partition.active.isEmpty ? 0 : 6)
               }
             }
           }
@@ -218,6 +267,21 @@ struct MacProviderManagementView: View {
         }
       }
     }
+  }
+
+  private func providerSectionHeader(_ title: String, count: Int) -> some View {
+    HStack(spacing: 6) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      Text("\(count)")
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(MacDesignTokens.Colors.surface, in: Capsule())
+    }
+    .accessibilityAddTraits(.isHeader)
   }
 
   private var showsFreeLimitBanner: Bool {
@@ -286,23 +350,7 @@ struct MacProviderManagementView: View {
         }
         Spacer()
         Menu {
-          Button("Manage", systemImage: "arrow.right.circle") { selectedAccountID = account.id }
-          Button("Edit Connection…", systemImage: "pencil") { editorRoute = .edit(account.id) }
-          if !isDefault && state == .ready {
-            Button("Make Default", systemImage: "checkmark.circle") {
-              Task { _ = await model.setDefaultAccount(account.id) }
-            }
-          }
-          Button(
-            account.isEnabled ? "Disable" : "Enable",
-            systemImage: account.isEnabled ? "pause.circle" : "play.circle"
-          ) {
-            Task { _ = await model.setAccountEnabled(!account.isEnabled, accountID: account.id) }
-          }
-          Divider()
-          Button("Delete Connection…", systemImage: "trash", role: .destructive) {
-            deleteAccount = account
-          }
+          providerCardMenuItems(for: account, state: state, isDefault: isDefault)
         } label: {
           Image(systemName: "ellipsis").frame(width: 28, height: 28)
         }
@@ -361,6 +409,58 @@ struct MacProviderManagementView: View {
     }
     .contentShape(Rectangle())
     .onTapGesture { selectedAccountID = account.id }
+    .contextMenu {
+      providerCardMenuItems(for: account, state: state, isDefault: isDefault)
+    }
+  }
+
+  private func canRefreshModels(_ account: ProviderAccount, state: MacProviderPresentationState) -> Bool {
+    guard state == .ready, !model.isProviderRestricted(account.id) else { return false }
+    let modelsPath = model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath
+    return modelsPath != nil
+  }
+
+  @ViewBuilder
+  private func providerCardMenuItems(
+    for account: ProviderAccount,
+    state: MacProviderPresentationState,
+    isDefault: Bool
+  ) -> some View {
+    Button("Manage", systemImage: "arrow.right.circle") { selectedAccountID = account.id }
+    Button("Edit Connection…", systemImage: "pencil") { editorRoute = .edit(account.id) }
+    if !isDefault && state == .ready {
+      Button("Make Default", systemImage: "checkmark.circle") {
+        Task { _ = await model.setDefaultAccount(account.id) }
+      }
+    }
+    if canRefreshModels(account, state: state) {
+      Button(
+        refreshingAccountID == account.id ? "Refreshing Models…" : "Refresh Models",
+        systemImage: "arrow.clockwise"
+      ) {
+        refreshModels(account)
+      }
+      .disabled(model.isBusy || refreshingAccountID == account.id)
+    }
+    Button(
+      account.isEnabled ? "Disable" : "Enable",
+      systemImage: account.isEnabled ? "pause.circle" : "play.circle"
+    ) {
+      Task { _ = await model.setAccountEnabled(!account.isEnabled, accountID: account.id) }
+    }
+    Divider()
+    Button("Delete Connection…", systemImage: "trash", role: .destructive) {
+      deleteAccount = account
+    }
+  }
+
+  private func refreshModels(_ account: ProviderAccount) {
+    guard refreshingAccountID == nil else { return }
+    refreshingAccountID = account.id
+    Task { @MainActor in
+      defer { refreshingAccountID = nil }
+      _ = await model.refreshModels(accountID: account.id)
+    }
   }
 
   private func beginAddProvider() {
@@ -445,6 +545,15 @@ private struct MacProviderWorkspaceDetailView: View {
             Button("Make Default", systemImage: "checkmark.circle") {
               Task { _ = await model.setDefaultAccount(account.id) }
             }
+          }
+          if state == .ready,
+            !model.isProviderRestricted(account.id),
+            (model.provider(for: account.providerID)?.modelsPath ?? account.definition.modelsPath) != nil
+          {
+            Button("Refresh Models", systemImage: "arrow.clockwise") {
+              Task { _ = await model.refreshModels(accountID: account.id) }
+            }
+            .disabled(model.isBusy)
           }
           Button(
             account.isEnabled ? "Disable" : "Enable",

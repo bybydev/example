@@ -1,6 +1,7 @@
 import AppKit
 import BYOKchatProviderCore
 import Foundation
+import MacAppFoundation
 import Observation
 import os
 import SwiftUI
@@ -10,6 +11,9 @@ struct MacShellView: View {
   let model: MacAppModel
 
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
+  @Environment(PurchaseManager.self) private var purchaseManager
+  @Environment(MacProGateCenter.self) private var proGateCenter
+  @Environment(\.controlActiveState) private var controlActiveState
   @Environment(\.macToastCenter) private var toastCenter
   @State private var sidebarVisible = true
   @State private var navigation = MacChatNavigation()
@@ -18,6 +22,7 @@ struct MacShellView: View {
   @State private var toolsConversationID: ConversationID?
   @State private var chatSettingsConversationID: ConversationID?
   @State private var searchText = ""
+  @State private var pendingSearchFocus = false
   @State private var composerFocusRequestID = 0
   @State private var showingTargetPicker = false
   @State private var showingChatTools = false
@@ -26,6 +31,9 @@ struct MacShellView: View {
   @State private var deleteTarget: ChatConversation?
   @State private var pendingAttachmentsByKey: [String: [ChatAttachment]] = [:]
   @State private var didRestorePendingAttachments = false
+  @State private var activeUpsellFeature: MacProFeature?
+  @State private var pendingUpsellFeature: MacProFeature?
+  @State private var upsellFallbackTask: Task<Void, Never>?
 
   var body: some View {
     Group {
@@ -57,7 +65,7 @@ struct MacShellView: View {
         chats: chats,
         selection: $navigation.requestedID,
         searchText: $searchText,
-        searchFocusRequestID: model.conversationSearchRequestID,
+        pendingSearchFocus: $pendingSearchFocus,
         newChat: { startNewChat(chats: chats) },
         selectSearchResult: { item in
           navigation.requestedID = item.conversationID
@@ -172,7 +180,15 @@ struct MacShellView: View {
         didSelectInitialChat = true
         navigation.requestedID = chats.conversationSummaries.first?.id
       }
-      chats.updateSearch(searchText)
+      if MacProAccess.canUseChatSearch(hasPro: purchaseManager.hasPro) {
+        chats.updateSearch(searchText)
+      } else {
+        chats.updateSearch("")
+      }
+    }
+    .onDisappear {
+      upsellFallbackTask?.cancel()
+      upsellFallbackTask = nil
     }
     .task {
       await restorePendingAttachmentsIfNeeded()
@@ -197,6 +213,10 @@ struct MacShellView: View {
     .onChange(of: model.newChatRequestID) { _, _ in
       startNewChat(chats: chats, forceReset: true)
     }
+    .onChange(of: model.conversationSearchRequestID) { _, _ in
+      sidebarVisible = true
+      pendingSearchFocus = true
+    }
     .onChange(of: model.sidebarToggleRequestID) { _, _ in
       sidebarVisible.toggle()
     }
@@ -206,6 +226,17 @@ struct MacShellView: View {
         chats: chats,
         providers: providers
       )
+    }
+    .onChange(of: proGateCenter.upsellRequestID) { _, _ in
+      handleProUpsellRequest()
+    }
+    .onChange(of: utilitySheets.destination) { _, destination in
+      guard destination == nil, let pending = pendingUpsellFeature else { return }
+      pendingUpsellFeature = nil
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(250))
+        activeUpsellFeature = pending
+      }
     }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
@@ -275,6 +306,9 @@ struct MacShellView: View {
       MacRenameConversationSheet(conversation: conversation) { title in
         await chats.renameConversation(conversation.id, title: title)
       }
+    }
+    .sheet(item: $activeUpsellFeature) { feature in
+      MacProUpsellSheet(feature: feature)
     }
     .confirmationDialog(
       deleteTarget.map { "Delete \"\($0.title.isEmpty ? "New Chat" : $0.title)\"?" } ?? "Delete conversation?",
@@ -551,6 +585,31 @@ struct MacShellView: View {
     guard let store = model.pendingAttachmentStore else { return }
     pendingAttachmentsByKey = await store.snapshot()
   }
+
+  private func handleProUpsellRequest() {
+    upsellFallbackTask?.cancel()
+    if controlActiveState == .key, let feature = proGateCenter.claimPendingUpsell() {
+      presentProUpsell(feature)
+      return
+    }
+
+    // Allow a focused secondary window (such as Settings) one turn to claim the
+    // upsell first; otherwise present it from the main workspace window.
+    upsellFallbackTask = Task { @MainActor in
+      await Task.yield()
+      guard !Task.isCancelled, let feature = proGateCenter.claimPendingUpsell() else { return }
+      presentProUpsell(feature)
+    }
+  }
+
+  private func presentProUpsell(_ feature: MacProFeature) {
+    if utilitySheets.destination != nil {
+      pendingUpsellFeature = feature
+      utilitySheets.dismiss()
+    } else {
+      activeUpsellFeature = feature
+    }
+  }
 }
 
 private struct MacAppShell<Sidebar: View, Content: View>: View {
@@ -733,6 +792,41 @@ enum MacSidebarSearchSupport {
     }
     return trimmedSnippet.isEmpty ? nil : trimmedSnippet
   }
+
+  static func titleMatches(
+    for query: String,
+    in conversations: [ChatConversation],
+    limit: Int = 120
+  ) -> [MacChatSessionModel.SearchItem] {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return [] }
+
+    let cap = max(1, limit)
+    var results: [MacChatSessionModel.SearchItem] = []
+    results.reserveCapacity(min(cap, 32))
+
+    for conversation in conversations {
+      guard
+        conversation.title.range(
+          of: trimmed,
+          options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil
+      else { continue }
+      results.append(
+        MacChatSessionModel.SearchItem(
+          conversationID: conversation.id,
+          messageID: nil,
+          title: conversation.title,
+          snippet: conversation.title,
+          role: .title,
+          updatedAt: conversation.updatedAt
+        )
+      )
+      if results.count == cap { break }
+    }
+
+    return results
+  }
 }
 
 private struct MacSidebarProjectIconView: View {
@@ -761,7 +855,7 @@ private struct MacSidebarView: View {
   @Bindable var chats: MacChatSessionModel
   @Binding var selection: ConversationID?
   @Binding var searchText: String
-  let searchFocusRequestID: Int
+  @Binding var pendingSearchFocus: Bool
   let newChat: () -> Void
   let selectSearchResult: (MacChatSessionModel.SearchItem) -> Void
   let rename: (ChatConversation) -> Void
@@ -769,11 +863,30 @@ private struct MacSidebarView: View {
 
   @Environment(MacWorkspaceModel.self) private var workspace
   @Environment(MacMCPModel.self) private var mcp
+  @Environment(PurchaseManager.self) private var purchaseManager
   @AppStorage("byokchat.sidebar.pinnedConversationIDs") private var pinnedConversationIDs = ""
   @FocusState private var searchFocused: Bool
 
   private var isSearching: Bool {
     !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var canUseFullTextSearch: Bool {
+    MacProAccess.canUseChatSearch(hasPro: purchaseManager.hasPro)
+  }
+
+  private var isCheckingEntitlement: Bool {
+    purchaseManager.entitlementState == .checking
+  }
+
+  private var displayedSearchItems: [MacChatSessionModel.SearchItem] {
+    if canUseFullTextSearch {
+      return chats.searchItems
+    }
+    return MacSidebarSearchSupport.titleMatches(
+      for: searchText,
+      in: chats.conversationSummaries
+    )
   }
 
   private var pinnedIDSet: Set<String> {
@@ -855,12 +968,31 @@ private struct MacSidebarView: View {
     .background(MacDesignTokens.Colors.surface.opacity(0.52))
     .onAppear {
       prunePinnedConversations()
+      if pendingSearchFocus {
+        pendingSearchFocus = false
+        searchFocused = true
+      }
     }
-    .onChange(of: searchFocusRequestID) { _, _ in
+    .onChange(of: pendingSearchFocus) { _, shouldFocus in
+      guard shouldFocus else { return }
+      pendingSearchFocus = false
       searchFocused = true
     }
     .onChange(of: searchText) { _, value in
-      chats.updateSearch(value)
+      if canUseFullTextSearch {
+        chats.updateSearch(value)
+      } else if !chats.searchItems.isEmpty || chats.isSearching {
+        chats.updateSearch("")
+      }
+    }
+    .onChange(of: purchaseManager.hasPro) { _, hasPro in
+      if MacProAccess.canUseChatSearch(hasPro: hasPro) {
+        if isSearching {
+          chats.updateSearch(searchText)
+        }
+      } else {
+        chats.updateSearch("")
+      }
     }
     .onChange(of: chats.conversationSummaries.map(\.id)) { _, _ in
       prunePinnedConversations()
@@ -941,8 +1073,9 @@ private struct MacSidebarView: View {
   }
 
   private var searchResults: some View {
-    VStack(spacing: 0) {
-      if chats.isIndexingSearch {
+    let items = displayedSearchItems
+    return VStack(spacing: 0) {
+      if canUseFullTextSearch && chats.isIndexingSearch {
         HStack(spacing: 7) {
           ProgressView()
             .controlSize(.mini)
@@ -955,9 +1088,12 @@ private struct MacSidebarView: View {
         .padding(.horizontal, MacDesignTokens.Spacing.compact)
         .padding(.vertical, 6)
         Divider()
+      } else if !canUseFullTextSearch {
+        proSearchUpsellCallout
+        Divider()
       }
 
-      if chats.isSearching && chats.searchItems.isEmpty {
+      if canUseFullTextSearch && chats.isSearching && items.isEmpty {
         VStack {
           Spacer()
           ProgressView()
@@ -965,12 +1101,15 @@ private struct MacSidebarView: View {
           Spacer()
         }
         .frame(maxWidth: .infinity)
-      } else if chats.searchItems.isEmpty {
-        sidebarEmptyState(icon: "magnifyingglass", text: "No matching conversations")
+      } else if items.isEmpty {
+        sidebarEmptyState(
+          icon: "magnifyingglass",
+          text: canUseFullTextSearch ? "No matching conversations" : "No matching chat titles"
+        )
       } else {
         ScrollView {
           LazyVStack(spacing: 2) {
-            ForEach(chats.searchItems) { item in
+            ForEach(items) { item in
               MacSearchResultRow(
                 item: item,
                 subtitle: MacSidebarSearchSupport.subtitle(
@@ -990,6 +1129,52 @@ private struct MacSidebarView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var proSearchUpsellCallout: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .top, spacing: 8) {
+        Image(systemName: "crown.fill")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+          .padding(.top, 1)
+          .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Full-Text Chat Search is a BYOK Pro feature")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          Text("Showing matching chat titles. Upgrade to search every message and attachment.")
+            .font(.system(size: 11))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      Button {
+        MacProAccess.requestUpgrade(.chatSearch)
+      } label: {
+        Text("Upgrade to Pro")
+          .font(.system(size: 11.5, weight: .semibold))
+          .frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent)
+      .controlSize(.small)
+      .disabled(isCheckingEntitlement)
+    }
+    .padding(10)
+    .background(
+      MacDesignTokens.Colors.surface,
+      in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.82), lineWidth: 1)
+    }
+    .padding(.horizontal, MacDesignTokens.Spacing.small)
+    .padding(.vertical, MacDesignTokens.Spacing.small)
   }
 
   private func sidebarEmptyState(icon: String, text: String) -> some View {
@@ -1012,11 +1197,14 @@ private struct MacSidebarView: View {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(.secondary)
 
-      TextField("Search conversations", text: $searchText)
+      TextField(
+        canUseFullTextSearch ? "Search chats and messages" : "Search chat titles",
+        text: $searchText
+      )
         .textFieldStyle(.plain)
         .focused($searchFocused)
 
-      if chats.isSearching {
+      if canUseFullTextSearch && chats.isSearching {
         ProgressView()
           .controlSize(.mini)
       } else if !searchText.isEmpty {

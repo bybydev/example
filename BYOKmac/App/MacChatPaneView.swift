@@ -911,7 +911,9 @@ private struct MacTranscriptView: View {
                       mcp: mcp,
                       conversationID: conversationID,
                       message: message,
-                      failureContext: failureContextLabel(for: message, accountsByID: accountsByID)
+                      failureContext: failureContextLabel(for: message, accountsByID: accountsByID),
+                      chooseTarget: chooseTarget,
+                      manageProviders: manageProviders
                     )
 
                     if message.role == .assistant,

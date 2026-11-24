@@ -197,6 +197,147 @@ struct MacProAccessTests {
         == MacAppThemeID.githubDarkDimmed.rawValue
     )
   }
+
+  @Test("MacProFeature includes themes and chatSearch with stable IDs and analytics dimensions")
+  func proFeatureCatalogAndAnalyticsDimensions() {
+    let all = MacProFeature.allCases
+    #expect(all.count == 6)
+    #expect(all.contains(.themes))
+    #expect(all.contains(.chatSearch))
+    #expect(all.contains(.providerAccounts))
+    #expect(all.contains(.projects))
+    #expect(all.contains(.mcpServers))
+    #expect(all.contains(.analytics))
+    #expect(Set(all.map(\.id)).count == all.count)
+
+    for feature in all {
+      #expect(feature.id == feature.rawValue)
+    }
+
+    #expect(MacAppAnalytics.Dimension(feature: .themes) == .themes)
+    #expect(MacAppAnalytics.Dimension(feature: .chatSearch) == .chatSearch)
+    #expect(MacAppAnalytics.Dimension(feature: .providerAccounts) == .providers)
+    #expect(MacAppAnalytics.Dimension(feature: .projects) == .projects)
+    #expect(MacAppAnalytics.Dimension(feature: .mcpServers) == .mcp)
+    #expect(MacAppAnalytics.Dimension(feature: .analytics) == .analyticsHistory)
+  }
+
+  @Test("Full-text chat search requires BYOK Pro and respects checking state")
+  func chatSearchDecisions() {
+    #expect(!MacProAccess.canUseChatSearch(hasPro: false))
+    #expect(MacProAccess.canUseChatSearch(hasPro: true))
+
+    #expect(MacProAccess.chatSearchDecision(entitlement: .free) == .requiresPro)
+    #expect(MacProAccess.chatSearchDecision(entitlement: .checking) == .checking)
+    #expect(MacProAccess.chatSearchDecision(entitlement: .pro) == .allowed)
+  }
+
+  @Test("Theme decisions allow GitHub themes for Free and gate Pro themes cleanly")
+  func themeDecisions() {
+    #expect(!MacThemeFoundation.isProTheme(.githubLight))
+    #expect(!MacThemeFoundation.isProTheme(.githubDarkDimmed))
+    #expect(MacThemeFoundation.isFreeTheme(.githubLight))
+    #expect(MacThemeFoundation.isFreeTheme(.githubDarkDimmed))
+    #expect(MacThemeFoundation.isProTheme(.midnight))
+    #expect(MacThemeFoundation.isProTheme(.system))
+
+    #expect(MacProAccess.canUseTheme(.githubLight, hasPro: false))
+    #expect(MacProAccess.canUseTheme(.githubDarkDimmed, hasPro: false))
+    #expect(!MacProAccess.canUseTheme(.midnight, hasPro: false))
+    #expect(MacProAccess.canUseTheme(.midnight, hasPro: true))
+
+    #expect(MacProAccess.themeDecision(.githubLight, entitlement: .free) == .allowed)
+    #expect(MacProAccess.themeDecision(.githubDarkDimmed, entitlement: .free) == .allowed)
+    #expect(MacProAccess.themeDecision(.githubLight, entitlement: .checking) == .allowed)
+    #expect(MacProAccess.themeDecision(.githubDarkDimmed, entitlement: .pro) == .allowed)
+
+    #expect(MacProAccess.themeDecision(.midnight, entitlement: .free) == .requiresPro)
+    #expect(MacProAccess.themeDecision(.midnight, entitlement: .checking) == .checking)
+    #expect(MacProAccess.themeDecision(.midnight, entitlement: .pro) == .allowed)
+    #expect(MacProAccess.themeDecision(.system, entitlement: .free) == .requiresPro)
+    #expect(MacProAccess.themeDecision(.system, entitlement: .checking) == .checking)
+    #expect(MacProAccess.themeDecision(.system, entitlement: .pro) == .allowed)
+  }
+
+  @Test("Every Pro feature provides complete Free-vs-Pro upsell metadata")
+  func upsellMetadataCompleteness() {
+    for feature in MacProFeature.allCases {
+      let content = feature.upsellContent
+      #expect(!content.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      #expect(!content.headline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      #expect(!content.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      #expect(!content.systemImage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      #expect(content.comparisonTitle == "Free vs Pro")
+      #expect(!content.comparisonFootnote.isEmpty)
+      #expect(content.primaryActionTitle == "See BYOK Pro Plans")
+      #expect(content.secondaryActionTitle == "Not Now")
+      #expect(content.rows.count == MacProFeature.allCases.count)
+
+      let highlighted = content.rows.filter(\.isHighlighted)
+      #expect(highlighted.count == 1)
+      #expect(highlighted.first?.id == feature.id)
+
+      for row in content.rows {
+        #expect(!row.feature.isEmpty)
+        #expect(!row.freeValue.isEmpty)
+        #expect(!row.proValue.isEmpty)
+        #expect(!row.systemImage.isEmpty)
+      }
+    }
+  }
+
+  @Test("MacProGateCenter separates contextual upsell requests from paywall opens")
+  func gateCenterUpsellCoordination() {
+    let gate = MacProGateCenter()
+    #expect(gate.requestID == 0)
+    #expect(gate.upsellRequestID == 0)
+    #expect(gate.feature == nil)
+    #expect(gate.claimPendingUpsell() == nil)
+
+    gate.request(.chatSearch)
+    #expect(gate.feature == .chatSearch)
+    #expect(gate.upsellRequestID == 1)
+    #expect(gate.requestID == 0)
+    #expect(gate.claimPendingUpsell() == .chatSearch)
+    #expect(gate.claimPendingUpsell() == nil)
+
+    gate.request(.themes)
+    #expect(gate.feature == .themes)
+    #expect(gate.upsellRequestID == 2)
+    #expect(gate.requestID == 0)
+    #expect(gate.claimPendingUpsell() == .themes)
+
+    gate.openPaywall()
+    #expect(gate.requestID == 1)
+  }
+
+  @Test("Free title search filters titles case- and diacritic-insensitively without message deep links")
+  func freeLocalTitleSearch() {
+    let conversations = [
+      ChatConversation(
+        id: ConversationID(rawValue: "c1"),
+        title: "Café Architecture Notes",
+        providerID: "openai",
+        accountID: "acct-1",
+        modelID: "gpt-4o"
+      ),
+      ChatConversation(
+        id: ConversationID(rawValue: "c2"),
+        title: "Swift Concurrency Review",
+        providerID: "openai",
+        accountID: "acct-1",
+        modelID: "gpt-4o"
+      ),
+    ]
+
+    #expect(MacSidebarSearchSupport.titleMatches(for: "   ", in: conversations).isEmpty)
+
+    let matches = MacSidebarSearchSupport.titleMatches(for: "cafe", in: conversations)
+    #expect(matches.count == 1)
+    #expect(matches.first?.conversationID == ConversationID(rawValue: "c1"))
+    #expect(matches.first?.messageID == nil)
+    #expect(matches.first?.role == .title)
+  }
 }
 
 @Suite("macOS Library feature")

@@ -10,6 +10,8 @@ struct MacRichMessageView: View {
   let conversationID: ConversationID?
   let storedMessage: ChatMessage
   let failureContext: String?
+  let chooseTarget: (() -> Void)?
+  let manageProviders: (() -> Void)?
 
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(MacWorkspaceModel.self) private var workspace
@@ -26,7 +28,9 @@ struct MacRichMessageView: View {
     mcp: MacMCPModel,
     conversationID: ConversationID?,
     message: ChatMessage,
-    failureContext: String? = nil
+    failureContext: String? = nil,
+    chooseTarget: (() -> Void)? = nil,
+    manageProviders: (() -> Void)? = nil
   ) {
     _providers = Bindable(wrappedValue: providers)
     _chats = Bindable(wrappedValue: chats)
@@ -34,6 +38,8 @@ struct MacRichMessageView: View {
     self.conversationID = conversationID
     storedMessage = message
     self.failureContext = failureContext
+    self.chooseTarget = chooseTarget
+    self.manageProviders = manageProviders
   }
 
   private struct LiveRendering: Equatable {
@@ -105,7 +111,11 @@ struct MacRichMessageView: View {
     .sheet(isPresented: $showingEdit) {
       if let conversationID {
         MacEditAndResendView(
+          chats: chats,
+          conversationID: conversationID,
           original: message.content,
+          chooseTarget: chooseTarget,
+          manageProviders: manageProviders,
           save: { value in
             await chats.editAndResend(
               conversationID: conversationID,
@@ -619,8 +629,58 @@ private struct MacReasoningDisclosure: View {
   }
 }
 
+nonisolated enum MacEditAndResendGuard {
+  enum BlockReason: Equatable, Sendable {
+    case configurationIssue(String)
+    case generating
+    case empty
+    case unchanged
+  }
+
+  static func blockReason(
+    draft: String,
+    original: String,
+    configurationIssue: MacChatConfigurationIssue? = nil,
+    isGenerating: Bool = false
+  ) -> BlockReason? {
+    if let configurationIssue {
+      return .configurationIssue(configurationIssue.message)
+    }
+    if isGenerating {
+      return .generating
+    }
+    let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedDraft.isEmpty else {
+      return .empty
+    }
+    let trimmedOriginal = original.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmedDraft != trimmedOriginal else {
+      return .unchanged
+    }
+    return nil
+  }
+
+  static func canResend(
+    draft: String,
+    original: String,
+    configurationIssue: MacChatConfigurationIssue? = nil,
+    isGenerating: Bool = false
+  ) -> Bool {
+    blockReason(
+      draft: draft,
+      original: original,
+      configurationIssue: configurationIssue,
+      isGenerating: isGenerating
+    ) == nil
+  }
+}
+
 private struct MacEditAndResendView: View {
+  @Bindable var chats: MacChatSessionModel
+  let conversationID: ConversationID
   let original: String
+  let chooseTarget: (() -> Void)?
+  let manageProviders: (() -> Void)?
   let save: (String) async -> Bool
 
   @Environment(\.dismiss) private var dismiss
@@ -628,10 +688,42 @@ private struct MacEditAndResendView: View {
   @State private var isSaving = false
   @FocusState private var focused: Bool
 
-  init(original: String, save: @escaping (String) async -> Bool) {
+  init(
+    chats: MacChatSessionModel,
+    conversationID: ConversationID,
+    original: String,
+    chooseTarget: (() -> Void)? = nil,
+    manageProviders: (() -> Void)? = nil,
+    save: @escaping (String) async -> Bool
+  ) {
+    _chats = Bindable(wrappedValue: chats)
+    self.conversationID = conversationID
     self.original = original
+    self.chooseTarget = chooseTarget
+    self.manageProviders = manageProviders
     self.save = save
     _text = State(initialValue: original)
+  }
+
+  private var configurationIssue: MacChatConfigurationIssue? {
+    chats.configurationIssue(for: conversationID)
+  }
+
+  private var isGenerating: Bool {
+    chats.isGenerating(conversationID)
+  }
+
+  private var blockReason: MacEditAndResendGuard.BlockReason? {
+    MacEditAndResendGuard.blockReason(
+      draft: text,
+      original: original,
+      configurationIssue: configurationIssue,
+      isGenerating: isGenerating
+    )
+  }
+
+  private var canResend: Bool {
+    blockReason == nil && !isSaving
   }
 
   var body: some View {
@@ -641,6 +733,20 @@ private struct MacEditAndResendView: View {
       Text("Messages after this turn will be replaced by the new response.")
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      if let issue = configurationIssue {
+        warningBanner(
+          title: "Chat configuration needs attention",
+          message: issue.message,
+          issue: issue
+        )
+      } else if isGenerating {
+        warningBanner(
+          title: "Generation in progress",
+          message: "Wait for the current response to finish before editing and resending.",
+          issue: nil
+        )
+      }
 
       TextEditor(text: $text)
         .font(.system(size: 14))
@@ -653,23 +759,78 @@ private struct MacEditAndResendView: View {
             .stroke(Color.primary.opacity(0.12), lineWidth: 1)
         }
 
-      HStack {
+      HStack(spacing: 10) {
+        if blockReason == .unchanged {
+          Text("Edit the message before resending.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
         Spacer()
         Button("Cancel") { dismiss() }
           .keyboardShortcut(.cancelAction)
         Button("Resend") { commit() }
           .keyboardShortcut(.defaultAction)
-          .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+          .disabled(!canResend)
       }
     }
     .padding(20)
-    .frame(width: 560, height: 320)
+    .frame(width: 560, minHeight: 320)
     .onAppear { focused = true }
   }
 
+  private func warningBanner(
+    title: String,
+    message: String,
+    issue: MacChatConfigurationIssue?
+  ) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.orange)
+        .padding(.top, 1)
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Text(message)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Spacer(minLength: 8)
+
+      if let issue {
+        if issue.prefersProviderRepair, let manageProviders {
+          Button("Fix Connection") {
+            dismiss()
+            manageProviders()
+          }
+          .controlSize(.small)
+        } else if let chooseTarget {
+          Button("Switch Model") {
+            dismiss()
+            chooseTarget()
+          }
+          .controlSize(.small)
+        }
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(Color.orange.opacity(0.35), lineWidth: 0.75)
+    }
+  }
+
   private func commit() {
+    guard canResend else { return }
     let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty, !isSaving else { return }
+    guard !value.isEmpty else { return }
     isSaving = true
     Task { @MainActor in
       if await save(value) {

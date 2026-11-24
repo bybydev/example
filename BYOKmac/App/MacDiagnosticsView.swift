@@ -3,6 +3,146 @@ import BYOKchatProviderCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+nonisolated enum MacDiagnosticsSupport: Sendable {
+  private struct SanitizedExportEnvelope: Decodable {
+    var events: [SanitizedExportEvent]
+  }
+
+  private struct SanitizedExportEvent: Decodable {
+    var id: String
+    var timestamp: Date
+    var dataClass: String
+    var category: String
+    var name: String
+    var severity: String
+    var outcome: String?
+    var conversationID: String?
+    var messageID: String?
+    var providerID: String?
+    var accountID: String?
+    var modelID: String?
+    var durationMilliseconds: Double?
+    var timeToFirstTokenMilliseconds: Double?
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var cachedInputTokens: Int?
+    var reasoningTokens: Int?
+    var modelRequestCount: Int?
+    var toolCallCount: Int?
+    var httpStatus: Int?
+    var errorCode: String?
+    var metadata: [String: String]
+  }
+
+  static func canClearAllTelemetry(_ statistics: TelemetryStoreStatistics) -> Bool {
+    statistics.eventCount > 0 || statistics.rollupRowCount > 0
+  }
+
+  static func categoryDisplayTitle(_ category: TelemetryCategory) -> String {
+    switch category {
+    case .mcp:
+      "MCP"
+    default:
+      category.rawValue.capitalized
+    }
+  }
+
+  static func eventShareText(for event: TelemetryEvent) -> String {
+    let categoryTitle = categoryDisplayTitle(event.category)
+    if let sanitized = sanitizedEvent(from: event) {
+      let timestampText = ISO8601DateFormatter().string(from: sanitized.timestamp)
+      var lines = [
+        timestampText,
+        "\(sanitized.severity.uppercased()) · \(categoryTitle) · \(sanitized.name)",
+        "Data class: \(sanitized.dataClass.capitalized)",
+        "Category: \(categoryTitle)",
+      ]
+      if let outcome = sanitized.outcome {
+        lines.append("Outcome: \(outcome.capitalized)")
+      }
+      if let providerID = sanitized.providerID {
+        lines.append("Provider: \(providerID)")
+      }
+      if let accountID = sanitized.accountID {
+        lines.append("Account: \(accountID)")
+      }
+      if let modelID = sanitized.modelID {
+        lines.append("Model: \(modelID)")
+      }
+      if let conversationID = sanitized.conversationID {
+        lines.append("Conversation: \(conversationID)")
+      }
+      if let messageID = sanitized.messageID {
+        lines.append("Message: \(messageID)")
+      }
+      if let duration = sanitized.durationMilliseconds {
+        lines.append("Duration: \(formatMilliseconds(duration))")
+      }
+      if let ttft = sanitized.timeToFirstTokenMilliseconds {
+        lines.append("First token: \(formatMilliseconds(ttft))")
+      }
+      if let inputTokens = sanitized.inputTokens {
+        lines.append("Input tokens: \(inputTokens)")
+      }
+      if let outputTokens = sanitized.outputTokens {
+        lines.append("Output tokens: \(outputTokens)")
+      }
+      if let cachedInputTokens = sanitized.cachedInputTokens {
+        lines.append("Cached input tokens: \(cachedInputTokens)")
+      }
+      if let reasoningTokens = sanitized.reasoningTokens {
+        lines.append("Reasoning tokens: \(reasoningTokens)")
+      }
+      if let modelRequestCount = sanitized.modelRequestCount {
+        lines.append("Model requests: \(modelRequestCount)")
+      }
+      if let toolCallCount = sanitized.toolCallCount {
+        lines.append("Tool calls: \(toolCallCount)")
+      }
+      if let status = sanitized.httpStatus {
+        lines.append("HTTP status: \(status)")
+      }
+      if let errorCode = sanitized.errorCode {
+        lines.append("Error: \(errorCode)")
+      }
+      if !sanitized.metadata.isEmpty {
+        lines.append("Metadata:")
+        for key in sanitized.metadata.keys.sorted() {
+          if let value = sanitized.metadata[key] {
+            lines.append("  \(key): \(value)")
+          }
+        }
+      }
+      return lines.joined(separator: "\n")
+    }
+
+    var fallbackLines = [TelemetryDiagnostics.text(for: event)]
+    if let modelRequestCount = event.modelRequestCount, modelRequestCount >= 0 {
+      fallbackLines.append("Model requests: \(modelRequestCount)")
+    }
+    if let toolCallCount = event.toolCallCount, toolCallCount >= 0 {
+      fallbackLines.append("Tool calls: \(toolCallCount)")
+    }
+    return fallbackLines
+      .joined(separator: "\n")
+      .replacingOccurrences(of: " · \(event.category.rawValue) · ", with: " · \(categoryTitle) · ")
+  }
+
+  private static func sanitizedEvent(from event: TelemetryEvent) -> SanitizedExportEvent? {
+    guard let data = try? TelemetryDiagnostics.exportJSON(events: [event]) else { return nil }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return (try? decoder.decode(SanitizedExportEnvelope.self, from: data))?.events.first
+  }
+
+  private static func formatMilliseconds(_ value: Double) -> String {
+    if value >= 1_000 {
+      return String(format: "%.2f s", value / 1_000)
+    }
+    return String(format: "%.1f ms", value)
+  }
+}
+
 struct MacDiagnosticsView: View {
   @Bindable var diagnostics: MacDiagnosticsModel
 
@@ -61,6 +201,7 @@ struct MacDiagnosticsView: View {
             LabeledContent("Events", value: diagnostics.statistics.eventCount.formatted())
             LabeledContent("Analytics", value: diagnostics.statistics.analyticsEventCount.formatted())
             LabeledContent("Diagnostic", value: diagnostics.statistics.diagnosticEventCount.formatted())
+            LabeledContent("Daily rollups", value: diagnostics.statistics.rollupRowCount.formatted())
             LabeledContent(
               "Database",
               value: ByteCountFormatter.string(fromByteCount: diagnostics.statistics.databaseBytes, countStyle: .file)
@@ -105,7 +246,10 @@ struct MacDiagnosticsView: View {
             Button("Clear All Telemetry", systemImage: "trash", role: .destructive) {
               confirmClearAll = true
             }
-            .disabled(diagnostics.isBusy || diagnostics.statistics.eventCount == 0)
+            .disabled(
+              diagnostics.isBusy
+                || !MacDiagnosticsSupport.canClearAllTelemetry(diagnostics.statistics)
+            )
 
             Text("Clearing telemetry never deletes conversations, usage/billing metadata, credentials, projects, Library items, or provider configuration.")
               .font(.caption)
@@ -252,7 +396,7 @@ private struct MacTelemetryLogsView: View {
           .width(min: 180, ideal: 280)
 
           TableColumn("Category") { event in
-            Text(event.category.rawValue.capitalized)
+            Text(MacDiagnosticsSupport.categoryDisplayTitle(event.category))
           }
           .width(min: 80, ideal: 100)
 
@@ -349,7 +493,7 @@ private struct MacTelemetryFilterView: View {
           Picker("Category", selection: categorySelection) {
             Text("All").tag("")
             ForEach(TelemetryCategory.allCases, id: \.rawValue) { value in
-              Text(value.rawValue.capitalized).tag(value.rawValue)
+              Text(MacDiagnosticsSupport.categoryDisplayTitle(value)).tag(value.rawValue)
             }
           }
           Picker("Severity", selection: severitySelection) {
@@ -451,10 +595,17 @@ private struct MacTelemetryEventDetailView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 10) {
         Text(eventTitle(event.name.rawValue))
           .font(.headline)
         Spacer()
+        ShareLink(
+          item: MacDiagnosticsSupport.eventShareText(for: event),
+          subject: Text("BYOK Diagnostic Event"),
+          message: Text("Sanitized local telemetry event")
+        ) {
+          Label("Share", systemImage: "square.and.arrow.up")
+        }
         Button("Copy JSON") { copyJSON() }
         Button("Done") { dismiss() }
           .keyboardShortcut(.cancelAction)
@@ -467,7 +618,7 @@ private struct MacTelemetryEventDetailView: View {
         Section("Event") {
           LabeledContent("Timestamp", value: event.timestamp.formatted(date: .abbreviated, time: .standard))
           LabeledContent("Data class", value: event.dataClass.rawValue.capitalized)
-          LabeledContent("Category", value: event.category.rawValue.capitalized)
+          LabeledContent("Category", value: MacDiagnosticsSupport.categoryDisplayTitle(event.category))
           LabeledContent("Severity", value: event.severity.rawValue.capitalized)
           if let outcome = event.outcome {
             LabeledContent("Outcome", value: outcome.rawValue.capitalized)
@@ -505,6 +656,17 @@ private struct MacTelemetryEventDetailView: View {
             if let value = event.outputTokens { LabeledContent("Output", value: value.formatted()) }
             if let value = event.cachedInputTokens { LabeledContent("Cached input", value: value.formatted()) }
             if let value = event.reasoningTokens { LabeledContent("Reasoning", value: value.formatted()) }
+          }
+        }
+
+        if event.modelRequestCount != nil || event.toolCallCount != nil {
+          Section("Requests & Tools") {
+            if let value = event.modelRequestCount {
+              LabeledContent("Model requests", value: value.formatted())
+            }
+            if let value = event.toolCallCount {
+              LabeledContent("Tool calls", value: value.formatted())
+            }
           }
         }
 

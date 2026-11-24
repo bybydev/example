@@ -229,14 +229,6 @@ enum MacPurchaseStore {
 
   static let features: [PurchaseFeature] = [
     PurchaseFeature(
-      id: "themes",
-      systemImage: "paintpalette.fill",
-      title: "All themes",
-      message: "GitHub Dark Dimmed and GitHub Light are free. Pro unlocks every MAF theme.",
-      freeValue: "2 GitHub themes",
-      proValue: "All themes"
-    ),
-    PurchaseFeature(
       id: "provider-accounts",
       systemImage: "key.horizontal.fill",
       title: "Unlimited provider accounts",
@@ -267,6 +259,22 @@ enum MacPurchaseStore {
       message: "All analytics features are free for today. Pro unlocks 7-day, 30-day, monthly, and all-time history.",
       freeValue: "Today",
       proValue: "All date ranges"
+    ),
+    PurchaseFeature(
+      id: "chat-search",
+      systemImage: "magnifyingglass",
+      title: "Full-text chat search",
+      message: "Search chat titles for free. Pro unlocks fast full-text search across every message and attachment name.",
+      freeValue: "Titles",
+      proValue: "Full-text search"
+    ),
+    PurchaseFeature(
+      id: "themes",
+      systemImage: "paintpalette.fill",
+      title: "All themes",
+      message: "GitHub Light and GitHub Dark Dimmed are free. Pro unlocks every built-in theme.",
+      freeValue: "2 GitHub themes",
+      proValue: "All themes"
     ),
   ]
 
@@ -325,7 +333,7 @@ enum MacPurchaseStore {
 
   static let paywallConfiguration = ProPaywallConfiguration(
     title: "BYOK Pro",
-    subtitle: "Unlock every theme, unlimited configurations, and your full analytics history.",
+    subtitle: "Unlock every theme, full-text search, unlimited configurations, and your full analytics history.",
     highlightedProductID: yearlyProductID,
     highlightedProductBadge: "BEST VALUE",
     termsURL: termsURL,
@@ -358,11 +366,165 @@ enum MacPurchaseStore {
   #endif
 }
 
-enum MacProFeature: String, Sendable {
+struct MacProComparisonRow: Identifiable, Equatable, Sendable {
+  let id: String
+  let systemImage: String
+  let feature: String
+  let freeValue: String
+  let proValue: String
+  let isHighlighted: Bool
+}
+
+struct MacProUpsellContent: Equatable, Sendable {
+  let title: String
+  let headline: String
+  let summary: String
+  let systemImage: String
+  let comparisonTitle: String
+  let comparisonFootnote: String
+  let rows: [MacProComparisonRow]
+  let primaryActionTitle: String
+  let secondaryActionTitle: String
+}
+
+enum MacProFeature: String, CaseIterable, Identifiable, Sendable {
   case providerAccounts
   case projects
   case mcpServers
   case analytics
+  case chatSearch
+  case themes
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .providerAccounts:
+      "Provider Accounts"
+    case .projects:
+      "Projects"
+    case .mcpServers:
+      "MCP Servers"
+    case .analytics:
+      "Analytics History"
+    case .chatSearch:
+      "Full-Text Chat Search"
+    case .themes:
+      "All Themes"
+    }
+  }
+
+  var headline: String {
+    switch self {
+    case .providerAccounts:
+      "Free includes 1 connection"
+    case .projects:
+      "Free includes 1 project"
+    case .mcpServers:
+      "Free includes 1 MCP server"
+    case .analytics:
+      "Unlock analytics history"
+    case .chatSearch:
+      "Unlock full-text chat search"
+    case .themes:
+      "Unlock every theme"
+    }
+  }
+
+  var summary: String {
+    switch self {
+    case .providerAccounts:
+      "Keep your existing connection, or upgrade to BYOK Pro to add unlimited cloud, local, and custom provider accounts."
+    case .projects:
+      "Keep your existing project, or upgrade to BYOK Pro to organize chats, sources, prompts, and tool defaults across unlimited projects."
+    case .mcpServers:
+      "Keep your existing server, or upgrade to BYOK Pro to connect unlimited remote MCP servers."
+    case .analytics:
+      "Every analytics view is free for today. Upgrade to BYOK Pro to explore usage, cost, performance, and reliability across 7-day, 30-day, monthly, and all-time history."
+    case .chatSearch:
+      "Search chat titles for free. Upgrade to BYOK Pro for fast full-text search across every message and attachment name in your history."
+    case .themes:
+      "GitHub Light and GitHub Dark Dimmed are free. Upgrade to BYOK Pro to unlock every built-in macOS theme."
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .providerAccounts:
+      "key.horizontal.fill"
+    case .projects:
+      "folder.fill"
+    case .mcpServers:
+      "shippingbox.fill"
+    case .analytics:
+      "chart.bar.xaxis"
+    case .chatSearch:
+      "magnifyingglass"
+    case .themes:
+      "paintpalette.fill"
+    }
+  }
+
+  var freeComparisonValue: String {
+    switch self {
+    case .providerAccounts:
+      "1 connection"
+    case .projects:
+      "1 project"
+    case .mcpServers:
+      "1 server"
+    case .analytics:
+      "Today"
+    case .chatSearch:
+      "Titles only"
+    case .themes:
+      "2 GitHub themes"
+    }
+  }
+
+  var proComparisonValue: String {
+    switch self {
+    case .providerAccounts:
+      "Unlimited"
+    case .projects:
+      "Unlimited"
+    case .mcpServers:
+      "Unlimited"
+    case .analytics:
+      "All date ranges"
+    case .chatSearch:
+      "Full-text search"
+    case .themes:
+      "All themes"
+    }
+  }
+
+  var comparisonRows: [MacProComparisonRow] {
+    Self.allCases.map { item in
+      MacProComparisonRow(
+        id: item.id,
+        systemImage: item.systemImage,
+        feature: item.title,
+        freeValue: item.freeComparisonValue,
+        proValue: item.proComparisonValue,
+        isHighlighted: item == self
+      )
+    }
+  }
+
+  var upsellContent: MacProUpsellContent {
+    MacProUpsellContent(
+      title: title,
+      headline: headline,
+      summary: summary,
+      systemImage: systemImage,
+      comparisonTitle: "Free vs Pro",
+      comparisonFootnote: "Saved data is always preserved if Pro expires; access to Pro-only features and historical analytics is locked.",
+      rows: comparisonRows,
+      primaryActionTitle: "See BYOK Pro Plans",
+      secondaryActionTitle: "Not Now"
+    )
+  }
 }
 
 @MainActor
@@ -370,21 +532,35 @@ enum MacProFeature: String, Sendable {
 final class MacProGateCenter {
   static let shared = MacProGateCenter()
 
+  /// Observed by `BYOKmacApp` to open `MacWindowID.proPaywall`. Only incremented
+  /// when the user chooses to view Pro plans or an explicit paywall open is requested.
   private(set) var requestID = 0
+  /// Observed by active windows/sheets to present the contextual `MacProUpsellSheet`
+  /// before opening the paywall window.
+  private(set) var upsellRequestID = 0
   private(set) var feature: MacProFeature?
 
-  private init() {}
+  @ObservationIgnored private var handledUpsellRequestID = 0
+
+  init() {}
 
   func request(_ feature: MacProFeature) {
-    let dimension: MacAppAnalytics.Dimension
-    switch feature {
-    case .providerAccounts: dimension = .providers
-    case .projects: dimension = .projects
-    case .mcpServers: dimension = .mcp
-    case .analytics: dimension = .analyticsHistory
-    }
-    MacAppAnalytics.track(.upgradeRequested, dimension: dimension)
+    MacAppAnalytics.track(.upgradeRequested, dimension: .init(feature: feature))
     self.feature = feature
+    upsellRequestID &+= 1
+  }
+
+  /// Atomically claims the latest pending contextual upsell so only one open
+  /// window presents `MacProUpsellSheet` for a given request.
+  func claimPendingUpsell() -> MacProFeature? {
+    guard handledUpsellRequestID != upsellRequestID, let feature else {
+      return nil
+    }
+    handledUpsellRequestID = upsellRequestID
+    return feature
+  }
+
+  func openPaywall() {
     requestID &+= 1
   }
 }
@@ -419,6 +595,46 @@ enum MacProAccess {
 
   static func canCreateMCPServer(currentCount: Int, hasPro: Bool) -> Bool {
     BYOKProPolicy.canCreateMCPServer(currentCount: currentCount, hasPro: hasPro)
+  }
+
+  static func canUseChatSearch(hasPro: Bool) -> Bool {
+    BYOKProPolicy.canUseFullTextSearch(hasPro: hasPro)
+  }
+
+  static func canUseTheme(_ themeID: MacAppThemeID, hasPro: Bool) -> Bool {
+    hasPro || !MacThemeFoundation.isProTheme(themeID)
+  }
+
+  static func chatSearchDecision(
+    entitlement: MacProEntitlementAccess? = nil
+  ) -> MacProGateDecision {
+    let access = entitlement ?? entitlementAccess
+    switch access {
+    case .pro:
+      return .allowed
+    case .checking:
+      return .checking
+    case .free:
+      return .requiresPro
+    }
+  }
+
+  static func themeDecision(
+    _ themeID: MacAppThemeID,
+    entitlement: MacProEntitlementAccess? = nil
+  ) -> MacProGateDecision {
+    if !MacThemeFoundation.isProTheme(themeID) {
+      return .allowed
+    }
+    let access = entitlement ?? entitlementAccess
+    switch access {
+    case .pro:
+      return .allowed
+    case .checking:
+      return .checking
+    case .free:
+      return .requiresPro
+    }
   }
 
   static func providerAccountCapacityDecision(
@@ -533,6 +749,225 @@ enum MacProAccess {
       MacProGateCenter.shared.request(feature)
       return false
     }
+  }
+}
+
+struct MacProUpsellSheet: View {
+  let feature: MacProFeature
+  var onSeePlans: (() -> Void)? = nil
+
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.openWindow) private var openWindow
+  @Environment(PurchaseManager.self) private var purchaseManager: PurchaseManager?
+
+  private var content: MacProUpsellContent {
+    feature.upsellContent
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      header
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+
+      Divider()
+
+      comparisonSection
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+
+      Divider()
+
+      footer
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+    .frame(width: 500)
+    .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: purchaseManager?.hasPro ?? false) { _, hasPro in
+      if hasPro {
+        dismiss()
+      }
+    }
+  }
+
+  private var header: some View {
+    HStack(alignment: .top, spacing: 14) {
+      Image(systemName: content.systemImage)
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+        .frame(width: 44, height: 44)
+        .background(
+          MacDesignTokens.Colors.accentSoft,
+          in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+        )
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 5) {
+          Image(systemName: "crown.fill")
+            .font(.system(size: 10, weight: .semibold))
+          Text("BYOK PRO")
+            .font(.system(size: 10.5, weight: .bold))
+            .tracking(0.8)
+        }
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+
+        Text(content.headline)
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+
+        Text(content.summary)
+          .font(.callout)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private var comparisonSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(content.comparisonTitle)
+        .font(.system(size: 12.5, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+
+      VStack(spacing: 0) {
+        HStack(spacing: 12) {
+          Text("Feature")
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Text("Free")
+            .frame(width: 102, alignment: .trailing)
+          Text("Pro")
+            .frame(width: 112, alignment: .trailing)
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+
+        Rectangle()
+          .fill(MacDesignTokens.Colors.separator.opacity(0.75))
+          .frame(height: 1)
+
+        ForEach(Array(content.rows.enumerated()), id: \.element.id) { index, row in
+          if index > 0 {
+            Rectangle()
+              .fill(MacDesignTokens.Colors.separator.opacity(0.45))
+              .frame(height: 1)
+          }
+
+          HStack(spacing: 12) {
+            HStack(spacing: 8) {
+              Image(systemName: row.systemImage)
+                .font(.system(size: 12, weight: row.isHighlighted ? .semibold : .medium))
+                .foregroundStyle(
+                  row.isHighlighted
+                    ? MacDesignTokens.Colors.accent
+                    : MacDesignTokens.Colors.textMuted
+                )
+                .frame(width: 16)
+
+              Text(row.feature)
+                .font(.system(size: 12.5, weight: row.isHighlighted ? .semibold : .regular))
+                .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(row.freeValue)
+              .font(.system(size: 12))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+              .frame(width: 102, alignment: .trailing)
+
+            Text(row.proValue)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(
+                row.isHighlighted
+                  ? MacDesignTokens.Colors.accent
+                  : MacDesignTokens.Colors.textPrimary
+              )
+              .lineLimit(1)
+              .frame(width: 112, alignment: .trailing)
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 9)
+          .background(
+            row.isHighlighted
+              ? MacDesignTokens.Colors.accentSoft.opacity(0.65)
+              : Color.clear
+          )
+        }
+      }
+      .background(
+        MacDesignTokens.Colors.surface,
+        in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+      )
+      .clipShape(
+        RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: MacDesignTokens.Radius.medium, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.82), lineWidth: 1)
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("BYOK Free and Pro feature comparison")
+
+      Text(content.comparisonFootnote)
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private var footer: some View {
+    HStack(spacing: 10) {
+      Spacer(minLength: 0)
+
+      Button(content.secondaryActionTitle) {
+        dismiss()
+      }
+      .keyboardShortcut(.cancelAction)
+
+      Button(content.primaryActionTitle) {
+        dismiss()
+        if let onSeePlans {
+          onSeePlans()
+        } else {
+          openWindow(id: MacWindowID.proPaywall)
+        }
+      }
+      .buttonStyle(.borderedProminent)
+      .keyboardShortcut(.defaultAction)
+    }
+  }
+}
+
+@MainActor
+private struct MacProUpsellPresenterModifier: ViewModifier {
+  @Environment(MacProGateCenter.self) private var proGateCenter: MacProGateCenter?
+  @Environment(\.controlActiveState) private var controlActiveState
+  @State private var activeFeature: MacProFeature?
+
+  func body(content: Content) -> some View {
+    content
+      .onChange(of: proGateCenter?.upsellRequestID ?? 0) { _, _ in
+        guard controlActiveState == .key,
+          let claimed = proGateCenter?.claimPendingUpsell()
+        else { return }
+        activeFeature = claimed
+      }
+      .sheet(item: $activeFeature) { feature in
+        MacProUpsellSheet(feature: feature)
+      }
+  }
+}
+
+extension View {
+  @MainActor
+  func macProUpsellPresenter() -> some View {
+    modifier(MacProUpsellPresenterModifier())
   }
 }
 

@@ -24,6 +24,14 @@ enum MacThemeFoundation {
 
   static let store = makeStore()
 
+  static func isProTheme(_ themeID: MacAppThemeID) -> Bool {
+    configuration.isProTheme(themeID)
+  }
+
+  static func isFreeTheme(_ themeID: MacAppThemeID) -> Bool {
+    freeThemeIDs.contains(themeID)
+  }
+
   static func makeStore(defaults: UserDefaults = .standard) -> MacAppThemeStore {
     migrateLegacyThemeID(defaults: defaults)
     return MacAppThemeStore(

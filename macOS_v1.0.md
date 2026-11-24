@@ -102,10 +102,10 @@ Prioritized checklist to bring `BYOKmac` to feature parity with `BYOKchat` (iOS)
 
 ## P4 — Polish, Pro Flow & Debug/Diagnostics Parity
 
-- [ ] **Pro Gating & Themes Alignment** (`BYOKmac/App/MacPurchaseStore.swift`, `BYOKmac/App/MacThemeModel.swift`)
+- [x] **Pro Gating & Themes Alignment** (`BYOKmac/App/MacPurchaseStore.swift`, `BYOKmac/App/MacThemeModel.swift`)
   - Add `.themes` and `.chatSearch` (FTS5 gating) to `MacProFeature` + contextual Free-vs-Pro upsell flow before paywall; decide whether to port the 10 custom `BYOKchatThemes` palettes or keep `MacAppFoundation` themes.
-- [ ] **Diagnostics & `#if DEBUG` Developer Tools** (`BYOKmac/App/MacDiagnosticsView.swift`, `BYOKmac/App/BYOKmacApp.swift`)
+- [x] **Diagnostics & `#if DEBUG` Developer Tools** (`BYOKmac/App/MacDiagnosticsView.swift`, `BYOKmac/App/BYOKmacApp.swift`)
   - Diagnostics: show `Daily rollups` count, enable Clear All Telemetry when rollups exist even if `eventCount == 0`, add `Model requests`, `Tool calls`, and `ShareLink` in event detail, fix `"Mcp"` → `"MCP"`.
   - Debug tools (if needed for testing): Provider Console, AI Provider Simulator, Model Catalog Inspector, FTS5 Inspector, Seed Data, and Upsell replays.
-- [ ] **Minor Polish**
+- [x] **Minor Polish**
   - Add `Created`/`Updated` timestamps, inline `Enabled` toggle, and inline URL error message in `MacConnectionEditorView`; group Active vs Disabled accounts/MCP servers; add `Refresh Models` to provider card menu; add `snapshot.refreshedAt` to MCP detail overview; add character-cap collapse (`1_800` chars) & shared `Highlighter` in `MacHighlightedCodeBlock`, `heading4`–`heading6` styles, unchanged-message & broken-config guards in `MacEditAndResendView`, and interactive onboarding demos if desired.

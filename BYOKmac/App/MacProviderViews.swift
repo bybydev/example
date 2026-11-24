@@ -943,6 +943,34 @@ enum MacConnectionEditorRoute: Identifiable {
   }
 }
 
+nonisolated enum MacConnectionURLValidator {
+  static let invalidURLMessage = "Enter a valid URL starting with https:// or http://."
+
+  /// Resolves a draft base URL string for a given `ProviderKind`.
+  /// Empty input returns `nil` for custom OpenAI-compatible servers and the
+  /// provider's default endpoint for built-in providers.
+  static func resolvedEndpoint(for rawURL: String, kind: ProviderKind) -> URL? {
+    let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+      return kind == .openAICompatible ? nil : kind.defaultEndpoint
+    }
+    guard let parsed = URL(string: trimmed),
+      let scheme = parsed.scheme?.lowercased(),
+      scheme == "http" || scheme == "https",
+      let host = parsed.host, !host.isEmpty
+    else { return nil }
+    return kind.normalizedBaseURL(parsed)
+  }
+
+  /// Returns an inline validation error message when a non-empty Base URL fails
+  /// HTTP(S) validation.
+  static func validationError(for rawURL: String, kind: ProviderKind) -> String? {
+    let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return resolvedEndpoint(for: trimmed, kind: kind) == nil ? invalidURLMessage : nil
+  }
+}
+
 struct MacConnectionEditorView: View {
   private enum ConnectionTestState: Equatable {
     case idle
@@ -996,6 +1024,7 @@ struct MacConnectionEditorView: View {
   @State private var seedModelsText: String
   @State private var appTitle: String
   @State private var httpReferer: String
+  @State private var isEnabled: Bool
   @State private var isSaving = false
   @State private var isRevealing = false
   @State private var clearCredential = false
@@ -1077,6 +1106,7 @@ struct MacConnectionEditorView: View {
     _seedModelsText = State(initialValue: (account?.seedModelIDs ?? []).joined(separator: "\n"))
     _appTitle = State(initialValue: account?.metadata["appTitle"] ?? "")
     _httpReferer = State(initialValue: account?.metadata["httpReferer"] ?? "")
+    _isEnabled = State(initialValue: account?.isEnabled ?? true)
     _showingAdvanced = State(initialValue: kind == .openAICompatible || account?.baseURLOverride != nil)
   }
 
@@ -1148,16 +1178,11 @@ struct MacConnectionEditorView: View {
   }
 
   private var resolvedDraftEndpoint: URL? {
-    let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-      return isCustom ? nil : kind.defaultEndpoint
-    }
-    guard let parsed = URL(string: trimmed),
-      let scheme = parsed.scheme?.lowercased(),
-      ["http", "https"].contains(scheme),
-      let host = parsed.host, !host.isEmpty
-    else { return nil }
-    return kind.normalizedBaseURL(parsed)
+    MacConnectionURLValidator.resolvedEndpoint(for: baseURL, kind: kind)
+  }
+
+  private var baseURLValidationError: String? {
+    MacConnectionURLValidator.validationError(for: baseURL, kind: kind)
   }
 
   private var draftDefinition: ProviderDefinition {
@@ -1340,7 +1365,7 @@ struct MacConnectionEditorView: View {
     return true
   }
 
-  private var hasUnsavedChanges: Bool {
+  private var hasNonEnabledUnsavedChanges: Bool {
     let typedModel = manualModelID.trimmingCharacters(in: .whitespacesAndNewlines)
     let resolvedModelID = typedModel.isEmpty ? selectedModelID : ModelID(rawValue: typedModel)
     let manualIDs = manualModels.map { $0.id.rawValue } + (typedModel.isEmpty ? [] : [typedModel])
@@ -1397,6 +1422,11 @@ struct MacConnectionEditorView: View {
     if !manualIDs.isEmpty || discoveredModels != nil { return true }
     if resolvedModelID != initialDefaultModelID { return true }
     return false
+  }
+
+  private var hasUnsavedChanges: Bool {
+    if let existing, isEnabled != existing.isEnabled { return true }
+    return hasNonEnabledUnsavedChanges
   }
 
   var body: some View {
@@ -1477,6 +1507,23 @@ struct MacConnectionEditorView: View {
                     didEditLabel = true
                   }
                 }
+              if !isCreate {
+                Divider()
+                HStack(alignment: .center, spacing: 12) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text("Enabled")
+                      .font(.system(size: 13, weight: .medium))
+                    Text("Disabled connections won't appear in model pickers or new chats.")
+                      .font(.caption)
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  }
+                  Spacer()
+                  Toggle("Enabled", isOn: $isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+              }
             }
           }
 
@@ -1550,18 +1597,13 @@ struct MacConnectionEditorView: View {
             editorCard("Endpoint", systemImage: "network") {
               VStack(alignment: .leading, spacing: 10) {
                 TextField("Base URL", text: $baseURL, prompt: Text("https://example.com/v1"))
+                if let urlError = baseURLValidationError {
+                  Label(urlError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                }
                 TextField("Chat Completions Path", text: $chatPath)
                 TextField("Models Path (blank disables discovery)", text: $modelsPath)
-                if !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  resolvedDraftEndpoint == nil
-                {
-                  Label(
-                    "Enter a valid URL starting with https:// or http://.",
-                    systemImage: "exclamationmark.triangle.fill"
-                  )
-                  .font(.caption)
-                  .foregroundStyle(.red)
-                }
                 Text("HTTP and HTTPS endpoints are accepted, including private LAN and self-hosted servers.")
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -1571,15 +1613,10 @@ struct MacConnectionEditorView: View {
             editorCard("Local Server", systemImage: "network") {
               VStack(alignment: .leading, spacing: 10) {
                 TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
-                if !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  resolvedDraftEndpoint == nil
-                {
-                  Label(
-                    "Enter a valid URL starting with https:// or http://.",
-                    systemImage: "exclamationmark.triangle.fill"
-                  )
-                  .font(.caption)
-                  .foregroundStyle(.red)
+                if let urlError = baseURLValidationError {
+                  Label(urlError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
                 }
                 Text(localServerHint)
                   .font(.caption)
@@ -1607,15 +1644,10 @@ struct MacConnectionEditorView: View {
                 editorCard("Endpoint Override", systemImage: "network") {
                   VStack(alignment: .leading, spacing: 8) {
                     TextField("Base URL Override", text: $baseURL)
-                    if !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      resolvedDraftEndpoint == nil
-                    {
-                      Label(
-                        "Enter a valid URL starting with https:// or http://.",
-                        systemImage: "exclamationmark.triangle.fill"
-                      )
-                      .font(.caption)
-                      .foregroundStyle(.red)
+                    if let urlError = baseURLValidationError {
+                      Label(urlError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                     }
                     Text("Leave unchanged to use the provider default endpoint.")
                       .font(.caption)
@@ -1643,6 +1675,22 @@ struct MacConnectionEditorView: View {
                 TextField("App Title", text: $appTitle)
                 TextField("HTTP Referer", text: $httpReferer)
               }
+            }
+          }
+
+          if let existing {
+            editorCard("Details", systemImage: "info.circle") {
+              VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Created") {
+                  Text(existing.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                }
+                LabeledContent("Updated") {
+                  Text(existing.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                }
+              }
+              .font(.callout)
             }
           }
         }
@@ -2163,28 +2211,40 @@ struct MacConnectionEditorView: View {
         }
 
       case .edit(let accountID):
-        let modelSelectionChanged =
-          !typedModel.isEmpty
-          || resolvedModelID != existing?.defaultModelID
-          || (resolvedModelID == nil && !effectiveRemoved.isEmpty)
-        let succeeded = await model.updateConnection(
-          accountID: accountID,
-          label: label,
-          newCredential: trimmedCredential.isEmpty ? nil : credential,
-          clearCredential: clearCredential,
-          baseURL: isCustom ? baseURL : normalizedBuiltInOverride,
-          headers: headers,
-          metadata: metadata,
-          chatCompletionsPath: isCustom ? chatPath : nil,
-          modelsPath: isCustom ? modelsPath : nil,
-          authChoice: isCustom ? effectiveAuthentication : nil,
-          seedModelIDs: isCustom && !seedModels.isEmpty ? seedModels : nil,
-          defaultModelID: modelSelectionChanged ? resolvedModelID : nil,
-          clearDefaultModel: modelSelectionChanged && resolvedModelID == nil,
-          discoveredModels: preview,
-          manualModelIDs: manualIDs,
-          removedManualModelIDs: effectiveRemoved
-        )
+        let enabledChanged = existing.map { isEnabled != $0.isEnabled } ?? false
+        let otherFieldsChanged = hasNonEnabledUnsavedChanges
+        var succeeded = true
+        if otherFieldsChanged {
+          let modelSelectionChanged =
+            !typedModel.isEmpty
+            || resolvedModelID != existing?.defaultModelID
+            || (resolvedModelID == nil && !effectiveRemoved.isEmpty)
+          succeeded = await model.updateConnection(
+            accountID: accountID,
+            label: label,
+            newCredential: trimmedCredential.isEmpty ? nil : credential,
+            clearCredential: clearCredential,
+            baseURL: isCustom ? baseURL : normalizedBuiltInOverride,
+            headers: headers,
+            metadata: metadata,
+            chatCompletionsPath: isCustom ? chatPath : nil,
+            modelsPath: isCustom ? modelsPath : nil,
+            authChoice: isCustom ? effectiveAuthentication : nil,
+            seedModelIDs: isCustom && !seedModels.isEmpty ? seedModels : nil,
+            defaultModelID: modelSelectionChanged ? resolvedModelID : nil,
+            clearDefaultModel: modelSelectionChanged && resolvedModelID == nil,
+            discoveredModels: preview,
+            manualModelIDs: manualIDs,
+            removedManualModelIDs: effectiveRemoved
+          )
+        }
+        if succeeded, enabledChanged {
+          let priorWarning = model.errorMessage
+          succeeded = await model.setAccountEnabled(isEnabled, accountID: accountID)
+          if succeeded, let priorWarning, !priorWarning.isEmpty, model.errorMessage == nil {
+            model.errorMessage = priorWarning
+          }
+        }
         if succeeded {
           onFinished(accountID)
           dismiss()

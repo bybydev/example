@@ -33,6 +33,7 @@ struct MacSettingsView: View {
     .onChange(of: settingsRouter.requestID) { _, _ in
       consumeRouterRequest()
     }
+    .macProUpsellPresenter()
   }
 
   private var sidebar: some View {
@@ -135,8 +136,7 @@ struct MacSettingsView: View {
         purchaseManager: purchaseManager,
         variant: .compact,
         onUpgrade: {
-          MacAppAnalytics.track(.upgradeRequested, dimension: .themes)
-          openWindow(id: MacWindowID.proPaywall)
+          MacProAccess.requestUpgrade(.themes)
         }
       )
     case .connections:
@@ -552,6 +552,7 @@ private struct MacConnectionSettingsView: View {
     .sheet(isPresented: $showingConnections) {
       if let providers = model.providers {
         MacProviderManagementView(model: providers)
+          .macProUpsellPresenter()
       }
     }
   }
@@ -622,6 +623,7 @@ private struct MacToolsSettingsView: View {
     .sheet(isPresented: $showingServers) {
       if let mcp = model.mcp {
         MacMCPServerListView(mcp: mcp)
+          .macProUpsellPresenter()
       }
     }
   }

@@ -297,6 +297,36 @@ struct MacMarkdownMessageContent: View {
             FontSize(.em(1.14))
           }
       }
+      .heading4 { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.52), bottom: .em(0.24))
+          .markdownTextStyle {
+            FontWeight(.semibold)
+            FontSize(.em(1.02))
+            ForegroundColor(.primary)
+          }
+      }
+      .heading5 { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.48), bottom: .em(0.2))
+          .markdownTextStyle {
+            FontWeight(.semibold)
+            FontSize(.em(0.94))
+            ForegroundColor(.secondary)
+          }
+      }
+      .heading6 { configuration in
+        configuration.label
+          .fixedSize(horizontal: false, vertical: true)
+          .markdownMargin(top: .em(0.44), bottom: .em(0.18))
+          .markdownTextStyle {
+            FontWeight(.semibold)
+            FontSize(.em(0.88))
+            ForegroundColor(.accentColor)
+          }
+      }
       .paragraph { configuration in
         configuration.label
           .fixedSize(horizontal: false, vertical: true)
@@ -1614,6 +1644,56 @@ private extension CGFloat {
 // MARK: - Code Blocks
 
 struct MacHighlightedCodeBlock: View {
+  nonisolated static let collapseLineThreshold = 18
+  nonisolated static let collapseCharacterThreshold = 1_800
+
+  nonisolated struct Preview: Equatable, Sendable {
+    let displayedContent: String
+    let isLong: Bool
+    let lineCount: Int
+    let toggleLabel: String
+  }
+
+  nonisolated static func preview(
+    for content: String,
+    isExpanded: Bool,
+    isStreaming: Bool = false
+  ) -> Preview {
+    let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+    let exceedsLines = lines.count > collapseLineThreshold
+    let exceedsCharacters = content.count > collapseCharacterThreshold
+    let isLong = exceedsLines || exceedsCharacters
+
+    let displayedContent: String
+    if isLong, !isExpanded, !isStreaming {
+      let lineCapped = exceedsLines
+        ? lines.prefix(collapseLineThreshold).joined(separator: "\n")
+        : content
+      let charCapped = lineCapped.count > collapseCharacterThreshold
+        ? String(lineCapped.prefix(collapseCharacterThreshold))
+        : lineCapped
+      displayedContent = charCapped + "\n…"
+    } else {
+      displayedContent = content
+    }
+
+    let toggleLabel: String
+    if isExpanded {
+      toggleLabel = "Show less"
+    } else if exceedsLines {
+      toggleLabel = "Show all \(lines.count) lines"
+    } else {
+      toggleLabel = "Show all"
+    }
+
+    return Preview(
+      displayedContent: displayedContent,
+      isLong: isLong,
+      lineCount: lines.count,
+      toggleLabel: toggleLabel
+    )
+  }
+
   let language: String?
   let content: String
   var isStreaming = false
@@ -1623,27 +1703,14 @@ struct MacHighlightedCodeBlock: View {
   @State private var showFullScreen = false
   @State private var copied = false
 
-  private let collapsedLineLimit = 18
-
-  private var lines: [Substring] {
-    content.split(separator: "\n", omittingEmptySubsequences: false)
-  }
-
-  private var isLong: Bool {
-    lines.count > collapsedLineLimit || content.count > 2_400
-  }
-
-  private var displayedContent: String {
-    guard isLong, !isExpanded, !isStreaming else { return content }
-    return lines.prefix(collapsedLineLimit).joined(separator: "\n") + "\n…"
-  }
-
   private var languageLabel: String {
     let value = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return value.isEmpty ? "CODE" : value.uppercased()
   }
 
   var body: some View {
+    let preview = Self.preview(for: content, isExpanded: isExpanded, isStreaming: isStreaming)
+
     VStack(spacing: 0) {
       HStack(spacing: 8) {
         Circle()
@@ -1680,14 +1747,14 @@ struct MacHighlightedCodeBlock: View {
 
       ScrollView(.horizontal) {
         if isStreaming {
-          Text(displayedContent)
+          Text(preview.displayedContent)
             .font(.system(size: 13, design: .monospaced))
             .fixedSize(horizontal: true, vertical: true)
             .textSelection(.enabled)
             .padding(13)
         } else {
           MacHighlightedCodeText(
-            code: displayedContent,
+            code: preview.displayedContent,
             language: language,
             colorScheme: colorScheme
           )
@@ -1696,13 +1763,13 @@ struct MacHighlightedCodeBlock: View {
       }
       .scrollIndicators(.visible)
 
-      if isLong && !isStreaming {
+      if preview.isLong && !isStreaming {
         Divider()
         Button {
           isExpanded.toggle()
         } label: {
           Label(
-            isExpanded ? "Collapse code" : "Show all \(lines.count) lines",
+            preview.toggleLabel,
             systemImage: isExpanded ? "chevron.up" : "chevron.down"
           )
           .font(.caption.weight(.medium))
@@ -1738,15 +1805,22 @@ struct MacHighlightedCodeBlock: View {
 }
 
 private struct MacHighlightedCodeText: View {
+  private struct RenderKey: Equatable {
+    let code: String
+    let language: String?
+    let isDark: Bool
+  }
+
   let code: String
   let language: String?
   let colorScheme: ColorScheme
 
   @State private var highlighted: AttributedString?
+  @State private var highlightedKey: RenderKey?
 
   var body: some View {
     Group {
-      if let highlighted {
+      if let highlighted, highlightedKey == renderKey {
         Text(highlighted)
       } else {
         Text(code)
@@ -1755,17 +1829,25 @@ private struct MacHighlightedCodeText: View {
     }
     .fixedSize(horizontal: true, vertical: true)
     .textSelection(.enabled)
-    .task(id: renderID) {
-      highlighted = await MacSyntaxHighlighting.shared.render(
+    .task(id: renderKey) {
+      let key = renderKey
+      let rendered = await MacSyntaxHighlighting.shared.render(
         code: code,
         language: language,
         isDark: colorScheme == .dark
       )
+      guard !Task.isCancelled else { return }
+      highlighted = rendered
+      highlightedKey = rendered != nil ? key : nil
     }
   }
 
-  private var renderID: String {
-    "\(colorScheme == .dark ? "dark" : "light")::\(language ?? "auto")::\(code.hashValue)"
+  private var renderKey: RenderKey {
+    RenderKey(
+      code: code,
+      language: language,
+      isDark: colorScheme == .dark
+    )
   }
 }
 
@@ -1778,20 +1860,33 @@ private actor MacSyntaxHighlighting {
 
   static let shared = MacSyntaxHighlighting()
 
+  private var highlighter: Highlighter?
+  private var configuredTheme: String?
   private var cache: [CacheKey: AttributedString] = [:]
   private var order: [CacheKey] = []
   private let limit = 72
 
   func render(code: String, language: String?, isDark: Bool) -> AttributedString? {
+    guard !Task.isCancelled else { return nil }
     let key = CacheKey(code: code, language: language, isDark: isDark)
     if let cached = cache[key] { return cached }
 
-    guard let highlighter = Highlighter() else { return nil }
-    _ = highlighter.setTheme(
-      isDark ? "github-dark" : "github",
-      withFont: "Menlo-Regular",
-      ofSize: 13
-    )
+    if highlighter == nil {
+      highlighter = Highlighter()
+    }
+    guard let highlighter else { return nil }
+
+    let themeName = isDark ? "github-dark" : "github"
+    if configuredTheme != themeName {
+      _ = highlighter.setTheme(
+        themeName,
+        withFont: "Menlo-Regular",
+        ofSize: 13
+      )
+      configuredTheme = themeName
+    }
+
+    guard !Task.isCancelled else { return nil }
     guard let value = highlighter.highlight(code, as: normalize(language)) else { return nil }
 
     let mutable = NSMutableAttributedString(attributedString: value)
