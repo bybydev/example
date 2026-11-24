@@ -16,6 +16,7 @@ final class MacMCPModel {
   var isBusy = false
   var errorMessage: String?
   var statusMessage: String?
+  var onProjectStateChanged: (@MainActor () async -> Void)?
 
   private let runtime: MCPRemoteRuntime
   private let workspace: MCPWorkspaceStore
@@ -252,6 +253,11 @@ final class MacMCPModel {
     defer { isBusy = false }
 
     do {
+      let snapshot = await workspace.snapshot()
+      let serverIDs = snapshot.servers.map(\.id)
+        + snapshot.tombstones.keys.map { MCPServerID(rawValue: $0) }
+      try await projectWorkspace.removeMCPServerReferences(serverID, knownServerIDs: serverIDs)
+      await onProjectStateChanged?()
       try await workspace.deleteServer(serverID)
 
       var cleanupWarning: String?
@@ -265,6 +271,8 @@ final class MacMCPModel {
       statusMessage = cleanupWarning.map { "MCP server deleted. \($0)" } ?? "MCP server deleted"
       return true
     } catch {
+      await onProjectStateChanged?()
+      try? await reloadSnapshot()
       MacAppAnalytics.reportError("mcp_operation_failed", component: "mcp")
       errorMessage = error.localizedDescription
       return false
@@ -356,7 +364,12 @@ final class MacMCPModel {
   ) async -> Bool {
     guard requireConfigurationAccess(configuration) else { return false }
     return await performResult("Tool configuration applied") {
-      try await workspace.replaceChatConfiguration(configuration, conversationID: conversationID)
+      let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
+      try await workspace.replaceChatConfiguration(
+        configuration,
+        conversationID: conversationID,
+        preserveEmpty: inherited != nil
+      )
       try await reloadSnapshot()
     }
   }
@@ -474,27 +487,13 @@ final class MacMCPModel {
     serverID: MCPServerID,
     conversationID: ConversationID
   ) async throws {
-    if await workspace.explicitChatConfiguration(for: conversationID) != nil {
-      try await workspace.setChatServerEnabled(
-        enabled,
-        serverID: serverID,
-        conversationID: conversationID
-      )
-      return
-    }
-
-    if var inherited = await projectWorkspace.mcpConfiguration(for: conversationID) {
-      inherited.enabledServerIDs.removeAll { $0 == serverID }
-      if enabled { inherited.enabledServerIDs.append(serverID) }
-      inherited.enabledServerIDs.sort { $0.rawValue < $1.rawValue }
-      try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
-      return
-    }
-
+    let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
     try await workspace.setChatServerEnabled(
       enabled,
       serverID: serverID,
-      conversationID: conversationID
+      conversationID: conversationID,
+      inheritedBase: inherited,
+      preserveEmpty: inherited != nil
     )
   }
 
@@ -503,33 +502,13 @@ final class MacMCPModel {
     exposedToolName: String,
     conversationID: ConversationID
   ) async throws {
-    if await workspace.explicitChatConfiguration(for: conversationID) != nil {
-      try await workspace.setChatToolPolicy(
-        policy,
-        exposedToolName: exposedToolName,
-        conversationID: conversationID
-      )
-      return
-    }
-
-    if var inherited = await projectWorkspace.mcpConfiguration(for: conversationID) {
-      let normalized = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !normalized.isEmpty, normalized.count <= MCPToolNamespace.maximumExposedNameLength else {
-        throw MCPError.invalidToolDefinition("Invalid MCP tool permission name.")
-      }
-      if policy == .ask {
-        inherited.toolPolicies.removeValue(forKey: normalized)
-      } else {
-        inherited.toolPolicies[normalized] = policy
-      }
-      try await workspace.replaceChatConfiguration(inherited, conversationID: conversationID)
-      return
-    }
-
+    let inherited = await projectWorkspace.mcpConfiguration(for: conversationID)
     try await workspace.setChatToolPolicy(
       policy,
       exposedToolName: exposedToolName,
-      conversationID: conversationID
+      conversationID: conversationID,
+      inheritedBase: inherited,
+      preserveEmpty: inherited != nil
     )
   }
 

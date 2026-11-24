@@ -48,14 +48,56 @@ struct MacTargetPickerView: View {
     }
   }
 
-  private var reasoningControl: ModelReasoningControl {
+  private var resolvedCapabilities: ResolvedModelCapabilities {
     guard let accountID, let modelID else { return .init() }
-    return providers.capabilities(accountID: accountID, modelID: modelID).reasoning
+    return providers.capabilities(accountID: accountID, modelID: modelID)
+  }
+
+  private var reasoningControl: ModelReasoningControl {
+    resolvedCapabilities.reasoning
+  }
+
+  private func anthropicOutputLimit(for options: ReasoningOptions?) -> Int? {
+    guard providers.account(accountID)?.kind == .anthropic else { return nil }
+    let fallback = AnthropicMessagesAdapter.defaultMaxTokens(
+      reasoning: options,
+      capabilities: resolvedCapabilities
+    )
+    return maxOutputTokens ?? fallback
   }
 
   private var reasoningError: String? {
-    reasoningControl.budgetValidationMessage(reasoning,
-      outputLimit: providers.account(accountID)?.kind == .anthropic ? (maxOutputTokens ?? 4_096) : nil)
+    reasoningControl.budgetValidationMessage(
+      reasoning,
+      outputLimit: anthropicOutputLimit(for: reasoning)
+    )
+  }
+
+  private func budgetHint(for budget: ReasoningBudgetControl) -> String {
+    let outputLimit = anthropicOutputLimit(for: reasoning)
+    let outputCap = outputLimit.map { $0 - 1 }
+    let effectiveMaximum: Int?
+    switch (budget.maximum, outputCap) {
+    case (let maxBudget?, let cap?): effectiveMaximum = min(maxBudget, cap)
+    case (let maxBudget?, nil): effectiveMaximum = maxBudget
+    case (nil, let cap?): effectiveMaximum = cap
+    case (nil, nil): effectiveMaximum = nil
+    }
+
+    if let maxTokens = effectiveMaximum, maxTokens < budget.minimum, let outputLimit {
+      return "The thinking budget must be below \(outputLimit.formatted()) output tokens."
+    }
+
+    if budget.allowsAutomatic {
+      if let maxTokens = effectiveMaximum {
+        return "Use -1 for automatic thinking, or \(budget.minimum.formatted())–\(maxTokens.formatted()) tokens."
+      }
+      return "Use -1 for automatic thinking, or at least \(budget.minimum.formatted()) tokens."
+    }
+    if let maxTokens = effectiveMaximum {
+      return "Enter \(budget.minimum.formatted())–\(maxTokens.formatted()) tokens."
+    }
+    return "Minimum \(budget.minimum.formatted()) tokens."
   }
 
   var body: some View {
@@ -163,13 +205,13 @@ struct MacTargetPickerView: View {
                     reasoning = options
                   }
                 ), format: .number)
-                Text(budget.allowsAutomatic ? "Use -1 for automatic thinking." : "Minimum \(budget.minimum) tokens.")
+                Text(budgetHint(for: budget))
                   .font(.caption)
                   .foregroundStyle(.secondary)
               }
               Text(reasoningError ?? reasoningControl.label(for: reasoning))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(reasoningError != nil ? Color.red : .secondary)
             }
             .padding(12)
           }
@@ -260,6 +302,7 @@ struct MacConnectionEditorView: View {
   @State private var httpReferer: String
   @State private var isSaving = false
   @State private var isRevealing = false
+  @State private var clearCredential = false
   @State private var showingAdvanced = false
 
   private var existing: ProviderAccount? {
@@ -327,8 +370,43 @@ struct MacConnectionEditorView: View {
     return false
   }
 
-  private var requiresCredential: Bool {
+  private var showsCredentialField: Bool {
     effectiveAuthentication != .none
+  }
+
+  private var requiresCredential: Bool {
+    showsCredentialField && kind.requiresCredential
+  }
+
+  private var hasStoredCredential: Bool {
+    guard !isCreate, let accountID = existing?.id else { return false }
+    return model.hasCredential(accountID)
+  }
+
+  private var credentialPlaceholder: String {
+    if isCreate {
+      return requiresCredential ? "API Key / Token" : "API Key / Token (optional)"
+    }
+    return "New API Key / Token (leave blank to keep current)"
+  }
+
+  private var localServerPlaceholder: String {
+    switch kind {
+    case .ollama: "http://localhost:11434/v1"
+    case .lmStudio: "http://localhost:1234/v1"
+    default: "http://localhost:11434/v1"
+    }
+  }
+
+  private var localServerHint: String {
+    switch kind {
+    case .ollama:
+      "Use http://localhost:11434/v1 on this Mac, or your LAN IP with 'Expose Ollama to the network' enabled. /v1 is added automatically if omitted."
+    case .lmStudio:
+      "Use http://localhost:1234/v1 on this Mac, or your LAN IP with 'Serve on Local Network' enabled. /v1 is added automatically if omitted."
+    default:
+      "HTTP and HTTPS endpoints are accepted for local and LAN hosts."
+    }
   }
 
   private var effectiveAuthentication: ProviderAuthentication {
@@ -377,7 +455,10 @@ struct MacConnectionEditorView: View {
             }
           }
 
-          editorCard("Authentication", systemImage: "key") {
+          editorCard(
+            showsCredentialField && !requiresCredential ? "Authentication (Optional)" : "Authentication",
+            systemImage: "key"
+          ) {
             VStack(alignment: .leading, spacing: 10) {
               if kind == .openAICompatible {
                 Picker("Authentication", selection: $authMode) {
@@ -390,28 +471,52 @@ struct MacConnectionEditorView: View {
                 }
               }
 
-              if requiresCredential {
-                SecureField(
-                  isCreate ? "API Key / Token" : "New API Key / Token (leave blank to keep current)",
-                  text: $credential
-                )
-                if !isCreate, let accountID = existing?.id, model.hasCredential(accountID) {
+              if showsCredentialField {
+                if hasStoredCredential && clearCredential {
                   HStack {
-                    Label("Credential stored in Keychain", systemImage: "lock.fill")
+                    Text("Saved API key will be removed when you click Save.")
                       .font(.caption)
                       .foregroundStyle(MacDesignTokens.Colors.textMuted)
                     Spacer()
-                    Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
-                      .disabled(isRevealing)
+                    Button("Keep Saved Key") {
+                      clearCredential = false
+                    }
                   }
                 } else {
-                  Text("Credentials are stored in Keychain.")
+                  SecureField(credentialPlaceholder, text: $credential)
+                  if hasStoredCredential {
+                    HStack(spacing: 8) {
+                      Label("Credential stored in Keychain", systemImage: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                      Spacer()
+                      Button(isRevealing ? "Revealing…" : "Reveal") { revealCredential() }
+                        .disabled(isRevealing)
+                      if !requiresCredential {
+                        Button("Remove Key", role: .destructive) {
+                          clearCredential = true
+                          credential = ""
+                        }
+                      }
+                    }
+                  } else {
+                    Text(
+                      requiresCredential
+                        ? "Credentials are stored in Keychain."
+                        : "Optional. Stored in Keychain if provided."
+                    )
                     .font(.caption)
                     .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  }
                 }
               } else {
                 Text("This connection does not require a credential.")
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                if hasStoredCredential {
+                  Text("Saved API key will be removed when you click Save.")
+                    .font(.caption)
+                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                }
               }
             }
           }
@@ -437,6 +542,18 @@ struct MacConnectionEditorView: View {
                   .font(.body.monospaced())
                   .frame(minHeight: 80)
                 Text("Optional model IDs, one per line. Discovery can also be refreshed after saving.")
+                  .font(.caption)
+                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              }
+            }
+          } else if kind.isLocalServer {
+            editorCard("Local Server", systemImage: "network") {
+              VStack(alignment: .leading, spacing: 10) {
+                TextField("Server URL", text: $baseURL, prompt: Text(localServerPlaceholder))
+                if isCreate {
+                  TextField("Default Model ID (optional)", text: $defaultModel)
+                }
+                Text(localServerHint)
                   .font(.caption)
                   .foregroundStyle(MacDesignTokens.Colors.textMuted)
               }
@@ -500,6 +617,13 @@ struct MacConnectionEditorView: View {
       if authMode == "header" && customHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         return false
       }
+    } else if kind.isLocalServer {
+      let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmedURL.isEmpty {
+        guard let url = URL(string: trimmedURL),
+          let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme)
+        else { return false }
+      }
     }
     if isCreate && requiresCredential && credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return false
@@ -558,6 +682,7 @@ struct MacConnectionEditorView: View {
           accountID: accountID,
           label: label,
           newCredential: credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : credential,
+          clearCredential: clearCredential,
           baseURL: kind == .openAICompatible ? baseURL : normalizedBuiltInOverride,
           headers: headers,
           metadata: metadata,
@@ -578,8 +703,10 @@ struct MacConnectionEditorView: View {
 
   private var normalizedBuiltInOverride: String {
     let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let defaultURL = kind.defaultEndpoint?.absoluteString else { return trimmed }
-    return trimmed == defaultURL ? "" : trimmed
+    guard !trimmed.isEmpty else { return "" }
+    let normalized = URL(string: trimmed).map { kind.normalizedBaseURL($0).absoluteString } ?? trimmed
+    guard let defaultURL = kind.defaultEndpoint?.absoluteString else { return normalized }
+    return normalized == defaultURL ? "" : normalized
   }
 
   private func revealCredential() {

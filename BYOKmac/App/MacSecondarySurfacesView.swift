@@ -53,6 +53,7 @@ struct MacMCPServerListView: View {
   @Bindable var mcp: MacMCPModel
 
   @Environment(\.dismiss) private var dismiss
+  @State private var toastCenter = MacToastCenter()
 
   var body: some View {
     VStack(spacing: 0) {
@@ -83,6 +84,12 @@ struct MacMCPServerListView: View {
     }
     .frame(minWidth: 920, idealWidth: 980, minHeight: 620, idealHeight: 680)
     .background(MacDesignTokens.Colors.canvas)
+    .macToastOverlay(toastCenter)
+    .onChange(of: mcp.statusMessage) { _, message in
+      guard let message else { return }
+      toastCenter.showStatus(message)
+      mcp.statusMessage = nil
+    }
   }
 }
 
@@ -90,6 +97,7 @@ struct MacSecondarySurfacesView: View {
   let model: MacAppModel
 
   @State private var utilitySheets = MacUtilitySheetCoordinator()
+  @State private var toastCenter = MacToastCenter()
 
   var body: some View {
     if let workspace = model.workspace, let mcp = model.mcp, let chats = model.chats {
@@ -98,6 +106,7 @@ struct MacSecondarySurfacesView: View {
         .environment(mcp)
         .environment(chats)
         .environment(utilitySheets)
+        .environment(\.macToastCenter, toastCenter)
     } else {
       ContentUnavailableView(
         "Workspace Unavailable",
@@ -113,6 +122,21 @@ struct MacSecondarySurfacesView: View {
     chats: MacChatSessionModel
   ) -> some View {
     MacShellView(model: model)
+      .overlay(alignment: .top) {
+        if utilitySheets.destination == nil {
+          MacToastOverlay(center: toastCenter)
+        }
+      }
+      .onChange(of: workspace.statusMessage) { _, message in
+        guard let message else { return }
+        toastCenter.showStatus(message)
+        workspace.statusMessage = nil
+      }
+      .onChange(of: mcp.statusMessage) { _, message in
+        guard let message else { return }
+        toastCenter.showStatus(message)
+        mcp.statusMessage = nil
+      }
       .sheet(
         item: Binding(
           get: { utilitySheets.destination },
@@ -129,6 +153,7 @@ struct MacSecondarySurfacesView: View {
         .environment(mcp)
         .environment(chats)
         .environment(utilitySheets)
+        .environment(\.macToastCenter, toastCenter)
       }
   }
 

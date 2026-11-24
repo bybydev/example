@@ -250,6 +250,81 @@ struct MacMCPModelTests {
     #expect(!fixture.model.isServerRestricted(second.id))
     #expect(await fixture.model.setEnabled(true, serverID: second.id))
   }
+
+  @Test("Deleting an MCP server removes stale project references and notifies project observer")
+  func deleteServerRemovesProjectReferences() async throws {
+    let fixture = try await MacMCPFixture.make()
+    let server = MCPRemoteServer(
+      id: "project-ref-server",
+      name: "Project Ref MCP",
+      endpoint: URL(string: "https://project-ref.example.com/mcp")!,
+      isEnabled: false
+    )
+    try await fixture.workspace.upsertServer(server)
+    let project = try await fixture.projectWorkspace.createProject(
+      name: "Work",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      mcpConfiguration: MCPChatToolConfiguration(enabledServerIDs: [server.id])
+    )
+    await fixture.model.reloadFromStorage()
+
+    @MainActor
+    final class CallbackBox {
+      var count = 0
+    }
+    let callback = CallbackBox()
+    fixture.model.onProjectStateChanged = {
+      callback.count += 1
+    }
+
+    #expect(await fixture.model.deleteServer(server.id))
+    #expect(callback.count >= 1)
+    let updatedProject = await fixture.projectWorkspace.snapshot().projects.first { $0.id == project.id }
+    #expect(updatedProject?.mcpConfiguration?.enabledServerIDs.contains(server.id) != true)
+  }
+
+  @Test("Disabling an inherited project MCP server preserves an explicit empty chat override")
+  func disablingInheritedServerPreservesEmptyOverride() async throws {
+    let fixture = try await MacMCPFixture.make()
+    let server = MCPRemoteServer(
+      id: "inherited-server",
+      name: "Inherited MCP",
+      endpoint: URL(string: "https://inherited.example.com/mcp")!,
+      isEnabled: true
+    )
+    try await fixture.workspace.upsertServer(server)
+    let project = try await fixture.projectWorkspace.createProject(
+      name: "Project",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      mcpConfiguration: MCPChatToolConfiguration(enabledServerIDs: [server.id])
+    )
+    let conversationID: ConversationID = "inherited-override-chat"
+    try await fixture.projectWorkspace.assignConversation(conversationID, to: project.id)
+    await fixture.model.reloadFromStorage()
+
+    #expect(fixture.model.inheritsProjectTools(conversationID))
+    #expect(fixture.model.isServerEnabled(server.id, for: conversationID))
+
+    let disabled = await fixture.model.setChatServerEnabled(
+      false,
+      serverID: server.id,
+      conversationID: conversationID
+    )
+
+    #expect(disabled)
+    #expect(fixture.model.hasChatOverride(conversationID))
+    #expect(!fixture.model.inheritsProjectTools(conversationID))
+    #expect(!fixture.model.isServerEnabled(server.id, for: conversationID))
+    #expect(fixture.model.chatConfiguration(for: conversationID).enabledServerIDs.isEmpty)
+  }
 }
 
 @MainActor

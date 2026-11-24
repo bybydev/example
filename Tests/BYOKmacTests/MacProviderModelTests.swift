@@ -357,6 +357,106 @@ struct MacProviderModelTests {
     #expect(model.preferredTarget()?.accountID == second.id)
     #expect(await model.revealCredential(accountID: second.id) == "second-key")
   }
+
+  @Test("Ollama connection is ready without an API key and normalizes /v1 base URL")
+  func ollamaConnectionIsReadyWithoutCredentialAndNormalizesBaseURL() async throws {
+    let context = try await makeMacProviderTestContext()
+    defer { context.cleanup() }
+
+    let model = MacProviderModel(services: context.services)
+    try await model.load()
+
+    let createdID = await model.createConnection(
+      kind: .ollama,
+      label: "LAN Ollama",
+      credential: "",
+      baseURL: "http://192.168.1.50:11434",
+      defaultModel: "llama3.2",
+      headers: [:],
+      metadata: [:]
+    )
+    let accountID = try #require(createdID)
+    let account = try #require(model.account(accountID))
+
+    #expect(account.baseURLOverride == URL(string: "http://192.168.1.50:11434/v1"))
+    #expect(!model.hasCredential(accountID))
+    #expect(model.isReady(account))
+    #expect(macProviderPresentationState(model: model, account: account) == .ready)
+    #expect(model.preferredTarget()?.accountID == accountID)
+  }
+
+  @Test("Optional credentials can be removed and switching custom auth to none clears stored secrets")
+  func optionalCredentialRemovalAndAuthNoneCleanup() async throws {
+    let context = try await makeMacProviderTestContext()
+    defer { context.cleanup() }
+
+    let model = MacProviderModel(services: context.services)
+    try await model.load()
+
+    let createdID = await model.createConnection(
+      kind: .openAICompatible,
+      label: "Custom LAN",
+      credential: "optional-secret",
+      baseURL: "http://192.168.1.60:8000/v1",
+      defaultModel: "",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: nil,
+      authChoice: .bearer,
+      seedModelIDs: ["local-1"]
+    )
+    let accountID = try #require(createdID)
+    #expect(model.hasCredential(accountID))
+
+    let cleared = await model.updateConnection(
+      accountID: accountID,
+      label: "Custom LAN",
+      newCredential: nil,
+      clearCredential: true,
+      baseURL: "http://192.168.1.60:8000/v1",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: nil,
+      authChoice: .bearer,
+      seedModelIDs: ["local-1"]
+    )
+    #expect(cleared)
+    #expect(!model.hasCredential(accountID))
+    let afterClear = try #require(model.account(accountID))
+    #expect(model.isReady(afterClear))
+
+    let restored = await model.updateConnection(
+      accountID: accountID,
+      label: "Custom LAN",
+      newCredential: "second-secret",
+      baseURL: "http://192.168.1.60:8000/v1",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: nil,
+      authChoice: .bearer,
+      seedModelIDs: ["local-1"]
+    )
+    #expect(restored)
+    #expect(model.hasCredential(accountID))
+
+    let switchedToNone = await model.updateConnection(
+      accountID: accountID,
+      label: "Custom LAN",
+      newCredential: nil,
+      baseURL: "http://192.168.1.60:8000/v1",
+      headers: [:],
+      metadata: [:],
+      chatCompletionsPath: "/chat/completions",
+      modelsPath: nil,
+      authChoice: .none,
+      seedModelIDs: ["local-1"]
+    )
+    #expect(switchedToNone)
+    #expect(!model.hasCredential(accountID))
+  }
 }
 
 @MainActor

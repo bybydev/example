@@ -118,10 +118,7 @@ final class MacProviderModel {
 
   func isReady(_ account: ProviderAccount) -> Bool {
     guard account.isEnabled else { return false }
-    switch account.definition.authentication {
-    case .none:
-      break
-    case .bearer, .header:
+    if account.definition.requiresCredential {
       guard credentialAccountIDs.contains(account.id) else { return false }
     }
     return models(for: account.id).contains { $0.isAvailable }
@@ -167,7 +164,7 @@ final class MacProviderModel {
         modelsPath: kind == .openAICompatible ? normalizedOptionalPath(modelsPath) : nil,
         authChoice: kind == .openAICompatible ? authChoice : nil,
         seedModelIDs: kind == .openAICompatible ? normalizedSeedModelIDs(seedModelIDs) : nil,
-        baseURLOverride: try optionalURL(baseURL),
+        baseURLOverride: try optionalURL(baseURL, kind: kind),
         additionalHeaders: headers,
         metadata: metadata,
         defaultModelID: defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -208,6 +205,7 @@ final class MacProviderModel {
     accountID: ProviderAccountID,
     label: String,
     newCredential: String?,
+    clearCredential: Bool = false,
     baseURL: String,
     headers: [String: String],
     metadata: [String: String],
@@ -240,7 +238,7 @@ final class MacProviderModel {
 
     do {
       updated.label = trimmedLabel
-      updated.baseURLOverride = try optionalURL(baseURL)
+      updated.baseURLOverride = try optionalURL(baseURL, kind: updated.kind)
       updated.additionalHeaders = headers
       updated.metadata = metadata
       if updated.kind == .openAICompatible {
@@ -256,7 +254,23 @@ final class MacProviderModel {
       return false
     }
 
-    if let newCredential {
+    let shouldClearCredential =
+      clearCredential || (updated.kind == .openAICompatible && updated.authChoice == .none)
+    if shouldClearCredential {
+      do {
+        try await accountManager.setCredential(nil, accountID: accountID)
+      } catch {
+        MacAppAnalytics.reportError("provider_credential_save_failed", component: "provider")
+        let credentialError = error
+        let rollbackWarning = await rollbackUpdatedAccount(original)
+        try? await reloadSnapshot()
+        errorMessage = joinedError(
+          primary: credentialError.localizedDescription,
+          warning: rollbackWarning
+        )
+        return false
+      }
+    } else if let newCredential {
       let trimmedCredential = newCredential.trimmingCharacters(in: .whitespacesAndNewlines)
       if !trimmedCredential.isEmpty {
         do {
@@ -484,10 +498,7 @@ final class MacProviderModel {
 
     func ready(_ account: ProviderAccount) -> Bool {
       guard account.isEnabled else { return false }
-      switch account.definition.authentication {
-      case .none:
-        break
-      case .bearer, .header:
+      if account.definition.requiresCredential {
         guard credentials.contains(account.id) else { return false }
       }
       return (records[account.id] ?? []).contains { $0.isAvailable && !$0.isHidden }
@@ -607,13 +618,13 @@ final class MacProviderModel {
     return autoName(for: kind)
   }
 
-  private func optionalURL(_ value: String) throws -> URL? {
+  private func optionalURL(_ value: String, kind: ProviderKind) throws -> URL? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
     guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
       throw ProviderError.invalidBaseURL
     }
-    return url
+    return kind.normalizedBaseURL(url)
   }
 
   private func normalizedPath(_ value: String?, fallback: String) -> String {

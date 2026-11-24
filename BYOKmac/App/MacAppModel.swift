@@ -247,6 +247,9 @@ final class MacAppModel {
         try? await self.sweepOrphanFiles(services: services)
       }
     }
+    mcpModel.onProjectStateChanged = { [weak workspaceModel] in
+      await workspaceModel?.reload()
+    }
     workspace = workspaceModel
 
     try await services.projectWorkspace.reconcileConversationIDs(Set(conversations.map(\.id)))
@@ -385,6 +388,9 @@ final class MacAppModel {
         Task { @MainActor in
           try? await self.sweepOrphanFiles(services: services)
         }
+      }
+      mcpModel.onProjectStateChanged = { [weak workspaceModel] in
+        await workspaceModel?.reload()
       }
       workspace = workspaceModel
 

@@ -770,11 +770,9 @@ private struct MacComposerView: View {
         importPasteboard()
       }
 
-      if !workspace.libraryEntries.isEmpty {
-        Divider()
-        Button("From Library…", systemImage: "books.vertical") {
-          showingLibraryPicker = true
-        }
+      Divider()
+      Button("From Library…", systemImage: "books.vertical") {
+        showingLibraryPicker = true
       }
 
       if !projectFiles.isEmpty {

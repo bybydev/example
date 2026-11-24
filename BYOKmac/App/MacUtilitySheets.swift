@@ -75,6 +75,7 @@ struct MacUtilitySheetContainer<Content: View>: View {
   @ViewBuilder let content: Content
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.macToastCenter) private var toastCenter
 
   init(
     destination: MacUtilitySheetDestination,
@@ -130,6 +131,11 @@ struct MacUtilitySheetContainer<Content: View>: View {
     }
     .frame(minWidth: 920, idealWidth: 980, minHeight: 620, idealHeight: 680)
     .background(MacDesignTokens.Colors.canvas)
+    .overlay(alignment: .top) {
+      if let toastCenter {
+        MacToastOverlay(center: toastCenter)
+      }
+    }
   }
 }
 

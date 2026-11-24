@@ -88,6 +88,9 @@ targets:
       path: BYOKmac/Resources/Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: BYOK Chat uses your local network to connect to local AI servers such as Ollama or LM Studio on your network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hoangbkit.byokchat

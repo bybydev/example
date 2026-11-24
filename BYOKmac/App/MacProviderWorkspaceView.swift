@@ -23,7 +23,7 @@ func macProviderPresentationState(
   account: ProviderAccount
 ) -> MacProviderPresentationState {
   guard account.isEnabled else { return .disabled }
-  if account.definition.authentication != .none, !model.hasCredential(account.id) {
+  if account.definition.requiresCredential, !model.hasCredential(account.id) {
     return .credentialRequired
   }
   guard model.models(for: account.id).contains(where: { $0.isAvailable }) else {
@@ -532,7 +532,8 @@ private struct MacProviderOverviewView: View {
 
   private var credentialSummary: String {
     if account.definition.authentication == .none { return "Not required" }
-    return model.hasCredential(account.id) ? "Stored in Keychain" : "Missing"
+    if model.hasCredential(account.id) { return "Stored in Keychain" }
+    return account.definition.requiresCredential ? "Missing" : "Optional (not set)"
   }
 
   private var defaultModelLabel: String {
@@ -778,7 +779,8 @@ private struct MacProviderConnectionWorkspaceView: View {
 
   private var credentialSummary: String {
     if account.definition.authentication == .none { return "Not required" }
-    return model.hasCredential(account.id) ? "Stored in Keychain" : "Missing"
+    if model.hasCredential(account.id) { return "Stored in Keychain" }
+    return account.definition.requiresCredential ? "Missing" : "Optional (not set)"
   }
 
   private var authenticationSummary: String {

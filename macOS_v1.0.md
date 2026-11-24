@@ -6,19 +6,19 @@ Prioritized checklist to bring `BYOKmac` to feature parity with `BYOKchat` (iOS)
 
 ## P0 — Functional Bugs & Broken Core Parity
 
-- [ ] **Optional API keys for local & OpenAI-compatible servers** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacProviderModel.swift`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
+- [x] **Optional API keys for local & OpenAI-compatible servers** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacProviderModel.swift`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
   - Switch `requiresCredential` / `isReady(_:)` checks from `authentication != .none` to `ProviderDefinition.requiresCredential` so Ollama, LM Studio, and OpenAI-compatible servers work without an API key.
   - Add **Remove API Key** flow (`clearCredential`) and auto-clear stored Keychain secrets when switching custom auth to `.none`.
-- [ ] **Local server (Ollama / LM Studio) setup & ATS local networking** (`BYOKmac/App/MacProviderViews.swift`, `project.yml`)
+- [x] **Local server (Ollama / LM Studio) setup & ATS local networking** (`BYOKmac/App/MacProviderViews.swift`, `project.yml`)
   - Expose dedicated Base URL field (not buried in Advanced) with Ollama/LM Studio placeholders, apply `kind.normalizedBaseURL(_:)` (`/v1`), and add `NSAllowsLocalNetworking: true` to `BYOKmac` Info.plist / `project.yml` so `http://` LAN servers aren't blocked by ATS.
-- [ ] **MCP project-reference cleanup & `preserveEmpty` chat overrides** (`BYOKmac/App/MacMCPModel.swift`)
+- [x] **MCP project-reference cleanup & `preserveEmpty` chat overrides** (`BYOKmac/App/MacMCPModel.swift`)
   - Call `projectWorkspace.removeMCPServerReferences(...)` when deleting an MCP server.
   - Pass `inheritedBase:` + `preserveEmpty: inherited != nil` when editing chat MCP configs so disabling all inherited project tools doesn't silently revert.
-- [ ] **Fix Anthropic default max-tokens cap in target picker** (`BYOKmac/App/MacProviderViews.swift`)
+- [x] **Fix Anthropic default max-tokens cap in target picker** (`BYOKmac/App/MacProviderViews.swift`)
   - Use `AnthropicMessagesAdapter.defaultMaxTokens` instead of hardcoded `4_096`, with full min/max/output-cap budget hints.
-- [ ] **Surface swallowed status/warning messages (Toasts / Banners)** (`BYOKmac/App/MacWorkspaceModel.swift`, `BYOKmac/App/MacMCPModel.swift`)
+- [x] **Surface swallowed status/warning messages (Toasts / Banners)** (`BYOKmac/App/MacWorkspaceModel.swift`, `BYOKmac/App/MacMCPModel.swift`)
   - `workspace.statusMessage` and `mcp.statusMessage` are written but never rendered; add a toast or banner overlay (matching `BYOKchat/App/BYOKToastCenter.swift`).
-- [ ] **Keep `"From Library…"` visible in composer when saved Library is empty** (`BYOKmac/App/MacChatPaneView.swift`)
+- [x] **Keep `"From Library…"` visible in composer when saved Library is empty** (`BYOKmac/App/MacChatPaneView.swift`)
   - Currently hidden when `workspace.libraryEntries.isEmpty`, making the `"From Chats"` picker tab unreachable.
 
 ---
