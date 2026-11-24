@@ -32,8 +32,8 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
       MacMarkdownMessageContent(text: source, textSize: textSize)
 
     case .code(let language, let content, let isComplete):
-      if MacAnswerContentParser.isMermaidLanguage(language), isComplete {
-        MacMermaidAnswerView(source: content)
+      if MacAnswerContentParser.isMermaidLanguage(language) {
+        MacMermaidAnswerView(source: content, isComplete: isComplete)
       } else if isComplete {
         // Stable code is highlighted once. MacHighlightedCodeText shows plain
         // monospaced source until the asynchronous highlight is ready.
@@ -48,6 +48,9 @@ private struct MacStableRenderedAnswerBlockView: View, Equatable {
       } else {
         MacStreamingMathSourceView(expression: expression)
       }
+
+    case .table(let table):
+      MacMarkdownTableView(table: table, textSize: textSize, isComplete: true)
     }
   }
 }
@@ -71,10 +74,17 @@ private struct MacStreamingTailBlockView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
 
     case .code(let language, let content, _):
-      MacStreamingCodeSourceView(language: language, content: content)
+      if MacAnswerContentParser.isMermaidLanguage(language) {
+        MacMermaidAnswerView(source: content, isComplete: false)
+      } else {
+        MacStreamingCodeSourceView(language: language, content: content)
+      }
 
     case .math(let expression, _):
       MacStreamingMathSourceView(expression: expression)
+
+    case .table(let table):
+      MacMarkdownTableView(table: table, textSize: textSize, isComplete: false)
     }
   }
 

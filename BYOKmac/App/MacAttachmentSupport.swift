@@ -3,6 +3,8 @@ import BYOKchatProviderCore
 import CoreTransferable
 import Foundation
 import ImageIO
+import QuickLook
+import QuickLookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -243,6 +245,11 @@ struct MacAttachmentStrip: View {
   let attachments: [ChatAttachment]
   var presentation: MacAttachmentPresentation = .message
   var remove: ((String) -> Void)?
+  var addAttachment: (() -> Void)? = nil
+  var maxAttachments: Int = MacAttachmentImporter.maximumCount
+  var isImportingAttachments: Bool = false
+  var onOpenAttachment: ((ChatAttachment) -> Void)? = nil
+  var saveToLibrary: ((ChatAttachment) -> Void)? = nil
   var loadThumbnail: ((String, CGFloat) async -> Data?)?
 
   var body: some View {
@@ -253,8 +260,17 @@ struct MacAttachmentStrip: View {
             attachment: attachment,
             presentation: presentation,
             remove: remove,
+            onOpenAttachment: onOpenAttachment,
+            saveToLibrary: saveToLibrary,
             loadThumbnail: loadThumbnail
           )
+        }
+
+        if presentation == .composer,
+          attachments.count < maxAttachments,
+          let addAttachment
+        {
+          addAttachmentTile(action: addAttachment)
         }
       }
       .padding(.vertical, 2)
@@ -262,24 +278,71 @@ struct MacAttachmentStrip: View {
     .scrollIndicators(.hidden)
     .frame(height: presentation.imageSize.height + 4)
   }
+
+  private func addAttachmentTile(action: @escaping () -> Void) -> some View {
+    let tileShape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+    return Button(action: action) {
+      VStack(spacing: 6) {
+        if isImportingAttachments {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Image(systemName: "plus")
+            .font(.system(size: 18, weight: .semibold))
+        }
+        Text(isImportingAttachments ? "Adding" : "Add")
+          .font(.system(size: 11, weight: .semibold))
+      }
+      .foregroundStyle(.secondary)
+      .frame(width: 72, height: presentation.imageSize.height)
+      .background(Color.primary.opacity(0.03), in: tileShape)
+      .overlay(
+        tileShape.stroke(
+          Color.primary.opacity(0.18),
+          style: StrokeStyle(lineWidth: 0.9, dash: [5, 4])
+        )
+      )
+      .contentShape(tileShape)
+    }
+    .buttonStyle(.plain)
+    .disabled(isImportingAttachments)
+    .help(isImportingAttachments ? "Importing attachments…" : "Add another attachment")
+    .accessibilityLabel(isImportingAttachments ? "Importing attachment" : "Add another attachment")
+  }
 }
 
 private struct MacAttachmentTile: View {
   let attachment: ChatAttachment
   let presentation: MacAttachmentPresentation
   let remove: ((String) -> Void)?
+  let onOpenAttachment: ((ChatAttachment) -> Void)?
+  let saveToLibrary: ((ChatAttachment) -> Void)?
   let loadThumbnail: ((String, CGFloat) async -> Data?)?
 
   @Environment(\.displayScale) private var displayScale
   @State private var image: NSImage?
   @State private var unavailable = false
 
+  private var hasContextMenu: Bool {
+    if presentation == .composer {
+      return remove != nil
+    }
+    return onOpenAttachment != nil || saveToLibrary != nil
+  }
+
   var body: some View {
-    ZStack(alignment: .topTrailing) {
-      if attachment.isImage {
-        imageTile
+    let content = ZStack(alignment: .topTrailing) {
+      if presentation == .message, let onOpenAttachment {
+        Button {
+          onOpenAttachment(attachment)
+        } label: {
+          tileBody
+        }
+        .buttonStyle(.plain)
+        .help("Preview \(attachment.filename)")
+        .accessibilityHint("Click to preview")
       } else {
-        fileTile
+        tileBody
       }
 
       if let remove {
@@ -299,6 +362,43 @@ private struct MacAttachmentTile: View {
     }
     .task(id: attachment.id) {
       await loadImageIfNeeded()
+    }
+
+    if hasContextMenu {
+      content.contextMenu {
+        tileContextMenu
+      }
+    } else {
+      content
+    }
+  }
+
+  @ViewBuilder
+  private var tileBody: some View {
+    if attachment.isImage {
+      imageTile
+    } else {
+      fileTile
+    }
+  }
+
+  @ViewBuilder
+  private var tileContextMenu: some View {
+    if presentation == .composer, let remove {
+      Button("Remove", systemImage: "trash", role: .destructive) {
+        remove(attachment.id)
+      }
+    } else if presentation == .message {
+      if let onOpenAttachment {
+        Button("Preview", systemImage: "eye") {
+          onOpenAttachment(attachment)
+        }
+      }
+      if let saveToLibrary {
+        Button("Save to Library", systemImage: "books.vertical") {
+          saveToLibrary(attachment)
+        }
+      }
     }
   }
 
@@ -387,5 +487,320 @@ private struct MacAttachmentTile: View {
     }
     image = decoded
     unavailable = false
+  }
+}
+
+struct MacAttachmentPreviewSheet: View {
+  let attachment: ChatAttachment
+  let loadData: (String) async -> Data?
+  var saveToLibrary: (() -> Void)? = nil
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var loadedImage: NSImage?
+  @State private var quickLookURL: URL?
+  @State private var tempDirectory: URL?
+  @State private var errorMessage: String?
+  @State private var isLoading = true
+  @State private var zoomScale: CGFloat = 1.0
+
+  private static let minZoom: CGFloat = 1.0
+  private static let maxZoom: CGFloat = 5.0
+
+  var body: some View {
+    VStack(spacing: 0) {
+      headerBar
+      Divider()
+      previewContent
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .frame(minWidth: 720, idealWidth: 880, minHeight: 540, idealHeight: 660)
+    .background(MacDesignTokens.Colors.canvas)
+    .task(id: attachment.id) {
+      await loadPreview()
+    }
+    .onDisappear {
+      cleanupTempDirectory()
+    }
+  }
+
+  private var headerBar: some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(attachment.filename)
+          .font(.headline)
+          .lineLimit(1)
+        Text(
+          "\(attachment.mimeType) · \(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))"
+        )
+        .font(.caption)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .lineLimit(1)
+      }
+
+      Spacer(minLength: 8)
+
+      if loadedImage != nil {
+        HStack(spacing: 4) {
+          Button {
+            withAnimation(.easeOut(duration: 0.15)) {
+              zoomScale = max(Self.minZoom, zoomScale - 0.5)
+            }
+          } label: {
+            Image(systemName: "minus.magnifyingglass")
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .disabled(zoomScale <= Self.minZoom + 0.01)
+          .help("Zoom Out")
+          .accessibilityLabel("Zoom out")
+
+          Button {
+            withAnimation(.easeOut(duration: 0.15)) {
+              zoomScale = Self.minZoom
+            }
+          } label: {
+            Text("\(Int((zoomScale * 100).rounded()))%")
+              .font(.caption.monospacedDigit())
+              .frame(minWidth: 42)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .disabled(abs(zoomScale - Self.minZoom) < 0.01)
+          .help("Reset Zoom")
+          .accessibilityLabel("Reset zoom")
+
+          Button {
+            withAnimation(.easeOut(duration: 0.15)) {
+              zoomScale = min(Self.maxZoom, zoomScale + 0.5)
+            }
+          } label: {
+            Image(systemName: "plus.magnifyingglass")
+          }
+          .buttonStyle(MacIconButtonStyle())
+          .disabled(zoomScale >= Self.maxZoom - 0.01)
+          .help("Zoom In")
+          .accessibilityLabel("Zoom in")
+        }
+      }
+
+      if let saveToLibrary {
+        Button("Save to Library", systemImage: "books.vertical", action: saveToLibrary)
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+      }
+
+      Button("Done") {
+        dismiss()
+      }
+      .keyboardShortcut(.cancelAction)
+    }
+    .padding(.horizontal, 16)
+    .frame(height: 54)
+    .background(MacDesignTokens.Colors.surface)
+  }
+
+  @ViewBuilder
+  private var previewContent: some View {
+    if isLoading {
+      ProgressView("Loading preview…")
+        .controlSize(.regular)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if let loadedImage {
+      MacZoomableImageView(
+        image: loadedImage,
+        scale: $zoomScale,
+        minScale: Self.minZoom,
+        maxScale: Self.maxZoom
+      )
+    } else if let quickLookURL {
+      MacAttachmentQuickLookView(url: quickLookURL)
+    } else {
+      ContentUnavailableView(
+        "Preview Unavailable",
+        systemImage: "exclamationmark.triangle",
+        description: Text(errorMessage ?? "The saved bytes for \(attachment.filename) are unavailable.")
+      )
+    }
+  }
+
+  private func loadPreview() async {
+    cleanupTempDirectory()
+    loadedImage = nil
+    quickLookURL = nil
+    errorMessage = nil
+    zoomScale = Self.minZoom
+    isLoading = true
+    defer { isLoading = false }
+
+    let data: Data?
+    if !attachment.data.isEmpty {
+      data = attachment.data
+    } else {
+      data = await loadData(attachment.id)
+    }
+    guard !Task.isCancelled else { return }
+
+    guard let data, !data.isEmpty else {
+      errorMessage = "The saved bytes for \(attachment.filename) are unavailable."
+      return
+    }
+
+    if attachment.isImage, let decoded = NSImage(data: data) {
+      loadedImage = decoded
+      return
+    }
+
+    let safeName = Self.safeFilename(attachment.filename)
+    let result: Result<(directory: URL, fileURL: URL), Error> = await Task.detached(
+      priority: .userInitiated
+    ) {
+      do {
+        let directory = FileManager.default.temporaryDirectory
+          .appendingPathComponent(
+            "BYOKchat-attachment-preview-\(UUID().uuidString)",
+            isDirectory: true
+          )
+        try FileManager.default.createDirectory(
+          at: directory,
+          withIntermediateDirectories: true
+        )
+        let fileURL = directory.appendingPathComponent(safeName, isDirectory: false)
+        try data.write(to: fileURL, options: .atomic)
+        return .success((directory, fileURL))
+      } catch {
+        return .failure(error)
+      }
+    }.value
+
+    guard !Task.isCancelled else {
+      if case .success(let created) = result {
+        try? FileManager.default.removeItem(at: created.directory)
+      }
+      return
+    }
+
+    switch result {
+    case .success(let created):
+      tempDirectory = created.directory
+      quickLookURL = created.fileURL
+    case .failure(let error):
+      MacAppAnalytics.reportError("attachment_preview_failed", component: "attachments")
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func cleanupTempDirectory() {
+    if let tempDirectory {
+      try? FileManager.default.removeItem(at: tempDirectory)
+      self.tempDirectory = nil
+    }
+    quickLookURL = nil
+  }
+
+  private static func safeFilename(_ filename: String) -> String {
+    let value = filename
+      .replacingOccurrences(of: "/", with: "-")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty ? "attachment" : value
+  }
+}
+
+private struct MacZoomableImageView: View {
+  let image: NSImage
+  @Binding var scale: CGFloat
+  let minScale: CGFloat
+  let maxScale: CGFloat
+
+  @State private var gestureMagnification: CGFloat = 1.0
+
+  private var effectiveScale: CGFloat {
+    min(maxScale, max(minScale, scale * gestureMagnification))
+  }
+
+  var body: some View {
+    GeometryReader { geometry in
+      let containerSize = geometry.size
+      let baseSize = fittedSize(for: image.size, inside: containerSize)
+      let scaledWidth = baseSize.width * effectiveScale
+      let scaledHeight = baseSize.height * effectiveScale
+
+      ScrollView([.horizontal, .vertical]) {
+        ZStack {
+          Image(nsImage: image)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: scaledWidth, height: scaledHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
+        }
+        .frame(
+          minWidth: max(containerSize.width, scaledWidth + 32),
+          minHeight: max(containerSize.height, scaledHeight + 32)
+        )
+      }
+      .gesture(
+        MagnifyGesture()
+          .onChanged { value in
+            gestureMagnification = value.magnification
+          }
+          .onEnded { value in
+            scale = min(maxScale, max(minScale, scale * value.magnification))
+            gestureMagnification = 1.0
+          }
+      )
+      .onTapGesture(count: 2) {
+        withAnimation(.easeOut(duration: 0.18)) {
+          scale = abs(scale - minScale) < 0.05 ? min(2.5, maxScale) : minScale
+        }
+      }
+    }
+    .background(Color.primary.opacity(0.03))
+  }
+
+  private func fittedSize(for imageSize: CGSize, inside container: CGSize) -> CGSize {
+    let availableWidth = max(1, container.width - 32)
+    let availableHeight = max(1, container.height - 32)
+    guard imageSize.width > 0, imageSize.height > 0 else {
+      return CGSize(width: availableWidth, height: availableHeight)
+    }
+    let widthRatio = availableWidth / imageSize.width
+    let heightRatio = availableHeight / imageSize.height
+    let ratio = min(widthRatio, heightRatio)
+    return CGSize(width: imageSize.width * ratio, height: imageSize.height * ratio)
+  }
+}
+
+private final class MacAttachmentPreviewItem: NSObject, QLPreviewItem {
+  let previewItemURL: URL?
+
+  init(url: URL) {
+    previewItemURL = url
+  }
+}
+
+private struct MacAttachmentQuickLookView: NSViewRepresentable {
+  let url: URL
+
+  final class Coordinator {
+    var item: MacAttachmentPreviewItem?
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  func makeNSView(context: Context) -> QLPreviewView {
+    let view = QLPreviewView(frame: .zero, style: .normal)!
+    view.autostarts = true
+    let item = MacAttachmentPreviewItem(url: url)
+    context.coordinator.item = item
+    view.previewItem = item
+    return view
+  }
+
+  func updateNSView(_ view: QLPreviewView, context: Context) {
+    guard context.coordinator.item?.previewItemURL != url else { return }
+    let item = MacAttachmentPreviewItem(url: url)
+    context.coordinator.item = item
+    view.previewItem = item
+    view.refreshPreviewItem()
   }
 }

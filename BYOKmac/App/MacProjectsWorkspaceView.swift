@@ -508,11 +508,27 @@ private struct MacProjectOverviewView: View {
           VStack(alignment: .leading, spacing: 10) {
             HStack {
               VStack(alignment: .leading, spacing: 5) {
-                MacProjectValueRow(title: "Provider Account", value: accountLabel)
-                MacProjectValueRow(title: "Model", value: modelLabel)
+                MacProjectValueRow(
+                  title: "Provider Account",
+                  value: accountStatus.label,
+                  valueColor: accountStatus.isUnavailable ? Color.orange : nil
+                )
+                MacProjectValueRow(
+                  title: "Model",
+                  value: modelStatus.label,
+                  valueColor: modelStatus.isUnavailable ? Color.orange : nil
+                )
               }
               Spacer()
               Button("Edit") { editor = .defaults }
+            }
+            if accountStatus.isUnavailable || modelStatus.isUnavailable {
+              Label(
+                "One or more saved defaults are no longer available. Edit defaults to choose an active provider account or model.",
+                systemImage: "exclamationmark.triangle.fill"
+              )
+              .font(.caption)
+              .foregroundStyle(.orange)
             }
             Text("These defaults apply when a new chat is created. Existing chats keep their current provider and model.")
               .font(.caption)
@@ -583,12 +599,29 @@ private struct MacProjectOverviewView: View {
       }
     }
     .sheet(isPresented: $showingNewPrompt) {
-      MacProjectPromptEditor(existing: nil) { preset in
+      let existingNames = Set(
+        project.projectPromptPresets.map {
+          $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+      )
+      MacProjectPromptEditor(
+        existing: nil,
+        existingNames: existingNames,
+        atLimit: project.projectPromptPresets.count >= ProjectWorkspaceStore.maxPresetCount
+      ) { preset in
         savePromptPreset(preset)
       }
     }
     .sheet(item: $promptToEdit) { preset in
-      MacProjectPromptEditor(existing: preset) { value in
+      let otherNames = Set(
+        project.projectPromptPresets
+          .filter { $0.id != preset.id }
+          .map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+      )
+      MacProjectPromptEditor(
+        existing: preset,
+        existingNames: otherNames
+      ) { value in
         savePromptPreset(value)
       }
     }
@@ -615,7 +648,8 @@ private struct MacProjectOverviewView: View {
   }
 
   private var reusablePromptsCard: some View {
-    overviewCard("Reusable Prompts", systemImage: "text.badge.plus") {
+    let atPromptLimit = project.projectPromptPresets.count >= ProjectWorkspaceStore.maxPresetCount
+    return overviewCard("Reusable Prompts", systemImage: "text.badge.plus") {
       VStack(spacing: 8) {
         if project.projectPromptPresets.isEmpty {
           HStack {
@@ -624,6 +658,7 @@ private struct MacProjectOverviewView: View {
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+              .disabled(atPromptLimit)
           }
         } else {
           ForEach(project.projectPromptPresets) { preset in
@@ -653,28 +688,43 @@ private struct MacProjectOverviewView: View {
           }
 
           HStack {
+            if atPromptLimit {
+              Text("Maximum of \(ProjectWorkspaceStore.maxPresetCount) reusable prompts reached.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
             Spacer()
             Button("Add Prompt", systemImage: "plus") { showingNewPrompt = true }
+              .disabled(atPromptLimit)
           }
         }
       }
     }
   }
 
-  private var accountLabel: String {
-    guard let accountID = project.accountID else { return "App Default" }
-    return providers.account(accountID)?.label ?? "Unavailable Account"
+  private var accountStatus: (label: String, isUnavailable: Bool) {
+    guard let accountID = project.accountID else { return ("App Default", false) }
+    guard let account = providers.account(accountID) else {
+      return ("Unavailable Account", true)
+    }
+    if !account.isEnabled {
+      return ("\(account.label) (Disabled)", true)
+    }
+    return (account.label, false)
   }
 
-  private var modelLabel: String {
-    guard let modelID = project.modelID else { return "Account Default" }
-    if let accountID = project.accountID,
-      let record = providers.models(for: accountID, includeHidden: true)
-        .first(where: { $0.model.id == modelID })
+  private var modelStatus: (label: String, isUnavailable: Bool) {
+    guard let modelID = project.modelID else { return ("Account Default", false) }
+    guard let accountID = project.accountID else { return ("\(modelID.rawValue) (Unavailable)", true) }
+    if let record = providers.models(for: accountID, includeHidden: true)
+      .first(where: { $0.model.id == modelID })
     {
-      return record.model.displayName
+      if record.isAvailable {
+        return (record.model.displayName, false)
+      }
+      return ("\(record.model.displayName) (Unavailable)", true)
     }
-    return modelID.rawValue
+    return ("\(modelID.rawValue) (Unavailable)", true)
   }
 
   private func savePromptPreset(_ value: ProjectPromptPreset) {
@@ -703,6 +753,12 @@ private struct MacProjectChatsWorkspaceView: View {
   let startNewChat: () -> Void
 
   @State private var searchText = ""
+  @State private var renameTarget: ChatConversation?
+  @State private var deleteTarget: ChatConversation?
+
+  private var otherProjects: [ChatProject] {
+    workspace.projects.filter { $0.id != project.id }
+  }
 
   private var memberConversations: [ChatConversation] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -803,51 +859,141 @@ private struct MacProjectChatsWorkspaceView: View {
         }
       }
     }
+    .sheet(item: $renameTarget) { conversation in
+      MacProjectChatRenameSheet(conversation: conversation) { newTitle in
+        let renamed = await chats.renameConversation(conversation.id, title: newTitle)
+        if !renamed, let error = chats.errorMessage {
+          workspace.errorMessage = error
+          chats.errorMessage = nil
+        }
+        return renamed
+      }
+    }
+    .confirmationDialog(
+      deleteTarget.map { "Delete \"\(conversationTitle($0))\"?" } ?? "Delete conversation?",
+      isPresented: Binding(
+        get: { deleteTarget != nil },
+        set: { if !$0 { deleteTarget = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Delete Conversation", role: .destructive) {
+        guard let target = deleteTarget else { return }
+        deleteTarget = nil
+        deleteConversation(target.id)
+      }
+      Button("Cancel", role: .cancel) {
+        deleteTarget = nil
+      }
+    } message: {
+      Text("This removes the conversation and its chat-specific project/tool references. This cannot be undone.")
+    }
   }
 
   private func conversationRow(_ conversation: ChatConversation) -> some View {
-    Button {
-      openChat(conversation.id)
-    } label: {
-      HStack(spacing: 10) {
-        Image(systemName: "bubble.left")
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-          .frame(width: 24)
+    HStack(spacing: 8) {
+      Button {
+        openChat(conversation.id)
+      } label: {
+        HStack(spacing: 10) {
+          Image(systemName: "bubble.left")
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+            .frame(width: 24)
 
-        VStack(alignment: .leading, spacing: 3) {
-          Text(conversationTitle(conversation))
-            .font(.system(size: 13.5, weight: .medium))
-            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-            .lineLimit(1)
-          Text(conversationPreview(conversation))
-            .font(.caption)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(conversationTitle(conversation))
+              .font(.system(size: 13.5, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .lineLimit(1)
+            Text(conversationPreview(conversation))
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+          }
+
+          Spacer()
+
+          Text(conversation.updatedAt, format: .dateTime.month(.abbreviated).day())
+            .font(.caption2)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            .lineLimit(1)
+
+          Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
         }
-
-        Spacer()
-
-        Text(conversation.updatedAt, format: .dateTime.month(.abbreviated).day())
-          .font(.caption2)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-
-        Image(systemName: "chevron.right")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(MacDesignTokens.Colors.textMuted.opacity(0.8))
+        .contentShape(Rectangle())
       }
-      .padding(.horizontal, 12)
-      .frame(minHeight: 54)
-      .contentShape(Rectangle())
+      .buttonStyle(.plain)
+
+      Menu {
+        conversationActions(conversation)
+      } label: {
+        Image(systemName: "ellipsis")
+          .frame(width: 28, height: 28)
+      }
+      .menuStyle(.borderlessButton)
+      .fixedSize()
+      .help("Chat actions")
     }
-    .buttonStyle(.plain)
+    .padding(.horizontal, 12)
+    .frame(minHeight: 54)
     .contextMenu {
-      Button("Open", systemImage: "arrow.up.forward.app") { openChat(conversation.id) }
-      Button("Remove from Project", systemImage: "folder.badge.minus") {
-        Task { @MainActor in
-          if await workspace.removeConversation(conversation.id) {
-            await mcp.reloadFromStorage()
+      conversationActions(conversation)
+    }
+  }
+
+  @ViewBuilder
+  private func conversationActions(_ conversation: ChatConversation) -> some View {
+    Button("Open", systemImage: "arrow.up.forward.app") {
+      openChat(conversation.id)
+    }
+    Button("Rename…", systemImage: "pencil") {
+      renameTarget = conversation
+    }
+    if !otherProjects.isEmpty {
+      Menu("Move to Project", systemImage: "folder.badge.plus") {
+        ForEach(otherProjects) { targetProject in
+          Button(targetProject.name) {
+            moveConversation(conversation.id, to: targetProject.id)
           }
         }
+      }
+    }
+    Button("Remove from Project", systemImage: "folder.badge.minus") {
+      removeConversation(conversation.id)
+    }
+    Divider()
+    Button("Delete…", systemImage: "trash", role: .destructive) {
+      deleteTarget = conversation
+    }
+  }
+
+  private func moveConversation(_ conversationID: ConversationID, to targetProjectID: ProjectID) {
+    Task { @MainActor in
+      if await workspace.assignConversation(conversationID, to: targetProjectID) {
+        await mcp.reloadFromStorage()
+      }
+    }
+  }
+
+  private func removeConversation(_ conversationID: ConversationID) {
+    Task { @MainActor in
+      if await workspace.removeConversation(conversationID) {
+        await mcp.reloadFromStorage()
+      }
+    }
+  }
+
+  private func deleteConversation(_ conversationID: ConversationID) {
+    Task { @MainActor in
+      let deleted = await chats.deleteConversation(conversationID)
+      if let error = chats.errorMessage {
+        workspace.errorMessage = error
+        chats.errorMessage = nil
+      }
+      if deleted {
+        await workspace.reload()
+        await mcp.reloadFromStorage()
       }
     }
   }
@@ -875,6 +1021,11 @@ private struct MacProjectSourcesWorkspaceView: View {
   @State private var searchText = ""
   @State private var showingImporter = false
   @State private var isWorking = false
+  @State private var previewFile: ProjectFile?
+  @State private var previewURL: URL?
+  @State private var previewLoadingID: String?
+  @State private var previewRequestID = UUID()
+  @State private var showingPreview = false
 
   private var visibleFiles: [ProjectFile] {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -896,7 +1047,11 @@ private struct MacProjectSourcesWorkspaceView: View {
           .frame(maxWidth: 340)
         Spacer()
         Button("Add Files", systemImage: "doc.badge.plus") { showingImporter = true }
-          .disabled(project.projectFiles.count >= 8 || isWorking || workspace.isBusy)
+          .disabled(
+            project.projectFiles.count >= ProjectWorkspaceStore.maxFileCount
+              || isWorking
+              || workspace.isBusy
+          )
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
@@ -947,9 +1102,11 @@ private struct MacProjectSourcesWorkspaceView: View {
           Divider()
 
           HStack {
-            Text("\(project.projectFiles.count) of 8 files · \(formattedTotalBytes) of 40 MB")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            Text(
+              "\(project.projectFiles.count) of \(ProjectWorkspaceStore.maxFileCount) files · \(formattedTotalBytes) of 40 MB"
+            )
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
             Spacer()
           }
           .padding(.horizontal, 16)
@@ -958,6 +1115,14 @@ private struct MacProjectSourcesWorkspaceView: View {
         }
       }
     }
+    .onChange(of: project.id) { _, _ in
+      showingPreview = false
+      cleanupPreview()
+      previewFile = nil
+    }
+    .onDisappear {
+      cleanupPreview()
+    }
     .fileImporter(
       isPresented: $showingImporter,
       allowedContentTypes: [.item],
@@ -965,28 +1130,55 @@ private struct MacProjectSourcesWorkspaceView: View {
     ) { result in
       importFiles(result)
     }
+    .sheet(
+      isPresented: $showingPreview,
+      onDismiss: {
+        cleanupPreview()
+        previewFile = nil
+      }
+    ) {
+      previewSheet
+    }
   }
 
   private func sourceRow(_ file: ProjectFile) -> some View {
     HStack(spacing: 12) {
-      Image(systemName: file.mimeType.hasPrefix("image/") ? "photo" : "doc.fill")
-        .foregroundStyle(MacDesignTokens.Colors.accent)
-        .frame(width: 30, height: 30)
-        .background(MacDesignTokens.Colors.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+      Button {
+        preview(file)
+      } label: {
+        HStack(spacing: 12) {
+          Image(systemName: sourceSymbol(file))
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+            .frame(width: 30, height: 30)
+            .background(MacDesignTokens.Colors.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
 
-      VStack(alignment: .leading, spacing: 3) {
-        Text(file.filename)
-          .font(.system(size: 13.5, weight: .medium))
-          .lineLimit(1)
-        Text("\(sourceType(file)) · \(macProjectFileDetail(file))")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          .lineLimit(1)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(file.filename)
+              .font(.system(size: 13.5, weight: .medium))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+              .lineLimit(1)
+            Text("\(sourceType(file)) · \(macProjectFileDetail(file))")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+          }
+
+          Spacer()
+
+          if previewLoadingID == file.id {
+            ProgressView()
+              .controlSize(.small)
+          }
+        }
+        .contentShape(Rectangle())
       }
-
-      Spacer()
+      .buttonStyle(.plain)
 
       Menu {
+        Button("Preview", systemImage: "eye") {
+          preview(file)
+        }
+        Divider()
         Button("Remove from Project", systemImage: "trash", role: .destructive) {
           remove(file)
         }
@@ -1000,19 +1192,134 @@ private struct MacProjectSourcesWorkspaceView: View {
     .padding(.horizontal, 12)
     .frame(minHeight: 56)
     .contextMenu {
-      Button("Remove from Project", role: .destructive) { remove(file) }
+      Button("Preview", systemImage: "eye") { preview(file) }
+      Divider()
+      Button("Remove from Project", systemImage: "trash", role: .destructive) { remove(file) }
     }
+  }
+
+  @ViewBuilder
+  private var previewSheet: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(previewFile?.filename ?? "Preview")
+            .font(.headline)
+          if let previewFile {
+            Text("\(sourceType(previewFile)) · \(macProjectFileDetail(previewFile))")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          }
+        }
+
+        Spacer()
+
+        Button("Done") {
+          showingPreview = false
+        }
+        .keyboardShortcut(.cancelAction)
+      }
+      .padding(.horizontal, 16)
+      .frame(height: 52)
+
+      Divider()
+
+      if let previewURL {
+        MacLibraryQuickLookView(url: previewURL)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ProgressView()
+          .controlSize(.large)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .frame(minWidth: 760, idealWidth: 900, minHeight: 560, idealHeight: 680)
+    .background(MacDesignTokens.Colors.canvas)
   }
 
   private var formattedTotalBytes: String {
     ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file)
   }
 
+  private func sourceSymbol(_ file: ProjectFile) -> String {
+    if MacProjectFileImportSupport.isImageMIMEType(file.mimeType) { return "photo" }
+    if MacProjectFileImportSupport.isTextLikeMIMEType(file.mimeType) { return "doc.text.fill" }
+    return "doc.fill"
+  }
+
   private func sourceType(_ file: ProjectFile) -> String {
-    if file.mimeType.hasPrefix("image/") { return "Image" }
+    if MacProjectFileImportSupport.isImageMIMEType(file.mimeType) { return "Image" }
     if file.mimeType.lowercased().contains("pdf") { return "PDF" }
     let ext = (file.filename as NSString).pathExtension
     return ext.isEmpty ? "File" : ext.uppercased()
+  }
+
+  private func preview(_ file: ProjectFile) {
+    let requestID = UUID()
+    previewRequestID = requestID
+    previewLoadingID = file.id
+    let fileID = file.id
+    let filename = file.filename
+
+    Task { @MainActor in
+      guard let data = await workspace.fileData(fileID), !data.isEmpty else {
+        if previewRequestID == requestID {
+          previewLoadingID = nil
+          workspace.errorMessage = "The file '\(filename)' could not be loaded."
+        }
+        return
+      }
+      guard previewRequestID == requestID else { return }
+
+      do {
+        let tempURL = try await Task.detached(priority: .userInitiated) {
+          let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+              "BYOKchat-project-preview-\(requestID.uuidString)",
+              isDirectory: true
+            )
+          try? FileManager.default.removeItem(at: directory)
+          try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+          )
+          let safeName = MacProjectFileImportSupport.safePreviewFilename(filename)
+          let url = directory.appendingPathComponent(safeName, isDirectory: false)
+          try data.write(to: url, options: .atomic)
+          return url
+        }.value
+
+        guard previewRequestID == requestID else {
+          try? FileManager.default.removeItem(at: tempURL.deletingLastPathComponent())
+          return
+        }
+
+        cleanupPreviewFileOnly()
+        previewFile = file
+        previewURL = tempURL
+        previewLoadingID = nil
+        showingPreview = true
+      } catch {
+        if previewRequestID == requestID {
+          previewLoadingID = nil
+          MacAppAnalytics.reportError("project_file_preview_failed", component: "projects")
+          workspace.errorMessage = error.localizedDescription
+        }
+      }
+    }
+  }
+
+  private func cleanupPreviewFileOnly() {
+    if let previewURL {
+      try? FileManager.default.removeItem(at: previewURL.deletingLastPathComponent())
+    }
+    self.previewURL = nil
+  }
+
+  private func cleanupPreview() {
+    previewRequestID = UUID()
+    cleanupPreviewFileOnly()
+    previewLoadingID = nil
   }
 
   private func remove(_ file: ProjectFile) {
@@ -1030,33 +1337,19 @@ private struct MacProjectSourcesWorkspaceView: View {
       workspace.errorMessage = error.localizedDescription
     case .success(let urls):
       guard !urls.isEmpty else { return }
+      let existingCount = project.projectFiles.count
+      let existingBytes = totalBytes
       isWorking = true
       Task { @MainActor in
         defer { isWorking = false }
         do {
-          var additions: [ProjectFile] = []
-          for url in urls {
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-
-            let values = try url.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey])
-            if let fileSize = values.fileSize, fileSize > 20 * 1_024 * 1_024 {
-              throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
-            }
-
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            guard data.count <= 20 * 1_024 * 1_024 else {
-              throw ProviderError.invalidRequest("\(url.lastPathComponent) is larger than 20 MB.")
-            }
-            let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
-            additions.append(
-              ProjectFile(
-                filename: url.lastPathComponent,
-                mimeType: type.preferredMIMEType ?? "application/octet-stream",
-                data: data
-              )
+          let additions = try await Task.detached(priority: .userInitiated) {
+            try MacProjectFileImportSupport.importFiles(
+              from: urls,
+              existingCount: existingCount,
+              existingBytes: existingBytes
             )
-          }
+          }.value
 
           if await workspace.addProjectFiles(additions, to: project.id) {
             await mcp.reloadFromStorage()
@@ -1078,6 +1371,8 @@ private struct MacProjectToolsWorkspaceView: View {
   @State private var configuration: MCPChatToolConfiguration
   @State private var presets: [ProjectToolPreset]
   @State private var showingSavePreset = false
+  @State private var pendingOverwriteOnDismiss: String?
+  @State private var pendingOverwriteName: String?
   @State private var isSaving = false
 
   init(
@@ -1121,14 +1416,46 @@ private struct MacProjectToolsWorkspaceView: View {
           .frame(width: 250)
       }
     }
-    .sheet(isPresented: $showingSavePreset) {
-      MacProjectToolPresetNameSheet { name in
-        savePreset(named: name)
+    .sheet(
+      isPresented: $showingSavePreset,
+      onDismiss: {
+        if let nameToOverwrite = pendingOverwriteOnDismiss {
+          pendingOverwriteOnDismiss = nil
+          pendingOverwriteName = nameToOverwrite
+        }
+      }
+    ) {
+      MacProjectToolPresetNameSheet(existingPresets: presets) { name in
+        requestSavePreset(named: name)
+      }
+    }
+    .confirmationDialog(
+      "Replace Tool Preset?",
+      isPresented: Binding(
+        get: { pendingOverwriteName != nil },
+        set: { if !$0 { pendingOverwriteName = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Replace", role: .destructive) {
+        if let nameToOverwrite = pendingOverwriteName {
+          commitSavePreset(named: nameToOverwrite)
+        }
+        pendingOverwriteName = nil
+      }
+      Button("Cancel", role: .cancel) {
+        pendingOverwriteName = nil
+      }
+    } message: {
+      if let nameToOverwrite = pendingOverwriteName {
+        Text("A tool preset named \"\(nameToOverwrite)\" already exists. Replace it with the current tool settings?")
       }
     }
     .onChange(of: project.id) { _, _ in
       configuration = project.mcpConfiguration ?? MCPChatToolConfiguration()
       presets = project.projectToolPresets
+      pendingOverwriteOnDismiss = nil
+      pendingOverwriteName = nil
     }
   }
 
@@ -1200,15 +1527,23 @@ private struct MacProjectToolsWorkspaceView: View {
     .background(MacDesignTokens.Colors.canvas)
   }
 
-  private func savePreset(named rawName: String) {
+  private func requestSavePreset(named rawName: String) {
     let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty else { return }
+    guard !name.isEmpty, name.count <= ProjectWorkspaceStore.maxPresetNameLength else { return }
+    if presets.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+      pendingOverwriteOnDismiss = name
+    } else if presets.count < ProjectWorkspaceStore.maxPresetCount {
+      commitSavePreset(named: name)
+    }
+  }
+
+  private func commitSavePreset(named name: String) {
     if let index = presets.firstIndex(where: {
       $0.name.caseInsensitiveCompare(name) == .orderedSame
     }) {
       presets[index].name = name
       presets[index].configuration = configuration
-    } else {
+    } else if presets.count < ProjectWorkspaceStore.maxPresetCount {
       presets.append(ProjectToolPreset(name: name, configuration: configuration))
     }
   }
@@ -1248,6 +1583,24 @@ private struct MacProjectCreateSheet: View {
 
   private let symbols = MacProjectWorkspaceEditorSupport.symbols
 
+  private var trimmedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var nameValidationError: String? {
+    guard !trimmedName.isEmpty else { return nil }
+    if trimmedName.count > ProjectWorkspaceStore.maxNameLength {
+      return "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
+    }
+    let hasDuplicate = workspace.projects.contains {
+      $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+    }
+    if hasDuplicate {
+      return "A project with this name already exists."
+    }
+    return nil
+  }
+
   private var enabledAccounts: [ProviderAccount] {
     providers.accounts.filter(\.isEnabled)
   }
@@ -1258,7 +1611,7 @@ private struct MacProjectCreateSheet: View {
   }
 
   private var canCreate: Bool {
-    !isSaving && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !isSaving && !trimmedName.isEmpty && nameValidationError == nil
   }
 
   var body: some View {
@@ -1275,15 +1628,23 @@ private struct MacProjectCreateSheet: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          HStack(spacing: 14) {
-            Image(systemName: symbolName)
-              .font(.system(size: 22, weight: .semibold))
-              .foregroundStyle(selectedAccent)
-              .frame(width: 52, height: 52)
-              .background(selectedAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+              Image(systemName: symbolName)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(selectedAccent)
+                .frame(width: 52, height: 52)
+                .background(selectedAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
 
-            TextField("Project name", text: $name)
-              .textFieldStyle(.roundedBorder)
+              TextField("Project name", text: $name)
+                .textFieldStyle(.roundedBorder)
+            }
+
+            if let nameValidationError {
+              Text(nameValidationError)
+                .font(.caption)
+                .foregroundStyle(.red)
+            }
           }
 
           VStack(alignment: .leading, spacing: 8) {
@@ -1426,19 +1787,49 @@ private struct MacProjectIdentityEditor: View {
     _accentID = State(initialValue: project.accentID)
   }
 
+  private var trimmedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var nameValidationError: String? {
+    guard !trimmedName.isEmpty else { return nil }
+    if trimmedName.count > ProjectWorkspaceStore.maxNameLength {
+      return "Project names must be \(ProjectWorkspaceStore.maxNameLength) characters or fewer."
+    }
+    let hasDuplicate = workspace.projects.contains {
+      $0.id != project.id && $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+    }
+    if hasDuplicate {
+      return "A project with this name already exists."
+    }
+    return nil
+  }
+
+  private var canSave: Bool {
+    !isSaving && !trimmedName.isEmpty && nameValidationError == nil
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       MacProjectSheetHeader(
         title: "Project",
         primaryTitle: "Save",
-        primaryEnabled: !isSaving && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        primaryEnabled: canSave,
         cancel: { dismiss() },
         primary: save
       )
       Divider()
       Form {
         TextField("Name", text: $name)
+        if let nameValidationError {
+          Text(nameValidationError)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
         Picker("Icon", selection: $symbolName) {
+          if !MacProjectWorkspaceEditorSupport.symbols.contains(symbolName) {
+            Label("Custom", systemImage: symbolName).tag(symbolName)
+          }
           ForEach(MacProjectWorkspaceEditorSupport.symbols, id: \.self) { symbol in
             Label(MacProjectWorkspaceEditorSupport.symbolTitle(symbol), systemImage: symbol).tag(symbol)
           }
@@ -1457,10 +1848,11 @@ private struct MacProjectIdentityEditor: View {
       .formStyle(.grouped)
       .padding(10)
     }
-    .frame(width: 480, height: 330)
+    .frame(width: 480, height: 350)
   }
 
   private func save() {
+    guard canSave else { return }
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
@@ -1506,9 +1898,44 @@ private struct MacProjectDefaultsEditor: View {
     providers.accounts.filter(\.isEnabled)
   }
 
+  private var selectedAccount: ProviderAccount? {
+    guard let accountID else { return nil }
+    return enabledAccounts.first { $0.id == accountID }
+  }
+
+  private var unavailableAccountLabel: String? {
+    guard let accountID, selectedAccount == nil else { return nil }
+    if let disabled = providers.accounts.first(where: { $0.id == accountID }) {
+      return "\(disabled.label) (Disabled)"
+    }
+    return "Unavailable Account"
+  }
+
   private var availableModels: [AccountModelRecord] {
     guard let accountID else { return [] }
     return providers.models(for: accountID).filter(\.isAvailable)
+  }
+
+  private var unavailableModelLabel: String? {
+    guard let accountID, let modelID,
+      !availableModels.contains(where: { $0.model.id == modelID })
+    else { return nil }
+    if let record = providers.models(for: accountID, includeHidden: true)
+      .first(where: { $0.model.id == modelID })
+    {
+      return "\(record.model.displayName) (Unavailable)"
+    }
+    return "\(modelID.rawValue) (Unavailable)"
+  }
+
+  private var hasUnavailableDefaults: Bool {
+    unavailableAccountLabel != nil || unavailableModelLabel != nil
+  }
+
+  private var canSave: Bool {
+    !isSaving
+      && (accountID == nil || selectedAccount != nil)
+      && (accountID == nil || modelID == nil || availableModels.contains(where: { $0.model.id == modelID }))
   }
 
   var body: some View {
@@ -1516,7 +1943,7 @@ private struct MacProjectDefaultsEditor: View {
       MacProjectSheetHeader(
         title: "New Chat Defaults",
         primaryTitle: "Save",
-        primaryEnabled: !isSaving,
+        primaryEnabled: canSave,
         cancel: { dismiss() },
         primary: save
       )
@@ -1524,6 +1951,9 @@ private struct MacProjectDefaultsEditor: View {
       Form {
         Picker("Provider Account", selection: $accountID) {
           Text("App Default").tag(nil as ProviderAccountID?)
+          if let unavailableAccountLabel, let accountID {
+            Text(unavailableAccountLabel).tag(Optional(accountID))
+          }
           ForEach(enabledAccounts) { account in
             Text(account.label).tag(Optional(account.id))
           }
@@ -1531,10 +1961,21 @@ private struct MacProjectDefaultsEditor: View {
         if accountID != nil {
           Picker("Model", selection: $modelID) {
             Text("Account Default").tag(nil as ModelID?)
+            if let unavailableModelLabel, let modelID {
+              Text(unavailableModelLabel).tag(Optional(modelID))
+            }
             ForEach(availableModels) { record in
               Text(record.model.displayName).tag(Optional(record.model.id))
             }
           }
+        }
+        if hasUnavailableDefaults {
+          Label(
+            "The previously selected provider account or model is no longer available. Choose an active option or switch back to App Default / Account Default before saving.",
+            systemImage: "exclamationmark.triangle.fill"
+          )
+          .font(.caption)
+          .foregroundStyle(.orange)
         }
         Text("Changes apply to new chats. Existing chats keep their current provider and model.")
           .font(.caption)
@@ -1543,7 +1984,7 @@ private struct MacProjectDefaultsEditor: View {
       .formStyle(.grouped)
       .padding(10)
     }
-    .frame(width: 520, height: 320)
+    .frame(width: 520, height: 360)
     .onChange(of: accountID) { _, value in
       guard let value else {
         modelID = nil
@@ -1560,6 +2001,7 @@ private struct MacProjectDefaultsEditor: View {
   }
 
   private func save() {
+    guard canSave else { return }
     isSaving = true
     Task { @MainActor in
       defer { isSaving = false }
@@ -1633,17 +2075,48 @@ private struct MacProjectInstructionsEditor: View {
 
 private struct MacProjectPromptEditor: View {
   let existing: ProjectPromptPreset?
+  let existingNames: Set<String>
+  let atLimit: Bool
   let save: (ProjectPromptPreset) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @State private var name: String
   @State private var prompt: String
 
-  init(existing: ProjectPromptPreset?, save: @escaping (ProjectPromptPreset) -> Void) {
+  init(
+    existing: ProjectPromptPreset?,
+    existingNames: Set<String>,
+    atLimit: Bool = false,
+    save: @escaping (ProjectPromptPreset) -> Void
+  ) {
     self.existing = existing
+    self.existingNames = existingNames
+    self.atLimit = atLimit
     self.save = save
     _name = State(initialValue: existing?.name ?? "")
     _prompt = State(initialValue: existing?.prompt ?? "")
+  }
+
+  private var trimmedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var trimmedPrompt: String {
+    prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var nameError: String? {
+    if atLimit {
+      return "A project can contain at most \(ProjectWorkspaceStore.maxPresetCount) presets."
+    }
+    guard !trimmedName.isEmpty else { return nil }
+    if trimmedName.count > ProjectWorkspaceStore.maxPresetNameLength {
+      return "Preset names must be \(ProjectWorkspaceStore.maxPresetNameLength) characters or fewer."
+    }
+    if existingNames.contains(trimmedName.lowercased()) {
+      return "A prompt preset with this name already exists."
+    }
+    return nil
   }
 
   var body: some View {
@@ -1656,8 +2129,13 @@ private struct MacProjectPromptEditor: View {
         primary: saveValue
       )
       Divider()
-      VStack(alignment: .leading, spacing: 12) {
+      VStack(alignment: .leading, spacing: 10) {
         TextField("Name", text: $name)
+        if let nameError {
+          Text(nameError)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
         TextEditor(text: $prompt)
           .frame(minHeight: 190)
           .padding(8)
@@ -1669,12 +2147,14 @@ private struct MacProjectPromptEditor: View {
       }
       .padding(16)
     }
-    .frame(width: 520, height: 360)
+    .frame(width: 520, height: 380)
   }
 
   private var canSave: Bool {
-    !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !atLimit
+      && !trimmedName.isEmpty
+      && !trimmedPrompt.isEmpty
+      && nameError == nil
   }
 
   private func saveValue() {
@@ -1682,8 +2162,8 @@ private struct MacProjectPromptEditor: View {
     save(
       ProjectPromptPreset(
         id: existing?.id ?? UUID().uuidString.lowercased(),
-        name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-        prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        name: trimmedName,
+        prompt: trimmedPrompt
       )
     )
     dismiss()
@@ -1691,37 +2171,136 @@ private struct MacProjectPromptEditor: View {
 }
 
 private struct MacProjectToolPresetNameSheet: View {
+  let existingPresets: [ProjectToolPreset]
   let save: (String) -> Void
 
   @Environment(\.dismiss) private var dismiss
   @State private var name = ""
+
+  private var trimmedName: String {
+    name.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var matchesExistingPreset: Bool {
+    guard !trimmedName.isEmpty else { return false }
+    return existingPresets.contains {
+      $0.name.caseInsensitiveCompare(trimmedName) == .orderedSame
+    }
+  }
+
+  private var validationError: String? {
+    if trimmedName.count > ProjectWorkspaceStore.maxPresetNameLength {
+      return "Preset names must be \(ProjectWorkspaceStore.maxPresetNameLength) characters or fewer."
+    }
+    if !matchesExistingPreset && existingPresets.count >= ProjectWorkspaceStore.maxPresetCount {
+      return "A project can contain at most \(ProjectWorkspaceStore.maxPresetCount) tool presets. Enter an existing preset name to update it, or delete one first."
+    }
+    return nil
+  }
+
+  private var canSave: Bool {
+    !trimmedName.isEmpty && validationError == nil
+  }
 
   var body: some View {
     VStack(spacing: 0) {
       MacProjectSheetHeader(
         title: "Save Tool Preset",
         primaryTitle: "Save",
-        primaryEnabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        primaryEnabled: canSave,
         cancel: { dismiss() },
         primary: saveValue
       )
       Divider()
       VStack(alignment: .leading, spacing: 10) {
         TextField("Preset name", text: $name)
-        Text("Saving with an existing preset name replaces that preset.")
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .onSubmit { saveValue() }
+        if let validationError {
+          Text(validationError)
+            .font(.caption)
+            .foregroundStyle(.red)
+        } else {
+          Text("Saving with an existing preset name will ask before replacing that preset.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
       }
       .padding(16)
     }
-    .frame(width: 420, height: 180)
+    .frame(width: 440, height: 190)
   }
 
   private func saveValue() {
-    let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    save(value)
+    guard canSave else { return }
+    save(trimmedName)
     dismiss()
+  }
+}
+
+private struct MacProjectChatRenameSheet: View {
+  let conversation: ChatConversation
+  let save: (String) async -> Bool
+
+  @Environment(\.dismiss) private var dismiss
+  @FocusState private var titleFocused: Bool
+  @State private var title: String
+  @State private var isSaving = false
+
+  init(
+    conversation: ChatConversation,
+    save: @escaping (String) async -> Bool
+  ) {
+    self.conversation = conversation
+    self.save = save
+    _title = State(initialValue: conversation.title)
+  }
+
+  private var trimmedTitle: String {
+    title.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var canSave: Bool {
+    let original = conversation.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmedTitle.isEmpty && trimmedTitle != original && !isSaving
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Rename Conversation")
+        .font(.headline)
+
+      TextField("Conversation name", text: $title)
+        .textFieldStyle(.roundedBorder)
+        .focused($titleFocused)
+        .onSubmit { commit() }
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Rename") { commit() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave)
+      }
+    }
+    .padding(20)
+    .frame(width: 380)
+    .onAppear {
+      titleFocused = true
+    }
+  }
+
+  private func commit() {
+    guard canSave else { return }
+    let value = trimmedTitle
+    isSaving = true
+    Task { @MainActor in
+      if await save(value) {
+        dismiss()
+      } else {
+        isSaving = false
+      }
+    }
   }
 }
 
@@ -1746,6 +2325,7 @@ private struct MacProjectWorkspaceIcon: View {
 private struct MacProjectValueRow: View {
   let title: String
   let value: String
+  var valueColor: Color? = nil
 
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
@@ -1755,7 +2335,7 @@ private struct MacProjectValueRow: View {
         .frame(width: 120, alignment: .leading)
       Text(value)
         .font(.system(size: 13.5, weight: .medium))
-        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        .foregroundStyle(valueColor ?? MacDesignTokens.Colors.textPrimary)
     }
   }
 }

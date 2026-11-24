@@ -125,6 +125,37 @@ struct MacStreamingAnswerRendererTests {
     #expect(closedMath.tailBlocks.isEmpty)
   }
 
+  @Test("Streaming GFM table parses as table block in tail and freezes once followed")
+  func streamingTableTransitionsToStableBlock() async {
+    let renderer = MacStreamingAnswerRenderer()
+    let tableSource = """
+    | Name | Score |
+    | :--- | ---: |
+    | Ada | 10 |
+    """
+
+    let live = await renderer.update(source: tableSource)
+    #expect(live.stableBlocks.isEmpty)
+    #expect(live.tailBlocks.count == 1)
+    if case .table(let tailTable) = live.tailBlocks[0] {
+      #expect(tailTable.headers == ["Name", "Score"])
+      #expect(tailTable.alignments == [.leading, .trailing])
+      #expect(tailTable.rows == [["Ada", "10"]])
+    } else {
+      Issue.record("Expected tail block to be a parsed table")
+    }
+
+    let followed = await renderer.update(source: tableSource + "\n\nSummary below")
+    #expect(followed.stableBlocks.count == 1)
+    if case .table(let stableTable) = followed.stableBlocks[0].block {
+      #expect(stableTable.headers == ["Name", "Score"])
+      #expect(stableTable.rows == [["Ada", "10"]])
+    } else {
+      Issue.record("Expected stable block to be a parsed table")
+    }
+    #expect(followed.tailBlocks == [.markdown("Summary below")])
+  }
+
   @Test("Long streamed prose keeps one bounded mutable tail")
   func longResponseKeepsTailBounded() async {
     let renderer = MacStreamingAnswerRenderer()

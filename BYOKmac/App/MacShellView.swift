@@ -48,11 +48,23 @@ struct MacShellView: View {
       sidebarWidth: MacDesignTokens.Layout.sidebarIdeal
     ) {
       MacSidebarView(
+        providers: providers,
         chats: chats,
         selection: $navigation.requestedID,
         searchText: $searchText,
         searchFocusRequestID: model.conversationSearchRequestID,
         newChat: { startNewChat(chats: chats) },
+        selectSearchResult: { item in
+          navigation.requestedID = item.conversationID
+          if let messageID = item.messageID {
+            navigation.navigateToMessage(
+              MacConversationNavigationRequest(
+                conversationID: item.conversationID,
+                messageID: messageID
+              )
+            )
+          }
+        },
         rename: { renameTarget = $0 },
         delete: { deleteTarget = $0 }
       )
@@ -186,10 +198,20 @@ struct MacShellView: View {
     }
     .sheet(isPresented: $showingChatTools) {
       if let toolsConversationID {
+        let target = chats.target(for: toolsConversationID)
+        let modelSupportsTools = target.map {
+          providers.capabilities(accountID: $0.accountID, modelID: $0.modelID)[.tools] != .unsupported
+        } ?? true
         MacChatToolsView(
           mcp: mcp,
           conversationID: toolsConversationID,
-          presets: model.workspace?.project(for: toolsConversationID)?.projectToolPresets ?? []
+          presets: model.workspace?.project(for: toolsConversationID)?.projectToolPresets ?? [],
+          isGenerating: chats.isGenerating(toolsConversationID),
+          modelSupportsTools: modelSupportsTools,
+          manageServers: {
+            showingChatTools = false
+            utilitySheets.present(.mcpServers)
+          }
         )
       }
     }
@@ -464,12 +486,184 @@ private struct MacAppShell<Sidebar: View, Content: View>: View {
   }
 }
 
+struct MacChatListSection: Identifiable, Equatable, Sendable {
+  let id: String
+  let title: String
+  let isPinned: Bool
+  let conversations: [ChatConversation]
+}
+
+enum MacChatListGrouping {
+  static func sections(
+    from history: [ChatConversation],
+    pinnedIDs: Set<String>,
+    now: Date = .now,
+    calendar: Calendar = .current,
+    locale: Locale = .current
+  ) -> [MacChatListSection] {
+    let sortedByRecency: (ChatConversation, ChatConversation) -> Bool = { lhs, rhs in
+      if lhs.updatedAt != rhs.updatedAt {
+        return lhs.updatedAt > rhs.updatedAt
+      }
+      return lhs.id.rawValue > rhs.id.rawValue
+    }
+
+    let pinned = history
+      .filter { pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+    let unpinned = history
+      .filter { !pinnedIDs.contains($0.id.rawValue) }
+      .sorted(by: sortedByRecency)
+
+    var sections: [MacChatListSection] = []
+    if !pinned.isEmpty {
+      sections.append(
+        MacChatListSection(
+          id: "pinned",
+          title: "Pinned",
+          isPinned: true,
+          conversations: pinned
+        )
+      )
+    }
+
+    let startOfToday = calendar.startOfDay(for: now)
+    let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+    let startOfLast7Days = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
+    let startOfLast30Days = calendar.date(byAdding: .day, value: -30, to: startOfToday) ?? startOfToday
+
+    var today: [ChatConversation] = []
+    var yesterday: [ChatConversation] = []
+    var last7Days: [ChatConversation] = []
+    var last30Days: [ChatConversation] = []
+    var monthOrder: [String] = []
+    var monthTitles: [String: String] = [:]
+    var monthBuckets: [String: [ChatConversation]] = [:]
+    let monthFormat = Date.FormatStyle(
+      locale: locale,
+      calendar: calendar,
+      timeZone: calendar.timeZone
+    ).month(.wide).year()
+
+    for conversation in unpinned {
+      if conversation.updatedAt >= startOfToday {
+        today.append(conversation)
+      } else if conversation.updatedAt >= startOfYesterday {
+        yesterday.append(conversation)
+      } else if conversation.updatedAt >= startOfLast7Days {
+        last7Days.append(conversation)
+      } else if conversation.updatedAt >= startOfLast30Days {
+        last30Days.append(conversation)
+      } else {
+        let components = calendar.dateComponents([.year, .month], from: conversation.updatedAt)
+        let year = components.year ?? 0
+        let month = components.month ?? 0
+        let key = "month-\(year)-\(month)"
+        if monthBuckets[key] == nil {
+          monthOrder.append(key)
+          let monthAnchor = calendar.date(from: DateComponents(year: year, month: month, day: 1))
+            ?? conversation.updatedAt
+          monthTitles[key] = monthAnchor.formatted(monthFormat)
+        }
+        monthBuckets[key, default: []].append(conversation)
+      }
+    }
+
+    if !today.isEmpty {
+      sections.append(
+        MacChatListSection(id: "today", title: "Today", isPinned: false, conversations: today)
+      )
+    }
+    if !yesterday.isEmpty {
+      sections.append(
+        MacChatListSection(
+          id: "yesterday",
+          title: "Yesterday",
+          isPinned: false,
+          conversations: yesterday
+        )
+      )
+    }
+    if !last7Days.isEmpty {
+      sections.append(
+        MacChatListSection(
+          id: "last7days",
+          title: "Previous 7 Days",
+          isPinned: false,
+          conversations: last7Days
+        )
+      )
+    }
+    if !last30Days.isEmpty {
+      sections.append(
+        MacChatListSection(
+          id: "last30days",
+          title: "Previous 30 Days",
+          isPinned: false,
+          conversations: last30Days
+        )
+      )
+    }
+    for key in monthOrder {
+      guard let items = monthBuckets[key], !items.isEmpty else { continue }
+      sections.append(
+        MacChatListSection(
+          id: key,
+          title: monthTitles[key] ?? "Older",
+          isPinned: false,
+          conversations: items
+        )
+      )
+    }
+
+    return sections
+  }
+}
+
+enum MacSidebarSearchSupport {
+  static func subtitle(
+    for item: MacChatSessionModel.SearchItem,
+    summary: ChatConversation?
+  ) -> String? {
+    let trimmedTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedSnippet = item.snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+    if item.role == .title || trimmedSnippet == trimmedTitle {
+      let preview = summary?.lastMessagePreview?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      return preview.isEmpty ? nil : preview
+    }
+    return trimmedSnippet.isEmpty ? nil : trimmedSnippet
+  }
+}
+
+private struct MacSidebarProjectIconView: View {
+  let project: ChatProject
+  var size: CGFloat = 17
+
+  private var color: Color {
+    MacProjectAccentOption(rawValue: project.accentID)?.color ?? .blue
+  }
+
+  var body: some View {
+    Image(systemName: project.symbolName)
+      .font(.system(size: size * 0.48, weight: .semibold))
+      .foregroundStyle(color)
+      .frame(width: size, height: size)
+      .background(
+        color.opacity(0.14),
+        in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+      )
+      .accessibilityHidden(true)
+  }
+}
+
 private struct MacSidebarView: View {
+  @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
   @Binding var selection: ConversationID?
   @Binding var searchText: String
   let searchFocusRequestID: Int
   let newChat: () -> Void
+  let selectSearchResult: (MacChatSessionModel.SearchItem) -> Void
   let rename: (ChatConversation) -> Void
   let delete: (ChatConversation) -> Void
 
@@ -490,16 +684,18 @@ private struct MacSidebarView: View {
     )
   }
 
-  private var pinnedConversations: [ChatConversation] {
-    chats.conversationSummaries
-      .filter { pinnedIDSet.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
+  private var conversationSections: [MacChatListSection] {
+    MacChatListGrouping.sections(
+      from: chats.conversationSummaries,
+      pinnedIDs: pinnedIDSet
+    )
   }
 
-  private var recentConversations: [ChatConversation] {
-    chats.conversationSummaries
-      .filter { !pinnedIDSet.contains($0.id.rawValue) }
-      .sorted { $0.updatedAt > $1.updatedAt }
+  private var accountsByID: [ProviderAccountID: ProviderAccount] {
+    Dictionary(
+      providers.accounts.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
   }
 
   var body: some View {
@@ -572,26 +768,18 @@ private struct MacSidebarView: View {
   }
 
   private var conversationList: some View {
-    Group {
+    let sections = conversationSections
+    let accounts = accountsByID
+    return Group {
       if chats.conversationSummaries.isEmpty {
         sidebarEmptyState(icon: "bubble.left", text: "No conversations yet")
       } else {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 2) {
-            if !pinnedConversations.isEmpty {
-              sidebarSectionTitle("Pinned", topPadding: 2)
-              ForEach(pinnedConversations) { conversation in
-                conversationRow(conversation)
-              }
-            }
-
-            if !recentConversations.isEmpty {
-              sidebarSectionTitle(
-                "Recent",
-                topPadding: pinnedConversations.isEmpty ? 2 : 12
-              )
-              ForEach(recentConversations) { conversation in
-                conversationRow(conversation)
+            ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+              sidebarSectionTitle(section.title, topPadding: index == 0 ? 2 : 12)
+              ForEach(section.conversations) { conversation in
+                conversationRow(conversation, account: accounts[conversation.accountID])
               }
             }
           }
@@ -611,13 +799,21 @@ private struct MacSidebarView: View {
       .padding(.bottom, 3)
   }
 
-  private func conversationRow(_ conversation: ChatConversation) -> some View {
+  private func conversationRow(
+    _ conversation: ChatConversation,
+    account: ProviderAccount?
+  ) -> some View {
     let pinned = pinnedIDSet.contains(conversation.id.rawValue)
     let currentProject = workspace.project(for: conversation.id)
+    let hasDraft = !chats.draft(for: conversation.id)
+      .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return MacConversationRow(
       conversation: conversation,
+      account: account,
       selected: selection == conversation.id,
       pinned: pinned,
+      isGenerating: chats.isGenerating(conversation.id),
+      hasDraft: hasDraft,
       currentProject: currentProject,
       projects: workspace.projects,
       action: { selection = conversation.id },
@@ -637,8 +833,30 @@ private struct MacSidebarView: View {
     )
   }
 
+  private var indexingProgressLabel: String {
+    if let progress = chats.searchIndexingProgress, progress.total > 0 {
+      return "Indexing messages (\(progress.processed)/\(progress.total))…"
+    }
+    return "Indexing messages…"
+  }
+
   private var searchResults: some View {
-    Group {
+    VStack(spacing: 0) {
+      if chats.isIndexingSearch {
+        HStack(spacing: 7) {
+          ProgressView()
+            .controlSize(.mini)
+          Text(indexingProgressLabel)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, MacDesignTokens.Spacing.compact)
+        .padding(.vertical, 6)
+        Divider()
+      }
+
       if chats.isSearching && chats.searchItems.isEmpty {
         VStack {
           Spacer()
@@ -655,9 +873,14 @@ private struct MacSidebarView: View {
             ForEach(chats.searchItems) { item in
               MacSearchResultRow(
                 item: item,
+                subtitle: MacSidebarSearchSupport.subtitle(
+                  for: item,
+                  summary: chats.summary(item.conversationID)
+                ),
+                project: workspace.project(for: item.conversationID),
                 selected: selection == item.conversationID
               ) {
-                selection = item.conversationID
+                selectSearchResult(item)
               }
             }
           }
@@ -666,6 +889,7 @@ private struct MacSidebarView: View {
         }
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private func sidebarEmptyState(icon: String, text: String) -> some View {
@@ -750,8 +974,11 @@ private struct MacSidebarView: View {
 
 private struct MacConversationRow: View {
   let conversation: ChatConversation
+  let account: ProviderAccount?
   let selected: Bool
   let pinned: Bool
+  let isGenerating: Bool
+  let hasDraft: Bool
   let currentProject: ChatProject?
   let projects: [ChatProject]
   let action: () -> Void
@@ -767,13 +994,23 @@ private struct MacConversationRow: View {
   var body: some View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: MacDesignTokens.Spacing.xSmall) {
-        HStack(alignment: .firstTextBaseline, spacing: MacDesignTokens.Spacing.small) {
+        HStack(alignment: .center, spacing: 6) {
+          if let currentProject {
+            MacSidebarProjectIconView(project: currentProject, size: 17)
+          }
+
           Text(conversation.title.isEmpty ? "New Chat" : conversation.title)
             .font(.system(size: 13, weight: selected ? .semibold : .medium))
             .lineLimit(1)
             .foregroundStyle(.primary)
 
-          Spacer(minLength: MacDesignTokens.Spacing.small)
+          Spacer(minLength: 4)
+
+          if isGenerating {
+            ProgressView()
+              .controlSize(.mini)
+              .accessibilityLabel("Generating")
+          }
 
           Text(conversation.updatedAt.formatted(date: .omitted, time: .shortened))
             .font(.caption2)
@@ -792,6 +1029,19 @@ private struct MacConversationRow: View {
             .font(.caption)
             .foregroundStyle(.tertiary)
         }
+
+        HStack(spacing: 4) {
+          Text(account?.label ?? conversation.providerID.rawValue)
+          Text("·")
+          Text(conversation.modelID.rawValue)
+          if hasDraft {
+            Text("· Draft")
+              .foregroundStyle(MacDesignTokens.Colors.accent)
+          }
+        }
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
       }
       .padding(.horizontal, MacDesignTokens.Spacing.small)
       .padding(.vertical, 7)
@@ -842,13 +1092,18 @@ private struct MacConversationRow: View {
 
 private struct MacSearchResultRow: View {
   let item: MacChatSessionModel.SearchItem
+  let subtitle: String?
+  let project: ChatProject?
   let selected: Bool
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
+          if let project {
+            MacSidebarProjectIconView(project: project, size: 17)
+          }
           Text(item.title.isEmpty ? "New Chat" : item.title)
             .font(.system(size: 13, weight: selected ? .semibold : .medium))
             .lineLimit(1)
@@ -857,10 +1112,12 @@ private struct MacSearchResultRow: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
         }
-        Text(item.snippet)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(2)
+        if let subtitle {
+          Text(subtitle)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
       }
       .padding(.horizontal, MacDesignTokens.Spacing.small)
       .padding(.vertical, 7)

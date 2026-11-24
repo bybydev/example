@@ -6,9 +6,17 @@ import os
 /// MarkdownContent type predates Sendable. This wrapper publishes only immutable
 /// parsed values; all construction happens on the parse actor before publication.
 final class MacPreparedAnswer: @unchecked Sendable {
+  struct MarkdownSegment: @unchecked Sendable {
+    let text: String
+    let useLaTeX: Bool
+    let markdownContent: MarkdownContent?
+    let columnAlignments: [MacTableColumnAlignment]
+  }
+
   let source: String
   let blocks: [MacAnswerContentBlock]
   let markdown: [String: MarkdownContent]
+  let markdownSegments: [String: [MarkdownSegment]]
   let inlineMathSources: Set<String>
 
   init(source: String) {
@@ -16,37 +24,53 @@ final class MacPreparedAnswer: @unchecked Sendable {
     let blocks = MacAnswerContentParser.parse(source)
     self.blocks = blocks
     var markdown: [String: MarkdownContent] = [:]
+    var markdownSegments: [String: [MarkdownSegment]] = [:]
     var inlineMathSources: Set<String> = []
-    for case .markdown(let text) in blocks {
-      if Self.shouldUseInlineMathRenderer(text) {
-        inlineMathSources.insert(text)
-      } else {
-        markdown[text] = MarkdownContent(text)
+
+    for block in blocks {
+      switch block {
+      case .markdown(let text):
+        let segments = MacAnswerContentParser.splitMarkdownForInlineMath(text).map { segment in
+          if segment.useLaTeX {
+            inlineMathSources.insert(segment.text)
+            return MarkdownSegment(
+              text: segment.text,
+              useLaTeX: true,
+              markdownContent: nil,
+              columnAlignments: []
+            )
+          }
+          let content = MarkdownContent(segment.text)
+          markdown[segment.text] = content
+          return MarkdownSegment(
+            text: segment.text,
+            useLaTeX: false,
+            markdownContent: content,
+            columnAlignments: MacMarkdownTableAlignment.columnAlignments(in: segment.text) ?? []
+          )
+        }
+        markdownSegments[text] = segments
+
+      case .table(let table):
+        // Preserve pre-parsed Markdown fallback for any caller inspecting the
+        // cached MarkdownContent map directly.
+        if markdown[table.rawMarkdown] == nil {
+          markdown[table.rawMarkdown] = MarkdownContent(table.rawMarkdown)
+        }
+
+      case .code, .math:
+        break
       }
     }
+
     self.markdown = markdown
+    self.markdownSegments = markdownSegments
     self.inlineMathSources = inlineMathSources
   }
 
   static func shouldUseInlineMathRenderer(_ markdown: String) -> Bool {
-    guard MacAnswerContentParser.containsInlineMath(markdown),
-      MacAnswerContentParser.isLikelyBalancedInlineMath(markdown)
-    else { return false }
-
-    for line in markdown.components(separatedBy: .newlines) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      if trimmed.hasPrefix("#")
-        || trimmed.hasPrefix(">")
-        || trimmed.hasPrefix("- ")
-        || trimmed.hasPrefix("* ")
-        || trimmed.hasPrefix("+ ")
-        || trimmed.hasPrefix("|")
-        || trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) != nil
-      {
-        return false
-      }
-    }
-    return true
+    let segments = MacAnswerContentParser.splitMarkdownForInlineMath(markdown)
+    return segments.count == 1 && segments[0].useLaTeX
   }
 }
 

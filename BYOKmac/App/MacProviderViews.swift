@@ -125,12 +125,17 @@ struct MacTargetPickerView: View {
           }
         )) {
           ForEach(readyAccounts) { account in
-            VStack(alignment: .leading, spacing: 2) {
-              Text(account.label)
-                .fontWeight(.medium)
-              Text(account.kind == .openAICompatible ? "OpenAI-compatible" : account.kind.displayName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 9) {
+              MacProviderMark(account: account, size: 26, isReady: true)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(account.label)
+                  .fontWeight(.medium)
+                  .lineLimit(1)
+                Text(account.kind == .openAICompatible ? "OpenAI-compatible" : account.kind.displayName)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+              }
             }
             .tag(account.id)
           }
@@ -288,14 +293,19 @@ struct MacConnectionEditorView: View {
 
   @Environment(\.dismiss) private var dismiss
 
+  @State private var selectedKind: ProviderKind
   @State private var label: String
+  @State private var suggestedLabel: String
+  @State private var didEditLabel = false
+  @State private var showingProviderPicker = false
   @State private var credential = ""
   @State private var baseURL: String
   @State private var chatPath: String
   @State private var modelsPath: String
   @State private var authMode: String
   @State private var customHeaderName: String
-  @State private var headersText: String
+  @State private var additionalHeaders: [MacAdditionalHeaderItem]
+  @State private var headerEditorTarget: MacAdditionalHeaderEditorTarget?
   @State private var defaultModel: String
   @State private var seedModelsText: String
   @State private var appTitle: String
@@ -314,7 +324,7 @@ struct MacConnectionEditorView: View {
 
   private var kind: ProviderKind {
     switch route {
-    case .create(let kind): kind
+    case .create: selectedKind
     case .edit: existing?.kind ?? .openAICompatible
     }
   }
@@ -341,7 +351,11 @@ struct MacConnectionEditorView: View {
     case .edit: kind = account?.kind ?? .openAICompatible
     }
 
-    _label = State(initialValue: account?.label ?? model.autoName(for: kind))
+    let initialLabel = account?.label ?? model.autoName(for: kind)
+    _selectedKind = State(initialValue: kind)
+    _label = State(initialValue: initialLabel)
+    _suggestedLabel = State(initialValue: initialLabel)
+    _didEditLabel = State(initialValue: account != nil)
     _baseURL = State(initialValue: account?.baseURLOverride?.absoluteString ?? (kind == .openAICompatible ? "" : kind.defaultEndpoint?.absoluteString ?? ""))
     _chatPath = State(initialValue: account?.chatCompletionsPath ?? "/chat/completions")
     _modelsPath = State(initialValue: account?.modelsPath ?? "/models")
@@ -357,7 +371,7 @@ struct MacConnectionEditorView: View {
       _authMode = State(initialValue: "none")
       _customHeaderName = State(initialValue: "X-API-Key")
     }
-    _headersText = State(initialValue: serializeHeaders(account?.additionalHeaders ?? [:]))
+    _additionalHeaders = State(initialValue: MacAdditionalHeaderItem.items(from: account?.additionalHeaders ?? [:]))
     _defaultModel = State(initialValue: account?.defaultModelID?.rawValue ?? "")
     _seedModelsText = State(initialValue: (account?.seedModelIDs ?? []).joined(separator: "\n"))
     _appTitle = State(initialValue: account?.metadata["appTitle"] ?? "")
@@ -420,14 +434,27 @@ struct MacConnectionEditorView: View {
     }
   }
 
+  private var headerValidationPolicy: HTTPHeaderValidationPolicy {
+    .provider(kind: kind, authentication: effectiveAuthentication)
+  }
+
+  private var hasInvalidAdditionalHeaders: Bool {
+    MacAdditionalHeaderItem.hasValidationErrors(
+      in: additionalHeaders,
+      policy: headerValidationPolicy
+    )
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 12) {
-        Image(systemName: providerSymbol(kind))
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-          .frame(width: 34, height: 34)
-          .background(MacDesignTokens.Colors.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+        Group {
+          if let existing {
+            MacProviderMark(account: existing, size: 36, isReady: true)
+          } else {
+            MacProviderMark(kind: kind, size: 36, isReady: true)
+          }
+        }
         VStack(alignment: .leading, spacing: 2) {
           Text(isCreate ? "Connect \(providerDisplayName(kind))" : "Edit Connection")
             .font(.title3.weight(.semibold))
@@ -450,8 +477,51 @@ struct MacConnectionEditorView: View {
         VStack(alignment: .leading, spacing: 14) {
           editorCard("Connection", systemImage: "link") {
             VStack(alignment: .leading, spacing: 10) {
-              LabeledContent("Provider", value: providerDisplayName(kind))
+              if isCreate {
+                Button {
+                  showingProviderPicker = true
+                } label: {
+                  HStack(spacing: 10) {
+                    MacProviderMark(kind: selectedKind, size: 28, isReady: true)
+                    VStack(alignment: .leading, spacing: 1) {
+                      Text(selectedKind.macPickerTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                      Text(selectedKind.macPickerDescription)
+                        .font(.caption)
+                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                    }
+                    Spacer()
+                    Text("Change")
+                      .font(.caption.weight(.medium))
+                      .foregroundStyle(MacDesignTokens.Colors.accent)
+                    Image(systemName: "chevron.right")
+                      .font(.caption2.weight(.semibold))
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  }
+                  .padding(.horizontal, 10)
+                  .padding(.vertical, 8)
+                  .background(
+                    MacDesignTokens.Colors.canvas.opacity(0.65),
+                    in: RoundedRectangle(cornerRadius: 8)
+                  )
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                      .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+                  }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Provider")
+                .accessibilityValue(selectedKind.macPickerTitle)
+              } else {
+                LabeledContent("Provider", value: providerDisplayName(kind))
+              }
               TextField("Connection Name", text: $label)
+                .onChange(of: label) { _, newValue in
+                  if newValue != suggestedLabel {
+                    didEditLabel = true
+                  }
+                }
             }
           }
 
@@ -581,15 +651,13 @@ struct MacConnectionEditorView: View {
             .font(.headline)
           }
 
-          editorCard("Custom Headers", systemImage: "list.bullet.rectangle") {
-            VStack(alignment: .leading, spacing: 8) {
-              TextEditor(text: $headersText)
-                .font(.body.monospaced())
-                .frame(minHeight: 80)
-              Text("One header per line: Name: Value")
-                .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            }
+          editorCard("Additional Headers", systemImage: "list.bullet.rectangle") {
+            MacAdditionalHeadersSection(
+              headers: $additionalHeaders,
+              policy: headerValidationPolicy,
+              footerText: "Optional non-secret headers sent with requests. Authentication and transport headers are managed by BYOKchat.",
+              editorTarget: $headerEditorTarget
+            )
           }
 
           if kind == .openRouter {
@@ -606,10 +674,55 @@ struct MacConnectionEditorView: View {
     }
     .frame(width: 620, height: kind == .openAICompatible ? 720 : 620)
     .background(MacDesignTokens.Colors.canvas)
+    .sheet(isPresented: $showingProviderPicker) {
+      MacProviderKindPickerSheet(currentSelection: selectedKind) { newKind in
+        switchKind(to: newKind)
+      }
+    }
+    .macAdditionalHeaderEditorSheet(
+      target: $headerEditorTarget,
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy
+    )
+  }
+
+  private func switchKind(to newKind: ProviderKind) {
+    guard isCreate, newKind != selectedKind else { return }
+    selectedKind = newKind
+    let nextSuggested = model.autoName(for: newKind)
+    suggestedLabel = nextSuggested
+    if !didEditLabel {
+      label = nextSuggested
+    }
+    baseURL = newKind == .openAICompatible ? "" : (newKind.defaultEndpoint?.absoluteString ?? "")
+    chatPath = "/chat/completions"
+    modelsPath = "/models"
+    let authentication = newKind.authSpec.fixedAuthentication ?? .bearer
+    switch authentication {
+    case .bearer:
+      authMode = "bearer"
+      customHeaderName = "X-API-Key"
+    case .header(let name):
+      authMode = "header"
+      customHeaderName = name
+    case .none:
+      authMode = "none"
+      customHeaderName = "X-API-Key"
+    }
+    credential = ""
+    clearCredential = false
+    additionalHeaders = []
+    headerEditorTarget = nil
+    defaultModel = ""
+    seedModelsText = ""
+    appTitle = ""
+    httpReferer = ""
+    showingAdvanced = newKind == .openAICompatible
   }
 
   private var canSave: Bool {
     guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+    guard !hasInvalidAdditionalHeaders else { return false }
     if kind == .openAICompatible {
       guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
         let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme)
@@ -635,7 +748,10 @@ struct MacConnectionEditorView: View {
     guard canSave, !isSaving else { return }
     let headers: [String: String]
     do {
-      headers = try parseHeaders(headersText)
+      headers = try MacAdditionalHeaderItem.validatedDictionary(
+        from: additionalHeaders,
+        policy: headerValidationPolicy
+      )
     } catch {
       model.errorMessage = error.localizedDescription
       return
@@ -738,38 +854,6 @@ struct MacConnectionEditorView: View {
         .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
     }
   }
-}
-
-private enum MacProviderEditorError: LocalizedError {
-  case invalidHeader(String)
-
-  var errorDescription: String? {
-    switch self {
-    case .invalidHeader(let line): "Invalid header line: \(line)"
-    }
-  }
-}
-
-private func parseHeaders(_ text: String) throws -> [String: String] {
-  var result: [String: String] = [:]
-  for rawLine in text.split(whereSeparator: \.isNewline) {
-    let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !line.isEmpty else { continue }
-    guard let separator = line.firstIndex(of: ":") else {
-      throw MacProviderEditorError.invalidHeader(line)
-    }
-    let name = String(line[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
-    let value = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty, !value.isEmpty else {
-      throw MacProviderEditorError.invalidHeader(line)
-    }
-    result[name] = value
-  }
-  return result
-}
-
-private func serializeHeaders(_ headers: [String: String]) -> String {
-  headers.keys.sorted().map { "\($0): \(headers[$0] ?? "")" }.joined(separator: "\n")
 }
 
 private func parseSeedModels(_ text: String) -> [String] {

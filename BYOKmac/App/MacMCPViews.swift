@@ -611,28 +611,41 @@ private struct MacMCPServerConnectionEditorView: View {
   @State private var authenticationKind: MCPAuthenticationKind
   @State private var authenticationHeader: String
   @State private var credential = ""
-  @State private var additionalHeadersText: String
-  @State private var showingAdvanced = false
-  @State private var headerError: String?
+  @State private var additionalHeaders: [MacAdditionalHeaderItem]
+  @State private var headerEditorTarget: MacAdditionalHeaderEditorTarget?
+  @State private var showingAdvanced: Bool
   @State private var isSaving = false
 
   init(mcp: MacMCPModel, server: MCPRemoteServer?) {
     self.mcp = mcp
     self.server = server
+    let savedHeaders = server?.additionalHeaders ?? [:]
     _name = State(initialValue: server?.name ?? "")
     _endpoint = State(initialValue: server?.endpoint.absoluteString ?? "https://")
     _authenticationKind = State(initialValue: server?.authentication.kind ?? .none)
     _authenticationHeader = State(initialValue: server?.authentication.headerName ?? "X-API-Key")
-    _additionalHeadersText = State(
-      initialValue: server?.additionalHeaders
-        .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
-        .map { "\($0.key): \($0.value)" }
-        .joined(separator: "\n") ?? ""
+    _additionalHeaders = State(initialValue: MacAdditionalHeaderItem.items(from: savedHeaders))
+    _showingAdvanced = State(initialValue: !savedHeaders.isEmpty)
+  }
+
+  private var headerValidationPolicy: HTTPHeaderValidationPolicy {
+    .mcp(
+      authenticationHeader: authenticationKind == .customHeader
+        ? authenticationHeader
+        : nil
+    )
+  }
+
+  private var hasInvalidAdditionalHeaders: Bool {
+    MacAdditionalHeaderItem.hasValidationErrors(
+      in: additionalHeaders,
+      policy: headerValidationPolicy
     )
   }
 
   private var canSave: Bool {
     guard !isSaving else { return false }
+    guard !hasInvalidAdditionalHeaders else { return false }
     guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
     guard let url = URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)),
       let scheme = url.scheme?.lowercased(),
@@ -688,31 +701,45 @@ private struct MacMCPServerConnectionEditorView: View {
         }
 
         Section {
-          DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
-            VStack(alignment: .leading, spacing: 8) {
+          DisclosureGroup(isExpanded: $showingAdvanced) {
+            MacAdditionalHeadersSection(
+              headers: $additionalHeaders,
+              policy: headerValidationPolicy,
+              footerText: "Optional non-secret headers. Authentication and MCP protocol headers are managed by BYOKchat.",
+              editorTarget: $headerEditorTarget
+            )
+            .padding(.top, 8)
+          } label: {
+            HStack(spacing: 8) {
               Text("Additional Headers")
-                .font(.caption.weight(.semibold))
-              TextEditor(text: $additionalHeadersText)
-                .font(.system(size: 12, design: .monospaced))
-                .frame(minHeight: 90)
-              if let headerError {
-                Text(headerError)
+              Spacer()
+              if hasInvalidAdditionalHeaders {
+                Image(systemName: "exclamationmark.triangle.fill")
                   .font(.caption)
                   .foregroundStyle(.red)
               }
-              Text("Optional non-secret headers, one per line as Name: Value. Authentication and MCP protocol headers are managed by BYOKchat.")
+              Text(additionalHeaders.isEmpty ? "None" : "\(additionalHeaders.count)")
                 .font(.caption)
-                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                .foregroundStyle(hasInvalidAdditionalHeaders ? Color.red : MacDesignTokens.Colors.textMuted)
             }
-            .padding(.top, 6)
           }
         }
       }
       .formStyle(.grouped)
       .padding(10)
     }
-    .frame(width: 560, height: 500)
+    .frame(width: 560, height: 520)
     .background(MacDesignTokens.Colors.canvas)
+    .onChange(of: hasInvalidAdditionalHeaders) { _, hasErrors in
+      if hasErrors && !showingAdvanced {
+        showingAdvanced = true
+      }
+    }
+    .macAdditionalHeaderEditorSheet(
+      target: $headerEditorTarget,
+      headers: $additionalHeaders,
+      policy: headerValidationPolicy
+    )
   }
 
   private var credentialPlaceholder: String {
@@ -724,11 +751,13 @@ private struct MacMCPServerConnectionEditorView: View {
     guard canSave else { return }
     let headers: [String: String]
     do {
-      headers = try parseHeaders(additionalHeadersText)
-      headerError = nil
+      headers = try MacAdditionalHeaderItem.validatedDictionary(
+        from: additionalHeaders,
+        policy: headerValidationPolicy
+      )
     } catch {
-      headerError = error.localizedDescription
       showingAdvanced = true
+      mcp.errorMessage = error.localizedDescription
       return
     }
 
@@ -757,42 +786,46 @@ private struct MacMCPServerConnectionEditorView: View {
       if saved { dismiss() }
     }
   }
-
-  private func parseHeaders(_ value: String) throws -> [String: String] {
-    var headers: [String: String] = [:]
-    for rawLine in value.split(separator: "\n", omittingEmptySubsequences: true) {
-      let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !line.isEmpty else { continue }
-      guard let separator = line.firstIndex(of: ":") else {
-        throw MCPError.invalidServer("Each additional header must use Name: Value.")
-      }
-      let key = String(line[..<separator]).trimmingCharacters(in: .whitespaces)
-      let headerValue = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
-      guard !key.isEmpty, !headerValue.isEmpty else {
-        throw MCPError.invalidServer("Each additional header needs both a name and value.")
-      }
-      guard headers[key] == nil else {
-        throw MCPError.invalidServer("Duplicate additional header: \(key)")
-      }
-      headers[key] = headerValue
-    }
-    return headers
-  }
 }
 
 struct MacChatToolsView: View {
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID
   let presets: [ProjectToolPreset]
+  let isGenerating: Bool
+  let modelSupportsTools: Bool
+  let manageServers: (() -> Void)?
 
   @Environment(\.dismiss) private var dismiss
   @Environment(MacWorkspaceModel.self) private var workspace
+  @State private var showingAddServer = false
+
+  init(
+    mcp: MacMCPModel,
+    conversationID: ConversationID,
+    presets: [ProjectToolPreset],
+    isGenerating: Bool = false,
+    modelSupportsTools: Bool = true,
+    manageServers: (() -> Void)? = nil
+  ) {
+    self.mcp = mcp
+    self.conversationID = conversationID
+    self.presets = presets
+    self.isGenerating = isGenerating
+    self.modelSupportsTools = modelSupportsTools
+    self.manageServers = manageServers
+  }
 
   private var project: ChatProject? {
     workspace.project(for: conversationID)
   }
 
+  private var isMutationDisabled: Bool {
+    mcp.isBusy || isGenerating
+  }
+
   var body: some View {
+    let activeConfig = normalizedToolConfiguration(mcp.chatConfiguration(for: conversationID))
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 2) {
@@ -813,22 +846,31 @@ struct MacChatToolsView: View {
         if !presets.isEmpty {
           Menu("Apply Preset") {
             ForEach(presets) { preset in
-              Button(preset.name) {
+              let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
+              Button {
                 Task {
                   _ = await mcp.applyChatConfiguration(
                     preset.configuration,
                     conversationID: conversationID
                   )
                 }
+              } label: {
+                if isApplied {
+                  Label(preset.name, systemImage: "checkmark")
+                } else {
+                  Text(preset.name)
+                }
               }
             }
           }
+          .disabled(isMutationDisabled)
         }
 
         if mcp.hasChatOverride(conversationID), project != nil {
           Button("Reset to Project Defaults") {
             Task { _ = await mcp.removeChatConfiguration(conversationID) }
           }
+          .disabled(isMutationDisabled)
         }
 
         Button("Done") { dismiss() }
@@ -842,6 +884,16 @@ struct MacChatToolsView: View {
         mcp: mcp,
         configuration: mcp.chatConfiguration(for: conversationID),
         context: .chat(projectName: project?.name),
+        isGenerating: isGenerating,
+        modelSupportsTools: modelSupportsTools,
+        addServer: {
+          if let manageServers {
+            dismiss()
+            manageServers()
+          } else if MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) {
+            showingAddServer = true
+          }
+        },
         setServerEnabled: { serverID, enabled in
           Task {
             _ = await mcp.setChatServerEnabled(
@@ -864,18 +916,35 @@ struct MacChatToolsView: View {
     }
     .frame(width: 700, height: 650)
     .background(MacDesignTokens.Colors.canvas)
+    .sheet(isPresented: $showingAddServer) {
+      MacMCPServerConnectionEditorView(mcp: mcp, server: nil)
+    }
+  }
+
+  private func normalizedToolConfiguration(
+    _ configuration: MCPChatToolConfiguration
+  ) -> MCPChatToolConfiguration {
+    MCPChatToolConfiguration(
+      enabledServerIDs: Array(Set(configuration.enabledServerIDs)).sorted { $0.rawValue < $1.rawValue },
+      toolPolicies: configuration.toolPolicies.filter { $0.value != .ask }
+    )
   }
 }
 
 struct MacProjectToolsConfigurationView: View {
   @Bindable var mcp: MacMCPModel
   @Binding var configuration: MCPChatToolConfiguration
+  @State private var showingAddServer = false
 
   var body: some View {
     MacMCPServerConfigurationList(
       mcp: mcp,
       configuration: configuration,
       context: .project,
+      addServer: {
+        guard MacProAccess.requireMCPServerCapacity(currentCount: mcp.servers.count) else { return }
+        showingAddServer = true
+      },
       setServerEnabled: { serverID, enabled in
         configuration.enabledServerIDs.removeAll { $0 == serverID }
         if enabled { configuration.enabledServerIDs.append(serverID) }
@@ -889,6 +958,9 @@ struct MacProjectToolsConfigurationView: View {
         }
       }
     )
+    .sheet(isPresented: $showingAddServer) {
+      MacMCPServerConnectionEditorView(mcp: mcp, server: nil)
+    }
   }
 }
 
@@ -896,29 +968,70 @@ private struct MacMCPServerConfigurationList: View {
   @Bindable var mcp: MacMCPModel
   let configuration: MCPChatToolConfiguration
   let context: MacMCPConfigurationContext
+  var isGenerating: Bool = false
+  var modelSupportsTools: Bool = true
+  var addServer: (() -> Void)? = nil
   let setServerEnabled: (MCPServerID, Bool) -> Void
   let setPolicy: (String, ChatToolPermissionPolicy) -> Void
 
+  private var isMutationDisabled: Bool {
+    isGenerating || (mcp.isBusy && isChatContext)
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 10) {
-        Image(systemName: context.guidanceIcon)
-          .foregroundStyle(MacDesignTokens.Colors.accent)
-        Text(context.guidance)
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        Spacer()
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 10) {
+          Image(systemName: context.guidanceIcon)
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+          Text(context.guidance)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          Spacer()
+        }
+
+        if isGenerating {
+          HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "hourglass")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.orange)
+              .padding(.top, 1)
+            Text("Wait for the current response to finish before changing tools.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          }
+        }
+
+        if !modelSupportsTools {
+          HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.orange)
+              .padding(.top, 1)
+            Text("The current model does not support tools. Enabled tools will not be sent until you switch models.")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          }
+        }
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 12)
       .background(MacDesignTokens.Colors.surface.opacity(0.75))
 
       if mcp.servers.isEmpty {
-        ContentUnavailableView(
-          "No MCP Servers",
-          systemImage: "server.rack",
-          description: Text("Add a remote MCP server in MCP Servers first.")
-        )
+        ContentUnavailableView {
+          Label("No MCP Servers", systemImage: "server.rack")
+        } description: {
+          Text("Add a remote MCP server to discover and enable tools.")
+        } actions: {
+          if let addServer {
+            Button("Add MCP Server") {
+              addServer()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(mcp.isBusy)
+          }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView {
@@ -935,69 +1048,116 @@ private struct MacMCPServerConfigurationList: View {
 
   private func serverConfigurationCard(_ server: MCPRemoteServer) -> some View {
     let enabled = configuration.isServerEnabled(server.id)
+    let missingCredential = server.authentication.kind != .none && !mcp.hasCredential(server.id)
     let tools = mcp.tools(for: server.id)
+    let snapshot = mcp.snapshot(for: server.id)
 
-    return DisclosureGroup {
-      VStack(alignment: .leading, spacing: 8) {
-        if !server.isEnabled {
-          Label(
-            "Enable this server globally in MCP Servers before using its tools here.",
-            systemImage: "pause.circle"
-          )
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        } else if !enabled {
-          Label(
-            context == .project
-              ? "Enable in Project to configure this server's tool permissions."
-              : "Enable for This Chat to configure this server's tool permissions.",
-            systemImage: "switch.2"
-          )
-          .font(.caption)
-          .foregroundStyle(MacDesignTokens.Colors.textMuted)
-        } else if tools.isEmpty {
-          HStack {
-            Text("No cached tools yet.")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
-            Spacer()
-            Button("Refresh Tools", systemImage: "arrow.clockwise") {
-              Task { _ = await mcp.refresh(server.id) }
-            }
-            .disabled(mcp.isBusy)
-          }
-        } else {
-          ForEach(tools) { binding in
-            toolPermissionRow(binding)
-          }
-        }
-      }
-      .padding(.top, 8)
-    } label: {
-      HStack(spacing: 10) {
-        Circle()
-          .fill(server.isEnabled ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted.opacity(0.5))
-          .frame(width: 8, height: 8)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(server.name)
-            .font(.system(size: 13.5, weight: .medium))
-          Text(server.isEnabled ? "\(tools.count) tools discovered" : "Globally disabled")
+    return VStack(alignment: .leading, spacing: 0) {
+      DisclosureGroup {
+        VStack(alignment: .leading, spacing: 8) {
+          if !server.isEnabled {
+            Label(
+              "Enable this server globally in MCP Servers before using its tools here.",
+              systemImage: "pause.circle"
+            )
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          } else if missingCredential {
+            Label(
+              "Missing credential. Add it in MCP Servers before enabling.",
+              systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+          } else if !enabled {
+            Label(
+              context == .project
+                ? "Enable in Project to configure this server's tool permissions."
+                : "Enable for This Chat to configure this server's tool permissions.",
+              systemImage: "switch.2"
+            )
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          } else if tools.isEmpty {
+            HStack {
+              Text("No cached tools yet.")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              Spacer()
+              Button("Refresh Tools", systemImage: "arrow.clockwise") {
+                Task { _ = await mcp.refresh(server.id) }
+              }
+              .disabled(mcp.isBusy)
+            }
+          } else {
+            ForEach(tools) { binding in
+              toolPermissionRow(binding)
+            }
+          }
         }
-        Spacer()
-        Toggle(
-          context.enableTitle,
-          isOn: Binding(
-            get: { configuration.isServerEnabled(server.id) },
-            set: { setServerEnabled(server.id, $0) }
+        .padding(.top, 8)
+      } label: {
+        HStack(spacing: 10) {
+          Circle()
+            .fill(
+              !server.isEnabled
+                ? MacDesignTokens.Colors.textMuted.opacity(0.5)
+                : (missingCredential ? Color.orange : MacDesignTokens.Colors.accent)
+            )
+            .frame(width: 8, height: 8)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(server.name)
+              .font(.system(size: 13.5, weight: .medium))
+            if !server.isEnabled {
+              Text("Globally disabled")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            } else if missingCredential {
+              Text("Missing credential. Add it in MCP Servers before enabling.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            } else {
+              Text("\(tools.count) \(tools.count == 1 ? "tool" : "tools") discovered")
+                .font(.caption)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
+          }
+          Spacer()
+          if server.isEnabled && !missingCredential {
+            Button {
+              Task { _ = await mcp.refresh(server.id) }
+            } label: {
+              Image(systemName: "arrow.clockwise")
+                .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(MacIconButtonStyle())
+            .disabled(mcp.isBusy)
+            .help("Refresh tools for \(server.name)")
+            .accessibilityLabel("Refresh tools for \(server.name)")
+          }
+          Toggle(
+            context.enableTitle,
+            isOn: Binding(
+              get: { configuration.isServerEnabled(server.id) },
+              set: { setServerEnabled(server.id, $0) }
+            )
           )
-        )
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .disabled(!server.isEnabled || mcp.isBusy)
+          .toggleStyle(.switch)
+          .controlSize(.small)
+          .disabled(((!server.isEnabled || missingCredential) && !enabled) || mcp.isBusy || isGenerating)
+        }
+        .padding(.vertical, 4)
       }
-      .padding(.vertical, 4)
+
+      if let snapshot {
+        HStack {
+          Text("MCP \(snapshot.protocolVersion)")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+          Spacer()
+        }
+        .padding(.top, 6)
+      }
     }
     .padding(12)
     .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -1009,10 +1169,18 @@ private struct MacMCPServerConfigurationList: View {
 
   private func toolPermissionRow(_ binding: MCPToolBinding) -> some View {
     let tool = binding.remoteTool
-    return HStack(alignment: .center, spacing: 10) {
+    let description = tool.description.trimmingCharacters(in: .whitespacesAndNewlines)
+    return HStack(alignment: .top, spacing: 10) {
       VStack(alignment: .leading, spacing: 3) {
         Text(tool.title ?? tool.remoteName)
           .font(.system(size: 13, weight: .medium))
+        if !description.isEmpty {
+          Text(description)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         HStack(spacing: 7) {
           if tool.title != nil {
             Text(tool.remoteName)
@@ -1045,7 +1213,7 @@ private struct MacMCPServerConfigurationList: View {
       .labelsHidden()
       .pickerStyle(.menu)
       .frame(width: 130)
-      .disabled(mcp.isBusy && isChatContext)
+      .disabled(isMutationDisabled)
     }
     .padding(.vertical, 3)
   }
@@ -1103,12 +1271,18 @@ private struct MacMCPApprovalCard: View {
   let request: MCPToolApprovalRequest
   let resolve: (MCPToolApprovalDecision) -> Void
 
+  @State private var isResolving = false
+
+  private var isDestructive: Bool {
+    request.destructiveHint == true
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .top, spacing: 10) {
-        Image(systemName: request.destructiveHint == true ? "exclamationmark.shield" : "hand.raised")
+        Image(systemName: isDestructive ? "exclamationmark.shield" : "hand.raised")
           .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(request.destructiveHint == true ? Color.orange : MacDesignTokens.Colors.accent)
+          .foregroundStyle(isDestructive ? Color.orange : MacDesignTokens.Colors.accent)
           .frame(width: 28, height: 28)
         VStack(alignment: .leading, spacing: 3) {
           Text("Allow tool call?")
@@ -1122,17 +1296,19 @@ private struct MacMCPApprovalCard: View {
         }
       }
 
-      HStack(spacing: 8) {
-        if request.readOnlyHint == true {
-          Label("Read-only", systemImage: "eye")
+      if request.readOnlyHint == true || isDestructive {
+        HStack(spacing: 8) {
+          if request.readOnlyHint == true {
+            Label("Read-only", systemImage: "eye")
+          }
+          if isDestructive {
+            Label("Destructive", systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.orange)
+          }
         }
-        if request.destructiveHint == true {
-          Label("Destructive", systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.orange)
-        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
       }
-      .font(.caption2.weight(.medium))
-      .foregroundStyle(MacDesignTokens.Colors.textMuted)
 
       DisclosureGroup("Arguments") {
         Text(request.arguments.macPrettyJSONString())
@@ -1143,59 +1319,109 @@ private struct MacMCPApprovalCard: View {
       }
       .font(.caption.weight(.semibold))
 
-      ViewThatFits(in: .horizontal) {
+      if isResolving {
         HStack(spacing: 8) {
-          Button("Deny", role: .destructive) { resolve(.deny) }
-          Spacer(minLength: 4)
-          Button("Allow Once") { resolve(.allowOnce) }
-          Button("Always Allow") { resolve(.alwaysAllow) }
-            .buttonStyle(.borderedProminent)
+          ProgressView().controlSize(.small)
+          Text("Applying decision…")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
-        VStack(alignment: .trailing, spacing: 8) {
+        .padding(.top, 2)
+      } else {
+        ViewThatFits(in: .horizontal) {
           HStack(spacing: 8) {
-            Button("Deny", role: .destructive) { resolve(.deny) }
-            Button("Allow Once") { resolve(.allowOnce) }
+            denyButton
+            Spacer(minLength: 4)
+            allowOnceButton
+            alwaysAllowButton
           }
-          Button("Always Allow") { resolve(.alwaysAllow) }
-            .buttonStyle(.borderedProminent)
+          VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 8) {
+              denyButton
+              allowOnceButton
+            }
+            alwaysAllowButton
+          }
+          .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .controlSize(.small)
+        .disabled(isResolving)
       }
-      .controlSize(.small)
     }
     .padding(14)
     .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large))
     .overlay {
       RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large)
         .stroke(
-          request.destructiveHint == true ? Color.orange.opacity(0.45) : MacDesignTokens.Colors.separator,
+          isDestructive ? Color.orange.opacity(0.45) : MacDesignTokens.Colors.separator,
           lineWidth: 1
         )
     }
   }
+
+  private func submit(_ decision: MCPToolApprovalDecision) {
+    guard !isResolving else { return }
+    isResolving = true
+    resolve(decision)
+  }
+
+  private var denyButton: some View {
+    Button("Deny", role: .destructive) { submit(.deny) }
+      .buttonStyle(.bordered)
+  }
+
+  @ViewBuilder
+  private var allowOnceButton: some View {
+    if isDestructive {
+      Button("Allow Once") { submit(.allowOnce) }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.orange)
+    } else {
+      Button("Allow Once") { submit(.allowOnce) }
+        .buttonStyle(.bordered)
+    }
+  }
+
+  @ViewBuilder
+  private var alwaysAllowButton: some View {
+    if isDestructive {
+      Button("Always Allow") { submit(.alwaysAllow) }
+        .buttonStyle(.bordered)
+    } else {
+      Button("Always Allow") { submit(.alwaysAllow) }
+        .buttonStyle(.borderedProminent)
+    }
+  }
 }
 
-private struct MacMCPElicitationCard: View {
-  let request: MCPElicitationRequest
-  let resolve: (MCPElicitationDecision) -> Void
-
-  @State private var textValues: [String: String]
-  @State private var boolValues: [String: Bool]
-
-  init(request: MCPElicitationRequest, resolve: @escaping (MCPElicitationDecision) -> Void) {
-    self.request = request
-    self.resolve = resolve
-
+enum MacMCPElicitationFormSupport {
+  static func initialValues(
+    for fields: [MCPElicitationField]
+  ) -> (text: [String: String], bools: [String: Bool]) {
     var text: [String: String] = [:]
     var bools: [String: Bool] = [:]
-    for field in request.fields {
+    for field in fields {
+      if field.kind == .string, !field.allowedValues.isEmpty {
+        if case .string(let value)? = field.defaultValue, field.allowedValues.contains(value) {
+          text[field.name] = value
+        } else if field.isRequired {
+          text[field.name] = field.allowedValues.first
+        } else {
+          text[field.name] = ""
+        }
+        continue
+      }
       switch (field.kind, field.defaultValue) {
       case (.boolean, .bool(let value)):
         bools[field.name] = value
       case (.string, .string(let value)):
         text[field.name] = value
       case (.integer, .number(let value)), (.number, .number(let value)):
-        text[field.name] = String(value)
+        if let exact = Int(exactly: value) {
+          text[field.name] = String(exact)
+        } else if value.isFinite {
+          text[field.name] = String(value)
+        }
       case (.stringArray, .array(let values)):
         text[field.name] = values.compactMap {
           if case .string(let value) = $0 { return value }
@@ -1205,8 +1431,115 @@ private struct MacMCPElicitationCard: View {
         if field.kind == .boolean { bools[field.name] = false }
       }
     }
-    _textValues = State(initialValue: text)
-    _boolValues = State(initialValue: bools)
+    return (text, bools)
+  }
+
+  static func canSubmit(
+    mode: MCPElicitationMode,
+    url: URL?,
+    fields: [MCPElicitationField],
+    textValues: [String: String]
+  ) -> Bool {
+    guard mode == .form else { return url != nil }
+    for field in fields {
+      let storedValue = textValues[field.name] ?? ""
+      if field.kind == .string, !field.allowedValues.isEmpty {
+        if storedValue.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard field.allowedValues.contains(storedValue) else { return false }
+        continue
+      }
+      let raw = storedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      switch field.kind {
+      case .boolean:
+        continue
+      case .string:
+        if field.isRequired, raw.isEmpty { return false }
+      case .integer:
+        if raw.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard Int(raw) != nil else { return false }
+      case .number:
+        if raw.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        guard let value = Double(raw), value.isFinite else { return false }
+      case .stringArray:
+        let items = parseStringArray(raw)
+        if items.isEmpty {
+          if field.isRequired { return false }
+          continue
+        }
+        if !field.allowedValues.isEmpty,
+          !items.allSatisfy(field.allowedValues.contains)
+        {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  static func responseContent(
+    fields: [MCPElicitationField],
+    textValues: [String: String],
+    boolValues: [String: Bool]
+  ) -> [String: JSONValue] {
+    var values: [String: JSONValue] = [:]
+    for field in fields {
+      switch field.kind {
+      case .boolean:
+        values[field.name] = .bool(boolValues[field.name] ?? false)
+      case .integer:
+        let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Int(raw) { values[field.name] = .number(Double(value)) }
+      case .number:
+        let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Double(raw), value.isFinite { values[field.name] = .number(value) }
+      case .string:
+        let value = textValues[field.name] ?? ""
+        if !field.allowedValues.isEmpty {
+          if !value.isEmpty { values[field.name] = .string(value) }
+        } else if !value.isEmpty || field.isRequired {
+          values[field.name] = .string(value)
+        }
+      case .stringArray:
+        let items = parseStringArray(textValues[field.name] ?? "")
+        if !items.isEmpty || field.isRequired {
+          values[field.name] = .array(items.map(JSONValue.string))
+        }
+      }
+    }
+    return values
+  }
+
+  static func parseStringArray(_ raw: String) -> [String] {
+    raw
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
+}
+
+private struct MacMCPElicitationCard: View {
+  let request: MCPElicitationRequest
+  let resolve: (MCPElicitationDecision) -> Void
+
+  @State private var textValues: [String: String]
+  @State private var boolValues: [String: Bool]
+  @State private var isResolving = false
+
+  init(request: MCPElicitationRequest, resolve: @escaping (MCPElicitationDecision) -> Void) {
+    self.request = request
+    self.resolve = resolve
+    let initial = MacMCPElicitationFormSupport.initialValues(for: request.fields)
+    _textValues = State(initialValue: initial.text)
+    _boolValues = State(initialValue: initial.bools)
   }
 
   var body: some View {
@@ -1220,37 +1553,62 @@ private struct MacMCPElicitationCard: View {
       switch request.mode {
       case .form:
         formFields
+        if !canSubmit && !isResolving {
+          Text("Complete all required fields with valid values to continue.")
+            .font(.caption2)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
       case .url:
         if let url = request.url {
           VStack(alignment: .leading, spacing: 8) {
             Text("Complete the requested step in your browser, then return to BYOKchat.")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            Text(url.host ?? url.absoluteString)
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            Text(url.absoluteString)
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(3)
+              .truncationMode(.middle)
+              .textSelection(.enabled)
             Link(destination: url) {
-              Label("Open Link", systemImage: "arrow.up.right.square")
+              Label("Open \(url.host ?? url.absoluteString)", systemImage: "arrow.up.right.square")
             }
             .buttonStyle(.borderedProminent)
           }
         }
       }
 
-      ViewThatFits(in: .horizontal) {
+      if isResolving {
         HStack(spacing: 8) {
-          Button("Cancel") { resolve(.cancel) }
-          Button("Decline", role: .destructive) { resolve(.decline) }
-          Spacer()
-          submitButton
+          ProgressView().controlSize(.small)
+          Text("Submitting…")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
-        VStack(alignment: .trailing, spacing: 8) {
+        .padding(.top, 2)
+      } else {
+        ViewThatFits(in: .horizontal) {
           HStack(spacing: 8) {
-            Button("Cancel") { resolve(.cancel) }
-            Button("Decline", role: .destructive) { resolve(.decline) }
+            cancelButton
+            declineButton
+            Spacer()
+            submitButton
           }
-          submitButton
+          VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 8) {
+              cancelButton
+              declineButton
+            }
+            submitButton
+          }
+          .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .controlSize(.small)
+        .disabled(isResolving)
       }
-      .controlSize(.small)
     }
     .padding(14)
     .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: MacDesignTokens.Radius.large))
@@ -1260,12 +1618,28 @@ private struct MacMCPElicitationCard: View {
     }
   }
 
+  private func submitDecision(_ decision: MCPElicitationDecision) {
+    guard !isResolving else { return }
+    isResolving = true
+    resolve(decision)
+  }
+
+  private var cancelButton: some View {
+    Button("Cancel") { submitDecision(.cancel) }
+      .buttonStyle(.bordered)
+  }
+
+  private var declineButton: some View {
+    Button("Decline", role: .destructive) { submitDecision(.decline) }
+      .buttonStyle(.bordered)
+  }
+
   private var submitButton: some View {
     Button(request.mode == .url ? "Continue" : "Submit") {
-      resolve(.accept(responseContent()))
+      submitDecision(.accept(responseContent()))
     }
     .buttonStyle(.borderedProminent)
-    .disabled(!canSubmit)
+    .disabled(!canSubmit || isResolving)
   }
 
   @ViewBuilder
@@ -1286,10 +1660,13 @@ private struct MacMCPElicitationCard: View {
             Picker(
               field.displayName,
               selection: Binding(
-                get: { textValues[field.name] ?? field.allowedValues.first ?? "" },
+                get: { textValues[field.name] ?? "" },
                 set: { textValues[field.name] = $0 }
               )
             ) {
+              if !field.isRequired {
+                Text("None").tag("")
+              }
               ForEach(field.allowedValues, id: \.self) { value in Text(value).tag(value) }
             }
           default:
@@ -1300,6 +1677,11 @@ private struct MacMCPElicitationCard: View {
                 set: { textValues[field.name] = $0 }
               )
             )
+            if field.kind == .stringArray, !field.allowedValues.isEmpty {
+              Text("Allowed: \(field.allowedValues.joined(separator: ", "))")
+                .font(.caption2)
+                .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            }
           }
 
           if let description = field.description, !description.isEmpty {
@@ -1310,53 +1692,24 @@ private struct MacMCPElicitationCard: View {
         }
       }
     }
+    .disabled(isResolving)
   }
 
   private var canSubmit: Bool {
-    guard request.mode == .form else { return request.url != nil }
-    for field in request.fields {
-      let raw = (textValues[field.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-      if field.isRequired, field.kind != .boolean, raw.isEmpty { return false }
-      if raw.isEmpty { continue }
-      switch field.kind {
-      case .integer:
-        guard Int(raw) != nil else { return false }
-      case .number:
-        guard let value = Double(raw), value.isFinite else { return false }
-      case .string, .boolean, .stringArray:
-        break
-      }
-    }
-    return true
+    MacMCPElicitationFormSupport.canSubmit(
+      mode: request.mode,
+      url: request.url,
+      fields: request.fields,
+      textValues: textValues
+    )
   }
 
   private func responseContent() -> [String: JSONValue] {
-    var values: [String: JSONValue] = [:]
-    for field in request.fields {
-      switch field.kind {
-      case .boolean:
-        values[field.name] = .bool(boolValues[field.name] ?? false)
-      case .integer:
-        if let value = Int(textValues[field.name] ?? "") {
-          values[field.name] = .number(Double(value))
-        }
-      case .number:
-        if let value = Double(textValues[field.name] ?? ""), value.isFinite {
-          values[field.name] = .number(value)
-        }
-      case .string:
-        let value = textValues[field.name] ?? ""
-        if !value.isEmpty || field.isRequired { values[field.name] = .string(value) }
-      case .stringArray:
-        let value = (textValues[field.name] ?? "")
-          .split(separator: ",")
-          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-          .filter { !$0.isEmpty }
-          .map(JSONValue.string)
-        if !value.isEmpty || field.isRequired { values[field.name] = .array(value) }
-      }
-    }
-    return values
+    MacMCPElicitationFormSupport.responseContent(
+      fields: request.fields,
+      textValues: textValues,
+      boolValues: boolValues
+    )
   }
 }
 

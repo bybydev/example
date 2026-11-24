@@ -84,6 +84,8 @@ targets:
       - path: BYOKmac
       - path: BYOKchat/Resources/AppIcon.icon
         buildPhase: resources
+      - path: BYOKchat/Resources/Assets.xcassets
+        buildPhase: resources
     info:
       path: BYOKmac/Resources/Info.plist
       properties:

@@ -42,6 +42,22 @@ struct MacMarkdownTableAlignmentTests {
     )
   }
 
+  @Test("Recovers alignment for nested tables inside blockquotes")
+  func recoversBlockquoteTableAlignment() {
+    let markdown = """
+    > | Metric | Value |
+    > | :--- | ---: |
+    > | Latency | 12ms |
+    """
+
+    #expect(
+      MacMarkdownTableAlignment.columnAlignments(in: markdown) == [
+        .leading,
+        .trailing,
+      ]
+    )
+  }
+
   @Test("Returns nil when no GFM delimiter row exists")
   func returnsNilWithoutTable() {
     #expect(MacMarkdownTableAlignment.columnAlignments(in: "Plain paragraph") == nil)

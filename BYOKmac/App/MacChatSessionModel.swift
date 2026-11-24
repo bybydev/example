@@ -36,8 +36,9 @@ final class MacChatSessionModel {
     var usage: ProviderUsage?
   }
 
-  struct SearchItem: Identifiable {
+  struct SearchItem: Identifiable, Equatable, Sendable {
     let conversationID: ConversationID
+    let messageID: ChatMessageID?
     let title: String
     let snippet: String
     let role: ConversationSearchMatchRole
@@ -68,6 +69,8 @@ final class MacChatSessionModel {
   private(set) var streamRevisions: [ConversationID: Int] = [:]
   private(set) var searchItems: [SearchItem] = []
   private(set) var isSearching = false
+  private(set) var isIndexingSearch = false
+  private(set) var searchIndexingProgress: ConversationSearchIndexProgress?
   private(set) var newChatTarget: MacChatTarget?
   private(set) var newChatProjectID: ProjectID?
   var errorMessage: String?
@@ -266,6 +269,14 @@ final class MacChatSessionModel {
       do {
         try await Task.sleep(for: Self.searchDebounce)
         try Task.checkCancellation()
+        let indexStatus = await store.searchIndexStatus()
+        try Task.checkCancellation()
+        if indexStatus.isConfigured,
+          indexStatus.staleConversationCount > 0 || indexStatus.phase == .notBuilt || indexStatus.phase == .stale
+        {
+          await reconcileSearchIndex()
+          try Task.checkCancellation()
+        }
         let results = await store.search(query, limit: 120)
         try Task.checkCancellation()
         applySearchResults(results)
@@ -275,6 +286,34 @@ final class MacChatSessionModel {
         isSearching = false
         MacAppAnalytics.reportError("conversation_search_failed", component: "chat_storage")
         errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  func reconcileSearchIndex() async {
+    guard !isIndexingSearch else { return }
+    isIndexingSearch = true
+    defer {
+      isIndexingSearch = false
+      searchIndexingProgress = nil
+    }
+    await store.reconcileSearchIndex { [weak self] progress in
+      Task { @MainActor in
+        self?.searchIndexingProgress = progress
+      }
+    }
+  }
+
+  func rebuildSearchIndex() async throws {
+    guard !isIndexingSearch else { return }
+    isIndexingSearch = true
+    defer {
+      isIndexingSearch = false
+      searchIndexingProgress = nil
+    }
+    try await store.rebuildSearchIndex { [weak self] progress in
+      Task { @MainActor in
+        self?.searchIndexingProgress = progress
       }
     }
   }
@@ -873,17 +912,44 @@ final class MacChatSessionModel {
   }
 
   private func applySearchResults(_ results: [ConversationSearchResult]) {
-    var seen: Set<ConversationID> = []
-    searchItems = results.compactMap { result in
-      guard seen.insert(result.conversationID).inserted else { return nil }
-      return SearchItem(
-        conversationID: result.conversationID,
-        title: result.title,
-        snippet: result.snippet,
-        role: result.role,
-        updatedAt: result.updatedAt
+    searchItems = Self.searchItems(from: results)
+  }
+
+  nonisolated static func searchItems(from results: [ConversationSearchResult]) -> [SearchItem] {
+    var items: [SearchItem] = []
+    var indexByConversation: [ConversationID: Int] = [:]
+
+    for result in results {
+      if let existingIndex = indexByConversation[result.conversationID] {
+        // Preserve a matched messageID if an earlier title-only match already
+        // claimed this conversation's slot during deduplication.
+        if items[existingIndex].messageID == nil, let matchedMessageID = result.messageID {
+          items[existingIndex] = SearchItem(
+            conversationID: result.conversationID,
+            messageID: matchedMessageID,
+            title: result.title,
+            snippet: result.snippet,
+            role: result.role,
+            updatedAt: result.updatedAt
+          )
+        }
+        continue
+      }
+
+      indexByConversation[result.conversationID] = items.count
+      items.append(
+        SearchItem(
+          conversationID: result.conversationID,
+          messageID: result.messageID,
+          title: result.title,
+          snippet: result.snippet,
+          role: result.role,
+          updatedAt: result.updatedAt
+        )
       )
     }
+
+    return items
   }
 
   private func validatedNewChatTarget() -> MacChatTarget? {

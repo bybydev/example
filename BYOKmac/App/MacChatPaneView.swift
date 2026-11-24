@@ -5,6 +5,27 @@ import SwiftUI
 import UniformTypeIdentifiers
 import os
 
+enum MacChatMessageWindowPolicy {
+  static let initialVisibleCount = 30
+  static let loadMoreBatchSize = 30
+  static let searchContextAbove = 15
+
+  /// Returns the tail slice of messages to mount in the transcript `List`,
+  /// expanding automatically to include a navigation target with context.
+  static func visibleRange(
+    totalCount: Int,
+    visibleCount: Int,
+    targetMessageIndex: Int?
+  ) -> Range<Int> {
+    guard totalCount > 0 else { return 0..<0 }
+    var start = max(0, totalCount - max(1, visibleCount))
+    if let targetMessageIndex, targetMessageIndex >= 0, targetMessageIndex < totalCount {
+      start = min(start, max(0, targetMessageIndex - searchContextAbove))
+    }
+    return start..<totalCount
+  }
+}
+
 struct MacChatPane: View {
   @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
@@ -56,6 +77,7 @@ struct MacChatPane: View {
         ZStack {
           ForEach(retainedConversations) { retained in
             MacTranscriptView(
+              providers: providers,
               chats: chats,
               mcp: mcp,
               conversationID: retained.id,
@@ -222,6 +244,7 @@ private struct MacProHeaderButton: View {
 }
 
 private struct MacTranscriptView: View {
+  @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
@@ -240,6 +263,15 @@ private struct MacTranscriptView: View {
   @State private var showJumpToLatest = false
   @State private var hasCompletedInitialScroll = false
   @State private var pendingSourceMessageID: ChatMessageID?
+  @State private var pendingScrollTarget: PendingScrollTarget?
+  @State private var visibleMessageLimit = MacChatMessageWindowPolicy.initialVisibleCount
+  @State private var isLoadingEarlierMessages = false
+  @State private var pendingEarlierAnchorID: ChatMessageID?
+
+  private struct PendingScrollTarget: Equatable {
+    let token = UUID()
+    let messageID: ChatMessageID
+  }
 
   private struct GenerationState: Equatable {
     let isActive: Bool
@@ -251,6 +283,7 @@ private struct MacTranscriptView: View {
   }
 
   init(
+    providers: MacProviderModel,
     chats: MacChatSessionModel,
     mcp: MacMCPModel,
     conversationID: ConversationID?,
@@ -259,6 +292,7 @@ private struct MacTranscriptView: View {
     isActive: Bool,
     navigationTarget: MacTranscriptNavigationTarget?
   ) {
+    _providers = Bindable(wrappedValue: providers)
     _chats = Bindable(wrappedValue: chats)
     _mcp = Bindable(wrappedValue: mcp)
     self.conversationID = conversationID
@@ -281,8 +315,38 @@ private struct MacTranscriptView: View {
     conversation?.messages ?? []
   }
 
+  private var activeTargetMessageID: ChatMessageID? {
+    if let pendingSourceMessageID { return pendingSourceMessageID }
+    if let pendingScrollTarget { return pendingScrollTarget.messageID }
+    if let navigationTarget, navigationTarget.request.conversationID == conversationID {
+      return navigationTarget.request.messageID
+    }
+    return nil
+  }
+
+  private var visibleMessageRange: Range<Int> {
+    let allMessages = messages
+    let targetIndex = activeTargetMessageID.flatMap { targetID in
+      allMessages.firstIndex { $0.id == targetID }
+    }
+    return MacChatMessageWindowPolicy.visibleRange(
+      totalCount: allMessages.count,
+      visibleCount: visibleMessageLimit,
+      targetMessageIndex: targetIndex
+    )
+  }
+
   var body: some View {
-    ScrollViewReader { proxy in
+    let allMessages = messages
+    let visibleRange = visibleMessageRange
+    let visibleMessages = allMessages[visibleRange]
+    let hiddenEarlierCount = visibleRange.lowerBound
+    let accountsByID = Dictionary(
+      providers.accounts.map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
+
+    return ScrollViewReader { proxy in
       ZStack(alignment: .bottom) {
         List {
           transcriptRow {
@@ -296,28 +360,45 @@ private struct MacTranscriptView: View {
               newConversationEmptyState
             }
           } else if conversation != nil {
-            if messages.isEmpty {
+            if allMessages.isEmpty {
               transcriptRow {
                 Text("This conversation has no messages yet.")
                   .font(.system(size: 15))
                   .foregroundStyle(.secondary)
               }
             } else {
-              ForEach(messages) { message in
+              if hiddenEarlierCount > 0 {
+                transcriptRow(bottomSpacing: 20) {
+                  loadEarlierMessagesButton(
+                    hiddenCount: hiddenEarlierCount,
+                    allMessages: allMessages,
+                    currentStartIndex: visibleRange.lowerBound,
+                    anchorMessageID: visibleMessages.first?.id
+                  )
+                }
+              }
+
+              ForEach(visibleMessages) { message in
                 transcriptRow(bottomSpacing: 48) {
                   VStack(alignment: .leading, spacing: 8) {
                     MacRichMessageView(
                       chats: chats,
                       mcp: mcp,
                       conversationID: conversationID,
-                      message: message
+                      message: message,
+                      failureContext: failureContextLabel(for: message, accountsByID: accountsByID)
                     )
 
-                    if message.role == .assistant, message.status == .complete {
+                    if message.role == .assistant,
+                      message.status != .pending,
+                      message.status != .streaming
+                    {
                       MacAssistantMessageActions(
                         chats: chats,
                         conversationID: conversationID,
-                        message: message
+                        message: message,
+                        includeRetry: message.status != .failed,
+                        hideEmptyContentActions: message.status == .failed
                       )
                     }
                   }
@@ -441,6 +522,27 @@ private struct MacTranscriptView: View {
             _ = scrollToPendingSourceMessageIfAvailable(proxy)
           }
         }
+        .task(id: pendingEarlierAnchorID) {
+          guard let anchorID = pendingEarlierAnchorID else { return }
+          await Task.yield()
+          guard !Task.isCancelled else { return }
+          proxy.scrollTo(anchorID.rawValue, anchor: .top)
+          pendingEarlierAnchorID = nil
+        }
+        .task(id: pendingScrollTarget) {
+          guard let target = pendingScrollTarget else { return }
+          await Task.yield()
+          guard !Task.isCancelled, isActive else { return }
+          let scroll = {
+            proxy.scrollTo(target.messageID.rawValue, anchor: .center)
+          }
+          if reduceMotion {
+            scroll()
+          } else {
+            withAnimation(.easeOut(duration: 0.18), scroll)
+          }
+          pendingScrollTarget = nil
+        }
         .task(id: isActive) {
           guard isActive else { return }
           isUserDraggingTimeline = false
@@ -461,6 +563,7 @@ private struct MacTranscriptView: View {
             isUserDraggingTimeline = false
             showJumpToLatest = false
             pendingSourceMessageID = nil
+            pendingScrollTarget = nil
             scrollToBottom(proxy, animated: true)
           } label: {
             Image(systemName: "arrow.down")
@@ -532,16 +635,123 @@ private struct MacTranscriptView: View {
     .padding(.top, 84)
   }
 
+  private func loadEarlierMessagesButton(
+    hiddenCount: Int,
+    allMessages: [ChatMessage],
+    currentStartIndex: Int,
+    anchorMessageID: ChatMessageID?
+  ) -> some View {
+    let batchCount = min(hiddenCount, MacChatMessageWindowPolicy.loadMoreBatchSize)
+    return HStack {
+      Spacer()
+      Button {
+        guard !isLoadingEarlierMessages else { return }
+        isLoadingEarlierMessages = true
+        let targetConversationID = conversationID
+        let batchStart = max(0, currentStartIndex - batchCount)
+        let textsToPrewarm = allMessages[batchStart..<currentStartIndex]
+          .filter { $0.role == .assistant && !$0.content.isEmpty }
+          .map(\.content)
+        let expandedCount = (allMessages.count - currentStartIndex) + batchCount
+        Task { @MainActor in
+          for text in textsToPrewarm {
+            guard !Task.isCancelled else { return }
+            _ = try? await MacAnswerContentParseCache.shared.answer(for: text)
+          }
+          guard conversationID == targetConversationID else { return }
+          pendingEarlierAnchorID = anchorMessageID
+          visibleMessageLimit = max(visibleMessageLimit, expandedCount)
+          isLoadingEarlierMessages = false
+        }
+      } label: {
+        HStack(spacing: 7) {
+          if isLoadingEarlierMessages {
+            ProgressView()
+              .controlSize(.mini)
+          } else {
+            Image(systemName: "arrow.up.circle")
+              .font(.system(size: 12.5, weight: .semibold))
+          }
+          Text(
+            hiddenCount > batchCount
+              ? "Load \(batchCount) earlier messages (\(hiddenCount) hidden)"
+              : "Load \(hiddenCount) earlier message\(hiddenCount == 1 ? "" : "s")"
+          )
+          .font(.system(size: 12.5, weight: .medium))
+        }
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
+        .background(MacDesignTokens.Colors.surface, in: Capsule())
+        .overlay(Capsule().stroke(MacDesignTokens.Colors.separator, lineWidth: 0.75))
+      }
+      .buttonStyle(.plain)
+      .disabled(isLoadingEarlierMessages)
+      Spacer()
+    }
+  }
+
+  private func failureContextLabel(
+    for message: ChatMessage,
+    accountsByID: [ProviderAccountID: ProviderAccount]
+  ) -> String? {
+    guard message.status == .failed, message.failureOrigin == .remote else { return nil }
+
+    var parts: [String] = []
+    if let accountID = message.accountID, let account = accountsByID[accountID] {
+      if providers.accounts.filter({ $0.providerID == account.providerID }).count > 1 {
+        parts.append(account.label)
+      }
+      parts.append(
+        providers.provider(for: account.providerID)?.displayName ?? account.providerID.rawValue
+      )
+      if let modelID = message.modelID {
+        let modelName = providers.models(for: account.id, includeHidden: true)
+          .first(where: { $0.model.id == modelID })?.model.displayName
+        parts.append(modelName ?? modelID.rawValue)
+      }
+    } else {
+      if let providerID = message.providerID {
+        parts.append(providers.provider(for: providerID)?.displayName ?? providerID.rawValue)
+      }
+      if let modelID = message.modelID {
+        parts.append(modelID.rawValue)
+      }
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
   @discardableResult
   private func scrollToPendingSourceMessageIfAvailable(_ proxy: ScrollViewProxy) -> Bool {
     guard isActive, let messageID = pendingSourceMessageID,
-      messages.contains(where: { $0.id == messageID })
+      let targetIndex = messages.firstIndex(where: { $0.id == messageID })
     else { return false }
+
+    let currentRange = MacChatMessageWindowPolicy.visibleRange(
+      totalCount: messages.count,
+      visibleCount: visibleMessageLimit,
+      targetMessageIndex: nil
+    )
+    let requiredRange = MacChatMessageWindowPolicy.visibleRange(
+      totalCount: messages.count,
+      visibleCount: visibleMessageLimit,
+      targetMessageIndex: targetIndex
+    )
+    let requiredCount = messages.count - requiredRange.lowerBound
+    let needsExpansion = !currentRange.contains(targetIndex)
+    if requiredCount > visibleMessageLimit {
+      visibleMessageLimit = requiredCount
+    }
 
     pendingSourceMessageID = nil
     followsLatest = false
     isUserDraggingTimeline = false
     showJumpToLatest = true
+
+    if needsExpansion {
+      pendingScrollTarget = PendingScrollTarget(messageID: messageID)
+      return true
+    }
 
     let scroll = {
       proxy.scrollTo(messageID.rawValue, anchor: .center)
@@ -586,6 +796,11 @@ private struct MacComposerView: View {
   @State private var fileDropTargeted = false
   @State private var showingFileImporter = false
   @State private var showingLibraryPicker = false
+  @State private var importingAttachmentCount = 0
+
+  private var isImportingAttachments: Bool {
+    importingAttachmentCount > 0
+  }
 
   private var target: MacChatTarget? {
     chats.target(for: conversationID)
@@ -617,6 +832,7 @@ private struct MacComposerView: View {
       || !attachments.isEmpty)
       && target != nil
       && !isStreaming
+      && !isImportingAttachments
   }
 
   private var project: ChatProject? {
@@ -651,7 +867,9 @@ private struct MacComposerView: View {
         MacAttachmentStrip(
           attachments: attachments,
           presentation: .composer,
-          remove: removeAttachment
+          remove: removeAttachment,
+          addAttachment: { showingFileImporter = true },
+          isImportingAttachments: isImportingAttachments
         )
         .padding(.horizontal, 12)
         .padding(.top, 9)
@@ -697,6 +915,7 @@ private struct MacComposerView: View {
       MacLibraryAttachmentPickerView(
         workspace: workspace,
         excludedIDs: Set(attachments.map(\.id)),
+        existingAttachmentByteCount: attachments.reduce(0) { $0 + $1.byteCount },
         attach: appendAttachments
       )
     }
@@ -777,12 +996,20 @@ private struct MacComposerView: View {
 
       if !projectFiles.isEmpty {
         Divider()
+        let attachedIDs = Set(attachments.map(\.id))
         Menu("Project Files", systemImage: "folder.badge.plus") {
           ForEach(projectFiles) { file in
-            Button(file.filename) {
+            let isAttached = attachedIDs.contains(file.id)
+            Button {
               attachProjectFile(file)
+            } label: {
+              if isAttached {
+                Label(file.filename, systemImage: "checkmark")
+              } else {
+                Text(file.filename)
+              }
             }
-            .disabled(attachments.contains(where: { $0.id == file.id }))
+            .disabled(isAttached)
           }
         }
       }
@@ -805,19 +1032,30 @@ private struct MacComposerView: View {
         )
       }
     } label: {
-      Image(systemName: "plus")
-        .font(.system(size: 16, weight: .regular))
-        .frame(width: 34, height: 34)
-        .contentShape(Circle())
+      Group {
+        if isImportingAttachments {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Image(systemName: "plus")
+            .font(.system(size: 16, weight: .regular))
+        }
+      }
+      .frame(width: 34, height: 34)
+      .contentShape(Circle())
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     // Menu is width-greedy on macOS; without this it absorbs the flexible
     // space in bottomControls and pushes the model pill toward the send button.
     .fixedSize()
-    .disabled(isStreaming || target == nil)
-    .accessibilityLabel("Add or configure")
-    .help("Add attachments, project prompts, or configure chat tools")
+    .disabled(isStreaming || target == nil || isImportingAttachments)
+    .accessibilityLabel(isImportingAttachments ? "Importing attachments" : "Add or configure")
+    .help(
+      isImportingAttachments
+        ? "Importing attachments…"
+        : "Add attachments, project prompts, or configure chat tools"
+    )
   }
 
   private var targetButton: some View {
@@ -908,7 +1146,11 @@ private struct MacComposerView: View {
 
   private func submit() {
     let text = draftBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard (!text.isEmpty || !attachments.isEmpty), target != nil, !isStreaming else { return }
+    guard (!text.isEmpty || !attachments.isEmpty),
+      target != nil,
+      !isStreaming,
+      !isImportingAttachments
+    else { return }
     send(text, attachments)
   }
 
@@ -926,7 +1168,9 @@ private struct MacComposerView: View {
 
   private func importURLs(_ urls: [URL]) {
     guard !isStreaming else { return }
+    importingAttachmentCount += 1
     Task { @MainActor in
+      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
       do {
         appendAttachments(try await MacAttachmentImporter.importURLs(urls))
       } catch {
@@ -938,7 +1182,9 @@ private struct MacComposerView: View {
 
   private func importImages(_ images: [MacDroppedImage]) {
     guard !isStreaming else { return }
+    importingAttachmentCount += 1
     Task { @MainActor in
+      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
       do {
         appendAttachments(try await MacAttachmentImporter.importDroppedImages(images))
       } catch {
@@ -950,7 +1196,9 @@ private struct MacComposerView: View {
 
   private func importPasteboard() {
     guard !isStreaming else { return }
+    importingAttachmentCount += 1
     Task { @MainActor in
+      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
       do {
         appendAttachments(try await MacAttachmentImporter.importPasteboard())
       } catch {
@@ -962,7 +1210,9 @@ private struct MacComposerView: View {
 
   private func attachProjectFile(_ file: ProjectFile) {
     guard !isStreaming, !attachments.contains(where: { $0.id == file.id }) else { return }
+    importingAttachmentCount += 1
     Task { @MainActor in
+      defer { importingAttachmentCount = max(0, importingAttachmentCount - 1) }
       if let attachment = await workspace.attachment(for: file) {
         appendAttachments([attachment])
       } else if let error = workspace.errorMessage {
@@ -977,8 +1227,11 @@ private struct MacAssistantMessageActions: View {
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
+  var includeRetry: Bool = true
+  var hideEmptyContentActions: Bool = false
 
   @State private var copied = false
+  @State private var showingDetails = false
   @State private var showingRegenerateConfirmation = false
 
   private var canRetry: Bool {
@@ -987,30 +1240,38 @@ private struct MacAssistantMessageActions: View {
       && !chats.isGenerating(conversationID)
   }
 
+  private var showContentActions: Bool {
+    !hideEmptyContentActions || !message.content.isEmpty
+  }
+
   var body: some View {
     HStack(spacing: 2) {
-      Button {
-        copyToPasteboard(message.content)
-        copied = true
-        Task { @MainActor in
-          try? await Task.sleep(for: .seconds(1.2))
-          copied = false
+      if showContentActions {
+        Button {
+          copyToPasteboard(message.content)
+          copied = true
+          Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
+          }
+        } label: {
+          actionIcon(copied ? "checkmark" : "doc.on.doc")
         }
-      } label: {
-        actionIcon(copied ? "checkmark" : "doc.on.doc")
+        .buttonStyle(.plain)
+        .disabled(message.content.isEmpty)
+        .help(copied ? "Copied" : "Copy response")
+        .accessibilityLabel(copied ? "Response copied" : "Copy response")
       }
-      .buttonStyle(.plain)
-      .disabled(message.content.isEmpty)
-      .help(copied ? "Copied" : "Copy response")
-      .accessibilityLabel(copied ? "Response copied" : "Copy response")
 
-      Button(action: requestRegeneration) {
-        actionIcon("arrow.clockwise")
+      if includeRetry {
+        Button(action: requestRegeneration) {
+          actionIcon("arrow.clockwise")
+        }
+        .buttonStyle(.plain)
+        .disabled(!canRetry)
+        .help(canRetry ? "Retry response" : "Retry is available on the latest response")
+        .accessibilityLabel("Retry response")
       }
-      .buttonStyle(.plain)
-      .disabled(!canRetry)
-      .help(canRetry ? "Retry response" : "Retry is available on the latest response")
-      .accessibilityLabel("Retry response")
 
       Menu {
         if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1019,10 +1280,14 @@ private struct MacAssistantMessageActions: View {
           }
         }
 
-        if !message.content.isEmpty {
+        if showContentActions, !message.content.isEmpty {
           ShareLink(item: message.content) {
             Label("Share", systemImage: "square.and.arrow.up")
           }
+        }
+
+        Button("Message Details", systemImage: "info.circle") {
+          showingDetails = true
         }
       } label: {
         actionIcon("ellipsis")
@@ -1036,6 +1301,9 @@ private struct MacAssistantMessageActions: View {
     // Pulls the leading glyph back over its centered frame's inset so the
     // first icon's visual edge lines up with the message text above.
     .padding(.leading, -7)
+    .sheet(isPresented: $showingDetails) {
+      MacMessageDetailsView(message: message)
+    }
     .confirmationDialog(
       "Regenerate this response?",
       isPresented: $showingRegenerateConfirmation,

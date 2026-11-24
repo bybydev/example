@@ -49,34 +49,34 @@ Prioritized checklist to bring `BYOKmac` to feature parity with `BYOKchat` (iOS)
 
 ## P2 — Markdown, Chat & Workspace UX Parity
 
-- [ ] **Custom Markdown Table Renderer** (`BYOKmac/App/MacAnswerContentParser.swift`, `BYOKmac/App/MacMarkdownMessageContent.swift`)
+- [x] **Custom Markdown Table Renderer** (`BYOKmac/App/MacAnswerContentParser.swift`, `BYOKmac/App/MacMarkdownMessageContent.swift`)
   - Parse `.table` blocks with dimensions header, edge fades, inline math/images/links in cells, **Copy as Markdown / TSV**, and full-screen 2D-scrollable viewer.
-- [ ] **Inline Response Image Provider** (`BYOKmac/App/MacMarkdownMessageContent.swift`)
+- [x] **Inline Response Image Provider** (`BYOKmac/App/MacMarkdownMessageContent.swift`)
   - Decode `data:image/*;base64,...`, cache bytes/thumbnails, show loading/unavailable states, and support click-to-zoom preview.
-- [ ] **Mermaid Diagram Parity** (`BYOKmac/App/MacMarkdownMessageContent.swift`)
+- [x] **Mermaid Diagram Parity** (`BYOKmac/App/MacMarkdownMessageContent.swift`)
   - Recognize `mermaidjs`/`mermaid-js` + attribute suffixes, strip YAML frontmatter & extract `title`, handle unsupported diagram types gracefully, match active app theme, add inline **Show Source / Show Diagram** toggle, click-to-expand, and zoom/pan + **Save/Share Image** in full screen.
-- [ ] **Paragraph-Level Inline Math Splitting & Currency Guards** (`BYOKmac/App/MacAnswerContentParseCache.swift`, `BYOKmac/App/MacAnswerContentParser.swift`)
+- [x] **Paragraph-Level Inline Math Splitting & Currency Guards** (`BYOKmac/App/MacAnswerContentParseCache.swift`, `BYOKmac/App/MacAnswerContentParser.swift`)
   - Split markdown blocks per paragraph (instead of disabling inline math whenever a block has headings/lists) and add digit guards around `$` to avoid currency false positives.
-- [ ] **Chat Attachment Preview & Context Menu** (`BYOKmac/App/MacAttachmentSupport.swift`)
+- [x] **Chat Attachment Preview & Context Menu** (`BYOKmac/App/MacAttachmentSupport.swift`)
   - Click-to-preview attachments (image viewer / Quick Look) and per-tile `"Save to Library"` context menu; add inline `+ Add` tile and import spinner in composer.
-- [ ] **Failed / Cancelled / Interrupted Message UX** (`BYOKmac/App/MacRichMessageView.swift`, `BYOKmac/App/MacChatPaneView.swift`)
+- [x] **Failed / Cancelled / Interrupted Message UX** (`BYOKmac/App/MacRichMessageView.swift`, `BYOKmac/App/MacChatPaneView.swift`)
   - Styled failure card with `Account · Provider · Model` context + inline Retry button, and show `MacAssistantMessageActions` on failed/cancelled/interrupted messages (not just `.complete`).
-- [ ] **Long User Message Collapsing & URL Auto-Linking** (`BYOKmac/App/MacRichMessageView.swift`)
+- [x] **Long User Message Collapsing & URL Auto-Linking** (`BYOKmac/App/MacRichMessageView.swift`)
   - Collapse >12-line / >900-char user messages with Show more/less and auto-link HTTP(S) URLs.
-- [ ] **Search Deep-Linking & Sidebar Polish** (`BYOKmac/App/MacChatSessionModel.swift`, `BYOKmac/App/MacShellView.swift`)
+- [x] **Search Deep-Linking & Sidebar Polish** (`BYOKmac/App/MacChatSessionModel.swift`, `BYOKmac/App/MacShellView.swift`)
   - Keep `messageID` on `SearchItem` so clicking a search result scrolls to the matched message; add project icons, generating spinner, Draft/model indicators, date-bucket grouping (`Today`, `Yesterday`, `Previous 7/30 Days`), title-match preview fallback, and FTS indexing progress.
-- [ ] **Windowed Transcript Loading** (`BYOKmac/App/MacChatPaneView.swift`)
+- [x] **Windowed Transcript Loading** (`BYOKmac/App/MacChatPaneView.swift`)
   - Load latest 30 messages with `"Load N earlier messages"` button for long conversations (matching `ChatMessageWindowPolicy`).
-- [ ] **Projects & Library Polish** (`BYOKmac/App/MacProjectsWorkspaceView.swift`, `BYOKmac/App/MacLibraryAttachmentPickerView.swift`, `BYOKmac/App/MacLibraryView.swift`)
+- [x] **Projects & Library Polish** (`BYOKmac/App/MacProjectsWorkspaceView.swift`, `BYOKmac/App/MacLibraryAttachmentPickerView.swift`, `BYOKmac/App/MacLibraryView.swift`)
   - Project file Quick Look preview, off-main-actor import validation (reject dirs/empty/>40 MB, HEIC→JPEG normalization, text-only token estimates), Rename/Move/Delete actions in Project Chats tab, inline duplicate/length validation + unavailable-default warning + tool-preset overwrite confirmation.
   - Cross-tab multi-select + remaining-slot/size preflight in `MacLibraryAttachmentPickerView`; invalid-character/extension warnings in `MacLibraryRenameSheet` and `"Clear Search & Filters"` in empty results.
-- [ ] **Target Label Formatter Sync** (`BYOKmac/App/MacTargetLabelFormatter.swift`)
+- [x] **Target Label Formatter Sync** (`BYOKmac/App/MacTargetLabelFormatter.swift`)
   - Port newer model families (`o1`/`o3`/`o4`/`glm`/Mistral families), slash/Fireworks/hyphen normalization, all provider short names (`Z.ai`, `Moonshot`, `MiniMax`, `Qwen`, etc.), and compact reasoning labels (`Min`/`Med`/`X-High`, `4K`/`Auto`).
-- [ ] **Provider Brand SVG Logos & Grouped Searchable Picker** (`project.yml`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
+- [x] **Provider Brand SVG Logos & Grouped Searchable Picker** (`project.yml`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
   - Share the 39 `provider.*.imageset` SVGs + `ProviderLogoCatalog` host/alias matching on macOS, group `MacProviderKindPickerSheet` into **Cloud Providers** vs **Local & Custom** with search, allow switching kind during creation, and add the **Supported Providers** catalog view.
-- [ ] **Structured Additional Headers & `HTTPHeaderValidator`** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacMCPViews.swift`)
+- [x] **Structured Additional Headers & `HTTPHeaderValidator`** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacMCPViews.swift`)
   - Replace raw header `TextEditor`s with key/value editor enforcing `HTTPHeaderValidationPolicy` for both Providers and MCP servers.
-- [ ] **MCP Tools Sheet & Approval/Elicitation Safety** (`BYOKmac/App/MacMCPViews.swift`)
+- [x] **MCP Tools Sheet & Approval/Elicitation Safety** (`BYOKmac/App/MacMCPViews.swift`)
   - Add unsupported-model warning, while-generating mutation lock, missing-credential guard, inline `"Add MCP Server"` empty CTA, active preset checkmark, always-available Refresh + protocol version + tool descriptions.
   - Add `isResolving` double-submit guards on Approval/Elicitation cards, demote `"Always Allow"` when `isDestructive`, add `"None"` option for optional enum elicitations, validate/display `allowedValues` for `.stringArray`, and display full host/URL before opening `.url` elicitations.
 

@@ -166,8 +166,18 @@ struct MacLibraryView: View {
     workspace.libraryEntries.reduce(0) { $0 + $1.byteCount }
   }
 
+  private var trimmedSearchQuery: String {
+    searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   private var filtersAreActive: Bool {
     kindFilter != .all || sourceFilter != .all
+  }
+
+  private func clearSearchAndFilters() {
+    searchText = ""
+    kindFilter = .all
+    sourceFilter = .all
   }
 
   var body: some View {
@@ -466,15 +476,27 @@ struct MacLibraryView: View {
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else if visibleEntries.isEmpty {
-      ContentUnavailableView(
-        searchText.isEmpty ? "No Files" : "No Matches",
-        systemImage: searchText.isEmpty ? "line.3.horizontal.decrease.circle" : "magnifyingglass",
-        description: Text(
-          searchText.isEmpty
+      ContentUnavailableView {
+        Label(
+          trimmedSearchQuery.isEmpty ? "No Files" : "No Matches",
+          systemImage: trimmedSearchQuery.isEmpty
+            ? "line.3.horizontal.decrease.circle"
+            : "magnifyingglass"
+        )
+      } description: {
+        Text(
+          trimmedSearchQuery.isEmpty
             ? "Nothing matches the current filters."
             : "Try a different name or clear the filters."
         )
-      )
+      } actions: {
+        if filtersAreActive || !trimmedSearchQuery.isEmpty {
+          Button("Clear Search & Filters") {
+            clearSearchAndFilters()
+          }
+          .buttonStyle(.bordered)
+        }
+      }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
       switch viewMode {
@@ -1269,7 +1291,7 @@ private final class MacLibraryPreviewItem: NSObject, QLPreviewItem {
   }
 }
 
-private struct MacLibraryQuickLookView: NSViewRepresentable {
+struct MacLibraryQuickLookView: NSViewRepresentable {
   let url: URL
 
   final class Coordinator {
@@ -1295,6 +1317,68 @@ private struct MacLibraryQuickLookView: NSViewRepresentable {
   }
 }
 
+enum MacLibraryRenameValidation {
+  struct Evaluation: Equatable, Sendable {
+    let trimmedName: String
+    let canSave: Bool
+    let errorMessage: String?
+    let warningMessage: String?
+  }
+
+  static func evaluate(proposed: String, original: String) -> Evaluation {
+    let trimmed = proposed.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+      return Evaluation(
+        trimmedName: trimmed,
+        canSave: false,
+        errorMessage: nil,
+        warningMessage: nil
+      )
+    }
+    if trimmed.contains("/") || trimmed.contains("\0") {
+      return Evaluation(
+        trimmedName: trimmed,
+        canSave: false,
+        errorMessage: "Filenames cannot contain '/'.",
+        warningMessage: nil
+      )
+    }
+    if trimmed == "." || trimmed == ".." {
+      return Evaluation(
+        trimmedName: trimmed,
+        canSave: false,
+        errorMessage: "Filenames cannot be '.' or '..'.",
+        warningMessage: nil
+      )
+    }
+    if trimmed == original {
+      return Evaluation(
+        trimmedName: trimmed,
+        canSave: false,
+        errorMessage: nil,
+        warningMessage: nil
+      )
+    }
+
+    let originalExt = (original as NSString).pathExtension
+    let newExt = (trimmed as NSString).pathExtension
+    var warning: String?
+    if !originalExt.isEmpty {
+      if newExt.isEmpty {
+        warning = "Removing the .\(originalExt) extension may prevent previews from opening."
+      } else if newExt.caseInsensitiveCompare(originalExt) != .orderedSame {
+        warning = "Changing the .\(originalExt) extension to .\(newExt) may affect previews."
+      }
+    }
+    return Evaluation(
+      trimmedName: trimmed,
+      canSave: true,
+      errorMessage: nil,
+      warningMessage: warning
+    )
+  }
+}
+
 private struct MacLibraryRenameSheet: View {
   let entry: LibraryEntry
   let save: (String) async -> Bool
@@ -1312,12 +1396,27 @@ private struct MacLibraryRenameSheet: View {
     _filename = State(initialValue: entry.filename)
   }
 
+  private var validation: MacLibraryRenameValidation.Evaluation {
+    MacLibraryRenameValidation.evaluate(proposed: filename, original: entry.filename)
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 12) {
       Text("Rename Library Item")
         .font(.headline)
 
       TextField("Filename", text: $filename)
+        .onSubmit { commit() }
+
+      if let error = validation.errorMessage {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.red)
+      } else if let warning = validation.warningMessage {
+        Label(warning, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(.orange)
+      }
 
       HStack {
         Spacer()
@@ -1328,28 +1427,27 @@ private struct MacLibraryRenameSheet: View {
         .keyboardShortcut(.cancelAction)
 
         Button("Rename") {
-          let value = filename.trimmingCharacters(
-            in: .whitespacesAndNewlines
-          )
-          guard !value.isEmpty else { return }
-
-          isSaving = true
-          Task { @MainActor in
-            if await save(value) {
-              dismiss()
-            } else {
-              isSaving = false
-            }
-          }
+          commit()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(
-          filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || isSaving
-        )
+        .disabled(!validation.canSave || isSaving)
       }
     }
     .padding(20)
     .frame(width: 420)
+  }
+
+  private func commit() {
+    let evaluation = validation
+    guard evaluation.canSave, !isSaving else { return }
+
+    isSaving = true
+    Task { @MainActor in
+      if await save(evaluation.trimmedName) {
+        dismiss()
+      } else {
+        isSaving = false
+      }
+    }
   }
 }

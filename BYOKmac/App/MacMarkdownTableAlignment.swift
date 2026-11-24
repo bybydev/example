@@ -1,20 +1,24 @@
 import Foundation
 
-enum MacTableColumnAlignment: Equatable, Sendable {
+enum MacTableColumnAlignment: Equatable, Hashable, Sendable {
   case leading
   case center
   case trailing
 }
 
 enum MacMarkdownTableAlignment {
-  /// Mirrors the iOS GFM delimiter-row recovery used when fixed-width table
-  /// cells leave MarkdownUI's grid alignment with no horizontal slack.
+  /// Recovers GFM delimiter-row column alignments for tables that remain inside
+  /// `.markdown` segments (for example nested inside blockquotes or list items).
   static func columnAlignments(in markdown: String) -> [MacTableColumnAlignment]? {
+    guard markdown.contains("|"), markdown.contains("-") else { return nil }
     var fenceCharacter: Character?
     var fenceLength = 0
 
     for line in markdown.components(separatedBy: .newlines) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      var trimmed = line.trimmingCharacters(in: .whitespaces)
+      while trimmed.hasPrefix(">") {
+        trimmed = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+      }
 
       if let first = trimmed.first, first == "`" || first == "~" {
         let runLength = trimmed.prefix { $0 == first }.count
@@ -35,35 +39,12 @@ enum MacMarkdownTableAlignment {
         }
       }
 
-      guard fenceCharacter == nil, isDelimiterRow(trimmed) else { continue }
-
-      let cells = trimmed
-        .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
-        .components(separatedBy: "|")
-      let result = cells.map { cell -> MacTableColumnAlignment in
-        let value = cell.trimmingCharacters(in: .whitespaces)
-        switch (value.hasPrefix(":"), value.hasSuffix(":")) {
-        case (true, true): return .center
-        case (false, true): return .trailing
-        default: return .leading
-        }
-      }
-      return result.isEmpty ? nil : result
+      guard fenceCharacter == nil,
+        let alignments = MacAnswerContentParser.parseTableDelimiterRow(trimmed)
+      else { continue }
+      return alignments
     }
 
     return nil
-  }
-
-  private static func isDelimiterRow(_ line: String) -> Bool {
-    guard line.contains("|"), line.contains("-") else { return false }
-    let cells = line
-      .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
-      .components(separatedBy: "|")
-    return !cells.isEmpty && cells.allSatisfy { cell in
-      let value = cell.trimmingCharacters(in: .whitespaces)
-      let body = value.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-      return !body.isEmpty && body.allSatisfy { $0 == "-" }
-        && value.contains("-")
-    }
   }
 }

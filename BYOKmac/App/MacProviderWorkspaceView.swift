@@ -40,6 +40,7 @@ struct MacProviderManagementView: View {
   @State private var selectedAccountID: ProviderAccountID?
   @State private var searchText = ""
   @State private var showingProviderPicker = false
+  @State private var showingSupportedProviders = false
   @State private var editorRoute: MacConnectionEditorRoute?
   @State private var deleteAccount: ProviderAccount?
   @State private var testingAccountID: ProviderAccountID?
@@ -121,6 +122,11 @@ struct MacProviderManagementView: View {
         editorRoute = .create(kind)
       }
     }
+    .sheet(isPresented: $showingSupportedProviders) {
+      MacSupportedProvidersCatalogView(model: model) { kind in
+        editorRoute = .create(kind)
+      }
+    }
     .sheet(item: $editorRoute) { route in
       MacConnectionEditorView(model: model, route: route) { accountID in
         if let accountID { selectedAccountID = accountID }
@@ -185,6 +191,10 @@ struct MacProviderManagementView: View {
 
         ScrollView {
           VStack(alignment: .leading, spacing: 12) {
+            if showsFreeLimitBanner {
+              freeLimitBanner
+            }
+
             Text("\(visibleAccounts.count) connection\(visibleAccounts.count == 1 ? "" : "s")")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
@@ -210,6 +220,52 @@ struct MacProviderManagementView: View {
     }
   }
 
+  private var showsFreeLimitBanner: Bool {
+    MacProAccess.providerAccountCapacityDecision(currentCount: model.accounts.count) == .requiresPro
+  }
+
+  private var freeLimitBanner: some View {
+    HStack(alignment: .center, spacing: 14) {
+      Image(systemName: "crown.fill")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+        .frame(width: 32, height: 32)
+        .background(MacDesignTokens.Colors.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Free includes 1 connection")
+          .font(.system(size: 13.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Text("Upgrade to BYOK Pro to add unlimited cloud, local, and custom providers.")
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      }
+
+      Spacer(minLength: 12)
+
+      HStack(spacing: 8) {
+        Button("Supported Providers") {
+          showingSupportedProviders = true
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+
+        Button("Upgrade") {
+          MacProAccess.requestUpgrade(.providerAccounts)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+      }
+    }
+    .padding(13)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10)
+        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+    }
+  }
+
   private func providerCard(_ account: ProviderAccount) -> some View {
     let state = macProviderPresentationState(model: model, account: account)
     let records = model.models(for: account.id, includeHidden: true)
@@ -218,7 +274,7 @@ struct MacProviderManagementView: View {
 
     return VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .top, spacing: 11) {
-        MacProviderIcon(kind: account.kind, size: 40, isReady: state == .ready)
+        MacProviderIcon(account: account, size: 40, isReady: state == .ready)
         VStack(alignment: .leading, spacing: 2) {
           Text(account.label)
             .font(.system(size: 14, weight: .semibold))
@@ -364,7 +420,7 @@ private struct MacProviderWorkspaceDetailView: View {
           .buttonStyle(.plain)
           .foregroundStyle(MacDesignTokens.Colors.accent)
         Divider().frame(height: 24)
-        MacProviderIcon(kind: account.kind, size: 40, isReady: state == .ready)
+        MacProviderIcon(account: account, size: 40, isReady: state == .ready)
         VStack(alignment: .leading, spacing: 3) {
           HStack(spacing: 7) {
             Text(account.label).font(.title3.weight(.semibold)).lineLimit(1)
@@ -805,16 +861,28 @@ private struct MacProviderConnectionWorkspaceView: View {
   }
 }
 
-private struct MacProviderKindPickerSheet: View {
+struct MacProviderKindPickerSheet: View {
+  var currentSelection: ProviderKind? = nil
   let selected: (ProviderKind) -> Void
+
   @Environment(\.dismiss) private var dismiss
+  @State private var searchText = ""
+
+  private var filteredCloud: [ProviderKind] {
+    ProviderKind.cloudCatalog.filter { $0.matchesMacProviderSearch(searchText) }
+  }
+
+  private var filteredLocalAndCustom: [ProviderKind] {
+    ProviderKind.localAndCustomCatalog.filter { $0.matchesMacProviderSearch(searchText) }
+  }
 
   var body: some View {
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
-          Text("Add AI Provider").font(.title3.weight(.semibold))
-          Text("Choose a service to connect.")
+          Text(currentSelection == nil ? "Add AI Provider" : "Choose AI Provider")
+            .font(.title3.weight(.semibold))
+          Text("Choose a cloud, local, or OpenAI-compatible service.")
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
         }
@@ -823,68 +891,87 @@ private struct MacProviderKindPickerSheet: View {
           .buttonStyle(.plain)
           .keyboardShortcut(.cancelAction)
           .help("Close")
-          .accessibilityLabel("Close Add AI Provider")
+          .accessibilityLabel("Close Provider Picker")
       }
-      .padding(18)
+      .padding(.horizontal, 18)
+      .padding(.top, 18)
+      .padding(.bottom, 12)
+
+      MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
 
       Divider()
 
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            ForEach(ProviderKind.catalog, id: \.rawValue) { kind in providerChoice(kind) }
-          }
-          Divider()
-          Button { choose(.openAICompatible) } label: {
-            HStack(spacing: 12) {
-              MacProviderIcon(kind: .openAICompatible, size: 38, isReady: true)
-              VStack(alignment: .leading, spacing: 3) {
-                Text("OpenAI-compatible Server")
-                  .font(.system(size: 13.5, weight: .semibold))
-                  .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-                Text("Connect Ollama, LM Studio, a LAN server, or another compatible API.")
-                  .font(.caption)
-                  .foregroundStyle(MacDesignTokens.Colors.textMuted)
-              }
-              Spacer()
-              Image(systemName: "chevron.right").foregroundStyle(MacDesignTokens.Colors.textMuted)
+      if filteredCloud.isEmpty && filteredLocalAndCustom.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 18) {
+            if !filteredCloud.isEmpty {
+              providerGroup(title: "Cloud Providers", kinds: filteredCloud)
             }
-            .padding(13)
-            .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-              RoundedRectangle(cornerRadius: 10)
-                .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+            if !filteredLocalAndCustom.isEmpty {
+              providerGroup(title: "Local & Custom", kinds: filteredLocalAndCustom)
             }
           }
-          .buttonStyle(.plain)
+          .padding(18)
         }
-        .padding(18)
       }
     }
-    .frame(width: 620, height: 500)
+    .frame(width: 640, height: 540)
     .background(MacDesignTokens.Colors.canvas)
   }
 
+  private func providerGroup(title: String, kinds: [ProviderKind]) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .textCase(.uppercase)
+
+      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        ForEach(kinds, id: \.rawValue) { kind in
+          providerChoice(kind)
+        }
+      }
+    }
+  }
+
   private func providerChoice(_ kind: ProviderKind) -> some View {
-    Button { choose(kind) } label: {
+    let isSelected = kind == currentSelection
+    return Button { choose(kind) } label: {
       HStack(spacing: 11) {
         MacProviderIcon(kind: kind, size: 36, isReady: true)
         VStack(alignment: .leading, spacing: 2) {
-          Text(kind.displayName)
+          Text(kind.macPickerTitle)
             .font(.system(size: 13.5, weight: .semibold))
             .foregroundStyle(MacDesignTokens.Colors.textPrimary)
-          Text(providerDescription(kind))
+            .lineLimit(1)
+          Text(kind.macPickerDescription)
             .font(.caption)
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
         }
-        Spacer()
+        Spacer(minLength: 6)
+        if isSelected {
+          Image(systemName: "checkmark")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+        }
       }
       .padding(12)
-      .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
+      .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
       .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
       .overlay {
         RoundedRectangle(cornerRadius: 10)
-          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+          .stroke(
+            isSelected
+              ? MacDesignTokens.Colors.accent.opacity(0.6)
+              : MacDesignTokens.Colors.separator.opacity(0.75),
+            lineWidth: isSelected ? 1 : 0.5
+          )
       }
     }
     .buttonStyle(.plain)
@@ -894,28 +981,134 @@ private struct MacProviderKindPickerSheet: View {
     dismiss()
     selected(kind)
   }
+}
 
-  private func providerDescription(_ kind: ProviderKind) -> String {
-    switch kind {
-    case .openai: "GPT models"
-    case .xAI: "Grok models"
-    case .anthropic: "Claude models"
-    case .gemini: "Gemini models"
-    case .deepSeek: "DeepSeek models"
-    case .zAI: "GLM models"
-    case .moonshot: "Kimi models"
-    case .minimax: "MiniMax models"
-    case .qwen: "Qwen models"
-    case .mistral: "Mistral models"
-    case .groq: "Fast LPU inference"
-    case .together: "Open-source hosted models"
-    case .fireworks: "Fast hosted inference"
-    case .openRouter: "Multi-provider routing"
-    case .nvidia: "NVIDIA hosted models"
-    case .ollama: "Local Ollama server"
-    case .lmStudio: "Local LM Studio server"
-    case .openAICompatible: "Compatible APIs"
+/// Searchable catalog of every supported provider, reachable from the Free
+/// 1-connection limit banner so users can browse cloud, local, and custom
+/// providers with live search and Connected badges.
+struct MacSupportedProvidersCatalogView: View {
+  @Bindable var model: MacProviderModel
+  let onSelect: (ProviderKind) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var searchText = ""
+
+  private var connectedKinds: Set<ProviderKind> {
+    Set(model.accounts.map(\.kind))
+  }
+
+  private var filteredCloud: [ProviderKind] {
+    ProviderKind.cloudCatalog.filter { $0.matchesMacProviderSearch(searchText) }
+  }
+
+  private var filteredLocalAndCustom: [ProviderKind] {
+    ProviderKind.localAndCustomCatalog.filter { $0.matchesMacProviderSearch(searchText) }
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Supported Providers")
+            .font(.title3.weight(.semibold))
+          Text("Cloud, local, and OpenAI-compatible providers supported by BYOKchat.")
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        Spacer()
+        Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+          .buttonStyle(.plain)
+          .keyboardShortcut(.cancelAction)
+          .help("Close")
+          .accessibilityLabel("Close Supported Providers")
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 18)
+      .padding(.bottom, 12)
+
+      MacProviderSearchField(placeholder: "Search providers", text: $searchText)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
+
+      Divider()
+
+      if filteredCloud.isEmpty && filteredLocalAndCustom.isEmpty {
+        ContentUnavailableView.search(text: searchText)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 18) {
+            if !filteredCloud.isEmpty {
+              catalogGroup(title: "Cloud Providers", kinds: filteredCloud)
+            }
+            if !filteredLocalAndCustom.isEmpty {
+              catalogGroup(title: "Local & Custom", kinds: filteredLocalAndCustom)
+            }
+          }
+          .padding(18)
+        }
+      }
     }
+    .frame(width: 640, height: 540)
+    .background(MacDesignTokens.Colors.canvas)
+  }
+
+  private func catalogGroup(title: String, kinds: [ProviderKind]) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .textCase(.uppercase)
+
+      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        ForEach(kinds, id: \.rawValue) { kind in
+          catalogRow(kind)
+        }
+      }
+    }
+  }
+
+  private func catalogRow(_ kind: ProviderKind) -> some View {
+    let isConnected = connectedKinds.contains(kind)
+    return Button {
+      guard MacProAccess.requireProviderAccountCapacity(currentCount: model.accounts.count) else {
+        return
+      }
+      dismiss()
+      onSelect(kind)
+    } label: {
+      HStack(spacing: 11) {
+        MacProviderIcon(kind: kind, size: 36, isReady: true)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(kind.macPickerTitle)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+          Text(kind.macPickerDescription)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 6)
+        if isConnected {
+          Text("Connected")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.green.opacity(0.14), in: Capsule())
+            .fixedSize()
+        }
+      }
+      .padding(12)
+      .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.5)
+      }
+    }
+    .buttonStyle(.plain)
   }
 }
 
@@ -973,20 +1166,31 @@ private struct MacProviderSearchField: View {
 }
 
 private struct MacProviderIcon: View {
-  let kind: ProviderKind
+  private let account: ProviderAccount?
+  private let kind: ProviderKind
   let size: CGFloat
   let isReady: Bool
 
+  init(account: ProviderAccount, size: CGFloat, isReady: Bool) {
+    self.account = account
+    self.kind = account.kind
+    self.size = size
+    self.isReady = isReady
+  }
+
+  init(kind: ProviderKind, size: CGFloat, isReady: Bool) {
+    self.account = nil
+    self.kind = kind
+    self.size = size
+    self.isReady = isReady
+  }
+
   var body: some View {
-    Image(systemName: providerSymbol(kind))
-      .font(.system(size: size * 0.48, weight: .semibold))
-      .foregroundStyle(isReady ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
-      .frame(width: size, height: size)
-      .background(
-        (isReady ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted).opacity(0.11),
-        in: RoundedRectangle(cornerRadius: size * 0.27)
-      )
-      .accessibilityHidden(true)
+    if let account {
+      MacProviderMark(account: account, size: size, isReady: isReady)
+    } else {
+      MacProviderMark(kind: kind, size: size, isReady: isReady)
+    }
   }
 }
 
