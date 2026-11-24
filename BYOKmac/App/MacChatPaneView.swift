@@ -285,6 +285,12 @@ private struct MacTranscriptView: View {
     ScrollViewReader { proxy in
       ZStack(alignment: .bottom) {
         List {
+          transcriptRow {
+            Color.clear
+              .frame(height: MacDesignTokens.Spacing.transcriptTop)
+          }
+          .accessibilityHidden(true)
+
           if conversationID == nil {
             transcriptRow {
               newConversationEmptyState
@@ -337,17 +343,14 @@ private struct MacTranscriptView: View {
 
           transcriptRow {
             Color.clear
-              .frame(height: 1)
+              .frame(height: effectiveBottomSpace)
           }
+          .accessibilityHidden(true)
           .id(ScrollTarget.bottom)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .contentMargins(.horizontal, MacDesignTokens.Spacing.large, for: .scrollContent)
-        .contentMargins(.top, MacDesignTokens.Spacing.transcriptTop, for: .scrollContent)
-        .contentMargins(.bottom, effectiveBottomSpace, for: .scrollContent)
         .scrollIndicators(.automatic)
-        .defaultScrollAnchor(.bottom)
         .background {
           MacTranscriptScrollObserver(isEnabled: isActive, connection: scrollConnection) { previous, current in
             guard isActive else { return }
@@ -486,6 +489,7 @@ private struct MacTranscriptView: View {
     content()
       .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth, alignment: .leading)
       .frame(maxWidth: .infinity, alignment: .center)
+      .padding(.horizontal, MacDesignTokens.Spacing.large)
       .padding(.bottom, bottomSpacing)
       .background(MacTranscriptScrollAnchor(connection: scrollConnection).allowsHitTesting(false))
       .listRowInsets(EdgeInsets())
