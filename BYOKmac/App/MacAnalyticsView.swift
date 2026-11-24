@@ -89,9 +89,13 @@ final class MacAnalyticsModel {
       await services.telemetryRecorder.retryAfterFailure()
     }
 
-    async let conversationsTask = services.conversationStore.allConversations()
-    async let workspaceSnapshotTask = services.providerWorkspace.snapshot()
-    async let analyticsLoadTask = services.telemetryRecorder.loadAnalytics(
+    let conversationStore = services.conversationStore
+    let providerWorkspace = services.providerWorkspace
+    let telemetryRecorder = services.telemetryRecorder
+
+    async let conversationsTask = conversationStore.allConversations()
+    async let workspaceSnapshotTask = providerWorkspace.snapshot()
+    async let analyticsLoadTask = telemetryRecorder.loadAnalytics(
       range: effectiveRange,
       reference: reference,
       limit: TelemetryStoreConfiguration.maximumRecentEventQueryCount
