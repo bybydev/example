@@ -143,8 +143,10 @@ final class MacAppModel {
   private(set) var newChatRequestID = 0
   private(set) var conversationSearchRequestID = 0
   private(set) var sidebarToggleRequestID = 0
+  private(set) var exportMarkdownRequestID = 0
 
   private let coreServicesFactory: MacCoreServicesFactory
+  private var catalogRefreshTask: Task<Void, Never>?
 
   init(
     storageEnvironment: BYOKStorageEnvironment = MacStorageEnvironment.current,
@@ -259,6 +261,7 @@ final class MacAppModel {
     await diagnostics?.load()
 
     startupState = .ready
+    scheduleBackgroundCatalogRefresh(for: providerModel)
   }
 
   func recordRecoveryBackup(_ url: URL?) {
@@ -317,6 +320,11 @@ final class MacAppModel {
   func requestSidebarToggle() {
     guard isReady else { return }
     sidebarToggleRequestID &+= 1
+  }
+
+  func requestExportMarkdown() {
+    guard isReady else { return }
+    exportMarkdownRequestID &+= 1
   }
 
   private func projectTarget(_ projectID: ProjectID?) -> MacChatTarget? {
@@ -411,6 +419,7 @@ final class MacAppModel {
       diagnostics = diagnosticsModel
 
       startupState = .ready
+      scheduleBackgroundCatalogRefresh(for: providerModel)
     } catch {
       MacAppAnalytics.reportError(currentStage.analyticsErrorCode, component: "startup")
       clearRuntimeModels()
@@ -418,7 +427,21 @@ final class MacAppModel {
     }
   }
 
+  private func scheduleBackgroundCatalogRefresh(for providerModel: MacProviderModel) {
+    catalogRefreshTask?.cancel()
+    catalogRefreshTask = Task { @MainActor [weak self, weak providerModel] in
+      guard let providerModel else { return }
+      await providerModel.refreshModelCatalogIfNeeded()
+      guard !Task.isCancelled else { return }
+      await providerModel.refreshReadyAccountsIfNeeded()
+      guard !Task.isCancelled else { return }
+      self?.chats?.refreshNewChatTargetAfterProviderChanges()
+    }
+  }
+
   private func clearRuntimeModels() {
+    catalogRefreshTask?.cancel()
+    catalogRefreshTask = nil
     mcp?.stopInteractionObservers()
     coreServices = nil
     providers = nil

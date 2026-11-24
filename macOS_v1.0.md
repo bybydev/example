@@ -25,24 +25,24 @@ Prioritized checklist to bring `BYOKmac` to feature parity with `BYOKchat` (iOS)
 
 ## P1 — Major Missing User-Facing Features
 
-- [ ] **Per-Chat Settings sheet** (iOS ref: `ChatSettingsView` in `BYOKchat/Features/Chats/ChatView.swift`)
+- [x] **Per-Chat Settings sheet** (iOS ref: `ChatSettingsView` in `BYOKchat/Features/Chats/ChatView.swift`)
   - Per-chat System Prompt (with Reset to Project / Reset to Default / Clear), Temperature & Top-P toggles/sliders, Max Output Tokens with validation, and OpenRouter Routing options (Sort, Data Collection, Fallbacks, ZDR, Provider Order, Reset).
-- [ ] **Active-Chat Header Context & Overflow Menu** (`BYOKmac/App/MacChatPaneView.swift`)
+- [x] **Active-Chat Header Context & Overflow Menu** (`BYOKmac/App/MacChatPaneView.swift`)
   - Show active project badge/shortcut in `MacChatHeader` and a chat menu: Prompts, Chat Settings, Tools, Project Settings, Chat Usage/Analytics, Rename, Export Markdown, Delete.
-- [ ] **Export Full Conversation as Markdown** (`BYOKmac/App/MacChatPaneView.swift`, `BYOKmac/App/MacCommands.swift`)
+- [x] **Export Full Conversation as Markdown** (`BYOKmac/App/MacChatPaneView.swift`, `BYOKmac/App/MacCommands.swift`)
   - Wire `ConversationMarkdownFormatter.render(_:accountLabel:)` (currently macOS only exports single messages).
-- [ ] **Layer 2 Remote Model Catalog (`ModelCatalogStore`)** (`BYOKmac/App/MacProviderModel.swift`)
+- [x] **Layer 2 Remote Model Catalog (`ModelCatalogStore`)** (`BYOKmac/App/MacProviderModel.swift`)
   - Integrate `services.modelCatalog` (`refreshModelCatalogIfNeeded`, force refresh, cache clear, applying catalog updates to workspace) + 24h TTL / 15m failure-throttled per-account refresh.
-- [ ] **Provider Editor & Target Picker Discovery** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
+- [x] **Provider Editor & Target Picker Discovery** (`BYOKmac/App/MacProviderViews.swift`, `BYOKmac/App/MacProviderWorkspaceView.swift`)
   - Pre-save **Test Connection** & **Fetch Models** (`previewModels`), searchable Default Model picker with capability badges (context window, Vision, Files), unsaved-changes discard guard, and **Delete/Remove manual models**.
   - In `MacTargetPickerView`: allow manual Model ID entry/removal, in-picker Refresh + last-checked timestamp, unready-account/unavailable-model warnings, and capability badges.
-- [ ] **Pre-send MCP Tools configuration** (`BYOKmac/App/MacChatPaneView.swift`, `BYOKmac/App/MacMCPViews.swift`)
+- [x] **Pre-send MCP Tools configuration** (`BYOKmac/App/MacChatPaneView.swift`, `BYOKmac/App/MacMCPViews.swift`)
   - Allow configuring MCP tools before the first message is sent (currently gated on `conversationID != nil`).
-- [ ] **Citations / Sources Sheet** (iOS ref: `BYOKchat/Features/Chats/AnswerContentParser.swift`, `BYOKchat/Features/Chats/AnswerPresentationViews.swift`)
+- [x] **Citations / Sources Sheet** (iOS ref: `BYOKchat/Features/Chats/AnswerContentParser.swift`, `BYOKchat/Features/Chats/AnswerPresentationViews.swift`)
   - Extract deduplicated links from assistant responses and add `"Sources"` action + sheet.
-- [ ] **Response Image Scanner & Save-Images Sheet** (iOS ref: `BYOKchat/Features/Library/ResponseImageScanner.swift`, `BYOKchat/Features/Library/ResponseImageSaveSheet.swift`)
+- [x] **Response Image Scanner & Save-Images Sheet** (iOS ref: `BYOKchat/Features/Library/ResponseImageScanner.swift`, `BYOKchat/Features/Library/ResponseImageSaveSheet.swift`)
   - Scan markdown/tables for remote + `data:image/` images and expose `"Save Images…"` to Library with multi-select and message provenance.
-- [ ] **Context-Omitted Banner, Configuration Repair Banner & Guided Setup Hero** (iOS ref: `BYOKchat/Features/Chats/ChatView+Content.swift`, `BYOKchat/Features/Chats/ChatComponents.swift`)
+- [x] **Context-Omitted Banner, Configuration Repair Banner & Guided Setup Hero** (iOS ref: `BYOKchat/Features/Chats/ChatView+Content.swift`, `BYOKchat/Features/Chats/ChatComponents.swift`)
   - Surface omitted-context warnings (`lastContextOmittedMessageCount > 0`), broken target/credential/model repair banners, and actionable empty-chat setup cards.
 
 ---

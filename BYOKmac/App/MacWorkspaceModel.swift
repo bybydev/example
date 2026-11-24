@@ -344,6 +344,26 @@ final class MacWorkspaceModel {
     }
   }
 
+  @discardableResult
+  func saveLibraryItem(
+    filename: String,
+    mimeType: String,
+    data: Data,
+    source: LibraryEntrySource,
+    successMessage: String? = "Saved to Library"
+  ) async -> LibraryEntry? {
+    await performReturning(successMessage, referencesChanged: true) {
+      let entry = try await libraryStore.add(
+        filename: filename,
+        mimeType: mimeType,
+        data: data,
+        source: source
+      )
+      MacAppAnalytics.track(.libraryItemSaved, dimension: entry.kind == .image ? .image : .file)
+      return entry
+    }
+  }
+
   func renameLibraryEntry(_ id: LibraryEntryID, filename: String) async -> Bool {
     await performResult(nil) {
       try await libraryStore.rename(id, filename: filename)

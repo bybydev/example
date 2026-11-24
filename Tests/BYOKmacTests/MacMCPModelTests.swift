@@ -325,6 +325,156 @@ struct MacMCPModelTests {
     #expect(!fixture.model.isServerEnabled(server.id, for: conversationID))
     #expect(fixture.model.chatConfiguration(for: conversationID).enabledServerIDs.isEmpty)
   }
+
+  @Test("Draft MCP configuration supports toggling servers, policies, project inheritance, and empty override")
+  func draftConfigurationSupportsPreSendMutationsAndProjectInheritance() async throws {
+    let fixture = try await MacMCPFixture.make()
+    let server = MCPRemoteServer(
+      id: "draft-server",
+      name: "Draft MCP",
+      endpoint: URL(string: "https://draft.example.com/mcp")!,
+      isEnabled: true
+    )
+    try await fixture.workspace.upsertServer(server)
+    try await fixture.workspace.storeSnapshot(
+      MCPServerSnapshot(
+        serverID: server.id,
+        protocolVersion: "2025-03-26",
+        era: .modern,
+        tools: [
+          MCPRemoteTool(
+            remoteName: "search",
+            title: "Search",
+            description: "Search docs",
+            inputSchema: .object([:])
+          )
+        ],
+        expiresAt: Date.now.addingTimeInterval(300)
+      )
+    )
+    let project = try await fixture.projectWorkspace.createProject(
+      name: "Research",
+      symbolName: "folder.fill",
+      accentID: "blue",
+      accountID: nil,
+      modelID: nil,
+      instructions: "",
+      mcpConfiguration: MCPChatToolConfiguration(enabledServerIDs: [server.id])
+    )
+    await fixture.model.reloadFromStorage()
+
+    // Without a draft override, a new chat in a project inherits project tools.
+    #expect(fixture.model.inheritsProjectToolsForDraft(draft: nil, projectID: project.id))
+    #expect(
+      fixture.model.effectiveDraftConfiguration(draft: nil, projectID: project.id).enabledServerIDs
+        == [server.id]
+    )
+
+    // Disabling the inherited server produces an explicit empty override rather than reverting to nil.
+    let disabledResult = await fixture.model.updatedDraftServerEnabled(
+      false,
+      serverID: server.id,
+      currentDraft: nil,
+      projectID: project.id
+    )
+    #expect(disabledResult.succeeded)
+    #expect(disabledResult.configuration == MCPChatToolConfiguration())
+    #expect(!fixture.model.inheritsProjectToolsForDraft(draft: disabledResult.configuration, projectID: project.id))
+
+    // Standalone new chat: enabling server + setting tool policy + resetting back to empty clears to nil.
+    let enabledStandalone = await fixture.model.updatedDraftServerEnabled(
+      true,
+      serverID: server.id,
+      currentDraft: nil,
+      projectID: nil
+    )
+    #expect(enabledStandalone.succeeded)
+    #expect(enabledStandalone.configuration?.enabledServerIDs == [server.id])
+
+    let exposedTool = MCPToolNamespace.exposedName(serverID: server.id, remoteName: "search")
+    let policyUpdated = fixture.model.updatedDraftToolPolicy(
+      .alwaysAllow,
+      exposedToolName: exposedTool,
+      currentDraft: enabledStandalone.configuration,
+      projectID: nil
+    )
+    #expect(policyUpdated.succeeded)
+    #expect(policyUpdated.configuration?.policy(for: exposedTool) == .alwaysAllow)
+
+    let policyCleared = fixture.model.updatedDraftToolPolicy(
+      .ask,
+      exposedToolName: exposedTool,
+      currentDraft: policyUpdated.configuration,
+      projectID: nil
+    )
+    #expect(policyCleared.succeeded)
+    #expect(policyCleared.configuration?.toolPolicies.isEmpty == true)
+
+    let disabledStandalone = await fixture.model.updatedDraftServerEnabled(
+      false,
+      serverID: server.id,
+      currentDraft: policyCleared.configuration,
+      projectID: nil
+    )
+    #expect(disabledStandalone.succeeded)
+    #expect(disabledStandalone.configuration == nil)
+  }
+
+  @Test("Draft preset application filters unknown servers, strips Ask policies, and enforces Pro limits")
+  func draftPresetApplicationAndProBoundary() async throws {
+    let suiteName = "byok-mac-mcp-draft-preset-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
+    let fixture = try await MacMCPFixture.make(
+      restrictions: restrictions,
+      entitlementAccessOverride: .free
+    )
+
+    let allowedServer = MCPRemoteServer(
+      id: "allowed-server",
+      name: "Allowed",
+      endpoint: URL(string: "https://allowed.example.com/mcp")!,
+      isEnabled: true
+    )
+    let restrictedServer = MCPRemoteServer(
+      id: "restricted-server",
+      name: "Restricted",
+      endpoint: URL(string: "https://restricted.example.com/mcp")!,
+      isEnabled: true
+    )
+    try await fixture.workspace.upsertServer(allowedServer)
+    try await fixture.workspace.upsertServer(restrictedServer)
+    restrictions.recordFullBackupImport(
+      before: MacProResourceSnapshot(),
+      after: MacProResourceSnapshot(
+        mcpServerIDs: [allowedServer.id.rawValue, restrictedServer.id.rawValue]
+      ),
+      strategy: .replaceExisting,
+      entitlement: .free
+    )
+    await fixture.model.reloadFromStorage()
+
+    let preset = MCPChatToolConfiguration(
+      enabledServerIDs: [allowedServer.id, "deleted-server"],
+      toolPolicies: [
+        "mcp_allowed_read": .alwaysAllow,
+        "mcp_allowed_ask": .ask,
+      ]
+    )
+    let applied = fixture.model.validatedDraftPresetConfiguration(preset, projectID: nil)
+    #expect(applied.succeeded)
+    #expect(applied.configuration?.enabledServerIDs == [allowedServer.id])
+    #expect(applied.configuration?.toolPolicies == ["mcp_allowed_read": .alwaysAllow])
+    #expect(fixture.model.statusMessage == "Tool configuration applied")
+
+    let blocked = fixture.model.validatedDraftPresetConfiguration(
+      MCPChatToolConfiguration(enabledServerIDs: [restrictedServer.id]),
+      projectID: nil
+    )
+    #expect(!blocked.succeeded)
+    #expect(fixture.model.errorMessage != nil)
+  }
 }
 
 @MainActor

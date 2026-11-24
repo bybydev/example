@@ -33,6 +33,12 @@ struct MacCommands: Commands {
       .keyboardShortcut("k", modifiers: .command)
       .disabled(!model.isReady)
 
+      Button("Export Conversation as Markdown…") {
+        model.requestExportMarkdown()
+      }
+      .keyboardShortcut("e", modifiers: [.command, .shift])
+      .disabled(!model.isReady || model.chats?.conversationSummaries.isEmpty != false)
+
       Divider()
 
       Button("Stop Generating") {

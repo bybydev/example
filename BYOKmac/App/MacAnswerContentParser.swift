@@ -223,6 +223,22 @@ struct MacMarkdownMathSegment: Equatable, Sendable {
   let useLaTeX: Bool
 }
 
+struct MacAnswerSource: Identifiable, Hashable, Sendable {
+  let url: URL
+  let title: String?
+
+  var id: String { url.absoluteString }
+
+  var host: String {
+    url.host(percentEncoded: false) ?? url.host ?? url.absoluteString
+  }
+
+  var displayTitle: String {
+    let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? host : trimmed
+  }
+}
+
 enum MacAnswerContentBlock: Equatable, Sendable {
   case markdown(String)
   case code(language: String?, content: String, isComplete: Bool)
@@ -233,6 +249,12 @@ enum MacAnswerContentBlock: Equatable, Sendable {
 enum MacAnswerContentParser {
   private static let inlineMathRegex = try? NSRegularExpression(
     pattern: #"(?<![\\$\d])\$(?![$\s])(?:\\.|[^$\n])+(?<!\s)(?<!\\)\$(?![$\d])|\\\((?:\\.|[^\\\n])+\\\)"#
+  )
+  private static let markdownLinkRegex = try? NSRegularExpression(
+    pattern: #"(?<!!)\[([^\]]+)\]\((https?://(?:[^\s()]+|\([^\s()]*\))+)\)"#
+  )
+  private static let markdownImageRegex = try? NSRegularExpression(
+    pattern: #"!\[[^\]]*\]\((?:[^\s()]+|\([^\s()]*\))+(?:\s+(?:"[^"]*"|'[^']*'))?\)"#
   )
   private static let orderedListRegex = try? NSRegularExpression(pattern: #"^\d+[.)]\s"#)
   private static let inlineMarkdownFormattingRegex = try? NSRegularExpression(
@@ -374,6 +396,46 @@ enum MacAnswerContentParser {
 
     flushMarkdown()
     return blocks
+  }
+
+  static func sources(in text: String, limit: Int = 50) -> [MacAnswerSource] {
+    sources(in: parse(text), limit: limit)
+  }
+
+  static func sources(in blocks: [MacAnswerContentBlock], limit: Int = 50) -> [MacAnswerSource] {
+    guard limit > 0 else { return [] }
+    var values: [MacAnswerSource] = []
+    var indexByKey: [String: Int] = [:]
+
+    for block in blocks {
+      let markdown: String
+      switch block {
+      case .markdown(let text):
+        markdown = text
+      case .table(let table):
+        markdown = table.rawMarkdown
+      case .code, .math:
+        continue
+      }
+
+      for source in markdownSources(markdown) {
+        let key = normalizedURLKey(source.url)
+        if let existingIndex = indexByKey[key] {
+          if values[existingIndex].title == nil,
+            let title = source.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !title.isEmpty
+          {
+            values[existingIndex] = MacAnswerSource(url: values[existingIndex].url, title: title)
+          }
+          continue
+        }
+        guard values.count < limit else { return values }
+        indexByKey[key] = values.count
+        values.append(source)
+      }
+    }
+
+    return values
   }
 
   /// Returns the source that can no longer change Markdown interpretation and
@@ -1086,5 +1148,170 @@ enum MacAnswerContentParser {
 
   private static func trimTrailingNewlines(_ value: String) -> String {
     value.replacingOccurrences(of: #"\n+$"#, with: "", options: .regularExpression)
+  }
+
+  private struct PositionedSource {
+    let location: Int
+    let source: MacAnswerSource
+  }
+
+  private static func markdownSources(_ markdown: String) -> [MacAnswerSource] {
+    let cleaned = stripMarkdownImages(from: stripInlineCodeSpans(from: markdown))
+    guard !cleaned.isEmpty else { return [] }
+
+    let fullRange = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+    var positioned: [PositionedSource] = []
+    var linkedRanges: [NSRange] = []
+
+    if let markdownLinkRegex {
+      for match in markdownLinkRegex.matches(in: cleaned, range: fullRange) {
+        guard
+          match.numberOfRanges >= 3,
+          let titleRange = Range(match.range(at: 1), in: cleaned),
+          let urlRange = Range(match.range(at: 2), in: cleaned),
+          let url = sanitizedURL(String(cleaned[urlRange]))
+        else { continue }
+        let rawTitle = String(cleaned[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        linkedRanges.append(match.range)
+        positioned.append(
+          PositionedSource(
+            location: match.range.location,
+            source: MacAnswerSource(url: url, title: rawTitle.isEmpty ? nil : rawTitle)
+          )
+        )
+      }
+    }
+
+    if cleaned.contains("."),
+      let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    {
+      for match in detector.matches(in: cleaned, range: fullRange) {
+        guard !linkedRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else {
+          continue
+        }
+        guard let rawURL = match.url,
+          let textRange = Range(match.range, in: cleaned)
+        else { continue }
+
+        let matchedText = String(cleaned[textRange])
+        let loweredMatch = matchedText.lowercased()
+        guard loweredMatch.hasPrefix("http://")
+          || loweredMatch.hasPrefix("https://")
+          || loweredMatch.hasPrefix("www.")
+        else { continue }
+
+        let resolvedURL: URL?
+        if loweredMatch.hasPrefix("http://") || loweredMatch.hasPrefix("https://") {
+          resolvedURL = sanitizedURL(matchedText) ?? sanitizedURL(rawURL.absoluteString)
+        } else {
+          resolvedURL = sanitizedURL(rawURL.absoluteString) ?? (isValidBrowsableURL(rawURL) ? rawURL : nil)
+        }
+        guard let url = resolvedURL else { continue }
+        positioned.append(
+          PositionedSource(
+            location: match.range.location,
+            source: MacAnswerSource(url: url, title: nil)
+          )
+        )
+      }
+    }
+
+    return positioned
+      .sorted { $0.location < $1.location }
+      .map(\.source)
+  }
+
+  /// Replaces matched backtick inline code spans with spaces so links or image
+  /// markdown inside inline code are ignored during extraction.
+  static func stripInlineCodeSpans(from text: String) -> String {
+    guard text.contains("`") else { return text }
+    let chars = Array(text)
+    var output = ""
+    output.reserveCapacity(chars.count)
+    var index = 0
+
+    while index < chars.count {
+      if chars[index] == "`" {
+        var runLength = 0
+        while index + runLength < chars.count, chars[index + runLength] == "`" {
+          runLength += 1
+        }
+        if let closeStart = findMatchingBacktickRun(in: chars, from: index + runLength, length: runLength) {
+          output.append(" ")
+          index = closeStart + runLength
+          continue
+        }
+        output.append(contentsOf: repeatElement("`", count: runLength))
+        index += runLength
+        continue
+      }
+      output.append(chars[index])
+      index += 1
+    }
+
+    return output
+  }
+
+  private static func findMatchingBacktickRun(
+    in chars: [Character],
+    from start: Int,
+    length: Int
+  ) -> Int? {
+    var index = start
+    while index < chars.count {
+      if chars[index] == "`" {
+        var runLength = 0
+        while index + runLength < chars.count, chars[index + runLength] == "`" {
+          runLength += 1
+        }
+        if runLength == length { return index }
+        index += runLength
+      } else {
+        index += 1
+      }
+    }
+    return nil
+  }
+
+  private static func stripMarkdownImages(from text: String) -> String {
+    guard text.contains("!["), let markdownImageRegex else { return text }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    return markdownImageRegex.stringByReplacingMatches(in: text, range: range, withTemplate: " ")
+  }
+
+  private static func sanitizedURL(_ value: String) -> URL? {
+    var trimmed = value
+    let trailingSimplePunctuation: Set<Character> = [".", ",", ";", ":", "!", "?"]
+    while let last = trimmed.last {
+      if trailingSimplePunctuation.contains(last) {
+        trimmed.removeLast()
+      } else if last == ")" {
+        let openCount = trimmed.filter { $0 == "(" }.count
+        let closeCount = trimmed.filter { $0 == ")" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else if last == "]" {
+        let openCount = trimmed.filter { $0 == "[" }.count
+        let closeCount = trimmed.filter { $0 == "]" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else if last == "}" {
+        let openCount = trimmed.filter { $0 == "{" }.count
+        let closeCount = trimmed.filter { $0 == "}" }.count
+        guard closeCount > openCount else { break }
+        trimmed.removeLast()
+      } else {
+        break
+      }
+    }
+    guard let url = URL(string: trimmed), isValidBrowsableURL(url) else { return nil }
+    return url
+  }
+
+  private static func normalizedURLKey(_ url: URL) -> String {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.fragment = nil
+    if components?.path == "/" { components?.path = "" }
+    return (components?.url ?? url).absoluteString.lowercased()
   }
 }

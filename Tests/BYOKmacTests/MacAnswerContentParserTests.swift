@@ -406,4 +406,81 @@ struct MacAnswerContentParserTests {
     #expect(decoded.filename == "image.png")
     #expect(decoded.mimeType == "image/png")
   }
+
+  @Test("Extracts and deduplicates sources from markdown, bare URLs, and tables while ignoring code and images")
+  func extractsAndDeduplicatesSources() {
+    let text = """
+    Read [Swift](https://swift.org/documentation/) and https://example.com/page.
+    Also check www.apple.com/macos, ignore ChatView.swift and README.md.
+
+    Inline code `https://inline-code.example/hidden` and `[CodeLink](https://code-link.example)` stay excluded.
+    Images ![Banner](https://cdn.example.com/banner.png) are not citation sources.
+
+    ```text
+    https://secret.example/internal
+    [Fenced](https://fenced.example/doc)
+    ```
+
+    $$
+    https://math.example/ignored
+    $$
+
+    | Resource | Preview |
+    | --- | --- |
+    | [Wikipedia](https://en.wikipedia.org/wiki/Swift_(programming_language)) | ![Logo](https://cdn.example.com/logo.png) |
+
+    Duplicates: https://example.com/page#section and [Swift Docs](https://SWIFT.ORG/documentation/).
+    """
+
+    let blocks = MacAnswerContentParser.parse(text)
+    let sources = MacAnswerContentParser.sources(in: blocks)
+
+    #expect(sources == MacAnswerContentParser.sources(in: text))
+    #expect(sources.count == 4)
+
+    #expect(sources[0].displayTitle == "Swift")
+    #expect(sources[0].host == "swift.org")
+    #expect(sources[0].url.absoluteString == "https://swift.org/documentation/")
+
+    #expect(sources[1].title == nil)
+    #expect(sources[1].displayTitle == "example.com")
+    #expect(sources[1].url.absoluteString == "https://example.com/page")
+
+    #expect(sources[2].host == "www.apple.com")
+    #expect(sources[2].url.path == "/macos")
+
+    #expect(sources[3].displayTitle == "Wikipedia")
+    #expect(
+      sources[3].url.absoluteString == "https://en.wikipedia.org/wiki/Swift_(programming_language)"
+    )
+  }
+
+  @Test("Preserves source order, upgrades bare URL title when later linked, enforces limit, and rejects invalid URLs")
+  func sourceOrderingTitleUpgradeAndValidation() {
+    let text = """
+    First https://first.example/ and then [Second](https://second.example/guide).
+    Later [First Guide](https://first.example) and [Broken](https://) and [JS](javascript:alert(1)).
+    """
+
+    let allSources = MacAnswerContentParser.sources(in: text)
+    #expect(allSources.count == 2)
+    #expect(allSources[0].url.absoluteString == "https://first.example/")
+    #expect(allSources[0].displayTitle == "First Guide")
+    #expect(allSources[1].url.absoluteString == "https://second.example/guide")
+    #expect(allSources[1].displayTitle == "Second")
+
+    let limited = MacAnswerContentParser.sources(in: text, limit: 1)
+    #expect(limited.count == 1)
+    #expect(limited[0].url.absoluteString == "https://first.example/")
+
+    if let hostless = URL(string: "https://") {
+      #expect(!MacAnswerContentParser.isValidBrowsableURL(hostless))
+    }
+    if let javascript = URL(string: "javascript:alert(1)") {
+      #expect(!MacAnswerContentParser.isValidBrowsableURL(javascript))
+    }
+    if let valid = URL(string: "https://example.com") {
+      #expect(MacAnswerContentParser.isValidBrowsableURL(valid))
+    }
+  }
 }

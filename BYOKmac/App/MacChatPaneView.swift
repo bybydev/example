@@ -5,6 +5,25 @@ import SwiftUI
 import UniformTypeIdentifiers
 import os
 
+nonisolated enum MacConversationExportSupport {
+  static func markdownFilename(for title: String?) -> String {
+    let raw = title ?? "BYOKchat-conversation"
+    var result = ""
+    var previousWasDash = false
+    for character in raw {
+      if character.isLetter || character.isNumber || character == "_" {
+        result.append(character)
+        previousWasDash = false
+      } else if !previousWasDash {
+        result.append("-")
+        previousWasDash = true
+      }
+    }
+    let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return trimmed.isEmpty ? "BYOKchat-conversation" : trimmed
+  }
+}
+
 enum MacChatMessageWindowPolicy {
   static let initialVisibleCount = 30
   static let loadMoreBatchSize = 30
@@ -42,11 +61,22 @@ struct MacChatPane: View {
   let chooseTarget: () -> Void
   let manageProviders: () -> Void
   let configureTools: () -> Void
+  let openChatSettings: () -> Void
+  let openProjects: () -> Void
+  let openAnalytics: () -> Void
+  let renameConversation: () -> Void
+  let exportMarkdown: () -> Void
+  let deleteConversation: () -> Void
+  let startNewChat: () -> Void
+  let focusComposer: () -> Void
   let appendAttachments: ([ChatAttachment]) -> Void
   let removeAttachment: (String) -> Void
   let send: (String, [ChatAttachment]) -> Void
 
+  @Environment(MacWorkspaceModel.self) private var workspace
   @State private var composerHeight: CGFloat = 0
+  @State private var showingPromptsPicker = false
+  @State private var dismissedOmittedBannerKey: String?
 
   private var transcriptBottomSpace: CGFloat {
     max(
@@ -55,13 +85,64 @@ struct MacChatPane: View {
     )
   }
 
+  private var activeConversation: ChatConversation? {
+    chats.conversation(conversationID)
+  }
+
   private var title: String {
-    let value = chats.conversation(conversationID)?.title ?? summary?.title ?? ""
+    let value = activeConversation?.title ?? summary?.title ?? ""
     return value.isEmpty ? "New Chat" : value
   }
 
   private var messageCount: Int? {
-    chats.conversation(conversationID)?.messages.count ?? summary?.messageCount
+    activeConversation?.messages.count ?? summary?.messageCount
+  }
+
+  private var activeProject: ChatProject? {
+    if let conversationID {
+      return workspace.project(for: conversationID)
+    }
+    return workspace.project(chats.newChatProjectID)
+  }
+
+  private var canExportMarkdown: Bool {
+    conversationID != nil && (messageCount ?? 0) > 0
+  }
+
+  private var configurationIssue: MacChatConfigurationIssue? {
+    chats.configurationIssue(for: conversationID)
+  }
+
+  private var omittedMessageCount: Int {
+    activeConversation?.lastContextOmittedMessageCount ?? 0
+  }
+
+  private var omittedBannerKey: String? {
+    guard let conversationID, omittedMessageCount > 0 else { return nil }
+    return "\(conversationID.rawValue)::\(omittedMessageCount)::\(activeConversation?.messages.count ?? 0)"
+  }
+
+  private var showOmittedBanner: Bool {
+    guard let omittedBannerKey else { return false }
+    return dismissedOmittedBannerKey != omittedBannerKey
+  }
+
+  private var enabledToolCount: Int {
+    let configuration: MCPChatToolConfiguration
+    if let conversationID {
+      configuration = mcp.chatConfiguration(for: conversationID)
+    } else {
+      configuration = mcp.effectiveDraftConfiguration(
+        draft: chats.newChatMCPConfiguration,
+        projectID: chats.newChatProjectID
+      )
+    }
+    let enabledIDs = Set(configuration.enabledServerIDs)
+    return enabledIDs.reduce(0) { total, serverID in
+      total + mcp.tools(for: serverID).filter {
+        configuration.policy(for: $0.exposedName) != .disabled
+      }.count
+    }
   }
 
   var body: some View {
@@ -69,9 +150,32 @@ struct MacChatPane: View {
       MacChatHeader(
         title: title,
         messageCount: messageCount,
+        activeProject: activeProject,
+        hasPersistedConversation: conversationID != nil,
+        canExportMarkdown: canExportMarkdown,
+        enabledToolCount: enabledToolCount,
         sidebarVisible: sidebarVisible,
-        toggleSidebar: toggleSidebar
+        toggleSidebar: toggleSidebar,
+        openPrompts: { showingPromptsPicker = true },
+        openChatSettings: openChatSettings,
+        openTools: configureTools,
+        openProject: openProjects,
+        openAnalytics: openAnalytics,
+        renameConversation: renameConversation,
+        exportMarkdown: exportMarkdown,
+        deleteConversation: deleteConversation
       )
+
+      if showOmittedBanner {
+        MacContextOmittedBanner(
+          omittedCount: omittedMessageCount,
+          startNewChat: startNewChat,
+          dismiss: { dismissedOmittedBannerKey = omittedBannerKey }
+        )
+        .frame(maxWidth: MacDesignTokens.Layout.transcriptMaximumWidth)
+        .padding(.horizontal, MacDesignTokens.Spacing.large)
+        .padding(.bottom, 8)
+      }
 
       ZStack(alignment: .bottom) {
         ZStack {
@@ -82,9 +186,16 @@ struct MacChatPane: View {
               mcp: mcp,
               conversationID: retained.id,
               initialConversation: retained.conversation,
+              activeProject: retained.id == conversationID ? activeProject : nil,
               bottomSpace: transcriptBottomSpace,
               isActive: retained.id == conversationID,
-              navigationTarget: navigationTarget
+              navigationTarget: navigationTarget,
+              chooseTarget: chooseTarget,
+              manageProviders: manageProviders,
+              openChatSettings: openChatSettings,
+              configureTools: configureTools,
+              openProjects: openProjects,
+              applyPromptPreset: applyPromptPreset
             )
             .environment(\.macPreparedAnswers, retained.answers)
             .environment(\.macTranscriptIsActive, retained.id == conversationID)
@@ -105,21 +216,32 @@ struct MacChatPane: View {
           }
         }
 
-        MacComposerView(
-          providers: providers,
-          chats: chats,
-          mcp: mcp,
-          conversationID: conversationID,
-          focusRequestID: composerFocusRequestID,
-          attachments: attachments,
-          chooseTarget: chooseTarget,
-          manageProviders: manageProviders,
-          configureTools: configureTools,
-          appendAttachments: appendAttachments,
-          removeAttachment: removeAttachment,
-          send: send
-        )
-        .id(conversationID?.rawValue ?? "new-chat")
+        VStack(spacing: 10) {
+          if let issue = configurationIssue {
+            MacConfigurationRepairBanner(
+              issue: issue,
+              switchModel: chooseTarget,
+              openProviders: manageProviders
+            )
+          }
+
+          MacComposerView(
+            providers: providers,
+            chats: chats,
+            mcp: mcp,
+            conversationID: conversationID,
+            hasConfigurationIssue: configurationIssue != nil,
+            focusRequestID: composerFocusRequestID,
+            attachments: attachments,
+            chooseTarget: chooseTarget,
+            manageProviders: manageProviders,
+            configureTools: configureTools,
+            appendAttachments: appendAttachments,
+            removeAttachment: removeAttachment,
+            send: send
+          )
+          .id(conversationID?.rawValue ?? "new-chat")
+        }
         .frame(maxWidth: MacDesignTokens.Layout.composerMaximumWidth)
         .onGeometryChange(for: CGFloat.self) { geometry in
           geometry.size.height
@@ -132,14 +254,52 @@ struct MacChatPane: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(MacDesignTokens.Colors.canvas)
+    .sheet(isPresented: $showingPromptsPicker) {
+      MacChatPromptsPickerSheet(
+        activeProject: activeProject,
+        allProjects: workspace.projects,
+        openProjects: {
+          showingPromptsPicker = false
+          openProjects()
+        },
+        applyPreset: { preset in
+          showingPromptsPicker = false
+          applyPromptPreset(preset)
+        }
+      )
+    }
+  }
+
+  private func applyPromptPreset(_ preset: ProjectPromptPreset) {
+    let value = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    let current = chats.draft(for: conversationID)
+    if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      chats.setDraft(value, conversationID: conversationID)
+    } else {
+      chats.setDraft(current + "\n\n" + value, conversationID: conversationID)
+    }
+    focusComposer()
   }
 }
 
 private struct MacChatHeader: View {
   let title: String
   let messageCount: Int?
+  let activeProject: ChatProject?
+  let hasPersistedConversation: Bool
+  let canExportMarkdown: Bool
+  let enabledToolCount: Int
   let sidebarVisible: Bool
   let toggleSidebar: () -> Void
+  let openPrompts: () -> Void
+  let openChatSettings: () -> Void
+  let openTools: () -> Void
+  let openProject: () -> Void
+  let openAnalytics: () -> Void
+  let renameConversation: () -> Void
+  let exportMarkdown: () -> Void
+  let deleteConversation: () -> Void
 
   var body: some View {
     HStack(spacing: 10) {
@@ -166,13 +326,17 @@ private struct MacChatHeader: View {
           .truncationMode(.tail)
 
         if let messageCount, messageCount > 0 {
-          Text("\(messageCount) messages")
+          Text("\(messageCount) \(messageCount == 1 ? "message" : "messages")")
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(MacDesignTokens.Colors.textMuted)
             .lineLimit(1)
         }
       }
-      .frame(maxWidth: 360, alignment: .leading)
+      .frame(maxWidth: 320, alignment: .leading)
+
+      if let activeProject {
+        projectBadgeButton(activeProject)
+      }
 
       Color.clear
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -180,11 +344,352 @@ private struct MacChatHeader: View {
         .gesture(WindowDragGesture())
         .allowsWindowActivationEvents(true)
 
+      overflowMenu
+
       MacProHeaderButton()
         .fixedSize()
     }
     .padding(.horizontal, MacDesignTokens.Spacing.compact)
     .frame(height: MacDesignTokens.Layout.titlebarHeight)
+    .background(MacDesignTokens.Colors.canvas)
+  }
+
+  private func projectBadgeButton(_ project: ChatProject) -> some View {
+    let accent = MacProjectAccentOption(rawValue: project.accentID)?.color ?? .blue
+    return Button(action: openProject) {
+      HStack(spacing: 5) {
+        Image(systemName: project.symbolName)
+          .font(.system(size: 9.5, weight: .semibold))
+          .foregroundStyle(accent)
+          .frame(width: 16, height: 16)
+          .background(
+            accent.opacity(0.14),
+            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+          )
+        Text(project.name)
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .padding(.leading, 5)
+      .padding(.trailing, 9)
+      .frame(height: MacDesignTokens.Control.compactButtonHeight)
+      .background(MacDesignTokens.Colors.surface, in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.85), lineWidth: 0.7)
+      }
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .frame(maxWidth: 180, alignment: .leading)
+    .fixedSize(horizontal: true, vertical: true)
+    .help("Open \(project.name) in Projects")
+    .accessibilityLabel("Project \(project.name)")
+  }
+
+  private var overflowMenu: some View {
+    Menu {
+      Button("Prompts…", systemImage: "text.bubble", action: openPrompts)
+      Button("Chat Settings…", systemImage: "slider.horizontal.3", action: openChatSettings)
+      Button(
+        enabledToolCount == 0 ? "Tools…" : "Tools (\(enabledToolCount))…",
+        systemImage: "wrench.and.screwdriver",
+        action: openTools
+      )
+      if activeProject != nil {
+        Button("Project Settings…", systemImage: "folder.badge.gearshape", action: openProject)
+      }
+      Button("Chat Usage & Analytics…", systemImage: "chart.bar.xaxis", action: openAnalytics)
+      Divider()
+      Button("Rename…", systemImage: "pencil", action: renameConversation)
+        .disabled(!hasPersistedConversation)
+      Button("Export as Markdown…", systemImage: "square.and.arrow.up", action: exportMarkdown)
+        .disabled(!canExportMarkdown)
+      Divider()
+      Button("Delete…", systemImage: "trash", role: .destructive, action: deleteConversation)
+        .disabled(!hasPersistedConversation)
+    } label: {
+      Image(systemName: "ellipsis.circle")
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(.secondary)
+        .frame(
+          width: MacDesignTokens.Control.iconButtonSize,
+          height: MacDesignTokens.Control.iconButtonSize
+        )
+        .contentShape(Rectangle())
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Chat options")
+    .accessibilityLabel("Chat options")
+  }
+}
+
+private struct MacContextOmittedBanner: View {
+  let omittedCount: Int
+  let startNewChat: () -> Void
+  let dismiss: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "text.badge.minus")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.orange)
+        .accessibilityHidden(true)
+
+      Text(
+        "\(omittedCount) earlier \(omittedCount == 1 ? "message was" : "messages were") omitted from the latest request to fit the context window."
+      )
+      .font(.caption)
+      .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+      .fixedSize(horizontal: false, vertical: true)
+
+      Spacer(minLength: 8)
+
+      Button("Start New Chat", action: startNewChat)
+        .controlSize(.small)
+        .buttonStyle(.bordered)
+
+      Button(action: dismiss) {
+        Image(systemName: "xmark")
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .frame(width: 22, height: 22)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Dismiss")
+      .accessibilityLabel("Dismiss context warning")
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(Color.orange.opacity(0.38), lineWidth: 0.75)
+    }
+  }
+}
+
+private struct MacConfigurationRepairBanner: View {
+  let issue: MacChatConfigurationIssue
+  let switchModel: () -> Void
+  let openProviders: () -> Void
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 12) {
+      Image(systemName: "wrench.and.screwdriver.fill")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(.orange)
+        .frame(width: 30, height: 30)
+        .background(
+          Color.orange.opacity(0.14),
+          in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Chat configuration needs attention")
+          .font(.system(size: 12.5, weight: .semibold))
+          .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        Text(issue.message)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Spacer(minLength: 8)
+
+      HStack(spacing: 8) {
+        if issue.prefersProviderRepair {
+          Button("Switch Model", action: switchModel)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+          Button("Fix Connection", action: openProviders)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        } else {
+          Button("Open Providers", action: openProviders)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+          Button("Switch Model", action: switchModel)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(Color.orange.opacity(0.42), lineWidth: 0.85)
+    }
+    .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+  }
+}
+
+private struct MacChatPromptsPickerSheet: View {
+  let activeProject: ChatProject?
+  let allProjects: [ChatProject]
+  let openProjects: () -> Void
+  let applyPreset: (ProjectPromptPreset) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var searchText = ""
+
+  private struct PromptGroup: Identifiable {
+    let id: ProjectID
+    let project: ChatProject
+    let presets: [ProjectPromptPreset]
+  }
+
+  private var groups: [PromptGroup] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    var orderedProjects: [ChatProject] = []
+    if let activeProject {
+      orderedProjects.append(activeProject)
+    }
+    for project in allProjects where project.id != activeProject?.id {
+      orderedProjects.append(project)
+    }
+    return orderedProjects.compactMap { project in
+      let matching = project.projectPromptPresets.filter { preset in
+        guard !query.isEmpty else { return true }
+        return preset.name.localizedCaseInsensitiveContains(query)
+          || preset.prompt.localizedCaseInsensitiveContains(query)
+      }
+      guard !matching.isEmpty else { return nil }
+      return PromptGroup(id: project.id, project: project, presets: matching)
+    }
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Prompts")
+            .font(.headline)
+          Text(
+            activeProject != nil
+              ? "Insert a reusable prompt into the composer"
+              : "Reusable prompts from your projects"
+          )
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        }
+        Spacer()
+        Button("Manage in Projects…", action: openProjects)
+        Button("Close") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+      }
+      .padding(16)
+
+      Divider()
+
+      if !allProjects.allSatisfy({ $0.projectPromptPresets.isEmpty }) {
+        HStack(spacing: 8) {
+          Image(systemName: "magnifyingglass")
+            .foregroundStyle(.secondary)
+          TextField("Search prompts", text: $searchText)
+            .textFieldStyle(.plain)
+          if !searchText.isEmpty {
+            Button {
+              searchText = ""
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .background(MacDesignTokens.Colors.surface.opacity(0.6))
+
+        Divider()
+      }
+
+      if groups.isEmpty {
+        ContentUnavailableView {
+          Label(
+            searchText.isEmpty ? "No Reusable Prompts" : "No Matching Prompts",
+            systemImage: searchText.isEmpty ? "text.bubble" : "magnifyingglass"
+          )
+        } description: {
+          Text(
+            searchText.isEmpty
+              ? "Add reusable prompt presets inside any project to quickly insert them into chats."
+              : "Try a different search term."
+          )
+        } actions: {
+          if searchText.isEmpty {
+            Button("Open Projects", action: openProjects)
+              .buttonStyle(.borderedProminent)
+          }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 14) {
+            ForEach(groups) { group in
+              VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                  let accent = MacProjectAccentOption(rawValue: group.project.accentID)?.color ?? .blue
+                  Image(systemName: group.project.symbolName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                  Text(group.project.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                  if group.project.id == activeProject?.id {
+                    Text("Current Project")
+                      .font(.caption2.weight(.medium))
+                      .foregroundStyle(MacDesignTokens.Colors.accent)
+                      .padding(.horizontal, 6)
+                      .padding(.vertical, 2)
+                      .background(MacDesignTokens.Colors.accentSoft, in: Capsule())
+                  }
+                }
+
+                ForEach(group.presets) { preset in
+                  Button {
+                    applyPreset(preset)
+                  } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                      Text(preset.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                      Text(preset.prompt)
+                        .font(.caption)
+                        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                      MacDesignTokens.Colors.surface,
+                      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay {
+                      RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+                    }
+                  }
+                  .buttonStyle(.plain)
+                }
+              }
+            }
+          }
+          .padding(16)
+        }
+      }
+    }
+    .frame(width: 540, height: 480)
     .background(MacDesignTokens.Colors.canvas)
   }
 }
@@ -248,9 +753,16 @@ private struct MacTranscriptView: View {
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
+  let activeProject: ChatProject?
   let bottomSpace: CGFloat
   let isActive: Bool
   let navigationTarget: MacTranscriptNavigationTarget?
+  let chooseTarget: () -> Void
+  let manageProviders: () -> Void
+  let openChatSettings: () -> Void
+  let configureTools: () -> Void
+  let openProjects: () -> Void
+  let applyPromptPreset: (ProjectPromptPreset) -> Void
   @State private var retainedConversation: ChatConversation?
   @State private var retainedBottomSpace: CGFloat
   @State private var lastNavigationToken: UUID?
@@ -288,17 +800,31 @@ private struct MacTranscriptView: View {
     mcp: MacMCPModel,
     conversationID: ConversationID?,
     initialConversation: ChatConversation?,
+    activeProject: ChatProject?,
     bottomSpace: CGFloat,
     isActive: Bool,
-    navigationTarget: MacTranscriptNavigationTarget?
+    navigationTarget: MacTranscriptNavigationTarget?,
+    chooseTarget: @escaping () -> Void,
+    manageProviders: @escaping () -> Void,
+    openChatSettings: @escaping () -> Void,
+    configureTools: @escaping () -> Void,
+    openProjects: @escaping () -> Void,
+    applyPromptPreset: @escaping (ProjectPromptPreset) -> Void
   ) {
     _providers = Bindable(wrappedValue: providers)
     _chats = Bindable(wrappedValue: chats)
     _mcp = Bindable(wrappedValue: mcp)
     self.conversationID = conversationID
+    self.activeProject = activeProject
     self.bottomSpace = bottomSpace
     self.isActive = isActive
     self.navigationTarget = navigationTarget
+    self.chooseTarget = chooseTarget
+    self.manageProviders = manageProviders
+    self.openChatSettings = openChatSettings
+    self.configureTools = configureTools
+    self.openProjects = openProjects
+    self.applyPromptPreset = applyPromptPreset
     _retainedConversation = State(initialValue: initialConversation)
     _retainedBottomSpace = State(initialValue: bottomSpace)
   }
@@ -362,9 +888,7 @@ private struct MacTranscriptView: View {
           } else if conversation != nil {
             if allMessages.isEmpty {
               transcriptRow {
-                Text("This conversation has no messages yet.")
-                  .font(.system(size: 15))
-                  .foregroundStyle(.secondary)
+                existingEmptyConversationState
               }
             } else {
               if hiddenEarlierCount > 0 {
@@ -615,24 +1139,326 @@ private struct MacTranscriptView: View {
     .padding(.top, 60)
   }
 
+  @ViewBuilder
+  private var existingEmptyConversationState: some View {
+    if let conversation, let issue = chats.configurationIssue(for: conversation) {
+      VStack(spacing: 14) {
+        Image(systemName: "wrench.and.screwdriver")
+          .font(.system(size: 28, weight: .medium))
+          .foregroundStyle(.orange)
+          .accessibilityHidden(true)
+
+        Text("Finish setting up this chat")
+          .font(.title2.weight(.semibold))
+          .accessibilityAddTraits(.isHeader)
+
+        Text(issue.message)
+          .font(.callout)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: 460)
+
+        HStack(spacing: 10) {
+          Button("Switch Model", action: chooseTarget)
+            .buttonStyle(.borderedProminent)
+          Button("Open Providers", action: manageProviders)
+            .buttonStyle(.bordered)
+        }
+      }
+      .frame(maxWidth: .infinity)
+      .padding(.top, 72)
+    } else {
+      readyHeroView(subline: activeTargetSubline)
+    }
+  }
+
+  @ViewBuilder
   private var newConversationEmptyState: some View {
-    VStack(spacing: MacDesignTokens.Spacing.compact) {
-      Image(systemName: "sparkles")
-        .font(.system(size: 26, weight: .medium))
-        .foregroundStyle(MacDesignTokens.Colors.accent)
-        .accessibilityHidden(true)
+    let readiness = chats.newChatSetupReadiness(project: activeProject)
+    switch readiness {
+    case .ready:
+      readyHeroView(subline: activeTargetSubline)
+    default:
+      guidedSetupHero(for: readiness)
+    }
+  }
 
-      Text("Start a conversation")
-        .font(.title2.weight(.semibold))
-        .accessibilityAddTraits(.isHeader)
+  private var activeTargetSubline: String? {
+    guard let target = chats.target(for: conversationID) else { return nil }
+    let accountName = providers.account(target.accountID)?.label
+      ?? conversation?.providerID.rawValue
+      ?? "Provider"
+    let modelName = providers.models(for: target.accountID, includeHidden: true)
+      .first(where: { $0.model.id == target.modelID })?.model.displayName
+      ?? target.modelID.rawValue
+    return "Using \(accountName) · \(modelName)"
+  }
 
-      Text("Choose a model, then ask anything.")
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+  private func readyHeroView(subline: String?) -> some View {
+    VStack(spacing: 16) {
+      if let activeProject {
+        let accent = MacProjectAccentOption(rawValue: activeProject.accentID)?.color ?? .blue
+        Image(systemName: activeProject.symbolName)
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(accent)
+          .frame(width: 52, height: 52)
+          .background(accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .accessibilityHidden(true)
+
+        Text(activeProject.name)
+          .font(.title2.weight(.semibold))
+          .accessibilityAddTraits(.isHeader)
+      } else {
+        Image(systemName: "bubble.left.and.bubble.right")
+          .font(.system(size: 28, weight: .medium))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+          .accessibilityHidden(true)
+
+        Text("How can I help?")
+          .font(.title2.weight(.semibold))
+          .accessibilityAddTraits(.isHeader)
+      }
+
+      if let subline {
+        Text(subline)
+          .font(.callout)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .multilineTextAlignment(.center)
+      }
+
+      if let activeProject {
+        let trimmedInstructions = activeProject.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedInstructions.isEmpty {
+          Text(trimmedInstructions)
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 500)
+        }
+
+        if !activeProject.projectPromptPresets.isEmpty {
+          VStack(spacing: 8) {
+            Text("Project Prompts")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+
+            LazyVGrid(
+              columns: [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 8)],
+              spacing: 8
+            ) {
+              ForEach(activeProject.projectPromptPresets.prefix(4)) { preset in
+                Button {
+                  applyPromptPreset(preset)
+                } label: {
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(preset.name)
+                      .font(.system(size: 12.5, weight: .semibold))
+                      .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+                      .lineLimit(1)
+                    Text(preset.prompt)
+                      .font(.caption)
+                      .foregroundStyle(MacDesignTokens.Colors.textMuted)
+                      .lineLimit(2)
+                      .multilineTextAlignment(.leading)
+                  }
+                  .padding(10)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .background(
+                    MacDesignTokens.Colors.surface,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                  )
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                      .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+                  }
+                }
+                .buttonStyle(.plain)
+              }
+            }
+            .frame(maxWidth: 560)
+          }
+          .padding(.top, 4)
+        }
+      }
+
+      HStack(spacing: 8) {
+        Button("Switch Model", systemImage: "cpu", action: chooseTarget)
+        Button("Chat Settings", systemImage: "slider.horizontal.3", action: openChatSettings)
+        if !mcp.servers.isEmpty {
+          Button("Tools", systemImage: "wrench.and.screwdriver", action: configureTools)
+        }
+      }
+      .buttonStyle(MacSecondaryButtonStyle())
+      .font(.system(size: 11.5, weight: .medium))
+      .padding(.top, 4)
     }
     .frame(maxWidth: .infinity)
-    .padding(.top, 84)
+    .padding(.top, 64)
+  }
+
+  private func guidedSetupHero(for readiness: MacChatSetupReadiness) -> some View {
+    let icon: String
+    let title: String
+    let description: String
+    let primaryLabel: String
+    let primaryIcon: String
+    let primaryAction: () -> Void
+
+    switch readiness {
+    case .noConnection:
+      icon = "link"
+      title = activeProject == nil ? "Connect your AI" : "Set up a connection"
+      description = activeProject.map {
+        "Add a provider connection before starting a chat in \($0.name)."
+      } ?? "Connect a cloud AI provider with your own API key, or point to a local server like Ollama or LM Studio."
+      primaryLabel = "Add Provider Connection"
+      primaryIcon = "plus.circle.fill"
+      primaryAction = manageProviders
+
+    case .missingCredential(let accountLabel):
+      icon = "key.slash"
+      title = "Finish setting up \(accountLabel)"
+      description = "\(accountLabel) needs an API key before it can be used."
+      primaryLabel = "Open Providers"
+      primaryIcon = "key.fill"
+      primaryAction = manageProviders
+
+    case .noModel(let accountLabel):
+      icon = "rectangle.stack.badge.plus"
+      title = "Choose a model"
+      description = "Refresh or add a model for \(accountLabel) before starting a chat."
+      primaryLabel = "Open Providers"
+      primaryIcon = "rectangle.stack.fill"
+      primaryAction = manageProviders
+
+    case .projectAccountUnavailable(let projectName):
+      icon = "folder.badge.questionmark"
+      title = "Project connection unavailable"
+      description = "The provider account selected for \(projectName) is unavailable or disabled. Choose another account in project defaults."
+      primaryLabel = "Open Projects"
+      primaryIcon = "folder.badge.gearshape"
+      primaryAction = openProjects
+
+    case .projectModelUnavailable(let projectName):
+      icon = "folder.badge.questionmark"
+      title = "Project model unavailable"
+      description = "The default model selected for \(projectName) is no longer available. Choose another model in project defaults."
+      primaryLabel = "Open Projects"
+      primaryIcon = "folder.badge.gearshape"
+      primaryAction = openProjects
+
+    case .allAccountsRestricted:
+      icon = "lock.shield"
+      title = "Connection requires BYOK Pro"
+      description = "Your restored connections exceed the Free tier limit. Manage your connections or upgrade to BYOK Pro."
+      primaryLabel = "Open Providers"
+      primaryIcon = "sparkles"
+      primaryAction = manageProviders
+
+    case .ready:
+      icon = "sparkles"
+      title = "How can I help?"
+      description = ""
+      primaryLabel = "Open Providers"
+      primaryIcon = "sparkles"
+      primaryAction = manageProviders
+    }
+
+    return VStack(spacing: 18) {
+      Image(systemName: icon)
+        .font(.system(size: 28, weight: .medium))
+        .foregroundStyle(MacDesignTokens.Colors.accent)
+        .frame(width: 56, height: 56)
+        .background(
+          MacDesignTokens.Colors.accentSoft,
+          in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .accessibilityHidden(true)
+
+      VStack(spacing: 6) {
+        Text(title)
+          .font(.title2.weight(.semibold))
+          .multilineTextAlignment(.center)
+          .accessibilityAddTraits(.isHeader)
+
+        Text(description)
+          .font(.callout)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: 480)
+      }
+
+      Button(action: primaryAction) {
+        Label(primaryLabel, systemImage: primaryIcon)
+          .font(.system(size: 13.5, weight: .semibold))
+          .padding(.horizontal, 14)
+          .padding(.vertical, 4)
+      }
+      .buttonStyle(.borderedProminent)
+      .controlSize(.large)
+
+      HStack(alignment: .top, spacing: 12) {
+        setupInfoCard(
+          icon: "cloud",
+          title: "Cloud Providers",
+          detail: "OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, and more with Keychain-secured keys.",
+          actionTitle: "Open Providers",
+          action: manageProviders
+        )
+        setupInfoCard(
+          icon: "desktopcomputer",
+          title: "Local Servers",
+          detail: "Run models locally with Ollama or LM Studio on your Mac or LAN — no API key required.",
+          actionTitle: "Connect Local Server",
+          action: manageProviders
+        )
+      }
+      .frame(maxWidth: 580)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.top, 48)
+  }
+
+  private func setupInfoCard(
+    icon: String,
+    title: String,
+    detail: String,
+    actionTitle: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 7) {
+          Image(systemName: icon)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.accent)
+          Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MacDesignTokens.Colors.textPrimary)
+        }
+
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+
+        Spacer(minLength: 0)
+
+        Text(actionTitle)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(MacDesignTokens.Colors.accent)
+      }
+      .padding(14)
+      .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+      .background(MacDesignTokens.Colors.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.7)
+      }
+    }
+    .buttonStyle(.plain)
   }
 
   private func loadEarlierMessagesButton(
@@ -782,6 +1608,7 @@ private struct MacComposerView: View {
   @Bindable var chats: MacChatSessionModel
   @Bindable var mcp: MacMCPModel
   let conversationID: ConversationID?
+  let hasConfigurationIssue: Bool
   let focusRequestID: Int
   let attachments: [ChatAttachment]
   let chooseTarget: () -> Void
@@ -831,6 +1658,7 @@ private struct MacComposerView: View {
     (!draftBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !attachments.isEmpty)
       && target != nil
+      && !hasConfigurationIssue
       && !isStreaming
       && !isImportingAttachments
   }
@@ -851,8 +1679,15 @@ private struct MacComposerView: View {
   }
 
   private var enabledToolCount: Int {
-    guard let conversationID else { return 0 }
-    let configuration = mcp.chatConfiguration(for: conversationID)
+    let configuration: MCPChatToolConfiguration
+    if let conversationID {
+      configuration = mcp.chatConfiguration(for: conversationID)
+    } else {
+      configuration = mcp.effectiveDraftConfiguration(
+        draft: chats.newChatMCPConfiguration,
+        projectID: chats.newChatProjectID
+      )
+    }
     let enabledIDs = Set(configuration.enabledServerIDs)
     return enabledIDs.reduce(0) { total, serverID in
       total + mcp.tools(for: serverID).filter {
@@ -1023,14 +1858,12 @@ private struct MacComposerView: View {
         }
       }
 
-      if conversationID != nil {
-        Divider()
-        Button(
-          enabledToolCount == 0 ? "Tools…" : "Tools · \(enabledToolCount)…",
-          systemImage: "wrench.and.screwdriver",
-          action: configureTools
-        )
-      }
+      Divider()
+      Button(
+        enabledToolCount == 0 ? "Tools…" : "Tools · \(enabledToolCount)…",
+        systemImage: "wrench.and.screwdriver",
+        action: configureTools
+      )
     } label: {
       Group {
         if isImportingAttachments {
@@ -1148,6 +1981,7 @@ private struct MacComposerView: View {
     let text = draftBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
     guard (!text.isEmpty || !attachments.isEmpty),
       target != nil,
+      !hasConfigurationIssue,
       !isStreaming,
       !isImportingAttachments
     else { return }
@@ -1224,6 +2058,8 @@ private struct MacComposerView: View {
 
 private struct MacAssistantMessageActions: View {
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
+  @Environment(MacWorkspaceModel.self) private var workspace
+  @Environment(\.macToastCenter) private var toastCenter
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
@@ -1232,6 +2068,10 @@ private struct MacAssistantMessageActions: View {
 
   @State private var copied = false
   @State private var showingDetails = false
+  @State private var showingSources = false
+  @State private var activeSources: [MacAnswerSource] = []
+  @State private var showingSaveImages = false
+  @State private var activeImageCandidates: [MacResponseImageCandidate] = []
   @State private var showingRegenerateConfirmation = false
 
   private var canRetry: Bool {
@@ -1244,7 +2084,18 @@ private struct MacAssistantMessageActions: View {
     !hideEmptyContentActions || !message.content.isEmpty
   }
 
+  private var extractedSources: [MacAnswerSource] {
+    guard showContentActions, !message.content.isEmpty else { return [] }
+    return MacAnswerContentParser.sources(in: message.content)
+  }
+
+  private var hasSavableImages: Bool {
+    guard showContentActions, conversationID != nil, !message.content.isEmpty else { return false }
+    return MacResponseImageScanner.hasImageCandidates(in: message.content)
+  }
+
   var body: some View {
+    let sources = extractedSources
     HStack(spacing: 2) {
       if showContentActions {
         Button {
@@ -1273,10 +2124,51 @@ private struct MacAssistantMessageActions: View {
         .accessibilityLabel("Retry response")
       }
 
+      if !sources.isEmpty {
+        Button {
+          activeSources = sources
+          showingSources = true
+        } label: {
+          HStack(spacing: 4) {
+            Image(systemName: "globe")
+              .font(.system(size: 11.5, weight: .medium))
+            Text(sources.count == 1 ? "1 Source" : "\(sources.count) Sources")
+              .font(.system(size: 11.5, weight: .medium))
+          }
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 8)
+          .frame(height: 26)
+          .background(MacDesignTokens.Colors.surface, in: Capsule())
+          .overlay {
+            Capsule()
+              .stroke(MacDesignTokens.Colors.separator.opacity(0.75), lineWidth: 0.6)
+          }
+          .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+        .help("View \(sources.count) cited \(sources.count == 1 ? "source" : "sources")")
+        .accessibilityLabel("Sources, \(sources.count)")
+      }
+
       Menu {
         if !message.reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           Button("Copy Reasoning", systemImage: "brain") {
             copyToPasteboard(message.reasoning)
+          }
+        }
+
+        if !sources.isEmpty {
+          Button("Sources (\(sources.count))…", systemImage: "globe") {
+            activeSources = sources
+            showingSources = true
+          }
+        }
+
+        if hasSavableImages {
+          Button("Save Images…", systemImage: "photo.on.rectangle.angled") {
+            activeImageCandidates = MacResponseImageScanner.imageCandidates(in: message.content)
+            showingSaveImages = !activeImageCandidates.isEmpty
           }
         }
 
@@ -1303,6 +2195,26 @@ private struct MacAssistantMessageActions: View {
     .padding(.leading, -7)
     .sheet(isPresented: $showingDetails) {
       MacMessageDetailsView(message: message)
+    }
+    .sheet(isPresented: $showingSources) {
+      MacAnswerSourcesSheet(sources: activeSources)
+    }
+    .sheet(isPresented: $showingSaveImages) {
+      if let conversationID {
+        MacResponseImageSaveSheet(
+          candidates: activeImageCandidates,
+          conversationID: conversationID,
+          messageID: message.id,
+          workspace: workspace
+        ) { savedCount in
+          guard savedCount > 0 else { return }
+          toastCenter?.success(
+            savedCount == 1
+              ? "Saved 1 image to Library"
+              : "Saved \(savedCount) images to Library"
+          )
+        }
+      }
     }
     .confirmationDialog(
       "Regenerate this response?",

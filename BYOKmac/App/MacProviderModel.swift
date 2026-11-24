@@ -11,35 +11,58 @@ struct MacChatTarget: Sendable, Equatable {
 @MainActor
 @Observable
 final class MacProviderModel {
+  enum CatalogRefreshResult: Sendable, Equatable {
+    case refreshed
+    case current
+    case throttled
+    case unsupported
+  }
+
+  static let catalogRefreshInterval: TimeInterval = 24 * 60 * 60
+  static let catalogRetryInterval: TimeInterval = 15 * 60
+
   private(set) var definitions: [ProviderDefinition] = []
   private(set) var accounts: [ProviderAccount] = []
   private(set) var modelsByAccount: [ProviderAccountID: [AccountModelRecord]] = [:]
+  private(set) var lastModelRefreshByAccount: [ProviderAccountID: Date] = [:]
+  private(set) var modelCatalogStatus: ModelCatalogStatus?
+  private(set) var modelCatalogRevision: Int = ModelCatalogRegistry.current?.revision ?? 0
+  private(set) var isRefreshingModelCatalog = false
   private(set) var credentialAccountIDs: Set<ProviderAccountID> = []
   private(set) var defaultAccountID: ProviderAccountID?
   var isBusy = false
   var errorMessage: String?
 
+  @ObservationIgnored private var catalogRefreshTasks: [ProviderAccountID: Task<Void, Error>] = [:]
+  @ObservationIgnored private var catalogRefreshFailures: [ProviderAccountID: Date] = [:]
+  @ObservationIgnored private var modelCatalogRefreshTask: Task<ModelCatalogRefreshResult, Error>?
+
   private let registry: ProviderRegistry
   private let workspace: ProviderWorkspaceStore
   private let accountManager: ProviderAccountManager
   private let runtime: ProviderRuntime
+  private let modelCatalog: ModelCatalogStore
   private let restrictions: MacProResourceRestrictions
   private let entitlementAccessOverride: MacProEntitlementAccess?
 
   init(
     services: BYOKCoreServices,
     restrictions: MacProResourceRestrictions = MacPurchaseStore.restrictions,
-    entitlementAccessOverride: MacProEntitlementAccess? = nil
+    entitlementAccessOverride: MacProEntitlementAccess? = nil,
+    runtime: ProviderRuntime? = nil
   ) {
     registry = services.providerRegistry
     workspace = services.providerWorkspace
     accountManager = services.accountManager
-    runtime = services.providerRuntime
+    self.runtime = runtime ?? services.providerRuntime
+    modelCatalog = services.modelCatalog
     self.restrictions = restrictions
     self.entitlementAccessOverride = entitlementAccessOverride
   }
 
   func load() async throws {
+    await modelCatalog.load()
+    try await registry.refreshBuiltIns()
     try await workspace.load()
     try await accountManager.synchronizeCustomProviders()
     try await synchronizeConfiguredSeedModelsForStoredAccounts()
@@ -48,10 +71,96 @@ final class MacProviderModel {
 
   func reload() async {
     await perform {
+      await modelCatalog.load()
+      try await registry.refreshBuiltIns()
       try await accountManager.synchronizeCustomProviders()
       try await synchronizeConfiguredSeedModelsForStoredAccounts()
       try await reloadSnapshot()
     }
+  }
+
+  /// Background non-blocking refresh of the remote Layer 2 catalog.
+  /// Errors are absorbed so offline launches and transient outages stay quiet.
+  func refreshModelCatalogIfNeeded() async {
+    _ = try? await refreshModelCatalog(force: false)
+  }
+
+  /// Forces an immediate conditional refresh of the Layer 2 remote model catalog.
+  @discardableResult
+  func forceRefreshModelCatalog(now: Date = .now) async throws -> ModelCatalogRefreshResult {
+    try await refreshModelCatalog(force: true, now: now)
+  }
+
+  /// Fetches Layer 2 static catalog JSON using ETag conditional requests,
+  /// persists valid newer revisions, and merges updated seed models into
+  /// existing built-in cloud accounts.
+  @discardableResult
+  func refreshModelCatalog(
+    force: Bool = true,
+    now: Date = .now
+  ) async throws -> ModelCatalogRefreshResult {
+    if let existing = modelCatalogRefreshTask {
+      return try await existing.value
+    }
+    isRefreshingModelCatalog = true
+    let task: Task<ModelCatalogRefreshResult, Error> = Task { @MainActor in
+      let result = try await modelCatalog.refresh(force: force, now: now)
+      switch result {
+      case .updated:
+        try await applyActiveModelCatalogToWorkspace()
+      case .ignoredOlderThanBundled:
+        try await registry.refreshBuiltIns()
+        try await reloadSnapshot()
+      case .notModified, .upToDate, .throttled:
+        let status = await modelCatalog.status()
+        modelCatalogStatus = status
+        modelCatalogRevision = status.revision
+      }
+      return result
+    }
+    modelCatalogRefreshTask = task
+    defer {
+      modelCatalogRefreshTask = nil
+      isRefreshingModelCatalog = false
+    }
+    do {
+      return try await task.value
+    } catch {
+      let status = await modelCatalog.status()
+      modelCatalogStatus = status
+      modelCatalogRevision = status.revision
+      throw error
+    }
+  }
+
+  /// Removes any cached Layer 2 remote catalog and reverts to the bundled Layer 1 baseline.
+  func clearModelCatalogCache() async throws {
+    try await modelCatalog.clearCache()
+    try await registry.refreshBuiltIns()
+    try await reloadSnapshot()
+  }
+
+  private func applyActiveModelCatalogToWorkspace() async throws {
+    try await registry.refreshBuiltIns()
+    let activeSnapshot = await modelCatalog.activeCatalog()
+    let existingAccounts = await workspace.allAccounts()
+    for account in existingAccounts
+    where account.kind != .openAICompatible && !account.kind.isLocalServer {
+      let rawSeeds = activeSnapshot?.seedModels(for: account.kind) ?? account.kind.seedModels
+      let seeds = rawSeeds.map { model in
+        var value = model
+        value.providerID = account.providerID
+        return value
+      }
+      guard !seeds.isEmpty else { continue }
+      _ = try await workspace.mergeModels(
+        seeds,
+        for: account.id,
+        expectedAccount: account,
+        markRefreshed: false
+      )
+    }
+    try await reloadSnapshot()
   }
 
   func provider(for id: ProviderID) -> ProviderDefinition? {
@@ -61,6 +170,10 @@ final class MacProviderModel {
   func account(_ id: ProviderAccountID?) -> ProviderAccount? {
     guard let id else { return nil }
     return accounts.first { $0.id == id }
+  }
+
+  func lastModelRefreshAt(for accountID: ProviderAccountID) -> Date? {
+    lastModelRefreshByAccount[accountID]
   }
 
   func models(for accountID: ProviderAccountID, includeHidden: Bool = false) -> [AccountModelRecord] {
@@ -80,8 +193,11 @@ final class MacProviderModel {
 
   func capabilities(accountID: ProviderAccountID, modelID: ModelID) -> ResolvedModelCapabilities {
     let record = models(for: accountID, includeHidden: true).first { $0.model.id == modelID }
-    return ModelCapabilityResolver.resolve(kind: account(accountID)?.kind ?? .openAICompatible,
-      modelID: modelID, model: record?.model)
+    return ModelCapabilityResolver.resolve(
+      kind: account(accountID)?.kind ?? .openAICompatible,
+      modelID: modelID,
+      model: record?.model
+    )
   }
 
   func supportsReasoning(accountID: ProviderAccountID, modelID: ModelID) -> Bool {
@@ -140,7 +256,9 @@ final class MacProviderModel {
     chatCompletionsPath: String? = nil,
     modelsPath: String? = nil,
     authChoice: ProviderAuthentication? = nil,
-    seedModelIDs: [String]? = nil
+    seedModelIDs: [String]? = nil,
+    discoveredModels: [ProviderModel]? = nil,
+    manualModelIDs: [String] = []
   ) async -> ProviderAccountID? {
     guard MacProAccess.requireProviderAccountCapacity(currentCount: accounts.count) else {
       errorMessage = "Free includes 1 provider connection. Upgrade to BYOK Pro to add more."
@@ -154,6 +272,7 @@ final class MacProviderModel {
     let account: ProviderAccount
     do {
       let trimmedCredential = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+      let trimmedDefaultModel = defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
       account = try await accountManager.createAccount(
         kind: kind,
         label: normalizedLabel(label, kind: kind),
@@ -167,9 +286,7 @@ final class MacProviderModel {
         baseURLOverride: try optionalURL(baseURL, kind: kind),
         additionalHeaders: headers,
         metadata: metadata,
-        defaultModelID: defaultModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          ? nil
-          : ModelID(rawValue: defaultModel.trimmingCharacters(in: .whitespacesAndNewlines))
+        defaultModelID: trimmedDefaultModel.isEmpty ? nil : ModelID(rawValue: trimmedDefaultModel)
       )
     } catch {
       MacAppAnalytics.reportError("provider_save_failed", component: "provider")
@@ -178,7 +295,11 @@ final class MacProviderModel {
     }
 
     do {
-      try await installConfiguredModels(for: account)
+      try await installConfiguredModels(
+        for: account,
+        discoveredModels: discoveredModels,
+        manualModelIDs: manualModelIDs
+      )
     } catch {
       MacAppAnalytics.reportError("provider_model_setup_failed", component: "provider")
       let setupError = error
@@ -212,7 +333,12 @@ final class MacProviderModel {
     chatCompletionsPath: String?,
     modelsPath: String?,
     authChoice: ProviderAuthentication?,
-    seedModelIDs: [String]?
+    seedModelIDs: [String]?,
+    defaultModelID: ModelID? = nil,
+    clearDefaultModel: Bool = false,
+    discoveredModels: [ProviderModel]? = nil,
+    manualModelIDs: [String] = [],
+    removedManualModelIDs: Set<ModelID> = []
   ) async -> Bool {
     guard requireProviderAccess(accountID) else { return false }
 
@@ -229,6 +355,17 @@ final class MacProviderModel {
       return false
     }
 
+    let addedManualIDs = Set(
+      manualModelIDs
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .map(ModelID.init(rawValue:))
+    )
+    var effectiveRemoved = removedManualModelIDs.subtracting(addedManualIDs)
+    if let defaultModelID, !clearDefaultModel {
+      effectiveRemoved.remove(defaultModelID)
+    }
+
     var updated = original
     let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedLabel.isEmpty else {
@@ -241,11 +378,22 @@ final class MacProviderModel {
       updated.baseURLOverride = try optionalURL(baseURL, kind: updated.kind)
       updated.additionalHeaders = headers
       updated.metadata = metadata
+      if clearDefaultModel {
+        updated.defaultModelID = nil
+      } else if let defaultModelID {
+        updated.defaultModelID = defaultModelID
+      }
       if updated.kind == .openAICompatible {
         updated.chatCompletionsPath = normalizedPath(chatCompletionsPath, fallback: "/chat/completions")
         updated.modelsPath = normalizedOptionalPath(modelsPath)
         updated.authChoice = authChoice ?? .bearer
-        updated.seedModelIDs = normalizedSeedModelIDs(seedModelIDs)
+        let normalizedSeeds = normalizedSeedModelIDs(seedModelIDs)
+        if !effectiveRemoved.isEmpty, let normalizedSeeds {
+          let filtered = normalizedSeeds.filter { !effectiveRemoved.contains(ModelID(rawValue: $0)) }
+          updated.seedModelIDs = filtered.isEmpty ? nil : filtered
+        } else {
+          updated.seedModelIDs = normalizedSeeds
+        }
       }
       try await accountManager.updateAccount(updated)
     } catch {
@@ -290,11 +438,33 @@ final class MacProviderModel {
     }
 
     var warnings: [String] = []
+    if defaultModelID != nil || discoveredModels != nil || !manualModelIDs.isEmpty {
+      do {
+        try await saveModels(
+          for: updated,
+          defaultModelID: updated.defaultModelID,
+          discoveredModels: discoveredModels,
+          manualModelIDs: manualModelIDs,
+          markRefreshed: discoveredModels != nil
+        )
+      } catch {
+        MacAppAnalytics.reportError("provider_model_sync_failed", component: "provider")
+        warnings.append("Connection changes were saved, but models could not be updated: \(error.localizedDescription)")
+      }
+    }
     do {
       try await installConfiguredSeedModels(for: updated)
     } catch {
       MacAppAnalytics.reportError("provider_model_sync_failed", component: "provider")
       warnings.append("Connection changes were saved, but seed models could not be synchronized: \(error.localizedDescription)")
+    }
+    if !effectiveRemoved.isEmpty {
+      do {
+        try await workspace.removeManualModels(effectiveRemoved, for: accountID)
+      } catch {
+        MacAppAnalytics.reportError("provider_model_sync_failed", component: "provider")
+        warnings.append("Connection changes were saved, but manual models could not be removed: \(error.localizedDescription)")
+      }
     }
     do {
       try await accountManager.synchronizeCustomProviders()
@@ -350,12 +520,162 @@ final class MacProviderModel {
     }
   }
 
+  /// Cached-first per-account model discovery with 24h freshness TTL, 15m failure
+  /// backoff, and in-flight deduplication. Does not set global `isBusy` / `errorMessage`.
+  @discardableResult
+  func refreshModelsIfNeeded(
+    accountID: ProviderAccountID,
+    force: Bool = false,
+    now: Date = .now
+  ) async throws -> CatalogRefreshResult {
+    guard let account = accounts.first(where: { $0.id == accountID }) else {
+      throw ProviderError.accountNotFound(accountID)
+    }
+    guard !isProviderRestricted(accountID) else { return .throttled }
+    guard account.definition.modelsPath != nil else { return .unsupported }
+
+    if let existing = catalogRefreshTasks[accountID] {
+      try await existing.value
+      return .refreshed
+    }
+    if !force {
+      if let last = lastModelRefreshByAccount[accountID],
+        now.timeIntervalSince(last) < Self.catalogRefreshInterval
+      {
+        return .current
+      }
+      if let failed = catalogRefreshFailures[accountID],
+        now.timeIntervalSince(failed) < Self.catalogRetryInterval
+      {
+        return .throttled
+      }
+    }
+
+    let task = Task { @MainActor in
+      _ = try await runtime.refreshModels(accountID: accountID)
+      try await reloadSnapshot()
+    }
+    catalogRefreshTasks[accountID] = task
+    defer { catalogRefreshTasks[accountID] = nil }
+    do {
+      try await task.value
+      catalogRefreshFailures[accountID] = nil
+      return .refreshed
+    } catch {
+      MacAppAnalytics.reportError("provider_refresh_failed", component: "provider")
+      catalogRefreshFailures[accountID] = now
+      throw error
+    }
+  }
+
+  /// Refreshes all ready, unrestricted accounts whose discovery cache is stale (>24h).
+  /// Errors are absorbed per account and subject to the 15m retry backoff.
+  func refreshReadyAccountsIfNeeded(now: Date = .now) async {
+    let candidates = accounts.filter {
+      isReady($0) && !isProviderRestricted($0.id) && $0.definition.modelsPath != nil
+    }
+    for account in candidates {
+      _ = try? await refreshModelsIfNeeded(accountID: account.id, force: false, now: now)
+    }
+  }
+
+  /// Explicit user-triggered model discovery. Always unthrottled.
   func refreshModels(accountID: ProviderAccountID) async -> Bool {
     guard requireProviderAccess(accountID) else { return false }
-    return await performCommittedResult(
+    let succeeded = await performCommittedResult(
       warningPrefix: "Models were refreshed, but the provider list could not refresh:"
     ) {
       _ = try await runtime.refreshModels(accountID: accountID)
+    }
+    if succeeded {
+      catalogRefreshFailures[accountID] = nil
+    }
+    return succeeded
+  }
+
+  /// Pre-save discovery using the editor's unsaved endpoint, auth, headers, and credential draft.
+  /// Only an unchanged stored credential is read from Keychain; preview never writes to storage.
+  func previewModels(
+    for account: ResolvedProviderAccount,
+    storedCredentialAccountID: ProviderAccountID? = nil
+  ) async throws -> [ProviderModel] {
+    let resolved = try await resolveDraftAccountForPreview(
+      account,
+      storedCredentialAccountID: storedCredentialAccountID
+    )
+    return try await runtime.listModels(account: resolved)
+  }
+
+  /// Pre-save connection test against a specific model ID using unsaved draft values.
+  /// Useful for providers with discovery disabled (`modelsPath == nil`).
+  func testConnectionPreview(
+    for account: ResolvedProviderAccount,
+    modelID: ModelID,
+    storedCredentialAccountID: ProviderAccountID? = nil
+  ) async throws {
+    let trimmedModel = modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedModel.isEmpty else {
+      throw ProviderError.invalidModel
+    }
+    let resolved = try await resolveDraftAccountForPreview(
+      account,
+      storedCredentialAccountID: storedCredentialAccountID
+    )
+    try await runtime.testConnection(account: resolved, modelID: ModelID(rawValue: trimmedModel))
+  }
+
+  /// Persists an exact manually entered model ID from the target picker on Done,
+  /// without modifying the connection's default model.
+  func ensureSelectableModel(_ modelID: ModelID, for accountID: ProviderAccountID) async throws {
+    guard requireProviderAccess(accountID) else {
+      throw ProviderError.invalidRequest(
+        MacProAccess.restoredResourceBlockedMessage("provider connection")
+      )
+    }
+    let trimmed = modelID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      throw ProviderError.invalidModel
+    }
+    let normalizedID = ModelID(rawValue: trimmed)
+    let existing = models(for: accountID, includeHidden: true).first { $0.model.id == normalizedID }
+    if existing?.isAvailable == true && existing?.isHidden == false { return }
+    let account = try await workspace.account(id: accountID)
+    if existing?.isAvailable != true {
+      try await workspace.addManualModel(
+        existing?.model ?? ProviderModel(
+          providerID: account.providerID,
+          id: normalizedID,
+          displayName: normalizedID.rawValue
+        ),
+        for: accountID
+      )
+    }
+    if existing?.isHidden == true {
+      try await workspace.setHidden(false, modelID: normalizedID, accountID: accountID)
+    }
+    try await reloadSnapshot()
+  }
+
+  /// Removes user-added manual models from an account without touching chat history.
+  func removeManualModels(_ ids: Set<ModelID>, for accountID: ProviderAccountID) async throws {
+    guard !ids.isEmpty else { return }
+    guard requireProviderAccess(accountID) else {
+      throw ProviderError.invalidRequest(
+        MacProAccess.restoredResourceBlockedMessage("provider connection")
+      )
+    }
+    try await workspace.removeManualModels(ids, for: accountID)
+    try await reloadSnapshot()
+  }
+
+  /// Removes a single manually added model and surfaces errors via `errorMessage`.
+  @discardableResult
+  func removeManualModel(_ modelID: ModelID, accountID: ProviderAccountID) async -> Bool {
+    guard requireProviderAccess(accountID) else { return false }
+    return await performCommittedResult(
+      warningPrefix: "The custom model was removed, but the provider list could not refresh:"
+    ) {
+      try await workspace.removeManualModels([modelID], for: accountID)
     }
   }
 
@@ -425,6 +745,7 @@ final class MacProviderModel {
 
     do {
       let cleanupFailures = try await accountManager.deleteAccount(accountID)
+      catalogRefreshFailures[accountID] = nil
       var warnings: [String] = []
       if !cleanupFailures.isEmpty {
         warnings.append(ProviderError.credentialCleanupFailed(cleanupFailures).localizedDescription)
@@ -475,14 +796,63 @@ final class MacProviderModel {
     return true
   }
 
+  private func resolveDraftAccountForPreview(
+    _ account: ResolvedProviderAccount,
+    storedCredentialAccountID: ProviderAccountID?
+  ) async throws -> ResolvedProviderAccount {
+    var resolved = account
+    if let baseURL = resolved.baseURLOverride {
+      resolved.baseURLOverride = resolved.kind.normalizedBaseURL(baseURL)
+    }
+    let definition = resolved.definition
+    try ProviderRegistry.validate(definition)
+    if let baseURL = resolved.baseURLOverride, resolved.kind != .openAICompatible {
+      try ProviderHTTP.validateBaseURL(
+        baseURL,
+        allowsLocalHTTP: definition.allowsLocalHTTP
+      )
+    }
+    if definition.authentication != .none {
+      if resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+        let storedCredentialAccountID
+      {
+        guard requireProviderAccess(storedCredentialAccountID) else {
+          throw ProviderError.invalidRequest(
+            MacProAccess.restoredResourceBlockedMessage("provider connection")
+          )
+        }
+        resolved.apiKey = try await accountManager.resolvedAccount(id: storedCredentialAccountID).apiKey
+      }
+      if definition.requiresCredential {
+        guard resolved.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+          throw ProviderError.missingCredential(resolved.providerID)
+        }
+      }
+    }
+    return resolved
+  }
+
   private func reloadSnapshot() async throws {
-    definitions = await registry.allDefinitions()
+    let registeredDefinitions = await registry.allDefinitions()
     let loadedAccounts = await workspace.allAccounts()
 
+    var definitionsByID = Dictionary(uniqueKeysWithValues: registeredDefinitions.map { ($0.id, $0) })
+    for account in loadedAccounts
+    where account.kind == .openAICompatible || definitionsByID[account.providerID] == nil {
+      definitionsByID[account.providerID] = account.definition
+    }
+    definitions = definitionsByID.values.sorted {
+      $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+    }
+
     var records: [ProviderAccountID: [AccountModelRecord]] = [:]
+    var refreshDates: [ProviderAccountID: Date] = [:]
     var credentials: Set<ProviderAccountID> = []
     for account in loadedAccounts {
       records[account.id] = await workspace.modelRecords(for: account.id, includeHidden: true)
+      if let refreshedAt = await workspace.lastModelRefreshAt(for: account.id) {
+        refreshDates[account.id] = refreshedAt
+      }
       switch account.definition.authentication {
       case .none:
         break
@@ -494,7 +864,11 @@ final class MacProviderModel {
     }
 
     modelsByAccount = records
+    lastModelRefreshByAccount = refreshDates
     credentialAccountIDs = credentials
+    let catalogStatus = await modelCatalog.status()
+    modelCatalogStatus = catalogStatus
+    modelCatalogRevision = catalogStatus.revision
 
     func ready(_ account: ProviderAccount) -> Bool {
       guard account.isEnabled else { return false }
@@ -551,25 +925,66 @@ final class MacProviderModel {
     return records.first(where: { $0.isAvailable })?.model.id
   }
 
-  private func installConfiguredModels(for account: ProviderAccount) async throws {
-    if !account.kind.seedModels.isEmpty {
-      try await workspace.mergeModels(account.kind.seedModels, for: account.id)
-    }
+  private func installConfiguredModels(
+    for account: ProviderAccount,
+    discoveredModels: [ProviderModel]? = nil,
+    manualModelIDs: [String] = []
+  ) async throws {
+    let catalogToMerge = discoveredModels ?? (account.kind.seedModels.isEmpty ? nil : account.kind.seedModels)
+    try await saveModels(
+      for: account,
+      defaultModelID: account.defaultModelID,
+      discoveredModels: catalogToMerge,
+      manualModelIDs: manualModelIDs,
+      markRefreshed: discoveredModels != nil
+    )
     try await installConfiguredSeedModels(for: account)
+  }
 
-    if let defaultModelID = account.defaultModelID,
-      !(await workspace.modelRecords(for: account.id, includeHidden: true)).contains(where: {
-        $0.model.id == defaultModelID
-      })
-    {
-      try await workspace.addManualModel(
-        ProviderModel(
-          providerID: account.providerID,
-          id: defaultModelID,
-          displayName: defaultModelID.rawValue
-        ),
-        for: account.id
+  private func saveModels(
+    for account: ProviderAccount,
+    defaultModelID: ModelID?,
+    discoveredModels: [ProviderModel]?,
+    manualModelIDs: [String],
+    markRefreshed: Bool = false
+  ) async throws {
+    if let discoveredModels {
+      let remapped = discoveredModels.map { model in
+        var value = model
+        value.providerID = account.providerID
+        return value
+      }
+      _ = try await workspace.mergeModels(
+        remapped,
+        for: account.id,
+        expectedAccount: account,
+        markRefreshed: markRefreshed
       )
+    }
+    let explicitManualIDs = Set(
+      manualModelIDs
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .map(ModelID.init(rawValue:))
+    )
+    var manualIDs = explicitManualIDs
+    if let defaultModelID { manualIDs.insert(defaultModelID) }
+    for id in manualIDs {
+      let record = await workspace.modelRecords(for: account.id, includeHidden: true)
+        .first { $0.model.id == id }
+      if record?.isAvailable != true || explicitManualIDs.contains(id) {
+        try await workspace.addManualModel(
+          record?.model ?? ProviderModel(
+            providerID: account.providerID,
+            id: id,
+            displayName: id.rawValue
+          ),
+          for: account.id
+        )
+      }
+      if record?.isHidden == true {
+        try await workspace.setHidden(false, modelID: id, accountID: account.id)
+      }
     }
   }
 
@@ -621,7 +1036,11 @@ final class MacProviderModel {
   private func optionalURL(_ value: String, kind: ProviderKind) throws -> URL? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
-    guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
+    guard let url = URL(string: trimmed),
+      let scheme = url.scheme?.lowercased(),
+      ["http", "https"].contains(scheme),
+      let host = url.host, !host.isEmpty
+    else {
       throw ProviderError.invalidBaseURL
     }
     return kind.normalizedBaseURL(url)

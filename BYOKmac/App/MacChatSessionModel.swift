@@ -3,6 +3,54 @@ import Foundation
 import Observation
 import os
 
+enum MacChatConfigurationIssue: Equatable, Sendable {
+  case providerMissing
+  case accountMissing
+  case accountDisabled(label: String)
+  case accountRestricted(label: String)
+  case missingCredential(label: String)
+  case modelMissing(modelID: ModelID)
+  case modelUnavailable(modelName: String)
+
+  var message: String {
+    switch self {
+    case .providerMissing:
+      "This conversation references a provider that is no longer configured."
+    case .accountMissing:
+      "The provider account used by this conversation was deleted. Select another account to continue."
+    case .accountDisabled(let label):
+      "The selected provider account \"\(label)\" is disabled."
+    case .accountRestricted(let label):
+      "\"\(label)\" requires BYOK Pro or switching to an available connection."
+    case .missingCredential(let label):
+      "The selected account \"\(label)\" is missing its API key."
+    case .modelMissing:
+      "The selected model is missing. Choose another model to continue."
+    case .modelUnavailable(let modelName):
+      "The selected model \"\(modelName)\" is no longer reported by the provider."
+    }
+  }
+
+  var prefersProviderRepair: Bool {
+    switch self {
+    case .accountDisabled, .accountRestricted, .missingCredential:
+      true
+    case .providerMissing, .accountMissing, .modelMissing, .modelUnavailable:
+      false
+    }
+  }
+}
+
+enum MacChatSetupReadiness: Equatable, Sendable {
+  case ready
+  case noConnection
+  case projectAccountUnavailable(projectName: String)
+  case missingCredential(accountLabel: String)
+  case noModel(accountLabel: String)
+  case projectModelUnavailable(projectName: String)
+  case allAccountsRestricted
+}
+
 @MainActor
 func performMacConversationDeletion(
   deleteConversation: () async throws -> Void,
@@ -73,6 +121,9 @@ final class MacChatSessionModel {
   private(set) var searchIndexingProgress: ConversationSearchIndexProgress?
   private(set) var newChatTarget: MacChatTarget?
   private(set) var newChatProjectID: ProjectID?
+  private(set) var newChatSystemPromptOverride: String?
+  private(set) var newChatOptions = ProviderRequestOptions()
+  private(set) var newChatMCPConfiguration: MCPChatToolConfiguration?
   var errorMessage: String?
   var onSummariesChanged: (([ChatConversation]) -> Void)?
 
@@ -122,6 +173,128 @@ final class MacChatSessionModel {
   }
 
   var sendsOnReturn: Bool { preferences.sendOnReturn }
+  var defaultSystemPrompt: String { preferences.defaultSystemPrompt }
+
+  func effectiveSystemPrompt(for conversationID: ConversationID?, project: ChatProject?) -> String {
+    if let conversationID {
+      return conversation(conversationID)?.systemPrompt ?? ""
+    }
+    if let override = newChatSystemPromptOverride {
+      return override
+    }
+    let projectInstructions = project?.instructions.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !projectInstructions.isEmpty {
+      return projectInstructions
+    }
+    return preferences.defaultSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  func effectiveOptions(for conversationID: ConversationID?) -> ProviderRequestOptions {
+    if let conversationID {
+      return conversation(conversationID)?.options ?? ProviderRequestOptions()
+    }
+    var options = newChatOptions
+    options.reasoning = target(for: nil)?.reasoning
+    return options
+  }
+
+  func setNewChatMCPConfiguration(_ configuration: MCPChatToolConfiguration?) {
+    newChatMCPConfiguration = configuration
+  }
+
+  func resetNewChatMCPConfiguration() {
+    newChatMCPConfiguration = nil
+  }
+
+  func configurationIssue(for conversationID: ConversationID?) -> MacChatConfigurationIssue? {
+    guard let conversationID,
+      let conversation = conversation(conversationID) ?? summary(conversationID)
+    else { return nil }
+    return configurationIssue(for: conversation)
+  }
+
+  func configurationIssue(for conversation: ChatConversation) -> MacChatConfigurationIssue? {
+    guard providers.definitions.contains(where: { $0.id == conversation.providerID }) else {
+      return .providerMissing
+    }
+    guard let account = providers.account(conversation.accountID) else {
+      return .accountMissing
+    }
+    if isProviderRestricted(account.id) || providers.isProviderRestricted(account.id) {
+      return .accountRestricted(label: account.label)
+    }
+    guard account.isEnabled else {
+      return .accountDisabled(label: account.label)
+    }
+    let requiresCredential =
+      providers.provider(for: account.providerID)?.requiresCredential
+      ?? account.definition.requiresCredential
+    if requiresCredential && !providers.hasCredential(account.id) {
+      return .missingCredential(label: account.label)
+    }
+    guard
+      let model = providers.models(for: account.id, includeHidden: true).first(where: {
+        $0.model.id == conversation.modelID
+      })
+    else {
+      return .modelMissing(modelID: conversation.modelID)
+    }
+    guard model.isAvailable else {
+      return .modelUnavailable(modelName: model.model.displayName)
+    }
+    return nil
+  }
+
+  func newChatSetupReadiness(project: ChatProject?) -> MacChatSetupReadiness {
+    if let project, let accountID = project.accountID {
+      guard let account = providers.account(accountID), account.isEnabled else {
+        return .projectAccountUnavailable(projectName: project.name)
+      }
+      if isProviderRestricted(account.id) || providers.isProviderRestricted(account.id) {
+        return .allAccountsRestricted
+      }
+      let requiresCredential =
+        providers.provider(for: account.providerID)?.requiresCredential
+        ?? account.definition.requiresCredential
+      if requiresCredential && !providers.hasCredential(account.id) {
+        return .missingCredential(accountLabel: account.label)
+      }
+      let availableModels = providers.models(for: account.id).filter(\.isAvailable)
+      if let projectModelID = project.modelID {
+        if !availableModels.contains(where: { $0.model.id == projectModelID }) {
+          return .projectModelUnavailable(projectName: project.name)
+        }
+      } else if availableModels.isEmpty {
+        return .noModel(accountLabel: account.label)
+      }
+      return .ready
+    }
+
+    if target(for: nil) != nil {
+      return .ready
+    }
+
+    let enabled = providers.accounts.filter(\.isEnabled)
+    guard !enabled.isEmpty else { return .noConnection }
+
+    let accessible = enabled.filter {
+      !isProviderRestricted($0.id) && !providers.isProviderRestricted($0.id)
+    }
+    guard !accessible.isEmpty else { return .allAccountsRestricted }
+
+    let primary = providers.resolvedDefaultAccount.flatMap { resolved in
+      accessible.first { $0.id == resolved.id }
+    } ?? accessible.first!
+
+    let requiresCredential =
+      providers.provider(for: primary.providerID)?.requiresCredential
+      ?? primary.definition.requiresCredential
+    if requiresCredential && !providers.hasCredential(primary.id) {
+      return .missingCredential(accountLabel: primary.label)
+    }
+
+    return .noModel(accountLabel: primary.label)
+  }
 
   func summary(_ id: ConversationID?) -> ChatConversation? {
     guard let id else { return nil }
@@ -408,6 +581,10 @@ final class MacChatSessionModel {
 
     guard let conversationID else {
       newChatTarget = target
+      newChatOptions.reasoning = target.reasoning
+      if account.kind != .openRouter {
+        newChatOptions.openRouterRouting = nil
+      }
       return true
     }
 
@@ -444,6 +621,65 @@ final class MacChatSessionModel {
     }
   }
 
+  func updateChatSettings(
+    conversationID: ConversationID?,
+    systemPrompt: String,
+    options: ProviderRequestOptions
+  ) async -> Bool {
+    let normalizedPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let conversationID else {
+      var updatedOptions = options
+      let currentTarget = target(for: nil)
+      let activeKind = currentTarget.flatMap { providers.account($0.accountID)?.kind }
+      if activeKind != .openRouter {
+        updatedOptions.openRouterRouting = nil
+      }
+      updatedOptions.reasoning = currentTarget?.reasoning
+      newChatSystemPromptOverride = normalizedPrompt
+      newChatOptions = updatedOptions
+      return true
+    }
+
+    if generationTasks[conversationID] != nil {
+      errorMessage = "Wait for the current response to finish before saving chat settings."
+      return false
+    }
+
+    await loadConversation(conversationID)
+    guard var conversation = hydratedConversations[conversationID] else { return false }
+
+    guard !isProviderRestricted(conversation.accountID) else {
+      blockRestoredResource("provider connection", feature: .providerAccounts)
+      return false
+    }
+
+    do {
+      var updatedOptions = options
+      if providers.account(conversation.accountID)?.kind != .openRouter {
+        updatedOptions.openRouterRouting = nil
+      }
+      try await store.updateTarget(
+        conversationID,
+        providerID: conversation.providerID,
+        accountID: conversation.accountID,
+        modelID: conversation.modelID,
+        systemPrompt: normalizedPrompt,
+        options: updatedOptions
+      )
+
+      conversation.systemPrompt = normalizedPrompt
+      conversation.options = updatedOptions
+      conversation.updatedAt = .now
+      hydratedConversations[conversationID] = conversation
+      try await reloadSummaries()
+      return true
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+  }
+
   func queueNewChat(
     projectID: ProjectID?,
     initialDraft: String?,
@@ -456,6 +692,9 @@ final class MacChatSessionModel {
   }
 
   func resetNewChat() {
+    newChatSystemPromptOverride = nil
+    newChatOptions = ProviderRequestOptions()
+    newChatMCPConfiguration = nil
     if hasQueuedNewChat {
       newChatProjectID = queuedNewChatProjectID
       newChatDraft = queuedNewChatDraft ?? ""
@@ -518,7 +757,15 @@ final class MacChatSessionModel {
       }
 
       if let projectID = newChatProjectID {
-        guard await validateNewChatProjectAccess(projectID) else {
+        guard await validateNewChatProjectAccess(
+          projectID,
+          overridingMCPConfiguration: newChatMCPConfiguration
+        ) else {
+          newChatDraft = trimmed
+          return nil
+        }
+      } else if let draftMCP = newChatMCPConfiguration {
+        guard await validateMCPAccess(configuration: draftMCP) else {
           newChatDraft = trimmed
           return nil
         }
@@ -531,16 +778,27 @@ final class MacChatSessionModel {
         } else {
           project = nil
         }
-        let projectInstructions = project?.instructions.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let defaultPrompt = preferences.defaultSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let systemPrompt = projectInstructions.isEmpty ? defaultPrompt : projectInstructions
+        let systemPrompt: String
+        if let override = newChatSystemPromptOverride {
+          systemPrompt = override
+        } else {
+          let projectInstructions = project?.instructions.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+          let defaultPrompt = preferences.defaultSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+          systemPrompt = projectInstructions.isEmpty ? defaultPrompt : projectInstructions
+        }
+
+        var options = newChatOptions
+        options.reasoning = target.reasoning
+        if account.kind != .openRouter {
+          options.openRouterRouting = nil
+        }
 
         let conversation = try await store.createConversation(
           providerID: account.providerID,
           accountID: account.id,
           modelID: target.modelID,
           systemPrompt: systemPrompt,
-          options: ProviderRequestOptions(reasoning: target.reasoning)
+          options: options
         )
 
         if let projectID = newChatProjectID {
@@ -560,10 +818,37 @@ final class MacChatSessionModel {
           }
         }
 
+        if let draftMCP = newChatMCPConfiguration {
+          do {
+            try await mcpWorkspace.replaceChatConfiguration(
+              draftMCP,
+              conversationID: conversation.id,
+              preserveEmpty: project?.mcpConfiguration != nil
+            )
+          } catch let mcpError {
+            try? await mcpWorkspace.removeChatConfiguration(conversationID: conversation.id)
+            if newChatProjectID != nil {
+              try? await projectWorkspace.removeConversation(conversation.id)
+            }
+            do {
+              try await store.deleteConversation(conversation.id)
+            } catch let rollbackError {
+              try? await reloadSummaries()
+              errorMessage = "Couldn't apply the new chat's tool configuration (\(mcpError.localizedDescription)), and cleanup of the empty chat also failed: \(rollbackError.localizedDescription)"
+              newChatDraft = trimmed
+              return nil
+            }
+            throw mcpError
+          }
+        }
+
         hydratedConversations[conversation.id] = conversation
         draftValues[conversation.id] = trimmed
         newChatDraft = ""
         newChatProjectID = nil
+        newChatSystemPromptOverride = nil
+        newChatOptions = ProviderRequestOptions()
+        newChatMCPConfiguration = nil
         effectiveID = conversation.id
         try await reloadSummaries()
       } catch {
@@ -1006,7 +1291,10 @@ final class MacChatSessionModel {
     )
   }
 
-  private func validateNewChatProjectAccess(_ projectID: ProjectID) async -> Bool {
+  private func validateNewChatProjectAccess(
+    _ projectID: ProjectID,
+    overridingMCPConfiguration: MCPChatToolConfiguration? = nil
+  ) async -> Bool {
     let projectSnapshot = await projectWorkspace.snapshot()
     let projectIDs = projectSnapshot.projects.map(\.id)
     if restrictions.isProjectRestricted(
@@ -1016,6 +1304,10 @@ final class MacChatSessionModel {
     ) {
       blockRestoredResource("project", feature: .projects)
       return false
+    }
+
+    if let overridingMCPConfiguration {
+      return await validateMCPAccess(configuration: overridingMCPConfiguration)
     }
 
     guard let project = try? await projectWorkspace.project(id: projectID) else { return true }

@@ -1,22 +1,27 @@
+import AppKit
 import BYOKchatProviderCore
 import Foundation
 import Observation
 import os
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MacShellView: View {
   let model: MacAppModel
 
   @Environment(MacUtilitySheetCoordinator.self) private var utilitySheets
+  @Environment(\.macToastCenter) private var toastCenter
   @State private var sidebarVisible = true
   @State private var navigation = MacChatNavigation()
   @State private var didSelectInitialChat = false
   @State private var targetPickerConversationID: ConversationID?
   @State private var toolsConversationID: ConversationID?
+  @State private var chatSettingsConversationID: ConversationID?
   @State private var searchText = ""
   @State private var composerFocusRequestID = 0
   @State private var showingTargetPicker = false
   @State private var showingChatTools = false
+  @State private var showingChatSettings = false
   @State private var renameTarget: ChatConversation?
   @State private var deleteTarget: ChatConversation?
   @State private var pendingAttachmentsByKey: [String: [ChatAttachment]] = [:]
@@ -88,11 +93,34 @@ struct MacShellView: View {
         },
         manageProviders: { utilitySheets.present(.providers) },
         configureTools: {
-          if let paneConversationID {
-            toolsConversationID = paneConversationID
-            showingChatTools = true
+          toolsConversationID = paneConversationID
+          showingChatTools = true
+        },
+        openChatSettings: {
+          chatSettingsConversationID = paneConversationID
+          showingChatSettings = true
+        },
+        openProjects: { utilitySheets.present(.projects) },
+        openAnalytics: { utilitySheets.present(.analytics) },
+        renameConversation: {
+          if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
+            renameTarget = conversation
           }
         },
+        exportMarkdown: {
+          exportConversationAsMarkdown(
+            conversationID: paneConversationID,
+            chats: chats,
+            providers: providers
+          )
+        },
+        deleteConversation: {
+          if let conversation = chats.conversation(paneConversationID) ?? chats.summary(paneConversationID) {
+            deleteTarget = conversation
+          }
+        },
+        startNewChat: { startNewChat(chats: chats, forceReset: true) },
+        focusComposer: { composerFocusRequestID &+= 1 },
         appendAttachments: { additions in
           appendAttachments(
             additions,
@@ -172,6 +200,13 @@ struct MacShellView: View {
     .onChange(of: model.sidebarToggleRequestID) { _, _ in
       sidebarVisible.toggle()
     }
+    .onChange(of: model.exportMarkdownRequestID) { _, _ in
+      exportConversationAsMarkdown(
+        conversationID: navigation.displayedID,
+        chats: chats,
+        providers: providers
+      )
+    }
     .onReceive(NotificationCenter.default.publisher(for: .macOpenConversationFromLibrary)) { notification in
       guard let rawValue = notification.object as? String else { return }
       let conversationID = ConversationID(rawValue: rawValue)
@@ -191,29 +226,50 @@ struct MacShellView: View {
       MacTargetPickerView(
         providers: providers,
         initialTarget: chats.target(for: targetPickerConversationID),
-        maxOutputTokens: chats.conversation(targetPickerConversationID)?.options.maxOutputTokens
+        maxOutputTokens: chats.effectiveOptions(for: targetPickerConversationID).maxOutputTokens
       ) { target in
         await chats.applyTarget(target, conversationID: targetPickerConversationID)
       }
     }
-    .sheet(isPresented: $showingChatTools) {
-      if let toolsConversationID {
-        let target = chats.target(for: toolsConversationID)
-        let modelSupportsTools = target.map {
-          providers.capabilities(accountID: $0.accountID, modelID: $0.modelID)[.tools] != .unsupported
-        } ?? true
-        MacChatToolsView(
-          mcp: mcp,
-          conversationID: toolsConversationID,
-          presets: model.workspace?.project(for: toolsConversationID)?.projectToolPresets ?? [],
-          isGenerating: chats.isGenerating(toolsConversationID),
-          modelSupportsTools: modelSupportsTools,
-          manageServers: {
-            showingChatTools = false
-            utilitySheets.present(.mcpServers)
-          }
-        )
+    .sheet(isPresented: $showingChatSettings) {
+      let project: ChatProject? = if let chatSettingsConversationID {
+        model.workspace?.project(for: chatSettingsConversationID)
+      } else {
+        model.workspace?.project(chats.newChatProjectID)
       }
+      MacChatSettingsView(
+        chats: chats,
+        providers: providers,
+        conversationID: chatSettingsConversationID,
+        project: project
+      )
+    }
+    .sheet(isPresented: $showingChatTools) {
+      let target = chats.target(for: toolsConversationID)
+      let modelSupportsTools = target.map {
+        providers.capabilities(accountID: $0.accountID, modelID: $0.modelID)[.tools] != .unsupported
+      } ?? true
+      let draftProjectID = toolsConversationID == nil ? chats.newChatProjectID : nil
+      let project = toolsConversationID.flatMap { model.workspace?.project(for: $0) }
+        ?? model.workspace?.project(draftProjectID)
+      MacChatToolsView(
+        mcp: mcp,
+        conversationID: toolsConversationID,
+        projectID: draftProjectID,
+        draftConfiguration: toolsConversationID == nil
+          ? Binding(
+              get: { chats.newChatMCPConfiguration },
+              set: { chats.setNewChatMCPConfiguration($0) }
+            )
+          : nil,
+        presets: project?.projectToolPresets ?? [],
+        isGenerating: chats.isGenerating(toolsConversationID),
+        modelSupportsTools: modelSupportsTools,
+        manageServers: {
+          showingChatTools = false
+          utilitySheets.present(.mcpServers)
+        }
+      )
     }
     .sheet(item: $renameTarget) { conversation in
       MacRenameConversationSheet(conversation: conversation) { title in
@@ -299,6 +355,50 @@ struct MacShellView: View {
     }
 
     composerFocusRequestID &+= 1
+  }
+
+  private func exportConversationAsMarkdown(
+    conversationID: ConversationID?,
+    chats: MacChatSessionModel,
+    providers: MacProviderModel
+  ) {
+    guard let conversationID else {
+      toastCenter?.warning("Open a conversation with messages to export.")
+      return
+    }
+    Task { @MainActor in
+      await chats.loadConversation(conversationID)
+      guard let conversation = chats.conversation(conversationID), !conversation.messages.isEmpty else {
+        toastCenter?.warning("This conversation has no messages to export.")
+        return
+      }
+      let accountLabel = providers.account(conversation.accountID)?.label
+      let markdown = ConversationMarkdownFormatter.render(conversation, accountLabel: accountLabel)
+      let filename = "\(MacConversationExportSupport.markdownFilename(for: conversation.title)).md"
+
+      let panel = NSSavePanel()
+      panel.allowedContentTypes = [.markdown]
+      panel.canCreateDirectories = true
+      panel.isExtensionHidden = false
+      panel.nameFieldStringValue = filename
+      panel.title = "Export Conversation as Markdown"
+
+      let response: NSApplication.ModalResponse
+      if let window = NSApp.keyWindow {
+        response = await panel.beginSheetModal(for: window)
+      } else {
+        response = panel.runModal()
+      }
+      guard response == .OK, let destinationURL = panel.url else { return }
+
+      do {
+        try Data(markdown.utf8).write(to: destinationURL, options: .atomic)
+        toastCenter?.success("Exported \"\(destinationURL.lastPathComponent)\"")
+      } catch {
+        toastCenter?.error("Export failed: \(error.localizedDescription)")
+        chats.errorMessage = "Could not export Markdown: \(error.localizedDescription)"
+      }
+    }
   }
 
   private func attachmentKey(_ conversationID: ConversationID?) -> String {

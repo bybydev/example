@@ -564,6 +564,13 @@ private struct MacProviderOverviewView: View {
             MacProviderValueRow(title: "Available", value: records.filter(\.isAvailable).count.formatted())
             MacProviderValueRow(title: "Favorites", value: records.filter(\.isFavorite).count.formatted())
             MacProviderValueRow(title: "Hidden", value: records.filter(\.isHidden).count.formatted())
+            if account.definition.modelsPath != nil {
+              MacProviderValueRow(
+                title: "Last Refreshed",
+                value: model.lastModelRefreshAt(for: account.id)?
+                  .formatted(date: .abbreviated, time: .shortened) ?? "Not refreshed yet"
+              )
+            }
             HStack { Spacer(); Button("View Models", action: showModels) }
           }
         }
@@ -637,6 +644,12 @@ private struct MacProviderModelsWorkspaceView: View {
         Toggle("Show Hidden", isOn: $showHidden).toggleStyle(.checkbox)
         Spacer()
         if account.definition.modelsPath != nil {
+          if let refreshedAt = model.lastModelRefreshAt(for: account.id) {
+            Text("Checked \(refreshedAt.formatted(date: .abbreviated, time: .shortened))")
+              .font(.caption)
+              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+              .lineLimit(1)
+          }
           Button("Refresh", systemImage: "arrow.clockwise") {
             Task { _ = await model.refreshModels(accountID: account.id) }
           }
@@ -686,7 +699,7 @@ private struct MacProviderModelsWorkspaceView: View {
       .buttonStyle(.plain)
       .foregroundStyle(record.isFavorite ? MacDesignTokens.Colors.accent : MacDesignTokens.Colors.textMuted)
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 7) {
           Text(record.model.displayName)
             .font(.system(size: 13.5, weight: .medium))
@@ -698,6 +711,13 @@ private struct MacProviderModelsWorkspaceView: View {
         Text("\(record.model.id.rawValue) · \(record.isAvailable ? "Available" : "Unavailable")")
           .font(.caption.monospaced())
           .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        MacModelCapabilityBadges(
+          kind: account.kind,
+          model: record.model,
+          isManual: record.isManual,
+          isHidden: record.isHidden,
+          isAvailable: record.isAvailable
+        )
       }
       .opacity(record.isAvailable ? 1 : 0.55)
 
@@ -710,6 +730,19 @@ private struct MacProviderModelsWorkspaceView: View {
         .controlSize(.small)
       }
 
+      if record.isManual {
+        Button {
+          Task { _ = await model.removeManualModel(record.model.id, accountID: account.id) }
+        } label: {
+          Image(systemName: "trash")
+            .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(MacDesignTokens.Colors.textMuted)
+        .help("Remove custom model")
+        .accessibilityLabel("Remove \(record.model.displayName)")
+      }
+
       Button {
         Task { await model.setHidden(!record.isHidden, modelID: record.model.id, accountID: account.id) }
       } label: {
@@ -718,6 +751,7 @@ private struct MacProviderModelsWorkspaceView: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(MacDesignTokens.Colors.textMuted)
+      .help(record.isHidden ? "Show model" : "Hide model")
     }
     .padding(.horizontal, 13)
     .padding(.vertical, 11)
@@ -725,6 +759,13 @@ private struct MacProviderModelsWorkspaceView: View {
     .overlay {
       RoundedRectangle(cornerRadius: 10)
         .stroke(MacDesignTokens.Colors.separator.opacity(0.72), lineWidth: 0.5)
+    }
+    .contextMenu {
+      if record.isManual {
+        Button("Remove Custom Model", systemImage: "trash", role: .destructive) {
+          Task { _ = await model.removeManualModel(record.model.id, accountID: account.id) }
+        }
+      }
     }
   }
 }

@@ -295,6 +295,363 @@ struct MacChatSessionModelTests {
     #expect(item.role == .user)
     #expect(!session.isSearching)
   }
+
+  @Test("Per-chat settings persist on existing conversations and respect OpenRouter routing scope")
+  func updateChatSettingsPersistsOnExistingConversation() async throws {
+    let context = try await makeMacCoreTestContext()
+    defer { context.cleanup() }
+
+    let openRouter = try await context.services.accountManager.createAccount(
+      kind: .openRouter,
+      label: "OpenRouter",
+      credential: "or-key",
+      defaultModelID: "openai/gpt-4o"
+    )
+    try await context.services.providerWorkspace.addManualModel(
+      ProviderModel(providerID: openRouter.providerID, id: "openai/gpt-4o", displayName: "GPT-4o"),
+      for: openRouter.id
+    )
+    let deepSeek = try await context.services.accountManager.createAccount(
+      kind: .deepSeek,
+      label: "DeepSeek",
+      credential: "ds-key",
+      defaultModelID: "deepseek-v4-flash"
+    )
+    try await context.services.providerWorkspace.mergeModels(
+      ProviderKind.deepSeek.seedModels,
+      for: deepSeek.id
+    )
+
+    let providers = MacProviderModel(services: context.services)
+    try await providers.load()
+
+    let orConversation = try await context.services.conversationStore.createConversation(
+      providerID: openRouter.providerID,
+      accountID: openRouter.id,
+      modelID: "openai/gpt-4o"
+    )
+    let dsConversation = try await context.services.conversationStore.createConversation(
+      providerID: deepSeek.providerID,
+      accountID: deepSeek.id,
+      modelID: "deepseek-v4-flash"
+    )
+
+    let session = MacChatSessionModel(
+      services: context.services,
+      providers: providers,
+      preferences: context.preferences,
+      initialSummaries: await context.services.conversationStore.conversationSummaries()
+    )
+
+    let routing = OpenRouterRoutingOptions(
+      providerOrder: ["anthropic", "openai"],
+      allowFallbacks: false,
+      requireParameters: true,
+      dataCollection: .deny,
+      zeroDataRetention: true,
+      sort: .latency
+    )
+    let options = ProviderRequestOptions(
+      temperature: 0.45,
+      topP: 0.9,
+      maxOutputTokens: 2_048,
+      openRouterRouting: routing
+    )
+
+    #expect(
+      await session.updateChatSettings(
+        conversationID: orConversation.id,
+        systemPrompt: "  Be concise.  ",
+        options: options
+      )
+    )
+    let persistedOR = try await context.services.conversationStore.conversation(id: orConversation.id)
+    #expect(persistedOR.systemPrompt == "Be concise.")
+    #expect(persistedOR.options.temperature == 0.45)
+    #expect(persistedOR.options.topP == 0.9)
+    #expect(persistedOR.options.maxOutputTokens == 2_048)
+    #expect(persistedOR.options.openRouterRouting == routing)
+
+    // Non-OpenRouter conversations strip OpenRouter routing automatically.
+    #expect(
+      await session.updateChatSettings(
+        conversationID: dsConversation.id,
+        systemPrompt: "Answer with bullets.",
+        options: options
+      )
+    )
+    let persistedDS = try await context.services.conversationStore.conversation(id: dsConversation.id)
+    #expect(persistedDS.systemPrompt == "Answer with bullets.")
+    #expect(persistedDS.options.temperature == 0.45)
+    #expect(persistedDS.options.maxOutputTokens == 2_048)
+    #expect(persistedDS.options.openRouterRouting == nil)
+  }
+
+  @Test("Pre-send chat settings and MCP configuration apply on createConversation and clear on resetNewChat")
+  func preSendSettingsAndMCPPersistAndReset() async throws {
+    let context = try await makeMacCoreTestContext()
+    defer { context.cleanup() }
+
+    let account = try await context.services.accountManager.createAccount(
+      kind: .openRouter,
+      label: "OpenRouter",
+      credential: "or-key",
+      defaultModelID: "openai/gpt-4o"
+    )
+    try await context.services.providerWorkspace.addManualModel(
+      ProviderModel(providerID: account.providerID, id: "openai/gpt-4o", displayName: "GPT-4o"),
+      for: account.id
+    )
+
+    let server = MCPRemoteServer(
+      id: "pre-send-server",
+      name: "Docs MCP",
+      endpoint: URL(string: "https://docs.example.com/mcp")!,
+      isEnabled: true
+    )
+    try await context.services.mcpWorkspace.upsertServer(server)
+
+    let providers = MacProviderModel(services: context.services)
+    try await providers.load()
+    let session = MacChatSessionModel(
+      services: context.services,
+      providers: providers,
+      preferences: context.preferences,
+      initialSummaries: await context.services.conversationStore.conversationSummaries()
+    )
+
+    let routing = OpenRouterRoutingOptions(
+      providerOrder: ["openai"],
+      zeroDataRetention: true,
+      sort: .price
+    )
+    let draftOptions = ProviderRequestOptions(
+      temperature: 0.3,
+      topP: 0.85,
+      maxOutputTokens: 1_500,
+      openRouterRouting: routing
+    )
+    let draftMCP = MCPChatToolConfiguration(
+      enabledServerIDs: [server.id],
+      toolPolicies: ["mcp_docs_search": .alwaysAllow]
+    )
+
+    // Stage pre-send settings, then verify resetNewChat clears them.
+    #expect(
+      await session.updateChatSettings(
+        conversationID: nil,
+        systemPrompt: "Temporary prompt",
+        options: draftOptions
+      )
+    )
+    session.setNewChatMCPConfiguration(draftMCP)
+    #expect(session.newChatSystemPromptOverride == "Temporary prompt")
+    #expect(session.newChatOptions.temperature == 0.3)
+    #expect(session.newChatMCPConfiguration == draftMCP)
+
+    session.resetNewChat()
+    #expect(session.newChatSystemPromptOverride == nil)
+    #expect(session.newChatOptions == ProviderRequestOptions())
+    #expect(session.newChatMCPConfiguration == nil)
+
+    // Re-stage settings and send the first message to verify persistence on createConversation.
+    #expect(
+      await session.updateChatSettings(
+        conversationID: nil,
+        systemPrompt: "Custom pre-send prompt",
+        options: draftOptions
+      )
+    )
+    session.setNewChatMCPConfiguration(draftMCP)
+
+    let createdID = try #require(await session.send(conversationID: nil, text: "Hello"))
+    await session.stop(createdID)
+
+    let persisted = try await context.services.conversationStore.conversation(id: createdID)
+    #expect(persisted.systemPrompt == "Custom pre-send prompt")
+    #expect(persisted.options.temperature == 0.3)
+    #expect(persisted.options.topP == 0.85)
+    #expect(persisted.options.maxOutputTokens == 1_500)
+    #expect(persisted.options.openRouterRouting == routing)
+
+    let persistedMCP = await context.services.mcpWorkspace.explicitChatConfiguration(for: createdID)
+    #expect(persistedMCP == draftMCP)
+
+    // Staging state resets once the conversation has been created.
+    #expect(session.newChatSystemPromptOverride == nil)
+    #expect(session.newChatOptions == ProviderRequestOptions())
+    #expect(session.newChatMCPConfiguration == nil)
+  }
+
+  @Test("Configuration issue detection reports broken provider, account, credential, model, and Pro restrictions")
+  func configurationIssueDetection() async throws {
+    let context = try await makeMacCoreTestContext()
+    defer { context.cleanup() }
+
+    let account = try await context.services.accountManager.createAccount(
+      kind: .deepSeek,
+      label: "Primary DeepSeek",
+      credential: "ds-key",
+      defaultModelID: "deepseek-v4-flash"
+    )
+    try await context.services.providerWorkspace.mergeModels(
+      ProviderKind.deepSeek.seedModels,
+      for: account.id
+    )
+    let localAccount = try await context.services.accountManager.createAccount(
+      kind: .ollama,
+      label: "Local Ollama",
+      credential: nil,
+      defaultModelID: "llama3.2"
+    )
+    try await context.services.providerWorkspace.addManualModel(
+      ProviderModel(providerID: localAccount.providerID, id: "llama3.2", displayName: "Llama 3.2"),
+      for: localAccount.id
+    )
+
+    let providers = MacProviderModel(services: context.services)
+    try await providers.load()
+    let session = MacChatSessionModel(
+      services: context.services,
+      providers: providers,
+      preferences: context.preferences,
+      initialSummaries: []
+    )
+
+    // Healthy cloud conversation and credential-less local Ollama conversation.
+    let healthyCloud = ChatConversation(
+      providerID: account.providerID,
+      accountID: account.id,
+      modelID: "deepseek-v4-flash"
+    )
+    #expect(session.configurationIssue(for: healthyCloud) == nil)
+
+    let healthyLocal = ChatConversation(
+      providerID: localAccount.providerID,
+      accountID: localAccount.id,
+      modelID: "llama3.2"
+    )
+    #expect(session.configurationIssue(for: healthyLocal) == nil)
+    #expect(session.newChatSetupReadiness(project: nil) == .ready)
+
+    // Missing provider definition.
+    let missingProvider = ChatConversation(
+      providerID: "nonexistent-provider",
+      accountID: account.id,
+      modelID: "deepseek-v4-flash"
+    )
+    #expect(session.configurationIssue(for: missingProvider) == .providerMissing)
+
+    // Deleted account.
+    let missingAccount = ChatConversation(
+      providerID: account.providerID,
+      accountID: "deleted-account",
+      modelID: "deepseek-v4-flash"
+    )
+    #expect(session.configurationIssue(for: missingAccount) == .accountMissing)
+
+    // Missing model.
+    let missingModel = ChatConversation(
+      providerID: account.providerID,
+      accountID: account.id,
+      modelID: "unknown-model"
+    )
+    #expect(session.configurationIssue(for: missingModel) == .modelMissing(modelID: "unknown-model"))
+
+    // Missing credential on cloud account.
+    try await context.services.accountManager.setCredential(nil, accountID: account.id)
+    await providers.reload()
+    #expect(
+      session.configurationIssue(for: healthyCloud)
+        == .missingCredential(label: "Primary DeepSeek")
+    )
+
+    // Disabled account.
+    #expect(await providers.setAccountEnabled(false, accountID: account.id))
+    #expect(
+      session.configurationIssue(for: healthyCloud)
+        == .accountDisabled(label: "Primary DeepSeek")
+    )
+
+    // Pro-restricted restored account.
+    let suiteName = "byok-mac-config-issue-restrictions-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let restrictions = MacProResourceRestrictions(defaults: defaults, keyPrefix: "test")
+    restrictions.recordFullBackupImport(
+      before: MacProResourceSnapshot(),
+      after: MacProResourceSnapshot(
+        providerAccountIDs: [localAccount.id.rawValue, account.id.rawValue]
+      ),
+      strategy: .replaceExisting,
+      entitlement: .free
+    )
+    let restrictedProviders = MacProviderModel(
+      services: context.services,
+      restrictions: restrictions,
+      entitlementAccessOverride: .free
+    )
+    try await restrictedProviders.load()
+    let restrictedSession = MacChatSessionModel(
+      services: context.services,
+      providers: restrictedProviders,
+      preferences: context.preferences,
+      initialSummaries: [],
+      restrictions: restrictions
+    )
+    #expect(
+      restrictedSession.configurationIssue(for: healthyCloud)
+        == .accountRestricted(label: "Primary DeepSeek")
+    )
+  }
+
+  @Test("Chat settings validation helpers and Markdown filename sanitization match rules")
+  func chatSettingsAndExportHelpers() {
+    #expect(MacChatSettingsSupport.temperatureRange(for: .minimax) == 0.01...1.0)
+    #expect(MacChatSettingsSupport.temperatureRange(for: .openai) == 0.0...2.0)
+    #expect(MacChatSettingsSupport.clampedTemperature(1.8, for: .minimax) == 1.0)
+    #expect(MacChatSettingsSupport.clampedTopP(0.01) == 0.05)
+
+    #expect(
+      MacChatSettingsSupport.parseMaxOutputTokens("", maxAllowed: 4_096, anthropicReasoningBudget: nil).error
+        == nil
+    )
+    #expect(
+      MacChatSettingsSupport.parseMaxOutputTokens("0", maxAllowed: 4_096, anthropicReasoningBudget: nil).error
+        != nil
+    )
+    #expect(
+      MacChatSettingsSupport.parseMaxOutputTokens("8192", maxAllowed: 4_096, anthropicReasoningBudget: nil).error
+        != nil
+    )
+    #expect(
+      MacChatSettingsSupport.parseMaxOutputTokens("1024", maxAllowed: 8_192, anthropicReasoningBudget: 1_024).error
+        != nil
+    )
+    #expect(
+      MacChatSettingsSupport.parseMaxOutputTokens("2048", maxAllowed: 8_192, anthropicReasoningBudget: 1_024).value
+        == 2_048
+    )
+
+    #expect(
+      MacChatSettingsSupport.parseProviderOrder("anthropic, openai, anthropic\ngoogle")
+        == ["anthropic", "openai", "google"]
+    )
+    #expect(MacChatSettingsSupport.normalizedOpenRouterRouting(OpenRouterRoutingOptions()) == nil)
+    #expect(
+      MacChatSettingsSupport.normalizedOpenRouterRouting(
+        OpenRouterRoutingOptions(zeroDataRetention: true)
+      )?.zeroDataRetention == true
+    )
+
+    #expect(
+      MacConversationExportSupport.markdownFilename(for: "Swift 6: Strict Concurrency?!")
+        == "Swift-6-Strict-Concurrency"
+    )
+    #expect(
+      MacConversationExportSupport.markdownFilename(for: "   ") == "BYOKchat-conversation"
+    )
+  }
 }
 
 private enum MacChatSessionTestError: Error {

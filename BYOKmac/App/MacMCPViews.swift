@@ -790,7 +790,9 @@ private struct MacMCPServerConnectionEditorView: View {
 
 struct MacChatToolsView: View {
   @Bindable var mcp: MacMCPModel
-  let conversationID: ConversationID
+  let conversationID: ConversationID?
+  let projectID: ProjectID?
+  let draftConfiguration: Binding<MCPChatToolConfiguration?>?
   let presets: [ProjectToolPreset]
   let isGenerating: Bool
   let modelSupportsTools: Bool
@@ -802,7 +804,9 @@ struct MacChatToolsView: View {
 
   init(
     mcp: MacMCPModel,
-    conversationID: ConversationID,
+    conversationID: ConversationID?,
+    projectID: ProjectID? = nil,
+    draftConfiguration: Binding<MCPChatToolConfiguration?>? = nil,
     presets: [ProjectToolPreset],
     isGenerating: Bool = false,
     modelSupportsTools: Bool = true,
@@ -810,6 +814,8 @@ struct MacChatToolsView: View {
   ) {
     self.mcp = mcp
     self.conversationID = conversationID
+    self.projectID = projectID
+    self.draftConfiguration = draftConfiguration
     self.presets = presets
     self.isGenerating = isGenerating
     self.modelSupportsTools = modelSupportsTools
@@ -817,7 +823,37 @@ struct MacChatToolsView: View {
   }
 
   private var project: ChatProject? {
-    workspace.project(for: conversationID)
+    if let conversationID {
+      return workspace.project(for: conversationID)
+    }
+    return workspace.project(projectID)
+  }
+
+  private var currentConfiguration: MCPChatToolConfiguration {
+    if let conversationID {
+      return mcp.chatConfiguration(for: conversationID)
+    }
+    return mcp.effectiveDraftConfiguration(
+      draft: draftConfiguration?.wrappedValue,
+      projectID: projectID
+    )
+  }
+
+  private var inheritsProjectTools: Bool {
+    if let conversationID {
+      return mcp.inheritsProjectTools(conversationID)
+    }
+    return mcp.inheritsProjectToolsForDraft(
+      draft: draftConfiguration?.wrappedValue,
+      projectID: projectID
+    )
+  }
+
+  private var hasChatOverride: Bool {
+    if let conversationID {
+      return mcp.hasChatOverride(conversationID)
+    }
+    return draftConfiguration?.wrappedValue != nil
   }
 
   private var isMutationDisabled: Bool {
@@ -825,20 +861,24 @@ struct MacChatToolsView: View {
   }
 
   var body: some View {
-    let activeConfig = normalizedToolConfiguration(mcp.chatConfiguration(for: conversationID))
+    let activeConfig = normalizedToolConfiguration(currentConfiguration)
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading, spacing: 2) {
           Text("Chat Tools")
             .font(.headline)
-          if mcp.inheritsProjectTools(conversationID), let project {
+          if inheritsProjectTools, let project {
             Text("Inheriting defaults from \(project.name)")
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textMuted)
-          } else if mcp.hasChatOverride(conversationID) {
-            Text("This chat has its own tool configuration")
-              .font(.caption)
-              .foregroundStyle(MacDesignTokens.Colors.textMuted)
+          } else if hasChatOverride {
+            Text(
+              conversationID == nil
+                ? "Custom tools will be applied when this chat starts"
+                : "This chat has its own tool configuration"
+            )
+            .font(.caption)
+            .foregroundStyle(MacDesignTokens.Colors.textMuted)
           }
         }
         Spacer()
@@ -848,12 +888,7 @@ struct MacChatToolsView: View {
             ForEach(presets) { preset in
               let isApplied = normalizedToolConfiguration(preset.configuration) == activeConfig
               Button {
-                Task {
-                  _ = await mcp.applyChatConfiguration(
-                    preset.configuration,
-                    conversationID: conversationID
-                  )
-                }
+                applyPreset(preset)
               } label: {
                 if isApplied {
                   Label(preset.name, systemImage: "checkmark")
@@ -866,9 +901,9 @@ struct MacChatToolsView: View {
           .disabled(isMutationDisabled)
         }
 
-        if mcp.hasChatOverride(conversationID), project != nil {
+        if hasChatOverride, project != nil {
           Button("Reset to Project Defaults") {
-            Task { _ = await mcp.removeChatConfiguration(conversationID) }
+            resetToProjectDefaults()
           }
           .disabled(isMutationDisabled)
         }
@@ -882,7 +917,7 @@ struct MacChatToolsView: View {
 
       MacMCPServerConfigurationList(
         mcp: mcp,
-        configuration: mcp.chatConfiguration(for: conversationID),
+        configuration: currentConfiguration,
         context: .chat(projectName: project?.name),
         isGenerating: isGenerating,
         modelSupportsTools: modelSupportsTools,
@@ -895,22 +930,10 @@ struct MacChatToolsView: View {
           }
         },
         setServerEnabled: { serverID, enabled in
-          Task {
-            _ = await mcp.setChatServerEnabled(
-              enabled,
-              serverID: serverID,
-              conversationID: conversationID
-            )
-          }
+          setServerEnabled(serverID, enabled: enabled)
         },
         setPolicy: { name, policy in
-          Task {
-            _ = await mcp.setChatToolPolicy(
-              policy,
-              exposedToolName: name,
-              conversationID: conversationID
-            )
-          }
+          setPolicy(name, policy: policy)
         }
       )
     }
@@ -918,6 +941,79 @@ struct MacChatToolsView: View {
     .background(MacDesignTokens.Colors.canvas)
     .sheet(isPresented: $showingAddServer) {
       MacMCPServerConnectionEditorView(mcp: mcp, server: nil)
+    }
+  }
+
+  private func applyPreset(_ preset: ProjectToolPreset) {
+    if let conversationID {
+      Task {
+        _ = await mcp.applyChatConfiguration(
+          preset.configuration,
+          conversationID: conversationID
+        )
+      }
+    } else {
+      let result = mcp.validatedDraftPresetConfiguration(
+        preset.configuration,
+        projectID: projectID
+      )
+      if result.succeeded {
+        draftConfiguration?.wrappedValue = result.configuration
+      }
+    }
+  }
+
+  private func resetToProjectDefaults() {
+    if let conversationID {
+      Task { _ = await mcp.removeChatConfiguration(conversationID) }
+    } else {
+      draftConfiguration?.wrappedValue = nil
+    }
+  }
+
+  private func setServerEnabled(_ serverID: MCPServerID, enabled: Bool) {
+    if let conversationID {
+      Task {
+        _ = await mcp.setChatServerEnabled(
+          enabled,
+          serverID: serverID,
+          conversationID: conversationID
+        )
+      }
+    } else {
+      Task {
+        let result = await mcp.updatedDraftServerEnabled(
+          enabled,
+          serverID: serverID,
+          currentDraft: draftConfiguration?.wrappedValue,
+          projectID: projectID
+        )
+        if result.succeeded {
+          draftConfiguration?.wrappedValue = result.configuration
+        }
+      }
+    }
+  }
+
+  private func setPolicy(_ name: String, policy: ChatToolPermissionPolicy) {
+    if let conversationID {
+      Task {
+        _ = await mcp.setChatToolPolicy(
+          policy,
+          exposedToolName: name,
+          conversationID: conversationID
+        )
+      }
+    } else {
+      let result = mcp.updatedDraftToolPolicy(
+        policy,
+        exposedToolName: name,
+        currentDraft: draftConfiguration?.wrappedValue,
+        projectID: projectID
+      )
+      if result.succeeded {
+        draftConfiguration?.wrappedValue = result.configuration
+      }
     }
   }
 

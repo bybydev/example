@@ -10,6 +10,7 @@ final class MacMCPModel {
   private(set) var credentialServerIDs: Set<MCPServerID> = []
   private(set) var chatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
   private(set) var inheritedChatConfigurations: [ConversationID: MCPChatToolConfiguration] = [:]
+  private(set) var projectMCPConfigurations: [ProjectID: MCPChatToolConfiguration] = [:]
   private(set) var pendingApprovals: [MCPToolApprovalRequest] = []
   private(set) var pendingElicitations: [MCPElicitationRequest] = []
 
@@ -115,6 +116,109 @@ final class MacMCPModel {
 
   func inheritsProjectTools(_ conversationID: ConversationID) -> Bool {
     chatConfigurations[conversationID] == nil && inheritedChatConfigurations[conversationID] != nil
+  }
+
+  func projectConfiguration(for projectID: ProjectID?) -> MCPChatToolConfiguration? {
+    guard let projectID else { return nil }
+    return projectMCPConfigurations[projectID]
+  }
+
+  func effectiveDraftConfiguration(
+    draft: MCPChatToolConfiguration?,
+    projectID: ProjectID?
+  ) -> MCPChatToolConfiguration {
+    draft ?? projectConfiguration(for: projectID) ?? MCPChatToolConfiguration()
+  }
+
+  func inheritsProjectToolsForDraft(
+    draft: MCPChatToolConfiguration?,
+    projectID: ProjectID?
+  ) -> Bool {
+    draft == nil && projectConfiguration(for: projectID) != nil
+  }
+
+  func updatedDraftServerEnabled(
+    _ enabled: Bool,
+    serverID: MCPServerID,
+    currentDraft: MCPChatToolConfiguration?,
+    projectID: ProjectID?
+  ) async -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
+    if enabled, !requireServerAccess(serverID) {
+      return (false, currentDraft)
+    }
+    var updated = currentDraft
+    let succeeded = await performResult(nil) {
+      if enabled {
+        guard servers.first(where: { $0.id == serverID })?.isEnabled == true else {
+          throw MCPError.invalidServer("Enable this MCP server in Settings first.")
+        }
+        _ = try await runtime.refreshServer(serverID)
+        try await reloadSnapshot()
+      }
+      var next = effectiveDraftConfiguration(draft: currentDraft, projectID: projectID)
+      next.enabledServerIDs.removeAll { $0 == serverID }
+      if enabled { next.enabledServerIDs.append(serverID) }
+      updated = normalizedDraftConfiguration(next, projectID: projectID)
+    }
+    return (succeeded, updated)
+  }
+
+  func updatedDraftToolPolicy(
+    _ policy: ChatToolPermissionPolicy,
+    exposedToolName: String,
+    currentDraft: MCPChatToolConfiguration?,
+    projectID: ProjectID?
+  ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
+    if policy != .disabled,
+      let serverID = serverID(forExposedToolName: exposedToolName),
+      !requireServerAccess(serverID)
+    {
+      return (false, currentDraft)
+    }
+    let normalizedName = exposedToolName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedName.isEmpty, normalizedName.count <= MCPToolNamespace.maximumExposedNameLength else {
+      errorMessage = MCPError.invalidToolDefinition("Invalid MCP tool permission name.").localizedDescription
+      return (false, currentDraft)
+    }
+    errorMessage = nil
+    var next = effectiveDraftConfiguration(draft: currentDraft, projectID: projectID)
+    if policy == .ask {
+      next.toolPolicies.removeValue(forKey: normalizedName)
+    } else {
+      next.toolPolicies[normalizedName] = policy
+    }
+    return (true, normalizedDraftConfiguration(next, projectID: projectID))
+  }
+
+  func validatedDraftPresetConfiguration(
+    _ configuration: MCPChatToolConfiguration,
+    projectID: ProjectID?
+  ) -> (succeeded: Bool, configuration: MCPChatToolConfiguration?) {
+    guard requireConfigurationAccess(configuration) else {
+      return (false, nil)
+    }
+    errorMessage = nil
+    statusMessage = "Tool configuration applied"
+    return (true, normalizedDraftConfiguration(configuration, projectID: projectID))
+  }
+
+  private func normalizedDraftConfiguration(
+    _ configuration: MCPChatToolConfiguration,
+    projectID: ProjectID?
+  ) -> MCPChatToolConfiguration? {
+    let knownServerIDs = Set(servers.map(\.id))
+    let enabledIDs = Array(Set(configuration.enabledServerIDs.filter(knownServerIDs.contains)))
+      .sorted { $0.rawValue < $1.rawValue }
+    let policies = configuration.toolPolicies.filter { $0.value != .ask }
+    let normalized = MCPChatToolConfiguration(
+      enabledServerIDs: enabledIDs,
+      toolPolicies: policies
+    )
+    let hasProjectInheritance = projectConfiguration(for: projectID) != nil
+    if !hasProjectInheritance && normalized.enabledServerIDs.isEmpty && normalized.toolPolicies.isEmpty {
+      return nil
+    }
+    return normalized
   }
 
   func isServerEnabled(_ serverID: MCPServerID, for conversationID: ConversationID) -> Bool {
@@ -526,6 +630,12 @@ final class MacMCPModel {
 
     let projectSnapshot = await projectWorkspace.snapshot()
     let projectsByID = Dictionary(uniqueKeysWithValues: projectSnapshot.projects.map { ($0.id.rawValue, $0) })
+    projectMCPConfigurations = Dictionary(
+      uniqueKeysWithValues: projectSnapshot.projects.compactMap { project in
+        guard let configuration = project.mcpConfiguration else { return nil }
+        return (project.id, configuration)
+      }
+    )
     inheritedChatConfigurations = Dictionary(
       uniqueKeysWithValues: projectSnapshot.conversationProjectIDs.compactMap { conversationID, projectID in
         guard let configuration = projectsByID[projectID]?.mcpConfiguration else { return nil }
