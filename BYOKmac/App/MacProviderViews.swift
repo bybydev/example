@@ -218,13 +218,13 @@ struct MacTargetPickerView: View {
     return !hasSavedAvailable && !hasStagedManual
   }
 
-  private var resolvedCapabilities: ResolvedModelCapabilities {
-    guard let accountID, let modelID else { return .init() }
+  private var resolvedCapabilities: ResolvedModelCapabilities? {
+    guard let accountID, let modelID else { return nil }
     return providers.capabilities(accountID: accountID, modelID: modelID)
   }
 
   private var reasoningControl: ModelReasoningControl {
-    resolvedCapabilities.reasoning
+    resolvedCapabilities?.reasoning ?? ModelReasoningControl()
   }
 
   private func anthropicOutputLimit(for options: ReasoningOptions?) -> Int? {
