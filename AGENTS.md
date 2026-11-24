@@ -2,5 +2,5 @@
 - Do not run build or tests.
 - Do not open xcode or iOS simulator.
 - All CI workflows must be triggered manually only.
-- Only commit and push if asked.
-- This project use xcodegen so don't edit xcodeproj directly
+- This project use xcodegen so don't edit xcodeproj directly.
+- When i say commit add all changed files.
