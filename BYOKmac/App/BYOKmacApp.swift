@@ -106,7 +106,6 @@ struct BYOKmacApp: App {
         .macAppTheme(model.themeStore, purchaseManager: purchases)
         .managesAnalytics(analytics)
     }
-    .windowStyle(.hiddenTitleBar)
 
     Window("BYOK Pro", id: MacWindowID.proPaywall) {
       MacProPaywallWindow(purchaseManager: purchases)
@@ -303,20 +302,28 @@ private struct MacBYOKOnboardingView: View {
 
   @Environment(\.openWindow) private var openWindow
   @Environment(\.dismissWindow) private var dismissWindow
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     OnboardingView {
       content
         .id(onboarding.currentStep)
-        .transition(.opacity.combined(with: .scale(scale: 0.985)))
-        .padding(34)
-        .background(MacDesignTokens.Colors.canvas)
+        .transition(
+          reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.985))
+        )
+        .padding(.top, 50)
+        .padding(.horizontal, 34)
+        .padding(.bottom, 70)
     } leadingActions: {
       HStack(spacing: 8) {
         if onboarding.canGoBack {
           Button("Back") {
-            withAnimation(.snappy(duration: 0.22)) {
+            if reduceMotion {
               onboarding.goBack()
+            } else {
+              withAnimation(.snappy(duration: 0.22)) {
+                onboarding.goBack()
+              }
             }
           }
           .buttonStyle(MacActionButtonStyle(.secondary))
@@ -340,9 +347,17 @@ private struct MacBYOKOnboardingView: View {
         continueFlow()
       }
       .buttonStyle(MacActionButtonStyle(.primary))
+      .keyboardShortcut(.defaultAction)
     }
-    .frame(width: 720, height: 590)
-    .background(MacDesignTokens.Colors.canvas)
+    .frame(
+      minWidth: 720,
+      idealWidth: 720,
+      maxWidth: .infinity,
+      minHeight: 590,
+      idealHeight: 590,
+      maxHeight: .infinity
+    )
+    .background(MacDesignTokens.Colors.canvas, ignoresSafeAreaEdges: .all)
   }
 
   @ViewBuilder
@@ -529,8 +544,12 @@ private struct MacBYOKOnboardingView: View {
 
   private func continueFlow() {
     guard onboarding.isLastStep else {
-      withAnimation(.snappy(duration: 0.22)) {
+      if reduceMotion {
         onboarding.goForward()
+      } else {
+        withAnimation(.snappy(duration: 0.22)) {
+          onboarding.goForward()
+        }
       }
       return
     }
@@ -557,6 +576,7 @@ private struct MacOnboardingStreamingDemoCard: View {
   }
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.macAppTheme) private var theme
   @State private var mode: Mode = .reasoning
   @State private var visibleWordCount = 0
   @State private var replayID = 0
@@ -597,8 +617,9 @@ private struct MacOnboardingStreamingDemoCard: View {
                 in: Capsule()
               )
               .foregroundStyle(
-                mode == item ? Color.white : MacDesignTokens.Colors.textMuted
+                mode == item ? theme.accentForeground : MacDesignTokens.Colors.textMuted
               )
+              .contentShape(Capsule())
           }
           .buttonStyle(.plain)
         }
@@ -633,12 +654,12 @@ private struct MacOnboardingStreamingDemoCard: View {
         }
         .font(.caption2.weight(.semibold))
 
-        Text(previewText)
+        formattedPreview(previewText)
           .font(.caption)
           .opacity(0)
           .frame(maxWidth: .infinity, alignment: .topLeading)
           .overlay(alignment: .topLeading) {
-            Text(streamedText)
+            formattedPreview(streamedText)
               .font(.caption)
               .foregroundStyle(MacDesignTokens.Colors.textPrimary)
               .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -696,6 +717,18 @@ private struct MacOnboardingStreamingDemoCard: View {
       }
     }
   }
+
+  private func formattedPreview(_ value: String) -> Text {
+    guard mode == .markdown,
+      let attributed = try? AttributedString(
+        markdown: value,
+        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+      )
+    else {
+      return Text(value)
+    }
+    return Text(attributed)
+  }
 }
 
 @MainActor
@@ -744,6 +777,7 @@ private struct MacOnboardingProviderPillDemoCard: View {
     ),
   ]
 
+  @Environment(\.macAppTheme) private var theme
   @State private var selectedID = "anthropic"
 
   private var selectedProvider: SampleProvider {
@@ -781,8 +815,9 @@ private struct MacOnboardingProviderPillDemoCard: View {
               in: Capsule()
             )
             .foregroundStyle(
-              selectedID == provider.id ? Color.white : MacDesignTokens.Colors.textPrimary
+              selectedID == provider.id ? theme.accentForeground : MacDesignTokens.Colors.textPrimary
             )
+            .contentShape(Capsule())
           }
           .buttonStyle(.plain)
         }
