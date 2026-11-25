@@ -1641,7 +1641,24 @@ final class MacChatNavigation {
   var errorMessage: String?
   @ObservationIgnored private var selectionRevision = 0
   @ObservationIgnored private var recencyOrder: [ConversationID?] = [nil]
-  private let limit = 5
+  private let limit: Int
+
+  static func recommendedRetainedLimit(
+    physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+  ) -> Int {
+    let gigabyte: UInt64 = 1_024 * 1_024 * 1_024
+    if physicalMemoryBytes <= 8 * gigabyte {
+      return 2
+    }
+    if physicalMemoryBytes <= 16 * gigabyte {
+      return 3
+    }
+    return 4
+  }
+
+  init(limit: Int = MacChatNavigation.recommendedRetainedLimit()) {
+    self.limit = max(1, limit)
+  }
 
   func prepareSelection(
     using prepare: @MainActor (ConversationID) async throws -> MacPreparedConversation

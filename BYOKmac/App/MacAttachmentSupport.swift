@@ -311,6 +311,32 @@ struct MacAttachmentStrip: View {
   }
 }
 
+@MainActor
+private final class MacAttachmentThumbnailCache {
+  static let shared = MacAttachmentThumbnailCache()
+
+  private let storage: NSCache<NSString, NSImage> = {
+    let cache = NSCache<NSString, NSImage>()
+    cache.countLimit = 96
+    cache.totalCostLimit = 24 * 1_024 * 1_024
+    return cache
+  }()
+
+  func image(forKey key: String) -> NSImage? {
+    storage.object(forKey: key as NSString)
+  }
+
+  func insert(_ image: NSImage, forKey key: String, byteCost: Int) {
+    storage.setObject(image, forKey: key as NSString, cost: max(1, byteCost))
+  }
+}
+
+private struct MacDecodedAttachmentBitmap: @unchecked Sendable {
+  let cgImage: CGImage
+  let pointSize: NSSize
+  let byteCost: Int
+}
+
 private struct MacAttachmentTile: View {
   let attachment: ChatAttachment
   let presentation: MacAttachmentPresentation
@@ -322,6 +348,18 @@ private struct MacAttachmentTile: View {
   @Environment(\.displayScale) private var displayScale
   @State private var image: NSImage?
   @State private var unavailable = false
+
+  private var targetMaxPixelSize: CGFloat {
+    max(64, max(presentation.imageSize.width, presentation.imageSize.height) * displayScale)
+  }
+
+  private var thumbnailCacheKey: String {
+    "\(attachment.id)@\(Int(targetMaxPixelSize.rounded()))"
+  }
+
+  private var resolvedImage: NSImage? {
+    image ?? MacAttachmentThumbnailCache.shared.image(forKey: thumbnailCacheKey)
+  }
 
   private var hasContextMenu: Bool {
     if presentation == .composer {
@@ -409,8 +447,8 @@ private struct MacAttachmentTile: View {
   private var imageTile: some View {
     ZStack {
       Color.primary.opacity(0.035)
-      if let image {
-        Image(nsImage: image)
+      if let resolvedImage {
+        Image(nsImage: resolvedImage)
           .resizable()
           .scaledToFill()
       } else if unavailable {
@@ -468,25 +506,64 @@ private struct MacAttachmentTile: View {
 
   private func loadImageIfNeeded() async {
     guard attachment.isImage else { return }
+    let key = thumbnailCacheKey
+    if let cached = MacAttachmentThumbnailCache.shared.image(forKey: key) {
+      image = cached
+      unavailable = false
+      return
+    }
+
+    let maxPixelSize = targetMaxPixelSize
+    let sourceData: Data?
     if !attachment.data.isEmpty {
-      image = NSImage(data: attachment.data)
-      unavailable = image == nil
-      if image != nil { return }
+      sourceData = attachment.data
+    } else if let loadThumbnail {
+      sourceData = await loadThumbnail(attachment.id, maxPixelSize)
+    } else {
+      sourceData = nil
     }
-    guard let loadThumbnail else {
+
+    guard !Task.isCancelled else { return }
+    guard let sourceData, !sourceData.isEmpty else {
       unavailable = true
       return
     }
-    let bytes = await loadThumbnail(
-      attachment.id,
-      max(presentation.imageSize.width, presentation.imageSize.height) * displayScale
+
+    let bitmap = await Task.detached(priority: .utility) {
+      Self.decodeDownsampledBitmap(from: sourceData, maxPixelSize: maxPixelSize)
+    }.value
+
+    guard !Task.isCancelled else { return }
+    if let bitmap {
+      let decoded = NSImage(cgImage: bitmap.cgImage, size: bitmap.pointSize)
+      MacAttachmentThumbnailCache.shared.insert(decoded, forKey: key, byteCost: bitmap.byteCost)
+      image = decoded
+      unavailable = false
+    } else {
+      unavailable = true
+    }
+  }
+
+  private nonisolated static func decodeDownsampledBitmap(
+    from data: Data,
+    maxPixelSize: CGFloat
+  ) -> MacDecodedAttachmentBitmap? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixelSize.rounded())),
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+      ?? CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+    let byteCost = max(1, cgImage.bytesPerRow * cgImage.height)
+    return MacDecodedAttachmentBitmap(
+      cgImage: cgImage,
+      pointSize: NSSize(width: cgImage.width, height: cgImage.height),
+      byteCost: byteCost
     )
-    guard let bytes, !bytes.isEmpty, let decoded = NSImage(data: bytes) else {
-      unavailable = true
-      return
-    }
-    image = decoded
-    unavailable = false
   }
 }
 

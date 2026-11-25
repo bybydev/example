@@ -10,16 +10,15 @@ struct MacRichMessageView: View {
   let conversationID: ConversationID?
   let storedMessage: ChatMessage
   let failureContext: String?
-  let chooseTarget: (() -> Void)?
-  let manageProviders: (() -> Void)?
+  let isLatestAssistant: Bool
+  let onShowDetails: (ChatMessage) -> Void
+  let onEditMessage: (ChatMessage) -> Void
+  let onPreviewAttachment: (ChatAttachment, ChatMessage) -> Void
+  let onRequestRegenerate: () -> Void
 
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(MacWorkspaceModel.self) private var workspace
   @State private var retainedLiveRendering: LiveRendering?
-  @State private var showingDetails = false
-  @State private var showingEdit = false
-  @State private var showingRegenerateConfirmation = false
-  @State private var previewAttachment: ChatAttachment?
   @State private var copied = false
 
   init(
@@ -29,8 +28,11 @@ struct MacRichMessageView: View {
     conversationID: ConversationID?,
     message: ChatMessage,
     failureContext: String? = nil,
-    chooseTarget: (() -> Void)? = nil,
-    manageProviders: (() -> Void)? = nil
+    isLatestAssistant: Bool = false,
+    onShowDetails: @escaping (ChatMessage) -> Void,
+    onEditMessage: @escaping (ChatMessage) -> Void,
+    onPreviewAttachment: @escaping (ChatAttachment, ChatMessage) -> Void,
+    onRequestRegenerate: @escaping () -> Void
   ) {
     _providers = Bindable(wrappedValue: providers)
     _chats = Bindable(wrappedValue: chats)
@@ -38,8 +40,11 @@ struct MacRichMessageView: View {
     self.conversationID = conversationID
     storedMessage = message
     self.failureContext = failureContext
-    self.chooseTarget = chooseTarget
-    self.manageProviders = manageProviders
+    self.isLatestAssistant = isLatestAssistant
+    self.onShowDetails = onShowDetails
+    self.onEditMessage = onEditMessage
+    self.onPreviewAttachment = onPreviewAttachment
+    self.onRequestRegenerate = onRequestRegenerate
   }
 
   private struct LiveRendering: Equatable {
@@ -48,7 +53,13 @@ struct MacRichMessageView: View {
     let reasoningSnapshot: MacStreamingAnswerSnapshot
   }
 
+  private var mayStream: Bool {
+    storedMessage.role == .assistant
+      && (storedMessage.status == .pending || storedMessage.status == .streaming)
+  }
+
   private var livePresentation: LiveRendering? {
+    guard mayStream else { return nil }
     guard isTranscriptActive else { return retainedLiveRendering }
     guard let presentation = chats.livePresentations[storedMessage.id] else { return nil }
     return LiveRendering(
@@ -92,61 +103,14 @@ struct MacRichMessageView: View {
         assistantMessage
       }
     }
-    .onChange(of: isTranscriptActive ? livePresentation : nil, initial: true) { _, rendering in
-      guard isTranscriptActive else { return }
+    .onChange(of: (isTranscriptActive && mayStream) ? livePresentation : nil, initial: true) { _, rendering in
+      guard isTranscriptActive, mayStream else { return }
       // Preserve the last rendered height while hidden. Falling back to the
       // persisted partial text would shrink the row and clamp its scroll position.
       retainedLiveRendering = rendering
     }
     .contentShape(Rectangle())
     .contextMenu { contextActions }
-    .sheet(isPresented: $showingDetails) {
-      MacMessageDetailsView(
-        message: message,
-        providers: providers,
-        conversation: chats.conversation(conversationID),
-        toolDisplayName: mcp.toolDisplayName
-      )
-    }
-    .sheet(isPresented: $showingEdit) {
-      if let conversationID {
-        MacEditAndResendView(
-          chats: chats,
-          conversationID: conversationID,
-          original: message.content,
-          chooseTarget: chooseTarget,
-          manageProviders: manageProviders,
-          save: { value in
-            await chats.editAndResend(
-              conversationID: conversationID,
-              messageID: message.id,
-              text: value
-            )
-          }
-        )
-      }
-    }
-    .sheet(item: $previewAttachment) { attachment in
-      MacAttachmentPreviewSheet(
-        attachment: attachment,
-        loadData: { id in
-          await chats.attachmentData(id)
-        },
-        saveToLibrary: attachmentSaveAction(for: attachment)
-      )
-    }
-    .confirmationDialog(
-      "Regenerate this response?",
-      isPresented: $showingRegenerateConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Regenerate") {
-        regenerate(confirmingUncertainCompletion: true)
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
-    }
   }
 
   private var userMessage: some View {
@@ -157,7 +121,7 @@ struct MacRichMessageView: View {
           MacAttachmentStrip(
             attachments: attachments,
             presentation: .message,
-            onOpenAttachment: { previewAttachment = $0 },
+            onOpenAttachment: { onPreviewAttachment($0, message) },
             saveToLibrary: attachmentSaveClosure,
             loadThumbnail: loadThumbnail
           )
@@ -195,7 +159,7 @@ struct MacRichMessageView: View {
         MacAttachmentStrip(
           attachments: attachments,
           presentation: .message,
-          onOpenAttachment: { previewAttachment = $0 },
+          onOpenAttachment: { onPreviewAttachment($0, message) },
           saveToLibrary: attachmentSaveClosure,
           loadThumbnail: loadThumbnail
         )
@@ -252,13 +216,6 @@ struct MacRichMessageView: View {
   private var attachmentSaveClosure: ((ChatAttachment) -> Void)? {
     guard let conversationID, !isStreaming else { return nil }
     return { attachment in
-      saveAttachmentToLibrary(attachment, conversationID: conversationID)
-    }
-  }
-
-  private func attachmentSaveAction(for attachment: ChatAttachment) -> (() -> Void)? {
-    guard let conversationID, !isStreaming else { return nil }
-    return {
       saveAttachmentToLibrary(attachment, conversationID: conversationID)
     }
   }
@@ -344,24 +301,20 @@ struct MacRichMessageView: View {
     if message.role == .user, canMutateConversation, !message.content.isEmpty {
       Divider()
       Button("Edit & Resend", systemImage: "pencil") {
-        showingEdit = true
+        onEditMessage(message)
       }
     }
 
-    if message.role == .assistant,
-      canMutateConversation,
-      let conversationID,
-      chats.isLatestAssistant(message.id, conversationID: conversationID)
-    {
+    if isLatestAssistant, canMutateConversation {
       Divider()
       Button(regenerateLabel, systemImage: "arrow.clockwise") {
-        requestRegeneration()
+        onRequestRegenerate()
       }
     }
 
     Divider()
     Button("Message Details", systemImage: "info.circle") {
-      showingDetails = true
+      onShowDetails(message)
     }
   }
 
@@ -372,11 +325,6 @@ struct MacRichMessageView: View {
     default:
       "Regenerate Response"
     }
-  }
-
-  private var isLatestAssistant: Bool {
-    guard message.role == .assistant, let conversationID else { return false }
-    return chats.isLatestAssistant(message.id, conversationID: conversationID)
   }
 
   private var canRetryAssistant: Bool {
@@ -476,22 +424,7 @@ struct MacRichMessageView: View {
   }
 
   private func requestRegeneration() {
-    guard let conversationID else { return }
-    if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
-      showingRegenerateConfirmation = true
-    } else {
-      regenerate(confirmingUncertainCompletion: false)
-    }
-  }
-
-  private func regenerate(confirmingUncertainCompletion: Bool) {
-    guard let conversationID else { return }
-    Task {
-      _ = await chats.regenerate(
-        conversationID: conversationID,
-        confirmingUncertainCompletion: confirmingUncertainCompletion
-      )
-    }
+    onRequestRegenerate()
   }
 
   private func copyToPasteboard(_ value: String, dimension: MacAppAnalytics.Dimension) {

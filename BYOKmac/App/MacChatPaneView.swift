@@ -817,6 +817,8 @@ private struct MacTranscriptView: View {
   @State private var scrollConnection = MacTranscriptScrollConnection()
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(MacWorkspaceModel.self) private var workspace
+  @Environment(\.macToastCenter) private var toastCenter
   @State private var isNearBottom = true
   @State private var followsLatest = true
   @State private var isUserDraggingTimeline = false
@@ -828,6 +830,26 @@ private struct MacTranscriptView: View {
   @State private var visibleMessageLimit = MacChatMessageWindowPolicy.initialVisibleCount
   @State private var isLoadingEarlierMessages = false
   @State private var pendingEarlierAnchorID: ChatMessageID?
+  @State private var activeRowSheet: ActiveRowSheet?
+  @State private var showingRegenerateConfirmation = false
+
+  private enum ActiveRowSheet: Identifiable {
+    case details(ChatMessage)
+    case edit(ChatMessage)
+    case previewAttachment(ChatAttachment, ChatMessage)
+    case sources([MacAnswerSource])
+    case saveImages(ChatMessage, [MacResponseImageCandidate])
+
+    var id: String {
+      switch self {
+      case .details(let message): "details-\(message.id.rawValue)"
+      case .edit(let message): "edit-\(message.id.rawValue)"
+      case .previewAttachment(let attachment, let message): "attachment-\(message.id.rawValue)-\(attachment.id)"
+      case .sources(let sources): "sources-\(sources.count)-\(sources.first?.id ?? "")"
+      case .saveImages(let message, _): "save-images-\(message.id.rawValue)"
+      }
+    }
+  }
 
   private struct PendingScrollTarget: Equatable {
     let token = UUID()
@@ -919,6 +941,7 @@ private struct MacTranscriptView: View {
     let visibleRange = visibleMessageRange
     let visibleMessages = allMessages[visibleRange]
     let hiddenEarlierCount = visibleRange.lowerBound
+    let latestAssistantID = allMessages.last(where: { $0.role == .assistant })?.id
     let accountsByID = Dictionary(
       providers.accounts.map { ($0.id, $0) },
       uniquingKeysWith: { first, _ in first }
@@ -955,6 +978,7 @@ private struct MacTranscriptView: View {
               }
 
               ForEach(visibleMessages) { message in
+                let isLatestAssistant = message.id == latestAssistantID
                 transcriptRow(bottomSpacing: 48) {
                   VStack(alignment: .leading, spacing: 8) {
                     MacRichMessageView(
@@ -964,8 +988,13 @@ private struct MacTranscriptView: View {
                       conversationID: conversationID,
                       message: message,
                       failureContext: failureContextLabel(for: message, accountsByID: accountsByID),
-                      chooseTarget: chooseTarget,
-                      manageProviders: manageProviders
+                      isLatestAssistant: isLatestAssistant,
+                      onShowDetails: { activeRowSheet = .details($0) },
+                      onEditMessage: { activeRowSheet = .edit($0) },
+                      onPreviewAttachment: { attachment, owner in
+                        activeRowSheet = .previewAttachment(attachment, owner)
+                      },
+                      onRequestRegenerate: requestRegeneration
                     )
 
                     if message.role == .assistant,
@@ -973,13 +1002,16 @@ private struct MacTranscriptView: View {
                       message.status != .streaming
                     {
                       MacAssistantMessageActions(
-                        providers: providers,
                         chats: chats,
                         conversationID: conversationID,
                         message: message,
+                        isLatestAssistant: isLatestAssistant,
                         includeRetry: message.status != .failed,
                         hideEmptyContentActions: message.status == .failed,
-                        toolDisplayName: mcp.toolDisplayName
+                        onShowDetails: { activeRowSheet = .details(message) },
+                        onShowSources: { activeRowSheet = .sources($0) },
+                        onSaveImages: { activeRowSheet = .saveImages(message, $0) },
+                        onRequestRegenerate: requestRegeneration
                       )
                     }
                   }
@@ -1174,6 +1206,115 @@ private struct MacTranscriptView: View {
           .accessibilityLabel("Scroll to bottom of chat")
         }
       }
+      .sheet(item: $activeRowSheet) { sheet in
+        rowModalContent(for: sheet)
+      }
+      .confirmationDialog(
+        "Regenerate this response?",
+        isPresented: $showingRegenerateConfirmation,
+        titleVisibility: .visible
+      ) {
+        Button("Regenerate") {
+          regenerate(confirmingUncertainCompletion: true)
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func rowModalContent(for sheet: ActiveRowSheet) -> some View {
+    switch sheet {
+    case .details(let message):
+      MacMessageDetailsView(
+        message: message,
+        providers: providers,
+        conversation: chats.conversation(conversationID),
+        toolDisplayName: mcp.toolDisplayName
+      )
+
+    case .edit(let message):
+      if let conversationID {
+        MacEditAndResendView(
+          chats: chats,
+          conversationID: conversationID,
+          original: message.content,
+          chooseTarget: chooseTarget,
+          manageProviders: manageProviders,
+          save: { value in
+            await chats.editAndResend(
+              conversationID: conversationID,
+              messageID: message.id,
+              text: value
+            )
+          }
+        )
+      }
+
+    case .previewAttachment(let attachment, let owner):
+      let isStreamingOwner = owner.status == .pending || owner.status == .streaming
+      MacAttachmentPreviewSheet(
+        attachment: attachment,
+        loadData: { id in
+          await chats.attachmentData(id)
+        },
+        saveToLibrary: (conversationID != nil && !isStreamingOwner)
+          ? {
+            guard let conversationID else { return }
+            Task { @MainActor in
+              let ok = await workspace.saveStoredAttachmentToLibrary(
+                attachment,
+                conversationID: conversationID,
+                messageID: owner.id
+              )
+              if !ok, let error = workspace.errorMessage {
+                chats.errorMessage = error
+              }
+            }
+          }
+          : nil
+      )
+
+    case .sources(let sources):
+      MacAnswerSourcesSheet(sources: sources)
+
+    case .saveImages(let message, let candidates):
+      if let conversationID {
+        MacResponseImageSaveSheet(
+          candidates: candidates,
+          conversationID: conversationID,
+          messageID: message.id,
+          workspace: workspace
+        ) { savedCount in
+          guard savedCount > 0 else { return }
+          toastCenter?.success(
+            savedCount == 1
+              ? "Saved 1 image to Library"
+              : "Saved \(savedCount) images to Library"
+          )
+        }
+      }
+    }
+  }
+
+  private func requestRegeneration() {
+    guard let conversationID else { return }
+    if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
+      showingRegenerateConfirmation = true
+    } else {
+      regenerate(confirmingUncertainCompletion: false)
+    }
+  }
+
+  private func regenerate(confirmingUncertainCompletion: Bool) {
+    guard let conversationID else { return }
+    Task {
+      _ = await chats.regenerate(
+        conversationID: conversationID,
+        confirmingUncertainCompletion: confirmingUncertainCompletion
+      )
     }
   }
 
@@ -2226,24 +2367,19 @@ private struct MacComposerView: View {
 private struct MacAssistantMessageActions: View {
   @Environment(\.macTranscriptIsActive) private var isTranscriptActive
   @Environment(\.macPreparedAnswers) private var preparedAnswers
-  @Environment(MacWorkspaceModel.self) private var workspace
-  @Environment(\.macToastCenter) private var toastCenter
-  @Bindable var providers: MacProviderModel
   @Bindable var chats: MacChatSessionModel
   let conversationID: ConversationID?
   let message: ChatMessage
+  let isLatestAssistant: Bool
   var includeRetry: Bool = true
   var hideEmptyContentActions: Bool = false
-  var toolDisplayName: ((String) -> String)? = nil
+  let onShowDetails: () -> Void
+  let onShowSources: ([MacAnswerSource]) -> Void
+  let onSaveImages: ([MacResponseImageCandidate]) -> Void
+  let onRequestRegenerate: () -> Void
 
   @State private var copied = false
   @State private var resolvedAnswer: MacPreparedAnswer?
-  @State private var showingDetails = false
-  @State private var showingSources = false
-  @State private var activeSources: [MacAnswerSource] = []
-  @State private var showingSaveImages = false
-  @State private var activeImageCandidates: [MacResponseImageCandidate] = []
-  @State private var showingRegenerateConfirmation = false
 
   private var preparedAnswer: MacPreparedAnswer? {
     if let resolvedAnswer, resolvedAnswer.source == message.content { return resolvedAnswer }
@@ -2252,9 +2388,8 @@ private struct MacAssistantMessageActions: View {
   }
 
   private var canRetry: Bool {
-    guard isTranscriptActive, let conversationID else { return false }
-    return chats.isLatestAssistant(message.id, conversationID: conversationID)
-      && !chats.isGenerating(conversationID)
+    guard isTranscriptActive, isLatestAssistant, let conversationID else { return false }
+    return !chats.isGenerating(conversationID)
   }
 
   private var showContentActions: Bool {
@@ -2292,7 +2427,7 @@ private struct MacAssistantMessageActions: View {
       }
 
       if includeRetry {
-        Button(action: requestRegeneration) {
+        Button(action: onRequestRegenerate) {
           actionIcon("arrow.clockwise")
         }
         .buttonStyle(.plain)
@@ -2303,8 +2438,7 @@ private struct MacAssistantMessageActions: View {
 
       if !sources.isEmpty {
         Button {
-          activeSources = sources
-          showingSources = true
+          onShowSources(sources)
         } label: {
           HStack(spacing: 4) {
             Image(systemName: "globe")
@@ -2337,15 +2471,16 @@ private struct MacAssistantMessageActions: View {
 
         if !sources.isEmpty {
           Button("Sources (\(sources.count))…", systemImage: "globe") {
-            activeSources = sources
-            showingSources = true
+            onShowSources(sources)
           }
         }
 
         if hasSavableImages {
           Button("Save Images…", systemImage: "photo.on.rectangle.angled") {
-            activeImageCandidates = MacResponseImageScanner.imageCandidates(in: message.content)
-            showingSaveImages = !activeImageCandidates.isEmpty
+            let candidates = MacResponseImageScanner.imageCandidates(in: message.content)
+            if !candidates.isEmpty {
+              onSaveImages(candidates)
+            }
           }
         }
 
@@ -2364,7 +2499,7 @@ private struct MacAssistantMessageActions: View {
         }
 
         Button("Message Details", systemImage: "info.circle") {
-          showingDetails = true
+          onShowDetails()
         }
       } label: {
         actionIcon("ellipsis")
@@ -2392,46 +2527,6 @@ private struct MacAssistantMessageActions: View {
         resolvedAnswer = prepared
       }
     }
-    .sheet(isPresented: $showingDetails) {
-      MacMessageDetailsView(
-        message: message,
-        providers: providers,
-        conversation: chats.conversation(conversationID),
-        toolDisplayName: toolDisplayName
-      )
-    }
-    .sheet(isPresented: $showingSources) {
-      MacAnswerSourcesSheet(sources: activeSources)
-    }
-    .sheet(isPresented: $showingSaveImages) {
-      if let conversationID {
-        MacResponseImageSaveSheet(
-          candidates: activeImageCandidates,
-          conversationID: conversationID,
-          messageID: message.id,
-          workspace: workspace
-        ) { savedCount in
-          guard savedCount > 0 else { return }
-          toastCenter?.success(
-            savedCount == 1
-              ? "Saved 1 image to Library"
-              : "Saved \(savedCount) images to Library"
-          )
-        }
-      }
-    }
-    .confirmationDialog(
-      "Regenerate this response?",
-      isPresented: $showingRegenerateConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Regenerate") {
-        regenerate(confirmingUncertainCompletion: true)
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("The provider may have completed the previous request even though BYOKchat could not confirm it. Regenerating can create another billable response.")
-    }
   }
 
   private func actionIcon(_ symbol: String) -> some View {
@@ -2440,25 +2535,6 @@ private struct MacAssistantMessageActions: View {
       .foregroundStyle(.secondary)
       .frame(width: 30, height: 30)
       .contentShape(Rectangle())
-  }
-
-  private func requestRegeneration() {
-    guard let conversationID, canRetry else { return }
-    if chats.latestAssistantRequiresRegenerationConfirmation(conversationID) {
-      showingRegenerateConfirmation = true
-    } else {
-      regenerate(confirmingUncertainCompletion: false)
-    }
-  }
-
-  private func regenerate(confirmingUncertainCompletion: Bool) {
-    guard let conversationID else { return }
-    Task {
-      _ = await chats.regenerate(
-        conversationID: conversationID,
-        confirmingUncertainCompletion: confirmingUncertainCompletion
-      )
-    }
   }
 
   private func copyToPasteboard(_ value: String) {

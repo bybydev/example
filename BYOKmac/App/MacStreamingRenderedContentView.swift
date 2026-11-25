@@ -84,7 +84,7 @@ private struct MacStreamingTailBlockView: View {
       MacStreamingMathSourceView(expression: expression)
 
     case .table(let table):
-      MacMarkdownTableView(table: table, textSize: textSize, isComplete: false)
+      MacStreamingTableSourceView(rawMarkdown: table.rawMarkdown)
     }
   }
 
@@ -130,6 +130,35 @@ private struct MacStreamingCodeSourceView: View {
       content: content,
       isStreaming: true
     )
+  }
+}
+
+private struct MacStreamingTableSourceView: View {
+  let rawMarkdown: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 6) {
+        Image(systemName: "tablecells")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.secondary)
+        Text("TABLE · STREAMING")
+          .font(.system(size: 9, weight: .semibold, design: .monospaced))
+          .foregroundStyle(.tertiary)
+      }
+      Text(rawMarkdown)
+        .font(.system(size: 12.5, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+    }
   }
 }
 

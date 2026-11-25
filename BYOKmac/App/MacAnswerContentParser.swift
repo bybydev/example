@@ -39,6 +39,41 @@ enum MacMarkdownTableLayout {
     let overflowsViewport: Bool
   }
 
+  private struct CacheKey: Hashable, Sendable {
+    let rawMarkdown: String
+    let availableWidthBucket: Int
+    let fontSizeTenths: Int
+    let fillsWidth: Bool
+    let maxColumnWidthBucket: Int?
+  }
+
+  private final class MetricsCache: @unchecked Sendable {
+    static let shared = MetricsCache()
+
+    private let lock = NSLock()
+    private var values: [CacheKey: Metrics] = [:]
+    private var order: [CacheKey] = []
+    private let limit = 128
+
+    func value(for key: CacheKey) -> Metrics? {
+      lock.lock()
+      defer { lock.unlock() }
+      return values[key]
+    }
+
+    func insert(_ metrics: Metrics, for key: CacheKey) {
+      lock.lock()
+      defer { lock.unlock() }
+      if values[key] == nil {
+        order.append(key)
+      }
+      values[key] = metrics
+      if order.count > limit {
+        values.removeValue(forKey: order.removeFirst())
+      }
+    }
+  }
+
   /// Computes deterministic, content-aware column widths that fit compact tables
   /// cleanly to the available viewport while keeping wide multi-column tables
   /// comfortably scrollable.
@@ -56,6 +91,16 @@ enum MacMarkdownTableLayout {
 
     let safeFontSize = max(11, fontSize)
     let safeAvailableWidth = max(180, availableWidth)
+    let cacheKey = CacheKey(
+      rawMarkdown: table.rawMarkdown,
+      availableWidthBucket: Int((safeAvailableWidth / 4).rounded()),
+      fontSizeTenths: Int((safeFontSize * 10).rounded()),
+      fillsWidth: fillsWidth,
+      maxColumnWidthBucket: maxColumnWidthOverride.map { Int($0.rounded()) }
+    )
+    if let cached = MetricsCache.shared.value(for: cacheKey) {
+      return cached
+    }
     let charWidth = safeFontSize * 0.54
     let horizontalInset = cellHorizontalPadding * 2
     let minColumnWidth = max(54, ceil(safeFontSize * 3.6))
@@ -146,11 +191,13 @@ enum MacMarkdownTableLayout {
     }
 
     let finalTotal = widths.reduce(0, +)
-    return Metrics(
+    let result = Metrics(
       columnWidths: widths,
       totalWidth: finalTotal,
       overflowsViewport: finalTotal > safeAvailableWidth + 1
     )
+    MetricsCache.shared.insert(result, for: cacheKey)
+    return result
   }
 
   private struct CellStats {

@@ -491,6 +491,8 @@ private struct MacMarkdownTablePalette: Sendable {
 }
 
 struct MacMarkdownTableView: View {
+  static let collapseRowThreshold = 12
+
   let table: MacParsedMarkdownTable
   var textSize: CGFloat = 15
   var fillsWidth = true
@@ -498,6 +500,7 @@ struct MacMarkdownTableView: View {
 
   @Environment(\.colorScheme) private var colorScheme
   @State private var measuredWidth: CGFloat = 0
+  @State private var isExpanded = false
   @State private var showFullScreen = false
   @State private var isCopied = false
   @State private var copyFeedbackRevision = 0
@@ -531,6 +534,9 @@ struct MacMarkdownTableView: View {
       fillsWidth: fillsWidth
     )
 
+    let isLongTable = fillsWidth && table.rows.count > Self.collapseRowThreshold
+    let rowLimit: Int? = (isLongTable && !isExpanded) ? Self.collapseRowThreshold : nil
+
     VStack(spacing: 0) {
       if fillsWidth {
         utilityBar(palette: palette, overflowsViewport: metrics.overflowsViewport)
@@ -543,6 +549,7 @@ struct MacMarkdownTableView: View {
       MacHorizontalPassthroughScrollView {
         MacMarkdownTableGrid(
           table: table,
+          rowLimit: rowLimit,
           columnWidths: metrics.columnWidths,
           totalWidth: metrics.totalWidth,
           fontSize: cellFontSize,
@@ -570,6 +577,29 @@ struct MacMarkdownTableView: View {
           .frame(width: 24)
           .allowsHitTesting(false)
         }
+      }
+
+      if isLongTable {
+        Rectangle()
+          .fill(palette.rowDivider)
+          .frame(height: 0.5)
+
+        Button {
+          withAnimation(.easeOut(duration: 0.16)) {
+            isExpanded.toggle()
+          }
+        } label: {
+          Label(
+            isExpanded ? "Show fewer rows" : "Show all \(table.rows.count) rows",
+            systemImage: isExpanded ? "chevron.up" : "chevron.down"
+          )
+          .font(.caption.weight(.medium))
+          .frame(maxWidth: .infinity)
+          .frame(height: 34)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(palette.secondaryForeground)
       }
     }
     .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
@@ -668,12 +698,21 @@ struct MacMarkdownTableView: View {
 
 private struct MacMarkdownTableGrid: View {
   let table: MacParsedMarkdownTable
+  var rowLimit: Int? = nil
   let columnWidths: [CGFloat]
   let totalWidth: CGFloat
   let fontSize: CGFloat
   let palette: MacMarkdownTablePalette
 
+  private var displayedRows: ArraySlice<[String]> {
+    if let rowLimit {
+      return table.rows.prefix(rowLimit)
+    }
+    return table.rows[...]
+  }
+
   var body: some View {
+    let rows = displayedRows
     VStack(alignment: .leading, spacing: 0) {
       rowView(
         cells: table.headers,
@@ -681,12 +720,12 @@ private struct MacMarkdownTableGrid: View {
         background: palette.headerRowBackground
       )
 
-      if !table.rows.isEmpty {
+      if !rows.isEmpty {
         Rectangle()
           .fill(palette.headerDivider)
           .frame(height: 1)
 
-        ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, row in
+        ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
           rowView(
             cells: row,
             isHeader: false,
@@ -695,7 +734,7 @@ private struct MacMarkdownTableGrid: View {
               : palette.oddRowBackground
           )
 
-          if rowIndex < table.rows.count - 1 {
+          if rowIndex < rows.count - 1 {
             Rectangle()
               .fill(palette.rowDivider)
               .frame(height: 0.5)
@@ -1065,7 +1104,25 @@ enum MacMarkdownImageSupport {
   }
 
   static func cacheKey(for url: URL) -> String {
-    let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+    let raw = url.absoluteString
+    let keyPayload: Data
+    if raw.utf8.count <= 2_048 {
+      keyPayload = Data(raw.utf8)
+    } else {
+      // Avoid hashing multi-megabyte data:image/... URIs inside SwiftUI body.
+      let utf8 = raw.utf8
+      let count = utf8.count
+      var sample = Data()
+      sample.reserveCapacity(800)
+      sample.append(contentsOf: "\(count):".utf8)
+      sample.append(contentsOf: utf8.prefix(256))
+      let midStart = utf8.index(utf8.startIndex, offsetBy: max(0, (count / 2) - 128))
+      let midEnd = utf8.index(midStart, offsetBy: min(256, count - (count / 2) + 128))
+      sample.append(contentsOf: utf8[midStart..<midEnd])
+      sample.append(contentsOf: utf8.suffix(256))
+      keyPayload = sample
+    }
+    let digest = SHA256.hash(data: keyPayload)
       .prefix(16)
       .map { String(format: "%02x", $0) }
       .joined()
@@ -1186,7 +1243,8 @@ private final class MacDecodedImageCache {
 
   private let storage: NSCache<NSString, NSImage> = {
     let cache = NSCache<NSString, NSImage>()
-    cache.countLimit = 48
+    cache.countLimit = 36
+    cache.totalCostLimit = 48 * 1_024 * 1_024
     return cache
   }()
 
@@ -1194,8 +1252,9 @@ private final class MacDecodedImageCache {
     storage.object(forKey: key as NSString)
   }
 
-  func insert(_ image: NSImage, forKey key: String) {
-    storage.setObject(image, forKey: key as NSString)
+  func insert(_ image: NSImage, forKey key: String, byteCost: Int? = nil) {
+    let cost = byteCost ?? max(1, Int(image.size.width * image.size.height * 4))
+    storage.setObject(image, forKey: key as NSString, cost: max(1, cost))
   }
 }
 
@@ -1335,7 +1394,11 @@ struct MacMarkdownResponseImageView: View {
         cgImage: cgImage,
         size: NSSize(width: cgImage.width, height: cgImage.height)
       )
-      MacDecodedImageCache.shared.insert(decoded, forKey: key)
+      MacDecodedImageCache.shared.insert(
+        decoded,
+        forKey: key,
+        byteCost: cgImage.bytesPerRow * cgImage.height
+      )
       image = decoded
     } else if let direct = NSImage(data: loaded.data) {
       guard !Task.isCancelled else { return }
@@ -1844,9 +1907,17 @@ private struct MacHighlightedCodeText: View {
   @State private var highlightedKey: RenderKey?
 
   var body: some View {
+    let key = renderKey
+    let resolved = (highlightedKey == key ? highlighted : nil)
+      ?? MacSyntaxHighlighting.shared.cached(
+        code: code,
+        language: language,
+        isDark: colorScheme == .dark
+      )
+
     Group {
-      if let highlighted, highlightedKey == renderKey {
-        Text(highlighted)
+      if let resolved {
+        Text(resolved)
       } else {
         Text(code)
           .font(.system(size: 13, design: .monospaced))
@@ -1854,8 +1925,16 @@ private struct MacHighlightedCodeText: View {
     }
     .fixedSize(horizontal: true, vertical: true)
     .textSelection(.enabled)
-    .task(id: renderKey) {
-      let key = renderKey
+    .task(id: key) {
+      if let cached = MacSyntaxHighlighting.shared.cached(
+        code: code,
+        language: language,
+        isDark: colorScheme == .dark
+      ) {
+        highlighted = cached
+        highlightedKey = key
+        return
+      }
       let rendered = await MacSyntaxHighlighting.shared.render(
         code: code,
         language: language,
@@ -1876,25 +1955,52 @@ private struct MacHighlightedCodeText: View {
   }
 }
 
-private actor MacSyntaxHighlighting {
-  private struct CacheKey: Hashable, Sendable {
+private final class MacSyntaxHighlightStorage: @unchecked Sendable {
+  struct CacheKey: Hashable, Sendable {
     let code: String
     let language: String?
     let isDark: Bool
   }
 
-  static let shared = MacSyntaxHighlighting()
-
-  private var highlighter: Highlighter?
-  private var configuredTheme: String?
+  private let lock = NSLock()
   private var cache: [CacheKey: AttributedString] = [:]
   private var order: [CacheKey] = []
   private let limit = 72
 
+  func value(for key: CacheKey) -> AttributedString? {
+    lock.lock()
+    defer { lock.unlock() }
+    return cache[key]
+  }
+
+  func insert(_ rendered: AttributedString, for key: CacheKey) {
+    lock.lock()
+    defer { lock.unlock() }
+    if cache[key] == nil {
+      order.append(key)
+    }
+    cache[key] = rendered
+    if order.count > limit {
+      cache.removeValue(forKey: order.removeFirst())
+    }
+  }
+}
+
+private actor MacSyntaxHighlighting {
+  static let shared = MacSyntaxHighlighting()
+
+  private nonisolated let storage = MacSyntaxHighlightStorage()
+  private var highlighter: Highlighter?
+  private var configuredTheme: String?
+
+  nonisolated func cached(code: String, language: String?, isDark: Bool) -> AttributedString? {
+    storage.value(for: MacSyntaxHighlightStorage.CacheKey(code: code, language: language, isDark: isDark))
+  }
+
   func render(code: String, language: String?, isDark: Bool) -> AttributedString? {
     guard !Task.isCancelled else { return nil }
-    let key = CacheKey(code: code, language: language, isDark: isDark)
-    if let cached = cache[key] { return cached }
+    let key = MacSyntaxHighlightStorage.CacheKey(code: code, language: language, isDark: isDark)
+    if let cached = storage.value(for: key) { return cached }
 
     if highlighter == nil {
       highlighter = Highlighter()
@@ -1917,11 +2023,7 @@ private actor MacSyntaxHighlighting {
     let mutable = NSMutableAttributedString(attributedString: value)
     mutable.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: mutable.length))
     let rendered = AttributedString(mutable)
-    cache[key] = rendered
-    order.append(key)
-    if order.count > limit {
-      cache.removeValue(forKey: order.removeFirst())
-    }
+    storage.insert(rendered, for: key)
     return rendered
   }
 
@@ -2044,14 +2146,45 @@ enum MacMermaidDiagramSupport {
   static let maxInlineHeight: CGFloat = 420
   static let inlineVerticalPadding: CGFloat = 20
 
+  private final class AnalysisCache: @unchecked Sendable {
+    static let shared = AnalysisCache()
+
+    private let lock = NSLock()
+    private var values: [String: Analysis] = [:]
+    private var order: [String] = []
+    private let limit = 128
+
+    func value(for source: String) -> Analysis? {
+      lock.lock()
+      defer { lock.unlock() }
+      return values[source]
+    }
+
+    func insert(_ analysis: Analysis, for source: String) {
+      lock.lock()
+      defer { lock.unlock() }
+      if values[source] == nil {
+        order.append(source)
+      }
+      values[source] = analysis
+      if order.count > limit {
+        values.removeValue(forKey: order.removeFirst())
+      }
+    }
+  }
+
   /// Analyzes Mermaid source to strip leading YAML frontmatter, extract an
   /// optional title, classify the diagram type, and flag unsupported Mermaid
   /// diagram types.
   static func analyze(_ source: String) -> Analysis {
+    if let cached = AnalysisCache.shared.value(for: source) {
+      return cached
+    }
     let (strippedSource, frontmatterTitle) = stripLeadingFrontmatter(from: source)
     let trimmed = strippedSource.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-      return Analysis(
+    let result: Analysis
+    if trimmed.isEmpty {
+      result = Analysis(
         renderSource: "",
         title: frontmatterTitle,
         kindLabel: "DIAGRAM",
@@ -2059,23 +2192,25 @@ enum MacMermaidDiagramSupport {
         unsupportedKindName: nil,
         isEmpty: true
       )
+    } else {
+      let firstDirective = firstDiagramDirectiveLine(in: strippedSource)
+      let firstToken = firstDirective?
+        .split(whereSeparator: { $0.isWhitespace || $0 == ":" || $0 == "{" })
+        .first
+        .map { String($0).lowercased() } ?? ""
+
+      let classification = classify(token: firstToken, line: firstDirective?.lowercased() ?? "")
+      result = Analysis(
+        renderSource: strippedSource,
+        title: frontmatterTitle,
+        kindLabel: classification.kindLabel,
+        displayTitle: classification.displayTitle,
+        unsupportedKindName: classification.unsupportedKindName,
+        isEmpty: false
+      )
     }
-
-    let firstDirective = firstDiagramDirectiveLine(in: strippedSource)
-    let firstToken = firstDirective?
-      .split(whereSeparator: { $0.isWhitespace || $0 == ":" || $0 == "{" })
-      .first
-      .map { String($0).lowercased() } ?? ""
-
-    let classification = classify(token: firstToken, line: firstDirective?.lowercased() ?? "")
-    return Analysis(
-      renderSource: strippedSource,
-      title: frontmatterTitle,
-      kindLabel: classification.kindLabel,
-      displayTitle: classification.displayTitle,
-      unsupportedKindName: classification.unsupportedKindName,
-      isEmpty: false
-    )
+    AnalysisCache.shared.insert(result, for: source)
+    return result
   }
 
   static func inlineHeight(for diagramBounds: CGRect, availableWidth: CGFloat) -> CGFloat {
@@ -2386,13 +2521,45 @@ enum MacMermaidDiagramSupport {
   }
 }
 
+private final class MacCachedMermaidRender {
+  let image: NSImage
+  let intrinsicSize: CGSize
+
+  init(image: NSImage, intrinsicSize: CGSize) {
+    self.image = image
+    self.intrinsicSize = intrinsicSize
+  }
+}
+
+@MainActor
+private final class MacMermaidRasterCache {
+  static let shared = MacMermaidRasterCache()
+
+  private let storage: NSCache<NSString, MacCachedMermaidRender> = {
+    let cache = NSCache<NSString, MacCachedMermaidRender>()
+    cache.countLimit = 24
+    cache.totalCostLimit = 32 * 1_024 * 1_024
+    return cache
+  }()
+
+  func value(forKey key: String) -> MacCachedMermaidRender? {
+    storage.object(forKey: key as NSString)
+  }
+
+  func insert(_ render: MacCachedMermaidRender, forKey key: String, byteCost: Int) {
+    storage.setObject(render, forKey: key as NSString, cost: max(1, byteCost))
+  }
+}
+
 struct MacMermaidAnswerView: View {
   let source: String
   var isComplete: Bool = true
 
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.displayScale) private var displayScale
   @State private var parseError: Error?
-  @State private var diagramBounds = CGRect.zero
+  @State private var renderedDiagram: MacCachedMermaidRender?
+  @State private var renderedCacheKey: String?
   @State private var cardWidth: CGFloat = 560
   @State private var showFullScreen = false
   @State private var showSource = false
@@ -2402,17 +2569,38 @@ struct MacMermaidAnswerView: View {
   private let collapsedLineLimit = 14
   private let collapsedCharacterLimit = 1_800
 
+  private struct RenderTaskKey: Equatable {
+    let renderSource: String
+    let isComplete: Bool
+    let isDark: Bool
+    let themeID: String
+    let scaleBucket: Int
+  }
+
   var body: some View {
     let analysis = MacMermaidDiagramSupport.analyze(source)
+    let activeThemeID = MacThemeFoundation.store
+      .currentTheme(hasPro: MacPurchaseStore.manager.hasPro)
+      .id.rawValue
+    let scaleBucket = Int(min(2.0, max(1.0, displayScale)).rounded())
+    let taskKey = RenderTaskKey(
+      renderSource: analysis.renderSource,
+      isComplete: isComplete,
+      isDark: colorScheme == .dark,
+      themeID: activeThemeID,
+      scaleBucket: scaleBucket
+    )
+    let cacheKey = "\(activeThemeID)|\(colorScheme == .dark ? 1 : 0)|\(scaleBucket)|\(analysis.renderSource)"
+    let resolvedRender = (renderedCacheKey == cacheKey ? renderedDiagram : nil)
+      ?? MacMermaidRasterCache.shared.value(forKey: cacheKey)
     let canRenderDiagram = isComplete
       && !analysis.isEmpty
       && analysis.unsupportedKindName == nil
       && parseError == nil
-    let inlineTheme = MacMermaidDiagramSupport.diagramTheme(
-      colorScheme: colorScheme,
-      canvas: .inlineCard
-    )
     let availableDiagramWidth = max(160, cardWidth - 16)
+    let diagramBounds = resolvedRender.map {
+      CGRect(origin: .zero, size: $0.intrinsicSize)
+    } ?? .zero
     let diagramHeight = MacMermaidDiagramSupport.inlineHeight(
       for: diagramBounds,
       availableWidth: availableDiagramWidth
@@ -2440,14 +2628,23 @@ struct MacMermaidAnswerView: View {
         collapsibleSourceBody(content: source)
       } else {
         ZStack(alignment: .bottomTrailing) {
-          GeometryReader { proxy in
-            MermaidDiagramView(
-              source: analysis.renderSource,
-              theme: inlineTheme,
-              parseError: $parseError,
-              diagramBounds: $diagramBounds
-            )
-            .frame(width: proxy.size.width, height: proxy.size.height)
+          Group {
+            if let resolvedRender {
+              Image(nsImage: resolvedRender.image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+              HStack(spacing: 8) {
+                ProgressView()
+                  .controlSize(.small)
+                Text("Rendering diagram…")
+                  .font(.caption.weight(.medium))
+                  .foregroundStyle(.secondary)
+              }
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
           }
           .frame(height: diagramHeight)
           .padding(8)
@@ -2495,17 +2692,42 @@ struct MacMermaidAnswerView: View {
         cardWidth = newWidth
       }
     }
+    .task(id: taskKey) {
+      guard isComplete, !analysis.isEmpty, analysis.unsupportedKindName == nil else { return }
+      if let cached = MacMermaidRasterCache.shared.value(forKey: cacheKey) {
+        renderedDiagram = cached
+        renderedCacheKey = cacheKey
+        parseError = nil
+        return
+      }
+      parseError = nil
+      let inlineTheme = MacMermaidDiagramSupport.diagramTheme(
+        colorScheme: colorScheme,
+        canvas: .inlineCard
+      )
+      do {
+        let image = try await MacMermaidDiagramSupport.renderImage(
+          source: analysis.renderSource,
+          theme: inlineTheme,
+          desiredScale: min(2.0, max(1.0, displayScale))
+        )
+        guard !Task.isCancelled else { return }
+        if let image {
+          let byteCost = Int(image.size.width * image.size.height * 4) * max(1, scaleBucket * scaleBucket)
+          let entry = MacCachedMermaidRender(image: image, intrinsicSize: image.size)
+          MacMermaidRasterCache.shared.insert(entry, forKey: cacheKey, byteCost: byteCost)
+          renderedDiagram = entry
+          renderedCacheKey = cacheKey
+        }
+      } catch {
+        guard !Task.isCancelled else { return }
+        parseError = error
+      }
+    }
     .onChange(of: source) { _, _ in
       parseError = nil
-      diagramBounds = .zero
       showSource = false
       isSourceExpanded = false
-    }
-    .onChange(of: isComplete) { _, complete in
-      if complete {
-        parseError = nil
-        diagramBounds = .zero
-      }
     }
     .sheet(isPresented: $showFullScreen) {
       MacFullScreenMermaidView(source: source, analysis: analysis)
